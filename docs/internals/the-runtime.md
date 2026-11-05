@@ -535,6 +535,13 @@ check also covers masks computed at runtime. Shared padding guards keep the
 caller-visible `str_pad()` or `mb_str_pad()` name in their exception messages.
 The multibyte padding fast path requires integer length and mode operands; other
 PHP types retain bridge validation, including valid weak numeric-string coercions.
+All ordinary mbstring shortcuts first compare argument types with the shared
+builtin contract. Only canonical scalar types can bypass preparation; other values
+retain shared coercions, Stringable callbacks, strict typing and diagnostics.
+Union arguments qualify only when every possible type is already accepted without
+a conversion. Null, container and reference arguments retain the coordinator.
+Length/count/cast specializations preserve the original caller strictness; nullable
+setting getters keep their ordinary result cast instead of becoming native setters.
 Regex split-count and replacement-length byte scans first query the shared request
 for UTF-8, default regex options and default resource limits, and require ASCII
 subjects. Other cases use the regex bridge. A failed split result is released

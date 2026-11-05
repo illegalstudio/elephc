@@ -504,7 +504,8 @@ pub(super) fn lower_position_int(
     runtime_label: &str,
     direction: super::super::StringPositionDirection,
 ) -> Result<()> {
-    let fast = inst.operands.len() == 4
+    let fast = super::prepared_args::already_prepared(ctx, inst, source)?
+        && inst.operands.len() == 4
         && super::explicit_utf8_encoding(ctx, inst.operands[3])?
         && ctx.value_php_type(inst.operands[0])?.codegen_repr() == PhpType::Str
         && ctx.value_php_type(inst.operands[1])?.codegen_repr() == PhpType::Str;
@@ -1363,7 +1364,8 @@ pub(super) fn lower_detect_encoding_len(
 
 /// Lowers `strlen(mb_chr(...))` to the UTF-8 byte length of one explicit-UTF-8 codepoint.
 pub(super) fn lower_chr_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let fast = inst.operands.len() == 2
+    let fast = super::prepared_args::already_prepared(ctx, inst, RuntimeBuiltinId::MbChr)?
+        && inst.operands.len() == 2
         && super::explicit_utf8_encoding(ctx, inst.operands[1])?;
     if !fast {
         super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbChr, false)?;
@@ -1433,7 +1435,8 @@ pub(super) fn lower_strimwidth_len(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    let fast = inst.operands.len() == 5
+    let fast = super::prepared_args::already_prepared(ctx, inst, RuntimeBuiltinId::MbStrimwidth)?
+        && inst.operands.len() == 5
         && super::explicit_utf8_encoding(ctx, inst.operands[4])?
         && const_int_operand(ctx, inst.operands[1])? == Some(0)
         && ctx.value_php_type(inst.operands[0])?.codegen_repr() == PhpType::Str
@@ -2067,7 +2070,8 @@ pub(super) fn lower_regex_set_options_len(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    if inst.operands.len() == 1 {
+    if super::prepared_args::already_prepared(ctx, inst, RuntimeBuiltinId::MbRegexSetOptions)?
+        && inst.operands.len() == 1 {
         let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
         load_string_arg_to_regs(ctx, inst, 0, "mb_regex_set_options", pointer, length)?;
         match ctx.emitter.target.arch {
@@ -2112,7 +2116,8 @@ pub(super) fn lower_http_input_len(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    if inst.operands.len() == 1 {
+    if super::prepared_args::already_prepared(ctx, inst, RuntimeBuiltinId::MbHttpInput)?
+        && inst.operands.len() == 1 {
         let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
         load_string_arg_to_regs(ctx, inst, 0, "mb_http_input", pointer, length)?;
         match ctx.emitter.target.arch {
@@ -2265,7 +2270,8 @@ pub(super) fn lower_strstr_len(
     source: RuntimeBuiltinId,
     mode: i64,
 ) -> Result<()> {
-    let fast = inst.operands.len() == 4
+    let fast = super::prepared_args::already_prepared(ctx, inst, source)?
+        && inst.operands.len() == 4
         && super::explicit_utf8_encoding(ctx, inst.operands[3])?
         && ctx.value_php_type(inst.operands[0])?.codegen_repr() == PhpType::Str
         && ctx.value_php_type(inst.operands[1])?.codegen_repr() == PhpType::Str;
@@ -2364,7 +2370,8 @@ pub(super) fn lower_str_split_count(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    let fast = inst.operands.len() == 3
+    let fast = super::prepared_args::already_prepared(ctx, inst, RuntimeBuiltinId::MbStrSplit)?
+        && inst.operands.len() == 3
         && super::explicit_utf8_encoding(ctx, inst.operands[2])?
         && ctx.value_php_type(inst.operands[0])?.codegen_repr() == PhpType::Str;
     if !fast {

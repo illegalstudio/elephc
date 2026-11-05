@@ -260,3 +260,94 @@ $mode = $argc > 0 ? "0" : "1";
 echo mb_str_pad("hello", $width, "-", $mode, "UTF-8"), "\n";
 "#, "mb_str_pad(): Argument #4 ($pad_type) must be of type int, string given\nmb_str_pad(): Argument #2 ($length) must be of type int, string given\nmb_str_pad(): Argument #4 ($pad_type) must be of type int, string given\n---hello\n");
 }
+
+/// Native string transforms retain Stringable callbacks, weak coercions and diagnostics.
+#[test]
+fn test_mb_fast_semantics_string_argument_preparation() {
+    assert_mb_fast_semantics(r#"<?php
+class FastCaseSubject { public function __toString(): string { echo "cast|"; return "aBc"; } }
+echo mb_strtoupper(new FastCaseSubject(), "UTF-8"), "\n";
+echo mb_strtolower(new FastCaseSubject(), "UTF-8"), "\n";
+echo mb_ucfirst(new FastCaseSubject(), "UTF-8"), "\n";
+echo mb_lcfirst(new FastCaseSubject(), "UTF-8"), "\n";
+echo mb_convert_case(new FastCaseSubject(), MB_CASE_UPPER, "UTF-8"), "\n";
+echo mb_strtoupper(123, "UTF-8"), "\n";
+set_error_handler(function ($number, $message) { echo "diagnostic|"; return true; });
+echo "[", mb_strtoupper(null, "UTF-8"), "]\n";
+function fast_array_case(mixed $value): string { return mb_convert_case($value, MB_CASE_UPPER, "UTF-8"); }
+try { fast_array_case([]); }
+catch (TypeError $e) { echo "array-type\n"; }
+restore_error_handler();
+"#, "cast|ABC\ncast|abc\ncast|ABc\ncast|aBc\ncast|ABC\n123\n[diagnostic|]\narray-type\n");
+}
+
+/// Native shortcuts retain integer validation and lossy-coercion diagnostics.
+#[test]
+fn test_mb_fast_semantics_integer_argument_preparation() {
+    assert_mb_fast_semantics(r#"<?php
+$invalid = $argc > 0 ? "nope" : "0";
+try { mb_substr("hello", $invalid, 1, "UTF-8"); }
+catch (TypeError $e) { echo "substr-start|"; }
+try { mb_strcut("hello", 0, $invalid, "UTF-8"); }
+catch (TypeError $e) { echo "strcut-length|"; }
+mb_internal_encoding("UTF-8"); mb_http_output("UTF-8");
+try { mb_output_handler("payload", $invalid); }
+catch (TypeError $e) { echo "output-status|"; }
+try { mb_ereg_search_setpos($invalid); }
+catch (TypeError $e) { echo "search-position\n"; }
+$previous = mb_substitute_character();
+set_error_handler(function ($number, $message) { echo "diagnostic|"; return true; });
+echo mb_substitute_character(63.5) ? "set\n" : "failed\n";
+restore_error_handler();
+mb_substitute_character($previous);
+echo mb_substr("hello", "1", "2", "UTF-8"), "|", mb_output_handler("ok", "0"), "\n";
+"#, "substr-start|strcut-length|output-status|search-position\ndiagnostic|set\nel|ok\n");
+}
+
+/// Native shortcuts do not coerce scalar arguments from strict source files.
+#[test]
+fn test_mb_fast_semantics_strict_argument_preparation() {
+    assert_mb_fast_semantics(r#"<?php
+declare(strict_types=1);
+$value = $argc > 0 ? 123 : "abc";
+try { mb_strtoupper($value, "UTF-8"); } catch (TypeError $e) { echo "upper|"; }
+try { mb_strtolower($value, "UTF-8"); } catch (TypeError $e) { echo "lower|"; }
+try { mb_ucfirst($value, "UTF-8"); } catch (TypeError $e) { echo "ucfirst|"; }
+try { mb_lcfirst($value, "UTF-8"); } catch (TypeError $e) { echo "lcfirst|"; }
+try { mb_convert_case($value, MB_CASE_UPPER, "UTF-8"); } catch (TypeError $e) { echo "convert-case|"; }
+$start = $argc > 0 ? 1.0 : 1;
+try { mb_substr("abc", $start, 1, "UTF-8"); } catch (TypeError $e) { echo "substr|"; }
+$substitute = $argc > 0 ? true : 63;
+try { mb_substitute_character($substitute); } catch (TypeError $e) { echo "substitute\n"; }
+"#, "upper|lower|ucfirst|lcfirst|convert-case|substr|substitute\n");
+}
+
+/// Integer and length observers retain diagnostics and null getter state.
+#[test]
+fn test_mb_fast_semantics_weak_observer_preparation() {
+    assert_mb_fast_semantics(r#"<?php
+$previous=mb_substitute_character();
+set_error_handler(function($n,$m){echo "diagnostic|";return true;});
+echo (int)mb_substitute_character(63.5),"\n";
+echo (int)mb_substitute_character(null),"|",mb_substitute_character(),"\n";
+echo (int)mb_internal_encoding(null),"|",mb_internal_encoding(),"\n";
+mb_regex_set_options("b");
+echo strlen(mb_regex_set_options(null)),"|",mb_regex_set_options(),"\n";
+restore_error_handler();mb_substitute_character($previous);
+"#, "diagnostic|1\n63|63\n0|UTF-8\n1|b\n");
+}
+
+/// Observer specializations retain caller strictness for every shared fallback.
+#[test]
+fn test_mb_fast_semantics_strict_observer_preparation() {
+    assert_mb_fast_semantics(r#"<?php
+declare(strict_types=1);
+$number=$argc>0?"65":65;
+try { echo strlen((string)mb_chr($number,"UTF-8")); } catch(TypeError $e){echo "chr-type|";}
+try { echo strlen(mb_strimwidth("abc",0,$number,"","UTF-8")); } catch(TypeError $e){echo "width-type|";}
+try { echo (int)mb_strpos("abc","b",$number,"UTF-8"); } catch(TypeError $e){echo "offset-type|";}
+$flag=$argc>0?true:63;
+try { echo count(mb_str_split("abc",$number,"UTF-8")); } catch(TypeError $e){echo "chunk-type|";}
+try { echo (int)mb_substitute_character($flag); } catch(TypeError $e){echo "setting-type\n";}
+"#, "chr-type|width-type|offset-type|chunk-type|setting-type\n");
+}

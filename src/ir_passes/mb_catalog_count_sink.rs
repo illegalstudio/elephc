@@ -120,12 +120,19 @@ fn specialize(function: &mut Function, count_id: InstId) -> bool {
         }
     }
     let operands = query.operands.clone();
+    let Some(Immediate::RuntimeCall(mut retargeted)) = query.immediate.clone() else {
+        return false;
+    };
+    match &mut retargeted {
+        RuntimeCallTarget::Function(target)
+        | RuntimeCallTarget::ProfiledFunction { target, .. } => *target = count_target,
+        _ => return false,
+    };
+
     let Some(count) = function.instruction_mut(count_id) else {
         return false;
     };
-    count.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-        count_target,
-    )));
+    count.immediate = Some(Immediate::RuntimeCall(retargeted));
     count.operands = operands;
     count.result_type = IrType::I64;
     count.result_php_type = PhpType::Int;
