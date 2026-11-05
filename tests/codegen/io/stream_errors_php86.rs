@@ -441,3 +441,71 @@ fn test_unsupported_globals_shapes_are_rejected_php86() {
         );
     }
 }
+
+/// A `Silent` context with `error_store = All` reports the excess read through the
+/// context handler with a `UserspaceInvalidReturn` error and stores it.
+#[test]
+fn test_user_wrapper_read_excess_handler_php86() {
+    let out = run86(
+        r#"<?php
+class HandlerStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_read(int $count): string { return str_repeat('A', $count + 1); }
+    public function stream_eof(): bool { return true; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('handler-stream', HandlerStream::class);
+$context = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_store' => StreamErrorStore::All,
+    'error_handler' => static function (array $errors): void {
+        echo 'handler: ', count($errors), ':', $errors[0]->code->name, "\n";
+    },
+]]);
+$stream = fopen('handler-stream://x', 'r', false, $context);
+var_dump(strlen(fread($stream, 4)));
+var_dump(count(stream_last_errors()));
+fclose($stream);
+"#,
+    );
+    assert_eq!(
+        out,
+        "handler: 1:UserspaceInvalidReturn\nint(4)\nint(1)\n"
+    );
+}
+
+/// A `stream_get_contents()` operation accumulates every excess read and calls the
+/// context handler once with all of them.
+#[test]
+fn test_user_wrapper_read_excess_accumulates_per_operation_php86() {
+    let out = run86(
+        r#"<?php
+class AccumulatingStream {
+    public $context;
+    private int $reads = 0;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_read(int $count): string {
+        $this->reads++;
+        return $this->reads <= 2 ? str_repeat('B', $count + 1) : '';
+    }
+    public function stream_eof(): bool { return $this->reads >= 3; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('accumulating-stream', AccumulatingStream::class);
+$context = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_store' => StreamErrorStore::All,
+    'error_handler' => static function (array $errors): void {
+        echo 'handler: ', count($errors), "\n";
+    },
+]]);
+$stream = fopen('accumulating-stream://x', 'r', false, $context);
+$data = stream_get_contents($stream);
+var_dump(strlen($data));
+var_dump(count(stream_last_errors()));
+fclose($stream);
+"#,
+    );
+    assert_eq!(out, "handler: 2\nint(8192)\nint(2)\n");
+}

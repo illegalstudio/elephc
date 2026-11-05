@@ -78,7 +78,7 @@ pub(super) fn store_stream_context_options(
         return Ok(());
     }
     ctx.load_value_to_result(options)?;
-    if ctx.module.web_application { normalize_application_options(ctx); }
+    normalize_context_options(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => store_stream_context_options_aarch64(ctx, clear_on_null),
         Arch::X86_64 => store_stream_context_options_x86_64(ctx, clear_on_null),
@@ -87,7 +87,7 @@ pub(super) fn store_stream_context_options(
 }
 
 /// Opens a physically boxed array before publishing its borrowed raw-container pointer.
-fn normalize_application_options(ctx: &mut FunctionContext<'_>) {
+fn normalize_context_options(ctx: &mut FunctionContext<'_>) {
     let boxed = ctx.next_label("application_options_boxed");
     let array = ctx.next_label("application_options_array");
     let null = ctx.next_label("application_options_null");

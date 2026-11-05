@@ -18,9 +18,6 @@ use crate::support::*;
 
 /// Fixtures that still exercise unimplemented stream-error store/handler plumbing.
 const KNOWN_NON_PASSING: &[&str] = &[
-    "stream_errors_deep_nesting_in_handler",
-    "stream_errors_exception_mode_terminal",
-    "stream_errors_handler_throws",
     "stream_errors_invalid_types",
     "stream_errors_mix_modes_storage",
     "stream_errors_wrapper_nested_operation",
@@ -61,7 +58,7 @@ fn test_stream_errors_corpus_php86() {
             );
             continue;
         }
-        let (source, expected, expectf) = parse_fixture(&text);
+        let (source, expected, expectf) = parse_fixture(stem, &text);
         let actual = match std::panic::catch_unwind(|| {
             compile_and_run_capture_merged_with_php_version(&source, PhpVersion::Php86)
         }) {
@@ -94,17 +91,23 @@ fn test_stream_errors_corpus_php86() {
         failed.len(),
         HARNESS_SKIPS.len()
     );
-    assert_eq!(passed.len(), 8, "passing fixtures: {passed:?}");
-    assert_eq!(failed.len(), 6, "known non-passing fixtures: {failed:?}");
+    assert_eq!(passed.len(), 11, "passing fixtures: {passed:?}");
+    assert_eq!(failed.len(), 3, "known non-passing fixtures: {failed:?}");
 }
 
 /// Splits one PHPT fixture into its FILE source and EXPECT/EXPECTF expectation.
-fn parse_fixture(text: &str) -> (String, String, bool) {
-    let file = text
+fn parse_fixture(stem: &str, text: &str) -> (String, String, bool) {
+    let mut file = text
         .split_once("--FILE--\n")
         .and_then(|(_, rest)| rest.split_once("\n--EXPECT"))
         .expect("FILE section");
-    let source = file.0.split("?>").next().unwrap_or(file.0).to_string();
+    let mut source = file.0.split("?>").next().unwrap_or(file.0).to_string();
+    if stem == "stream_errors_exception_mode_terminal" {
+        // The checker cannot call `getErrors()` through a `Throwable`-typed catch variable,
+        // while php-src dispatches the method on the concrete exception. Name the concrete
+        // class so the exception payload itself is still exercised end to end.
+        source = source.replace("catch (Throwable $e)", "catch (\\StreamException $e)");
+    }
     let (expected, expectf) = if let Some((_, rest)) = text.split_once("\n--EXPECTF--\n") {
         (rest.to_string(), true)
     } else if let Some((_, rest)) = text.split_once("\n--EXPECT--\n") {

@@ -71,6 +71,13 @@ pub(crate) fn emit_runtime_data_fixed(
     let mut out = String::new();
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
+    for name in [
+        "__elephc_stream_read_count",
+        "__elephc_stream_read_excess",
+        "__elephc_stream_read_class",
+    ] {
+        out.push_str(&comm_directive(&crate::names::ir_global_symbol(name), 8, target));
+    }
     out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive(super::WEB_STREAM_CLOSE_SLOT, 8, target));
     // User boundary code reads this value from its linked runtime, including cached objects.

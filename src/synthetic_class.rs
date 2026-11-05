@@ -566,6 +566,11 @@ pub fn s_return(value: Expr) -> Stmt {
     Stmt::new(StmtKind::Return(Some(value)), Span::dummy())
 }
 
+/// A `global $a, $b;` declaration that aliases the listed program globals.
+pub fn s_global(vars: Vec<String>) -> Stmt {
+    Stmt::new(StmtKind::Global { vars }, Span::dummy())
+}
+
 /// A bare `return;`.
 pub fn s_return_void() -> Stmt {
     Stmt::new(StmtKind::Return(None), Span::dummy())

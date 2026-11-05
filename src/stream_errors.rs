@@ -23,7 +23,11 @@ pub(crate) fn rewrite(program: Program, version: crate::php_version::PhpVersion)
         return program;
     }
     let wrappers = wrappers_present(&program);
-    if !wrappers.fopen && !wrappers.default_context {
+    if !wrappers.fopen
+        && !wrappers.default_context
+        && !wrappers.fread
+        && !wrappers.stream_get_contents
+    {
         return program;
     }
     let mut pass = Rewriter {
@@ -38,6 +42,8 @@ pub(crate) fn rewrite(program: Program, version: crate::php_version::PhpVersion)
 struct Wrappers {
     fopen: bool,
     default_context: bool,
+    fread: bool,
+    stream_get_contents: bool,
 }
 
 /// Scans the top-level declarations for the two wrapper functions.
@@ -48,6 +54,8 @@ fn wrappers_present(program: &[Stmt]) -> Wrappers {
             match php_symbol_key(name).as_str() {
                 "__elephc_fopen" => wrappers.fopen = true,
                 "__elephc_stream_context_set_default" => wrappers.default_context = true,
+                "__elephc_fread" => wrappers.fread = true,
+                "__elephc_stream_get_contents" => wrappers.stream_get_contents = true,
                 _ => {}
             }
         }
@@ -81,6 +89,10 @@ impl Pass for Rewriter {
             "stream_context_set_default" if self.wrappers.default_context => {
                 Some("__elephc_stream_context_set_default")
             }
+            "fread" if self.wrappers.fread => Some("__elephc_fread"),
+            "stream_get_contents" if self.wrappers.stream_get_contents => {
+                Some("__elephc_stream_get_contents")
+            }
             _ => None,
         };
         let name = replacement.map_or(name, |replacement| {
@@ -93,7 +105,10 @@ impl Pass for Rewriter {
     fn enter_function(&mut self, name: &str) {
         if matches!(
             php_symbol_key(name).as_str(),
-            "__elephc_fopen" | "__elephc_stream_context_set_default"
+            "__elephc_fopen"
+                | "__elephc_stream_context_set_default"
+                | "__elephc_fread"
+                | "__elephc_stream_get_contents"
         ) {
             self.wrapper_depth += 1;
         }

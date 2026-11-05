@@ -12,6 +12,8 @@
 //! - The wrapper bodies are the only calls the rewrite pass leaves pointing at the original
 //!   builtins.
 
+mod read_wrappers;
+
 use crate::parser::ast::{
     BinOp, EnumCaseDecl, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr,
 };
@@ -41,6 +43,7 @@ pub(crate) fn declarations() -> Program {
         fopen_wrapper(),
         stream_context_set_default_wrapper(),
     ];
+    program.extend(read_wrappers::declarations());
     program.shrink_to_fit();
     program
 }
@@ -52,6 +55,8 @@ pub(crate) fn requested(usage: &crate::prelude_prune::usage::Usage) -> bool {
             || name == "stream_context_set_default"
             || name == "stream_last_errors"
             || name == "stream_clear_errors"
+            || name == "fread"
+            || name == "stream_get_contents"
             || name.starts_with("stream_context_")
     }) || usage
         .classes
@@ -60,7 +65,7 @@ pub(crate) fn requested(usage: &crate::prelude_prune::usage::Usage) -> bool {
 }
 
 /// The PHP-visible `StreamErrorCode` cases, in upstream declaration order.
-const STREAM_ERROR_CODES: [&str; 75] = [
+const STREAM_ERROR_CODES: [&str; 76] = [
     "None",
     "Generic",
     "ReadFailed",
@@ -136,6 +141,7 @@ const STREAM_ERROR_CODES: [&str; 75] = [
     "TemporaryFileFailed",
     "LockFailed",
     "LockNotSupported",
+    "UserspaceInvalidReturn",
 ];
 
 /// Builds one unit enum with the supplied case names.
