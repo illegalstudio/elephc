@@ -429,6 +429,10 @@ fn test_untyped_function_body_error_reached_through_callbacks_is_reported() {
         format!("<?php {f} print_r(array_map(f(...), [1, 2]));"),
         format!("<?php {f} var_dump(call_user_func('f', 1));"),
         format!("<?php {f} var_dump(call_user_func_array('f', [1]));"),
+        format!("<?php {f} $a = [1]; var_dump(call_user_func_array('f', $a));"),
+        "<?php function id<T>(T $x) { $a = 5; return $a[0]; } \
+            print_r(array_map('id', [1, 2])); echo id(1);"
+            .to_string(),
         format!("<?php {f} function w($n) {{ return array_map('f', [$n]); }} print_r(w(1));"),
     ];
     for program in &programs {
@@ -456,7 +460,40 @@ fn test_callback_rewalk_refreshes_helper_return_built_from_late_static_property(
         "var_dump(call_user_func('a', 1));",
         "var_dump(call_user_func_array('a', [1]));",
         "$h = a(...); var_dump($h(1));",
+        "$xs = [1]; var_dump(call_user_func_array('a', $xs));",
     ] {
         expect_no_error(&format!("<?php {helpers} {call} C::$v = [9];"));
     }
+}
+
+/// A call reached under the eval barrier does not consume the re-walk of a failed untyped body:
+/// that call resolves to `mixed` without walking the body, so the body is walked again at the
+/// next call outside the barrier and its error is reported once.
+#[test]
+fn test_failed_body_rewalk_survives_calls_under_eval_barrier() {
+    for call in ["array_map('f', [1]);", "call_user_func('f', 1);", "f(1);"] {
+        let program = format!(
+            "<?php function f($n) {{ $x = 5; return $x[0] + $n; }} \
+             function outer() {{ $bad = C::$v[0]; eval(\"\"); {call} return $bad; }} \
+             class C {{ public static $v; }} echo outer(); C::$v = [9]; echo f(1);"
+        );
+        let messages = checker_error_messages(&program);
+        assert_eq!(
+            messages.iter().filter(|message| *message == "Cannot index non-array").count(),
+            1,
+            "{}: {:?}",
+            program,
+            messages
+        );
+    }
+}
+
+/// `call_user_func_array` over a variable list of arrays binds an untyped parameter to the
+/// element type, so a body that indexes it stays accepted when the re-walk runs from it.
+#[test]
+fn test_call_user_func_array_variable_list_rewalk_accepts_valid_body() {
+    expect_no_error(
+        "<?php function f($n) { return $n[0]; } $a = [[1], [2]]; \
+         var_dump(call_user_func_array('f', $a));",
+    );
 }

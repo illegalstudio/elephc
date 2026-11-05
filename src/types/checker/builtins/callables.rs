@@ -1133,7 +1133,7 @@ fn check_callback_builtin_call_in_engine_frame(
             // unless an opaque placeholder argument may have caused them.
             if let Err(error) = checker.check_function_call(cb_name, callback_args, span, env) {
                 if !callback_args_have_opaque_placeholder(callback_args, env) {
-                    if let Some(body_errors) = checker.failed_callback_body_errors(cb_name, &error)
+                    if let Some(body_errors) = checker.failed_callback_body_errors(&error)
                     {
                         return Err(body_errors);
                     }
@@ -1487,6 +1487,17 @@ pub(crate) fn check_call_user_func_array(
         checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(elems) = static_args.as_deref() {
             checker.rewalk_marked_callable_target(&cb_name, elems, span, env)?;
+        } else if let PhpType::Array(elem_ty) = checker.infer_type(&args[1], env)? {
+            // A variable argument list binds the parameters from its element type, as the
+            // first walk's spread did. An opaque element is no settled type (see
+            // `callback_args_have_opaque_placeholder`), so it keeps the provisional signature.
+            if !matches!(*elem_ty, PhpType::Mixed | PhpType::Never) {
+                let spread_args = vec![Expr::new(
+                    ExprKind::Spread(Box::new(args[1].clone())),
+                    args[1].span,
+                )];
+                checker.rewalk_marked_callable_target(&cb_name, &spread_args, span, env)?;
+            }
         }
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             validate_call_user_func_array_dynamic_arg_array(

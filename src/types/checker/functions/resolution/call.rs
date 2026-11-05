@@ -162,10 +162,7 @@ impl Checker {
         }
 
         self.refresh_completed_inferred_callee(name);
-        if self.rewalk_failed_body_at_next_call.contains(name)
-            && !self.resolving_functions.contains(name)
-            && self.fn_decls.contains_key(name)
-        {
+        if self.failed_body_rewalk_is_due(name) {
             return self.rewalk_failed_function_body_at_call(name, args, span, caller_env);
         }
 
@@ -706,9 +703,7 @@ impl Checker {
         let name = self
             .canonical_function_name_folded(name)
             .unwrap_or_else(|| name.to_string());
-        if !self.rewalk_failed_body_at_next_call.contains(name.as_str())
-            || self.resolving_functions.contains(name.as_str())
-            || !self.fn_decls.contains_key(name.as_str())
+        if !self.failed_body_rewalk_is_due(name.as_str())
             || crate::types::checker::builtins::callback_args_have_opaque_placeholder(
                 args, caller_env,
             )
@@ -723,27 +718,39 @@ impl Checker {
         result.map(|_| ())
     }
 
-    /// Returns the errors of `error` that the latest walk of `name`'s body raised, when that walk
-    /// failed, so a callback check that discards its call's result still reports them.
+    /// Reports whether a call reaching `name` now has to walk its failed body again
+    /// (`rewalk_failed_function_body_at_call`) instead of reading its provisional signature.
+    ///
+    /// Under the eval barrier a call to a function without a signature returns `mixed` without
+    /// walking the body, so a walk started there would consume the mark and check nothing; the
+    /// mark stays for the next call outside the barrier (`function o() { eval(""); f(1); }`).
+    fn failed_body_rewalk_is_due(&self, name: &str) -> bool {
+        self.rewalk_failed_body_at_next_call.contains(name)
+            && !self.eval_barrier_active
+            && !self.resolving_functions.contains(name)
+            && self.fn_decls.contains_key(name)
+    }
+
+    /// Returns the errors of `error` that the latest failed walk of a function body raised, so a
+    /// callback check that discards its call's result still reports them.
     ///
     /// A string callback whose function has no signature yet is resolved through
     /// `check_function_call` from checker-only placeholder arguments, and its result was
     /// discarded whole. A body error then reached no statement, so the driver never walked the
     /// body again and `array_map('f', $xs)` compiled a body that `f(1)` refuses. Only errors
-    /// recorded for the failed body come back; an argument refusal of the placeholders stays
-    /// discarded as before.
+    /// recorded for a failed body come back; an argument refusal of the placeholders stays
+    /// discarded as before. Every failed body is searched, not only the callback's own name: a
+    /// generic template walks and records its instantiation (`id<int>`) instead.
     pub(in crate::types::checker) fn failed_callback_body_errors(
         &self,
-        name: &str,
         error: &CompileError,
     ) -> Option<CompileError> {
-        let name = self
-            .canonical_function_name_folded(name)
-            .unwrap_or_else(|| name.to_string());
-        if self.completed_function_signatures.contains(name.as_str()) {
-            return None;
-        }
-        let recorded = self.failed_function_body_errors.get(name.as_str())?;
+        let recorded: Vec<&CompileError> = self
+            .failed_function_body_errors
+            .iter()
+            .filter(|(name, _)| !self.completed_function_signatures.contains(*name))
+            .flat_map(|(_, errors)| errors)
+            .collect();
         let body_errors: Vec<CompileError> = error
             .flatten()
             .into_iter()
