@@ -59,10 +59,10 @@ var_dump(sodium_crypto_pwhash_str_verify($hash, 'correct horse battery staple'))
 
 - Binary strings are fully supported: every input and output crosses the bridge
   as binary data, never as a NUL-terminated C string.
-- The by-reference functions mutate their argument exactly like php-src for locals and
-  array elements. Object-property targets are refused with a compile-time diagnostic
-  when the prelude wrapper needs an untyped reference cell (BLAKE2b, secretstream and
-  `sodium_memzero`), instead of silently losing the writeback. `sodium_memzero()` wipes
+- The eight by-reference functions mutate their argument exactly like php-src for
+  locals and array elements. Object-property targets are refused with a compile-time
+  diagnostic because the wrappers use an untyped reference cell to reproduce php-src's
+  own zval checks, instead of silently losing the writeback. `sodium_memzero()` wipes
   a uniquely owned string payload before converting the argument to `null`; BLAKE2b
   finalization and secretstream states also reset their reference to `null` after use.
 - Argument validation, exception classes, and messages match php-src 8.5,
