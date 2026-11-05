@@ -1268,6 +1268,16 @@ fn release_connection(conn_id: i64, reset_pgsql_session: bool) {
                 *count == 0
             }
         };
+        // A persistent MySQL link closed with an unreaped MYSQLI_ASYNC query is
+        // evicted (its drop shuts the worker's socket down), like mysqlnd closing
+        // such a link, instead of being pooled with its client still on the worker.
+        let pending_async = became_idle
+            && matches!(lock_recover(conns()).get(&conn_id),
+                Some(Conn::Mysql(connection)) if connection.has_pending_async());
+        if pending_async {
+            evict_persistent_connection(conn_id);
+            return;
+        }
         if became_idle && reset_pgsql_session {
             lock_recover(stmts()).retain(|_, statement| match statement {
                 Stmt::Postgres(statement) => statement.conn_id != conn_id,

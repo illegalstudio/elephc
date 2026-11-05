@@ -670,7 +670,8 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         ],
                         vec![
                         (e_binop(e_call("count", vec![e_var("constructor_args")]), BinOp::NotEq, e_int(0)), vec![
-                            s_throw(e_new("Exception", vec![e_binop(e_binop(e_str("mysqli_result::fetch_object(): Argument #2 ($constructor_args) must be empty when the specified class ("), BinOp::Concat, e_var("class")), BinOp::Concat, e_str(") does not have a constructor"))])),
+                            // PHP 8.3 turned this Exception into a ValueError.
+                            s_throw(e_new(if php_version >= PhpVersion::Php83 { "ValueError" } else { "Exception" }, vec![e_binop(e_binop(e_str("mysqli_result::fetch_object(): Argument #2 ($constructor_args) must be empty when the specified class ("), BinOp::Concat, e_var("class")), BinOp::Concat, e_str(") does not have a constructor"))])),
                         ]),
                     ],
                         None,

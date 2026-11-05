@@ -2553,7 +2553,20 @@ impl MyConn {
     /// Pings an idle client; an active row worker already proves the connection
     /// is live enough to remain a valid persistent handle.
     pub fn is_alive(&mut self) -> bool {
-        self.active_stream.is_some() || self.conn.ping().is_ok()
+        if self.active_stream.is_some() {
+            return true;
+        }
+        // A MYSQLI_ASYNC worker owns the client: the link cannot be checked out again
+        // until its query is cancelled, so a persistent pool replaces it.
+        if self.async_query.is_some() || self.conn.0.is_none() {
+            return false;
+        }
+        self.conn.ping().is_ok()
+    }
+
+    /// Whether a MYSQLI_ASYNC query is still in flight (not reaped) on this link.
+    pub fn has_pending_async(&self) -> bool {
+        self.async_query.is_some()
     }
 
     /// Updates the live `PDO::ATTR_FETCH_TABLE_NAMES` setting.

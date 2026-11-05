@@ -457,7 +457,7 @@ class mysqli_result implements IteratorAggregate {
         if (__elephc_class_has_constructor($class)) {
             call_user_func_array([$_object, "__construct"], $constructor_args);
         } elseif (count($constructor_args) != 0) {
-            throw new Exception("mysqli_result::fetch_object(): Argument #2 (\$constructor_args) must be empty when the specified class (" . $class . ") does not have a constructor");
+            throw new ValueError("mysqli_result::fetch_object(): Argument #2 (\$constructor_args) must be empty when the specified class (" . $class . ") does not have a constructor");
         }
         return $_object;
     }

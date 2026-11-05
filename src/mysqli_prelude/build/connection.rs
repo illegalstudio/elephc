@@ -53,6 +53,7 @@ use crate::synthetic_class::{
     s_array_push,
     s_assign,
     s_break,
+    s_continue,
     s_expr,
     s_for,
     s_foreach,
@@ -1787,6 +1788,25 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
+                    s_assign("_watched", e_int(0)),
+                    s_if(
+                        e_binop(e_var("error"), BinOp::StrictNotEq, e_null()),
+                        vec![
+                            s_foreach(e_var("error"), None, "_link", vec![
+                                s_if(
+                                    e_not(e_instance_of(e_var("_link"), "mysqli")),
+                                    vec![
+                                        s_throw(e_new("TypeError", vec![e_str("mysqli::poll(): Argument #1 ($read) must only contain objects of type mysqli")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("_watched", e_binop(e_var("_watched"), BinOp::Add, e_int(1))),
+                            ]),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_assign("_ready", e_array(vec![])),
                     s_assign("_budget", e_binop(e_binop(e_var("seconds"), BinOp::Mul, e_int(1000000)), BinOp::Add, e_var("microseconds"))),
                     s_assign("_deadline", e_binop(e_call("microtime", vec![e_bool(true)]), BinOp::Add, e_binop(e_var("_budget"), BinOp::Div, e_int(1000000)))),
@@ -1803,7 +1823,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                             ),
                         ]),
                         s_if(
-                            e_binop(e_binop(e_call("count", vec![e_var("_ready")]), BinOp::Gt, e_int(0)), BinOp::Or, e_binop(e_var("_count"), BinOp::Eq, e_int(0))),
+                            e_binop(e_binop(e_call("count", vec![e_var("_ready")]), BinOp::Gt, e_int(0)), BinOp::Or, e_binop(e_binop(e_var("_count"), BinOp::Eq, e_int(0)), BinOp::And, e_binop(e_var("_watched"), BinOp::Eq, e_int(0)))),
                             vec![
                                 s_break(1),
                             ],
@@ -1815,6 +1835,15 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                             e_binop(e_var("_left"), BinOp::LtEq, e_int(0)),
                             vec![
                                 s_break(1),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_if(
+                            e_binop(e_var("_count"), BinOp::Eq, e_int(0)),
+                            vec![
+                                s_expr(e_call("usleep", vec![e_var("_left")])),
+                                s_continue(1),
                             ],
                             vec![],
                             None,

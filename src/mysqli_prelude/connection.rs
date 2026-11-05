@@ -1139,6 +1139,19 @@ class mysqli {
                 }
             }
         }
+        // $error links only take part in mysqlnd's select() (for exceptional
+        // conditions, which a MySQL socket never raises), so they are validated
+        // like $read's (php names Argument #1 for both) and keep the call waiting
+        // for its timeout, never readying or rejecting anything themselves.
+        $_watched = 0;
+        if ($error !== null) {
+            foreach ($error as $_link) {
+                if (!($_link instanceof mysqli)) {
+                    throw new TypeError("mysqli::poll(): Argument #1 (\$read) must only contain objects of type mysqli");
+                }
+                $_watched = $_watched + 1;
+            }
+        }
         // Wait in short slices over every pending link until one is ready or
         // the timeout elapses (the bridge waits without holding any lock).
         $_ready = [];
@@ -1151,12 +1164,16 @@ class mysqli {
                     $_ready[] = $_link;
                 }
             }
-            if (count($_ready) > 0 || $_count == 0) {
+            if (count($_ready) > 0 || ($_count == 0 && $_watched == 0)) {
                 break;
             }
             $_left = (int) (($_deadline - microtime(true)) * 1000000);
             if ($_left <= 0) {
                 break;
+            }
+            if ($_count == 0) {
+                usleep($_left);
+                continue;
             }
             $_slice = $_left < 2000 ? $_left : 2000;
             foreach ($_pending as $_link) {

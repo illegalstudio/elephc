@@ -50,6 +50,14 @@ pub(super) fn source_for_version(php_version: PhpVersion) -> String {
     } else {
         remove_version_blocks(&mut source, "PHP < 8.4 mysqli constants");
     }
+    if php_version < PhpVersion::Php83 {
+        // Before PHP 8.3, constructor arguments for a class without a constructor
+        // raised an Exception instead of a ValueError.
+        source = source.replace(
+            "throw new ValueError(\"mysqli_result::fetch_object(): Argument #2",
+            "throw new Exception(\"mysqli_result::fetch_object(): Argument #2",
+        );
+    }
     if php_version < PhpVersion::Php82 {
         // mysqli::execute_query / mysqli_execute_query are PHP 8.2+.
         remove_version_blocks(&mut source, "PHP >= 8.2 mysqli execute_query");

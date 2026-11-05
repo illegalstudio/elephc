@@ -1236,6 +1236,66 @@ echo strlen($r->fetch_row()[0]), "|", var_export($r->fetch_row(), true), "|", $s
     assert_eq!(out, "100000|2006:MySQL server has gone away|2006\n100000|NULL|2006|MySQL server has gone away|1\n");
 }
 
+/// A persistent link closed with an unreaped `MYSQLI_ASYNC` query (either result mode) closes
+/// at once and does not poison the pool: the next `p:` connection with the same credentials
+/// runs queries right away. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_persistent_link_closed_with_pending_async_query() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+foreach ([MYSQLI_ASYNC, MYSQLI_ASYNC | MYSQLI_USE_RESULT] as $mode) {
+    $p = new mysqli("p:" . $host, $user, $pass, $dbname, $port);
+    $p->query("SELECT SLEEP(2)", $mode);
+    $start = microtime(true);
+    $p->close();
+    $closed = microtime(true) - $start;
+    $q = new mysqli("p:" . $host, $user, $pass, $dbname, $port);
+    $r = $q->query("SELECT 41 + 1");
+    echo $closed < 1.0 ? "early" : "late", ":", $r === false ? "failed:" . $q->errno : $r->fetch_row()[0], ":", microtime(true) - $start < 1.5 ? "fast" : "slow", "|";
+    $q->close();
+}
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "early:42:fast|early:42:fast|\n");
+}
+
+/// `mysqli_poll()` with links only in `$error` waits for its timeout (mysqlnd selects on them for
+/// exceptional conditions, which never come) instead of returning at once, validates those
+/// entries, and leaves readiness to `$read`. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_poll_waits_on_error_only_links() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$x = new mysqli($host, $user, $pass, $dbname, $port);
+$x->query("SELECT SLEEP(2)", MYSQLI_ASYNC);
+$start = microtime(true);
+$read = null;
+$error = [$x];
+$reject = [];
+$n = mysqli_poll($read, $error, $reject, 1);
+$waited = microtime(true) - $start;
+echo var_export($n, true), "|", $waited >= 0.9 && $waited < 1.8 ? "waited" : "returned", "|", var_export($read, true), "|", count($error), "|", count($reject);
+try {
+    $read = null;
+    $bad = [1];
+    mysqli_poll($read, $bad, $reject, 0);
+    echo "|accepted";
+} catch (TypeError $e) {
+    echo "|TypeError";
+}
+$read = [$x];
+$error = [$x];
+echo "|", mysqli_poll($read, $error, $reject, 3), "|", count($read), "|", count($error), "|", $x->reap_async_query()->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "0|waited|NULL|0|0|TypeError|1|1|0|0\n");
+}
+
 /// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
 /// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
 /// the set is unread, and the statistics count one unbuffered set. Expected output is
@@ -1703,7 +1763,7 @@ echo "ctor-saw=", $o->before, "|tag=", $o->tag;
 try {
     $db->query("SELECT '7' AS id")->fetch_object("Bare", ["x"]);
     echo "|bare=accepted";
-} catch (Exception $e) {
+} catch (ValueError $e) {
     echo "|bare=", get_class($e), ":", $e->getMessage();
 }
 $db->query("DROP TABLE IF EXISTS mbig");
@@ -1731,7 +1791,7 @@ echo "|client=", (int) mysqli_get_client_stats()["bytes_received"] >= (int) $aft
     ));
     assert_eq!(
         out,
-        "ctor-saw=7|tag=t|bare=Exception:mysqli_result::fetch_object(): Argument #2 ($constructor_args) must be empty when the specified class (Bare) does not have a constructor|small=int(5)\n|big=string(20) \"18446744073709551610\"\n|stmt=18446744073709551611|proc=18446744073709551611|link=18446744073709551611|sent=33|recv-big=y|pkts=2|overhead=y|client=y"
+        "ctor-saw=7|tag=t|bare=ValueError:mysqli_result::fetch_object(): Argument #2 ($constructor_args) must be empty when the specified class (Bare) does not have a constructor|small=int(5)\n|big=string(20) \"18446744073709551610\"\n|stmt=18446744073709551611|proc=18446744073709551611|link=18446744073709551611|sent=33|recv-big=y|pkts=2|overhead=y|client=y"
     );
 }
 
