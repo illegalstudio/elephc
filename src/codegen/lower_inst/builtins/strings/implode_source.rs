@@ -191,47 +191,73 @@ fn emit_implode_resource_type_error(ctx: &mut FunctionContext<'_>, name: &str, p
 /// A weak one-argument Stringable runs its conversion before the missing-array error.
 fn emit_implode_stringable_separator(ctx: &mut FunctionContext<'_>, array: ValueId, name: &str) -> Result<()> {
     let missing = ctx.next_label("implode_separator_not_stringable");
-    let fallback = ctx.next_label("implode_separator_eval_stringable");
-    let convert = ctx.next_label("implode_separator_convert");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_tostring_count", 0);
-            ctx.emitter.instruction("ldr x9, [x1]");                            // read the class id after the symbol helper has used x9 as scratch
-            ctx.emitter.instruction("cmp x9, x10");                             // reject synthetic and out-of-range class ids before indexing
-            ctx.emitter.instruction(&format!("b.hs {}", fallback));             // probe the owning eval context for a non-native class id
-            abi::emit_symbol_address(ctx.emitter, "x10", "_class_tostring_ptrs");
-            ctx.emitter.instruction("ldr x10, [x10, x9, lsl #3]");              // find the concrete or inherited conversion hook
-            ctx.emitter.instruction(&format!("cbz x10, {}", fallback));         // eval objects may use a native carrier without its own string hook
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov r9, QWORD PTR [rdi]");                 // inspect the object's concrete class without consuming it
-            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_class_tostring_count", 0);
-            ctx.emitter.instruction("cmp r9, r10");                             // reject synthetic and out-of-range class ids before indexing
-            ctx.emitter.instruction(&format!("jae {}", fallback));              // probe the owning eval context for a non-native class id
-            abi::emit_symbol_address(ctx.emitter, "r10", "_class_tostring_ptrs");
-            ctx.emitter.instruction("mov r10, QWORD PTR [r10 + r9*8]");         // find the concrete or inherited conversion hook
-            ctx.emitter.instruction("test r10, r10");                           // test whether the receiver has a native string conversion hook
-            ctx.emitter.instruction(&format!("jz {}", fallback));               // eval objects may use a native carrier without its own string hook
-        }
-    }
-    abi::emit_jump(ctx.emitter, &convert);
-    ctx.emitter.label(&fallback);
+    let native = ctx.next_label("implode_separator_native_stringable");
+    let intrinsic = ctx.next_label("implode_separator_intrinsic_stringable");
+    let accepted = ctx.next_label("implode_separator_accepted");
     if ctx.module.required_runtime_features.eval_bridge {
         ctx.load_value_to_result(array)?;
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), unboxed_payload_reg(ctx));
         let probe = ctx.emitter.target.extern_symbol("__elephc_eval_dynamic_object_has_to_string");
         abi::emit_call_label(ctx.emitter, &probe);
-        abi::emit_branch_if_int_result_zero(ctx.emitter, &missing);
-    } else {
-        abi::emit_jump(ctx.emitter, &missing);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &native);
+        super::super::eval::emit_discarded_object_string_context(ctx, array)?;
+        abi::emit_jump(ctx.emitter, &accepted);
     }
-    ctx.emitter.label(&convert);
+    ctx.emitter.label(&native);
+    // The eval predicate is a C call and may clobber the unboxed payload registers.
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_tostring_count", 0);
+            ctx.emitter.instruction("ldr x9, [x1]");                            // read the class id after the symbol helper has used x9 as scratch
+            ctx.emitter.instruction("cmp x9, x10");                             // reject synthetic and out-of-range class ids before indexing
+            ctx.emitter.instruction(&format!("b.hs {}", intrinsic));            // an unknown class has no callable native hook
+            abi::emit_symbol_address(ctx.emitter, "x10", "_class_tostring_ptrs");
+            ctx.emitter.instruction("ldr x10, [x10, x9, lsl #3]");              // find the concrete or inherited conversion hook
+            ctx.emitter.instruction(&format!("cbz x10, {}", intrinsic));        // builtin Throwable conversion has no source-method table entry
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rdi]");                 // inspect the object's concrete class without consuming it
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_class_tostring_count", 0);
+            ctx.emitter.instruction("cmp r9, r10");                             // reject synthetic and out-of-range class ids before indexing
+            ctx.emitter.instruction(&format!("jae {}", intrinsic));             // an unknown class has no callable native hook
+            abi::emit_symbol_address(ctx.emitter, "r10", "_class_tostring_ptrs");
+            ctx.emitter.instruction("mov r10, QWORD PTR [r10 + r9*8]");         // find the concrete or inherited conversion hook
+            ctx.emitter.instruction("test r10, r10");                           // test whether the receiver has a native string conversion hook
+            ctx.emitter.instruction(&format!("jz {}", intrinsic));              // builtin Throwable conversion has no source-method table entry
+        }
+    }
     ctx.load_value_to_result(array)?;
     abi::emit_call_label(ctx.emitter, "__rt_implode_cast_string");
     let (ptr, _) = abi::string_result_regs(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), ptr);
     abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+    abi::emit_jump(ctx.emitter, &accepted);
+
+    ctx.emitter.label(&intrinsic);
+    if let Some(throwable) = ctx.module.interface_infos.get("Throwable") {
+        let interface_id = throwable.interface_id;
+        ctx.load_value_to_result(array)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x0, [x1]");                        // test the receiver's actual class for intrinsic Throwable conversion
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");            // test the receiver's actual class for intrinsic Throwable conversion
+            }
+        }
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), interface_id as i64);
+        abi::emit_call_label(ctx.emitter, "__rt_class_implements_interface");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &missing);
+        // The remaining Throwable hook is builtin and side-effect free; its text is discarded.
+        // User overrides already took the eval or native hook path above.
+    } else {
+        abi::emit_jump(ctx.emitter, &missing);
+    }
+    ctx.emitter.label(&accepted);
     super::super::exceptions::emit_type_error(ctx, &format!("{name}(): {IMPLODE_NULL_TYPE_ERROR}"));
     ctx.emitter.label(&missing);
     Ok(())

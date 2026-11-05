@@ -133,8 +133,8 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_object_class_name(
 
 /// Probes an eval-created object's stringability without invoking user code.
 ///
-/// Compiled argument guards can consult this when the raw object's synthetic class id cannot
-/// index the native `__toString` table. The owning eval context is recovered from the dynamic
+/// Compiled argument guards consult this before native carrier metadata so eval overrides
+/// take precedence over inherited hooks. The owning eval context is recovered from the dynamic
 /// object registry. Returns 1 when conversion is available, or 0 on a missing owner, invalid
 /// ABI, failed lookup, or panic, matching the fail-closed contract of the other predicates.
 ///
@@ -153,7 +153,7 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_object_has_to_string(
         let Some(context) = context.as_mut() else { return 0; };
         if context.abi_version() != ABI_VERSION { return 0; }
         let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-        let Ok(boxed) = values.raw_heap_word_value(object as u64) else { return 0; };
+        let Ok(boxed) = ElephcRuntimeOps::object_from_raw(object) else { return 0; };
         let available = interpreter::execute_context_object_has_to_string(
             context, boxed.borrowed(), &mut values,
         );
