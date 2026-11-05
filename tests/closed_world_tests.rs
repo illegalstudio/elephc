@@ -807,6 +807,7 @@ function write(AbsentState $multi, int $id) {
     $multi->lastTimeout = null;
     $multi->openHandles[$id] = 1;
     ++$multi->responseCount;
+    unset($multi->pushed['site'][$id]);
 }
 function read(Gone $repo) {
     $result = $repo->load();

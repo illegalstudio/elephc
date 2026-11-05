@@ -165,9 +165,15 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// are refused on purpose, a packed-list property and an untyped static array, are reported by
 /// EIR lowering with a source span before this fallback is reached.
 pub(super) fn lower_unset_builtin(
-    _ctx: &mut FunctionContext<'_>,
+    ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    // The receiver of an unset this far down is a class a closed world could not load
+    // (`AmpClientState` over an uninstalled amphp): no object of it exists, so this never runs.
+    if ctx.module.closed_world {
+        crate::codegen::lower_inst::exceptions::emit_error(ctx, "Cannot unset a property of a class that could not be loaded");
+        return Ok(());
+    }
     Err(CodegenIrError::unsupported(format!(
         "unset target shape with {} lowered operands (supported: variables, \
          array/hash elements, elements of declared `array` or associative object \
