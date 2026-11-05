@@ -212,7 +212,7 @@ pub(super) fn check_property_array_assign(
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
-    let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
+    let normalized_idx_ty = property_write_key_type(normalized_array_key_type(index, idx_ty.clone()));
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let obj_ty = checker.union_single_object_class(&obj_ty)
         .filter(|_| matches!(&obj_ty, PhpType::Union(members)
@@ -252,8 +252,7 @@ pub(super) fn check_property_array_assign(
                 checker,
                 &prop_ty,
                 property_has_declared_type,
-                class_name,
-                property,
+                &format!("Property {}::${}[]", class_name, property),
                 index,
                 &normalized_idx_ty,
                 &val_ty,
@@ -997,12 +996,17 @@ fn updated_array_property_push_type(
 ///   for untyped properties.
 /// - For `AssocArray`: merges the key type with the index type and merges the value type with
 ///   the assigned value, preserving declared-type constraints.
-fn updated_array_property_assign_type(
+///
+/// `element_label` names the written element in compatibility diagnostics (`Property C::$p[]`,
+/// `Static property C::$p[]`): static properties share this promotion so a string key on an
+/// untyped `[]` slot stores a hash instead of an indexed array that drops the key. A key that
+/// is not provably an integer on a declared packed `array<T>` is refused, since that slot
+/// keeps its packed storage and the write would coerce the key into an index.
+pub(super) fn updated_array_property_assign_type(
     checker: &Checker,
     prop_ty: &PhpType,
     property_has_declared_type: bool,
-    class_name: &str,
-    property: &str,
+    element_label: &str,
     index: &Expr,
     normalized_idx_ty: &PhpType,
     val_ty: &PhpType,
@@ -1017,12 +1021,26 @@ fn updated_array_property_assign_type(
                 || (matches!(elem_ty.as_ref(), PhpType::Never)
                     && static_array_key_forces_hash_storage(index))
             {
+                // A declared `array<T>` is a packed vector that keeps its storage, so a key
+                // that is not provably an integer would be coerced into an index and a string
+                // key would overwrite element 0 in silence. Only `array<mixed>` switches to
+                // hash storage (`declared_generic_array_can_use_assoc_storage`).
+                if property_has_declared_type && !matches!(elem_ty.as_ref(), PhpType::Mixed) {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "Array index must be integer: {} is a packed array<{}>; cast the key with (int) or declare it array<K, V>",
+                            element_label.trim_end_matches("[]"),
+                            elem_ty
+                        ),
+                    ));
+                }
                 if property_has_declared_type {
                     checker.require_compatible_arg_type(
                         elem_ty.as_ref(),
                         val_ty,
                         span,
-                        &format!("Property {}::${}[]", class_name, property),
+                        element_label,
                     )?;
                 }
                 return Ok(assoc_property_type_after_keyed_write(
@@ -1038,7 +1056,7 @@ fn updated_array_property_assign_type(
                     elem_ty.as_ref(),
                     val_ty,
                     span,
-                    &format!("Property {}::${}[]", class_name, property),
+                    element_label,
                 )?;
                 Ok(PhpType::Array(elem_ty.clone()))
             } else if elem_ty.as_ref() == val_ty {
@@ -1059,7 +1077,7 @@ fn updated_array_property_assign_type(
                     existing_value.as_ref(),
                     val_ty,
                     span,
-                    &format!("Property {}::${}[]", class_name, property),
+                    element_label,
                 )?;
             }
             let merged_key = merge_array_key_types(*key.clone(), normalized_idx_ty.clone());
@@ -1085,8 +1103,43 @@ fn updated_array_property_assign_type(
     }
 }
 
+/// Widens a scalar key union such as `int|string` or `?int` to the `Mixed` key of a property
+/// element write.
+///
+/// A variable `string` key already normalizes to `Mixed` (it may be an integer string), and
+/// a union of string, bool, null and int-castable members is the same runtime key: the boxed
+/// value the hash store converts with PHP's key rules (null becomes `""`, a bool its integer).
+/// Left whole, the union failed the key check, and inside a function body that refusal was
+/// dropped with the stale initial errors, so the write compiled as an indexed `array_set` and
+/// lost every string key. A plain `int|float` union keeps its refusal.
+pub(super) fn property_write_key_type(key: PhpType) -> PhpType {
+    match &key {
+        PhpType::Union(members)
+            if members.iter().any(|member| {
+                matches!(
+                    member,
+                    PhpType::Str | PhpType::Bool | PhpType::False | PhpType::Void
+                )
+            }) && members.iter().all(|member| {
+                matches!(
+                    member,
+                    PhpType::Int
+                        | PhpType::Str
+                        | PhpType::Bool
+                        | PhpType::False
+                        | PhpType::Float
+                        | PhpType::Void
+                )
+            }) =>
+        {
+            PhpType::Mixed
+        }
+        _ => key,
+    }
+}
+
 /// Returns true if `ty` is a valid PHP array key type (Int, Str, or Mixed).
-fn is_php_array_key_type(ty: &PhpType) -> bool {
+pub(super) fn is_php_array_key_type(ty: &PhpType) -> bool {
     // `int|float` stays out, unlike the plain-local subscript which accepts it: an element write
     // through a PROPERTY lowers to `array_set` with a boxed index, and the backend has no arm
     // for one — `array_set index PHP type Mixed`, the same answer a `mixed` index gets. Letting
