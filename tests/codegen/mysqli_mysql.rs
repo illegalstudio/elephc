@@ -646,9 +646,18 @@ echo "|", $db->store_result() === false ? "nores" : "res";
 echo "|", $db->more_results() ? "more" : "nomore";
 $r = $db->query("SELECT 7");
 echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : ("no:" . $db->errno);
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$db->multi_query("SELECT (SELECT v FROM mde) AS s FROM mde; SELECT 99");
+try {
+    $db->store_result();
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode();
+}
+echo "|", $db->query("SELECT 8")->fetch_column(0);
 "#,
     ));
-    assert_eq!(out, "mq|0|nores|nomore|7");
+    assert_eq!(out, "mq|0|nores|nomore|7|1242|8");
 }
 
 /// Multi-statements are off on a mysqli session, like mysqlnd's: compound-body DDL is ONE

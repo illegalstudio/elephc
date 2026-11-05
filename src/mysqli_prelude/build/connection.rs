@@ -3198,6 +3198,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         e_binop(e_var("_result"), BinOp::StrictEq, e_null()),
                         vec![
                             s_expr(e_method_call(e_this(), "closeLive", vec![])),
+                            s_expr(e_method_call(e_this(), "__elephcReportError", vec![])),
                             s_return(e_null()),
                         ],
                         vec![],
@@ -3347,7 +3348,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
                         vec![
-                            s_expr(e_method_call(e_this(), "opFailed", vec![])),
+                            s_expr(e_method_call(e_this(), "__elephcAdoptBridgeError", vec![])),
                             s_return(e_null()),
                         ],
                         vec![],

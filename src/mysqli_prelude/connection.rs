@@ -2045,6 +2045,7 @@ class mysqli {
         $_result = $this->drainResultSet($this->liveStmt, $this->liveStep, $_cols);
         if ($_result === null) {
             $this->closeLive();
+            $this->__elephcReportError();
             return null;
         }
         $this->finishSet();
@@ -2163,7 +2164,9 @@ class mysqli {
             $_rc = elephc_pdo_step($stmt);
         }
         if ($_rc < 0) {
-            $this->opFailed();
+            // Recorded only: the caller releases the live batch, then reports (under
+            // STRICT the report throws, and the link must be free afterwards).
+            $this->__elephcAdoptBridgeError();
             return null;
         }
         $this->bump("buffered_sets");
