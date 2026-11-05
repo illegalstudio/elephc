@@ -199,6 +199,9 @@ pub(super) fn lower_const_null(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Lowers explicit Mixed boxing for scalar, string, object, and existing Mixed operands.
 pub(super) fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(cell) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return super::arithmetic::stack_cell::lower_box(ctx, inst, cell);
+    }
     let value = expect_operand(inst, 0)?;
     let source_ty = ctx.load_value_to_result(value)?;
     let raw_source_ty = ctx.raw_value_php_type(value)?;

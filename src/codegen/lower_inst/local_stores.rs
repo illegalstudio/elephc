@@ -21,6 +21,14 @@ pub(in crate::codegen) use owned_output::publish_current_owned_output;
 pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
+    if let Some(cell) = ctx.numeric_seed_offsets.get(&slot).copied() {
+        let seed = ctx.function.value(value).is_some_and(|metadata| {
+            crate::codegen::stack_numeric::scalar_numeric(&metadata.ir_type, &metadata.php_type)
+        });
+        if seed && ctx.local_slot_is_raw(slot) {
+            return super::arithmetic::stack_cell::store_seed(ctx, slot, value, cell);
+        }
+    }
     // Parking a call operand can happen after a sibling scratch string was evaluated.
     // Only an ordinary PHP assignment ends the concat lifetime, not a temporary owner store.
     let reset_concat_after_store = ctx.local_kind(slot)? == LocalKind::PhpLocal

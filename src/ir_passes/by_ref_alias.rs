@@ -151,6 +151,7 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             | IToF | FToI | IToStr | FToStr | BoolToStr | StrToI | StrToF | StrToNumber
             | ResourceToStr | Cast | MixedBox | MixedUnbox | MixedCastBool | MixedCastInt
             | MixedCastFloat | MixedCastString | ReturnBoundaryMixedToInt
+            | PropertyBoundaryCheckedToInt
             // String value operations.
             | StrConcat | StrAppend | StrLen | StrPersist | StrCharAt | StrInterpolate | StrIncDec
             // Output operations consume their operand by value.

@@ -179,7 +179,9 @@ add/subtract/multiply or numeric increment can reuse a 24-byte frame cell: two i
 checked integer arithmetic, while an existing float remains a float. Both input
 payloads are read before the output cell changes. Proven numeric relational
 comparisons avoid temporary boxes, compare integer pairs exactly and reject
-unordered NaN predicates. Unknown tags, calls, references
+unordered NaN predicates. Proven numeric `===` and `!==` compare tags inline:
+an integer is never identical to a float, integers compare exactly and floats
+use IEEE equality. Unknown tags, calls, references
 and escaping pointers keep ordinary heap-backed operations.
 
 `examples/constant-rematerialization/main.php` demonstrates bounded sample
@@ -190,7 +192,8 @@ accumulation with immediate masks, scaling, increments, and a fixed loop bound.
 Integer destinations expose checked arithmetic conversion in EIR before assigning
 call-operand owners. Direct, method, static and statically known callable arguments,
 including named and static spread arguments, can therefore use the existing checked
-integer sinks. Explicit `int` local declarations apply the same conversion to their
+integer sinks. Exact `float` parameters expose the same tree's float cast, so an
+in-range integer converts once and an overflowed tree passes its promoted double. Explicit `int` local declarations apply the same conversion to their
 initializer and later arithmetic assignments. Inferred locals retain PHP's dynamic
 integer or float result. Only add/subtract/multiply trees with concrete integer
 leaves take this path; unknown Mixed sources keep the ordinary boundary conversion.
@@ -209,13 +212,17 @@ cells described below, without allocating heap cells.
 add/subtract/multiply results from checked integer or proven numeric Mixed
 operations, plus numeric increments or decrements, whose complete pointer lifetime
 remains in the current activation. Numeric observations and one ordinary local
-are permitted, including a declared integer return check whose result copies the
-payload and preserves its TypeError guard. A checked result may also feed another
+are permitted, including a declared integer return check or a declared `int`
+property narrowing (`PropertyBoundaryCheckedToInt`), whose result copies the payload
+and preserves its TypeError guard. That narrowing is why `$this->count++` on a
+declared `int` property stores a raw word without a heap cell. A checked result may also feed another
 closed numeric add/subtract/multiply or increment; every input must be proven
 integer or float, including all local writers. A float tag remains floating point
 on subsequent operations. A same-block ordered comparison may consume the result
 directly when both operands have proven numeric origins, as in the trial-division
-condition `$divisor * $divisor <= $candidate`. The product retains overflow-to-float
+condition `$divisor * $divisor <= $candidate`. Strict identity against a proven
+numeric partner is admitted on the same terms, including reads of the owning local
+as in `$value = $i * 4; if ($value !== 20)`. The product retains overflow-to-float
 semantics; this does not require or imply an integer range proof for either counter.
 Integer casts of selected frame cells or reads of proven numeric locals inspect
 the runtime tag and load an integer payload directly. A float keeps the existing
@@ -225,6 +232,15 @@ it only when the complete function region proves the conditional jump in range.
 Unknown values, references and warning-sensitive string-offset or implicit casts
 keep their existing lowering. This reuses frame proofs without adding graph scans
 or changing the representation of a loop counter.
+A proven numeric local also owns one seed cell when an integer or float value is
+stored into it directly, as `$row = $bounds[$box]->first` stores a packed field. The
+store writes the tag and payload into that cell instead of boxing on the heap.
+Re-entering the loop rewrites the same cell, because every read of the slot copies its
+payload before the next store. An explicit `mixed_box` of a raw integer or float,
+such as a guarded counter's exit publication, is a cell producer when the local is
+its only owner. A guarded entry's tag test reads its seed in the same block as the
+payload copy. Nested loops with field-seeded counters therefore allocate nothing
+per loop entry.
 Private slots in the executable main frame use the same lifetime proof; globals
 retain heap storage. A string cast of the final value is an observation, not an
 escape: the formatter reads the tag and payload and numeric tags render into concat

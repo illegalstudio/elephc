@@ -121,7 +121,9 @@ fn lower_signature_argument(
     let reference_local = sig.ref_params.get(index).copied().unwrap_or(false)
         .then(|| local_values::lower_reference_local(ctx, arg)).flatten();
     let lowered = reference_local.unwrap_or_else(|| match sig.params.get(index) {
-        Some((_, param_ty)) => lower_expr_for_parameter(ctx, arg, param_ty),
+        Some((_, param_ty)) => lower_expr_for_parameter(
+            ctx, arg, param_ty, super::integer_destinations::parameter_is_source_typed(sig, index),
+        ),
         None => lower_expr(ctx, arg),
     });
     record_pointer_reference_argument(ctx, sig, index, arg);

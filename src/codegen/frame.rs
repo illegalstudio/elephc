@@ -74,6 +74,7 @@ pub(super) struct FrameLayout {
     pub(super) value_placement: ValuePlacement,
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
+    pub(super) numeric_seed_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_local_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
@@ -147,6 +148,11 @@ pub(super) fn layout_for_function(
             numeric_cell_offsets.insert(value, offset);
         }
     }
+    let mut numeric_seed_offsets = HashMap::new();
+    for slot in numeric.seed_slots {
+        offset += 24;
+        numeric_seed_offsets.insert(slot, offset);
+    }
     let mut ref_cell_state_offsets = HashMap::new();
     let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
     ref_cell_slots.sort_by_key(|slot| slot.as_raw());
@@ -213,6 +219,7 @@ pub(super) fn layout_for_function(
         value_placement,
         local_offsets,
         numeric_cell_offsets,
+        numeric_seed_offsets,
         numeric_local_slots: numeric.locals,
         numeric_values: numeric.proven_values,
         ref_cell_state_offsets,

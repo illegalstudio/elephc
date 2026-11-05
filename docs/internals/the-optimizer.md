@@ -573,7 +573,9 @@ For a canonical counter that lacks a static overflow proof,
 guarded integer copy. Both the seed and the invariant bound must have integer
 tags. Inclusive ascending bounds must differ from `PHP_INT_MAX`, and descending
 ones from `PHP_INT_MIN`. The copied counter uses private scalar storage, and each
-normal exit publishes its final integer into the original boxed slot. Float
+normal exit publishes its final integer into the original boxed slot. The entry
+test copies the seed payload beside its tag check, so a numeric seed and that exit
+box can use the backend's frame cells instead of heap boxes. Float
 bounds, overflowing seeds and unsafe inclusive bounds follow the original loop.
 Mutable bounds, escaping SSA values, references, dynamic scopes, handlers and
 suspension are excluded. Only innermost loops of at most 256 instructions qualify,

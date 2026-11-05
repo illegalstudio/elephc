@@ -122,7 +122,8 @@ the current stack frame when codegen proves the entire lifetime cannot escape.
 The cell has the ordinary runtime tag and payload but no heap header, and it
 must never reach a heap release or outlive its producing activation. Its
 overflow branch computes the operation's float result from the original
-operands. References, `eval`, suspension, delayed reads and unknown consumers
+operands. A proven numeric local also owns one seed cell for raw integer or float
+stores, so re-entering a counter loop does not box its seed. References, `eval`, suspension, delayed reads and unknown consumers
 retain ordinary heap storage. See
 [Frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells).
 
@@ -172,7 +173,8 @@ This limits additional stack use to simultaneously live transient values instead
 of the total number of operations in a long expression.
 
 `src/codegen/stack_numeric.rs` proves the complete use graph before frame layout.
-Only same-block scalar observations, closed numeric producers, ownership
+Only same-block scalar observations, numeric ordered or strict identity
+comparisons, closed numeric producers, ownership
 scaffolding and one ordinary local or owned operand slot may consume a selected
 pointer. Declared integer returns copy the payload and retain their type check.
 Every access to the owning slot must preserve the numeric storage contract. A

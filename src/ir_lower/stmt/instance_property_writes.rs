@@ -522,6 +522,15 @@ pub(super) fn lower_property_assign_without_native(
     // Without it the store would write the box POINTER into the field; with a coercion it would
     // silently truncate the overflow promotion an integer box exists to carry.
     let value = narrow_mixed_value_for_fixed_layout_field(ctx, object.value, property, value, span);
+    // A checked integer result headed for a plain declared `int` slot is verified here and stored
+    // as a raw word instead of a heap-boxed Mixed. Accessor routes keep the original PHP tag.
+    let value = if !preserve_property_operand && writes_plain_property_slot(ctx, object.value, property) {
+        crate::ir_lower::expr::narrow_checked_integer_for_int_property(
+            ctx, object.value, property, value, span,
+        )
+    } else {
+        value
+    };
     let retained_abstract_setter = receiver_retains_abstract_setter(ctx, object.value, property);
     let value = box_value_for_runtime_shaped_receiver(ctx, object, value, span);
     // The backing slot may be wider than its inherited setter. Preserve the runtime value's
@@ -665,6 +674,24 @@ fn receiver_retains_abstract_setter(
             .any(|info| info.retained_abstract_setter(property).is_some()),
         _ => false,
     }
+}
+
+/// Returns whether this write reaches the property slot directly rather than an accessor.
+///
+/// An inherited abstract setter, a `__set` method or a set hook (outside its own accessor) all
+/// observe the original PHP value, so a checked integer must keep its tag for them. A hook on
+/// the same name in ANY class also declines: a subclass can redeclare the property with a hook
+/// that only a runtime-class dispatch reaches, and that hook must receive the PHP value.
+fn writes_plain_property_slot(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> bool {
+    !receiver_retains_abstract_setter(ctx, object, property)
+        && !magic_set_receiver_has_method(ctx, object, property)
+        && !(set_hook_receiver_has_accessor(ctx, object, property)
+            && !ctx.in_own_property_accessor(property))
+        && !ctx.classes.values().any(|info| info.property_hooks.get(property).is_some_and(|hooks| hooks.set))
 }
 
 /// Boxes a concrete value assigned through a receiver whose CLASS is only known at run time.
