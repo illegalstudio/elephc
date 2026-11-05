@@ -14,6 +14,11 @@ workspace `Cargo.toml`, with these additions in `src/conn/mod.rs` (marked `eleph
   (`OptsBuilder::multi_statements`, default `true`) that lets a mysqli handshake omit
   `CLIENT_MULTI_STATEMENTS`, and `mariadb_extensions` (`OptsBuilder::mariadb_extensions`,
   default `true`) that lets it skip MariaDB's extended capabilities like mysqlnd.
+- `Conn::exec_iter_with_cursor(stmt, params, cursor_type)`: `COM_STMT_EXECUTE` with the
+  cursor-type flags byte (the upstream request builder always sends
+  `CURSOR_TYPE_NO_CURSOR`), whose metadata EOF is parsed for `SERVER_STATUS_CURSOR_EXISTS`,
+  and `Conn::stmt_fetch(stmt_id, num_rows, columns)`: `COM_STMT_FETCH` (mysqli's
+  `MYSQLI_CURSOR_TYPE_READ_ONLY` statements).
 - mysqlnd-exact wire statistics: `IO_STAT_NAMES`, `IoCounters`, the per-command response
   state machine that picks the mysqlnd packet reader of each received packet, and the
   `CountedStream` wrapper that counts raw received bytes.

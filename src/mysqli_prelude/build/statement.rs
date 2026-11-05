@@ -100,6 +100,8 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
         .private_prop("warningCount", TypeExpr::Int, Some(e_int(0)))
         .private_prop("attrUpdateMaxLength", TypeExpr::Int, Some(e_int(0)))
         .private_prop("attrCursorType", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("cursorOpen", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("cursorSpent", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("attrPrefetchRows", TypeExpr::Int, Some(e_int(1)))
         .method(
             method("__construct")
@@ -300,6 +302,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     ]),
                     s_prop_assign(e_this(), "bindTypes", e_var("types")),
                     s_prop_assign(e_this(), "paramReader", e_var("reader")),
+                    s_expr(e_method_call(e_this(), "clearError", vec![])),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -338,6 +341,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_prop_assign(e_this(), "resultWriter", e_var("writer")),
+                    s_expr(e_method_call(e_this(), "clearError", vec![])),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -375,6 +379,14 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         e_not(e_method_call(e_this(), "requireLinkNotBusy", vec![])),
                         vec![
                             s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_this_prop("hasPending"), BinOp::And, e_this_prop("cursorOpen")),
+                        vec![
+                            s_expr(e_method_call(e_this(), "drainCursor", vec![])),
                         ],
                         vec![],
                         None,
@@ -464,6 +476,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     ),
                     s_expr(e_method_call(e_this(), "clearLongData", vec![])),
                     s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_execute")])),
+                    s_expr(e_call("elephc_pdo_mysql_set_cursor_type", vec![e_this_prop("stmt"), e_this_prop("attrCursorType")])),
                     s_assign("_rc", e_call("elephc_pdo_mysql_execute", vec![e_this_prop("stmt")])),
                     s_if(
                         e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
@@ -473,6 +486,8 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
+                    s_prop_assign(e_this(), "cursorOpen", e_binop(e_call("elephc_pdo_mysql_cursor_open", vec![e_this_prop("stmt")]), BinOp::Eq, e_int(1))),
+                    s_prop_assign(e_this(), "cursorSpent", e_bool(false)),
                     s_assign("_cols", e_call("elephc_pdo_column_count", vec![e_this_prop("stmt")])),
                     s_prop_assign(e_this(), "field_count", e_var("_cols")),
                     s_prop_assign(e_this(), "cellKinds", e_array(vec![])),
@@ -569,6 +584,15 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                                 vec![],
                                 None,
                             ),
+                            s_if(
+                                e_this_prop("cursorSpent"),
+                                vec![
+                                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_fetch")])),
+                                    s_return(e_bool(false)),
+                                ],
+                                vec![],
+                                None,
+                            ),
                             s_return(e_null()),
                         ],
                         vec![],
@@ -579,6 +603,14 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         vec![
                             s_prop_assign(e_this(), "unbufferedCounted", e_bool(true)),
                             s_expr(e_method_call(e_this(), "linkStat", vec![e_str("ps_unbuffered_sets"), e_int(1), e_bool(true)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_this_prop("cursorOpen"),
+                        vec![
+                            s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_fetch")])),
                         ],
                         vec![],
                         None,
@@ -598,6 +630,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_this_prop("pendingStep"), BinOp::Eq, e_int(0)),
                         vec![
+                            s_prop_assign(e_this(), "cursorSpent", e_this_prop("cursorOpen")),
                             s_expr(e_method_call(e_this(), "finishResultSet", vec![])),
                             s_return(e_null()),
                         ],
@@ -610,7 +643,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     ]),
                     s_prop_assign(e_this(), "num_rows", e_binop(e_this_prop("num_rows"), BinOp::Add, e_int(1))),
                     s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_server_ps"), e_int(1), e_bool(true)])),
-                    s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_client_ps_unbuffered"), e_int(1), e_bool(true)])),
+                    s_expr(e_method_call(e_this(), "linkStat", vec![e_ternary(e_this_prop("cursorOpen"), e_str("rows_fetched_from_client_ps_cursor"), e_str("rows_fetched_from_client_ps_unbuffered")), e_int(1), e_bool(true)])),
                     s_prop_assign(e_this(), "pendingStep", e_int(2)),
                     s_expr(e_method_call(e_this(), "writeRow", vec![e_var("_row")])),
                     s_return(e_bool(true)),
@@ -621,18 +654,13 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                 .returns(t_union(vec![t_class("mysqli_result"), TypeExpr::False]))
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    // mysqlnd refuses get_result() once store_result() buffered the set: the
+                    // two APIs cannot be combined, and the stored rows stay fetchable.
                     s_if(
                         e_this_prop("stored"),
                         vec![
-                            s_assign("_cells", e_array(vec![])),
-                            s_assign("_rows", e_binop(e_this_prop("storedCount"), BinOp::Sub, e_this_prop("storedPos"))),
-                            s_assign("_start", e_binop(e_this_prop("storedPos"), BinOp::Mul, e_this_prop("field_count"))),
-                            s_assign("_end", e_binop(e_this_prop("storedCount"), BinOp::Mul, e_this_prop("field_count"))),
-                            s_for(Some(s_assign("_i", e_var("_start"))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_end"))), Some(s_expr(e_post_inc("_i"))), vec![
-                                s_array_push("_cells", e_index(e_this_prop("storedCells"), e_var("_i"))),
-                            ]),
-                            s_prop_assign(e_this(), "storedPos", e_this_prop("storedCount")),
-                            s_return(e_method_call(e_this(), "buildResult", vec![e_var("_cells"), e_var("_rows")])),
+                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2014), e_str("Commands out of sync; you can't run this command now"), e_str("HY000")])),
+                            s_return(e_bool(false)),
                         ],
                         vec![],
                         None,
@@ -649,6 +677,25 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                                 None,
                             ),
                             s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_this_prop("cursorOpen"),
+                        vec![
+                            s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_fetch")])),
+                            s_if(
+                                e_binop(e_call("elephc_pdo_mysql_cursor_fetch_all", vec![e_this_prop("stmt")]), BinOp::Lt, e_int(0)),
+                                vec![
+                                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                                    s_expr(e_method_call(e_this(), "syncLink", vec![])),
+                                    s_expr(e_method_call(e_this(), "opFailed", vec![])),
+                                    s_return(e_bool(false)),
+                                ],
+                                vec![],
+                                None,
+                            ),
                         ],
                         vec![],
                         None,
@@ -693,6 +740,24 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         e_not(e_this_prop("hasPending")),
                         vec![
                             s_return(e_bool(true)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_this_prop("cursorOpen"),
+                        vec![
+                            s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_fetch")])),
+                            s_if(
+                                e_binop(e_call("elephc_pdo_mysql_cursor_fetch_all", vec![e_this_prop("stmt")]), BinOp::Lt, e_int(0)),
+                                vec![
+                                    s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                                    s_expr(e_method_call(e_this(), "syncLink", vec![])),
+                                    s_return(e_method_call(e_this(), "opFailed", vec![])),
+                                ],
+                                vec![],
+                                None,
+                            ),
                         ],
                         vec![],
                         None,
@@ -859,18 +924,37 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "requireValid", vec![])),
+                    // mysqlnd's order: no bound parameters is "out of sync", then the
+                    // parameter number, then a parameter not bound as `b` (MYSQL_TYPE_LONG_BLOB).
+                    // None of them reaches mysqli_report(), like php.
                     s_if(
-                        e_binop(e_var("param_num"), BinOp::GtEq, e_this_prop("param_count")),
+                        e_binop(e_this_prop("bindTypes"), BinOp::StrictEq, e_str("")),
                         vec![
-                            s_prop_assign(e_this(), "errno", e_int(2034)),
-                            s_prop_assign(e_this(), "error", e_str("Invalid parameter number")),
-                            s_prop_assign(e_this(), "sqlstate", e_str("HY000")),
-                            s_prop_assign(e_this(), "error_list", e_array(vec![e_array_assoc(vec![(e_str("errno"), e_int(2034)), (e_str("sqlstate"), e_str("HY000")), (e_str("error"), e_str("Invalid parameter number"))])])),
+                            s_expr(e_method_call(e_this(), "unreportedFailure", vec![e_int(2014), e_str("Commands out of sync; you can't run this command now")])),
                             s_return(e_bool(false)),
                         ],
                         vec![],
                         None,
                     ),
+                    s_if(
+                        e_binop(e_var("param_num"), BinOp::GtEq, e_this_prop("param_count")),
+                        vec![
+                            s_expr(e_method_call(e_this(), "unreportedFailure", vec![e_int(2034), e_str("Invalid parameter number")])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_call("substr", vec![e_this_prop("bindTypes"), e_var("param_num"), e_int(1)]), BinOp::StrictNotEq, e_str("b")),
+                        vec![
+                            s_expr(e_method_call(e_this(), "unreportedFailure", vec![e_int(2035), e_str("Can't send long data for non-string/non-binary data types")])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "clearError", vec![])),
                     s_prop_array_assign(e_this(), "longData", e_var("param_num"), e_binop(e_cast(CastType::String, e_index(e_this_prop("longData"), e_var("param_num"))), BinOp::Concat, e_var("data"))),
                     s_prop_array_assign(e_this(), "longDataSent", e_var("param_num"), e_bool(true)),
                     s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_send_long_data")])),
@@ -1013,6 +1097,14 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireValid", vec![])),
                     s_if(
+                        e_binop(e_this_prop("hasPending"), BinOp::And, e_this_prop("cursorOpen")),
+                        vec![
+                            s_expr(e_method_call(e_this(), "drainCursor", vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
                         e_binop(e_this_prop("hasPending"), BinOp::And, e_binop(e_this_prop("stmt"), BinOp::GtEq, e_int(0))),
                         vec![
                             s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
@@ -1033,6 +1125,14 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireValid", vec![])),
                     s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_reset")])),
+                    s_if(
+                        e_binop(e_this_prop("hasPending"), BinOp::And, e_this_prop("cursorOpen")),
+                        vec![
+                            s_expr(e_method_call(e_this(), "drainCursor", vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
                     s_expr(e_method_call(e_this(), "clearLongData", vec![])),
                     s_prop_assign(e_this(), "hasPending", e_bool(false)),
@@ -1086,19 +1186,23 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_if(
-                        e_binop(e_this_prop("hasPending"), BinOp::And, e_not(e_this_prop("stored"))),
+                        e_binop(e_binop(e_this_prop("hasPending"), BinOp::And, e_not(e_this_prop("stored"))), BinOp::And, e_this_prop("cursorOpen")),
                         vec![
-                            s_expr(e_method_call(e_this(), "linkStat", vec![e_str("flushed_ps_sets"), e_int(1), e_bool(true)])),
-                            s_assign("_rc", e_method_call(e_this(), "pendingRow", vec![])),
-                            s_while(e_binop(e_var("_rc"), BinOp::Eq, e_int(1)), vec![
-                                s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_server_ps"), e_int(1), e_bool(true)])),
-                                s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_client_ps_unbuffered"), e_int(1), e_bool(true)])),
-                                s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_skipped_ps"), e_int(1), e_bool(true)])),
-                                s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
-                            ]),
-                            s_prop_assign(e_this(), "pendingStep", e_var("_rc")),
+                            s_expr(e_method_call(e_this(), "drainCursor", vec![])),
                         ],
-                        vec![],
+                        vec![
+                            (e_binop(e_this_prop("hasPending"), BinOp::And, e_not(e_this_prop("stored"))), vec![
+                                s_expr(e_method_call(e_this(), "linkStat", vec![e_str("flushed_ps_sets"), e_int(1), e_bool(true)])),
+                                s_assign("_rc", e_method_call(e_this(), "pendingRow", vec![])),
+                                s_while(e_binop(e_var("_rc"), BinOp::Eq, e_int(1)), vec![
+                                    s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_server_ps"), e_int(1), e_bool(true)])),
+                                    s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_client_ps_unbuffered"), e_int(1), e_bool(true)])),
+                                    s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_skipped_ps"), e_int(1), e_bool(true)])),
+                                    s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
+                                ]),
+                                s_prop_assign(e_this(), "pendingStep", e_var("_rc")),
+                            ]),
+                        ],
                         None,
                     ),
                     s_if(
@@ -1142,6 +1246,24 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                 ]),
         )
         .method(
+            method("drainCursor")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "linkStat", vec![e_str("flushed_ps_sets"), e_int(1), e_bool(true)])),
+                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_fetch")])),
+                    s_assign("_rc", e_method_call(e_this(), "pendingRow", vec![])),
+                    s_while(e_binop(e_var("_rc"), BinOp::Eq, e_int(1)), vec![
+                        s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_server_ps"), e_int(1), e_bool(true)])),
+                        s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_client_ps_cursor"), e_int(1), e_bool(true)])),
+                        s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_skipped_ps"), e_int(1), e_bool(true)])),
+                        s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_fetch")])),
+                        s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
+                    ]),
+                    s_prop_assign(e_this(), "pendingStep", e_var("_rc")),
+                ]),
+        )
+        .method(
             method("syncLink")
                 .private()
                 .returns(TypeExpr::Void)
@@ -1156,7 +1278,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_if(
-                        e_binop(e_this_prop("hasPending"), BinOp::Or, e_this_prop("moreResults")),
+                        e_binop(e_binop(e_this_prop("hasPending"), BinOp::And, e_not(e_this_prop("cursorOpen"))), BinOp::Or, e_this_prop("moreResults")),
                         vec![
                             s_expr(e_method_call(e_var("_link"), "__elephcStatementBusy", vec![e_this_prop("stmt")])),
                         ],
@@ -1535,6 +1657,19 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_this(), "error_list", e_array(vec![e_array_assoc(vec![(e_str("errno"), e_this_prop("errno")), (e_str("sqlstate"), e_this_prop("sqlstate")), (e_str("error"), e_this_prop("error"))])])),
                     s_expr(e_method_call(e_this(), "report", vec![e_this_prop("error"), e_this_prop("errno"), e_this_prop("sqlstate")])),
                     s_return(e_bool(false)),
+                ]),
+        )
+        .method(
+            method("unreportedFailure")
+                .private()
+                .param("errno", TypeExpr::Int)
+                .param("message", TypeExpr::Str)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "errno", e_var("errno")),
+                    s_prop_assign(e_this(), "error", e_var("message")),
+                    s_prop_assign(e_this(), "sqlstate", e_str("HY000")),
+                    s_prop_assign(e_this(), "error_list", e_array(vec![e_array_assoc(vec![(e_str("errno"), e_var("errno")), (e_str("sqlstate"), e_str("HY000")), (e_str("error"), e_var("message"))])])),
                 ]),
         )
         .method(

@@ -1627,7 +1627,7 @@ class mysqli {
         }
         $this->disableMultiStatements();
         $this->bump("com_query");
-        if (elephc_pdo_mysql_async_send($this->conn, $query) < 0) {
+        if (elephc_pdo_mysql_async_send($this->conn, $query, (int) $unbuffered) < 0) {
             return $this->opFailed();
         }
         $this->asyncPending = true;

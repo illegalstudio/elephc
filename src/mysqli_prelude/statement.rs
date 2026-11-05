@@ -88,6 +88,10 @@ class mysqli_stmt {
     // mysqli_stmt::attr_set() state.
     private int $attrUpdateMaxLength = 0;
     private int $attrCursorType = 0;
+    // MYSQLI_CURSOR_TYPE_READ_ONLY: this execution's rows sit in a server cursor (fetched
+    // with COM_STMT_FETCH, the link stays free), and whether the cursor was read to its end.
+    private bool $cursorOpen = false;
+    private bool $cursorSpent = false;
     private int $attrPrefetchRows = 1;
 
     // php: `new mysqli_stmt($mysql, $query)` is mysqli_stmt_init() plus an
@@ -209,6 +213,8 @@ class mysqli_stmt {
         }
         $this->bindTypes = $types;
         $this->paramReader = $reader;
+        // mysqlnd's bind_param / bind_result clear the statement error (SET_EMPTY_ERROR).
+        $this->clearError();
         return true;
     }
 
@@ -231,6 +237,7 @@ class mysqli_stmt {
             throw new ArgumentCountError("Number of bind variables doesn't match number of fields in prepared statement");
         }
         $this->resultWriter = $writer;
+        $this->clearError();
         return true;
     }
 
@@ -247,6 +254,9 @@ class mysqli_stmt {
         }
         if (!$this->requireLinkNotBusy()) {
             return false;
+        }
+        if ($this->hasPending && $this->cursorOpen) {
+            $this->drainCursor();
         }
         if ($this->executedOnce) {
             // Re-execution: rewind the server-side cursor and drop old binds.
@@ -309,10 +319,13 @@ class mysqli_stmt {
         $this->linkBump("com_stmt_execute");
         // The result set's header and metadata only: rows are read when they
         // are stored or fetched, like mysqlnd.
+        elephc_pdo_mysql_set_cursor_type($this->stmt, $this->attrCursorType);
         $_rc = elephc_pdo_mysql_execute($this->stmt);
         if ($_rc < 0) {
             return $this->opFailed();
         }
+        $this->cursorOpen = elephc_pdo_mysql_cursor_open($this->stmt) == 1;
+        $this->cursorSpent = false;
         $_cols = elephc_pdo_column_count($this->stmt);
         $this->field_count = $_cols;
         $this->cellKinds = [];
@@ -376,12 +389,20 @@ class mysqli_stmt {
                 $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
                 return false;
             }
+            if ($this->cursorSpent) {
+                // Past a cursor's end mysqlnd sends one more COM_STMT_FETCH and fails.
+                $this->linkBump("com_stmt_fetch");
+                return false;
+            }
             return null;
         }
         // The first fetch of an unstored execution is mysqlnd's use_result().
         if (!$this->unbufferedCounted) {
             $this->unbufferedCounted = true;
             $this->linkStat("ps_unbuffered_sets", 1, true);
+        }
+        if ($this->cursorOpen) {
+            $this->linkBump("com_stmt_fetch");
         }
         $this->pendingRow();
         if ($this->pendingStep < 0) {
@@ -392,6 +413,7 @@ class mysqli_stmt {
             return false;
         }
         if ($this->pendingStep == 0) {
+            $this->cursorSpent = $this->cursorOpen;
             $this->finishResultSet();
             return null;
         }
@@ -401,7 +423,7 @@ class mysqli_stmt {
         }
         $this->num_rows = $this->num_rows + 1;
         $this->linkStat("rows_fetched_from_server_ps", 1, true);
-        $this->linkStat("rows_fetched_from_client_ps_unbuffered", 1, true);
+        $this->linkStat($this->cursorOpen ? "rows_fetched_from_client_ps_cursor" : "rows_fetched_from_client_ps_unbuffered", 1, true);
         // The next row (or the set's EOF) is read by the next fetch(), like mysqlnd.
         $this->pendingStep = 2;
         $this->writeRow($_row);
@@ -411,22 +433,26 @@ class mysqli_stmt {
     public function get_result(): mysqli_result|false {
         $this->requireValid();
         if ($this->stored) {
-            // Rows already buffered by store_result(): hand the unread ones over.
-            $_cells = [];
-            $_rows = $this->storedCount - $this->storedPos;
-            $_start = $this->storedPos * $this->field_count;
-            $_end = $this->storedCount * $this->field_count;
-            for ($_i = $_start; $_i < $_end; $_i++) {
-                $_cells[] = $this->storedCells[$_i];
-            }
-            $this->storedPos = $this->storedCount;
-            return $this->buildResult($_cells, $_rows);
+            // mysqlnd refuses get_result() once store_result() buffered the set: the
+            // two APIs cannot be combined, and the stored rows stay fetchable.
+            $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
+            return false;
         }
         if (!$this->hasPending) {
             if (!$this->executedOnce) {
                 $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
             }
             return false;
+        }
+        if ($this->cursorOpen) {
+            // mysqlnd reads every remaining cursor row with one COM_STMT_FETCH.
+            $this->linkBump("com_stmt_fetch");
+            if (elephc_pdo_mysql_cursor_fetch_all($this->stmt) < 0) {
+                $this->hasPending = false;
+                $this->syncLink();
+                $this->opFailed();
+                return false;
+            }
         }
         $_cells = [];
         $_rowCount = 0;
@@ -464,6 +490,15 @@ class mysqli_stmt {
         }
         // Buffer the remaining rows client-side so fetch() / data_seek() walk
         // them and num_rows is exact.
+        if ($this->cursorOpen) {
+            // mysqlnd reads every remaining cursor row with one COM_STMT_FETCH.
+            $this->linkBump("com_stmt_fetch");
+            if (elephc_pdo_mysql_cursor_fetch_all($this->stmt) < 0) {
+                $this->hasPending = false;
+                $this->syncLink();
+                return $this->opFailed();
+            }
+        }
         $_cells = [];
         $_rowCount = 0;
         $_rc = $this->pendingRow();
@@ -565,14 +600,22 @@ class mysqli_stmt {
             throw new ValueError("mysqli_stmt::send_long_data(): Argument #1 (\$param_num) must be greater than or equal to 0");
         }
         $this->requireValid();
-        if ($param_num >= $this->param_count) {
-            // CR_INVALID_PARAMETER_NO, recorded but not reported (php returns false).
-            $this->errno = 2034;
-            $this->error = "Invalid parameter number";
-            $this->sqlstate = "HY000";
-            $this->error_list = [["errno" => 2034, "sqlstate" => "HY000", "error" => "Invalid parameter number"]];
+        // mysqlnd's order: no bound parameters is "out of sync", then the parameter
+        // number, then a parameter not bound as `b` (MYSQL_TYPE_LONG_BLOB). None of
+        // them reaches mysqli_report(), like php.
+        if ($this->bindTypes === "") {
+            $this->unreportedFailure(2014, "Commands out of sync; you can't run this command now");
             return false;
         }
+        if ($param_num >= $this->param_count) {
+            $this->unreportedFailure(2034, "Invalid parameter number");
+            return false;
+        }
+        if (substr($this->bindTypes, $param_num, 1) !== "b") {
+            $this->unreportedFailure(2035, "Can't send long data for non-string/non-binary data types");
+            return false;
+        }
+        $this->clearError();
         // Chunks accumulate until the next execute() sends them as one value.
         $this->longData[$param_num] = ((string) $this->longData[$param_num]) . $data;
         $this->longDataSent[$param_num] = true;
@@ -643,6 +686,9 @@ class mysqli_stmt {
     public function free_result(): void {
         $this->requireValid();
         // Discards pending or buffered rows so the statement can be re-executed.
+        if ($this->hasPending && $this->cursorOpen) {
+            $this->drainCursor();
+        }
         if ($this->hasPending && $this->stmt >= 0) {
             elephc_pdo_reset($this->stmt);
         }
@@ -656,6 +702,9 @@ class mysqli_stmt {
     public function reset(): bool {
         $this->requireValid();
         $this->linkBump("com_stmt_reset");
+        if ($this->hasPending && $this->cursorOpen) {
+            $this->drainCursor();
+        }
         elephc_pdo_reset($this->stmt);
         // php's reset keeps the parameter and result bindings but discards
         // long data and any pending rows.
@@ -696,7 +745,9 @@ class mysqli_stmt {
         if ($this->link === null) {
             return;
         }
-        if ($this->hasPending && !$this->stored) {
+        if ($this->hasPending && !$this->stored && $this->cursorOpen) {
+            $this->drainCursor();
+        } elseif ($this->hasPending && !$this->stored) {
             $this->linkStat("flushed_ps_sets", 1, true);
             $_rc = $this->pendingRow();
             while ($_rc == 1) {
@@ -731,6 +782,23 @@ class mysqli_stmt {
         return $this->pendingStep;
     }
 
+    // Reads and discards an open cursor's remaining rows, one COM_STMT_FETCH each
+    // plus the one that finds its end (mysqlnd's flush on free / reset / close /
+    // re-execute).
+    private function drainCursor(): void {
+        $this->linkStat("flushed_ps_sets", 1, true);
+        $this->linkBump("com_stmt_fetch");
+        $_rc = $this->pendingRow();
+        while ($_rc == 1) {
+            $this->linkStat("rows_fetched_from_server_ps", 1, true);
+            $this->linkStat("rows_fetched_from_client_ps_cursor", 1, true);
+            $this->linkStat("rows_skipped_ps", 1, true);
+            $this->linkBump("com_stmt_fetch");
+            $_rc = elephc_pdo_step($this->stmt);
+        }
+        $this->pendingStep = $_rc;
+    }
+
     // Registers (or releases) this statement's unread result set on the link,
     // which then answers other commands with 2014 like mysqlnd.
     private function syncLink(): void {
@@ -738,7 +806,8 @@ class mysqli_stmt {
         if ($_link === null || $this->stmt < 0) {
             return;
         }
-        if ($this->hasPending || $this->moreResults) {
+        // An open cursor's rows stay on the server without blocking the link.
+        if (($this->hasPending && !$this->cursorOpen) || $this->moreResults) {
             $_link->__elephcStatementBusy($this->stmt);
         } else {
             $_link->__elephcStatementIdle($this->stmt);
@@ -968,6 +1037,14 @@ class mysqli_stmt {
     }
 
     // Clears the per-operation error state after a successful operation.
+    // A client error recorded on the statement without mysqli_report() dispatch.
+    private function unreportedFailure(int $errno, string $message): void {
+        $this->errno = $errno;
+        $this->error = $message;
+        $this->sqlstate = "HY000";
+        $this->error_list = [["errno" => $errno, "sqlstate" => "HY000", "error" => $message]];
+    }
+
     private function clearError(): void {
         $this->errno = 0;
         $this->error = "";

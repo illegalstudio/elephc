@@ -411,6 +411,24 @@ pub struct MyStmt {
     /// mysqli: at a set boundary `step()` stops (the next set is read by
     /// `next_rowset()`), instead of PDO's eager advance.
     lazy_sets: bool,
+    /// mysqli's `MYSQLI_STMT_ATTR_CURSOR_TYPE` for the next execution (`0` none, `1`
+    /// `CURSOR_TYPE_READ_ONLY`).
+    cursor_type: u8,
+    /// The server-side cursor the last execution opened, if any.
+    server_cursor: Option<MyServerCursor>,
+}
+
+/// A read-only cursor the server opened for a native statement: its rows stay on the
+/// server and every `step()` reads the next one with `COM_STMT_FETCH`, so the link is free
+/// for other commands in between, like mysqlnd's cursor statements.
+struct MyServerCursor {
+    /// The cursor's result metadata, which decodes the fetched binary rows.
+    columns: Arc<[Column]>,
+    /// Set once a fetch came back without a row: the cursor is exhausted.
+    exhausted: bool,
+    /// Set by `fetch_all()`: every remaining row is buffered in `rows` and `step()` walks
+    /// them without further fetches.
+    drained: bool,
 }
 
 impl Drop for MyConn {
@@ -426,10 +444,39 @@ impl Drop for MyConn {
 struct MyAsyncQuery {
     /// SQL text, kept for transaction-state bookkeeping and the reaped statement.
     sql: String,
-    /// Worker returning the client, the buffered outcome, and the final warning count.
-    worker: JoinHandle<(Conn, Result<Vec<MyRowset>, mysql::Error>, u16)>,
-    /// Completion flag + condvar the poller waits on.
-    done: Arc<(Mutex<bool>, Condvar)>,
+    /// The worker running the query, in the shape its result mode reads it.
+    work: MyAsyncWork,
+    /// Readiness flag + condvar the poller waits on.
+    done: AsyncReady,
+}
+
+/// Readiness flag + condvar of an async query: set once its result can be reaped.
+type AsyncReady = Arc<(Mutex<bool>, Condvar)>;
+
+/// How a MYSQLI_ASYNC worker delivers its result.
+enum MyAsyncWork {
+    /// MYSQLI_STORE_RESULT: the worker buffers every result set, then returns the client,
+    /// the outcome, and the final warning count.
+    Buffered(JoinHandle<(Conn, Result<Vec<MyRowset>, mysql::Error>, u16)>),
+    /// MYSQLI_USE_RESULT: a demand-driven text-stream worker. It is ready once the first
+    /// set's metadata (or the query's error) arrived, and reaping hands the live stream to
+    /// the result, which reads every row from the server on fetch, like mysqlnd's unbuffered
+    /// reap.
+    Streaming {
+        commands: mpsc::Sender<MyStreamCommand>,
+        responses: mpsc::Receiver<MyStreamResponse>,
+        worker: JoinHandle<()>,
+    },
+}
+
+/// Marks an async query ready and wakes its pollers; idempotent.
+fn signal_ready(ready: &AsyncReady) {
+    let (flag, condvar) = &**ready;
+    let mut done = flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !*done {
+        *done = true;
+        condvar.notify_all();
+    }
 }
 
 /// Keeps the MySQL client optional while an unbuffered worker owns it.
@@ -2546,10 +2593,12 @@ impl MyConn {
             .unwrap_or(0)
     }
 
-    /// Starts a MYSQLI_ASYNC query: the client moves to a worker thread that runs `sql` and
-    /// buffers its result sets, so the caller returns at once. `1` when sent, `-1` (mysqlnd's
-    /// 2014 recorded) when the connection is busy with a stream or another async query.
-    pub fn async_send(&mut self, sql: &str) -> i64 {
+    /// Starts a MYSQLI_ASYNC query: the client moves to a worker thread that runs `sql`, so
+    /// the caller returns at once. A buffered query's worker reads every result set; an
+    /// `unbuffered` (MYSQLI_USE_RESULT) one reads only the first set's metadata and then
+    /// streams rows on demand. `1` when sent, `-1` (mysqlnd's 2014 recorded) when the
+    /// connection is busy with a stream or another async query.
+    pub fn async_send(&mut self, sql: &str, unbuffered: bool) -> i64 {
         if self.active_stream.is_some() || self.async_query.is_some() || self.unbuffered_active {
             self.sqlstate = "HY000".to_string();
             self.errcode = 2014;
@@ -2564,21 +2613,39 @@ impl MyConn {
         };
         self.server_version = client.server_version();
         self.no_backslash_escapes = client.no_backslash_escape();
-        let done = Arc::new((Mutex::new(false), Condvar::new()));
+        let done: AsyncReady = Arc::new((Mutex::new(false), Condvar::new()));
         let signal = Arc::clone(&done);
         let text = sql.to_string();
         let fetch_table_names = self.fetch_table_names;
-        let worker = std::thread::spawn(move || {
-            let outcome = collect_text_rowsets(&mut client, text, fetch_table_names);
-            let warnings = client.warnings();
-            let (flag, condvar) = &*signal;
-            *flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
-            condvar.notify_all();
-            (client, outcome, warnings)
-        });
+        let work = if unbuffered {
+            let (command_tx, command_rx) = mpsc::channel();
+            let (response_tx, response_rx) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                run_mysql_async_text_stream(
+                    client,
+                    text,
+                    fetch_table_names,
+                    command_rx,
+                    response_tx,
+                    signal,
+                );
+            });
+            MyAsyncWork::Streaming {
+                commands: command_tx,
+                responses: response_rx,
+                worker,
+            }
+        } else {
+            MyAsyncWork::Buffered(std::thread::spawn(move || {
+                let outcome = collect_text_rowsets(&mut client, text, fetch_table_names);
+                let warnings = client.warnings();
+                signal_ready(&signal);
+                (client, outcome, warnings)
+            }))
+        };
         self.async_query = Some(MyAsyncQuery {
             sql: sql.to_string(),
-            worker,
+            work,
             done,
         });
         self.errcode = 0;
@@ -2588,12 +2655,14 @@ impl MyConn {
 
     /// Returns the completion signal of the in-flight async query, if any, so a poller can
     /// wait on it WITHOUT holding the connection registry lock.
-    pub fn async_signal(&self) -> Option<Arc<(Mutex<bool>, Condvar)>> {
+    pub fn async_signal(&self) -> Option<AsyncReady> {
         self.async_query.as_ref().map(|query| Arc::clone(&query.done))
     }
 
-    /// Collects the async query's outcome: the client comes back from the worker and the
-    /// buffered result sets are installed into a fresh executed text statement. `Err(())`
+    /// Collects the async query's outcome into a fresh executed text statement. A buffered
+    /// query's client comes back from the worker with its result sets; an unbuffered one's
+    /// worker becomes the connection's active stream, so the statement reads rows from the
+    /// server on demand and the link stays busy until it is consumed or freed. `Err(())`
     /// (error recorded on the connection) when the query failed or none was in flight.
     pub fn async_reap(&mut self) -> Result<MyStmt, ()> {
         let Some(query) = self.async_query.take() else {
@@ -2602,7 +2671,15 @@ impl MyConn {
             self.errmsg = "Commands out of sync; you can't run this command now".to_string();
             return Err(());
         };
-        let Ok((client, outcome, warnings)) = query.worker.join() else {
+        let worker = match query.work {
+            MyAsyncWork::Streaming {
+                commands,
+                responses,
+                worker,
+            } => return self.reap_async_stream(&query.sql, commands, responses, worker),
+            MyAsyncWork::Buffered(worker) => worker,
+        };
+        let Ok((client, outcome, warnings)) = worker.join() else {
             self.sqlstate = "HY000".to_string();
             self.errcode = 2013;
             self.errmsg = "Lost connection to MySQL server during query".to_string();
@@ -2631,12 +2708,49 @@ impl MyConn {
         }
     }
 
+    /// Installs a reaped MYSQLI_USE_RESULT worker as the active stream of a fresh unbuffered
+    /// text statement. A failed query restores the client and records its error.
+    fn reap_async_stream(
+        &mut self,
+        sql: &str,
+        commands: mpsc::Sender<MyStreamCommand>,
+        responses: mpsc::Receiver<MyStreamResponse>,
+        worker: JoinHandle<()>,
+    ) -> Result<MyStmt, ()> {
+        // Built before the stream is installed: an emulated prepare runs no command, and
+        // the busy guard must not see the stream this statement is about to own.
+        let mut stmt = self.prepare(sql, true).map_err(|_| ())?;
+        let (stream_id, rowset) = self.activate_stream(commands, responses, worker).map_err(|_| ())?;
+        stmt.buffered = false;
+        stmt.stream_id = Some(stream_id);
+        stmt.remaining_rowsets.clear();
+        stmt.install_rowset(self, rowset);
+        self.note_transaction_sql(sql);
+        self.errcode = 0;
+        self.sqlstate = "00000".to_string();
+        Ok(stmt)
+    }
+
     /// Waits for and discards an in-flight async query (close / reset paths), so the client
     /// is never stranded on the worker thread.
     fn finish_async(&mut self) {
-        if let Some(query) = self.async_query.take() {
-            if let Ok((client, _, warnings)) = query.worker.join() {
-                self.restore_stream_client(client, warnings);
+        let Some(query) = self.async_query.take() else {
+            return;
+        };
+        match query.work {
+            MyAsyncWork::Buffered(worker) => {
+                if let Ok((client, _, warnings)) = worker.join() {
+                    self.restore_stream_client(client, warnings);
+                }
+            }
+            MyAsyncWork::Streaming {
+                commands,
+                responses,
+                worker,
+            } => {
+                if self.activate_stream(commands, responses, worker).is_ok() {
+                    self.finish_active_stream();
+                }
             }
         }
     }
@@ -2892,6 +3006,8 @@ impl MyConn {
                 buffered: self.buffered_query,
                 stream_id: None,
                 lazy_sets: self.lazy_rowsets,
+                cursor_type: 0,
+                server_cursor: None,
             });
         }
         match self.conn.prep(&translated) {
@@ -2963,6 +3079,8 @@ impl MyConn {
                     buffered: self.buffered_query,
                     stream_id: None,
                     lazy_sets: self.lazy_rowsets,
+                    cursor_type: 0,
+                    server_cursor: None,
                 })
             }
             Err(e) => {
@@ -3107,11 +3225,24 @@ fn mysql_stream_rowset(
 /// Drives an already-started MySQL query one row per `Next` command, preserving
 /// protocol result-set boundaries for `PDOStatement::nextRowset()`.
 fn drive_mysql_stream<T: mysql::prelude::Protocol>(
+    result: QueryResult<'_, '_, '_, T>,
+    fetch_table_names: bool,
+    counters: &mysql::IoCounters,
+    commands: &mpsc::Receiver<MyStreamCommand>,
+    responses: &mpsc::Sender<MyStreamResponse>,
+) -> Result<(), mysql::Error> {
+    drive_mysql_stream_signalled(result, fetch_table_names, counters, commands, responses, None)
+}
+
+/// [`drive_mysql_stream`], signalling `ready` (an async query's readiness) once the first
+/// set's metadata has been sent.
+fn drive_mysql_stream_signalled<T: mysql::prelude::Protocol>(
     mut result: QueryResult<'_, '_, '_, T>,
     fetch_table_names: bool,
     counters: &mysql::IoCounters,
     commands: &mpsc::Receiver<MyStreamCommand>,
     responses: &mpsc::Sender<MyStreamResponse>,
+    ready: Option<&AsyncReady>,
 ) -> Result<(), mysql::Error> {
     while let Some(mut set) = result.iter() {
         let columns = set.columns();
@@ -3125,6 +3256,9 @@ fn drive_mysql_stream<T: mysql::prelude::Protocol>(
         );
         if responses.send(MyStreamResponse::Rowset(rowset)).is_err() {
             return Ok(());
+        }
+        if let Some(ready) = ready {
+            signal_ready(ready);
         }
         let mut ended = false;
         while let Ok(command) = commands.recv() {
@@ -3201,6 +3335,33 @@ fn run_mysql_text_stream(
     finish_mysql_stream_worker(conn, result, &responses);
 }
 
+/// Runs a MYSQLI_ASYNC | MYSQLI_USE_RESULT query on its own worker: like
+/// [`run_mysql_text_stream`], and `ready` is signalled once the first set's metadata (or the
+/// query's outcome) has been sent, which is when mysqlnd's poll sees the link readable.
+fn run_mysql_async_text_stream(
+    mut conn: Conn,
+    sql: String,
+    fetch_table_names: bool,
+    commands: mpsc::Receiver<MyStreamCommand>,
+    responses: mpsc::Sender<MyStreamResponse>,
+    ready: AsyncReady,
+) {
+    let counters = conn.io_counters();
+    let result = match conn.query_iter(sql) {
+        Ok(result) => drive_mysql_stream_signalled(
+            result,
+            fetch_table_names,
+            &counters,
+            &commands,
+            &responses,
+            Some(&ready),
+        ),
+        Err(error) => Err(error),
+    };
+    finish_mysql_stream_worker(conn, result, &responses);
+    signal_ready(&ready);
+}
+
 /// Sends a worker's recovered connection plus final warning/error state.
 fn finish_mysql_stream_worker(
     conn: Conn,
@@ -3273,6 +3434,9 @@ impl MyStmt {
         if let Some(stream_id) = self.stream_id {
             conn.finish_stream(stream_id);
         }
+        // An open server cursor needs no wire traffic here: the server closes it on the
+        // statement's next execution or close.
+        self.server_cursor = None;
         self.cursor = -1;
         self.executed = false;
         self.rows.clear();
@@ -3409,6 +3573,10 @@ impl MyStmt {
             .as_ref()
             .expect("native MySQL statement missing its prepared handle")
             .clone();
+        self.server_cursor = None;
+        if !self.buffered && self.cursor_type != 0 {
+            return self.execute_with_cursor(conn, statement, values);
+        }
         if !self.buffered {
             let (stream_id, rowset) = conn.start_native_stream(statement, values)?;
             self.stream_id = Some(stream_id);
@@ -3494,6 +3662,162 @@ impl MyStmt {
                 Err(-1)
             }
         }
+    }
+
+    /// Executes a native statement asking the server for a read-only cursor
+    /// (mysqli's `MYSQLI_CURSOR_TYPE_READ_ONLY`). When the server opens one, only the
+    /// metadata is read and `step()` fetches the rows one `COM_STMT_FETCH` at a time; a
+    /// statement the server runs without a cursor (no result set) is materialized like a
+    /// buffered execution.
+    fn execute_with_cursor(
+        &mut self,
+        conn: &mut MyConn,
+        statement: Statement,
+        values: Vec<Value>,
+    ) -> Result<(), i64> {
+        let fetch_table_names = conn.fetch_table_names;
+        let cursor_type = self.cursor_type;
+        let outcome: Result<(Vec<MyRowset>, Option<Arc<[Column]>>), mysql::Error> = (|| {
+            let mut res = conn.conn.exec_iter_with_cursor(
+                &statement,
+                mysql::Params::Positional(values),
+                cursor_type,
+            )?;
+            let mut rowsets = Vec::new();
+            let mut first_columns = None;
+            while let Some(mut set) = res.iter() {
+                let live = set.columns();
+                let cols: &[Column] = live.as_ref();
+                if first_columns.is_none() && !cols.is_empty() {
+                    first_columns = Some(Arc::<[Column]>::from(cols.to_vec()));
+                }
+                let kinds = cols.iter().map(ColKind::from_column).collect::<Vec<_>>();
+                let mut rowset = mysql_stream_rowset(
+                    cols,
+                    set.affected_rows() as i64,
+                    set.last_insert_id(),
+                    fetch_table_names,
+                );
+                for row in set.by_ref() {
+                    rowset.rows.push(decode_row(row?.unwrap(), &kinds));
+                }
+                rowsets.push(rowset);
+            }
+            Ok((rowsets, first_columns))
+        })();
+        let warnings = conn.conn.warnings();
+        let cursor_open = conn
+            .conn
+            .status_flags()
+            .contains(mysql::consts::StatusFlags::SERVER_STATUS_CURSOR_EXISTS);
+        match outcome {
+            Ok((mut rowsets, columns)) => {
+                conn.errcode = 0;
+                conn.sqlstate = "00000".to_string();
+                conn.warning_count = warnings;
+                let first = if rowsets.is_empty() {
+                    MyRowset::empty()
+                } else {
+                    rowsets.remove(0)
+                };
+                self.remaining_rowsets = rowsets;
+                self.install_rowset(conn, first);
+                if let (true, Some(columns)) = (cursor_open, columns) {
+                    self.server_cursor = Some(MyServerCursor {
+                        columns,
+                        exhausted: false,
+                        drained: false,
+                    });
+                }
+                conn.note_transaction_sql(&self.query_string);
+                Ok(())
+            }
+            Err(e) => {
+                conn.record_mysql_error(&e);
+                Err(-1)
+            }
+        }
+    }
+
+    /// Advances an open server cursor: the next buffered row after `fetch_all()`, otherwise
+    /// one `COM_STMT_FETCH` of a single row (mysqlnd's default prefetch). `1` with the row
+    /// active, `0` once the cursor is exhausted, `-1` with the error recorded.
+    fn step_server_cursor(&mut self, conn: &mut MyConn) -> i64 {
+        let Some(cursor) = self.server_cursor.as_mut() else {
+            return 0;
+        };
+        if cursor.drained || cursor.exhausted {
+            self.cursor += 1;
+            return if (self.cursor as usize) < self.rows.len() { 1 } else { 0 };
+        }
+        let stmt_id = self
+            .statement
+            .as_ref()
+            .map(Statement::id)
+            .expect("cursor statement missing its prepared handle");
+        match conn.conn.stmt_fetch(stmt_id, 1, Arc::clone(&cursor.columns)) {
+            Ok((rows, _)) => {
+                self.rows.clear();
+                self.cursor = 0;
+                match rows.into_iter().next() {
+                    Some(row) => {
+                        self.rows.push(decode_row(row.unwrap(), &self.col_kinds));
+                        1
+                    }
+                    None => {
+                        cursor.exhausted = true;
+                        0
+                    }
+                }
+            }
+            Err(e) => {
+                conn.record_mysql_error(&e);
+                -1
+            }
+        }
+    }
+
+    /// Reads every remaining row of an open server cursor with one `COM_STMT_FETCH`
+    /// (mysqlnd's `get_result()` / `store_result()` on a cursor statement); `step()` then
+    /// walks them. Returns the number of rows read, `0` without an open cursor, or `-1`
+    /// with the error recorded.
+    pub fn cursor_fetch_all(&mut self, conn: &mut MyConn) -> i64 {
+        let Some(cursor) = self.server_cursor.as_mut() else {
+            return 0;
+        };
+        if cursor.drained || cursor.exhausted {
+            return 0;
+        }
+        let stmt_id = self
+            .statement
+            .as_ref()
+            .map(Statement::id)
+            .expect("cursor statement missing its prepared handle");
+        match conn.conn.stmt_fetch(stmt_id, u32::MAX, Arc::clone(&cursor.columns)) {
+            Ok((rows, _)) => {
+                cursor.drained = true;
+                self.rows = rows
+                    .into_iter()
+                    .map(|row| decode_row(row.unwrap(), &self.col_kinds))
+                    .collect();
+                self.cursor = -1;
+                self.rows.len() as i64
+            }
+            Err(e) => {
+                conn.record_mysql_error(&e);
+                -1
+            }
+        }
+    }
+
+    /// Sets mysqli's cursor type for the next execution (`0` none, `1` read-only).
+    pub fn set_cursor_type(&mut self, cursor_type: i64) {
+        self.cursor_type = u8::try_from(cursor_type).unwrap_or(0);
+    }
+
+    /// Whether the last execution left an open server cursor (mysqlnd's `cursor_exists`).
+    pub fn cursor_open(&self) -> bool {
+        self.server_cursor.is_some()
     }
 
     /// Executes an emulated MySQL statement through the text protocol after
@@ -3598,6 +3922,9 @@ impl MyStmt {
             if let Err(code) = self.execute(conn) {
                 return code;
             }
+        }
+        if self.server_cursor.is_some() {
+            return self.step_server_cursor(conn);
         }
         if let Some(stream_id) = self.stream_id {
             return match conn.next_stream_row(stream_id) {

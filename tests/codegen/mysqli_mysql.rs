@@ -977,6 +977,155 @@ $db->query("DROP TABLE msl");
     );
 }
 
+/// mysqlnd's `send_long_data()` preconditions and the `store_result()` / `get_result()`
+/// exclusion: no bound parameters is 2014, a parameter number past the count 2034, a
+/// parameter not bound as `b` (even `s`) 2035, none of them reported (so STRICT mode does not
+/// throw), and a success clears the error, as `bind_param()` and `bind_result()` do.
+/// `get_result()` after `store_result()` fails with a reported 2014 and leaves the stored
+/// rows fetchable. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_long_data_preconditions_and_stored_get_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+$plain = $db->prepare("SELECT ?");
+echo $plain->send_long_data(0, "x") ? "T" : "F", $plain->errno;
+$i = 1;
+$plain->bind_param("i", $i);
+echo "/", $plain->errno;
+echo "|", $plain->send_long_data(0, "x") ? "T" : "F", $plain->errno, ":", $plain->error_list[0]["sqlstate"];
+$s = "s";
+$plain->bind_param("s", $s);
+echo "|", $plain->send_long_data(0, "x") ? "T" : "F", $plain->errno;
+echo "|", $plain->send_long_data(4, "x") ? "T" : "F", $plain->errno;
+$plain->bind_param("b", $s);
+echo "|", $plain->send_long_data(0, "x") ? "T" : "F", $plain->errno, count($plain->error_list);
+$sel = $db->prepare("SELECT 1 UNION SELECT 2");
+$sel->execute();
+$sel->store_result();
+try {
+    $sel->get_result();
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode(), ":", $e->getMessage();
+}
+$v = 0;
+$sel->bind_result($v);
+$sel->fetch();
+echo "|", $v, ",", $sel->num_rows, ",", $sel->errno;
+"#,
+    ));
+    assert_eq!(
+        out,
+        "F2014/0|F2035:HY000|F2035|F2034|T00|2014:Commands out of sync; you can't run this command now|1,2,0"
+    );
+}
+
+/// `MYSQLI_CURSOR_TYPE_READ_ONLY` opens a server cursor like mysqlnd: the link stays free while
+/// its rows are fetched one `COM_STMT_FETCH` each, a fetch past the end is `false`,
+/// `get_result()` / `store_result()` read the rest in one fetch, `free_result()` / a
+/// re-execution / `close()` drain the cursor, and a statement without a result set runs as
+/// usual. The lifecycle statistics match mysqlnd's. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_read_only_cursor() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mcur");
+$db->query("CREATE TABLE mcur (id INT)");
+$db->query("INSERT INTO mcur VALUES (1), (2), (3)");
+$st = $db->prepare("SELECT id FROM mcur ORDER BY id");
+echo $st->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY) ? "set" : "unset";
+$st->execute();
+echo "|", $st->num_rows, "|", $db->query("SELECT 42")->fetch_row()[0];
+$id = 0;
+$st->bind_result($id);
+$out = "";
+while ($st->fetch()) {
+    $out = $out . $id . ":" . $db->query("SELECT 7")->fetch_row()[0] . ",";
+}
+echo "|", $out, "|", $st->num_rows;
+echo "|", var_export($st->fetch(), true);
+$st->execute();
+$st->fetch();
+$st->free_result();
+echo "|", $db->query("SELECT 8")->fetch_row()[0];
+$st->execute();
+$r = $st->get_result();
+$ids = [];
+foreach ($r->fetch_all() as $row) {
+    $ids[] = $row[0];
+}
+echo "|", $r->num_rows, "=", implode(",", $ids);
+$st->execute();
+$st->store_result();
+echo "|", $st->num_rows;
+$st->fetch();
+echo "=", $id;
+$st->execute();
+$st->fetch();
+$st->execute();
+$st->fetch();
+echo "|re=", $id;
+$st->close();
+$e = $db->prepare("SELECT id FROM mcur WHERE id > 100");
+$e->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY);
+$e->execute();
+$x = 0;
+$e->bind_result($x);
+echo "|empty=", var_export($e->fetch(), true);
+$ins = $db->prepare("INSERT INTO mcur VALUES (?)");
+$ins->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY);
+$v = 4;
+$ins->bind_param("i", $v);
+$ins->execute();
+echo "|ins=", $ins->affected_rows;
+$s = $db->get_connection_stats();
+echo "|", $s["com_stmt_fetch"], ",", $s["rows_fetched_from_server_ps"], ",", $s["rows_fetched_from_client_ps_cursor"], ",", $s["rows_skipped_ps"], ",", $s["flushed_ps_sets"], ",", $s["ps_unbuffered_sets"], ",", $s["ps_buffered_sets"];
+$db->query("DROP TABLE mcur");
+"#,
+    ));
+    assert_eq!(out, "set|0|42|1:7,2:7,3:7,|3|false|8|3=1,2,3|3=1|re=1|empty=NULL|ins=1|20,18,12,6,3,5,1");
+}
+
+/// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
+/// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
+/// the set is unread, and the statistics count one unbuffered set. Expected output is
+/// php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_async_use_result_streams_rows() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS masy");
+$db->query("CREATE TABLE masy (id INT)");
+$db->query("INSERT INTO masy VALUES (1), (2), (3)");
+$db->query("SELECT id FROM masy ORDER BY id", MYSQLI_ASYNC | MYSQLI_USE_RESULT);
+$read = [$db];
+$error = [$db];
+$reject = [];
+echo mysqli_poll($read, $error, $reject, 5);
+$r = $db->reap_async_query();
+echo "|", get_class($r), "|", $r->num_rows, "|", $r->fetch_row()[0];
+try {
+    $db->query("SELECT 1");
+    echo "|no-2014";
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode();
+}
+$rest = [];
+while ($row = $r->fetch_row()) {
+    $rest[] = $row[0];
+}
+echo "|", implode(",", $rest), "|", $r->num_rows, "|", $db->query("SELECT 5")->fetch_row()[0];
+$s = $db->get_connection_stats();
+echo "|", $s["unbuffered_sets"], ",", $s["buffered_sets"], ",", $s["rows_fetched_from_client_normal_unbuffered"], ",", $s["rows_fetched_from_server_normal"];
+$db->query("DROP TABLE masy");
+"#,
+    ));
+    assert_eq!(out, "1|mysqli_result|0|1|2014|2,3|3|5|1,1,3,4");
+}
+
 /// Warnings come back as a `mysqli_warning` chain (`SHOW WARNINGS`), from the
 /// connection and from a statement; `$info` carries the server's OK-packet
 /// info string; MYSQLI_OPT_INT_AND_FLOAT_NATIVE turns text-protocol numbers into

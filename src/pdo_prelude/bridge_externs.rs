@@ -290,7 +290,9 @@ extern "elephc_pdo" {
     // v61: MYSQLI_ASYNC on a worker thread — send returns at once, wait blocks up to
     // $timeout_us microseconds (1 = ready, 0 = timeout, -1 = none in flight), and reap
     // hands back an executed statement holding the buffered result (-1 = query failed).
-    function elephc_pdo_mysql_async_send(int $conn, string $sql): int;
+    // $unbuffered (MYSQLI_USE_RESULT) keeps the worker streaming: ready once the first set's
+    // metadata arrived, and the reaped statement reads its rows from the server on demand.
+    function elephc_pdo_mysql_async_send(int $conn, string $sql, int $unbuffered): int;
     function elephc_pdo_mysql_async_wait(int $conn, int $timeout_us): int;
     function elephc_pdo_mysql_async_reap(int $conn): int;
     // v62: raw protocol commands and the OK-packet server status flags (patched mysql
@@ -304,6 +306,12 @@ extern "elephc_pdo" {
     function elephc_pdo_mysql_set_server_option(int $conn, int $option): int;
     function elephc_pdo_mysql_execute(int $stmt): int;
     function elephc_pdo_mysql_more_results(int $stmt): int;
+    // MYSQLI_CURSOR_TYPE_READ_ONLY: the cursor type of the next execution, whether the
+    // last one opened a server cursor (rows fetched with COM_STMT_FETCH, link free), and
+    // one COM_STMT_FETCH of every remaining row for get_result() / store_result().
+    function elephc_pdo_mysql_set_cursor_type(int $stmt, int $type): int;
+    function elephc_pdo_mysql_cursor_open(int $stmt): int;
+    function elephc_pdo_mysql_cursor_fetch_all(int $stmt): int;
     // v22: a live transaction-state read backing PDO::inTransaction() /
     // beginTransaction()'s already-active guard (P1-g). SQLite reads native
     // autocommit; PostgreSQL/MySQL use bridge-maintained state updated after every

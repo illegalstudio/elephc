@@ -185,8 +185,9 @@ while ($sel->fetch()) {            // writes the row into $id / $userName
 - Like mysqlnd, `execute()` reads only the result set's metadata: the rows stay
   on the server and `fetch()` reads them one at a time. Until they are fetched
   to the end, stored, freed (`free_result()` / `reset()` / `close()`), or the
-  statement is re-executed, any other command on the link — a query, another
-  statement — fails with errno 2014 "Commands out of sync".
+  statement is re-executed, any other command on the link (a query, another
+  statement) fails with errno 2014 "Commands out of sync" (unless the
+  statement reads them through a cursor, see below).
 - `store_result()` buffers the rows client-side so `num_rows` / `num_rows()`
   are exact and `data_seek()` repositions `fetch()`.
 - `get_result()` drains the result set into an independent `mysqli_result`
@@ -198,6 +199,13 @@ while ($sel->fetch()) {            // writes the row into $id / $userName
   `MYSQLI_STMT_ATTR_CURSOR_TYPE` (plus `MYSQLI_STMT_ATTR_PREFETCH_ROWS` before
   PHP 8.4), with php's `ValueError`s and mysqlnd's "Not implemented" for the
   cursor types it does not support.
+- With `MYSQLI_CURSOR_TYPE_READ_ONLY`, `execute()` asks the server for a
+  read-only cursor, like mysqlnd: the rows stay in the cursor and each
+  `fetch()` reads one with `COM_STMT_FETCH`, so the link stays free for other
+  queries and statements in between. `get_result()` / `store_result()` read
+  every remaining row with one fetch, and `free_result()`, `reset()`,
+  `close()` or a re-execution drain the rest. A statement without a result
+  set runs as usual.
 - `mysqli::execute_query($sql, $params)` (PHP 8.2+) is prepare + execute +
   get_result in one call.
 - Statement properties: `affected_rows`, `errno`, `error`, `error_list`,
@@ -255,7 +263,10 @@ flight land in `$reject`; `$error` comes back empty), and `reap_async_query()`
 collects the result — blocking if the query is still running. Until it is
 reaped the link answers other commands with errno 2014, like mysqlnd, and a
 failing async query is reported by `reap_async_query()`, exactly where mysqlnd
-surfaces it.
+surfaces it. With `MYSQLI_ASYNC | MYSQLI_USE_RESULT` the worker reads only the
+result set's metadata, so `poll()` reports the link as soon as the server
+starts answering, and the reaped result is unbuffered: each fetch reads the
+next row from the server, and the link stays busy until it is read or freed.
 
 ## Transactions and savepoints
 

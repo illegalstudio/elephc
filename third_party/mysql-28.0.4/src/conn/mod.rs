@@ -1585,6 +1585,97 @@ impl Conn {
         self.handle_result_set()
     }
 
+    /// elephc patch: `_execute` with the `COM_STMT_EXECUTE` flags byte set to
+    /// `cursor_type` (`CURSOR_TYPE_READ_ONLY` = 1). The upstream request builder always
+    /// sends `CURSOR_TYPE_NO_CURSOR`, so the serialized request is patched in place: byte 0
+    /// is the command, bytes 1..5 the statement id, byte 5 the flags.
+    fn _execute_with_cursor(
+        &mut self,
+        stmt: &Statement,
+        params: Params,
+        cursor_type: u8,
+    ) -> Result<ResultSetInfo> {
+        let params = params
+            .into_values(stmt.named_params.as_deref())
+            .map_err(crate::DriverError::from)?;
+
+        if usize::from(stmt.num_params()) != params.len() {
+            return Err(DriverError(MismatchedStmtParams(
+                stmt.num_params(),
+                params.len(),
+            )));
+        }
+
+        let (exec_request, as_long_data) =
+            ComStmtExecuteRequestBuilder::new(stmt.id()).build(&params);
+
+        if as_long_data {
+            self.send_long_data(stmt.id(), &params)?;
+        }
+
+        let mut buf = get_buffer();
+        exec_request.serialize(buf.as_mut());
+        buf.as_mut()[5] = cursor_type;
+        self.reset_seq_id();
+        self.0.last_command = buf[0];
+        self.begin_command(buf[0]);
+        self.write_packet(&mut &*buf)?;
+        self.handle_result_set_reading_cursor(cursor_type != 0)
+    }
+
+    /// elephc patch: executes `stmt` asking the server for a cursor of `cursor_type`
+    /// (mysqli's `MYSQLI_STMT_ATTR_CURSOR_TYPE`). When the server opens one,
+    /// [`Conn::status_flags`] carries `SERVER_STATUS_CURSOR_EXISTS` and the result yields
+    /// its columns without rows, which [`Conn::stmt_fetch`] then reads; otherwise (a
+    /// statement without a result set, or one the server runs without a cursor) the result
+    /// is the ordinary one.
+    pub fn exec_iter_with_cursor(
+        &mut self,
+        stmt: &Statement,
+        params: Params,
+        cursor_type: u8,
+    ) -> Result<QueryResult<'_, '_, '_, Binary>> {
+        let info = self._execute_with_cursor(stmt, params, cursor_type)?;
+        let meta = info.into_statement_meta(&*self, stmt);
+        Ok(QueryResult::new(ConnMut::Mut(self), meta))
+    }
+
+    /// elephc patch: [`COM_STMT_FETCH`](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_fetch.html):
+    /// reads up to `num_rows` rows of the cursor statement `stmt_id` opened by
+    /// [`Conn::exec_iter_with_cursor`], decoded with `columns` (the cursor's result
+    /// metadata). Returns the rows and whether the server reported the cursor exhausted
+    /// (`SERVER_STATUS_LAST_ROW_SENT`). The link stays free between fetches, like mysqlnd's
+    /// cursor statements.
+    pub fn stmt_fetch(
+        &mut self,
+        stmt_id: u32,
+        num_rows: u32,
+        columns: Arc<[Column]>,
+    ) -> Result<(Vec<mysql_common::row::Row>, bool)> {
+        let mut data = [0_u8; 8];
+        data[..4].copy_from_slice(&stmt_id.to_le_bytes());
+        data[4..].copy_from_slice(&num_rows.to_le_bytes());
+        self.write_command(Command::COM_STMT_FETCH, &data)?;
+        let mut rows = Vec::new();
+        loop {
+            let pld = self.read_packet()?;
+            if pld[0] == 0xfe && pld.len() < 8 {
+                self.handle_ok::<OldEofPacket>(&pld)?;
+                break;
+            }
+            let row = ParseBuf(&pld).parse::<mysql_common::row::RowDeserializer<
+                mysql_common::value::ServerSide,
+                Binary,
+            >>(columns.clone())?;
+            rows.push(row.into());
+        }
+        let exhausted = self
+            .0
+            .status_flags
+            .contains(StatusFlags::SERVER_STATUS_LAST_ROW_SENT);
+        Ok((rows, exhausted))
+    }
+
     /// Bulk-executes the given statement. Query results will be ignored.
     fn _execute_bulk<P, I>(&mut self, stmt: &Statement, params: I) -> Result<()>
     where
@@ -1663,6 +1754,14 @@ impl Conn {
     }
 
     fn handle_result_set(&mut self) -> Result<ResultSetInfo> {
+        self.handle_result_set_reading_cursor(false)
+    }
+
+    /// elephc patch: [`Conn::handle_result_set`], and with `read_cursor_status` the result
+    /// set's metadata EOF is parsed instead of skipped: when it carries
+    /// `SERVER_STATUS_CURSOR_EXISTS` the server opened a cursor and sends no rows, so the
+    /// set ends after its metadata (the rows come through [`Conn::stmt_fetch`]).
+    fn handle_result_set_reading_cursor(&mut self, read_cursor_status: bool) -> Result<ResultSetInfo> {
         if self.more_results_exists() {
             self.sync_seq_id();
         }
@@ -1701,7 +1800,22 @@ impl Conn {
                 };
 
                 // skip eof packet
-                self.drop_packet()?;
+                if read_cursor_status {
+                    let eof = self.read_packet()?;
+                    if eof[0] == 0xfe && eof.len() < 8 {
+                        self.handle_ok::<OldEofPacket>(&eof)?;
+                        if self
+                            .0
+                            .status_flags
+                            .contains(StatusFlags::SERVER_STATUS_CURSOR_EXISTS)
+                        {
+                            self.0.has_results = false;
+                            return Ok(output);
+                        }
+                    }
+                } else {
+                    self.drop_packet()?;
+                }
                 self.0.has_results = column_count > 0;
 
                 Ok(output)
