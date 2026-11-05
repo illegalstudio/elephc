@@ -7,12 +7,13 @@
 //! Key details:
 //! - An active interpreter frame supplies context to helpers with no eval local.
 //! - Success retires the saved class string; a miss leaves it for the normal diagnostic.
+//! - Native factories use an additive ABI so Reflection still refuses abstract classes.
 
 use super::*;
 
 /// Probes the active eval class table without invoking a user constructor.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_constructorless_fallback(
-    ctx: &mut FunctionContext<'_>, miss_label: &str,
+    ctx: &mut FunctionContext<'_>, miss_label: &str, native_factory: bool,
 ) -> Result<()> {
     let missing = ctx.next_label("eval_constructorless_missing");
     let done = ctx.next_label("eval_constructorless_done");
@@ -32,7 +33,11 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_constructorless_fallb
     abi::emit_load_temporary_stack_slot(ctx.emitter, name_ptr, EVAL_CODE_PTR_OFFSET);
     abi::emit_load_temporary_stack_slot(ctx.emitter, name_len, EVAL_CODE_LEN_OFFSET);
     abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), 0);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_try_allocate_object_v1");
+    let symbol = ctx.emitter.target.extern_symbol(if native_factory {
+        "__elephc_eval_try_allocate_native_object_v1"
+    } else {
+        "__elephc_eval_try_allocate_object_v1"
+    });
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_branch_if_eval_c_int_negative(ctx, &missing);
     emit_eval_status_check(ctx);

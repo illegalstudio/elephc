@@ -718,7 +718,28 @@ pub(in crate::interpreter) fn eval_dynamic_class_allocate_object(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if class.is_abstract() || context.has_enum(class.name()) {
+    eval_dynamic_class_allocate_object_inner(class, context, caller_scope, values, false)
+}
+
+/// Native factories materialize abstract wrappers without changing ordinary allocation.
+pub(in crate::interpreter) fn eval_dynamic_class_allocate_native_object(
+    class: &EvalClass,
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_dynamic_class_allocate_object_inner(class, context, caller_scope, values, true)
+}
+
+/// Shares property initialization and unwind cleanup under the caller's allocation policy.
+fn eval_dynamic_class_allocate_object_inner(
+    class: &EvalClass,
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+    native_factory: bool,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if (class.is_abstract() && !native_factory) || context.has_enum(class.name()) {
         return Err(EvalStatus::RuntimeFatal);
     }
     let backing_class = context

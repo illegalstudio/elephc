@@ -10,15 +10,22 @@
 /// Prelude factories without eval locals can reach constructorless eval allocation on one ABI.
 fn verify_simplexml_constructorless_factories_probe_active_eval_classes(target: &str) {
     let source = r#"<?php
+interface NativeFactoryTargetMarker { public function marker(): string; }
+abstract class NativeAbstractFactoryTargetXml extends SimpleXMLElement implements NativeFactoryTargetMarker {}
 $source = $argc > 0 ? 'class EvalConstructorlessTargetXml extends SimpleXMLElement {} $root = new EvalConstructorlessTargetXml("<r><item/></r>"); echo get_class($root->item);' : '';
 eval($source);
 $native = new SimpleXMLElement('<r><item/></r>');
 echo get_class($native->item);
+$abstract = simplexml_load_string('<r/>', NativeAbstractFactoryTargetXml::class);
+echo get_class($abstract);
+$reflected = new ReflectionClass($argc > 0 ? 'EvalConstructorlessTargetXml' : 'SimpleXMLElement');
+$without = $reflected->newInstanceWithoutConstructor();
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("__elephc_eval_try_allocate_object_v1"), "{target}: missing eval allocation probe");
+    assert!(assembly.contains("__elephc_eval_try_allocate_native_object_v1"), "{target}: missing native factory allocation probe");
     assert!(assembly.contains("__elephc_eval_class_string_relation_v1"), "{target}: missing eval subclass relation probe");
 }
 

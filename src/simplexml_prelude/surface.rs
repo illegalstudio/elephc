@@ -38,7 +38,11 @@ extern "elephc_xml" {
 }
 
 function __elephc_simplexml_wrap(int $handle, string $class): SimpleXMLElement {
-    $object = __elephc_simplexml_allocate($class);
+    try { $object = __elephc_simplexml_allocate($class); }
+    catch (Throwable $error) {
+        elephc_xml_sx_free($handle);
+        throw $error;
+    }
     if ($object instanceof SimpleXMLElement) {
         $object->__elephc_attach($handle);
         return $object;

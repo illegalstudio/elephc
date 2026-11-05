@@ -5,7 +5,7 @@
 //! - The SimpleXML wrapper factory after parsing or selecting a native XML node.
 //!
 //! Key details:
-//! - Reuses Reflection's existing typed, target-aware constructorless EIR operation.
+//! - Native factories share constructorless EIR with Reflection but may allocate abstract classes.
 //! - The returned boxed object is fresh; XML handles are attached by the prelude.
 
 use crate::builtins::semantics::{
@@ -14,7 +14,7 @@ use crate::builtins::semantics::{
     BuiltinResultType, BuiltinRuntimeFunctions, BuiltinSemantics, BuiltinTargetStrategy,
     BuiltinTargetSupport, BuiltinValidation, LoweredBuiltinValue, NormalizedBuiltinCall,
 };
-use crate::ir::{Effects, Op};
+use crate::ir::{Effects, Immediate, Op};
 use crate::types::PhpType;
 
 builtin! {
@@ -39,12 +39,12 @@ fn effects(_: &crate::builtins::semantics::BuiltinSemanticInput<'_>) -> Effects 
     Op::DynamicObjectNewWithoutConstructorMixed.default_effects()
 }
 
-/// Emits the shared constructorless allocation operation with an owned boxed result.
+/// Native SimpleXML factories also allocate abstract subclasses, unlike Reflection.
 fn lower(ctx: &mut dyn BuiltinLoweringContext, call: &NormalizedBuiltinCall<'_>)
     -> Result<LoweredBuiltinValue, BuiltinLoweringError>
 {
     if call.operands.len() != 1 { return Err(BuiltinLoweringError::new("XML allocation requires a class name")); }
-    Ok(ctx.emit_value(Op::DynamicObjectNewWithoutConstructorMixed, call.operands.to_vec(), None,
+    Ok(ctx.emit_value(Op::DynamicObjectNewWithoutConstructorMixed, call.operands.to_vec(), Some(Immediate::Bool(true)),
         PhpType::Mixed, Op::DynamicObjectNewWithoutConstructorMixed.default_effects(),
         Some(call.span)))
 }

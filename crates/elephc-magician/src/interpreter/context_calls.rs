@@ -194,13 +194,40 @@ pub fn execute_context_try_allocate_object_outcome(
     name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalOutcome>, EvalStatus> {
+    execute_context_try_allocate_object_inner(context, name, values, false)
+}
+
+/// Native factories can materialize abstract wrappers without invoking user constructors.
+pub fn execute_context_try_allocate_native_object_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    execute_context_try_allocate_object_inner(context, name, values, true)
+}
+
+/// Keeps non-class refusals and throwable outcomes shared by both allocation policies.
+fn execute_context_try_allocate_object_inner(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+    native_factory: bool,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
     let mut scope = ElephcEvalScope::new();
     let result = (|| {
-        if let Some(message) = eval_reflection_eval_instantiation_error_message(name, context) {
-            return eval_throw_error(&message, context, values);
+        let native_abstract = native_factory && context.class(name).is_some_and(|class| class.is_abstract());
+        if !native_abstract {
+            if let Some(message) = eval_reflection_eval_instantiation_error_message(name, context) {
+                return eval_throw_error(&message, context, values);
+            }
         }
         let Some(class) = context.class(name).cloned() else { return Ok(None); };
-        eval_dynamic_class_allocate_object(&class, context, &mut scope, values).map(Some)
+        let object = if native_factory {
+            eval_dynamic_class_allocate_native_object(&class, context, &mut scope, values)
+        } else {
+            eval_dynamic_class_allocate_object(&class, context, &mut scope, values)
+        };
+        object.map(Some)
     })();
     match result {
         Ok(value) => Ok(value.map(EvalOutcome::Value)),

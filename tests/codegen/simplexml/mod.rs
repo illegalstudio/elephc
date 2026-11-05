@@ -25,6 +25,7 @@ mod dimension_writes;
 mod dimension_owners;
 mod receiver_handoff;
 mod receiver_handoff_generic;
+mod factory_owners;
 mod dimension_updates;
 mod dimension_update_owners;
 mod diagnostics;

@@ -1116,6 +1116,7 @@ pub enum Op {
     ObjectCloneShallow,
     DynamicObjectNew,
     DynamicObjectNewMixed,
+    /// Skips constructors; `Bool(true)` permits abstract classes for native factories.
     DynamicObjectNewWithoutConstructorMixed,
     /// Reinterprets one runtime callable descriptor as an opaque bridge pointer.
     CallablePtr,

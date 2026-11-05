@@ -785,7 +785,7 @@ fn validate_instruction_immediate(
         IterEnd => require_immediate(inst_id, inst, "iterator-state local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
-        StrCharAt => {
+        StrCharAt | DynamicObjectNewWithoutConstructorMixed => {
             if matches!(inst.immediate, None | Some(Imm::Bool(_))) {
                 Ok(())
             } else {
