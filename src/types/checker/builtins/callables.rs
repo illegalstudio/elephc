@@ -1095,11 +1095,13 @@ fn check_callback_builtin_call_in_engine_frame(
     }
 
     if let ExprKind::StringLiteral(cb_name) = &callback.kind {
+        // A marked failed body is walked again before the descriptor promotion below
+        // re-resolves the signature, so the promotion starts from the settled one.
+        checker.rewalk_marked_callable_target(cb_name, callback_args, span, env)?;
         // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
         // this function a named entry, so its collector has to be compiled for the descriptor
         // container before its signature is read here.
         checker.promote_descriptor_variadic_container(cb_name.as_str())?;
-        checker.rewalk_marked_callable_target(cb_name, callback_args, span, env)?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             return checker.check_known_callable_call(&sig, callback_args, span, env, label);
         }
@@ -1481,40 +1483,29 @@ pub(crate) fn check_call_user_func_array(
                 }
             }
         }
-        // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
-        // this function a named entry, so its collector has to be compiled for the descriptor
-        // container before its signature is read here.
-        checker.promote_descriptor_variadic_container(cb_name.as_str())?;
+        // A marked failed body is walked again before the descriptor promotion below
+        // re-resolves the signature, so the promotion starts from the settled one.
         if let Some(elems) = static_args.as_deref() {
             checker.rewalk_marked_callable_target(&cb_name, elems, span, env)?;
         } else {
-            // A variable argument list binds the parameters from its value type, as the first
-            // walk did, keys included. `mixed` is a real binding here, not a callback
-            // placeholder; an empty list (`never`) passes no argument to bind from, so it
-            // keeps the provisional signature.
+            // A variable argument list binds every untyped by-value parameter, the variadic
+            // tail included, to its value type. `mixed` is a real binding here, not a callback
+            // placeholder, and an empty list (`never`) binds `mixed` as well, so a body error
+            // that no argument decides is still reported.
             let value_ty = match checker.infer_type(&args[1], env)? {
                 PhpType::Array(elem_ty) => Some(*elem_ty),
                 PhpType::AssocArray { value, .. } => Some(*value),
                 _ => None,
             }
-            .filter(|ty| *ty != PhpType::Never);
-            let has_ref_param = checker
-                .fn_decls
-                .get(cb_name.as_str())
-                .is_some_and(|decl| decl.ref_params.iter().any(|is_ref| *is_ref));
-            if has_ref_param {
-                // A by-reference parameter cannot bind from a spread, so the first walk above
-                // ran from the declaration's initial parameter types; the re-walk does the
-                // same, with the list's value type for the untyped by-value parameters.
-                checker.rewalk_marked_function_from_initial_params(&cb_name, value_ty.as_ref())?;
-            } else if value_ty.is_some() {
-                let spread_args = vec![Expr::new(
-                    ExprKind::Spread(Box::new(args[1].clone())),
-                    args[1].span,
-                )];
-                checker.rewalk_marked_callable_target(&cb_name, &spread_args, span, env)?;
+            .map(|ty| if ty == PhpType::Never { PhpType::Mixed } else { ty });
+            if let Some(value_ty) = value_ty {
+                checker.rewalk_marked_function_from_initial_params(&cb_name, &value_ty)?;
             }
         }
+        // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
+        // this function a named entry, so its collector has to be compiled for the descriptor
+        // container before its signature is read here.
+        checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             validate_call_user_func_array_dynamic_arg_array(
                 checker,
@@ -1768,13 +1759,15 @@ pub(crate) fn check_call_user_func(
         let cb_name = canonical_function_name
             .clone()
             .unwrap_or_else(|| cb_name.clone());
+        // A marked failed body is walked again before the descriptor promotion below
+        // re-resolves the signature, so the promotion starts from the settled one.
+        if !has_traversable_spread {
+            checker.rewalk_marked_callable_target(&cb_name, &args[1..], span, env)?;
+        }
         // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
         // this function a named entry, so its collector has to be compiled for the descriptor
         // container before its signature is read here.
         checker.promote_descriptor_variadic_container(cb_name.as_str())?;
-        if !has_traversable_spread {
-            checker.rewalk_marked_callable_target(&cb_name, &args[1..], span, env)?;
-        }
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                 &sig,

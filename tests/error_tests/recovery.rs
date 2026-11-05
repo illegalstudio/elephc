@@ -442,6 +442,7 @@ fn test_untyped_function_body_error_reached_through_callbacks_is_reported() {
         "<?php function f($n, $m) { $x = 5; return $x[0] + $n; } $a = [1, 'x']; \
             var_dump(call_user_func_array('f', $a));"
             .to_string(),
+        format!("<?php {f} $a = []; var_dump(call_user_func_array('f', $a));"),
         format!("<?php {f} var_dump(call_user_func('f', 1, 2)); echo f(1);"),
         format!("<?php {f} $h = f(...); var_dump($h(1, 2)); echo f(1);"),
         "<?php function id<T>(T $x) { $a = 5; return $a[0]; } \
@@ -507,10 +508,11 @@ fn test_failed_body_rewalk_survives_calls_under_eval_barrier() {
     }
 }
 
-/// `call_user_func_array` over a variable list binds an untyped by-value parameter to the
-/// list's value type, so a body that indexes it stays accepted when the re-walk runs from it,
-/// also beside a by-reference parameter (whose first walk bound the by-value one to `int`), for
-/// a `mixed` list, and for an empty list, which binds nothing.
+/// `call_user_func_array` over a variable list binds every untyped by-value parameter, the
+/// variadic tail included, to the list's value type, so a body that indexes it stays accepted
+/// when the re-walk runs from it: beside a by-reference parameter (whose first walk bound the
+/// by-value one to `int`), for a `mixed` list, for an empty list, and for a variadic tail that
+/// a spread of the list would have typed `array<int>`.
 #[test]
 fn test_call_user_func_array_variable_list_rewalk_accepts_valid_body() {
     for program in [
@@ -522,7 +524,24 @@ fn test_call_user_func_array_variable_list_rewalk_accepts_valid_body() {
          var_dump(call_user_func_array('f', $a));",
         "<?php function f($n) { return $n[0]; } $a = []; \
          var_dump(call_user_func_array('f', $a));",
+        "<?php function f($n, ...$rest) { return $rest[0][0]; } $a = [[1], [2]]; \
+         var_dump(call_user_func_array('f', $a));",
+        "<?php function f(&$r, ...$rest) { return $rest[0][0]; } $a = [0, [1]]; \
+         var_dump(call_user_func_array('f', $a));",
+        "<?php function f($n, &$r, ...$rest) { return $n[0]; } $a = [[1], [2], [3]]; \
+         var_dump(call_user_func_array('f', $a));",
     ] {
         expect_no_error(program);
     }
+}
+
+/// A variadic callback whose first walk failed only on a helper's stale return is accepted: the
+/// failed body is walked again, refreshing the helper, before the descriptor promotion of its
+/// variadic collector re-resolves the signature from the provisional one.
+#[test]
+fn test_variadic_callback_rewalk_runs_before_descriptor_promotion() {
+    expect_no_error(
+        "<?php function f(...$n) { return g()[0]; } function g() { return C::$v; } \
+         class C { public static $v; } var_dump(call_user_func('f', 1)); C::$v = [9];",
+    );
 }

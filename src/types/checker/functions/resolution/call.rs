@@ -718,22 +718,22 @@ impl Checker {
         result.map(|_| ())
     }
 
-    /// Walks the failed body of a marked function again from its declaration's initial
-    /// parameter types, as `call_user_func_array` over a variable list first walked a function
-    /// with a by-reference parameter, and returns the errors that still hold.
+    /// Walks the failed body of a marked function again for `call_user_func_array` over a
+    /// variable argument list, from the declaration's initial parameter types with every
+    /// untyped by-value parameter bound to the list's value type, and returns the errors that
+    /// still hold.
     ///
-    /// Such a call cannot bind a by-reference parameter from a spread of the list, so its first
-    /// walk did not specialize from argument types either; the walk here runs once the final
-    /// pass has settled property and return types, so a stale error vanishes and a real one is
-    /// reported for the calling statement. An untyped by-value parameter takes the list's
-    /// value type (`list_value_ty`) instead of the initial `int` placeholder, which would
-    /// refuse `$n[0]` for a list of arrays; by-reference and declared parameters keep their
-    /// initial types. Completed callees with an inferred return are refreshed as for any other
-    /// re-walk (`refresh_completed_inferred_callee`).
+    /// A spread of the list cannot bind a by-reference parameter, and its binder types an
+    /// untyped variadic tail `array<int>` beside a regular parameter, which refuses
+    /// `$rest[0][0]` over a list of arrays; binding the parameters directly avoids both. The
+    /// walk runs once the final pass has settled property and return types, so a stale error
+    /// vanishes and a real one is reported for the calling statement. By-reference and
+    /// declared parameters keep their initial types. Completed callees with an inferred return
+    /// are refreshed as for any other re-walk (`refresh_completed_inferred_callee`).
     pub(in crate::types::checker) fn rewalk_marked_function_from_initial_params(
         &mut self,
         name: &str,
-        list_value_ty: Option<&PhpType>,
+        list_value_ty: &PhpType,
     ) -> Result<(), CompileError> {
         if !self.failed_body_rewalk_is_due(name) {
             return Ok(());
@@ -743,13 +743,16 @@ impl Checker {
         };
         self.rewalk_failed_body_at_next_call.remove(name);
         let mut param_types = self.initial_function_param_types(name, &decl)?;
-        if let Some(value_ty) = list_value_ty {
-            for (idx, (_, ty)) in param_types.iter_mut().enumerate().take(decl.params.len()) {
-                let untyped = decl.param_types.get(idx).is_some_and(Option::is_none);
-                let by_ref = decl.ref_params.get(idx).copied().unwrap_or(false);
-                if untyped && !by_ref {
-                    *ty = value_ty.clone();
-                }
+        for (idx, (_, ty)) in param_types.iter_mut().enumerate().take(decl.params.len()) {
+            let untyped = decl.param_types.get(idx).is_some_and(Option::is_none);
+            let by_ref = decl.ref_params.get(idx).copied().unwrap_or(false);
+            if untyped && !by_ref {
+                *ty = list_value_ty.clone();
+            }
+        }
+        if decl.variadic.is_some() && decl.variadic_type.is_none() && !decl.variadic_by_ref {
+            if let Some((_, ty)) = param_types.get_mut(decl.params.len()) {
+                *ty = PhpType::Array(Box::new(list_value_ty.clone()));
             }
         }
         let outer_walk = self.refreshed_inferred_callees.is_none();
