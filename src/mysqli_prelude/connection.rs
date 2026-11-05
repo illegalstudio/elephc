@@ -1347,8 +1347,9 @@ class mysqli {
         $this->bump("com_query");
         $_stmt = $this->prepareText($query, true);
         if ($_stmt < 0) {
-            $this->opFailed();
+            $this->__elephcAdoptBridgeError();
             $this->disableMultiStatements();
+            $this->__elephcReportError();
             return false;
         }
         // The first set's header and metadata only (2 = no row read yet).
@@ -1357,8 +1358,9 @@ class mysqli {
             $_rc = 2;
         }
         if ($_rc < 0) {
-            $this->opFailed();
+            $this->__elephcAdoptBridgeError();
             elephc_pdo_finalize($_stmt);
+            $this->__elephcReportError();
             return false;
         }
         $this->liveStmt = $_stmt;
@@ -1386,8 +1388,11 @@ class mysqli {
         // Read the next set's header and metadata (its rows stay unread).
         $_advanced = elephc_pdo_next_rowset($this->liveStmt);
         if ($_advanced < 0) {
-            $this->opFailed();
+            // Record the error, release the failed batch, then report: under
+            // STRICT the report throws, and the link must be free afterwards.
+            $this->__elephcAdoptBridgeError();
             $this->closeLive();
+            $this->__elephcReportError();
             return false;
         }
         if ($_advanced == 0) {
@@ -1973,8 +1978,9 @@ class mysqli {
             $_rc = 2;
         }
         if ($_rc < 0) {
-            $this->opFailed();
+            $this->__elephcAdoptBridgeError();
             elephc_pdo_finalize($_stmt);
+            $this->__elephcReportError();
             return 0;
         }
         // Column metadata is definitely known after the first step, including

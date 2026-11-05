@@ -2057,8 +2057,9 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_var("_stmt"), BinOp::Lt, e_int(0)),
                         vec![
-                            s_expr(e_method_call(e_this(), "opFailed", vec![])),
+                            s_expr(e_method_call(e_this(), "__elephcAdoptBridgeError", vec![])),
                             s_expr(e_method_call(e_this(), "disableMultiStatements", vec![])),
+                            s_expr(e_method_call(e_this(), "__elephcReportError", vec![])),
                             s_return(e_bool(false)),
                         ],
                         vec![],
@@ -2076,8 +2077,9 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
                         vec![
-                            s_expr(e_method_call(e_this(), "opFailed", vec![])),
+                            s_expr(e_method_call(e_this(), "__elephcAdoptBridgeError", vec![])),
                             s_expr(e_call("elephc_pdo_finalize", vec![e_var("_stmt")])),
+                            s_expr(e_method_call(e_this(), "__elephcReportError", vec![])),
                             s_return(e_bool(false)),
                         ],
                         vec![],
@@ -2123,8 +2125,9 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_var("_advanced"), BinOp::Lt, e_int(0)),
                         vec![
-                            s_expr(e_method_call(e_this(), "opFailed", vec![])),
+                            s_expr(e_method_call(e_this(), "__elephcAdoptBridgeError", vec![])),
                             s_expr(e_method_call(e_this(), "closeLive", vec![])),
+                            s_expr(e_method_call(e_this(), "__elephcReportError", vec![])),
                             s_return(e_bool(false)),
                         ],
                         vec![],
@@ -3098,8 +3101,9 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
                         vec![
-                            s_expr(e_method_call(e_this(), "opFailed", vec![])),
+                            s_expr(e_method_call(e_this(), "__elephcAdoptBridgeError", vec![])),
                             s_expr(e_call("elephc_pdo_finalize", vec![e_var("_stmt")])),
+                            s_expr(e_method_call(e_this(), "__elephcReportError", vec![])),
                             s_return(e_int(0)),
                         ],
                         vec![],

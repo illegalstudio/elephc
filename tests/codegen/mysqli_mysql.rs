@@ -1343,7 +1343,8 @@ $r->free();
 }
 
 /// A later statement of a `multi_query()` batch that fails makes the first `next_result()`
-/// fail with its error (1146), reported under STRICT, instead of an empty successful set.
+/// fail with its error (1146), reported under STRICT, instead of an empty successful set, and
+/// the link is free for the next query after the exception is caught.
 /// Expected output is php 8.5 + mysqlnd's.
 #[test]
 #[ignore]
@@ -1366,10 +1367,10 @@ try {
 } catch (mysqli_sql_exception $e) {
     echo "|", $e->getCode();
 }
-echo "\n";
+echo "|", $db->query("SELECT 4")->fetch_row()[0], "\n";
 "#,
     ));
-    assert_eq!(out, "1|true|false|1146|false|2|1146\n");
+    assert_eq!(out, "1|true|false|1146|false|2|1146|4\n");
 }
 
 /// Closing a link in the middle of an unbuffered result (a `MYSQLI_USE_RESULT` query or an
