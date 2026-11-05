@@ -37,6 +37,7 @@ pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_nam
                 crate::types::method_order::trait_imported_method_keys(
                     class,
                     &ctx.module.declared_trait_methods,
+                    &|method: &crate::ir::TraitMethodInfo| method.span,
                 )
             },
         );

@@ -152,7 +152,11 @@ pub(super) fn reflection_class_method_names_for_filter(
         class_name.trim_start_matches('\\'),
         ctx.classes,
         &|class| {
-            crate::types::method_order::trait_imported_method_keys(class, ctx.declared_trait_methods)
+            crate::types::method_order::trait_imported_method_keys(
+                class,
+                ctx.declared_trait_methods,
+                &|method: &crate::ir::TraitMethodInfo| method.span,
+            )
         },
     );
     let ordered: Vec<String> = ordered

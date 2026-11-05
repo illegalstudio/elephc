@@ -198,6 +198,7 @@ pub(super) fn collect_declared_trait_methods(
                                 is_static: method.is_static,
                                 is_final: method.is_final,
                                 is_abstract: method.is_abstract,
+                                span: method.span,
                             };
                             (method_key, info)
                         })

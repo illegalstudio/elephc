@@ -452,21 +452,32 @@ ok
 }
 
 /// `getMethods()` and `get_class_methods()` follow Zend's function-table order: a class's
-/// own methods, then its parent's table (overridden ones keep the child's position), then
-/// the methods its traits contribute. Expected output is php 8.3's.
+/// own methods (a trait method the class overrides keeps the class's position), then (through
+/// PHP 8.4) its parent's table (overridden ones keep the child's position) and the methods its
+/// traits contribute; PHP 8.5 binds the traits before the parent. Expected output is php 8.3's
+/// and php 8.5's.
 #[test]
 fn test_method_lists_follow_zend_table_order() {
-    let out = compile_and_run(
-        r#"<?php
+    let source = r#"<?php
 trait T { public function t1() {} }
 abstract class A { abstract public function ab(); public function a1() {} public static function s1() {} }
 class B extends A { use T; public function ab() {} public function b1() {} public function a1() {} }
+trait T2 { public function f() {} public function g() {} }
+class P2 { public function p() {} }
+class C3 extends P2 { use T2; public function f() {} public function h() {} }
+class C4 extends P2 { use T2; public function h() {} public function f() {} }
 function names(array $items): string { $out = []; foreach ($items as $item) { $out[] = $item->getName() . "@" . $item->getDeclaringClass()->getName(); } return implode(",", $out); }
 echo names((new ReflectionClass("B"))->getMethods()), "\n";
 echo implode(",", get_class_methods("B")), "\n";
-"#,
+echo names((new ReflectionClass("C3"))->getMethods()), "\n";
+echo implode(",", get_class_methods("C4")), "\n";
+"#;
+    assert_eq!(
+        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php83),
+        "ab@B,b1@B,a1@B,s1@A,t1@B\nab,b1,a1,s1,t1\nf@C3,h@C3,p@P2,g@C3\nh,f,p,g\n"
     );
-    assert_eq!(out, r#"ab@B,b1@B,a1@B,s1@A,t1@B
-ab,b1,a1,s1,t1
-"#);
+    assert_eq!(
+        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php85),
+        "ab@B,b1@B,a1@B,t1@B,s1@A\nab,b1,a1,t1,s1\nf@C3,h@C3,g@C3,p@P2\nh,f,g,p\n"
+    );
 }

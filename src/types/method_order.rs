@@ -8,13 +8,17 @@
 //!
 //! Key details:
 //! - zend_do_inheritance appends the parent's (not overridden) functions after the class's
-//!   own declarations, and trait methods are bound after inheritance, so a class's table is
-//!   its own methods, then its parent's table, then the methods its traits contribute.
+//!   own declarations. Through PHP 8.4 trait methods are bound after inheritance, so a class's
+//!   table is its own methods, then its parent's table, then the methods its traits
+//!   contribute. PHP 8.5 binds traits first: own methods, trait methods, then the parent's.
+//! - A class's own declaration of a trait method's name overrides it and keeps the class's
+//!   position (see [`trait_imported_method_keys`]).
 //! - A key keeps its first position; keys are lowercase php symbol keys.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::names::php_symbol_key;
+use crate::span::Span;
 use crate::types::ClassInfo;
 
 /// Returns `class_name`'s method keys in Zend's function-table order. `imported` names the
@@ -66,11 +70,29 @@ fn append_class_table(
             order.push(key.clone());
         }
     }
+    let traits_before_parent = crate::codegen_support::compile_php_version()
+        >= crate::php_version::PhpVersion::Php85;
+    if traits_before_parent {
+        append_trait_methods(&declared, &from_traits, order, seen);
+    }
     if let Some(parent) = info.parent.as_deref() {
         if php_symbol_key(parent) != php_symbol_key(class_name) {
             append_class_table(parent, classes, imported, order, seen, depth + 1);
         }
     }
+    if !traits_before_parent {
+        append_trait_methods(&declared, &from_traits, order, seen);
+    }
+}
+
+/// Appends the class's trait-imported method keys, in declaration order, that have no
+/// position yet.
+fn append_trait_methods(
+    declared: &[String],
+    from_traits: &HashSet<String>,
+    order: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
     for key in declared.iter().filter(|key| from_traits.contains(*key)) {
         if seen.insert(key.clone()) {
             order.push(key.clone());
@@ -80,9 +102,16 @@ fn append_class_table(
 
 /// The method keys `info` imported from its traits, from each used trait's declared
 /// methods plus the class's trait aliases.
+///
+/// A trait method the class overrides with its own declaration is NOT imported: Zend keeps the
+/// class's declaration in its own position. `span_of` returns a trait method's declaration
+/// span; trait composition copies that declaration into the class unchanged, so a class method
+/// is the imported one exactly when it carries that span. A synthetic span (built prelude
+/// code) identifies no declaration, so such a method falls back to the name match.
 pub(crate) fn trait_imported_method_keys<V>(
     info: &ClassInfo,
     declared_trait_methods: &HashMap<String, HashMap<String, V>>,
+    span_of: &dyn Fn(&V) -> Span,
 ) -> HashSet<String> {
     let mut keys = HashSet::new();
     for trait_name in &info.used_traits {
@@ -95,7 +124,17 @@ pub(crate) fn trait_imported_method_keys<V>(
                 .map(|(_, methods)| methods)
         });
         if let Some(methods) = methods {
-            keys.extend(methods.keys().map(|name| php_symbol_key(name)));
+            for (name, method) in methods {
+                let key = php_symbol_key(name);
+                let trait_span = span_of(method);
+                let overridden = trait_span.identifies_a_node()
+                    && info.method_decls.iter().any(|decl| {
+                        php_symbol_key(&decl.name) == key && decl.span != trait_span
+                    });
+                if !overridden {
+                    keys.insert(key);
+                }
+            }
         }
     }
     for (alias, _) in &info.trait_aliases {

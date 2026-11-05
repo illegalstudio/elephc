@@ -55,6 +55,10 @@ pub struct TraitMethodInfo {
     pub is_static: bool,
     pub is_final: bool,
     pub is_abstract: bool,
+    /// The declaration's source span. Trait composition copies the declaration into every
+    /// using class unchanged, so a class method with this span IS the imported trait method,
+    /// while a class's own override of the same name has its own span.
+    pub span: crate::span::Span,
 }
 
 /// One generated PHP 8.5 `clone()` property-override applicator.

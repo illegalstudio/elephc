@@ -394,6 +394,7 @@ fn visible_class_method_names(
                 crate::types::method_order::trait_imported_method_keys(
                     class,
                     ctx.declared_trait_methods,
+                    &|method: &crate::ir::TraitMethodInfo| method.span,
                 )
             },
         );
