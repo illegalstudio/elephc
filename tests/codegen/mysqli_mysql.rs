@@ -1529,6 +1529,35 @@ echo "|", $st->num_rows, "\n";
     assert_eq!(out, "1|3|true|3|2,3|3|seek=1|0\n");
 }
 
+/// A `CALL` whose procedure fails after a first result set returns that set (sync `query()`
+/// and a buffered `MYSQLI_ASYNC` reap alike) and reports the failure (1644) only when
+/// `next_result()` reaches it, like mysqlnd. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_call_error_after_first_set_waits_for_next_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP PROCEDURE IF EXISTS masig");
+$db->query("CREATE PROCEDURE masig() BEGIN SELECT 1 AS a; SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'boom'; END");
+$db->query("CALL masig()", MYSQLI_ASYNC);
+$read = [$db];
+$error = [];
+$reject = [];
+mysqli_poll($read, $error, $reject, 5);
+$r = $db->reap_async_query();
+echo is_object($r) ? get_class($r) . ":" . $r->fetch_row()[0] : var_export($r, true) . ":" . $db->errno;
+echo "|", var_export($db->more_results(), true);
+echo "|", var_export($db->next_result(), true), ":", $db->errno, ":", $db->error;
+echo "|", $db->query("SELECT 5")->fetch_row()[0];
+$db->query("CALL masig()");
+echo "|sync:", $db->errno;
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "mysqli_result:1|true|false:1644:boom|5|sync:0\n");
+}
+
 /// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
 /// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
 /// the set is unread, and the statistics count one unbuffered set. Expected output is

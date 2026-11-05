@@ -395,6 +395,9 @@ pub struct MyStmt {
     /// Result sets after the active one, retained in wire order for
     /// `PDOStatement::nextRowset()`.
     remaining_rowsets: Vec<MyRowset>,
+    /// The error of a later statement of a buffered batch (a MYSQLI_ASYNC `CALL` whose
+    /// procedure fails after a first set), reported when `next_rowset()` reaches it.
+    trailing_error: Option<mysql::Error>,
     /// Current 0-based row index; `-1` before the first `step()`.
     cursor: isize,
     /// Whether the query has been executed yet.
@@ -477,7 +480,7 @@ type AsyncReady = Arc<(Mutex<bool>, Condvar)>;
 enum MyAsyncWork {
     /// MYSQLI_STORE_RESULT: the worker buffers every result set, then returns the client,
     /// the outcome, and the final warning count.
-    Buffered(JoinHandle<(Conn, Result<Vec<MyRowset>, mysql::Error>, u16)>),
+    Buffered(JoinHandle<(Conn, (Vec<MyRowset>, Option<mysql::Error>), u16)>),
     /// MYSQLI_USE_RESULT: a demand-driven text-stream worker. It is ready once the first
     /// set's metadata (or the query's error) arrived, and reaping hands the live stream to
     /// the result, which reads every row from the server on fetch, like mysqlnd's unbuffered
@@ -602,23 +605,31 @@ impl MyRowset {
     }
 }
 
-/// Runs a text-protocol statement (or multi-statement batch) and buffers every result set,
+/// Runs a text-protocol statement (or multi-statement batch) and buffers its result sets,
 /// shared by buffered emulated statements and by mysqli's MYSQLI_ASYNC worker thread.
+///
+/// The sets read before a failure are kept: a batch (or `CALL`) whose later statement fails
+/// returns its earlier sets plus that error, which mysqlnd reports only when
+/// `next_result()` / `nextRowset()` reaches it. A failure of the first statement returns no
+/// sets.
 ///
 /// `ready` (the async worker's) is signalled as soon as the server's first response arrives,
 /// before the rows are read: mysqlnd's `mysqli_poll()` reports a link readable once its
 /// socket has data, and the rows are buffered when the query is reaped.
-fn collect_text_rowsets(
+fn collect_text_rowsets_until_error(
     client: &mut Conn,
     sql: String,
     fetch_table_names: bool,
     ready: Option<&AsyncReady>,
-) -> Result<Vec<MyRowset>, mysql::Error> {
+) -> (Vec<MyRowset>, Option<mysql::Error>) {
     let result = client.query_iter(sql);
     if let Some(ready) = ready {
         signal_ready(ready);
     }
-    let mut result = result?;
+    let mut result = match result {
+        Ok(result) => result,
+        Err(error) => return (Vec::new(), Some(error)),
+    };
     let mut rowsets = Vec::new();
     while let Some(mut set) = result.iter() {
         let last_id = set.last_insert_id();
@@ -646,7 +657,10 @@ fn collect_text_rowsets(
         let col_precisions = columns.iter().map(Column::decimals).collect::<Vec<_>>();
         let mut rows = Vec::new();
         for row in set.by_ref() {
-            rows.push(decode_row(row?.unwrap(), &col_kinds));
+            match row {
+                Ok(row) => rows.push(decode_row(row.unwrap(), &col_kinds)),
+                Err(error) => return (rowsets, Some(error)),
+            }
         }
         rowsets.push(MyRowset {
             affected,
@@ -661,7 +675,7 @@ fn collect_text_rowsets(
             rows,
         });
     }
-    Ok(rowsets)
+    (rowsets, None)
 }
 
 /// Extracts a MySQL server error code from a driver error, or `1` for transport /
@@ -2725,8 +2739,12 @@ impl MyConn {
             }
         } else {
             MyAsyncWork::Buffered(std::thread::spawn(move || {
-                let outcome =
-                    collect_text_rowsets(&mut client, text, fetch_table_names, Some(&signal));
+                let outcome = collect_text_rowsets_until_error(
+                    &mut client,
+                    text,
+                    fetch_table_names,
+                    Some(&signal),
+                );
                 let warnings = client.warnings();
                 signal_ready(&signal);
                 (client, outcome, warnings)
@@ -2778,7 +2796,11 @@ impl MyConn {
         };
         self.restore_stream_client(client, warnings);
         match outcome {
-            Ok(mut rowsets) => {
+            (rowsets, Some(error)) if rowsets.is_empty() => {
+                self.record_mysql_error(&error);
+                Err(())
+            }
+            (mut rowsets, trailing_error) => {
                 let mut stmt = self.prepare(&query.sql, true).map_err(|_| ())?;
                 let first = if rowsets.is_empty() {
                     MyRowset::empty()
@@ -2786,15 +2808,12 @@ impl MyConn {
                     rowsets.remove(0)
                 };
                 stmt.remaining_rowsets = rowsets;
+                stmt.trailing_error = trailing_error;
                 stmt.install_rowset(self, first);
                 self.note_transaction_sql(&query.sql);
                 self.errcode = 0;
                 self.sqlstate = "00000".to_string();
                 Ok(stmt)
-            }
-            Err(error) => {
-                self.record_mysql_error(&error);
-                Err(())
             }
         }
     }
@@ -3095,6 +3114,7 @@ impl MyConn {
                 col_precisions: Vec::new(),
                 rows: Vec::new(),
                 remaining_rowsets: Vec::new(),
+                trailing_error: None,
                 cursor: -1,
                 executed: false,
                 is_call: sql_is_call_statement(sql),
@@ -3168,6 +3188,7 @@ impl MyConn {
                     col_precisions,
                     rows: Vec::new(),
                     remaining_rowsets: Vec::new(),
+                    trailing_error: None,
                     cursor: -1,
                     executed: false,
                     is_call: sql_is_call_statement(sql),
@@ -3543,6 +3564,7 @@ impl MyStmt {
         self.executed = false;
         self.rows.clear();
         self.remaining_rowsets.clear();
+        self.trailing_error = None;
         self.stream_id = None;
         1
     }
@@ -3594,6 +3616,10 @@ impl MyStmt {
         if self.remaining_rowsets.is_empty() {
             if self.stream_id.is_none() {
                 conn.unbuffered_active = false;
+            }
+            if let Some(error) = self.trailing_error.take() {
+                conn.record_mysql_error(&error);
+                return -1;
             }
             return 0;
         }
@@ -3683,6 +3709,7 @@ impl MyStmt {
             let (stream_id, rowset) = conn.start_native_stream(statement, values)?;
             self.stream_id = Some(stream_id);
             self.remaining_rowsets.clear();
+            self.trailing_error = None;
             self.install_rowset(conn, rowset);
             conn.note_transaction_sql(&self.query_string);
             return Ok(());
@@ -3960,12 +3987,23 @@ impl MyStmt {
             let (stream_id, rowset) = conn.start_text_stream(sql)?;
             self.stream_id = Some(stream_id);
             self.remaining_rowsets.clear();
+            self.trailing_error = None;
             self.install_rowset(conn, rowset);
             conn.note_transaction_sql(&self.query_string);
             return Ok(());
         }
         let fetch_table_names = conn.fetch_table_names;
-        let outcome = collect_text_rowsets(&mut conn.conn, sql, fetch_table_names, None);
+        // A later statement's failure (a `CALL` whose procedure fails after a first set) is
+        // kept for next_rowset(), like mysqlnd, which reads further sets only on demand.
+        let (rowsets, trailing_error) =
+            collect_text_rowsets_until_error(&mut conn.conn, sql, fetch_table_names, None);
+        let outcome = match trailing_error {
+            Some(error) if rowsets.is_empty() => Err(error),
+            trailing_error => {
+                self.trailing_error = trailing_error;
+                Ok(rowsets)
+            }
+        };
         let warnings = conn.conn.warnings();
         match outcome {
             Ok(mut rowsets) => {
@@ -4009,7 +4047,7 @@ impl MyStmt {
     pub fn more_results(&self, conn: &MyConn) -> bool {
         match self.stream_id {
             Some(stream_id) => conn.stream_more_sets(stream_id),
-            None => !self.remaining_rowsets.is_empty(),
+            None => !self.remaining_rowsets.is_empty() || self.trailing_error.is_some(),
         }
     }
 
