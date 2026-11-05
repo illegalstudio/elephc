@@ -5,10 +5,11 @@
 - [x] Cover property/attribute access, iteration, conversions, DOM import, errors, and eval with focused tests.
 - [x] Update generated coverage, user documentation, and a runnable example.
 - [x] Open a draft PR and route heavy validation and regression checks through CI.
-- [ ] Resolve confirmed SimpleXML correctness defects and regressions in this PR, preserving every test and check.
-- [ ] Obtain three independent full-branch reviews (GLM 5.3-flash, MiniMax M3.1-flash, Mistral Large 4) and green CI on the same final head.
+- [x] Resolve confirmed SimpleXML correctness defects and regressions in this PR, preserving every test and check.
+- [x] Obtain three independent full-branch reviews (GLM 5.3-flash, MiniMax M3.1-flash, Mistral Large 4).
+- [ ] Run green CI on the final head after the integration branch reaches `main`.
 
-The current priority is closing SimpleXML. Do not extend the generalized native-reference refactor. The php-src 8.5.8 corpus runs at 154/154 and the branch is pushed; the three-model review is the remaining gate. Group necessary corrections into one push, keep the PR draft, and let CI terminate on the stable published candidate.
+The current priority is closing SimpleXML. Do not extend the generalized native-reference refactor. The php-src 8.5.8 corpus runs at 154/154 and the branch is pushed. PR #2248 targets Vincenzo's `feat/simplexml` integration branch: 1,057 of that branch's 1,062 commits are his, and the five SimpleXML-compliance commits are ours. A `main`-targeted PR from this head would carry the whole integration branch and currently conflicts with `main`, so keep this PR on `feat/simplexml`. Wait for that branch to merge, then rebase onto `main`, re-run the php-src corpus, and confirm no SimpleXML work was lost before requesting CI.
 
 Deferred generalized native-reference follow-up:
 
