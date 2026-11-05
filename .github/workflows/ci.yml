@@ -58,6 +58,32 @@ env:
     -p elephc-zend
 
 jobs:
+  cancel-rebuilt-queue-runs:
+    name: Cancel rebuilt merge queue runs
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The only write this job makes: cancelling the earlier merge_group runs of this workflow
+    # for the same pull request; see scripts/ci/cancel_rebuilt_queue_runs.sh.
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          sparse-checkout-cone-mode: true
+          persist-credentials: false
+
+      - name: Cancel the runs of this pull request's earlier merge groups
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_FILE: ci.yml
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          RUN_ID: ${{ github.run_id }}
+        run: bash scripts/ci/cancel_rebuilt_queue_runs.sh
+
   # The required gate waits for real PHP on the queue's actual integration commit.
   phpext-host-sdk:
     needs: plan
@@ -120,6 +146,7 @@ jobs:
           bash scripts/ci/test_plan_tiers.sh
           bash scripts/ci/test_run_eval_codegen_shard.sh
           bash scripts/ci/test_cancel_superseded_queue_runs.sh
+          bash scripts/ci/test_cancel_rebuilt_queue_runs.sh
 
       - name: Test macOS notarization gate
         run: python3 -B -m unittest discover -s .github/scripts -p 'test_notarize_macos.py' -v
