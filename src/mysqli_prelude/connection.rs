@@ -1083,10 +1083,16 @@ class mysqli {
         if ($_stmt < 0) {
             return $this->opFailed();
         }
-        $_rc = elephc_pdo_step($_stmt);
-        if ($_rc < 0) {
-            elephc_pdo_finalize($_stmt);
-            return $this->opFailed();
+        // An unbuffered (MYSQLI_USE_RESULT) set keeps its rows on the server: like
+        // mysqlnd, the reap reads only the header and metadata, and the first row
+        // is read by the first fetch (2 = not read yet).
+        $_rc = 2;
+        if (!$this->asyncUnbuffered) {
+            $_rc = elephc_pdo_step($_stmt);
+            if ($_rc < 0) {
+                elephc_pdo_finalize($_stmt);
+                return $this->opFailed();
+            }
         }
         $_columnCount = elephc_pdo_column_count($_stmt);
         $this->__elephcHeaderStats($_columnCount, true);

@@ -3304,6 +3304,13 @@ fn drive_mysql_stream_signalled<T: mysql::prelude::Protocol>(
     ready: Option<&AsyncReady>,
 ) -> Result<(), mysql::Error> {
     while let Some(mut set) = result.iter() {
+        // A later statement of the batch failed: report its error now (mysqlnd's
+        // next_result() fails with it) instead of announcing an empty successful set.
+        if set.is_errored() {
+            if let Some(Err(error)) = set.next() {
+                return Err(error);
+            }
+        }
         let columns = set.columns();
         let columns: &[Column] = columns.as_ref();
         let kinds = columns.iter().map(ColKind::from_column).collect::<Vec<_>>();

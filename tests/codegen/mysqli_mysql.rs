@@ -1317,6 +1317,61 @@ echo "|", mysqli_poll($read, $error, $reject, 3), "|", count($read), "|", count(
     assert_eq!(out, "0|waited|NULL|0|0|TypeError|1|1|0|0\n");
 }
 
+/// Reaping a `MYSQLI_ASYNC | MYSQLI_USE_RESULT` query reads only its header and metadata: the
+/// first row's bytes arrive with the first fetch (wire and row statistics advance there), like
+/// mysqlnd. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_async_use_result_reap_leaves_the_first_row_unread() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("SELECT REPEAT('y', 5000) AS v", MYSQLI_ASYNC | MYSQLI_USE_RESULT);
+$read = [$db];
+$error = [];
+$reject = [];
+mysqli_poll($read, $error, $reject, 5);
+$r = $db->reap_async_query();
+$before = $db->get_connection_stats();
+$row = $r->fetch_row();
+$after = $db->get_connection_stats();
+echo strlen($row[0]), "|", (int) $after["bytes_received"] - (int) $before["bytes_received"] > 5000 ? "read-at-fetch" : "read-at-reap";
+echo "|", (int) $before["rows_fetched_from_server_normal"], "|", (int) $after["rows_fetched_from_server_normal"], "\n";
+$r->free();
+"#,
+    ));
+    assert_eq!(out, "5000|read-at-fetch|0|1\n");
+}
+
+/// A later statement of a `multi_query()` batch that fails makes the first `next_result()`
+/// fail with its error (1146), reported under STRICT, instead of an empty successful set.
+/// Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_multi_query_next_result_reports_a_later_error() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->multi_query("SELECT 1; SELECT * FROM missing_table_xyz");
+$r = $db->store_result();
+echo $r->fetch_row()[0], "|", var_export($db->more_results(), true);
+$next = $db->next_result();
+echo "|", var_export($next, true), "|", $db->errno, "|", var_export($db->more_results(), true);
+echo "|", $db->query("SELECT 2")->fetch_row()[0];
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$db->multi_query("SELECT 3; SELECT * FROM missing_table_xyz");
+$db->use_result()->free();
+try {
+    $db->next_result();
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode();
+}
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "1|true|false|1146|false|2|1146\n");
+}
+
 /// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
 /// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
 /// the set is unread, and the statistics count one unbuffered set. Expected output is

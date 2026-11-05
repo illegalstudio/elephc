@@ -25,6 +25,9 @@ workspace `Cargo.toml`, with these additions in `src/conn/mod.rs` (marked `eleph
 - `IoCounters`, `GLOBAL_IO_COUNTERS`, and `Conn::io_counters()` — byte and packet counters
   updated in `raw_read_packet` / `write_packet`, the two points every packet passes
   (mysqli's `get_connection_stats()` / `mysqli_get_client_stats()`).
+- `QueryResult::is_errored()`: whether the current set of a multi-statement batch is the
+  server's error for its header, so a streaming consumer reports it before announcing the set
+  (mysqlnd's `next_result()` fails with that error).
 
 Everything else is byte-for-byte upstream (MIT / Apache-2.0, see the license files). To
 upgrade, copy the new release over this directory and re-apply the additions.

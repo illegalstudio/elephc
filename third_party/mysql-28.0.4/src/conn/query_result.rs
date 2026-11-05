@@ -301,6 +301,13 @@ impl<'c, 't, 'tc, T: crate::prelude::Protocol> QueryResult<'c, 't, 'tc, T> {
             .unwrap_or_else(|| "".into())
     }
 
+    /// elephc patch: whether the current set is the server's error for its header (a later
+    /// statement of a multi-statement batch failed). Its `ResultSet::next()` yields the error;
+    /// a streaming consumer checks this before announcing the set as a successful one.
+    pub fn is_errored(&self) -> bool {
+        matches!(self.state, SetIteratorState::Errored(_))
+    }
+
     /// Returns columns of the current result rest.
     pub fn columns(&self) -> SetColumns<'_> {
         SetColumns {

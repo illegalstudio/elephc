@@ -1684,12 +1684,20 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign("_rc", e_call("elephc_pdo_step", vec![e_var("_stmt")])),
+                    s_assign("_rc", e_int(2)),
                     s_if(
-                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
+                        e_not(e_this_prop("asyncUnbuffered")),
                         vec![
-                            s_expr(e_call("elephc_pdo_finalize", vec![e_var("_stmt")])),
-                            s_return(e_method_call(e_this(), "opFailed", vec![])),
+                            s_assign("_rc", e_call("elephc_pdo_step", vec![e_var("_stmt")])),
+                            s_if(
+                                e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
+                                vec![
+                                    s_expr(e_call("elephc_pdo_finalize", vec![e_var("_stmt")])),
+                                    s_return(e_method_call(e_this(), "opFailed", vec![])),
+                                ],
+                                vec![],
+                                None,
+                            ),
                         ],
                         vec![],
                         None,
