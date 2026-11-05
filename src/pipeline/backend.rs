@@ -104,16 +104,13 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         timings,
     } = inputs;
 
-    // Dynamic source is opaque to AOT feature detection. `--with-regex`
-    // explicitly enables the ordinary regex runtime/native requirement and
-    // lets eval setup register that managed provider with Magician.
-    if with_crates.contains("regex") {
-        ir_module.required_runtime_features.regex = true;
-    }
-    if with_crates.contains("mbstring") {
-        ir_module.required_runtime_features.mbstring = true;
-        ir_module.required_runtime_features.mbregex = true;
-        ir_module.required_runtime_features.mbstring_mime = true;
+    // Dynamic source is opaque to AOT feature detection, so `--with-regex` and
+    // `--with-mbstring` force their runtime families and native requirements.
+    for flag in with_crates.iter() {
+        crate::codegen_support::force_runtime_features_for_flag(
+            &mut ir_module.required_runtime_features,
+            flag,
+        );
     }
     let probe = with_crates.contains("probe");
     if probe {
@@ -347,62 +344,19 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             LinkRequirement::Bridge(_) | LinkRequirement::SystemLibrary(_) => None,
         })
         .collect();
-    // The curl bridge is a Rust `staticlib` (`elephc_curl`, planned above like any
-    // other bridge) that itself links against the managed native `curl` package
-    // (which pulls in `openssl`/`zlib` transitively through the catalog). Unlike
-    // `regex`, curl has no `RuntimeFeatures` bit: `elephc_curl` reaches
-    // `planned_link_libraries` either because the program actually uses curl (every
-    // curl `RuntimeFnId` declares `BuiltinRequirement::Bridge("elephc_curl")`, and the
-    // curl prelude is injected only when `src/curl_prelude/detect.rs` finds a `curl_*`
-    // reference) or because `--with-curl` forces it explicitly with no such reference;
-    // this mirrors that into the native requirement so the
-    // final link resolves `libcurl.a`/`libssl.a`/`libcrypto.a`/`libz.a` instead of
-    // failing on `elephc_curl`'s undefined libcurl symbols.
-    if planned_link_libraries
-        .iter()
-        .any(|library| library == "elephc_curl")
-    {
-        native_requirements.push(NativeRequirement::package("curl"));
-    }
-    // The xml bridge is the same shape as curl: `elephc_xml` is a Rust `staticlib`
-    // whose parser is libxml2 itself, reached through the Elephc-owned C shim the
-    // managed `libxml2` package builds and archives next to `libxml2.a`. It has no
-    // `RuntimeFeatures` bit either: `elephc_xml` reaches `planned_link_libraries`
-    // because the program names part of the surface (the xml prelude is injected
-    // only when `src/xml_prelude` detects an `xml_*`/`xmlwriter_*` call or an
-    // `XMLParser`/`XMLWriter` reference, and its `extern "elephc_xml"` block is what
-    // requires the bridge) or because `--with-xml` forces it. Mirroring that into
-    // the native requirement makes the final link resolve
-    // `libelephc_libxml2_shim.a` + `libxml2.a` from the project's catalog package
-    // instead of failing on the bridge's undefined `elephc_libxml2_v1_*`/`xml*`
-    // symbols — and, exactly like curl, there is no system `-lxml2` fallback.
-    if planned_link_libraries
-        .iter()
-        .any(|library| library == "elephc_xml")
-    {
-        native_requirements.push(NativeRequirement::package("libxml2"));
-    }
-    // The gmp bridge is the same shape again: `elephc_gmp` is a Rust `staticlib`
-    // whose raw operations call libgmp through `extern "C"` declarations. The
-    // injected GMP prelude's `extern "elephc_gmp"` block is what puts the bridge in
-    // `planned_link_libraries`; mirroring it into the native requirement resolves
-    // `libgmp.a` from the project's managed `gmp` package. There is deliberately no
-    // system `-lgmp` fallback.
-    if planned_link_libraries
-        .iter()
-        .any(|library| library == "elephc_gmp")
-    {
-        native_requirements.push(NativeRequirement::package("gmp"));
-    }
-    if planned_link_libraries.iter().any(|lib| lib == "elephc_fileinfo") {
-        native_requirements.push(NativeRequirement::package("libmagic"));
-    }
-    // The cipher bridge declares libcrypto's provider/EVP symbols without linking
-    // them. `openssl-crypto` is a libcrypto-only 3.6.4 build, deliberately separate
-    // from curl's 3.5.8 TLS pin; its zlib dependency supplies libz.a after it.
-    if planned_link_libraries.iter().any(|lib| lib == "elephc_openssl") {
-        native_requirements.push(NativeRequirement::package("openssl-crypto"));
-    }
+    // Bridges that are thin adapters over a C library (curl, xml, gmp, fileinfo,
+    // openssl) declare that library's symbols without linking them. A bridge
+    // reaches `planned_link_libraries` either because the program uses its surface
+    // (its prelude's `extern` block or a `BuiltinRequirement::Bridge`) or because
+    // `--with-<name>` forces it, and in both cases the final link resolves the
+    // library from the project's managed native package instead of failing on
+    // undefined symbols. `crate::linker::native_packages` owns the bridge-to-package
+    // table and its link order; `--print-capabilities` reports the same table.
+    native_requirements.extend(
+        crate::linker::native_packages_for_libraries(&planned_link_libraries)
+            .into_iter()
+            .map(NativeRequirement::package),
+    );
     let mut resolved_native = match crate::native_deps::resolve_for_compilation(
         Path::new(filename),
         target,

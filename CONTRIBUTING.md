@@ -850,16 +850,19 @@ If the new bridge's `.a` also needs a catalog package at PHP-program link time
 (curl is the precedent: `NativeRequirement::package("curl")` when `elephc_curl`
 is planned; `elephc native add curl` in the user project), then:
 
-1. Wire the native requirement in `src/pipeline/backend.rs` the same way curl
-   does.
+1. Add the bridge and its package to `BRIDGE_NATIVE_PACKAGES` in
+   `src/linker/native_packages.rs`, at the position the final link needs (the
+   table order is the link order). `src/pipeline/backend.rs` turns it into the
+   native requirement, and `--print-capabilities` reports it as a
+   `native:<package>` field.
 2. Pack `-p elephc-<name>` in nightly and release, like curl.
-3. Teach `scripts/verify-release-artifact.sh` to run
-   `$ELEPHC native add <package>` in the empty probe WORKDIR **before**
-   `--with-<name>`. Never fail-then-retry by grepping the compiler recovery
-   text. Never skip the compile probe.
-4. Cache `~/.cache/elephc/native` on the nightly and release `verify-artifact`
-   jobs (keyed like `curl-codegen-tests`) and give the job a long enough
-   timeout for a cold source build of the C library.
+3. Nothing to edit in `scripts/verify-release-artifact.sh`: it runs
+   `$ELEPHC native add <package>` for every reported `native:` field in the
+   empty probe WORKDIR **before** `--with-<name>`. Never fail-then-retry by
+   grepping the compiler recovery text. Never skip the compile probe.
+4. The nightly and release `verify-artifact` jobs cache `~/.cache/elephc/native`
+   keyed on the catalog and every recipe; give the job a long enough timeout
+   for a cold source build of the C library.
 
 System libraries — phar's zlib/bz2, `libdl`, Apple frameworks — are not
 managed native packages. They do not go through `elephc native add` and are
