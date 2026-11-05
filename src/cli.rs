@@ -765,30 +765,71 @@ pub(crate) fn help_text() -> String {
 /// thirteenth bridge is carried into that check by the edit that declares it
 /// and there is no second list for anyone to forget.
 ///
-/// Each line is `<kind>\t<name>[\t<archive>...]`: `bridge` for a capability
-/// backed by one archive of its own, `capability` for one that is not — either
-/// because it needs no archive (`regex`, whose provider is a managed native
-/// package) or because it is built out of several (`monitoring`). A capability
-/// listed with no archive is still a capability the binary must be able to
-/// link; the archives are what can be checked without compiling anything.
+/// Each line is `<kind>\t<name>[\t<archive>...][\tnative:<package>...]`:
+/// `bridge` for a capability backed by one archive of its own, `capability` for
+/// one that is not — either because it needs no archive (`regex`, whose provider
+/// is a managed native package) or because it is built out of several
+/// (`monitoring`). A capability listed with no archive is still a capability the
+/// binary must be able to link; the archives are what can be checked without
+/// compiling anything. Each `native:` field names a managed native package the
+/// project must declare (`elephc native add <package>`) before `--with-<name>`
+/// links, so the release probe prepares exactly what the binary will ask for.
 pub(crate) fn capability_report() -> String {
     let mut report = String::new();
     for name in with_flag_names() {
         if let Some(archive) = crate::linker::archive_filename_for_flag(name) {
-            report.push_str(&format!("bridge\t{name}\t{archive}\n"));
-            continue;
-        }
-        report.push_str(&format!("capability\t{name}"));
-        if name == "monitoring" {
-            for mechanism in MONITORING_BRIDGES {
-                if let Some(archive) = crate::linker::archive_filename_for_flag(mechanism) {
-                    report.push_str(&format!("\t{archive}"));
+            report.push_str(&format!("bridge\t{name}\t{archive}"));
+        } else {
+            report.push_str(&format!("capability\t{name}"));
+            if name == "monitoring" {
+                for mechanism in MONITORING_BRIDGES {
+                    if let Some(archive) = crate::linker::archive_filename_for_flag(mechanism) {
+                        report.push_str(&format!("\t{archive}"));
+                    }
                 }
             }
+        }
+        for package in native_packages_for_flag(name) {
+            report.push_str(&format!("\tnative:{package}"));
         }
         report.push('\n');
     }
     report
+}
+
+/// Returns the managed native packages a project must declare before `--with-<name>` links.
+///
+/// Mirrors what the backend asks the native resolver for when the flag is the
+/// only reason a capability is linked: the packages of the runtime features the
+/// flag forces first, then those of every bridge it plans, in the linker table's
+/// link order.
+fn native_packages_for_flag(name: &str) -> Vec<&'static str> {
+    use crate::codegen_support::LinkRequirement;
+
+    let mut forced = crate::codegen_support::RuntimeFeatures::none();
+    crate::codegen_support::force_runtime_features_for_flag(&mut forced, name);
+    let mut packages = Vec::new();
+    let mut libraries = Vec::new();
+    for requirement in crate::codegen_support::link_requirements_for_runtime_features(forced) {
+        match requirement {
+            LinkRequirement::NativePackage(package) => packages.push(package),
+            LinkRequirement::Bridge(library) => libraries.push(library.to_string()),
+            LinkRequirement::SystemLibrary(_) => {}
+        }
+    }
+    let flags: Vec<&str> = if name == "monitoring" { MONITORING_BRIDGES.to_vec() } else { vec![name] };
+    libraries.extend(
+        flags
+            .into_iter()
+            .filter_map(crate::linker::bridge_lib_for_flag)
+            .map(str::to_string),
+    );
+    for package in crate::linker::native_packages_for_libraries(&libraries) {
+        if !packages.contains(&package) {
+            packages.push(package);
+        }
+    }
+    packages
 }
 
 /// Parses a single `--ini KEY=VALUE` assignment into a `(key, value)` pair, splitting on the
@@ -1543,6 +1584,55 @@ mod tests {
                  probe cannot check that it was packed beside the binary"
             );
         }
+    }
+
+    /// Returns the tab-separated fields after `<kind>\t<name>` for one capability line.
+    fn capability_fields(report: &str, name: &str) -> Vec<String> {
+        report
+            .lines()
+            .map(|line| line.split('\t').collect::<Vec<_>>())
+            .find(|fields| fields.get(1) == Some(&name))
+            .unwrap_or_else(|| panic!("no capability line for {name} in:\n{report}"))
+            .into_iter()
+            .skip(2)
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Every bridge's managed native packages appear as `native:` fields on its line.
+    ///
+    /// The release probe adds exactly these packages before `--with-<name>`, so a
+    /// bridge that gains a package in the linker table is prepared by the probe
+    /// without anyone editing the script.
+    #[test]
+    fn the_capability_report_names_every_bridge_native_package() {
+        let report = super::capability_report();
+        for flag in super::with_flag_names() {
+            let Some(library) = crate::linker::bridge_lib_for_flag(flag) else { continue };
+            let fields = capability_fields(&report, flag);
+            for package in crate::linker::native_packages_for_libraries(&[library.to_string()]) {
+                assert!(
+                    fields.contains(&format!("native:{package}")),
+                    "--print-capabilities omits native:{package} for {flag}; fields: {fields:?}"
+                );
+            }
+        }
+        assert!(capability_fields(&report, "openssl").contains(&"native:openssl-crypto".to_string()));
+        assert!(!capability_fields(&report, "tls").iter().any(|field| field.starts_with("native:")));
+    }
+
+    /// Packages from the runtime features a flag forces are reported, after archives.
+    #[test]
+    fn the_capability_report_names_forced_feature_native_packages() {
+        let report = super::capability_report();
+        let mbstring = capability_fields(&report, "mbstring");
+        assert_eq!(
+            mbstring,
+            ["libelephc_mbstring.a", "native:pcre2", "native:oniguruma"],
+            "mbstring line: {mbstring:?}"
+        );
+        assert_eq!(capability_fields(&report, "regex"), ["native:pcre2"]);
+        assert!(capability_fields(&report, "mysqli").is_empty());
     }
 
     /// Every accepted `--with-<name>` must be advertised on the `--help` line.
