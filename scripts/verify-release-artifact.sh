@@ -110,7 +110,8 @@ while IFS=$'\t' read -r kind name archives; do
     # already covered by its own line.
     #
     # Some packed bridges need managed native packages when force-enabled.
-    # Prepare curl's dependency chain, GMP, mbstring's matching providers,
+    # Prepare curl's dependency chain, GMP, the openssl bridge's libcrypto-only
+    # `openssl-crypto` package, mbstring's matching providers,
     # fileinfo's libmagic, and XML's libxml2 provider before their probes.
     # Each bridge must still compile and link once its requirements are present.
     #
@@ -132,6 +133,7 @@ while IFS=$'\t' read -r kind name archives; do
     case "$name" in
         curl) native_packages="curl" ;;
         gmp) native_packages="gmp" ;;
+        openssl) native_packages="openssl-crypto" ;;
         mbstring) native_packages="oniguruma pcre2" ;;
     esac
     native_ready=true
