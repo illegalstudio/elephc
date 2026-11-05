@@ -158,6 +158,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     public function __elephc_handle_value(): int { return $this->__elephc_handle; }
     public function __construct(string $data, int $options = 0, bool $dataIsURL = false, string $namespaceOrPrefix = "", bool $isPrefix = false) {
+        if (strlen($data) > 2147483647) { throw new Exception('SimpleXMLElement::__construct(): Argument #1 ($data) is too long'); }
+        if (strlen($namespaceOrPrefix) > 2147483647) { throw new Exception('SimpleXMLElement::__construct(): Argument #4 ($namespaceOrPrefix) is too long'); }
+        if ($options < -2147483648 || $options > 2147483647) { throw new Exception('SimpleXMLElement::__construct(): Argument #2 ($options) is invalid'); }
         try {
             if ($dataIsURL) {
                 $handle = __elephc_simplexml_file_handle($data, $options, $namespaceOrPrefix, $isPrefix, 'SimpleXMLElement::__construct()');
@@ -874,6 +877,9 @@ class SimpleXMLIterator extends SimpleXMLElement {}
 
 function simplexml_load_string(string $data, ?string $class_name = "SimpleXMLElement", int $options = 0, string $namespace_or_prefix = "", bool $is_prefix = false): SimpleXMLElement|false {
     $class = __elephc_simplexml_class($class_name, 'simplexml_load_string');
+    if (strlen($data) > 2147483647) { throw new ValueError('simplexml_load_string(): Argument #1 ($data) is too long'); }
+    if (strlen($namespace_or_prefix) > 2147483647) { throw new ValueError('simplexml_load_string(): Argument #4 ($namespace_or_prefix) is too long'); }
+    if ($options < -2147483648 || $options > 2147483647) { throw new ValueError('simplexml_load_string(): Argument #3 ($options) is too large'); }
     $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespace_or_prefix, (int)$is_prefix, "");
     if ($handle === 0) {
         __elephc_simplexml_report_diagnostics('simplexml_load_string()');
@@ -886,6 +892,7 @@ function simplexml_load_string(string $data, ?string $class_name = "SimpleXMLEle
 function simplexml_load_file(string $filename, ?string $class_name = "SimpleXMLElement", int $options = 0, string $namespace_or_prefix = "", bool $is_prefix = false): SimpleXMLElement|false {
     if (strpos($filename, "\0") !== false) { throw new ValueError('simplexml_load_file(): Argument #1 ($filename) must not contain any null bytes'); }
     $class = __elephc_simplexml_class($class_name, 'simplexml_load_file');
+    if ($options < -2147483648 || $options > 2147483647) { throw new ValueError('simplexml_load_file(): Argument #3 ($options) is too large'); }
     $handle = __elephc_simplexml_file_handle($filename, $options, $namespace_or_prefix, $is_prefix, 'simplexml_load_file()');
     if ($handle === 0) {
         __elephc_simplexml_report_diagnostics('simplexml_load_file()');
