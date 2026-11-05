@@ -452,10 +452,10 @@ ok
 }
 
 /// `getMethods()` and `get_class_methods()` follow Zend's function-table order: a class's
-/// own methods (a trait method the class overrides keeps the class's position), then (through
-/// PHP 8.4) its parent's table (overridden ones keep the child's position) and the methods its
-/// traits contribute; PHP 8.5 binds the traits before the parent. Expected output is php 8.3's
-/// and php 8.5's.
+/// own methods (a trait method or trait alias the class overrides keeps the class's position),
+/// then (through PHP 8.4) its parent's table (overridden ones keep the child's position) and
+/// the methods its traits contribute (a nested trait's after its user's own); PHP 8.5 binds
+/// the traits before the parent. Expected output is php 8.3's and php 8.5's.
 #[test]
 fn test_method_lists_follow_zend_table_order() {
     let source = r#"<?php
@@ -466,18 +466,35 @@ trait T2 { public function f() {} public function g() {} }
 class P2 { public function p() {} }
 class C3 extends P2 { use T2; public function f() {} public function h() {} }
 class C4 extends P2 { use T2; public function h() {} public function f() {} }
+trait TA { public function a() {} }
+class C5 extends P2 { use TA { a as alias; } public function alias() {} public function z() {} }
+trait Inner { public function nested() {} }
+trait Outer { use Inner; public function outer() {} }
+class C6 extends P2 { use Outer; public function own() {} }
 function names(array $items): string { $out = []; foreach ($items as $item) { $out[] = $item->getName() . "@" . $item->getDeclaringClass()->getName(); } return implode(",", $out); }
 echo names((new ReflectionClass("B"))->getMethods()), "\n";
 echo implode(",", get_class_methods("B")), "\n";
 echo names((new ReflectionClass("C3"))->getMethods()), "\n";
 echo implode(",", get_class_methods("C4")), "\n";
+echo names((new ReflectionClass("C5"))->getMethods()), "\n";
+echo implode(",", get_class_methods("C5")), "\n";
+echo names((new ReflectionClass("C6"))->getMethods()), "\n";
+echo implode(",", get_class_methods("C6")), "\n";
 "#;
     assert_eq!(
         compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php83),
-        "ab@B,b1@B,a1@B,s1@A,t1@B\nab,b1,a1,s1,t1\nf@C3,h@C3,p@P2,g@C3\nh,f,p,g\n"
+        concat!(
+            "ab@B,b1@B,a1@B,s1@A,t1@B\nab,b1,a1,s1,t1\nf@C3,h@C3,p@P2,g@C3\nh,f,p,g\n",
+            "alias@C5,z@C5,p@P2,a@C5\nalias,z,p,a\n",
+            "own@C6,p@P2,outer@C6,nested@C6\nown,p,outer,nested\n",
+        )
     );
     assert_eq!(
         compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php85),
-        "ab@B,b1@B,a1@B,t1@B,s1@A\nab,b1,a1,t1,s1\nf@C3,h@C3,g@C3,p@P2\nh,f,g,p\n"
+        concat!(
+            "ab@B,b1@B,a1@B,t1@B,s1@A\nab,b1,a1,t1,s1\nf@C3,h@C3,g@C3,p@P2\nh,f,g,p\n",
+            "alias@C5,z@C5,a@C5,p@P2\nalias,z,a,p\n",
+            "own@C6,outer@C6,nested@C6,p@P2\nown,outer,nested,p\n",
+        )
     );
 }

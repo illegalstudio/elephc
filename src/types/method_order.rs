@@ -34,6 +34,7 @@ pub(crate) fn zend_method_table_order(
     order
 }
 
+/// Finds `name`'s class info, falling back to a case-insensitive php symbol-key match.
 fn lookup<'a>(classes: &'a HashMap<String, ClassInfo>, name: &str) -> Option<&'a ClassInfo> {
     let trimmed = name.trim_start_matches('\\');
     classes.get(trimmed).or_else(|| {
@@ -45,6 +46,8 @@ fn lookup<'a>(classes: &'a HashMap<String, ClassInfo>, name: &str) -> Option<&'a
     })
 }
 
+/// Appends `class_name`'s table: its own declarations, then (version-dependent order) its
+/// trait-imported methods and its parent's table, each key at its first position.
 fn append_class_table(
     class_name: &str,
     classes: &HashMap<String, ClassInfo>,
@@ -100,20 +103,28 @@ fn append_trait_methods(
     }
 }
 
-/// The method keys `info` imported from its traits, from each used trait's declared
-/// methods plus the class's trait aliases.
+/// The method keys `info` imported from its traits: methods its used traits (directly or
+/// through nested `use` inside a trait) contribute, plus trait aliases.
 ///
 /// A trait method the class overrides with its own declaration is NOT imported: Zend keeps the
 /// class's declaration in its own position. `span_of` returns a trait method's declaration
-/// span; trait composition copies that declaration into the class unchanged, so a class method
-/// is the imported one exactly when it carries that span. A synthetic span (built prelude
-/// code) identifies no declaration, so such a method falls back to the name match.
+/// span; trait composition copies that declaration into the class unchanged (an alias too,
+/// under its new name), so a class method is imported exactly when its span is some trait
+/// method's span. That one test covers class overrides of trait methods and of aliases, and
+/// methods a nested trait contributes. A synthetic span (built prelude code) identifies no
+/// declaration, so such a method falls back to matching the names its direct traits declare
+/// and the class's aliases.
 pub(crate) fn trait_imported_method_keys<V>(
     info: &ClassInfo,
     declared_trait_methods: &HashMap<String, HashMap<String, V>>,
     span_of: &dyn Fn(&V) -> Span,
 ) -> HashSet<String> {
-    let mut keys = HashSet::new();
+    let trait_spans: HashSet<Span> = declared_trait_methods
+        .values()
+        .flat_map(|methods| methods.values().map(span_of))
+        .filter(|span| span.identifies_a_node())
+        .collect();
+    let mut by_name = HashSet::new();
     for trait_name in &info.used_traits {
         let trimmed = trait_name.trim_start_matches('\\');
         let methods = declared_trait_methods.get(trimmed).or_else(|| {
@@ -124,21 +135,19 @@ pub(crate) fn trait_imported_method_keys<V>(
                 .map(|(_, methods)| methods)
         });
         if let Some(methods) = methods {
-            for (name, method) in methods {
-                let key = php_symbol_key(name);
-                let trait_span = span_of(method);
-                let overridden = trait_span.identifies_a_node()
-                    && info.method_decls.iter().any(|decl| {
-                        php_symbol_key(&decl.name) == key && decl.span != trait_span
-                    });
-                if !overridden {
-                    keys.insert(key);
-                }
-            }
+            by_name.extend(methods.keys().map(|name| php_symbol_key(name)));
         }
     }
-    for (alias, _) in &info.trait_aliases {
-        keys.insert(php_symbol_key(alias));
-    }
-    keys
+    by_name.extend(info.trait_aliases.iter().map(|(alias, _)| php_symbol_key(alias)));
+    info.method_decls
+        .iter()
+        .filter(|decl| {
+            if decl.span.identifies_a_node() {
+                trait_spans.contains(&decl.span)
+            } else {
+                by_name.contains(&php_symbol_key(&decl.name))
+            }
+        })
+        .map(|decl| php_symbol_key(&decl.name))
+        .collect()
 }
