@@ -128,6 +128,15 @@ impl View {
     }
     /// Returns the first matched node, if any.
     fn first(&self) -> Option<Node> { self.node_at(0) }
+    /// Retains initialization for empty selections whose original base node still exists.
+    fn has_native_base(&self) -> bool {
+        match &self.scope {
+            Scope::Node(node) => !node.is_null(),
+            Scope::Children(parent, _) | Scope::Attributes(parent, _)
+            | Scope::AttributeMiss(parent, _) | Scope::Index(parent, _) => parent.has_native_base(),
+            Scope::Nodes(nodes) | Scope::XPath(nodes) => !nodes.is_empty(),
+        }
+    }
     /// Resolves one position without materializing the rest of a live selection.
     fn node_at(&self, index: usize) -> Option<Node> {
         match &self.scope {
@@ -341,12 +350,11 @@ unsafe fn parse_file(filename: *const c_char, options: i64, namespace: impl AsRe
     from_document(raw, namespace, prefix)
 }
 
-/// Adopts a parsed document once and releases rootless results on the failure path.
+/// Adopts every parsed document, including recovery results without a root element.
 fn from_document(raw: Node, namespace: impl AsRef<[u8]>, prefix: bool) -> Option<View> {
     if raw.is_null() { return None; }
     let root = unsafe { ffi::root(raw) };
     let doc = Document::new(raw);
-    if root.is_null() { return None; }
     Some(View::new(doc, Scope::Node(root), root, Namespace { value: namespace.as_ref().to_vec(), prefix },
         None, Rc::new(RefCell::new(BTreeMap::new()))))
 }

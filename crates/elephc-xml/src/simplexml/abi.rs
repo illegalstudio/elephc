@@ -152,6 +152,7 @@ pub unsafe extern "C" fn elephc_xml_sx_select(handle: i64, kind: i64, name: *con
 }
 /// Reads count (0), presence (1), iteration count (2), truthiness (3), or node kind (4).
 /// DOM modes 12/13/14 read stable node identity, HTML document kind, and raw-text policy.
+/// Mode 15 reports document (1), initialized native base (2), and document root (4) bits.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
     guard(|| view(handle).map(|v| match operation {
@@ -180,6 +181,8 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
         12 => v.first().map(|node| node as usize as i64).unwrap_or(0),
         13 => unsafe { i64::from(ffi::node_type(v.doc.raw) == 13) },
         14 => v.first().map(|node| unsafe { i64::from(ffi::node_type(node) == 4) }).unwrap_or(0),
+        15 => 1 | (i64::from(v.has_native_base()) << 1)
+            | (i64::from(!unsafe { ffi::root(v.doc.raw) }.is_null()) << 2),
         _ => 0,
     }).unwrap_or(0))
 }
