@@ -1,7 +1,8 @@
 //! Purpose:
-//! Fixture tests for `scripts/verify-release-artifact.sh`: packed curl, GMP,
-//! mbstring, and XML archives are compile-probed after native preparation.
-//! Archive-less capabilities stay skipped, and link failures fail.
+//! Fixture tests for `scripts/verify-release-artifact.sh`: packed archives are
+//! compile-probed after adding the managed native packages the packaged binary
+//! names in its `native:` capability fields. Archive-less capabilities stay
+//! skipped, and link failures fail.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness (`cargo test --test verify_release_artifact`).
@@ -9,8 +10,11 @@
 //! Key details:
 //! - The script unpacks into an empty prefix on purpose, so these tests ship a
 //!   mock `elephc` inside a tarball rather than the real compiler.
-//! - The mock accepts the managed curl, GMP, Oniguruma, PCRE2, and libxml2 packages
-//!   before their bridge probes; it never downloads or builds catalog sources.
+//! - The mock advertises curl, GMP, OpenSSL, mbstring, XML, and a fictional
+//!   `future` bridge with `native:` fields and refuses each bridge probe until
+//!   its packages are added; it never downloads or builds catalog sources.
+//! - `future` needs `libfuture`, a package the script has never heard of, so the
+//!   probe passing proves it prepares packages from the binary's report alone.
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -42,9 +46,9 @@ fn scratch(label: &str) -> PathBuf {
 /// Writes a mock packaged `elephc` that implements the probe's exact calls.
 ///
 /// `--print-capabilities` reports `tls` as archive-only, plus `curl`, `gmp`,
-/// `mbstring`, and `xml` with managed native requirements. `regex` and `mysqli`
-/// have no archives. Managed bridge calls fail until native add creates their
-/// markers. A `broken` capability, when advertised,
+/// `openssl`, `mbstring`, `xml`, and `future` with `native:` package fields.
+/// `regex` (with `native:pcre2`) and `mysqli` have no archives. Managed bridge
+/// calls fail until native add creates their markers. A `broken` capability, when advertised,
 /// always fails with a truncated-archive error so a real link failure still
 /// FAILs without inventing a native add.
 fn write_mock_elephc(path: &Path, advertise_broken: bool) {
@@ -65,11 +69,13 @@ case "${{1:-}}" in
     ;;
   --print-capabilities)
     echo -e 'bridge\ttls\tlibelephc_tls.a'
-    echo -e 'bridge\tcurl\tlibelephc_curl.a'
-    echo -e 'bridge\tgmp\tlibelephc_gmp.a'
-    echo -e 'bridge\tmbstring\tlibelephc_mbstring.a'
-    echo -e 'bridge\txml\tlibelephc_xml.a'
-    {broken_line}    echo -e 'capability\tregex'
+    echo -e 'bridge\tcurl\tlibelephc_curl.a\tnative:curl'
+    echo -e 'bridge\tgmp\tlibelephc_gmp.a\tnative:gmp'
+    echo -e 'bridge\topenssl\tlibelephc_openssl.a\tnative:openssl-crypto'
+    echo -e 'bridge\tmbstring\tlibelephc_mbstring.a\tnative:pcre2\tnative:oniguruma'
+    echo -e 'bridge\txml\tlibelephc_xml.a\tnative:libxml2'
+    echo -e 'bridge\tfuture\tlibelephc_future.a\tnative:libfuture'
+    {broken_line}    echo -e 'capability\tregex\tnative:pcre2'
     echo -e 'capability\tmysqli'
     ;;
   --with-tls)
@@ -95,6 +101,24 @@ case "${{1:-}}" in
     printf '#!/bin/sh\necho ok\n' > probe
     chmod +x probe
     ;;
+  --with-openssl)
+    if [ ! -f "$state_dir/added-openssl-crypto" ]; then
+      echo "native manifest error: project does not declare required native package openssl-crypto" >&2
+      echo "recovery: elephc native add openssl-crypto" >&2
+      exit 1
+    fi
+    printf '#!/bin/sh\necho ok\n' > probe
+    chmod +x probe
+    ;;
+  --with-future)
+    if [ ! -f "$state_dir/added-libfuture" ]; then
+      echo "native manifest error: project does not declare required native package libfuture" >&2
+      echo "recovery: elephc native add libfuture" >&2
+      exit 1
+    fi
+    printf '#!/bin/sh\necho ok\n' > probe
+    chmod +x probe
+    ;;
   --with-xml)
     if [ ! -f "$state_dir/added-libxml2" ]; then
       echo "native project error: xml support requires managed native package libxml2" >&2
@@ -110,8 +134,8 @@ case "${{1:-}}" in
     exit 1
     ;;
   --with-mbstring)
-    if [ ! -f "$state_dir/added-oniguruma" ]; then
-      echo "mbstring matching requires managed native package oniguruma" >&2
+    if [ ! -f "$state_dir/added-oniguruma" ] || [ ! -f "$state_dir/added-pcre2" ]; then
+      echo "mbstring matching requires managed native packages oniguruma and pcre2" >&2
       exit 1
     fi
     printf '#!/bin/sh\necho ok\n' > probe
@@ -149,6 +173,8 @@ fn pack_tarball(staging: &Path, tarball: &Path, advertise_broken: bool) {
     fs::write(pack.join("libelephc_gmp.a"), b"gmp-archive\n").expect("write gmp archive");
     fs::write(pack.join("libelephc_mbstring.a"), b"mbstring-archive\n").expect("write mbstring archive");
     fs::write(pack.join("libelephc_xml.a"), b"xml-archive\n").expect("write xml archive");
+    fs::write(pack.join("libelephc_openssl.a"), b"openssl-archive\n").expect("write openssl archive");
+    fs::write(pack.join("libelephc_future.a"), b"future-archive\n").expect("write future archive");
     if advertise_broken {
         fs::write(pack.join("libelephc_broken.a"), b"broken-archive\n")
             .expect("write broken archive");
@@ -165,6 +191,8 @@ fn pack_tarball(staging: &Path, tarball: &Path, advertise_broken: bool) {
             "libelephc_gmp.a",
             "libelephc_mbstring.a",
             "libelephc_xml.a",
+            "libelephc_openssl.a",
+            "libelephc_future.a",
         ])
         .args(if advertise_broken {
             vec!["libelephc_broken.a"]
@@ -190,7 +218,7 @@ fn run_probe(tarball: &Path) -> (bool, String) {
     (output.status.success(), combined)
 }
 
-/// Packed curl, GMP, mbstring, and XML archives link after their managed packages are added.
+/// Every packed archive links after the packages named by its `native:` fields are added.
 #[test]
 fn packed_managed_bridges_are_ok_after_native_add() {
     let dir = scratch("curl_ok");
@@ -210,6 +238,21 @@ fn packed_managed_bridges_are_ok_after_native_add() {
     assert!(log.contains("adding managed native package pcre2 before --with-mbstring"), "{log}");
     assert!(log.contains("mock: native add pcre2"), "{log}");
     assert!(log.contains("ok    bridge mbstring (libelephc_mbstring.a)"), "{log}");
+    assert!(
+        log.contains("adding managed native package openssl-crypto before --with-openssl")
+            && log.contains("ok    bridge openssl (libelephc_openssl.a)"),
+        "openssl must be prepared from its native: field; log:\n{log}"
+    );
+    assert!(
+        log.contains("adding managed native package libfuture before --with-future")
+            && log.contains("mock: native add libfuture")
+            && log.contains("ok    bridge future (libelephc_future.a)"),
+        "a package the script never names must still be prepared from the report; log:\n{log}"
+    );
+    assert!(
+        !log.contains("native:"),
+        "native: fields must not be treated as archives; log:\n{log}"
+    );
     assert!(
         log.contains("ok    bridge curl (libelephc_curl.a)"),
         "curl must be reported ok after native add then one --with-curl; log:\n{log}"

@@ -1021,6 +1021,9 @@ pub(in crate::interpreter) fn eval_method_parameter_default(
 /// Returns whether an EvalIR expression can be safely evaluated as a method default.
 fn eval_method_default_expr_is_supported(expr: &EvalExpr) -> bool {
     match expr {
+        EvalExpr::ArrayGet { array, index } => {
+            eval_method_default_expr_is_supported(array) && eval_method_default_expr_is_supported(index)
+        }
         EvalExpr::Array(elements) => elements
             .iter()
             .all(eval_method_default_array_element_is_supported),

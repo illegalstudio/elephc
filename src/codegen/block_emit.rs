@@ -1203,21 +1203,32 @@ fn emit_static_property_default(
     expr: &ExprKind,
 ) -> Result<()> {
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
-    let resolved = super::const_default_values::resolve_const_default(
-        &crate::parser::ast::Expr::new(expr.clone(), crate::span::Span::synthetic()),
-        &super::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name),
-    ).and_then(super::const_default_values::resolved_literal_default);
-    let expr = resolved.as_ref().unwrap_or(expr);
-    let value = literal_default_value(
-        &format!("static property {}::${}", class_name, property),
-        php_type,
-        expr,
-        "static property initializer",
-    )?;
+    let default = crate::parser::ast::Expr::new(expr.clone(), crate::span::Span::synthetic());
+    let context = super::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name);
+    let description = format!("static property {}::${}", class_name, property);
+    // A scalar folded from enum operands (`E::A ? 1 : 2`) still materializes those singletons.
+    let mut enum_reads = Vec::new();
+    let value = if let Some(value) = super::const_default_values::resolve_enum_case_default(&default, &context) {
+        super::literal_defaults::enum_case_default_value(&description, php_type, value, "static property initializer")?
+    } else if let Some((literal, reads)) =
+        super::const_default_values::resolve_enum_read_scalar_default(&default, &context)
+    {
+        enum_reads = reads;
+        literal_default_value(&description, php_type, &literal, "static property initializer")?
+    } else {
+        let resolved = super::const_default_values::resolve_const_default(&default, &context)
+            .and_then(super::const_default_values::resolved_literal_default);
+        literal_default_value(&description, php_type, resolved.as_ref().unwrap_or(expr), "static property initializer")?
+    };
     ctx.emitter.comment(&format!(
         "initialize static property {}::${}",
         class_name, property
     ));
+    for (enum_name, case_name) in &enum_reads {
+        crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+            ctx.emitter, ctx.module, enum_name, case_name,
+        );
+    }
     emit_static_property_default_value(ctx, class_name, property, php_type, &value)?;
     Ok(())
 }
@@ -1272,13 +1283,15 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::Str(value) => {
             emit_string_literal_default_to_result(ctx, value);
         }
-        // `public static Level $l = Level::Low;` — the same singleton the instance-property
-        // path loads, into the result register this function's caller then stores. See
-        // `LiteralDefaultValue::EnumCase` for why the receiver is only settled here.
+        // Module-aware default resolution supplies the same canonical singleton and ordered
+        // case reads as the instance-property path; store the selected result below.
         LiteralDefaultValue::EnumCase {
-            enum_name,
-            case_name,
+            value,
+            boxed,
         } => {
+            let enum_name = &value.enum_name;
+            let case_name = &value.case_name;
+            // Defend against malformed internal metadata despite the earlier resolution.
             let is_case = ctx
                 .module
                 .enum_infos
@@ -1290,21 +1303,22 @@ fn emit_static_property_default_value(
                     enum_name, case_name, class_name, property
                 )));
             }
-            crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
-                ctx.emitter,
-                ctx.module,
-                enum_name,
-                case_name,
-            );
+            for (enum_name, case_name) in &value.evaluated {
+                crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+                    ctx.emitter, ctx.module, enum_name, case_name,
+                );
+            }
             // The static slot becomes a new OWNER, so it retains, exactly as the instance
             // path and an ordinary `Enum::Case` read do (issue #349). Without it,
             // `Config::$shared = Level::High;` releases the global's only reference. There is
             // no object register to preserve here — the caller stores straight from the
             // result register.
-            abi::emit_incref_if_refcounted(
-                ctx.emitter,
-                &crate::types::PhpType::Object(enum_name.clone()),
-            );
+            let case_type = crate::types::PhpType::Object(enum_name.clone());
+            if *boxed {
+                crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &case_type);
+            } else {
+                abi::emit_incref_if_refcounted(ctx.emitter, &case_type);
+            }
         }
         LiteralDefaultValue::Null => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);

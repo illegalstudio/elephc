@@ -55,6 +55,16 @@ pub(super) fn register_eval_native_property_default(
     );
     let default = match &registration.default {
         EvalNativePropertyDefault::Value(default) => default,
+        EvalNativePropertyDefault::EnumCase(value) => {
+            let key = value.evaluated.iter().map(|(class, case)| format!("{class}::{case}"))
+                .collect::<Vec<_>>().join("\n");
+            let (label, len) = ctx.data.add_string(key.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), &label);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), len as i64);
+            let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_register_native_property_default_enum_case");
+            abi::emit_call_label(ctx.emitter, &symbol);
+            return;
+        }
         EvalNativePropertyDefault::DeferredError(message) => {
             let (label, len) = ctx.data.add_string(message.as_bytes());
             abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), &label);
@@ -65,6 +75,9 @@ pub(super) fn register_eval_native_property_default(
         }
     };
     let symbol = match default {
+        EvalNativeCallableDefault::EnumCase { .. } | EvalNativeCallableDefault::Evaluated { .. } => {
+            unreachable!("enum singletons are excluded from compact callable default metadata")
+        }
         EvalNativeCallableDefault::Scalar { kind, payload } => {
             abi::emit_load_int_immediate(
                 ctx.emitter,

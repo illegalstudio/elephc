@@ -4,6 +4,7 @@
 //! Called from:
 //! - Method exception analysis, omitted-argument ownership and native default helper generation.
 //! - Native and eval reflection parameter-default metadata.
+//! - Checker default validation, which defers scoped-constant-dependent defaults.
 //!
 //! Key details:
 //! - Finding a possible error is distinct from selecting an unconditional property error.
@@ -23,6 +24,45 @@ pub(crate) fn source_constant_name(default: &Expr) -> Option<String> {
         StaticReceiver::Generic(_) => return None,
     };
     Some(format!("{receiver}::{name}"))
+}
+
+/// Returns whether a default's value type is only known once class-like constants exist.
+///
+/// A direct `K::NAME`, or a projection or branch selection whose operands read one, such as
+/// `K::ALL[0]` or `E::A ? E::B : E::C`: syntactic inference types every scoped constant as a
+/// string, so these are validated semantically after the schemas are complete.
+pub(crate) fn default_value_depends_on_scoped_constant(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ScopedConstantAccess { .. } => true,
+        ExprKind::ArrayAccess { .. } | ExprKind::Ternary { .. } | ExprKind::ShortTernary { .. }
+        | ExprKind::NullCoalesce { .. }
+        | ExprKind::BinaryOp { op: BinOp::NullCoalesce, .. } => contains_scoped_constant(expr),
+        _ => false,
+    }
+}
+
+/// Returns whether a constant-expression operand reads a class-like constant or enum case.
+fn contains_scoped_constant(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ScopedConstantAccess { .. } => true,
+        ExprKind::ArrayLiteral(values) => values.iter().any(contains_scoped_constant),
+        ExprKind::ArrayLiteralAssoc(entries) => entries.iter()
+            .any(|(key, value)| contains_scoped_constant(key) || contains_scoped_constant(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries.iter()
+            .any(|entry| entry.exprs().any(contains_scoped_constant)),
+        ExprKind::BinaryOp { left, right, .. } =>
+            contains_scoped_constant(left) || contains_scoped_constant(right),
+        ExprKind::ArrayAccess { array, index } =>
+            contains_scoped_constant(array) || contains_scoped_constant(index),
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } =>
+            contains_scoped_constant(value) || contains_scoped_constant(default),
+        ExprKind::Ternary { condition, then_expr, else_expr } =>
+            contains_scoped_constant(condition) || contains_scoped_constant(then_expr)
+                || contains_scoped_constant(else_expr),
+        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
+        | ExprKind::Cast { expr: inner, .. } => contains_scoped_constant(inner),
+        _ => false,
+    }
 }
 
 /// Returns whether any normalized default node can raise a deferred lexical Error.

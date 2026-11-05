@@ -69,7 +69,8 @@ use emitted_classes::collect_emitted_class_names;
 pub(crate) use prescan::collect_constants;
 pub use runtime_features::{LinkRequirement, RuntimeFeatures};
 pub use runtime_features::{
-    link_requirements_for_runtime_features, runtime_features_for_program_and_classes,
+    force_runtime_features_for_flag, link_requirements_for_runtime_features,
+    runtime_features_for_program_and_classes,
 };
 pub(crate) use sentinels::NULL_SENTINEL;
 pub(crate) use value_boxing::{

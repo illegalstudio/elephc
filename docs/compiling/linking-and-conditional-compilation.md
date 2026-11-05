@@ -355,8 +355,9 @@ Linker error: required Elephc bridge `elephc_magician` could not be found
 
 [`--print-capabilities`](cli-reference.md) is the
 authoritative list for the binary you are holding — one line per capability with
-the archives it needs — so a packaging script can check a tarball carries
-everything the compiler inside it advertises rather than guessing from this page.
+the archives it needs and the managed native packages (`native:<package>`) its
+link resolves — so a packaging script can check a tarball carries everything the
+compiler inside it advertises rather than guessing from this page.
 It reports the `eval` bridge under the plain `libelephc_magician.a`; the
 curl-aware variant above is the one name it does not print.
 
