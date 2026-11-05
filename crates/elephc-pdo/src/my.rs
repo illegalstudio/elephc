@@ -343,6 +343,10 @@ pub struct MyConn {
     next_stream_id: u64,
     /// MYSQLI_ASYNC query in flight on a worker thread, owning the client meanwhile.
     async_query: Option<MyAsyncQuery>,
+    /// The socket of the client while a stream or async worker owns it, so closing the
+    /// link can shut the transport down instead of waiting for the worker to drain.
+    #[cfg(unix)]
+    worker_socket: Option<std::os::unix::io::RawFd>,
 }
 
 /// A live MySQL prepared statement and its buffered or demand-driven result.
@@ -2097,6 +2101,8 @@ impl MyConn {
             active_stream: None,
             async_query: None,
             next_stream_id: 0,
+            #[cfg(unix)]
+            worker_socket: None,
         })
     }
 
@@ -2113,10 +2119,13 @@ impl MyConn {
     }
 
     /// Records mysqlnd's 2014/HY000 connection-busy diagnostic and returns false
-    /// while an unbuffered statement still owns unread rows.
+    /// while an unbuffered statement still owns unread rows, or while a pending
+    /// MYSQLI_ASYNC query's worker owns the client (whose slot must not be
+    /// dereferenced). A reap, which has already taken the async query, still builds its
+    /// statement before the worker's stream is installed, so it passes.
     fn ensure_not_busy(&mut self) -> bool {
         if !self.unbuffered_active {
-            return true;
+            return !(self.async_query.is_some() && self.client_unavailable());
         }
         self.sqlstate = "HY000".to_string();
         self.errcode = 2014;
@@ -2144,6 +2153,10 @@ impl MyConn {
         self.no_backslash_escapes = conn.no_backslash_escape();
         self.warning_count = warnings;
         self.conn.0 = Some(conn);
+        #[cfg(unix)]
+        {
+            self.worker_socket = None;
+        }
     }
 
     /// Stops the active worker and recovers its client for close/reset paths.
@@ -2245,6 +2258,10 @@ impl MyConn {
         let Some(conn) = self.conn.0.take() else {
             return Err(-1);
         };
+        #[cfg(unix)]
+        {
+            self.worker_socket = Some(std::os::unix::io::AsRawFd::as_raw_fd(&conn));
+        }
         let fetch_table_names = self.fetch_table_names;
         let (command_tx, command_rx) = mpsc::channel();
         let (response_tx, response_rx) = mpsc::channel();
@@ -2266,6 +2283,10 @@ impl MyConn {
         let Some(conn) = self.conn.0.take() else {
             return Err(-1);
         };
+        #[cfg(unix)]
+        {
+            self.worker_socket = Some(std::os::unix::io::AsRawFd::as_raw_fd(&conn));
+        }
         let fetch_table_names = self.fetch_table_names;
         let (command_tx, command_rx) = mpsc::channel();
         let (response_tx, response_rx) = mpsc::channel();
@@ -2568,6 +2589,17 @@ impl MyConn {
         self.async_query.is_some()
     }
 
+    /// Shuts the transport down while a stream or async worker owns the client, as
+    /// mysqlnd closes the socket of a link closed in the middle of a result: the
+    /// worker's pending read (or the drain of the unread rows) fails at once, so the
+    /// close that follows does not wait for the server. No-op on an idle link.
+    pub fn cancel_transport(&mut self) {
+        #[cfg(unix)]
+        if let (Some(fd), None) = (self.worker_socket, self.conn.0.as_ref()) {
+            shutdown_socket(fd);
+        }
+    }
+
     /// Updates the live `PDO::ATTR_FETCH_TABLE_NAMES` setting.
     pub fn set_fetch_table_names(&mut self, enabled: bool) {
         self.fetch_table_names = enabled;
@@ -2665,6 +2697,10 @@ impl MyConn {
         self.no_backslash_escapes = client.no_backslash_escape();
         #[cfg(unix)]
         let socket = std::os::unix::io::AsRawFd::as_raw_fd(&client);
+        #[cfg(unix)]
+        {
+            self.worker_socket = Some(socket);
+        }
         let done: AsyncReady = Arc::new((Mutex::new(false), Condvar::new()));
         let signal = Arc::clone(&done);
         let text = sql.to_string();

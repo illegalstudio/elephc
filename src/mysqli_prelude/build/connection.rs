@@ -987,6 +987,15 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireInitialized", vec![])),
+                    s_if(
+                        e_method_call(e_this(), "__elephcHasPendingResults", vec![]),
+                        vec![
+                            s_expr(e_method_call(e_this(), "__elephcOutOfSync", vec![])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_expr(e_method_call(e_this(), "bump", vec![e_str("com_debug")])),
                     s_if(
                         e_binop(e_call("elephc_pdo_mysql_dump_debug_info", vec![e_this_prop("conn")]), BinOp::Lt, e_int(0)),
@@ -2547,6 +2556,14 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0)),
                         vec![
                             s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_not(e_this_prop("persistent")),
+                        vec![
+                            s_expr(e_call("elephc_pdo_mysql_cancel", vec![e_this_prop("conn")])),
                         ],
                         vec![],
                         None,

@@ -625,6 +625,13 @@ class mysqli_stmt {
             return false;
         }
         $this->clearError();
+        // mysqlnd sends a chunk only on a ready link: while another result or an
+        // async query owns it, the call fails without an error and the chunk is
+        // dropped.
+        $_link = $this->link;
+        if ($_link !== null && $_link->__elephcBusyFor($this->stmt)) {
+            return false;
+        }
         // Chunks accumulate until the next execute() sends them as one value.
         $this->longData[$param_num] = ((string) $this->longData[$param_num]) . $data;
         $this->longDataSent[$param_num] = true;

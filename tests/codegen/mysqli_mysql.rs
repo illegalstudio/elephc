@@ -1372,6 +1372,88 @@ echo "\n";
     assert_eq!(out, "1|true|false|1146|false|2|1146\n");
 }
 
+/// Closing a link in the middle of an unbuffered result (a `MYSQLI_USE_RESULT` query or an
+/// unstored statement execution) returns at once, like mysqlnd closing the transport, instead
+/// of reading the unread rows first. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_close_mid_stream_does_not_drain_unread_rows() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$a = new mysqli($host, $user, $pass, $dbname, $port);
+$r = $a->query("SELECT REPEAT('x', 100000) AS v UNION ALL SELECT SLEEP(3)", MYSQLI_USE_RESULT);
+echo strlen($r->fetch_row()[0]);
+$start = microtime(true);
+$a->close();
+echo "|", microtime(true) - $start < 1.0 ? "early" : "late";
+$b = new mysqli($host, $user, $pass, $dbname, $port);
+$st = $b->prepare("SELECT REPEAT('x', 100000) AS v UNION ALL SELECT SLEEP(3)");
+$st->execute();
+$v = "";
+$st->bind_result($v);
+$st->fetch();
+echo "|", strlen($v);
+$start = microtime(true);
+$b->close();
+echo "|", microtime(true) - $start < 1.0 ? "early" : "late";
+echo "|", $db->query("SELECT 9")->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "100000|early|100000|early|9\n");
+}
+
+/// `send_long_data()` while another result or an async query owns the link fails without an
+/// error and drops the chunk, like mysqlnd, which sends a chunk only on a ready link. Expected
+/// output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_send_long_data_refused_on_a_busy_link() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$st = $db->prepare("SELECT LENGTH(?)");
+$blob = null;
+$st->bind_param("b", $blob);
+$u = $db->query("SELECT 1 UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+$sent = $st->send_long_data(0, "abc");
+echo var_export($sent, true), ":", $st->errno, ":", $db->errno;
+$u->free();
+$st->send_long_data(0, "de");
+$st->execute();
+$len = 0;
+$st->bind_result($len);
+$st->fetch();
+echo "|", $len;
+$st->close();
+$st = $db->prepare("SELECT LENGTH(?)");
+$st->bind_param("b", $blob);
+$db->query("SELECT SLEEP(0.3)", MYSQLI_ASYNC);
+echo "|", var_export($st->send_long_data(0, "xyz"), true), ":", $st->errno;
+$db->reap_async_query();
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "false:0:0|2|false:0\n");
+}
+
+/// `dump_debug_info()` while an async query is pending fails with an unreported 2014 (no
+/// exception under STRICT) instead of reaching the worker-owned client, and the query is
+/// reaped normally afterwards. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_dump_debug_info_refused_during_async_query() {
+    let out = compile_and_run(&my_program(
+        r#"
+$x = new mysqli($host, $user, $pass, $dbname, $port);
+$x->query("SELECT 5, SLEEP(0.5)", MYSQLI_ASYNC);
+echo var_export($x->dump_debug_info(), true), ":", $x->errno;
+echo "|", $x->reap_async_query()->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "false:2014|5\n");
+}
+
 /// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
 /// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
 /// the set is unread, and the statistics count one unbuffered set. Expected output is

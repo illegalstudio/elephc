@@ -4639,6 +4639,20 @@ pub extern "C" fn elephc_pdo_mysql_set_cursor_type(stmt_id: i64, cursor_type: i6
     })
 }
 
+/// Shuts down the transport of a MySQL link whose client a stream or MYSQLI_ASYNC worker
+/// owns (mysqli's close / reconnect of a link in the middle of a result), so releasing it
+/// does not wait for the unread rows. No-op on an idle link or a non-MySQL handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_cancel(conn_id: i64) -> i64 {
+    ffi_guard(0, || {
+        let mut guard = lock_recover(conns());
+        if let Some(Conn::Mysql(c)) = guard.get_mut(&conn_id) {
+            c.cancel_transport();
+        }
+        0
+    })
+}
+
 /// Returns `1` when a MySQL statement's last execution opened a server-side read-only
 /// cursor (its rows are fetched with `COM_STMT_FETCH` and the link stays free), `0`
 /// otherwise.

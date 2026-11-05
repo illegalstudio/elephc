@@ -973,6 +973,13 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_assign("_link", e_this_prop("link")),
+                    s_if(
+                        e_binop(e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()), BinOp::And, e_method_call(e_var("_link"), "__elephcBusyFor", vec![e_this_prop("stmt")])),
+                        vec![s_return(e_bool(false))],
+                        vec![],
+                        None,
+                    ),
                     s_prop_array_assign(e_this(), "longData", e_var("param_num"), e_binop(e_cast(CastType::String, e_index(e_this_prop("longData"), e_var("param_num"))), BinOp::Concat, e_var("data"))),
                     s_prop_array_assign(e_this(), "longDataSent", e_var("param_num"), e_bool(true)),
                     s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_send_long_data")])),

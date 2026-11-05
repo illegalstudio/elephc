@@ -311,6 +311,8 @@ extern "elephc_pdo" {
     // one COM_STMT_FETCH of every remaining row for get_result() / store_result().
     function elephc_pdo_mysql_set_cursor_type(int $stmt, int $type): int;
     function elephc_pdo_mysql_cursor_open(int $stmt): int;
+    // Shuts a busy link's transport down before mysqli closes it (no drain wait).
+    function elephc_pdo_mysql_cancel(int $conn): int;
     function elephc_pdo_mysql_cursor_fetch_all(int $stmt): int;
     // v22: a live transaction-state read backing PDO::inTransaction() /
     // beginTransaction()'s already-active guard (P1-g). SQLite reads native

@@ -682,6 +682,12 @@ class mysqli {
         // server answers: a refusal is only recorded in errno / error, with no
         // mysqli_report dispatch.
         $this->requireInitialized();
+        // While another result or an async query owns the link, mysqlnd refuses
+        // the command with an unreported 2014 and the call returns false.
+        if ($this->__elephcHasPendingResults()) {
+            $this->__elephcOutOfSync();
+            return false;
+        }
         $this->bump("com_debug");
         if (elephc_pdo_mysql_dump_debug_info($this->conn) < 0) {
             $this->__elephcAdoptBridgeError();
@@ -1629,6 +1635,12 @@ class mysqli {
     private function releaseConnection(): void {
         if ($this->conn < 0) {
             return;
+        }
+        // Like mysqlnd, a link closed in the middle of a result closes its
+        // transport instead of reading the unread rows; a persistent link keeps
+        // its transport for the pool and drains them.
+        if (!$this->persistent) {
+            elephc_pdo_mysql_cancel($this->conn);
         }
         $this->closeLive();
         if (elephc_pdo_in_transaction($this->conn) === 1) {
