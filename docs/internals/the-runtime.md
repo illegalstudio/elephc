@@ -528,6 +528,30 @@ case conversion, trimming, padding, slicing, search, splitting, codepoints,
 scrubbing, detection, latin-1 conversion, decimal numeric entities, RFC 2047
 base64 MIME encoding, half-width katakana conversion, and the UTF-8 output-handler
 passthrough, plus the literal `,` split and `[0-9]+`/`#` replacement patterns.
+ASCII multibyte trim calls use the byte-trim helpers only for masks without dots;
+any dot selects the shared bridge, because mbstring character lists have literal
+membership and never expand `a..z` ranges or issue byte-trim range warnings. This
+check also covers masks computed at runtime. Shared padding guards keep the
+caller-visible `str_pad()` or `mb_str_pad()` name in their exception messages.
+The multibyte padding fast path requires integer length and mode operands; other
+PHP types retain bridge validation, including valid weak numeric-string coercions.
+All ordinary mbstring shortcuts first compare argument types with the shared
+builtin contract. Only canonical scalar types can bypass preparation; other values
+retain shared coercions, Stringable callbacks, strict typing and diagnostics.
+Union arguments qualify only when every possible type is already accepted without
+a conversion. Null, container and reference arguments retain the coordinator.
+Length/count/cast specializations preserve the original caller strictness; nullable
+setting getters keep their ordinary result cast instead of becoming native setters.
+Regex split-count and replacement-length byte scans first query the shared request
+for UTF-8, default regex options and default resource limits, and require ASCII
+subjects. Other cases use the regex bridge. A failed split result is released
+before raising `count()`'s TypeError; it never becomes a silent zero count.
+Progressive searches, including `mb_ereg_search_pos()` and `mb_ereg_search_regs()`,
+use live regex resource limits and route diagnostic results through the ordinary
+bridge so error handlers run exactly once. A limit failure clears retained
+captures and preserves the cursor; resetting the limits restores ordinary match
+results.
+
 When a length-only observation reads a local assigned once from a compile-time
 ASCII literal, the EIR fold replaces case conversion, trimming, padding,
 slicing, width, encoding checks, counting, splitting, search positions, and
@@ -538,20 +562,19 @@ literals under explicit UTF-8 fold to their character positions, and a
 the literal's byte length, and an invariant `strlen(gzcompress($s))` is hoisted
 to the loop preheader. `token_name()` over a literal id or `T_*` constant is a
 compile-time catalog lookup; literal iconv MIME-word lengths and single-header
-counts, plus the default `iconv_get_encoding("internal_encoding")` length, fold
-once their call staging is proven removable; literal AES-CBC encrypt lengths and
+counts fold once their call staging is proven removable; literal AES-CBC encrypt lengths and
 matching encrypt/decrypt round trips fold to the PKCS#7/base64 or plaintext length;
 a literal `count(token_get_all($source))` is hoisted to the loop preheader after
-validating the source with the compiler front end; literal SHA-256/HMAC digests and the literal
-`[0-9]+` `mb_ereg_search*` progressive state machine are also constant-folded;
+validating the source with the compiler front end; literal SHA-256/HMAC digests
+are also constant-folded;
 `hash_algos()` reports PHP's complete 60-algorithm catalog, including the legacy
 Tiger/HAVAL/Snefru/GOST implementations and murmur3/xxHash checksums, and a
-zero-argument `count(hash_algos())` is hoisted out of loops,
-including the `start`/`length` or matched-bytes elements of the `pos`/`regs`/`getregs`
-arrays when every read is a known element access.
-When an identical-UTF-8 `mb_convert_variables()` result is observed only through
-`strlen()`, its unobserved array mutation is skipped and the encoding length is
-folded directly. A simple literal `mb_parse_str()` query (`key=value` pairs) folds
+zero-argument `count(hash_algos())` is hoisted out of loops. Progressive regex
+sessions, including their result arrays, and implicit iconv encoding getters retain
+runtime calls so caller-visible session changes and settings remain authoritative.
+`mb_convert_variables()` also retains its runtime conversion when its array result
+is unobserved: even identical UTF-8 encodings can update the request
+`illegal_chars` counter for malformed input. A simple literal `mb_parse_str()` query (`key=value` pairs) folds
 its known key reads to boxed values, using an int box for numeric-only consumers;
 encoded, duplicate, nested, or otherwise observed queries keep the runtime parser. Non-ASCII input,
 unsupported encodings, and other regex maps or patterns fall back to the shared

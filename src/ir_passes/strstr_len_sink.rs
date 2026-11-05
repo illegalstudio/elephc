@@ -131,9 +131,11 @@ fn specialize(function: &mut Function, candidate: InstId) -> bool {
     for (index, source) in detached {
         call.operands[index] = source;
     }
-    call.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-        length_target,
-    )));
+    let Some(Immediate::RuntimeCall(
+        RuntimeCallTarget::Function(target)
+        | RuntimeCallTarget::ProfiledFunction { target, .. },
+    )) = &mut call.immediate else { return false; };
+    *target = length_target;
     call.result_type = IrType::I64;
     call.result_php_type = PhpType::Int;
     call.result_ownership = Ownership::NonHeap;

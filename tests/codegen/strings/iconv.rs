@@ -412,3 +412,20 @@ echo "\n";
     assert_eq!(out.stdout, "5|10|\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Interior base64 padding keeps iconv's lenient decoder instead of a shorter literal length.
+#[test]
+fn test_iconv_mime_length_preserves_interior_padding() {
+    let check = || {
+        let out = compile_and_run_with_heap_debug(r#"<?php
+echo strlen((string)iconv_mime_decode("=?UTF-8?B?YQ==Yg==?=", 0, "UTF-8")), "|";
+echo bin2hex((string)iconv_mime_decode("=?UTF-8?B?YQ==Yg==?=", 0, "UTF-8")), "|";
+echo strlen((string)iconv_mime_decode("=?UTF-8?B?YQ==?=", 0, "UTF-8")), "\n";
+"#);
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, "3|610620|1\n");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    };
+    check();
+    without_ir_opt(check);
+}

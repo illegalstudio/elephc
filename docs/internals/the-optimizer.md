@@ -535,9 +535,9 @@ the trial replaces the original function.
 The proof preserves the physical ABI of eligible by-value, nonvariadic `mixed`
 call parameters by rematerializing their integer arguments at the existing call
 boundary. It does not authorize a different closure call or change dispatch.
-Executable main, parameter slots, references, dynamic `eval`, suspension,
-exception handlers, escaping values and uncertain integer/type facts are
-excluded. See [Bounded mixed counters](../compiling/optimization.md#bounded-mixed-counters).
+Private executable main frames are eligible when runtime includes cannot expose
+their locals. Parameter slots, references, dynamic `eval`, suspension, exception
+handlers, escaping values and uncertain integer/type facts are excluded. See [Bounded mixed counters](../compiling/optimization.md#bounded-mixed-counters).
 
 The backend's [frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells)
 are a separate storage optimization and do not require this pass to run.
@@ -567,6 +567,11 @@ is discarded after every counter update is proven nonoverflowing; it authorizes
 ordinary lowering again, including with IR optimization disabled, rather than
 installing speculative trial instructions in the executable function. Integer
 storage and buffer bounds remain independent proofs.
+
+The validator keeps dominator membership in dense bitsets throughout each check.
+Precomputed singleton flags retain the existing unreachable-continuation rules.
+This avoids materializing a hash set for every block during storage trials and
+debug pass checks, while preserving same-block ordering and dominance diagnostics.
 
 For a canonical counter that lacks a static overflow proof,
 `bounded_mixed_counter/versioning.rs` can retain the original loop and add a
@@ -777,6 +782,29 @@ lifetime pin and hidden slot are retired for both sinks. The operand
 evaluation and its side effects remain; the binary `md5(..., true)` form,
 non-string operands, the replacement-pair `strtr()` form and any other observer
 keep the real call.
+
+For explicit UTF-8 ASCII mbstring calls, a length fold must also prove that
+argument validation cannot fail. `mb_convert_case()` requires a constant mode in
+`0..=7`; `mb_str_pad()` requires a nonempty ASCII pad and a constant pad type in
+`0..=2`. Other modes and dynamic mode expressions retain the producer, including
+its exceptions and source-order argument effects. Multibyte trim length folds use
+literal character membership, without byte-trim range syntax. Literal mbstring
+regex and MIME decode calls retain their runtime calls: regex results depend on
+`mb_regex_encoding()`, and MIME output bytes depend on `mb_internal_encoding()`.
+Literal arguments alone cannot prove those request settings. Regex length/count
+shortcuts additionally check live UTF-8/default options and limits, plus ASCII subjects, before
+using byte scans; other states retain the full regex bridge. Explicit UTF-8 iconv
+position and MIME length folds retain their encoding proof. MIME words with interior
+Base64 padding keep the runtime decoder, whose lenient decoding differs from
+independent padded-quantum decoding. Progressive regex sessions and implicit iconv
+encoding getters also retain runtime calls: a function-local absence of setters
+cannot prove caller state or make session mutations unobservable to its caller.
+Likewise, an unobserved `mb_convert_variables()` array does not hide its updates
+to the request's illegal-character counter.
+
+The `count(explode($literal_separator, $subject))` fusion accepts only proven scalar
+string coercions. Other subjects keep the original `explode()` path and diagnostic;
+the decision happens before lowering the subject so fallback evaluates it once.
 
 ## Borrowed string reads
 

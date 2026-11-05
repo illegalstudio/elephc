@@ -150,6 +150,10 @@ Magician history explains each case's intended path.
 
 ## Internal measurements
 
+The [PR2090 follow-up comparison](diagnostics/pr2090-audit.md) records controlled
+revision measurements, semantic checks and compiler-cost diagnostics for PR2247,
+with raw samples kept separately from the CI benchmark history.
+
 For an isolated numeric accumulator, compile `benchmark/diagnostics/numeric_local.php`
 and pass the iteration count at runtime. Run the same source and arguments with
 `php -n`, with CLI OPcache and JIT disabled. Output is `checksum|body_ns`; argument

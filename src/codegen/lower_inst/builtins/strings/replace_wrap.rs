@@ -500,7 +500,7 @@ pub(crate) fn lower_str_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         Arch::AArch64 => lower_str_pad_aarch64(ctx, inst)?,
         Arch::X86_64 => lower_str_pad_x86_64(ctx, inst)?,
     }
-    emit_str_pad_argument_guards(ctx, inst.operands.len() >= 4);
+    emit_str_pad_argument_guards(ctx, inst.operands.len() >= 4, "str_pad");
     abi::emit_call_label(ctx.emitter, "__rt_str_pad");
     store_if_result(ctx, inst)
 }

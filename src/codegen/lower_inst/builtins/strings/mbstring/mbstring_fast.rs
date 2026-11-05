@@ -289,7 +289,29 @@ fn try_lower_trim(
     load_string_arg_to_regs(ctx, inst, 1, name, pointer, length)?;
     abi::emit_call_label(ctx.emitter, "__rt_mb_is_ascii");
     emit_predicate_branch(ctx, &fallback);
-    // Both operands are proven ASCII; bytewise trimming is identical to character trimming.
+    // mbstring masks are literal character sets. Byte trim helpers also parse ranges,
+    // so any dot keeps the shared bridge path, including masks known only at runtime.
+    load_string_arg_to_regs(ctx, inst, 1, name, pointer, length)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // pass the mask pointer as the first libc argument
+            ctx.emitter.instruction("mov x1, #46");                             // search for a dot that could introduce byte-range syntax
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the mask pointer as the first SysV argument
+            ctx.emitter.instruction("mov esi, 46");                             // search for a dot that could introduce byte-range syntax
+        }
+    }
+    ctx.emitter.bl_c("memchr");                                                // find dots without interpreting the mbstring character set
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {fallback}"));           // masks containing dots need literal membership semantics
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // a non-null result means the mask contains a dot
+            ctx.emitter.instruction(&format!("jnz {fallback}"));                // keep literal character-set semantics in the shared bridge
+        }
+    }
     load_string_arg_to_regs(ctx, inst, 0, name, pointer, length)?;
     super::super::common::lower_trim_mask_arg(ctx, inst, name)?;
     super::super::common::load_trim_warning_args(ctx, name)?;
@@ -375,7 +397,9 @@ fn try_lower_str_pad(
     if inst.operands.len() != 5
         || !super::explicit_utf8_encoding(ctx, inst.operands[4])?
         || ctx.value_php_type(inst.operands[0])?.codegen_repr() != PhpType::Str
+        || ctx.value_php_type(inst.operands[1])? != PhpType::Int
         || ctx.value_php_type(inst.operands[2])?.codegen_repr() != PhpType::Str
+        || ctx.value_php_type(inst.operands[3])? != PhpType::Int
     {
         return Ok(false);
     }
@@ -393,7 +417,7 @@ fn try_lower_str_pad(
         Arch::AArch64 => super::super::replace_wrap::lower_str_pad_aarch64(ctx, &synthetic)?,
         Arch::X86_64 => super::super::replace_wrap::lower_str_pad_x86_64(ctx, &synthetic)?,
     }
-    super::super::emit_str_pad_argument_guards(ctx, true);
+    super::super::emit_str_pad_argument_guards(ctx, true, "mb_str_pad");
     abi::emit_call_label(ctx.emitter, "__rt_str_pad");
     abi::emit_call_label(ctx.emitter, "__rt_str_dup_owned");
     finish_fast_path(ctx, inst, operation, fallback)
@@ -480,7 +504,8 @@ pub(super) fn lower_position_int(
     runtime_label: &str,
     direction: super::super::StringPositionDirection,
 ) -> Result<()> {
-    let fast = inst.operands.len() == 4
+    let fast = super::prepared_args::already_prepared(ctx, inst, source)?
+        && inst.operands.len() == 4
         && super::explicit_utf8_encoding(ctx, inst.operands[3])?
         && ctx.value_php_type(inst.operands[0])?.codegen_repr() == PhpType::Str
         && ctx.value_php_type(inst.operands[1])?.codegen_repr() == PhpType::Str;
@@ -1339,7 +1364,8 @@ pub(super) fn lower_detect_encoding_len(
 
 /// Lowers `strlen(mb_chr(...))` to the UTF-8 byte length of one explicit-UTF-8 codepoint.
 pub(super) fn lower_chr_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let fast = inst.operands.len() == 2
+    let fast = super::prepared_args::already_prepared(ctx, inst, RuntimeBuiltinId::MbChr)?
+        && inst.operands.len() == 2
         && super::explicit_utf8_encoding(ctx, inst.operands[1])?;
     if !fast {
         super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbChr, false)?;
@@ -1409,7 +1435,8 @@ pub(super) fn lower_strimwidth_len(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    let fast = inst.operands.len() == 5
+    let fast = super::prepared_args::already_prepared(ctx, inst, RuntimeBuiltinId::MbStrimwidth)?
+        && inst.operands.len() == 5
         && super::explicit_utf8_encoding(ctx, inst.operands[4])?
         && const_int_operand(ctx, inst.operands[1])? == Some(0)
         && ctx.value_php_type(inst.operands[0])?.codegen_repr() == PhpType::Str
@@ -1689,6 +1716,20 @@ fn verify_full_decimal_map(
     Ok(true)
 }
 
+/// Retains request encoding and syntax semantics before using byte-pattern shortcuts.
+fn emit_regex_ascii_state_probe(ctx: &mut FunctionContext<'_>, fallback: &str) {
+    ctx.emitter.bl_c("elephc_mbstring_regex_ascii_defaults_v1");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz w0, {fallback}"));            // other encoding or syntax states keep the regex bridge
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test eax, eax");                           // does the live request permit ASCII pattern shortcuts?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                 // other encoding or syntax states keep the regex bridge
+        }
+    }
+}
+
 /// Lowers `count(mb_split(...))` for a single literal ASCII separator.
 pub(super) fn lower_split_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let fast = inst.operands.len() == 2
@@ -1697,6 +1738,11 @@ pub(super) fn lower_split_count(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let fallback = ctx.next_label("mb_split_count_fallback");
     let done = ctx.next_label("mb_split_count_done");
     if fast {
+        emit_regex_ascii_state_probe(ctx, &fallback);
+        let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+        load_string_arg_to_regs(ctx, inst, 1, "mb_split", pointer, length)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mb_is_ascii");
+        emit_predicate_branch(ctx, &fallback);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 load_string_arg_to_regs(ctx, inst, 1, "mb_split", "x1", "x2")?;
@@ -1738,12 +1784,24 @@ pub(super) fn lower_split_count(ctx: &mut FunctionContext<'_>, inst: &Instructio
     Ok(())
 }
 
-/// Unboxes a `array|false` cell and returns the array length, falling back to PHP count().
+/// Counts an owned array result or releases false before raising PHP count's TypeError.
 fn emit_boxed_array_length_and_release(ctx: &mut FunctionContext<'_>) {
+    let countable = ctx.next_label("mb_split_count_array");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #32");                         // reserve the cell and its count
             ctx.emitter.instruction("str x0, [sp, #0]");                        // save the boxed array-or-false result
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp x0, #4");                              // is the split result an array container?
+            ctx.emitter.instruction(&format!("b.eq {countable}"));              // array results proceed to the count
+            ctx.emitter.instruction("cmp x0, #5");                              // is the split result an array container?
+            ctx.emitter.instruction(&format!("b.eq {countable}"));              // array results proceed to the count
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // release the owned false cell before throwing
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction("add sp, sp, #32");                         // restore the stack before the exception path
+            crate::codegen::lower_inst::builtins::count_empty::emit_count_type_error(ctx, "false");
+            ctx.emitter.label(&countable);
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the countable cell after tag inspection
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             ctx.emitter.instruction("str x0, [sp, #8]");                        // save the count across the cell release
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the boxed cell
@@ -1754,6 +1812,17 @@ fn emit_boxed_array_length_and_release(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => {
             ctx.emitter.instruction("sub rsp, 32");                             // reserve the cell and its count
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the boxed array-or-false result
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp rax, 4");                              // is the split result an array container?
+            ctx.emitter.instruction(&format!("je {countable}"));                // array results proceed to the count
+            ctx.emitter.instruction("cmp rax, 5");                              // is the split result an array container?
+            ctx.emitter.instruction(&format!("je {countable}"));                // array results proceed to the count
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // release the owned false cell before throwing
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction("add rsp, 32");                             // restore the stack before the exception path
+            crate::codegen::lower_inst::builtins::count_empty::emit_count_type_error(ctx, "false");
+            ctx.emitter.label(&countable);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the countable cell after tag inspection
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // save the count across the cell release
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the boxed cell
@@ -1776,6 +1845,7 @@ pub(super) fn lower_ereg_replace_len(
     let fallback = ctx.next_label("mb_ereg_replace_len_fallback");
     let done = ctx.next_label("mb_ereg_replace_len_done");
     if fast {
+        emit_regex_ascii_state_probe(ctx, &fallback);
         let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
         load_string_arg_to_regs(ctx, inst, 2, "mb_ereg_replace", pointer, length)?;
         abi::emit_call_label(ctx.emitter, "__rt_mb_is_ascii");
@@ -2000,7 +2070,8 @@ pub(super) fn lower_regex_set_options_len(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    if inst.operands.len() == 1 {
+    if super::prepared_args::already_prepared(ctx, inst, RuntimeBuiltinId::MbRegexSetOptions)?
+        && inst.operands.len() == 1 {
         let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
         load_string_arg_to_regs(ctx, inst, 0, "mb_regex_set_options", pointer, length)?;
         match ctx.emitter.target.arch {
@@ -2045,7 +2116,8 @@ pub(super) fn lower_http_input_len(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    if inst.operands.len() == 1 {
+    if super::prepared_args::already_prepared(ctx, inst, RuntimeBuiltinId::MbHttpInput)?
+        && inst.operands.len() == 1 {
         let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
         load_string_arg_to_regs(ctx, inst, 0, "mb_http_input", pointer, length)?;
         match ctx.emitter.target.arch {
@@ -2198,7 +2270,8 @@ pub(super) fn lower_strstr_len(
     source: RuntimeBuiltinId,
     mode: i64,
 ) -> Result<()> {
-    let fast = inst.operands.len() == 4
+    let fast = super::prepared_args::already_prepared(ctx, inst, source)?
+        && inst.operands.len() == 4
         && super::explicit_utf8_encoding(ctx, inst.operands[3])?
         && ctx.value_php_type(inst.operands[0])?.codegen_repr() == PhpType::Str
         && ctx.value_php_type(inst.operands[1])?.codegen_repr() == PhpType::Str;
@@ -2297,7 +2370,8 @@ pub(super) fn lower_str_split_count(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    let fast = inst.operands.len() == 3
+    let fast = super::prepared_args::already_prepared(ctx, inst, RuntimeBuiltinId::MbStrSplit)?
+        && inst.operands.len() == 3
         && super::explicit_utf8_encoding(ctx, inst.operands[2])?
         && ctx.value_php_type(inst.operands[0])?.codegen_repr() == PhpType::Str;
     if !fast {
