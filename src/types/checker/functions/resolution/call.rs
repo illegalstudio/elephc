@@ -683,6 +683,81 @@ impl Checker {
 }
 
 impl Checker {
+    /// Walks the body of a failed untyped-parameter function again when a callback or a
+    /// first-class callable reaches it, from the arguments that invocation passes, instead of
+    /// reading the provisional signature its failed walk left.
+    ///
+    /// The driver marks such a function for `rewalk_failed_function_body_at_call`, which a
+    /// direct call reaches through `check_function_call`. `array_map(f(...), $xs)`,
+    /// `call_user_func('f', 1)` or `$h = f(...); $h(1)` read the signature instead, so the final
+    /// pass never walked the body again and a real error went with the dropped initial one. An
+    /// error this walk raises belongs to the calling statement of the final pass and is
+    /// reported. A first-class callable call is not a direct call, so the walk leaves
+    /// `functions_called_directly` (which decides the pass-through return widening) as it was.
+    /// A callback builtin's opaque placeholder argument is no settled type, so arguments that
+    /// hold one keep the provisional signature (`callback_args_have_opaque_placeholder`).
+    pub(in crate::types::checker) fn rewalk_marked_callable_target(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let name = self
+            .canonical_function_name_folded(name)
+            .unwrap_or_else(|| name.to_string());
+        if !self.rewalk_failed_body_at_next_call.contains(name.as_str())
+            || self.resolving_functions.contains(name.as_str())
+            || !self.fn_decls.contains_key(name.as_str())
+            || crate::types::checker::builtins::callback_args_have_opaque_placeholder(
+                args, caller_env,
+            )
+        {
+            return Ok(());
+        }
+        let called_directly = self.functions_called_directly.contains(name.as_str());
+        let result = self.rewalk_failed_function_body_at_call(&name, args, span, caller_env);
+        if !called_directly {
+            self.functions_called_directly.remove(name.as_str());
+        }
+        result.map(|_| ())
+    }
+
+    /// Returns the errors of `error` that the latest walk of `name`'s body raised, when that walk
+    /// failed, so a callback check that discards its call's result still reports them.
+    ///
+    /// A string callback whose function has no signature yet is resolved through
+    /// `check_function_call` from checker-only placeholder arguments, and its result was
+    /// discarded whole. A body error then reached no statement, so the driver never walked the
+    /// body again and `array_map('f', $xs)` compiled a body that `f(1)` refuses. Only errors
+    /// recorded for the failed body come back; an argument refusal of the placeholders stays
+    /// discarded as before.
+    pub(in crate::types::checker) fn failed_callback_body_errors(
+        &self,
+        name: &str,
+        error: &CompileError,
+    ) -> Option<CompileError> {
+        let name = self
+            .canonical_function_name_folded(name)
+            .unwrap_or_else(|| name.to_string());
+        if self.completed_function_signatures.contains(name.as_str()) {
+            return None;
+        }
+        let recorded = self.failed_function_body_errors.get(name.as_str())?;
+        let body_errors: Vec<CompileError> = error
+            .flatten()
+            .into_iter()
+            .filter(|error| {
+                recorded.iter().any(|seen| {
+                    seen.span == error.span
+                        && seen.file == error.file
+                        && seen.message == error.message
+                })
+            })
+            .collect();
+        (!body_errors.is_empty()).then(|| CompileError::from_many(body_errors))
+    }
+
     /// Walks the body of a failed untyped-parameter function again from this call's settled
     /// argument types, as the first call did, instead of reusing its provisional signature.
     ///

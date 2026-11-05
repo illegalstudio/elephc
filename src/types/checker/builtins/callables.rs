@@ -196,6 +196,27 @@ pub(in crate::types::checker) fn is_callback_argument_placeholder(name: &str) ->
     name.starts_with(CALLBACK_ARG_PLACEHOLDER_PREFIX)
 }
 
+/// Reports whether a callback argument stands for an array slot whose type is statically opaque.
+///
+/// `callback_dummy_arg_for_type` binds an opaque `Mixed`/`Never` slot (the carry of
+/// `array_reduce`, the elements of a boxed array) to a bottom-typed placeholder, and a walk across
+/// such a placeholder refuses bodies the runtime value satisfies (`$carry + $item`). Errors of
+/// that walk prove nothing, so a callback check neither reports them nor walks a marked failed
+/// body again from such arguments (`Checker::rewalk_marked_callable_target`).
+pub(in crate::types::checker) fn callback_args_have_opaque_placeholder(
+    args: &[Expr],
+    env: &TypeEnv,
+) -> bool {
+    args.iter().any(|arg| {
+        matches!(
+            &arg.kind,
+            ExprKind::Variable(name)
+                if is_callback_argument_placeholder(name)
+                    && matches!(env.get(name), Some(PhpType::Mixed | PhpType::Never))
+        )
+    })
+}
+
 /// Returns the contextual closure-parameter type for one callback argument.
 ///
 /// `Mixed` and `Never` mean the array element is statically opaque, so an unannotated
@@ -1078,6 +1099,7 @@ fn check_callback_builtin_call_in_engine_frame(
         // this function a named entry, so its collector has to be compiled for the descriptor
         // container before its signature is read here.
         checker.promote_descriptor_variadic_container(cb_name.as_str())?;
+        checker.rewalk_marked_callable_target(cb_name, callback_args, span, env)?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             return checker.check_known_callable_call(&sig, callback_args, span, env, label);
         }
@@ -1106,8 +1128,17 @@ fn check_callback_builtin_call_in_engine_frame(
                 ));
             }
             // Keep function-variant discovery, but do not treat scalar dummy args
-            // as authoritative parameter types for callbacks over refcounted arrays.
-            let _ = checker.check_function_call(cb_name, callback_args, span, env);
+            // as authoritative parameter types for callbacks over refcounted arrays. The
+            // errors of a failed body are still reported (`failed_callback_body_errors`),
+            // unless an opaque placeholder argument may have caused them.
+            if let Err(error) = checker.check_function_call(cb_name, callback_args, span, env) {
+                if !callback_args_have_opaque_placeholder(callback_args, env) {
+                    if let Some(body_errors) = checker.failed_callback_body_errors(cb_name, &error)
+                    {
+                        return Err(body_errors);
+                    }
+                }
+            }
             return Ok(PhpType::Int);
         }
         // A BUILTIN named by string. `check_function_call` below resolves user functions and
@@ -1454,6 +1485,9 @@ pub(crate) fn check_call_user_func_array(
         // this function a named entry, so its collector has to be compiled for the descriptor
         // container before its signature is read here.
         checker.promote_descriptor_variadic_container(cb_name.as_str())?;
+        if let Some(elems) = static_args.as_deref() {
+            checker.rewalk_marked_callable_target(&cb_name, elems, span, env)?;
+        }
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             validate_call_user_func_array_dynamic_arg_array(
                 checker,
@@ -1711,6 +1745,9 @@ pub(crate) fn check_call_user_func(
         // this function a named entry, so its collector has to be compiled for the descriptor
         // container before its signature is read here.
         checker.promote_descriptor_variadic_container(cb_name.as_str())?;
+        if !has_traversable_spread {
+            checker.rewalk_marked_callable_target(&cb_name, &args[1..], span, env)?;
+        }
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
                 &sig,

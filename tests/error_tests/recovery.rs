@@ -2,7 +2,8 @@
 //! Integration or regression tests for diagnostic coverage of recovery, including parser recovery
 //! collects multiple errors, parser block recovery collects multiple errors, type checker recovery
 //! collects multiple errors, failed-assignment targets not cascading into `Undefined variable`, and
-//! function-body errors raised from a top-level call surviving the stale initial-error filter.
+//! function-body errors raised from a top-level call, a callback or a first-class callable
+//! surviving the stale initial-error filter.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -409,4 +410,53 @@ fn test_rewalk_refreshes_helper_return_built_from_late_static_property() {
     expect_no_error(
         "<?php function a($n) { return b($n)[0]; } function b($n) { return C::$v; } class C { public static $v; } echo a(1); C::$v = [9];",
     );
+}
+
+/// A body error of an untyped function is reported once when the program reaches the function
+/// only through a callback or a first-class callable. The string-callback check discarded the
+/// failed walk's errors, and the other paths read the provisional signature that walk left
+/// instead of walking the body again in the final pass, so each program compiled a body that
+/// `f(1)` refuses.
+#[test]
+fn test_untyped_function_body_error_reached_through_callbacks_is_reported() {
+    let f = "function f($n) { $x = 5; return $x[0] + $n; }";
+    let c = "function c($a, $b) { $x = 5; return $x[0] + $a - $b; }";
+    let programs = [
+        format!("<?php {f} print_r(array_map('f', [1, 2]));"),
+        format!("<?php {f} print_r(array_filter([1, 2], 'f'));"),
+        format!("<?php {c} $a = [3, 1]; usort($a, 'c'); print_r($a);"),
+        format!("<?php {f} $h = f(...); var_dump($h(1));"),
+        format!("<?php {f} print_r(array_map(f(...), [1, 2]));"),
+        format!("<?php {f} var_dump(call_user_func('f', 1));"),
+        format!("<?php {f} var_dump(call_user_func_array('f', [1]));"),
+        format!("<?php {f} function w($n) {{ return array_map('f', [$n]); }} print_r(w(1));"),
+    ];
+    for program in &programs {
+        let messages = checker_error_messages(program);
+        assert_eq!(
+            messages.iter().filter(|message| *message == "Cannot index non-array").count(),
+            1,
+            "{}: {:?}",
+            program,
+            messages
+        );
+    }
+}
+
+/// A callback whose first walk failed only on a helper's stale return is accepted: the helper
+/// returns a static property that a later top-level statement assigns an array, and the
+/// final-pass walk at the callback refreshes the helper before reading its return.
+#[test]
+fn test_callback_rewalk_refreshes_helper_return_built_from_late_static_property() {
+    let helpers = "function a($n) { return b($n)[0] + $n; } \
+        function b($n) { return C::$v; } class C { public static $v; }";
+    for call in [
+        "print_r(array_map('a', [1]));",
+        "print_r(array_map(a(...), [1]));",
+        "var_dump(call_user_func('a', 1));",
+        "var_dump(call_user_func_array('a', [1]));",
+        "$h = a(...); var_dump($h(1));",
+    ] {
+        expect_no_error(&format!("<?php {helpers} {call} C::$v = [9];"));
+    }
 }

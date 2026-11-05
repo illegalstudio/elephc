@@ -316,6 +316,9 @@ impl Checker {
         span: crate::span::Span,
         env: &TypeEnv,
     ) -> Result<FunctionSig, CompileError> {
+        if let CallableTarget::Function(name) = target {
+            self.rewalk_marked_callable_target(name.as_str(), args, span, env)?;
+        }
         let base_sig = self.resolve_first_class_callable_sig(target, span, env)?;
         if base_sig.declared_params.iter().all(|is_declared| *is_declared) {
             return Ok(base_sig);
