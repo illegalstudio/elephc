@@ -537,8 +537,11 @@ Regex split-count and replacement-length byte scans first query the shared reque
 for UTF-8, default regex options and default resource limits, and require ASCII
 subjects. Other cases use the regex bridge. A failed split result is released
 before raising `count()`'s TypeError; it never becomes a silent zero count.
-Progressive search steps use live regex resource limits and route diagnostic
-results through the ordinary bridge so error handlers run exactly once.
+Progressive searches, including `mb_ereg_search_pos()` and `mb_ereg_search_regs()`,
+use live regex resource limits and route diagnostic results through the ordinary
+bridge so error handlers run exactly once. A limit failure clears retained
+captures and preserves the cursor; resetting the limits restores ordinary match
+results.
 
 When a length-only observation reads a local assigned once from a compile-time
 ASCII literal, the EIR fold replaces case conversion, trimming, padding,

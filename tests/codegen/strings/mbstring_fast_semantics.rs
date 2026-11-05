@@ -214,3 +214,32 @@ echo strlen((string)mb_convert_variables("UTF-8", "UTF-8", $items)), "|";
 echo mb_get_info("illegal_chars"), "\n";
 "#, "5|1\n");
 }
+
+/// Result-returning progressive searches preserve live limits, captures and warning delivery.
+#[test]
+fn test_mb_fast_semantics_progressive_array_limits() {
+    assert_mb_fast_cli_semantics(r#"<?php
+set_error_handler(function ($number, $message) { echo "warning|"; return true; });
+mb_ereg_search_init("1234", "[0-9]+");
+mb_ereg_search();
+mb_ereg_search_setpos(0);
+ini_set("mbstring.regex_retry_limit", "1");
+echo mb_ereg_search_pos() === false ? "false|" : "match|";
+echo mb_ereg_search_getpos(), "|", mb_ereg_search_getregs() === false ? "empty" : "matched", "\n";
+ini_restore("mbstring.regex_retry_limit");
+mb_ereg_search_init("1234", "[0-9]+");
+mb_ereg_search();
+mb_ereg_search_setpos(0);
+ini_set("mbstring.regex_retry_limit", "1");
+echo mb_ereg_search_regs() === false ? "false|" : "match|";
+echo mb_ereg_search_getpos(), "|", mb_ereg_search_getregs() === false ? "empty" : "matched", "\n";
+ini_restore("mbstring.regex_retry_limit");
+mb_ereg_search_init("ab123", "[0-9]+");
+$position = mb_ereg_search_pos();
+echo $position[0], "|", $position[1], "\n";
+mb_ereg_search_init("ab123", "[0-9]+");
+$registers = mb_ereg_search_regs();
+echo $registers[0], "\n";
+restore_error_handler();
+"#, "warning|false|0|empty\nwarning|false|0|empty\n2|3\n123\n");
+}
