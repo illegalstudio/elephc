@@ -1055,7 +1055,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         while let Some(name) = current {
             if let Some(info) = self.classes.get(name) {
                 if let Some(value) = info.constants.get(const_name) {
-                    return Some(value.clone());
+                    return self.constant_value_in_scope(value, name);
                 }
                 current = info.parent.as_deref();
             } else {
@@ -1086,12 +1086,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             }
             if let Some(info) = self.interfaces.get(&name) {
                 if let Some(value) = info.constants.get(const_name) {
-                    return Some(value.clone());
+                    let owner = info.constant_declaring_interfaces.get(const_name)
+                        .map(String::as_str).unwrap_or(name.as_str());
+                    return self.constant_value_in_scope(value, owner);
                 }
                 queue.extend(info.parents.iter().cloned());
             }
         }
         None
+    }
+
+    /// Binds relative constant receivers before an initializer is lowered in another class.
+    fn constant_value_in_scope(&self, value: &crate::parser::ast::Expr, owner: &str) -> Option<crate::parser::ast::Expr> {
+        let parent = self.classes.get(owner).and_then(|class| class.parent.as_deref());
+        crate::types::checker::normalize_lexical_callable_default(
+            &Some(value.clone()), Some(owner), parent,
+        ).ok().flatten()
     }
 
     /// Records a constant discovered while lowering source-order `define()` calls.

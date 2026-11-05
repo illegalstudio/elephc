@@ -23,10 +23,14 @@ pub(in crate::codegen) fn resolve_array_const_default(
             })).collect::<Option<Vec<_>>>().map(ConstDefaultValue::Array);
         }
         ExprKind::ArrayLiteralAssoc(items) => {
-            return items.iter().map(|(key, value)| Some(ConstDefaultArrayElement {
-                key: Some(resolve_array_const_default_key(key, context, depth + 1)?),
+            let mut key_reads = Vec::new();
+            let elements = items.iter().map(|(key, value)| Some(ConstDefaultArrayElement {
+                key: Some(resolve_array_const_default_key(key, context, depth + 1, &mut key_reads)?),
                 default: resolve_const_default_at(value, context, depth + 1)?,
-            })).collect::<Option<Vec<_>>>().map(ConstDefaultValue::Array);
+            })).collect::<Option<Vec<_>>>()?;
+            // Keys that read enum singletons take the ordered fold below, which interleaves
+            // each key's reads before its value's as PHP evaluates them.
+            if key_reads.is_empty() { return Some(ConstDefaultValue::Array(elements)); }
         }
         _ => {}
     }
@@ -48,23 +52,28 @@ pub(in crate::codegen) fn resolve_array_const_default(
     };
     let mut elements = Vec::with_capacity(entries.len());
     let mut highest = None;
+    let mut reads = Vec::new();
     for entry in entries {
         match entry {
             ArrayEntry::Keyed(key, value) => {
-                let key = resolve_array_const_default_key(&key, context, depth + 1)?;
+                let key = resolve_array_const_default_key(&key, context, depth + 1, &mut reads)?;
                 let value = resolve_const_default_at(&value, context, depth + 1)?;
                 if contains_object(&value) { return None; }
+                collect_enum_reads(&value, &mut reads);
                 insert_array_element(&mut elements, &mut highest, key, value);
             }
             ArrayEntry::Value(value) => {
                 let key = next_integer_key(highest)?;
                 let value = resolve_const_default_at(&value, context, depth + 1)?;
                 if contains_object(&value) { return None; }
+                collect_enum_reads(&value, &mut reads);
                 insert_array_element(&mut elements, &mut highest, ConstDefaultArrayKey::Int(key), value);
             }
             ArrayEntry::Spread(value) => {
                 let source = match &value.kind { ExprKind::Spread(inner) => inner.as_ref(), _ => &value };
-                let source = match resolve_const_default_at(source, context, depth + 1)? {
+                let source = resolve_const_default_at(source, context, depth + 1)?;
+                collect_enum_reads(&source, &mut reads);
+                let source = match without_enum_effects(source) {
                     ConstDefaultValue::Array(elements) => elements,
                     ConstDefaultValue::Scalar { kind: CONST_DEFAULT_EMPTY_ARRAY, .. } => Vec::new(),
                     _ => return None,
@@ -91,7 +100,7 @@ pub(in crate::codegen) fn resolve_array_const_default(
         element.key == Some(ConstDefaultArrayKey::Int(index as i64))) {
         for element in &mut elements { element.key = None; }
     }
-    Some(ConstDefaultValue::Array(elements))
+    Some(with_enum_reads(ConstDefaultValue::Array(elements), reads))
 }
 
 /// Selects the next append key lazily, including PHP's pre-8.3 negative-key rule.
@@ -124,16 +133,47 @@ fn insert_array_element(
     }
 }
 
-/// Resolves one supported static array key.
+/// Selects a constant array element without dropping observable object construction.
+pub(super) fn resolve_array_offset_default(
+    array: &Expr, index: &Expr, context: &ConstDefaultContext<'_>, depth: usize,
+) -> Option<ConstDefaultValue> {
+    let value = resolve_const_default_at(array, context, depth + 1)?;
+    if contains_object(&value) { return None; }
+    let mut reads = Vec::new();
+    collect_enum_reads(&value, &mut reads);
+    let ConstDefaultValue::Array(source) = without_enum_effects(value) else { return None; };
+    // PHP evaluates the container before the offset, so offset reads follow the array's.
+    let requested = resolve_array_const_default_key(index, context, depth + 1, &mut reads)?;
+    let mut normalized = Vec::with_capacity(source.len());
+    let mut highest = None;
+    for element in source {
+        let key = match element.key {
+            Some(key) => key,
+            None => ConstDefaultArrayKey::Int(next_integer_key(highest)?),
+        };
+        insert_array_element(&mut normalized, &mut highest, key, element.default);
+    }
+    normalized.into_iter().find(|element| match (&element.key, &requested) {
+        (Some(ConstDefaultArrayKey::String(existing)), ConstDefaultArrayKey::String(requested)) =>
+            elephc_builtin_contract::string_literal::literal_bytes(existing)
+                == elephc_builtin_contract::string_literal::literal_bytes(requested),
+        (key, requested) => key.as_ref() == Some(requested),
+    }).map(|element| with_enum_reads(element.default, reads))
+}
+
+/// Resolves one supported static array key, appending the enum reads its evaluation performs.
 fn resolve_array_const_default_key(
     expr: &Expr,
     context: &ConstDefaultContext<'_>,
     depth: usize,
+    reads: &mut Vec<(String, String)>,
 ) -> Option<ConstDefaultArrayKey> {
     if let Some(key) = resolve_literal_array_const_default_key(expr) {
         return Some(key);
     }
-    match resolve_const_default_at(expr, context, depth + 1)? {
+    let value = resolve_const_default_at(expr, context, depth + 1)?;
+    collect_enum_reads(&value, reads);
+    match without_enum_effects(value) {
         ConstDefaultValue::Scalar {
             kind: CONST_DEFAULT_NULL,
             ..
@@ -181,6 +221,7 @@ pub(in crate::codegen) fn resolve_literal_array_const_default_key(
 fn contains_object(value: &ConstDefaultValue) -> bool {
     match value {
         ConstDefaultValue::Object { .. } => true,
+        ConstDefaultValue::Evaluated { value, .. } => contains_object(value),
         ConstDefaultValue::Array(elements) => elements.iter().any(|element| contains_object(&element.default)),
         _ => false,
     }

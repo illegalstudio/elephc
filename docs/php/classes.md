@@ -949,6 +949,23 @@ var_dump($config->level === Level::Low);         // bool(true)
 
 Every form stores the case's **canonical singleton**, so `===` against the case holds, exactly as it does for a case read anywhere else. Cases are materialized lazily, and a default is resolved through that same materialization rather than by copying the slot, so a default written before the case's first use elsewhere in the program is still the singleton and not `null`.
 
+Instance and static defaults also support nullable (`?Level` or `Level|null`), union,
+and `mixed` property types. Class and interface constant aliases resolve to the same
+case; `self::` and `parent::` bind to the property's declaring class, including on
+inherited properties and properties shadowing a private parent slot. PHP forbids
+`static::` in a property default. `ReflectionClass::getDefaultProperties()` and
+`ReflectionProperty::getDefaultValue()` return the enum case object for both pure
+and backed enums, including when these APIs are called inside `eval()`.
+
+Aliases can also select a case from a constant array, such as
+`const DEFAULT = self::CASES[0]`. Evaluated cases retain PHP's materialization
+order; cases on an untaken conditional branch remain lazy. The same projections and
+branches can be written directly on the property (`public Level $first =
+Holder::CASES[0];`, `public Level $level = Level::Low ? Level::High : Level::Low;`),
+an offset or key may itself depend on an enum (`self::CASES[Level::Low ? 1 : 0]`),
+and a scalar property may be selected by an enum condition (`public int $n =
+Level::Low ? 1 : 2;`); all of them initialize and reflect like PHP.
+
 A default naming a case that does not exist is a compile error (`Undefined enum case: Level::Missing`), and a scoped constant that resolves to a scalar is still rejected for an enum-typed slot.
 
 ### Built-in `SortDirection`

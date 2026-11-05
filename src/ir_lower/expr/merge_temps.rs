@@ -446,6 +446,9 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ),
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| fallback_expr_type(expr)),
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_constant_merge_type(ctx, receiver, name, expr)
+        }
         // Typed the way `lower_buffer_new` stamps the allocation, so `buffer_new<float>(1)[0]`
         // is read as a float element rather than the syntactic `int`.
         ExprKind::BufferNew { element_type, .. } => {
@@ -492,6 +495,33 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         }
         _ => fallback_expr_type(expr),
     }
+}
+
+/// Types a scoped constant as `lower_scoped_constant` materializes it, not by its spelling.
+///
+/// An enum case is its singleton object, and a lexical class constant lowers its declaration-
+/// scoped initializer in place. The syntactic fallback answers `string` for both, so a ternary
+/// over enum cases got a string merge temp that the object destination could not accept.
+/// Late static `static::` reads keep the fallback because descendants may override them.
+fn scoped_constant_merge_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    name: &str,
+    expr: &Expr,
+) -> PhpType {
+    let class_name = super::scoped_values::scoped_constant_receiver_name(ctx, receiver);
+    let normalized = class_name.trim_start_matches('\\');
+    if ctx.enums.get(normalized)
+        .is_some_and(|enum_info| enum_info.cases.iter().any(|case| case.name == name))
+    {
+        return PhpType::Object(normalized.to_string());
+    }
+    if !matches!(receiver, StaticReceiver::Static) {
+        if let Some(value) = ctx.scoped_constant_value(&class_name, name) {
+            return merge_arm_type(ctx, &value);
+        }
+    }
+    fallback_expr_type(expr)
 }
 
 /// Returns the expression an assignment expression evaluates to, for type prediction.
