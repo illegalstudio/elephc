@@ -1487,11 +1487,24 @@ pub(crate) fn check_call_user_func_array(
         checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(elems) = static_args.as_deref() {
             checker.rewalk_marked_callable_target(&cb_name, elems, span, env)?;
-        } else if let PhpType::Array(elem_ty) = checker.infer_type(&args[1], env)? {
-            // A variable argument list binds the parameters from its element type, as the
-            // first walk's spread did. An opaque element is no settled type (see
+        } else if checker
+            .fn_decls
+            .get(cb_name.as_str())
+            .is_some_and(|decl| decl.ref_params.iter().any(|is_ref| *is_ref))
+        {
+            // A by-reference parameter cannot bind from a spread, so the first walk above ran
+            // from the declaration's initial parameter types; the re-walk does the same.
+            checker.rewalk_marked_function_from_initial_params(&cb_name)?;
+        } else {
+            // A variable argument list binds the parameters from its value type, as the first
+            // walk's spread did, keys included. An opaque value is no settled type (see
             // `callback_args_have_opaque_placeholder`), so it keeps the provisional signature.
-            if !matches!(*elem_ty, PhpType::Mixed | PhpType::Never) {
+            let value_ty = match checker.infer_type(&args[1], env)? {
+                PhpType::Array(elem_ty) => Some(*elem_ty),
+                PhpType::AssocArray { value, .. } => Some(*value),
+                _ => None,
+            };
+            if value_ty.is_some_and(|ty| !matches!(ty, PhpType::Mixed | PhpType::Never)) {
                 let spread_args = vec![Expr::new(
                     ExprKind::Spread(Box::new(args[1].clone())),
                     args[1].span,

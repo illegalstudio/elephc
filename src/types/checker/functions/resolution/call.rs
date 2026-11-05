@@ -718,6 +718,38 @@ impl Checker {
         result.map(|_| ())
     }
 
+    /// Walks the failed body of a marked function again from its declaration's initial
+    /// parameter types, as `call_user_func_array` over a variable list first walked a function
+    /// with a by-reference parameter, and returns the errors that still hold.
+    ///
+    /// Such a call cannot bind a by-reference parameter from a spread of the list, so its first
+    /// walk did not specialize from argument types either; the walk here runs once the final
+    /// pass has settled property and return types, so a stale error vanishes and a real one is
+    /// reported for the calling statement. Completed callees with an inferred return are
+    /// refreshed as for any other re-walk (`refresh_completed_inferred_callee`).
+    pub(in crate::types::checker) fn rewalk_marked_function_from_initial_params(
+        &mut self,
+        name: &str,
+    ) -> Result<(), CompileError> {
+        if !self.failed_body_rewalk_is_due(name) {
+            return Ok(());
+        }
+        let Some(decl) = self.fn_decls.get(name).cloned() else {
+            return Ok(());
+        };
+        self.rewalk_failed_body_at_next_call.remove(name);
+        let param_types = self.initial_function_param_types(name, &decl)?;
+        let outer_walk = self.refreshed_inferred_callees.is_none();
+        if outer_walk {
+            self.refreshed_inferred_callees = Some(HashSet::new());
+        }
+        let result = self.resolve_function_signature(name, &decl, param_types);
+        if outer_walk {
+            self.refreshed_inferred_callees = None;
+        }
+        result.map(|_| ())
+    }
+
     /// Reports whether a call reaching `name` now has to walk its failed body again
     /// (`rewalk_failed_function_body_at_call`) instead of reading its provisional signature.
     ///

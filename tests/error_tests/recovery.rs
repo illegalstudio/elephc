@@ -430,6 +430,11 @@ fn test_untyped_function_body_error_reached_through_callbacks_is_reported() {
         format!("<?php {f} var_dump(call_user_func('f', 1));"),
         format!("<?php {f} var_dump(call_user_func_array('f', [1]));"),
         format!("<?php {f} $a = [1]; var_dump(call_user_func_array('f', $a));"),
+        format!("<?php {f} $a = ['n' => 1]; var_dump(call_user_func_array('f', $a));"),
+        format!("<?php {f} $a = [0 => 1]; var_dump(call_user_func_array('f', $a));"),
+        "<?php function f(&$n) { $x = 5; return $x[0] + $n; } $a = [1]; \
+            var_dump(call_user_func_array('f', $a));"
+            .to_string(),
         "<?php function id<T>(T $x) { $a = 5; return $a[0]; } \
             print_r(array_map('id', [1, 2])); echo id(1);"
             .to_string(),
@@ -461,9 +466,14 @@ fn test_callback_rewalk_refreshes_helper_return_built_from_late_static_property(
         "var_dump(call_user_func_array('a', [1]));",
         "$h = a(...); var_dump($h(1));",
         "$xs = [1]; var_dump(call_user_func_array('a', $xs));",
+        "$xs = ['n' => 1]; var_dump(call_user_func_array('a', $xs));",
     ] {
         expect_no_error(&format!("<?php {helpers} {call} C::$v = [9];"));
     }
+    expect_no_error(
+        "<?php function f(&$n) { return C::$v[0] + $n; } class C { public static $v; } \
+         $a = [1]; var_dump(call_user_func_array('f', $a)); C::$v = [9];",
+    );
 }
 
 /// A call reached under the eval barrier does not consume the re-walk of a failed untyped body:
