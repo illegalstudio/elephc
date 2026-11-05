@@ -6,7 +6,7 @@ description: "Finalizes an incremental BLAKE2b hash state."
 ## sodium_crypto_generichash_final()
 
 ```php
-function sodium_crypto_generichash_final(string $state, int $length = 32): string
+function sodium_crypto_generichash_final(string &$state, int $length = 32): string
 ```
 
 Finalizes an incremental BLAKE2b hash state.
@@ -21,7 +21,7 @@ Finalizes an incremental BLAKE2b hash state.
 
 | Compiled (AOT) | Magician (eval) |
 |---|---|
-| Available | Not available yet |
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

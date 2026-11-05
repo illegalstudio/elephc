@@ -15,6 +15,14 @@ use crate::synthetic_class::{e_int, e_str, s_const};
 /// Builds every `SODIUM_*` constant declaration.
 pub(super) fn declarations() -> Vec<Stmt> {
     vec![
+        s_const("PASSWORD_ARGON2I", e_str("argon2i")),
+        s_const("PASSWORD_ARGON2ID", e_str("argon2id")),
+        s_const("PASSWORD_ARGON2_DEFAULT_MEMORY_COST", e_int(65536)),
+        s_const("PASSWORD_ARGON2_DEFAULT_THREADS", e_int(1)),
+        s_const("PASSWORD_ARGON2_DEFAULT_TIME_COST", e_int(4)),
+        s_const("PASSWORD_ARGON2_PROVIDER", e_str("standard")),
+        s_const("PASSWORD_BCRYPT", e_str("2y")),
+        s_const("PASSWORD_DEFAULT", e_str("2y")),
         s_const("SODIUM_BASE64_VARIANT_ORIGINAL", e_int(1)),
         s_const("SODIUM_BASE64_VARIANT_ORIGINAL_NO_PADDING", e_int(3)),
         s_const("SODIUM_BASE64_VARIANT_URLSAFE", e_int(5)),

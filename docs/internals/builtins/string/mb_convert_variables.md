@@ -37,7 +37,7 @@ description: "Compiler internals for mb_convert_variables(): lowering path, type
 ## Signature summary
 
 ```php
-function mb_convert_variables(string $to_encoding, array|string $from_encoding, mixed $var, ...$vars): string|false
+function mb_convert_variables(string $to_encoding, array|string $from_encoding, mixed &$var, ...$vars): string|false
 ```
 
 ## What the type checker enforces

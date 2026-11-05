@@ -37,7 +37,7 @@ description: "Compiler internals for array_walk(): lowering path, type checks, a
 ## Signature summary
 
 ```php
-function array_walk(array $array, callable $callback): bool
+function array_walk(array &$array, callable $callback): bool
 ```
 
 ## What the type checker enforces

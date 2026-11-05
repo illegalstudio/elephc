@@ -37,7 +37,7 @@ description: "Compiler internals for pcntl_sigtimedwait(): lowering path, type c
 ## Signature summary
 
 ```php
-function pcntl_sigtimedwait(mixed $signals, mixed $info = [], int $seconds = 0, int $nanoseconds = 0): mixed
+function pcntl_sigtimedwait(mixed $signals, mixed &$info = [], int $seconds = 0, int $nanoseconds = 0): mixed
 ```
 
 ## What the type checker enforces

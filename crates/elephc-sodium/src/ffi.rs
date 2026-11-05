@@ -180,6 +180,8 @@ extern "C" {
         mem_limit: usize,
         algorithm: c_int,
     ) -> c_int;
+    /// Hashes a password with the selected Argon2 algorithm in libsodium's string format.
+    pub fn crypto_pwhash_str_alg(out: *mut c_char, password: *const c_char, password_len: c_ulonglong, ops_limit: c_ulonglong, mem_limit: usize, algorithm: c_int) -> c_int;
     /// Hashes a password with Argon2id in libsodium's string format.
     pub fn crypto_pwhash_str(out: *mut c_char, password: *const c_char, password_len: c_ulonglong, ops_limit: c_ulonglong, mem_limit: usize) -> c_int;
     /// Verifies an Argon2 password hash.

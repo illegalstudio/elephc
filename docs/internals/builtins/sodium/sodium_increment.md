@@ -35,7 +35,7 @@ description: "Compiler internals for sodium_increment(): lowering path, type che
 ## Signature summary
 
 ```php
-function sodium_increment(string $string): void
+function sodium_increment(string &$string): void
 ```
 
 ## What the type checker enforces
@@ -45,7 +45,11 @@ function sodium_increment(string $string): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `by-reference-or-lvalue`.
+- **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$string`.
 
 ## Cross-references
 

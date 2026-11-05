@@ -61,6 +61,8 @@ pub enum Area {
     /// The `ext/sodium` procedural surface backed by the `elephc_sodium` bridge and the
     /// managed `libsodium` native package.
     Sodium,
+    /// The core `password` extension's Argon2 provider, implemented over `elephc_sodium`.
+    Password,
 }
 
 /// Describes how a PHP-visible catalog entry reaches executable behavior.

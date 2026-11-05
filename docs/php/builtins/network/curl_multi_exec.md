@@ -6,7 +6,7 @@ description: "Runs the sub-connections of the current cURL handle."
 ## curl_multi_exec()
 
 ```php
-function curl_multi_exec(CurlMultiHandle $multi_handle, int $still_running): int
+function curl_multi_exec(CurlMultiHandle $multi_handle, int &$still_running): int
 ```
 
 Runs the sub-connections of the current cURL handle.

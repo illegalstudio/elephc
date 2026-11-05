@@ -6,7 +6,7 @@ description: "Open Internet or Unix domain socket connection."
 ## fsockopen()
 
 ```php
-function fsockopen(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed
+function fsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): mixed
 ```
 
 Open Internet or Unix domain socket connection.

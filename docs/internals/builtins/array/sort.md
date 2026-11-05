@@ -37,7 +37,7 @@ description: "Compiler internals for sort(): lowering path, type checks, and run
 ## Signature summary
 
 ```php
-function sort(array $array): bool
+function sort(array &$array): bool
 ```
 
 ## What the type checker enforces

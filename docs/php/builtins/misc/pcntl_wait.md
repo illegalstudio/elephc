@@ -6,7 +6,7 @@ description: "Waits for any child process and writes its target-native status."
 ## pcntl_wait()
 
 ```php
-function pcntl_wait(mixed $status, int $flags = 0, mixed $resource_usage = []): int
+function pcntl_wait(mixed &$status, int $flags = 0, mixed &$resource_usage = []): int
 ```
 
 Waits for any child process and writes its target-native status.

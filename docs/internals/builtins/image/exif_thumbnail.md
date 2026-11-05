@@ -27,7 +27,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function exif_thumbnail(string $filename, mixed $width = 0, mixed $height = 0, mixed $image_type = 0): mixed
+function exif_thumbnail(string $filename, mixed &$width = 0, mixed &$height = 0, mixed &$image_type = 0): mixed
 ```
 
 ## What the type checker enforces

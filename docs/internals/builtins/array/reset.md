@@ -37,7 +37,7 @@ description: "Compiler internals for reset(): lowering path, type checks, and ru
 ## Signature summary
 
 ```php
-function reset(array $array): mixed
+function reset(array &$array): mixed
 ```
 
 ## What the type checker enforces

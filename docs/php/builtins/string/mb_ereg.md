@@ -6,7 +6,7 @@ description: "Searches a multibyte string and optionally writes numeric and name
 ## mb_ereg()
 
 ```php
-function mb_ereg(string $pattern, string $string, mixed $matches = null): bool
+function mb_ereg(string $pattern, string $string, mixed &$matches = null): bool
 ```
 
 Searches a multibyte string and optionally writes numeric and named captures by reference.

@@ -72,10 +72,18 @@ var_dump(sodium_crypto_pwhash_str_verify($hash, 'correct horse battery staple'))
   fixtures that assert only backtrace redaction compare the uncaught exception
   class and message instead of the omitted frames.
 
-The three php-src `password_hash()` interoperability fixtures remain in the
-migrated corpus as ignored tests: elephc does not implement the core `password`
-extension's Argon2 provider yet, so `PASSWORD_ARGON2ID`, `password_get_info()`,
-`password_hash()` and `password_verify()` are unavailable.
+The core `password` extension's Argon2 provider is implemented on top of the
+same bridge, so `password_hash()`, `password_verify()`, `password_get_info()`,
+`password_needs_rehash()`, `password_algos()` and the `PASSWORD_ARGON2*`
+constants are available whenever the Sodium prelude is loaded. The Argon2i /
+Argon2id string formats and option validation follow php-src 8.5's Argon2
+password provider. libsodium's own Argon2i limit applies (`time_cost >= 3` for Argon2i at
+the smallest memory sizes); the php-src sodium fixtures use `time_cost` 4 and 8.
+bcrypt (`2y`) is reported by `password_algos()`/`password_get_info()` but not
+implemented.
+
+The full 31-case php-src Sodium corpus now runs, including the three
+`password_hash()` interoperability fixtures and `bug78516`.
 
 ## Inside `eval()`
 
@@ -83,8 +91,7 @@ A host program that linked Sodium registers the compiled prelude helpers in its
 eval context, so `eval()` code can call the non-mutating `sodium_*` functions
 exactly as compiled code can. The eight by-reference mutators (`sodium_add`,
 `sodium_increment`, `sodium_memzero`, the incremental BLAKE2b pair, and the
-three secretstream state functions) are AOT-only in this release because the
-eval builtin boundary receives values rather than caller lvalues; calling them
-inside `eval()` reports PHP's catchable
-`Error: Call to undefined function sodium_*()` until that adapter lands. A
-program that never linked Sodium keeps the same error for the whole surface.
+three secretstream state functions) run through hidden prelude wrappers whose
+parameters are ordinary PHP references, so eval mutates the caller's variable
+exactly like AOT. A program that never linked Sodium keeps PHP's catchable
+`Error: Call to undefined function sodium_*()` for the whole surface.

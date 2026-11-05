@@ -37,7 +37,7 @@ description: "Compiler internals for pcntl_waitpid(): lowering path, type checks
 ## Signature summary
 
 ```php
-function pcntl_waitpid(int $process_id, mixed $status, int $flags = 0, mixed $resource_usage = []): int
+function pcntl_waitpid(int $process_id, mixed &$status, int $flags = 0, mixed &$resource_usage = []): int
 ```
 
 ## What the type checker enforces

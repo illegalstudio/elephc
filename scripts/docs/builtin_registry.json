@@ -112576,6 +112576,367 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Password",
+    "canonical_name": "password_algos",
+    "description": "Returns the supported password hashing algorithms.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/sodium_prelude/password.rs",
+      "codegen_function": "password_algos",
+      "notes": [
+        "Implemented by the compiler-injected password prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_password.rs"
+    },
+    "module": "standard",
+    "name": "password_algos",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "password_algos",
+    "sub_area": "Password"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Password",
+    "canonical_name": "password_get_info",
+    "description": "Returns information about a password hash.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/sodium_prelude/password.rs",
+      "codegen_function": "password_get_info",
+      "notes": [
+        "Implemented by the compiler-injected password prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_password.rs"
+    },
+    "module": "standard",
+    "name": "password_get_info",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "password_get_info",
+    "sub_area": "Password"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": {
+            "constant": "PASSWORD_DEFAULT"
+          },
+          "name": "algo",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": [],
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Password",
+    "canonical_name": "password_hash",
+    "description": "Hashes a password.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/sodium_prelude/password.rs",
+      "codegen_function": "password_hash",
+      "notes": [
+        "Implemented by the compiler-injected password prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_password.rs"
+    },
+    "module": "standard",
+    "name": "password_hash",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "PASSWORD_DEFAULT",
+          "name": "algo",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "[]",
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "password_hash",
+    "sub_area": "Password"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "algo",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": [],
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Password",
+    "canonical_name": "password_needs_rehash",
+    "description": "Reports whether a password hash needs rehashing.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/sodium_prelude/password.rs",
+      "codegen_function": "password_needs_rehash",
+      "notes": [
+        "Implemented by the compiler-injected password prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_password.rs"
+    },
+    "module": "standard",
+    "name": "password_needs_rehash",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "algo",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "[]",
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "password_needs_rehash",
+    "sub_area": "Password"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Password",
+    "canonical_name": "password_verify",
+    "description": "Verifies a password against a hash.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/sodium_prelude/password.rs",
+      "codegen_function": "password_verify",
+      "notes": [
+        "Implemented by the compiler-injected password prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_password.rs"
+    },
+    "module": "standard",
+    "name": "password_verify",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "password_verify",
+    "sub_area": "Password"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -129908,7 +130269,7 @@
           "default": null,
           "name": "string1",
           "optional": false,
-          "type": "mixed"
+          "type": "string"
         },
         {
           "by_ref": false,
@@ -129927,9 +130288,36 @@
     "canonical_name": "sodium_add",
     "description": "Adds two strings as little-endian integers.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "by-reference-or-lvalue",
+      "area": "sodium",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "string1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string2",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -138077,7 +138465,7 @@
           "default": null,
           "name": "state",
           "optional": false,
-          "type": "mixed"
+          "type": "string"
         },
         {
           "by_ref": false,
@@ -138096,9 +138484,36 @@
     "canonical_name": "sodium_crypto_generichash_final",
     "description": "Finalizes an incremental BLAKE2b hash state.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "by-reference-or-lvalue",
+      "area": "sodium",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "state",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "32",
+          "name": "length",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -138494,7 +138909,7 @@
           "default": null,
           "name": "state",
           "optional": false,
-          "type": "mixed"
+          "type": "string"
         },
         {
           "by_ref": false,
@@ -138513,9 +138928,36 @@
     "canonical_name": "sodium_crypto_generichash_update",
     "description": "Updates an incremental BLAKE2b hash state.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "by-reference-or-lvalue",
+      "area": "sodium",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "state",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -142693,7 +143135,7 @@
           "default": null,
           "name": "state",
           "optional": false,
-          "type": "mixed"
+          "type": "string"
         },
         {
           "by_ref": false,
@@ -142719,9 +143161,43 @@
     "canonical_name": "sodium_crypto_secretstream_xchacha20poly1305_pull",
     "description": "Performs a secretstream operation.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "by-reference-or-lvalue",
+      "area": "sodium",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "state",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "ciphertext",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\"\"",
+          "name": "additional_data",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -142843,7 +143319,7 @@
           "default": null,
           "name": "state",
           "optional": false,
-          "type": "mixed"
+          "type": "string"
         },
         {
           "by_ref": false,
@@ -142876,9 +143352,50 @@
     "canonical_name": "sodium_crypto_secretstream_xchacha20poly1305_push",
     "description": "Performs a secretstream operation.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "by-reference-or-lvalue",
+      "area": "sodium",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "state",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\"\"",
+          "name": "additional_data",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -143007,7 +143524,7 @@
           "default": null,
           "name": "state",
           "optional": false,
-          "type": "mixed"
+          "type": "string"
         }
       ],
       "required_param_count": 1,
@@ -143019,9 +143536,29 @@
     "canonical_name": "sodium_crypto_secretstream_xchacha20poly1305_rekey",
     "description": "Performs a secretstream operation.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "by-reference-or-lvalue",
+      "area": "sodium",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "state",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -146556,7 +147093,7 @@
           "default": null,
           "name": "string",
           "optional": false,
-          "type": "mixed"
+          "type": "string"
         }
       ],
       "required_param_count": 1,
@@ -146568,9 +147105,29 @@
     "canonical_name": "sodium_increment",
     "description": "Increments a little-endian integer string.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "by-reference-or-lvalue",
+      "area": "sodium",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -146841,7 +147398,7 @@
           "default": null,
           "name": "string",
           "optional": false,
-          "type": "mixed"
+          "type": "string"
         }
       ],
       "required_param_count": 1,
@@ -146853,9 +147410,29 @@
     "canonical_name": "sodium_memzero",
     "description": "Overwrites a string with zero bytes.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "by-reference-or-lvalue",
+      "area": "sodium",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],

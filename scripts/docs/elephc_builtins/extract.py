@@ -585,6 +585,12 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
         "version",
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
+    # The core password provider is declared by its own sodium-prelude module.
+    "password": (
+        "sodium_prelude/password.rs",
+        "password",
+        "crates/elephc-builtin-contract/src/catalog_password.rs",
+    ),
     "random": (
         "random_prelude.rs",
         "random",

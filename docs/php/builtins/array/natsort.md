@@ -6,7 +6,7 @@ description: "Sorts an array using a natural order algorithm."
 ## natsort()
 
 ```php
-function natsort(array $array): bool
+function natsort(array &$array): bool
 ```
 
 Sorts an array using a natural order algorithm.

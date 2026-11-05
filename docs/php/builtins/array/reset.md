@@ -6,7 +6,7 @@ description: "Rewinds the array's internal pointer to the first element and retu
 ## reset()
 
 ```php
-function reset(array $array): mixed
+function reset(array &$array): mixed
 ```
 
 Rewinds the array's internal pointer to the first element and returns it.

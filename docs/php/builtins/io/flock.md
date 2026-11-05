@@ -6,7 +6,7 @@ description: "Portable advisory file locking."
 ## flock()
 
 ```php
-function flock(resource $stream, int $operation, bool $would_block = null): bool
+function flock(resource $stream, int $operation, bool &$would_block = null): bool
 ```
 
 Portable advisory file locking.

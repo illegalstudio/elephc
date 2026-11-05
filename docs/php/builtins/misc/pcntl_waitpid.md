@@ -6,7 +6,7 @@ description: "Waits for a selected child process and writes its target-native st
 ## pcntl_waitpid()
 
 ```php
-function pcntl_waitpid(int $process_id, mixed $status, int $flags = 0, mixed $resource_usage = []): int
+function pcntl_waitpid(int $process_id, mixed &$status, int $flags = 0, mixed &$resource_usage = []): int
 ```
 
 Waits for a selected child process and writes its target-native status.

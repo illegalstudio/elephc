@@ -6,7 +6,7 @@ description: "Adds two strings as little-endian integers."
 ## sodium_add()
 
 ```php
-function sodium_add(string $string1, string $string2): void
+function sodium_add(string &$string1, string $string2): void
 ```
 
 Adds two strings as little-endian integers.
@@ -21,7 +21,7 @@ Adds two strings as little-endian integers.
 
 | Compiled (AOT) | Magician (eval) |
 |---|---|
-| Available | Not available yet |
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

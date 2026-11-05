@@ -35,7 +35,7 @@ description: "Compiler internals for sodium_crypto_secretstream_xchacha20poly130
 ## Signature summary
 
 ```php
-function sodium_crypto_secretstream_xchacha20poly1305_push(string $state, string $message, string $additional_data = '', int $tag = 0): string
+function sodium_crypto_secretstream_xchacha20poly1305_push(string &$state, string $message, string $additional_data = '', int $tag = 0): string
 ```
 
 ## What the type checker enforces
@@ -45,7 +45,11 @@ function sodium_crypto_secretstream_xchacha20poly1305_push(string $state, string
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `by-reference-or-lvalue`.
+- **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$state`.
 
 ## Cross-references
 

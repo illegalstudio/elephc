@@ -191,11 +191,11 @@
       "total": 329
     },
     "constants": {
-      "have": 1451,
+      "have": 1459,
       "total": 3188
     },
     "functions": {
-      "have": 1163,
+      "have": 1168,
       "total": 2175
     }
   },
@@ -1435,7 +1435,7 @@
       "docs": null,
       "extension": "sodium",
       "functions": {
-        "eval": 102,
+        "eval": 110,
         "have": 110,
         "total": 110
       },
@@ -1484,14 +1484,14 @@
       },
       "constants": {
         "eval": 142,
-        "have": 163,
+        "have": 171,
         "total": 400
       },
       "docs": null,
       "extension": "standard",
       "functions": {
         "eval": 350,
-        "have": 390,
+        "have": 395,
         "total": 545
       },
       "name": "standard",

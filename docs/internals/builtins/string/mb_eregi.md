@@ -37,7 +37,7 @@ description: "Compiler internals for mb_eregi(): lowering path, type checks, and
 ## Signature summary
 
 ```php
-function mb_eregi(string $pattern, string $string, mixed $matches = null): bool
+function mb_eregi(string $pattern, string $string, mixed &$matches = null): bool
 ```
 
 ## What the type checker enforces

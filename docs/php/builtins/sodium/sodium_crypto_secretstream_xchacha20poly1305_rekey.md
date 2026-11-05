@@ -6,7 +6,7 @@ description: "Performs a secretstream operation."
 ## sodium_crypto_secretstream_xchacha20poly1305_rekey()
 
 ```php
-function sodium_crypto_secretstream_xchacha20poly1305_rekey(string $state): void
+function sodium_crypto_secretstream_xchacha20poly1305_rekey(string &$state): void
 ```
 
 Performs a secretstream operation.
@@ -20,7 +20,7 @@ Performs a secretstream operation.
 
 | Compiled (AOT) | Magician (eval) |
 |---|---|
-| Available | Not available yet |
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

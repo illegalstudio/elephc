@@ -93,6 +93,12 @@ pub(super) fn lower_arg_with_signature(
         None => lower_expr(ctx, arg),
     });
     record_pointer_reference_argument(ctx, sig, index, arg);
+    // A by-reference argument must keep the caller's storage: casting it to the declared
+    // scalar type here would materialize a temporary and make the callee mutate a copy.
+    // The callee's parameter binding owns the in-place type check/coercion instead.
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        return lowered.value;
+    }
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
 

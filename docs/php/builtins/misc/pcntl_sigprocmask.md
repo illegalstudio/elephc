@@ -6,7 +6,7 @@ description: "Changes the signal mask and optionally writes the prior blocked si
 ## pcntl_sigprocmask()
 
 ```php
-function pcntl_sigprocmask(int $mode, mixed $signals, mixed $old_signals = []): bool
+function pcntl_sigprocmask(int $mode, mixed $signals, mixed &$old_signals = []): bool
 ```
 
 Changes the signal mask and optionally writes the prior blocked signals.

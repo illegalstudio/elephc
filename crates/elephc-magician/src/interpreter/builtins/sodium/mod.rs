@@ -143,3 +143,15 @@ sodium_eval_bindings! {
     "sodium_pad",
     "sodium_unpad",
 }
+
+// By-reference mutators must keep their source arguments unevaluated so the direct hook
+// can forward them to the hidden prelude wrappers, whose ordinary `&$` parameters let
+// eval's user-function call machinery perform the caller writeback.
+eval_builtin! { contract: "sodium_add", area: Sodium, source_arguments: true, direct: Sodium, values: Sodium }
+eval_builtin! { contract: "sodium_increment", area: Sodium, source_arguments: true, direct: Sodium, values: Sodium }
+eval_builtin! { contract: "sodium_memzero", area: Sodium, source_arguments: true, direct: Sodium, values: Sodium }
+eval_builtin! { contract: "sodium_crypto_generichash_update", area: Sodium, source_arguments: true, direct: Sodium, values: Sodium }
+eval_builtin! { contract: "sodium_crypto_generichash_final", area: Sodium, source_arguments: true, direct: Sodium, values: Sodium }
+eval_builtin! { contract: "sodium_crypto_secretstream_xchacha20poly1305_push", area: Sodium, source_arguments: true, direct: Sodium, values: Sodium }
+eval_builtin! { contract: "sodium_crypto_secretstream_xchacha20poly1305_pull", area: Sodium, source_arguments: true, direct: Sodium, values: Sodium }
+eval_builtin! { contract: "sodium_crypto_secretstream_xchacha20poly1305_rekey", area: Sodium, source_arguments: true, direct: Sodium, values: Sodium }

@@ -37,7 +37,7 @@ description: "Compiler internals for array_push(): lowering path, type checks, a
 ## Signature summary
 
 ```php
-function array_push(array $array, ...$values): int
+function array_push(array &$array, ...$values): int
 ```
 
 ## What the type checker enforces

@@ -160,6 +160,21 @@ pub unsafe extern "C" fn elephc_sodium_call(
     })
 }
 
+/// Hashes a password with the selected Argon2 algorithm (1 = argon2i, 2 = argon2id).
+///
+/// # Safety
+/// `password` must be null or point at a NUL-terminated hexadecimal string.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_sodium_pwhash_str_alg(
+    password: *const c_char,
+    ops_limit: i64,
+    mem_limit: i64,
+    algorithm: i64,
+) -> *const c_char {
+    let password = arg_bytes(password);
+    contained(|| ops::pwhash_str_alg(&password, ops_limit, mem_limit, algorithm))
+}
+
 /// Derives a key with Argon2 through a dedicated six-register entry point.
 ///
 /// The generic bridge has room for only three integers, while `sodium_crypto_pwhash`

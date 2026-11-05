@@ -6,7 +6,7 @@ description: "Applies a user function recursively to array leaf values. AOT boxe
 ## array_walk_recursive()
 
 ```php
-function array_walk_recursive(array $array, callable $callback): bool
+function array_walk_recursive(array &$array, callable $callback): bool
 ```
 
 Applies a user function recursively to array leaf values. AOT boxed arrays pass a writable leaf reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.

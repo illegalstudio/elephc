@@ -760,6 +760,28 @@ pub(crate) fn pwhash(password: &[u8], salt: &[u8], out_len: i64, ops_limit: i64,
     Outcome::Bytes(output)
 }
 
+/// Hashes a password with the selected Argon2 algorithm in libsodium's string format.
+pub(crate) fn pwhash_str_alg(password: &[u8], ops_limit: i64, mem_limit: i64, algorithm: i64) -> Outcome {
+    if ops_limit <= 0 || mem_limit <= 0 || !(1..=2).contains(&algorithm) {
+        return Outcome::Internal;
+    }
+    let mut output = vec![0u8; 128];
+    let result = unsafe {
+        crypto_pwhash_str_alg(
+            output.as_mut_ptr() as *mut c_char,
+            password.as_ptr() as *const c_char,
+            password.len() as c_ulonglong,
+            ops_limit as c_ulonglong,
+            mem_limit as usize,
+            algorithm as c_int,
+        )
+    };
+    if result != 0 {
+        return Outcome::Internal;
+    }
+    truncate_at_nul(output)
+}
+
 /// Hashes a password with Argon2id in libsodium's string format.
 fn pwhash_str(password: &[u8], ops_limit: i64, mem_limit: i64) -> Outcome {
     if ops_limit <= 0 || mem_limit <= 0 {

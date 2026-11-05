@@ -22327,6 +22327,150 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_ARGON2I",
+      "route": "prelude",
+      "since": null,
+      "value": "argon2i"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_ARGON2ID",
+      "route": "prelude",
+      "since": null,
+      "value": "argon2id"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_ARGON2_DEFAULT_MEMORY_COST",
+      "route": "prelude",
+      "since": null,
+      "value": 65536
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_ARGON2_DEFAULT_THREADS",
+      "route": "prelude",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_ARGON2_DEFAULT_TIME_COST",
+      "route": "prelude",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_ARGON2_PROVIDER",
+      "route": "prelude",
+      "since": null,
+      "value": "standard"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_BCRYPT",
+      "route": "prelude",
+      "since": null,
+      "value": "2y"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_DEFAULT",
+      "route": "prelude",
+      "since": null,
+      "value": "2y"
+    },
+    {
+      "aot": {
         "kind": "language-intrinsic",
         "supported": true
       },

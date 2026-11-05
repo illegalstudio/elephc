@@ -394,3 +394,75 @@ if (is_array($functions)) {
     );
     assert_eq!(out, "bool(true)\n110\nbool(true)\nbool(true)\n");
 }
+
+/// The core password provider's Argon2i/Argon2id surface built on the sodium bridge.
+#[test]
+fn test_password_argon2_provider() {
+    let out = compile_and_run(
+        r#"<?php
+$hash = password_hash('secret', PASSWORD_ARGON2ID, ['memory_cost' => 8191, 'time_cost' => 2, 'threads' => 1]);
+var_dump(substr($hash, 0, 10));
+var_dump(password_verify('secret', $hash), password_verify('wrong', $hash));
+$info = password_get_info($hash);
+var_dump($info['algo'], $info['algoName']);
+var_dump($info['options']['memory_cost'], $info['options']['time_cost'], $info['options']['threads']);
+var_dump(in_array('argon2i', password_algos(), true), in_array('argon2id', password_algos(), true));
+var_dump(PASSWORD_ARGON2_PROVIDER);
+$i = password_hash('secret', PASSWORD_ARGON2I, ['memory_cost' => 8191, 'time_cost' => 4]);
+var_dump(substr($i, 0, 9), password_verify('secret', $i));
+var_dump(password_needs_rehash($hash, PASSWORD_ARGON2ID, ['memory_cost' => 8191, 'time_cost' => 2]));
+try { password_hash('x', PASSWORD_ARGON2ID, ['memory_cost' => 1]); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { password_hash('x', PASSWORD_ARGON2ID, ['time_cost' => 0]); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { password_hash('x', PASSWORD_ARGON2ID, ['threads' => 2]); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { password_hash('x', 'not-an-algorithm'); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+var_dump(password_needs_rehash($hash, PASSWORD_ARGON2ID, ['memory_cost' => 1]));
+var_dump(password_needs_rehash($hash, 'not-an-algorithm'));
+"#,
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "string(10) \"$argon2id$\"");
+    assert_eq!(lines[1], "bool(true)");
+    assert_eq!(lines[2], "bool(false)");
+    assert_eq!(lines[3], "string(8) \"argon2id\"");
+    assert_eq!(lines[4], "string(8) \"argon2id\"");
+    assert_eq!(lines[5], "int(8191)");
+    assert_eq!(lines[6], "int(2)");
+    assert_eq!(lines[7], "int(1)");
+    assert_eq!(lines[8], "bool(true)");
+    assert_eq!(lines[9], "bool(true)");
+    assert_eq!(lines[10], "string(8) \"standard\"");
+    assert_eq!(lines[11], "string(9) \"$argon2i$\"");
+    assert_eq!(lines[12], "bool(true)");
+    assert_eq!(lines[13], "bool(false)");
+    assert_eq!(lines[14], "Memory cost is outside of allowed memory range");
+    assert_eq!(lines[15], "Time cost is outside of allowed time range");
+    assert_eq!(lines[16], "A thread value other than 1 is not supported by this implementation");
+    assert_eq!(
+        lines[17],
+        "password_hash(): Argument #2 ($algo) must be a valid password hashing algorithm"
+    );
+    assert_eq!(lines[18], "bool(true)");
+    assert_eq!(lines[19], "bool(false)");
+}
+
+/// Eval's by-reference sodium mutators run through hidden PHP wrappers.
+#[test]
+fn test_sodium_eval_by_reference_mutators() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = "abc"; sodium_increment($a); echo $a, "\n";');
+eval('$b = hex2bin("ff01"); sodium_add($b, hex2bin("0101")); echo bin2hex($b), "\n";');
+eval('$z = "secret"; sodium_memzero($z); var_dump($z);');
+eval('$k = str_repeat("k", 32); $s = sodium_crypto_generichash_init($k); sodium_crypto_generichash_update($s, "abc"); echo bin2hex(sodium_crypto_generichash_final($s)), "\n"; var_dump($s);');
+eval('$key = str_repeat("k", 32); $init = sodium_crypto_secretstream_xchacha20poly1305_init_push($key); $state = $init[0]; $header = $init[1]; $c = sodium_crypto_secretstream_xchacha20poly1305_push($state, "hi", "", 0); $pull = sodium_crypto_secretstream_xchacha20poly1305_init_pull($header, $key); $r = sodium_crypto_secretstream_xchacha20poly1305_pull($pull, $c, ""); echo $r[0], " ", $r[1], " ", strlen($pull), "\n"; sodium_crypto_secretstream_xchacha20poly1305_rekey($pull); echo strlen($pull), "\n";');
+"#,
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "bbc");
+    assert_eq!(lines[1], "0003");
+    assert_eq!(lines[2], "NULL");
+    assert_eq!(lines[3], "0a9b1f4f633832a535f3e4539d906998c3814fbcd4cc136e57e8ea742ac36b61");
+    assert_eq!(lines[4], "NULL");
+    assert_eq!(lines[5], "hi 0 52");
+    assert_eq!(lines[6], "52");
+}

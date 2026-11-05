@@ -37,7 +37,7 @@ description: "Compiler internals for natcasesort(): lowering path, type checks, 
 ## Signature summary
 
 ```php
-function natcasesort(array $array): bool
+function natcasesort(array &$array): bool
 ```
 
 ## What the type checker enforces

@@ -6,7 +6,7 @@ description: "Updates an incremental BLAKE2b hash state."
 ## sodium_crypto_generichash_update()
 
 ```php
-function sodium_crypto_generichash_update(string $state, string $message): bool
+function sodium_crypto_generichash_update(string &$state, string $message): bool
 ```
 
 Updates an incremental BLAKE2b hash state.
@@ -21,7 +21,7 @@ Updates an incremental BLAKE2b hash state.
 
 | Compiled (AOT) | Magician (eval) |
 |---|---|
-| Available | Not available yet |
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

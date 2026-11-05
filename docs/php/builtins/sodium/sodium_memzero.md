@@ -6,7 +6,7 @@ description: "Overwrites a string with zero bytes."
 ## sodium_memzero()
 
 ```php
-function sodium_memzero(string $string): void
+function sodium_memzero(string &$string): void
 ```
 
 Overwrites a string with zero bytes.
@@ -20,7 +20,7 @@ Overwrites a string with zero bytes.
 
 | Compiled (AOT) | Magician (eval) |
 |---|---|
-| Available | Not available yet |
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

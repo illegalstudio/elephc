@@ -37,7 +37,7 @@ description: "Compiler internals for array_walk_recursive(): lowering path, type
 ## Signature summary
 
 ```php
-function array_walk_recursive(array $array, callable $callback): bool
+function array_walk_recursive(array &$array, callable $callback): bool
 ```
 
 ## What the type checker enforces

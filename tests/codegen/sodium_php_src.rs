@@ -9,19 +9,26 @@
 //!   carries its PHP source and assertion inline, matching the ordinary Elephc fixture
 //!   style. The test process never parses a `.phpt` file.
 //! - stdout and stderr share one OS file so warnings and output keep their order.
-//! - php-src skips and the three `password_hash` interoperability cases are preserved as
-//!   ignored tests with their original reason, so the provenance stays complete.
+//! - All 31 committed fixtures execute; the three `password_hash` interoperability
+//!   cases run against the core password provider implemented over the sodium bridge.
 //! - `tests/php_src/sodium/` remains the provenance copy and the input for
 //!   `scripts/gen_php_src_sodium_cases.py`.
 
 use crate::support::*;
 use regex::RegexBuilder;
+use std::sync::Once;
 
 #[path = "sodium_php_src_cases.rs"]
 mod cases;
 
 /// Replays one inline php-src sodium fixture and returns its merged output.
 pub(super) fn run_case(source: &str) -> String {
+    // The Argon2 password fixtures hash 64–128 MiB with up to eight passes and verify
+    // each hash again; the default 60-second fixture budget is too tight when CI shards
+    // run several of them concurrently. Raising the shared budget only lengthens the
+    // timeout and does not change any assertion.
+    static TIMEOUT: Once = Once::new();
+    TIMEOUT.call_once(|| std::env::set_var("ELEPHC_TEST_BINARY_TIMEOUT_SECS", "300"));
     if skip_without_sodium_native("sodium_php_src") {
         panic!("managed libsodium artifact is required for the sodium PHPT corpus");
     }

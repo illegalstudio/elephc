@@ -23,6 +23,7 @@ mod catalog_constants_curl;
 mod catalog_data;
 mod catalog_gmp;
 mod catalog_mbstring;
+mod catalog_password;
 mod catalog_pcntl;
 mod catalog_sodium;
 mod catalog_xml;
@@ -69,6 +70,7 @@ pub use object_operators::{
     BCMATH_NUMBER_OPERATORS, GMP_CASTS, GMP_OPERATORS,
 };
 pub use catalog_gmp::FUNCTIONS as GMP_FUNCTIONS;
+pub use catalog_password::FUNCTIONS as PASSWORD_FUNCTIONS;
 pub use catalog_sodium::FUNCTIONS as SODIUM_FUNCTIONS;
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};

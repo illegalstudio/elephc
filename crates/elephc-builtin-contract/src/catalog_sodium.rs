@@ -146,10 +146,10 @@ macro_rules! param {
     };
 }
 
-/// One `mixed` by-reference parameter.
-macro_rules! ref_param_mixed {
-    ($name:literal) => {
-        ParamSpec { name: $name, ty: TypeSpec::Mixed, default: None, by_ref: true }
+/// One by-reference parameter.
+macro_rules! ref_param {
+    ($name:literal, $ty:expr) => {
+        ParamSpec { name: $name, ty: $ty, default: None, by_ref: true }
     };
 }
 
@@ -183,7 +183,7 @@ macro_rules! sodium_contract {
 }
 
 pub(crate) static CONTRACTS: &[BuiltinContract] = &[
-    sodium_contract!("sodium_add", [ref_param_mixed!("string1"), param!("string2", TypeSpec::Str)], TypeSpec::Void, "Adds two strings as little-endian integers."),
+    sodium_contract!("sodium_add", [ref_param!("string1", TypeSpec::Str), param!("string2", TypeSpec::Str)], TypeSpec::Void, "Adds two strings as little-endian integers."),
     sodium_contract!("sodium_base642bin", [param!("string", TypeSpec::Str), param!("id", TypeSpec::Int), param!("ignore", TypeSpec::Str, DefaultSpec::Str(""))], TypeSpec::Str, "Decodes a base64 string."),
     sodium_contract!("sodium_bin2base64", [param!("string", TypeSpec::Str), param!("id", TypeSpec::Int)], TypeSpec::Str, "Encodes a binary string as base64."),
     sodium_contract!("sodium_bin2hex", [param!("string", TypeSpec::Str)], TypeSpec::Str, "Encodes a binary string as hexadecimal."),
@@ -234,10 +234,10 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     sodium_contract!("sodium_crypto_core_ristretto255_scalar_sub", [param!("x", TypeSpec::Str), param!("y", TypeSpec::Str)], TypeSpec::Str, "Performs a Ristretto255 scalar operation."),
     sodium_contract!("sodium_crypto_core_ristretto255_sub", [param!("p", TypeSpec::Str), param!("q", TypeSpec::Str)], TypeSpec::Str, "Performs a Ristretto255 group operation."),
     sodium_contract!("sodium_crypto_generichash", [param!("message", TypeSpec::Str), param!("key", TypeSpec::Str, DefaultSpec::Str("")), param!("length", TypeSpec::Int, DefaultSpec::Int(32))], TypeSpec::Str, "Computes a BLAKE2b hash."),
-    sodium_contract!("sodium_crypto_generichash_final", [ref_param_mixed!("state"), param!("length", TypeSpec::Int, DefaultSpec::Int(32))], TypeSpec::Str, "Finalizes an incremental BLAKE2b hash state."),
+    sodium_contract!("sodium_crypto_generichash_final", [ref_param!("state", TypeSpec::Str), param!("length", TypeSpec::Int, DefaultSpec::Int(32))], TypeSpec::Str, "Finalizes an incremental BLAKE2b hash state."),
     sodium_contract!("sodium_crypto_generichash_init", [param!("key", TypeSpec::Str, DefaultSpec::Str("")), param!("length", TypeSpec::Int, DefaultSpec::Int(32))], TypeSpec::Str, "Initializes an incremental BLAKE2b hash state."),
     sodium_contract!("sodium_crypto_generichash_keygen", [], TypeSpec::Str, "Generates a BLAKE2b key."),
-    sodium_contract!("sodium_crypto_generichash_update", [ref_param_mixed!("state"), param!("message", TypeSpec::Str)], TypeSpec::Bool, "Updates an incremental BLAKE2b hash state."),
+    sodium_contract!("sodium_crypto_generichash_update", [ref_param!("state", TypeSpec::Str), param!("message", TypeSpec::Str)], TypeSpec::Bool, "Updates an incremental BLAKE2b hash state."),
     sodium_contract!("sodium_crypto_kdf_derive_from_key", [param!("subkey_length", TypeSpec::Int), param!("subkey_id", TypeSpec::Int), param!("context", TypeSpec::Str), param!("key", TypeSpec::Str)], TypeSpec::Str, "Derives a subkey from a master key."),
     sodium_contract!("sodium_crypto_kdf_keygen", [], TypeSpec::Str, "Generates a KDF master key."),
     sodium_contract!("sodium_crypto_kx_client_session_keys", [param!("client_key_pair", TypeSpec::Str), param!("server_key", TypeSpec::Str)], TypeSpec::Array, "Performs a key-exchange operation."),
@@ -263,9 +263,9 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     sodium_contract!("sodium_crypto_secretstream_xchacha20poly1305_init_pull", [param!("header", TypeSpec::Str), param!("key", TypeSpec::Str)], TypeSpec::Str, "Performs a secretstream operation."),
     sodium_contract!("sodium_crypto_secretstream_xchacha20poly1305_init_push", [param!("key", TypeSpec::Str)], TypeSpec::Array, "Performs a secretstream operation."),
     sodium_contract!("sodium_crypto_secretstream_xchacha20poly1305_keygen", [], TypeSpec::Str, "Performs a secretstream operation."),
-    sodium_contract!("sodium_crypto_secretstream_xchacha20poly1305_pull", [ref_param_mixed!("state"), param!("ciphertext", TypeSpec::Str), param!("additional_data", TypeSpec::Str, DefaultSpec::Str(""))], TypeSpec::Union(&[TypeSpec::Array, TypeSpec::False]), "Performs a secretstream operation."),
-    sodium_contract!("sodium_crypto_secretstream_xchacha20poly1305_push", [ref_param_mixed!("state"), param!("message", TypeSpec::Str), param!("additional_data", TypeSpec::Str, DefaultSpec::Str("")), param!("tag", TypeSpec::Int, DefaultSpec::Int(0))], TypeSpec::Str, "Performs a secretstream operation."),
-    sodium_contract!("sodium_crypto_secretstream_xchacha20poly1305_rekey", [ref_param_mixed!("state")], TypeSpec::Void, "Performs a secretstream operation."),
+    sodium_contract!("sodium_crypto_secretstream_xchacha20poly1305_pull", [ref_param!("state", TypeSpec::Str), param!("ciphertext", TypeSpec::Str), param!("additional_data", TypeSpec::Str, DefaultSpec::Str(""))], TypeSpec::Union(&[TypeSpec::Array, TypeSpec::False]), "Performs a secretstream operation."),
+    sodium_contract!("sodium_crypto_secretstream_xchacha20poly1305_push", [ref_param!("state", TypeSpec::Str), param!("message", TypeSpec::Str), param!("additional_data", TypeSpec::Str, DefaultSpec::Str("")), param!("tag", TypeSpec::Int, DefaultSpec::Int(0))], TypeSpec::Str, "Performs a secretstream operation."),
+    sodium_contract!("sodium_crypto_secretstream_xchacha20poly1305_rekey", [ref_param!("state", TypeSpec::Str)], TypeSpec::Void, "Performs a secretstream operation."),
     sodium_contract!("sodium_crypto_shorthash", [param!("message", TypeSpec::Str), param!("key", TypeSpec::Str)], TypeSpec::Str, "Computes a short hash."),
     sodium_contract!("sodium_crypto_shorthash_keygen", [], TypeSpec::Str, "Generates a short-hash key."),
     sodium_contract!("sodium_crypto_sign", [param!("message", TypeSpec::Str), param!("secret_key", TypeSpec::Str)], TypeSpec::Str, "Signs a message and returns the signed message."),
@@ -288,9 +288,9 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     sodium_contract!("sodium_crypto_stream_xchacha20_xor_ic", [param!("message", TypeSpec::Str), param!("nonce", TypeSpec::Str), param!("counter", TypeSpec::Int), param!("key", TypeSpec::Str)], TypeSpec::Str, "Generates or applies a stream cipher keystream."),
     sodium_contract!("sodium_crypto_stream_xor", [param!("message", TypeSpec::Str), param!("nonce", TypeSpec::Str), param!("key", TypeSpec::Str)], TypeSpec::Str, "Generates or applies a stream cipher keystream."),
     sodium_contract!("sodium_hex2bin", [param!("string", TypeSpec::Str), param!("ignore", TypeSpec::Str, DefaultSpec::Str(""))], TypeSpec::Str, "Decodes a hexadecimal string."),
-    sodium_contract!("sodium_increment", [ref_param_mixed!("string")], TypeSpec::Void, "Increments a little-endian integer string."),
+    sodium_contract!("sodium_increment", [ref_param!("string", TypeSpec::Str)], TypeSpec::Void, "Increments a little-endian integer string."),
     sodium_contract!("sodium_memcmp", [param!("string1", TypeSpec::Str), param!("string2", TypeSpec::Str)], TypeSpec::Int, "Compares two strings in constant time."),
-    sodium_contract!("sodium_memzero", [ref_param_mixed!("string")], TypeSpec::Void, "Overwrites a string with zero bytes."),
+    sodium_contract!("sodium_memzero", [ref_param!("string", TypeSpec::Str)], TypeSpec::Void, "Overwrites a string with zero bytes."),
     sodium_contract!("sodium_pad", [param!("string", TypeSpec::Str), param!("block_size", TypeSpec::Int)], TypeSpec::Str, "Pads a string to a block size."),
     sodium_contract!("sodium_unpad", [param!("string", TypeSpec::Str), param!("block_size", TypeSpec::Int)], TypeSpec::Str, "Removes padding from a block-padded string."),
 ];
@@ -318,6 +318,13 @@ mod tests {
         let mut refs: Vec<(&str, &str)> = Vec::new();
         for contract in CONTRACTS {
             for param in contract.params.iter().filter(|param| param.by_ref) {
+                assert_eq!(
+                    param.ty,
+                    TypeSpec::Str,
+                    "{} ${} must keep php-src's string by-reference contract",
+                    contract.name,
+                    param.name,
+                );
                 refs.push((contract.name, param.name));
             }
         }

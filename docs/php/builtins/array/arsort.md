@@ -6,7 +6,7 @@ description: "Sorts an array in descending order and maintains index association
 ## arsort()
 
 ```php
-function arsort(array $array): bool
+function arsort(array &$array): bool
 ```
 
 Sorts an array in descending order and maintains index association.

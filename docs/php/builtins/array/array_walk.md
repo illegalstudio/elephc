@@ -6,7 +6,7 @@ description: "Applies a user function to every member of an array. AOT boxed arr
 ## array_walk()
 
 ```php
-function array_walk(array $array, callable $callback): bool
+function array_walk(array &$array, callable $callback): bool
 ```
 
 Applies a user function to every member of an array. AOT boxed arrays pass a writable value reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.

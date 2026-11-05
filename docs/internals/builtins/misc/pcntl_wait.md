@@ -37,7 +37,7 @@ description: "Compiler internals for pcntl_wait(): lowering path, type checks, a
 ## Signature summary
 
 ```php
-function pcntl_wait(mixed $status, int $flags = 0, mixed $resource_usage = []): int
+function pcntl_wait(mixed &$status, int $flags = 0, mixed &$resource_usage = []): int
 ```
 
 ## What the type checker enforces

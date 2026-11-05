@@ -37,7 +37,7 @@ description: "Compiler internals for prev(): lowering path, type checks, and run
 ## Signature summary
 
 ```php
-function prev(array $array): mixed
+function prev(array &$array): mixed
 ```
 
 ## What the type checker enforces

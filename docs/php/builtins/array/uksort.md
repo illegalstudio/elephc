@@ -6,7 +6,7 @@ description: "Sorts an array by keys using a user-defined comparison function."
 ## uksort()
 
 ```php
-function uksort(array $array, callable $callback): bool
+function uksort(array &$array, callable $callback): bool
 ```
 
 Sorts an array by keys using a user-defined comparison function.

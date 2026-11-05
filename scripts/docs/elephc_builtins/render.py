@@ -106,9 +106,9 @@ def _signature_line(b: dict) -> str:
         # PHP-style render: `string $name`
         if p.get("default") is not None:
             # already rendered PHP literal
-            parts.append(f"{p['type']} ${p['name']} = {p['default']}")
+            parts.append(f"{p['type']} {prefix}${p['name']} = {p['default']}")
         else:
-            parts.append(f"{p['type']} ${p['name']}")
+            parts.append(f"{p['type']} {prefix}${p['name']}")
     params = ", ".join(parts)
     if b["sig"]["variadic"]:
         sep = ", " if parts else ""

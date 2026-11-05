@@ -37,7 +37,7 @@ description: "Compiler internals for mb_parse_str(): lowering path, type checks,
 ## Signature summary
 
 ```php
-function mb_parse_str(string $string, mixed $result): bool
+function mb_parse_str(string $string, mixed &$result): bool
 ```
 
 ## What the type checker enforces

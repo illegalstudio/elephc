@@ -6,7 +6,7 @@ description: "Waits for a child state change and writes signal information plus 
 ## pcntl_waitid()
 
 ```php
-function pcntl_waitid(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4, mixed $resource_usage = []): bool
+function pcntl_waitid(int $idtype = 0, int $id = null, mixed &$info = [], int $flags = 4, mixed &$resource_usage = []): bool
 ```
 
 Waits for a child state change and writes signal information plus optional PHP 8.5 resource usage.

@@ -6,7 +6,7 @@ description: "Performs a secretstream operation."
 ## sodium_crypto_secretstream_xchacha20poly1305_pull()
 
 ```php
-function sodium_crypto_secretstream_xchacha20poly1305_pull(string $state, string $ciphertext, string $additional_data = ''): array|false
+function sodium_crypto_secretstream_xchacha20poly1305_pull(string &$state, string $ciphertext, string $additional_data = ''): array|false
 ```
 
 Performs a secretstream operation.
@@ -22,7 +22,7 @@ Performs a secretstream operation.
 
 | Compiled (AOT) | Magician (eval) |
 |---|---|
-| Available | Not available yet |
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -6,7 +6,7 @@ description: "Prepends one or more elements to the beginning of an array."
 ## array_unshift()
 
 ```php
-function array_unshift(array $array, ...$values): int
+function array_unshift(array &$array, ...$values): int
 ```
 
 Prepends one or more elements to the beginning of an array.

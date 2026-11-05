@@ -74,14 +74,14 @@ sidebar:
 | [`pcntl_signal()`](./misc/pcntl_signal.md) | `(int $signal, mixed $handler, bool $restart_syscalls = true): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_signal_dispatch()`](./misc/pcntl_signal_dispatch.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_signal_get_handler()`](./misc/pcntl_signal_get_handler.md) | `(int $signal): mixed` | `mixed` | ✓ | ✓ |
-| [`pcntl_sigprocmask()`](./misc/pcntl_sigprocmask.md) | `(int $mode, mixed $signals, mixed $old_signals = []): bool` | `bool` | ✓ | ✓ |
-| [`pcntl_sigtimedwait()`](./misc/pcntl_sigtimedwait.md) | `(mixed $signals, mixed $info = [], int $seconds = 0, int $nanoseconds = 0): mixed` | `mixed` | ✓ | ✓ |
-| [`pcntl_sigwaitinfo()`](./misc/pcntl_sigwaitinfo.md) | `(mixed $signals, mixed $info = []): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_sigprocmask()`](./misc/pcntl_sigprocmask.md) | `(int $mode, mixed $signals, mixed &$old_signals = []): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_sigtimedwait()`](./misc/pcntl_sigtimedwait.md) | `(mixed $signals, mixed &$info = [], int $seconds = 0, int $nanoseconds = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_sigwaitinfo()`](./misc/pcntl_sigwaitinfo.md) | `(mixed $signals, mixed &$info = []): mixed` | `mixed` | ✓ | ✓ |
 | [`pcntl_strerror()`](./misc/pcntl_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
 | [`pcntl_unshare()`](./misc/pcntl_unshare.md) | `(int $flags): bool` | `bool` | ✓ | ✓ |
-| [`pcntl_wait()`](./misc/pcntl_wait.md) | `(mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
-| [`pcntl_waitid()`](./misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4, mixed $resource_usage = []): bool` | `bool` | ✓ | ✓ |
-| [`pcntl_waitpid()`](./misc/pcntl_waitpid.md) | `(int $process_id, mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
+| [`pcntl_wait()`](./misc/pcntl_wait.md) | `(mixed &$status, int $flags = 0, mixed &$resource_usage = []): int` | `int` | ✓ | ✓ |
+| [`pcntl_waitid()`](./misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed &$info = [], int $flags = 4, mixed &$resource_usage = []): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_waitpid()`](./misc/pcntl_waitpid.md) | `(int $process_id, mixed &$status, int $flags = 0, mixed &$resource_usage = []): int` | `int` | ✓ | ✓ |
 | [`pcntl_wexitstatus()`](./misc/pcntl_wexitstatus.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
 | [`pcntl_wifcontinued()`](./misc/pcntl_wifcontinued.md) | `(int $status): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_wifexited()`](./misc/pcntl_wifexited.md) | `(int $status): bool` | `bool` | ✓ | ✓ |

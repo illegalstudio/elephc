@@ -37,7 +37,7 @@ description: "Compiler internals for flock(): lowering path, type checks, and ru
 ## Signature summary
 
 ```php
-function flock(resource $stream, int $operation, bool $would_block = null): bool
+function flock(resource $stream, int $operation, bool &$would_block = null): bool
 ```
 
 ## What the type checker enforces

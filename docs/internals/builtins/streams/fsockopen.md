@@ -37,7 +37,7 @@ description: "Compiler internals for fsockopen(): lowering path, type checks, an
 ## Signature summary
 
 ```php
-function fsockopen(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed
+function fsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): mixed
 ```
 
 ## What the type checker enforces

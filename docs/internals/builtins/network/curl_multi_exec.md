@@ -27,7 +27,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function curl_multi_exec(CurlMultiHandle $multi_handle, int $still_running): int
+function curl_multi_exec(CurlMultiHandle $multi_handle, int &$still_running): int
 ```
 
 ## What the type checker enforces

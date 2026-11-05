@@ -37,7 +37,7 @@ description: "Compiler internals for ksort(): lowering path, type checks, and ru
 ## Signature summary
 
 ```php
-function ksort(array $array, int $flags = 0): bool
+function ksort(array &$array, int $flags = 0): bool
 ```
 
 ## What the type checker enforces

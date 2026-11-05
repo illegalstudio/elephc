@@ -82,6 +82,11 @@ pub(super) fn array(items: Vec<Expr>) -> Expr {
     e_array(items)
 }
 
+/// A PHP associative array literal.
+pub(super) fn assoc(entries: Vec<(Expr, Expr)>) -> Expr {
+    e_array_assoc(entries)
+}
+
 /// `$array[$index]`.
 pub(super) fn index(array: Expr, index: Expr) -> Expr {
     e_index(array, index)

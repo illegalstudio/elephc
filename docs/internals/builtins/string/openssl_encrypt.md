@@ -37,7 +37,7 @@ description: "Compiler internals for openssl_encrypt(): lowering path, type chec
 ## Signature summary
 
 ```php
-function openssl_encrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = '', int $tag_length = 16): mixed
+function openssl_encrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed &$tag = null, string $aad = '', int $tag_length = 16): mixed
 ```
 
 ## What the type checker enforces

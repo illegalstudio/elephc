@@ -37,7 +37,7 @@ description: "Compiler internals for rsort(): lowering path, type checks, and ru
 ## Signature summary
 
 ```php
-function rsort(array $array): bool
+function rsort(array &$array): bool
 ```
 
 ## What the type checker enforces

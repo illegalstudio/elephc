@@ -7,9 +7,10 @@
 //! - The codegen test harness through the same pipeline.
 //!
 //! Key details:
-//! - Injection is pay-for-use: a program that never names a `sodium_*` function or
-//!   `SodiumException` declares nothing, links no bridge and requires no native package.
-//!   `--with-sodium` forces the whole surface for opaque dynamic use.
+//! - Injection is pay-for-use: a program that never names a `sodium_*` function,
+//!   `password_*` function, `SODIUM_*`/`PASSWORD_*` constant or `SodiumException`
+//!   declares nothing, links no bridge and requires no native package. `--with-sodium`
+//!   forces the whole surface for opaque dynamic use.
 //! - Everything here is built with `crate::synthetic_class` nodes and the parser AST;
 //!   no PHP source text is parsed at compile time.
 //! - The bridge crosses the C boundary as hexadecimal text because Elephc's `char*`
@@ -18,7 +19,9 @@
 mod constants;
 mod detect;
 mod dsl;
+mod eval_wrappers;
 mod functions;
+mod password;
 mod spec;
 mod validators;
 
@@ -48,6 +51,8 @@ fn declarations() -> Vec<Stmt> {
     program.extend(validators::declarations());
     program.extend(functions::declarations());
     program.extend(functions::framing_helpers());
+    program.extend(eval_wrappers::declarations());
+    program.extend(password::declarations());
     program
 }
 
@@ -69,6 +74,13 @@ fn extern_declarations() -> Vec<Stmt> {
             .param("password", CType::Str)
             .param("salt", CType::Str)
             .param("length", CType::Int)
+            .param("opslimit", CType::Int)
+            .param("memlimit", CType::Int)
+            .param("algorithm", CType::Int)
+            .returns(CType::Str)
+            .build(),
+        extern_fn("elephc_sodium_pwhash_str_alg", "elephc_sodium")
+            .param("password", CType::Str)
             .param("opslimit", CType::Int)
             .param("memlimit", CType::Int)
             .param("algorithm", CType::Int)

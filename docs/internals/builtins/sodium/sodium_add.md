@@ -35,7 +35,7 @@ description: "Compiler internals for sodium_add(): lowering path, type checks, a
 ## Signature summary
 
 ```php
-function sodium_add(string $string1, string $string2): void
+function sodium_add(string &$string1, string $string2): void
 ```
 
 ## What the type checker enforces
@@ -45,7 +45,11 @@ function sodium_add(string $string1, string $string2): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `by-reference-or-lvalue`.
+- **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$string1`.
 
 ## Cross-references
 

@@ -6,7 +6,7 @@ description: "Open persistent Internet or Unix domain socket connection."
 ## pfsockopen()
 
 ```php
-function pfsockopen(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed
+function pfsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): mixed
 ```
 
 Open persistent Internet or Unix domain socket connection.

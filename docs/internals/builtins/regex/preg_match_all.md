@@ -37,7 +37,7 @@ description: "Compiler internals for preg_match_all(): lowering path, type check
 ## Signature summary
 
 ```php
-function preg_match_all(string $pattern, string $subject, mixed $matches = null, int $flags = 0): int|false
+function preg_match_all(string $pattern, string $subject, mixed &$matches = null, int $flags = 0): int|false
 ```
 
 ## What the type checker enforces
