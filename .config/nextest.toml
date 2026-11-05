@@ -26,6 +26,13 @@ threads-required = "num-test-threads"
 filter = 'binary(codegen_tests) and (test(=codegen::simplexml::projections::test_simplexml_large_repeated_projection_bundle) or test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle))'
 threads-required = "num-test-threads"
 
+# This AOT/eval GMP/XML pair reached its 360s deadline twice during x86_64
+# linking under shared workers. Keep both programs and reserve the existing pool.
+[[profile.ci.overrides]]
+platform = 'cfg(target_arch = "x86_64")'
+filter = 'binary(codegen_tests) and test(=codegen::simplexml::native_operators::test_simplexml_gmp_mixed_operator_dispatch_bundle)'
+threads-required = "num-test-threads"
+
 # These target probes hit 60s twice under concurrent x86_64 CI work. Preserve their
 # assertions and deadlines while reserving the pool for each catalog-sized probe.
 [[profile.ci.overrides]]
