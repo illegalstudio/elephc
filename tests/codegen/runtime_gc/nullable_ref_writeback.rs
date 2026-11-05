@@ -368,3 +368,27 @@ run();
     );
     assert_clean(out, "2149|678\n");
 }
+
+/// A declared `array<array<mixed>>` local accepts nested arrays with raw typed slots: the
+/// writeback widens each nested array into boxed cells instead of rejecting a value the
+/// declaration admits, and nothing leaks.
+#[test]
+fn test_nullable_array_reference_widens_nested_arrays_into_mixed() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Cell { public function __construct(public int $v) {} }
+function retype(?array &$a): void { $a = [[1, 2], ["x", "y"], [new Cell(5)]]; }
+function run(): void {
+    for ($i = 0; $i < 3; $i++) {
+        array<array<mixed>> $rows = [[1, "a"]];
+        retype($rows);
+        if ($i == 2) {
+            echo count($rows), $rows[0][0] + $rows[0][1], $rows[1][1], $rows[2][0]->v, "\n";
+        }
+    }
+}
+run();
+"#,
+    );
+    assert_clean(out, "33y5\n");
+}

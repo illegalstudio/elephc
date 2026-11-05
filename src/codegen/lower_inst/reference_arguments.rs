@@ -980,9 +980,10 @@ fn array_elements_need_writeback_guard(element: &PhpType) -> bool {
 /// (the local reads its properties at that class's offsets), and a nested array's own slots
 /// must have the nested element layout, checked recursively. Empty nested arrays fit every
 /// layout. A nested array whose slots are boxed Mixed cells (the callee built it from `mixed`
-/// reads) is converted into the nested layout like the outer array: the outer array is first
-/// separated from other owners (copy-on-write), then the converted copy replaces the nested
-/// array in its slot, and the same happens one level down.
+/// reads) is converted into the nested layout like the outer array, and a nested array with
+/// raw typed slots bound for an `array<mixed>` level is widened into boxed cells: the outer
+/// array is first separated from other owners (copy-on-write), then the converted copy
+/// replaces the nested array in its slot, and the same happens one level down.
 fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &PhpType) {
     let object_target = match element {
         PhpType::Object(class_name) => match writeback_class_target(ctx, class_name) {
@@ -998,8 +999,7 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
     let done = ctx.next_label("ref_writeback_elements_done");
     // A nested array may be replaced in its slot (converted here, or separated one level
     // down), so the outer array must not be shared with another owner first.
-    let nested_convertible = matches!(element, PhpType::Array(inner)
-        if inner.codegen_repr() != PhpType::Mixed);
+    let nested_convertible = matches!(element, PhpType::Array(_));
     if nested_convertible {
         if ctx.emitter.target.arch == Arch::X86_64 {
             ctx.emitter.instruction("mov rdi, rax");                            // pass the owned outer array to the COW splitter
@@ -1062,7 +1062,14 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                 ctx.emitter.instruction("and x9, x9, #0x7f");                   // isolate the value_type, dropping the COW bit
                 ctx.emitter.instruction(&format!("cmp x9, #{}", inner_tag));    // do the nested slots have the nested element layout?
                 ctx.emitter.instruction(&format!("b.eq {}", fits));             // yes: check what they hold
-                if nested_convertible {
+                if inner == PhpType::Mixed {
+                    ctx.emitter.instruction("mov x1, x9");                      // pass the nested slots' current tag to the widening helper
+                    ctx.emitter.instruction("bl __rt_array_to_mixed");          // widen the slot's nested array into boxed cells (consumes it)
+                    ctx.emitter.instruction("ldr x10, [sp]");                   // reload the (unique) outer array
+                    ctx.emitter.instruction("ldr x9, [sp, #8]");                // reload the element index
+                    ctx.emitter.instruction("add x10, x10, #24");               // skip the 24-byte array header to the slots
+                    ctx.emitter.instruction("str x0, [x10, x9, lsl #3]");       // the slot now owns the widened copy
+                } else if nested_convertible {
                     ctx.emitter.instruction(&format!("cmp x9, #{}", boxed_tag)); // are the nested slots boxed Mixed cells?
                     ctx.emitter.instruction(&format!("b.ne {}", fail));         // any other layout cannot be converted
                     ctx.emitter.instruction(&format!("mov x1, #{}", inner_tag)); // pass the nested element tag the local expects
@@ -1091,7 +1098,14 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                 ctx.emitter.instruction("and r11, 0x7f");                       // isolate the value_type, dropping the COW bit
                 ctx.emitter.instruction(&format!("cmp r11, {}", inner_tag));    // do the nested slots have the nested element layout?
                 ctx.emitter.instruction(&format!("je {}", fits));               // yes: check what they hold
-                if nested_convertible {
+                if inner == PhpType::Mixed {
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass the slot's nested array to the widening helper
+                    ctx.emitter.instruction("mov rsi, r11");                    // pass the nested slots' current tag
+                    ctx.emitter.instruction("call __rt_array_to_mixed");        // widen the slot's nested array into boxed cells (consumes it)
+                    ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");        // reload the (unique) outer array
+                    ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 8]");    // reload the element index
+                    ctx.emitter.instruction("mov QWORD PTR [r10 + 24 + rcx * 8], rax"); // the slot now owns the widened copy
+                } else if nested_convertible {
                     ctx.emitter.instruction(&format!("cmp r11, {}", boxed_tag)); // are the nested slots boxed Mixed cells?
                     ctx.emitter.instruction(&format!("jne {}", fail));          // any other layout cannot be converted
                     abi::emit_load_int_immediate(ctx.emitter, "rdi", inner_tag);
