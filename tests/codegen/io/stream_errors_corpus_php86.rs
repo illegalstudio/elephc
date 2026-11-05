@@ -88,6 +88,12 @@ fn test_stream_errors_corpus_php86() {
         }
     }
 
+    eprintln!(
+        "stream_errors 8.6 PHPT: {} passed, {} known gaps, {} harness skips",
+        passed.len(),
+        failed.len(),
+        HARNESS_SKIPS.len()
+    );
     assert_eq!(passed.len(), 8, "passing fixtures: {passed:?}");
     assert_eq!(failed.len(), 6, "known non-passing fixtures: {failed:?}");
 }
