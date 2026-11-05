@@ -149,6 +149,11 @@ continues.
   internal classes expose only their documented surface. The `__toString` adapter also
   makes both classes satisfy `Stringable`, unlike php-src's cast handlers. Runtime
   casts, cloning failures, and debug dumps still match PHP.
+- **Configuration and encoding parameter reflection.** The injected prelude declares
+  `$config` and `$encoding` as `mixed` so their public adapters can reproduce internal
+  Tidy's weak scalar coercion and exact `TypeError` ordering. Reflection therefore reports
+  `mixed` where php-src reports `array|string|null` and `?string`; ordinary calls and the
+  documented signatures are unchanged.
 - **`ob_tidyhandler` is callable.** PHP registers it only as an output-handler alias;
   elephc also declares it as a prelude function so `ob_start('ob_tidyhandler')` can
   resolve it. Calling it directly, and `function_exists('ob_tidyhandler')` returning

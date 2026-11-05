@@ -606,7 +606,7 @@ class tidy
     private static bool $__elephc_minting = false;
     private static int $__elephc_minted_handle = 0;
 
-    public function __construct(?string $filename = null, array|string|null $config = null, ?string $encoding = null, bool $useIncludePath = false)
+    public function __construct(?string $filename = null, mixed $config = null, mixed $encoding = null, bool $useIncludePath = false)
     {
         if (self::$__elephc_minting) {
             self::$__elephc_handles[spl_object_id($this)] = self::$__elephc_minted_handle;
@@ -719,7 +719,7 @@ class tidy
         return $_ok;
     }
 
-    public function parseFile(string $filename, array|string|null $config = null, ?string $encoding = null, bool $useIncludePath = false): bool
+    public function parseFile(string $filename, mixed $config = null, mixed $encoding = null, bool $useIncludePath = false): bool
     {
         $_contents = __elephc_tidy_read_file($filename, $useIncludePath, 'tidy::parseFile()', 'parse');
         if ($_contents === false) {
@@ -735,7 +735,7 @@ class tidy
         return true;
     }
 
-    public function parseString(string $string, array|string|null $config = null, ?string $encoding = null): bool
+    public function parseString(string $string, mixed $config = null, mixed $encoding = null): bool
     {
         if (strlen($string) > 4294967295) {
             throw new ValueError('tidy::parseString(): Argument #1 ($string) is too long');
@@ -750,12 +750,12 @@ class tidy
         return true;
     }
 
-    public static function repairString(string $string, array|string|null $config = null, ?string $encoding = null): string|false
+    public static function repairString(string $string, mixed $config = null, mixed $encoding = null): string|false
     {
         return __elephc_tidy_repair_string($string, $config, $encoding, 'tidy::repairString()');
     }
 
-    public static function repairFile(string $filename, array|string|null $config = null, ?string $encoding = null, bool $useIncludePath = false): string|false
+    public static function repairFile(string $filename, mixed $config = null, mixed $encoding = null, bool $useIncludePath = false): string|false
     {
         return __elephc_tidy_repair_file($filename, $config, $encoding, $useIncludePath, 'tidy::repairFile()');
     }
@@ -1035,7 +1035,7 @@ final class tidyNode
     }
 }
 
-function tidy_parse_string(string $string, array|string|null $config = null, ?string $encoding = null): mixed
+function tidy_parse_string(string $string, mixed $config = null, mixed $encoding = null): mixed
 {
     if (strlen($string) > 4294967295) {
         throw new ValueError('tidy_parse_string(): Argument #1 ($string) is too long');
@@ -1066,7 +1066,7 @@ function tidy_get_output(mixed $tidy): string
     return elephc_tidy_output(__elephc_tidy_document($tidy, 'tidy_get_output()')->__elephc_doc_handle());
 }
 
-function tidy_parse_file(string $filename, array|string|null $config = null, ?string $encoding = null, bool $useIncludePath = false): mixed
+function tidy_parse_file(string $filename, mixed $config = null, mixed $encoding = null, bool $useIncludePath = false): mixed
 {
     $_contents = __elephc_tidy_read_file($filename, $useIncludePath, 'tidy_parse_file()', 'parse');
     if ($_contents === false) {
@@ -1112,7 +1112,7 @@ function __elephc_tidy_repair_string(string $string, mixed $config, mixed $encod
     }
 }
 
-function tidy_repair_string(string $string, array|string|null $config = null, ?string $encoding = null): string|false
+function tidy_repair_string(string $string, mixed $config = null, mixed $encoding = null): string|false
 {
     return __elephc_tidy_repair_string($string, $config, $encoding, 'tidy_repair_string()');
 }
@@ -1138,7 +1138,7 @@ function __elephc_tidy_repair_file(string $filename, mixed $config, mixed $encod
     }
 }
 
-function tidy_repair_file(string $filename, array|string|null $config = null, ?string $encoding = null, bool $useIncludePath = false): string|false
+function tidy_repair_file(string $filename, mixed $config = null, mixed $encoding = null, bool $useIncludePath = false): string|false
 {
     return __elephc_tidy_repair_file($filename, $config, $encoding, $useIncludePath, 'tidy_repair_file()');
 }

@@ -24,8 +24,8 @@ pub(super) fn decl_class_tidy() -> Stmt {
         .method(
             method("__construct")
                 .param_default("filename", t_nullable(TypeExpr::Str), e_null())
-                .param_default("config", t_union(vec![t_array(), TypeExpr::Str, TypeExpr::Void]), e_null())
-                .param_default("encoding", t_nullable(TypeExpr::Str), e_null())
+                .param_default("config", t_mixed(), e_null())
+                .param_default("encoding", t_mixed(), e_null())
                 .param_default("useIncludePath", TypeExpr::Bool, e_bool(false))
                 .body(vec![
                     s_if(
@@ -211,8 +211,8 @@ pub(super) fn decl_class_tidy() -> Stmt {
         .method(
             method("parseFile")
                 .param("filename", TypeExpr::Str)
-                .param_default("config", t_union(vec![t_array(), TypeExpr::Str, TypeExpr::Void]), e_null())
-                .param_default("encoding", t_nullable(TypeExpr::Str), e_null())
+                .param_default("config", t_mixed(), e_null())
+                .param_default("encoding", t_mixed(), e_null())
                 .param_default("useIncludePath", TypeExpr::Bool, e_bool(false))
                 .returns(TypeExpr::Bool)
                 .body(vec![
@@ -248,8 +248,8 @@ pub(super) fn decl_class_tidy() -> Stmt {
         .method(
             method("parseString")
                 .param("string", TypeExpr::Str)
-                .param_default("config", t_union(vec![t_array(), TypeExpr::Str, TypeExpr::Void]), e_null())
-                .param_default("encoding", t_nullable(TypeExpr::Str), e_null())
+                .param_default("config", t_mixed(), e_null())
+                .param_default("encoding", t_mixed(), e_null())
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_if(
@@ -284,8 +284,8 @@ pub(super) fn decl_class_tidy() -> Stmt {
             method("repairString")
                 .static_()
                 .param("string", TypeExpr::Str)
-                .param_default("config", t_union(vec![t_array(), TypeExpr::Str, TypeExpr::Void]), e_null())
-                .param_default("encoding", t_nullable(TypeExpr::Str), e_null())
+                .param_default("config", t_mixed(), e_null())
+                .param_default("encoding", t_mixed(), e_null())
                 .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
                 .body(vec![
                     s_return(e_call("__elephc_tidy_repair_string", vec![e_var("string"), e_var("config"), e_var("encoding"), e_str("tidy::repairString()")])),
@@ -295,8 +295,8 @@ pub(super) fn decl_class_tidy() -> Stmt {
             method("repairFile")
                 .static_()
                 .param("filename", TypeExpr::Str)
-                .param_default("config", t_union(vec![t_array(), TypeExpr::Str, TypeExpr::Void]), e_null())
-                .param_default("encoding", t_nullable(TypeExpr::Str), e_null())
+                .param_default("config", t_mixed(), e_null())
+                .param_default("encoding", t_mixed(), e_null())
                 .param_default("useIncludePath", TypeExpr::Bool, e_bool(false))
                 .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
                 .body(vec![

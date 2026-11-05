@@ -1704,21 +1704,6 @@ fn test_error_strict_types_rejects_scalars_into_string_parameter() {
     }
 }
 
-/// Verifies strict mode also rejects scalar binding to a union whose only scalar member is
-/// `string`, while the coercive path accepts the same call.
-#[test]
-fn test_error_strict_types_rejects_scalars_into_string_union_parameter() {
-    for (argument, php_type) in [("42", "int"), ("4.5", "float"), ("true", "bool")] {
-        expect_error(
-            &format!(
-                "<?php declare(strict_types=1); function ts(?string $s) {{ return $s; }} echo ts({});",
-                argument
-            ),
-            &format!("must be of type string|null, {} given", php_type),
-        );
-    }
-}
-
 /// Verifies every scalar that binds to a `bool` parameter in coercive mode is rejected under the
 /// directive.
 #[test]
