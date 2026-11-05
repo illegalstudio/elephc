@@ -1571,7 +1571,7 @@ jobs:
           retention-days: 7
 
   codegen-tests-linux-x86_64:
-    name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
+    name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/32)
     needs: [plan, build-archive-linux-x86_64]
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
@@ -1584,7 +1584,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
     steps:
       - uses: actions/checkout@v7
 
@@ -1707,7 +1707,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
-            --partition hash:${{ matrix.shard }}/16 \
+            --partition hash:${{ matrix.shard }}/32 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 4
 
