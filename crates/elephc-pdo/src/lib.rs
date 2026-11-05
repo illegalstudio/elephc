@@ -858,7 +858,10 @@ fn open_persistent_dsn(
 ) -> i64 {
     let _checkout = lock_recover(persistent_checkout_lock());
     let pool_key = (dsn.to_string(), persistent_key.to_string());
-    if let Some(id) = lock_recover(persistent_conns()).get(&pool_key).copied() {
+    // Read the pooled id into a local first: an `if let` scrutinee keeps its MutexGuard
+    // alive for the whole block, and the eviction below locks the same pool again.
+    let pooled = lock_recover(persistent_conns()).get(&pool_key).copied();
+    if let Some(id) = pooled {
         if persistent_connection_is_live(id) {
             let mut owners = lock_recover(persistent_owner_counts());
             *owners.entry(id).or_insert(0) += 1;
