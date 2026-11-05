@@ -372,7 +372,7 @@ fn validate_deferred_default(
             return;
         }
     }
-    if matches!(default.kind, ExprKind::ScopedConstantAccess { .. }) {
+    if crate::types::deferred_defaults::default_value_depends_on_scoped_constant(default) {
         if let Err(error) = checker.validate_resolved_declared_default_type(
             expected_ty,
             Some(default),

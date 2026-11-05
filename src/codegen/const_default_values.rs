@@ -5,7 +5,8 @@
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::eval` default registration.
 //! - `crate::codegen::runtime_callable_invoker::defaults` descriptor invoker metadata.
-//! - Reflection property-default metadata folding.
+//! - Reflection property-default metadata folding and ReflectionClass constant metadata.
+//! - Static property initialization and runtime class-name retention for static defaults.
 //!
 //! Key details:
 //! - Resolution is PURE. Global constants come from `Module::global_constants`, which already
@@ -134,6 +135,20 @@ pub(in crate::codegen) fn resolve_enum_case_default(
         }
         _ => None,
     }
+}
+
+/// Resolves a scalar default whose evaluation reads enum singletons it then discards.
+///
+/// `E::A ? 1 : 2` folds to `1`, but PHP still materializes `E::A` first. Reflection keeps the
+/// ordered reads beside the scalar literal; defaults without such reads return `None`.
+pub(in crate::codegen) fn resolve_enum_read_scalar_default(
+    expr: &Expr, context: &ConstDefaultContext<'_>,
+) -> Option<(ExprKind, Vec<(String, String)>)> {
+    let value = resolve_const_default(expr, context)?;
+    let mut evaluated = Vec::new();
+    collect_enum_reads(&value, &mut evaluated);
+    if evaluated.is_empty() { return None; }
+    resolved_scalar_literal(without_enum_effects(value)).map(|literal| (literal, evaluated))
 }
 
 /// Records first singleton accesses in PHP order; later cached reads have no creation effects.

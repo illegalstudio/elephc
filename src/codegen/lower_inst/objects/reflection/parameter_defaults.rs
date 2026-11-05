@@ -119,7 +119,9 @@ pub(super) fn reflection_literal_parameter_default_non_object_value(
 pub(super) fn reflection_default_value_contains_object(value: &ReflectionParameterDefaultValue) -> bool {
     match value {
         ReflectionParameterDefaultValue::Object { .. }
-        | ReflectionParameterDefaultValue::EnumCase(_) => true,
+        | ReflectionParameterDefaultValue::EnumCase(_)
+        // Its singleton reads are object materialization, even when the result is scalar.
+        | ReflectionParameterDefaultValue::Evaluated { .. } => true,
         ReflectionParameterDefaultValue::Array(elements) => elements
             .iter()
             .any(reflection_default_value_contains_object),
@@ -239,6 +241,12 @@ pub(super) fn reflection_parameter_default_from_constant_value(
         ReflectionConstantValue::Str(value) => Some(ReflectionParameterDefaultValue::Str(value)),
         ReflectionConstantValue::Null => Some(ReflectionParameterDefaultValue::Null),
         ReflectionConstantValue::EnumCase { .. } => None,
+        ReflectionConstantValue::Evaluated { value, enum_cases } => {
+            Some(ReflectionParameterDefaultValue::Evaluated {
+                value: Box::new(reflection_parameter_default_from_constant_value(*value)?),
+                enum_cases,
+            })
+        }
         ReflectionConstantValue::Array(elements) => elements
             .into_iter()
             .map(reflection_parameter_default_from_constant_value)

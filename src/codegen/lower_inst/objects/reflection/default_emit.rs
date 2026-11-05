@@ -31,6 +31,12 @@ pub(super) fn emit_reflection_constant_value_as_mixed(
             crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(enum_name.clone()));
         }
+        ReflectionConstantValue::Evaluated { value, enum_cases } => {
+            for (enum_name, case_name) in enum_cases {
+                crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            }
+            emit_reflection_constant_value_as_mixed(ctx, value);
+        }
         ReflectionConstantValue::Array(elements) => {
             emit_reflection_constant_array_to_result(ctx, elements);
             emit_box_current_owned_value_as_mixed(
@@ -93,6 +99,12 @@ pub(super) fn emit_reflection_default_value_as_mixed(
                 crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
             }
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(value.enum_name.clone()));
+        }
+        ReflectionParameterDefaultValue::Evaluated { value, enum_cases } => {
+            for (enum_name, case_name) in enum_cases {
+                crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            }
+            emit_reflection_default_value_as_mixed(ctx, value);
         }
         ReflectionParameterDefaultValue::Int(value) => {
             emit_boxed_int_literal_to_result(ctx, *value)

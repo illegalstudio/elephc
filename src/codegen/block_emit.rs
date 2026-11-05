@@ -1204,8 +1204,15 @@ fn emit_static_property_default(
     let default = crate::parser::ast::Expr::new(expr.clone(), crate::span::Span::synthetic());
     let context = super::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name);
     let description = format!("static property {}::${}", class_name, property);
+    // A scalar folded from enum operands (`E::A ? 1 : 2`) still materializes those singletons.
+    let mut enum_reads = Vec::new();
     let value = if let Some(value) = super::const_default_values::resolve_enum_case_default(&default, &context) {
         super::literal_defaults::enum_case_default_value(&description, php_type, value, "static property initializer")?
+    } else if let Some((literal, reads)) =
+        super::const_default_values::resolve_enum_read_scalar_default(&default, &context)
+    {
+        enum_reads = reads;
+        literal_default_value(&description, php_type, &literal, "static property initializer")?
     } else {
         let resolved = super::const_default_values::resolve_const_default(&default, &context)
             .and_then(super::const_default_values::resolved_literal_default);
@@ -1215,6 +1222,11 @@ fn emit_static_property_default(
         "initialize static property {}::${}",
         class_name, property
     ));
+    for (enum_name, case_name) in &enum_reads {
+        crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+            ctx.emitter, ctx.module, enum_name, case_name,
+        );
+    }
     emit_static_property_default_value(ctx, class_name, property, php_type, &value)?;
     Ok(())
 }

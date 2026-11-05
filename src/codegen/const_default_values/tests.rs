@@ -141,3 +141,49 @@ fn numeric_defaults_remainder_overflow_on_all_targets() {
     }
     assert_arithmetic(BinOp::Mod, ExprKind::IntLiteral(1), ExprKind::IntLiteral(0), None);
 }
+
+/// Enum-dependent keys and offsets resolve and keep their reads in PHP evaluation order.
+#[test]
+fn enum_dependent_keys_and_offsets_retain_ordered_reads_on_all_targets() {
+    let expr = |kind| Expr::new(kind, Span::dummy());
+    let case = |name: &str| expr(ExprKind::ScopedConstantAccess {
+        receiver: StaticReceiver::Named("E".into()), name: name.into(),
+    });
+    let selector = |condition: &str, then_key: ExprKind, else_key: ExprKind| expr(ExprKind::Ternary {
+        condition: Box::new(case(condition)),
+        then_expr: Box::new(expr(then_key)),
+        else_expr: Box::new(expr(else_key)),
+    });
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let mut module = Module::new(Target::parse(target).unwrap());
+        module.enum_infos.insert("E".into(), crate::types::EnumInfo {
+            backing_type: None,
+            cases: ["A", "B", "C"].into_iter().map(|name| crate::types::EnumCaseInfo {
+                name: name.into(), value: None, attribute_names: Vec::new(), attribute_args: Vec::new(),
+            }).collect(),
+        });
+        let context = ConstDefaultContext { module: &module, current_class: None };
+        // [E::C ? 1 : 0] reads the list [E::A, E::B] first, then the offset's E::C.
+        let offset = expr(ExprKind::ArrayAccess {
+            array: Box::new(expr(ExprKind::ArrayLiteral(vec![case("A"), case("B")]))),
+            index: Box::new(selector("C", ExprKind::IntLiteral(1), ExprKind::IntLiteral(0))),
+        });
+        let selected = resolve_enum_case_default(&offset, &context).expect(target);
+        assert_eq!(selected.case_name, "B", "{target}");
+        let order = |reads: &[(String, String)]| reads.iter().map(|(_, case)| case.clone()).collect::<Vec<_>>();
+        // The selected case is reloaded last so the final load leaves it in the result register.
+        assert_eq!(order(&selected.evaluated), ["A", "B", "C", "B"], "{target}");
+        // Each key's reads precede its value's: [E::C ? 'x' : 'y' => E::A, E::B ? 'z' : 'w' => 5].
+        let keyed = expr(ExprKind::ArrayLiteralAssoc(vec![
+            (selector("C", ExprKind::StringLiteral("x".into()), ExprKind::StringLiteral("y".into())), case("A")),
+            (selector("B", ExprKind::StringLiteral("z".into()), ExprKind::StringLiteral("w".into())), expr(ExprKind::IntLiteral(5))),
+        ]));
+        let value = resolve_const_default(&keyed, &context).expect(target);
+        let mut reads = Vec::new();
+        collect_enum_reads(&value, &mut reads);
+        assert_eq!(order(&reads), ["C", "A", "B"], "{target}");
+        let ConstDefaultValue::Array(elements) = without_enum_effects(value) else { panic!("{target}") };
+        assert!(elements[0].key == Some(ConstDefaultArrayKey::String("x".into())), "{target}");
+        assert!(elements[1].key == Some(ConstDefaultArrayKey::String("z".into())), "{target}");
+    }
+}

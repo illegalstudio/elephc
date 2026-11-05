@@ -509,6 +509,11 @@ impl Checker {
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 self.infer_scoped_constant_access(receiver, name, default_expr)?
             }
+            // `K::ALL[0]` and `E::A ? E::B : E::C` select a constant's value; their syntactic
+            // type is the string guess for each scoped constant, not the selected value.
+            _ if crate::types::deferred_defaults::default_value_depends_on_scoped_constant(default_expr) => {
+                self.infer_type(default_expr, &TypeEnv::default())?
+            }
             _ => self.declaration_default_type(default_expr),
         };
         self.require_compatible_arg_type(expected_ty, &default_ty, span, context)
@@ -535,7 +540,7 @@ impl Checker {
         // through: a missing case or an incompatible scalar constant is still reported, just
         // from the pass that can tell the difference.
         if default_expr
-            .is_some_and(|default| matches!(default.kind, ExprKind::ScopedConstantAccess { .. }))
+            .is_some_and(crate::types::deferred_defaults::default_value_depends_on_scoped_constant)
         {
             return Ok(());
         }

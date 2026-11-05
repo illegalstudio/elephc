@@ -53,6 +53,7 @@ mod parameter_defaults;
 mod object_defaults;
 mod default_export;
 mod names_constants;
+mod constant_resolved;
 mod constant_arithmetic;
 mod constant_arrays;
 mod operand_extract;
@@ -280,6 +281,8 @@ enum ReflectionParameterDefaultValue {
     Str(String),
     Null,
     EnumCase(crate::codegen::const_default_values::EnumCaseDefault),
+    /// A scalar whose constant expression first reads these enum singletons, in PHP order.
+    Evaluated { value: Box<ReflectionParameterDefaultValue>, enum_cases: Vec<(String, String)> },
     DeferredError(String),
     EirHelper(String),
     Object {
@@ -348,6 +351,8 @@ enum ReflectionConstantValue {
         enum_name: String,
         case_name: String,
     },
+    /// A value whose constant expression first reads these enum singletons, in PHP order.
+    Evaluated { value: Box<ReflectionConstantValue>, enum_cases: Vec<(String, String)> },
     Array(Vec<ReflectionConstantValue>),
     AssocArray(Vec<ReflectionConstantAssocEntry>),
 }

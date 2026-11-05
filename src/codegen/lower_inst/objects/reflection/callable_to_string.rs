@@ -238,6 +238,7 @@ pub(super) fn reflection_dump_default_value(default: &ReflectionParameterDefault
     match default {
         ReflectionParameterDefaultValue::EnumCase(value) =>
             format!("{}::{}", reflection_dump_text(&value.enum_name), reflection_dump_text(&value.case_name)),
+        ReflectionParameterDefaultValue::Evaluated { value, .. } => reflection_dump_default_value(value),
         ReflectionParameterDefaultValue::Int(value) => value.to_string(),
         ReflectionParameterDefaultValue::Bool(value) => value.to_string(),
         ReflectionParameterDefaultValue::Float(value) => reflection_dump_float(*value),

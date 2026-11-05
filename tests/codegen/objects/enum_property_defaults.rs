@@ -197,3 +197,114 @@ var_dump($defaults["alias"] === Level::Low);');
 "#);
     assert_eq!(out, "bool(true)\n".repeat(8));
 }
+
+/// An enum-branch class constant initializes an instance slot through the EIR thunk.
+#[test]
+fn test_enum_property_defaults_review_branch_constant_instance_slot() {
+    let out = compile_and_run(r#"<?php
+enum T { case A; case B; case Untaken; }
+class C {
+    const DEFAULT = T::A ? T::B : T::Untaken;
+    public T $p = self::DEFAULT;
+    public T|int $u = self::DEFAULT;
+    public mixed $m = self::DEFAULT;
+}
+$c = new C();
+var_dump($c->p === T::B, $c->u === T::B, $c->m === T::B);
+function pick(bool $flag): T { $value = $flag ? T::B : T::Untaken; return $value; }
+var_dump(pick(true) === T::B, pick(false) === T::Untaken);
+"#);
+    assert_eq!(out, "bool(true)\n".repeat(5));
+}
+
+/// Enum-dependent offsets and keys keep their singleton reads and resolve in every slot.
+#[test]
+fn test_enum_property_defaults_review_enum_offsets_and_keys() {
+    let out = compile_and_run(r#"<?php
+enum E { case A; case B; }
+class K {
+    const ALL = [E::A, E::B];
+    const PICK = self::ALL[E::A ? 1 : 0];
+    const KEYED = [E::A ? 'x' : 'y' => E::B];
+}
+class Holder {
+    public E $i = K::PICK;
+    public E $k = K::KEYED['x'];
+    public static E $s = K::PICK;
+}
+$h = new Holder();
+var_dump($h->i === E::B, $h->k === E::B, Holder::$s === E::B);
+$defaults = (new ReflectionClass('Holder'))->getDefaultProperties();
+var_dump($defaults['i'] === E::B, $defaults['k'] === E::B, $defaults['s'] === E::B);
+"#);
+    assert_eq!(out, "bool(true)\n".repeat(6));
+}
+
+/// Projections and branches written directly on a property type-check as their selected case.
+#[test]
+fn test_enum_property_defaults_review_direct_projection_and_branch() {
+    let out = compile_and_run(r#"<?php
+enum E { case A; case B; }
+class Holder {
+    const ALL = [E::A, E::B];
+    public E $direct = Holder::ALL[0];
+    public E $branch = E::A ? E::B : E::A;
+    public static E $shared = self::ALL[1];
+    public static E $selected = E::A ? E::B : E::A;
+}
+$h = new Holder();
+var_dump($h->direct === E::A, $h->branch === E::B);
+var_dump(Holder::$shared === E::B, Holder::$selected === E::B);
+$defaults = (new ReflectionClass('Holder'))->getDefaultProperties();
+var_dump($defaults['direct'] === E::A, $defaults['branch'] === E::B);
+"#);
+    assert_eq!(out, "bool(true)\n".repeat(6));
+}
+
+/// A scalar selected by an enum condition is initialized and reflected in both slot kinds.
+#[test]
+fn test_enum_property_defaults_review_enum_condition_scalar() {
+    let out = compile_and_run(r#"<?php
+enum E { case A; case B; }
+class C { public int $n = E::A ? 1 : 2; public static int $s = E::A ? 3 : 4; public float $f = E::B ? 5 : 6; }
+var_dump((new C())->n, C::$s, (new C())->f);
+$defaults = (new ReflectionClass('C'))->getDefaultProperties();
+var_dump($defaults['n'], $defaults['s'], $defaults['f']);
+var_dump((new ReflectionProperty('C', 'n'))->getDefaultValue());
+"#);
+    assert_eq!(out, "int(1)\nint(3)\nfloat(5)\nint(1)\nint(3)\nfloat(5)\nint(1)\n");
+}
+
+/// A static enum default keeps its enum's runtime metadata when nothing else names the enum.
+#[test]
+fn test_enum_property_defaults_review_static_only_enum_metadata() {
+    let out = compile_and_run(r#"<?php
+enum E { case A; case B; }
+class H { public static E $s = E::B; public static int $n = E::A ? 1 : 2; }
+var_dump(H::$s);
+echo get_class(H::$s), "\n";
+"#);
+    assert_eq!(out, "enum(E::B)\nE\n");
+}
+
+/// ReflectionClass constant metadata folds projections, branches and coalescing like PHP.
+#[test]
+fn test_enum_property_defaults_review_reflection_constant_projections() {
+    let out = compile_and_run(r#"<?php
+enum E { case A; case B; }
+class K {
+    const ALL = [E::A, E::B];
+    const ZERO = self::ALL[0];
+    const PICK = self::ALL[E::A ? 1 : 0];
+    const FLAG = true ? 1 : 2;
+    const NAMES = ['x' => 'one', 'y' => 'two'];
+    const NAME = self::NAMES['y'] ?? 'none';
+    const BOTH = E::A && false;
+}
+$constants = (new ReflectionClass('K'))->getConstants();
+var_dump($constants['ZERO'] === E::A, $constants['PICK'] === E::B);
+var_dump($constants['FLAG'], $constants['NAME'], $constants['BOTH']);
+var_dump((new ReflectionClassConstant('K', 'PICK'))->getValue() === E::B);
+"#);
+    assert_eq!(out, "bool(true)\nbool(true)\nint(1)\nstring(3) \"two\"\nbool(false)\nbool(true)\n");
+}

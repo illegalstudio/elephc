@@ -865,7 +865,14 @@ registers an owned constant-fetch expression so reading a default preserves sing
 identity without constructing another enum object. Constant array projections and
 branch selectors retain evaluated enum reads in `ConstDefaultValue::Evaluated`, even
 when the selected value is scalar. Property metadata emits these reads in first-access
-order and reloads the selected case last. Eval represents multiple reads as an owned
+order and reloads the selected case last; enum reads inside array keys and offsets
+(`self::ALL[E::A ? 1 : 0]`) join the same ordered list. A scalar selected by an enum
+condition (`public int $n = E::A ? 1 : 2`) keeps its reads too, as
+`ReflectionParameterDefaultValue::Evaluated` and before a static slot's store.
+Static defaults are stored outside EIR, so `runtime_referenced_class_names` keeps
+every enum they read in the class-name tables. EIR merge temps type an enum case as
+its singleton object and a class constant as its declaration-scoped initializer, so
+`$flag ? E::A : E::B` lowers to an object merge rather than a string one. Eval represents multiple reads as an owned
 array expression followed by a final-element read. Compact callable-default codecs
 decline such trees rather than silently erase their observable materialization.
 
@@ -875,7 +882,13 @@ which is distinct from the pure `resolve_const_default` resolver in
 `src/codegen/const_default_values.rs`: the reflection folder returns the recursive
 `ReflectionConstantValue` metadata enum, while the pure resolver returns the
 target-neutral `ConstDefaultValue` consumed by eval-bridge default registration
-and descriptor invokers. The two are not interchangeable.
+and descriptor invokers. The two are not interchangeable: the reflection folder
+handles the forms below itself and hands every other expression (constant array
+offsets such as `self::ALL[0]`, ternary and short-ternary selectors, `??`, `!`,
+`~`, logical and bitwise operators) to the pure resolver, converting the result
+through `src/codegen/lower_inst/objects/reflection/constant_resolved.rs`. Enum
+reads that a selector or projection discards stay ordered in
+`ReflectionConstantValue::Evaluated` and are materialized before the value.
 
 Supported forms: scalar literals, `self::`/`parent::`/`ClassName::` scoped
 access with ancestry, global `const` references, `::class`, negation, the

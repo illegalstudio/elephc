@@ -24,6 +24,19 @@ fn test_enum_property_defaults_review_reject_wrong_enum_alias() {
     }
 }
 
+/// Deferred projections and branches over scoped constants still reject incompatible values.
+#[test]
+fn test_enum_property_defaults_review_reject_wrong_projection_and_branch() {
+    for default in ["Holder::INTS[0]", "E::A ? 1 : 2"] {
+        for modifier in ["", "static "] {
+            let source = format!("<?php enum E {{ case A; }}
+                class Holder {{ const INTS = [1, 2]; }}
+                class Config {{ public {modifier}E $value = {default}; }}");
+            expect_error(&source, "default expects E, got int");
+        }
+    }
+}
+
 /// Deferring private-shadow defaults still rejects missing cases and incompatible aliases.
 #[test]
 fn test_enum_property_defaults_reject_invalid_shadow_defaults() {
