@@ -123,3 +123,26 @@ $t = 0; for ($i = 0; $i < 100; $i++) { $t += lh($i); } echo $t, "\n";
     );
     assert_clean(out, "-66\n5350\n");
 }
+
+/// Loop exits and latches that join a `break`/`continue` edge carrying a string or an object
+/// against the body's end leave the heap clean across many calls.
+#[test]
+fn test_loop_jump_joins_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function firstLong(array $words) { $hit = null; foreach ($words as $w) { if (strlen($w) > 3) { $hit = $w . "!"; break; } } return $hit; }
+function tagAt(int $n) { $p = 0; for ($i = 0; $i < 4; $i++) { if ($i != $n) { continue; } $p = "p" . $i; } return $p; }
+function boxAt(int $n) { $o = null; $i = 0; while ($i < 3) { $i++; switch ($i) { case 2: if ($n > 0) { $o = new ArrayObject([$n]); break 2; } break; default: break; } } return $o; }
+$total = 0;
+for ($i = 0; $i < 100; $i++) {
+    $total += strlen((string) firstLong(["a", "bb", "word" . $i, "z"]));
+    $tag = tagAt($i % 5);
+    $total += is_string($tag) ? strlen($tag) : $tag;
+    $box = boxAt($i % 2);
+    $total += $box === null ? 0 : count($box);
+}
+echo $total, "\n";
+"#,
+    );
+    assert_clean(out, "900\n");
+}

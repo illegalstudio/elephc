@@ -151,23 +151,243 @@ pub(super) fn record_if_arm_exit(ctx: &mut LoweringContext<'_, '_>, arms: &mut V
     });
 }
 
-/// Defers a `break`/`continue` edge whose target is the exit of a `switch` being lowered.
+/// Defers a `break`/`continue` edge whose target is a join point being lowered.
 ///
-/// A `switch` exit is a join like an `if` merge: each `break` reaches it with the facts its own
-/// case left, so it records its edge for `lower_switch_bodies` to reconcile instead of branching
-/// straight to the exit. Returns `false` when `target` is no such exit; the caller then branches.
-pub(super) fn record_switch_exit_edge(ctx: &mut LoweringContext<'_, '_>, target: BlockId) -> bool {
+/// A `switch` exit, and the exit and latch of a loop whose body jumps, are joins like an `if`
+/// merge: each `break`/`continue` reaches them with the facts its own path left, so it records
+/// its edge for the join to reconcile instead of branching straight to the target. Returns
+/// `false` when `target` is no such join point; the caller then branches.
+pub(super) fn record_join_edge(ctx: &mut LoweringContext<'_, '_>, target: BlockId) -> bool {
     let Some(index) = ctx
-        .switch_exit_arms
+        .join_edge_arms
         .iter()
-        .rposition(|(exit, _)| *exit == target)
+        .rposition(|(join, _)| *join == target)
     else {
         return false;
     };
-    let mut arms = std::mem::take(&mut ctx.switch_exit_arms[index].1);
+    let mut arms = std::mem::take(&mut ctx.join_edge_arms[index].1);
     record_if_arm_exit(ctx, &mut arms);
-    ctx.switch_exit_arms[index].1 = arms;
+    ctx.join_edge_arms[index].1 = arms;
     true
+}
+
+/// Removes a join point registered by its owner and returns the edges recorded into it.
+pub(super) fn take_join_edges(ctx: &mut LoweringContext<'_, '_>, join: BlockId) -> Vec<IfArmExit> {
+    let index = ctx
+        .join_edge_arms
+        .iter()
+        .rposition(|(block, _)| *block == join)
+        .expect("a join point is taken by the construct that registered it");
+    ctx.join_edge_arms.remove(index).1
+}
+
+/// Describes the still-unterminated block `tail` as a pending join edge carrying the current facts.
+pub(super) fn pending_join_edge(ctx: &LoweringContext<'_, '_>, tail: BlockId) -> IfArmExit {
+    IfArmExit {
+        tail,
+        types: ctx.local_types_snapshot(),
+        initialized: ctx.initialized_slots_snapshot(),
+        static_callables: ctx.static_callable_locals_snapshot(),
+    }
+}
+
+/// Joins deferred edges into `merge` like the arms of an `if`, starting from the first edge's facts.
+///
+/// `finish_if_type_join` rewrites only the locals its arms disagree on and leaves every other
+/// local as the context holds it. After an `if` that is the last arm's facts, but a `switch` body
+/// or a loop exit is joined after other code was lowered, so the context may hold the facts of
+/// another path: a local the last `switch` label assigned (`case ($o = null) === null:`) would
+/// read as that label left it in an earlier body whose own edges all agree it still holds the
+/// object. Initialization is a must-fact: only slots initialized on every incoming edge are
+/// visible after the join. That intersection is restored after any type-join conversion stores.
+/// A join no edge reaches is unreachable and leaves the context's facts alone.
+pub(super) fn join_edges(
+    ctx: &mut LoweringContext<'_, '_>,
+    edges: Vec<IfArmExit>,
+    merge: BlockId,
+    span: Span,
+) {
+    let Some(first) = edges.first() else {
+        finish_if_type_join(ctx, edges, merge, span);
+        return;
+    };
+    ctx.restore_local_types(first.types.clone());
+    ctx.restore_initialized_slots(first.initialized.clone());
+    let mut initialized = first.initialized.clone();
+    for edge in edges.iter().skip(1) {
+        initialized.retain(|slot| edge.initialized.contains(slot));
+    }
+    finish_if_type_join(ctx, edges, merge, span);
+    ctx.restore_initialized_slots(initialized);
+}
+
+/// The join points of a loop whose body may `break` or `continue` it.
+///
+/// A loop body is lowered once, so the facts after it are those of the path lowered last, and
+/// a jump out of the middle of the body used to reach the exit (or the next iteration) with a
+/// local the facts no longer described: `$v = 1; foreach (…) { if ($c) { $v = 2.5; break; } }`
+/// read `$v` back as `int(2)` after the loop. A loop that may jump therefore gets two joins like
+/// an `if` merge, boxing a local whose incoming edges disagree on its representation:
+///
+/// - the latch, reached by the end of the body and by every `continue`, which then enters the
+///   next iteration (the `for` update or the `do while` condition is lowered from it);
+/// - the exit, reached by the loop's own exit edge and by every `break`, including `break N` from
+///   a nested loop or `switch`.
+///
+/// The loop's own exit edge leaves from the head, which the entry reaches as well as the latch,
+/// so its facts are NOT the latch facts on the path that never iterates: after
+/// `$o = new C; foreach ($xs as $x) { if (…) { break; } $o = null; }` the latch says `$o` is
+/// `null` while an empty `$xs` leaves the object. Nothing may be loaded through such a fact, so a
+/// local whose entry and latch facts disagree is retyped on that edge instead (`Mixed` storage,
+/// or the shared pointer word), exactly like `apply_null_entry_boxing`, and the join then needs
+/// no conversion that reads it.
+///
+/// A loop whose body cannot jump keeps its direct edges and lowers exactly as before.
+pub(super) struct LoopJumpJoins {
+    /// Block every `break` (and the loop's own exit edge) finally reaches.
+    exit: BlockId,
+    /// Empty block the loop's own exit edge targets, so that edge can be converted too.
+    natural_exit: BlockId,
+    /// Block every `continue` and the end of the body reach.
+    latch: BlockId,
+    /// Where the latch continues, or `None` when the latch is itself the next lowered block.
+    after_latch: Option<BlockId>,
+    /// Local facts on entry to the loop, which its own exit edge can still carry.
+    entry_types: TypeEnv,
+    /// Slots initialized on entry to the loop.
+    entry_initialized: HashSet<LocalSlotId>,
+}
+
+impl LoopJumpJoins {
+    /// Registers the exit and latch joins of a loop whose `body` may jump out of it.
+    ///
+    /// `continue_target` is where the next iteration starts. When `latch_is_target` is set, that
+    /// block is lowered after the body (`for` update, `do while` condition) and is the latch
+    /// itself; otherwise it was lowered before the body and a fresh latch branches to it.
+    pub(super) fn begin(
+        ctx: &mut LoweringContext<'_, '_>,
+        body: &[Stmt],
+        exit: BlockId,
+        continue_target: BlockId,
+        latch_is_target: bool,
+    ) -> Option<Self> {
+        if !crate::termination::block_may_jump_out_of_current_loop(body) {
+            return None;
+        }
+        let natural_exit = ctx.builder.create_named_block("loop.done", Vec::new());
+        let (latch, after_latch) = if latch_is_target {
+            (continue_target, None)
+        } else {
+            (
+                ctx.builder.create_named_block("loop.latch", Vec::new()),
+                Some(continue_target),
+            )
+        };
+        ctx.join_edge_arms.push((exit, Vec::new()));
+        ctx.join_edge_arms.push((latch, Vec::new()));
+        Some(Self {
+            exit,
+            natural_exit,
+            latch,
+            after_latch,
+            entry_types: ctx.local_types_snapshot(),
+            entry_initialized: ctx.initialized_slots_snapshot(),
+        })
+    }
+
+    /// Returns the block the loop's own exit edge targets.
+    pub(super) fn exit_target(joins: &Option<Self>, exit: BlockId) -> BlockId {
+        joins.as_ref().map_or(exit, |joins| joins.natural_exit)
+    }
+
+    /// Returns the block a `continue` of this loop targets.
+    pub(super) fn continue_target(joins: &Option<Self>, continue_target: BlockId) -> BlockId {
+        joins.as_ref().map_or(continue_target, |joins| joins.latch)
+    }
+
+    /// Ends the body: joins its fall-through end and every `continue` into the latch.
+    ///
+    /// The builder is left in the latch with the joined facts. A latch that is not itself the
+    /// next lowered block is terminated with the branch to the next iteration.
+    pub(super) fn finish_latch(&self, ctx: &mut LoweringContext<'_, '_>, span: Span) {
+        if !ctx.builder.insertion_block_is_terminated() {
+            record_join_edge(ctx, self.latch);
+        }
+        let edges = take_join_edges(ctx, self.latch);
+        join_edges(ctx, edges, self.latch, span);
+        ctx.builder.position_at_end(self.latch);
+        if let Some(target) = self.after_latch {
+            branch_to(ctx, target);
+        }
+    }
+
+    /// Joins the loop's own exit edge and every `break` into the exit and positions the builder
+    /// there. The own exit edge carries the current facts, which are what reaching the exit
+    /// without a jump implied before these joins existed.
+    pub(super) fn finish_exit(self, ctx: &mut LoweringContext<'_, '_>, span: Span) {
+        self.retype_entry_divergent_locals(ctx);
+        let mut edges = vec![pending_join_edge(ctx, self.natural_exit)];
+        edges.extend(take_join_edges(ctx, self.exit));
+        join_edges(ctx, edges, self.exit, span);
+        ctx.builder.position_at_end(self.exit);
+    }
+
+    /// Retypes, without reading them, the locals whose entry and latch facts disagree.
+    ///
+    /// The current facts are the latch's. A local both sides hold in an ordinary frame slot gets
+    /// the type every path can be read back through: the pointer word when both are `null` or a
+    /// pointer, the inline nullable int when one side already is one and the other an int or
+    /// `null`, otherwise `Mixed` for representations of different kinds. Widening the slot
+    /// makes the backend box every store into it, so the exit reads whatever each path left.
+    /// Arrays that differ only in layout keep the latch fact, which their storage contracts keep
+    /// valid, as do locals some path leaves uninitialized.
+    fn retype_entry_divergent_locals(&self, ctx: &mut LoweringContext<'_, '_>) {
+        let mut names = self.entry_types.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        for name in names {
+            let entry = &self.entry_types[&name];
+            let Some(latch) = ctx.local_type_fact(&name).cloned() else {
+                continue;
+            };
+            let (entry_repr, latch_repr) = (entry.codegen_repr(), latch.codegen_repr());
+            if entry_repr == latch_repr
+                || crate::names::is_generated_local_name(&name)
+                || !ctx.local_is_plain_frame_slot(&name)
+            {
+                continue;
+            }
+            let Some(slot) = ctx.local_slots.get(&name).copied() else {
+                continue;
+            };
+            if !self.entry_initialized.contains(&slot) || !ctx.slot_is_initialized(slot) {
+                continue;
+            }
+            if let Some(pointer) = join_pointer_arm_types(&[entry.clone(), latch.clone()]) {
+                ctx.set_local_type(&name, pointer);
+                continue;
+            }
+            // An inline nullable int already holds both an int and `null`: keep that slot.
+            let tagged_member =
+                |ty: &PhpType| matches!(ty, PhpType::Int | PhpType::Void | PhpType::TaggedScalar);
+            if tagged_member(&entry_repr) && tagged_member(&latch_repr) {
+                if let Some(tagged) = [entry, &latch]
+                    .into_iter()
+                    .find(|ty| ty.codegen_repr() == PhpType::TaggedScalar)
+                {
+                    ctx.set_local_type(&name, tagged.clone());
+                    continue;
+                }
+            }
+            let array_like =
+                |ty: &PhpType| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+            if (array_like(&entry_repr) && array_like(&latch_repr))
+                || std::mem::discriminant(&entry_repr) == std::mem::discriminant(&latch_repr)
+            {
+                continue;
+            }
+            ctx.set_local_type(&name, PhpType::Mixed);
+        }
+    }
 }
 
 /// Reconciles flow-sensitive types and indexed-array layouts on all incoming merge edges.

@@ -356,7 +356,7 @@ pub(super) fn lower_switch_bodies(
         iterator_cleanup: None,
         receiver_pin: None,
     });
-    ctx.switch_exit_arms.push((exit, Vec::new()));
+    ctx.join_edge_arms.push((exit, Vec::new()));
     let mut fallthrough = None;
     for index in 0..=cases.len() {
         if default.is_some() && default_index == index {
@@ -374,16 +374,13 @@ pub(super) fn lower_switch_bodies(
             fallthrough = leave_switch_body(ctx);
         }
     }
-    let (_, mut exit_edges) = ctx
-        .switch_exit_arms
-        .pop()
-        .expect("switch exit join pushed above");
+    let mut exit_edges = take_join_edges(ctx, exit);
     exit_edges.extend(fallthrough);
     if default.is_none() {
         exit_edges.extend(default_edge.take());
     }
     ctx.loop_stack.pop();
-    join_switch_edges(ctx, exit_edges, exit, span);
+    join_edges(ctx, exit_edges, exit, span);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
 }
@@ -409,36 +406,8 @@ fn enter_switch_body(
         return;
     }
     let body = ctx.builder.create_named_block("switch.body", Vec::new());
-    join_switch_edges(ctx, dispatch, body, span);
+    join_edges(ctx, dispatch, body, span);
     ctx.builder.position_at_end(body);
-}
-
-/// Joins switch edges into `merge` like the arms of an `if`, starting from the first edge's facts.
-///
-/// `finish_if_type_join` rewrites only the locals its arms disagree on and leaves every other
-/// local as the context holds it. After an `if` that is the last arm's facts, but a switch body
-/// is entered after the WHOLE dispatch was lowered, so the context holds the facts of the last
-/// label: a local the last label assigned (`case ($o = null) === null:`) would read as that
-/// label left it in an earlier body whose own edges all agree it still holds the object.
-/// Initialization is a must-fact: only slots initialized on every incoming edge are visible
-/// in the body or exit. Restore that intersection after any type-join conversion stores.
-fn join_switch_edges(
-    ctx: &mut LoweringContext<'_, '_>,
-    edges: Vec<IfArmExit>,
-    merge: BlockId,
-    span: Span,
-) {
-    let mut initialized = HashSet::new();
-    if let Some(first) = edges.first() {
-        ctx.restore_local_types(first.types.clone());
-        ctx.restore_initialized_slots(first.initialized.clone());
-        initialized = first.initialized.clone();
-        for edge in edges.iter().skip(1) {
-            initialized.retain(|slot| edge.initialized.contains(slot));
-        }
-    }
-    finish_if_type_join(ctx, edges, merge, span);
-    ctx.restore_initialized_slots(initialized);
 }
 
 /// Ends one switch body, deferring its fall-through edge when control can still leave it.

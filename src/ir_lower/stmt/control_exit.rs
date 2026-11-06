@@ -624,8 +624,9 @@ fn terminate_return_with_owner(
 
 /// Terminates with a branch after running active finally bodies from inner to outer.
 ///
-/// A branch to the exit of a `switch` being lowered is deferred instead (see
-/// `record_switch_exit_edge`), so the exit can join the facts of every `break` that reaches it.
+/// A branch to a join point being lowered (a `switch` exit, or the exit or latch of a loop whose
+/// body jumps) is deferred instead (see `record_join_edge`), so the join can reconcile the facts
+/// of every `break`/`continue` that reaches it.
 pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId, loop_cleanup_count: usize) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
@@ -647,7 +648,7 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
     ctx.taken_finally_exceptions = saved_taken;
     ctx.exit_cleaned_loops = saved_cleaned;
-    if record_switch_exit_edge(ctx, target) {
+    if record_join_edge(ctx, target) {
         return;
     }
     ctx.builder.terminate(Terminator::Br {

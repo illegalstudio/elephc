@@ -611,3 +611,35 @@ echo $r, "\n";
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A `break` or `continue` that leaves a loop body early reaches the exit (or the next
+/// iteration) with the facts of its own path. The exit used to keep the facts of the body's end,
+/// so a value stored right before the jump was read back through the other path's view: `$v = 1;
+/// foreach (…) { if (…) { $v = 2.5; break; } }` printed `int(2)`, and a `switch` that `break 2`s
+/// out of the loop printed `float(1)` for the path that kept the int. Covers `while`, `do while`,
+/// `for` and `foreach`, `break 2` from a nested loop and from a `switch`, and `continue 2`.
+#[test]
+fn test_loop_exit_and_latch_join_break_and_continue_edges() {
+    let out = compile_and_run(
+        r#"<?php
+function ifBreak(int $n) { $v = 1; foreach ([1, 2] as $_) { if ($n == 1) { $v = 2.5; break; } } return $v; }
+function nestedBreak(int $n) { $v = 1; foreach ([1] as $_) { foreach ([1] as $_b) { if ($n == 1) { $v = 2.5; break 2; } } } return $v; }
+function switchBreak(int $k) { $v = 1; foreach ([1] as $_) { switch ($k) { case 1: $v = 2.5; break 2; default: break; } } return $v; }
+function switchStrBreak(string $k) { $v = 1; foreach ([1] as $_) { switch ($k) { case "a": $v = 2.5; break 2; default: break; } } return $v; }
+function switchContinue(int $k) { $v = 1; $i = 0; while ($i++ < 1) { switch ($k) { case 1: $v = 2.5; continue 2; default: break; } } return $v; }
+function whileBreak(int $n) { $v = null; $i = 0; while ($i < 3) { $i++; if ($i == $n) { $v = "hit" . $i; break; } } return $v; }
+function forContinue(int $n) { $v = null; for ($i = 0; $i < 3; $i++) { if ($i != $n) { continue; } $v = $i * 10; } return $v; }
+function doBreak(int $n) { $v = false; do { if ($n > 0) { $v = $n; break; } } while (false); return $v; }
+function forBreakCount(int $n) { $hits = 0; for ($i = 0; $i < 5; $i++) { if ($i == $n) { break; } $hits++; } return $hits; }
+var_dump(ifBreak(1), ifBreak(0), nestedBreak(1), switchBreak(1), switchBreak(2));
+var_dump(switchStrBreak("a"), switchContinue(1), switchContinue(2));
+var_dump(whileBreak(2), whileBreak(9), forContinue(1), forContinue(7), doBreak(4), doBreak(0), forBreakCount(3));
+"#,
+    );
+    assert_eq!(
+        out,
+        "float(2.5)\nint(1)\nfloat(2.5)\nfloat(2.5)\nint(1)\n\
+         float(2.5)\nfloat(2.5)\nint(1)\n\
+         string(4) \"hit2\"\nNULL\nint(10)\nNULL\nint(4)\nbool(false)\nint(3)\n"
+    );
+}

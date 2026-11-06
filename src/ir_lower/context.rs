@@ -201,7 +201,7 @@ pub(crate) struct LoweringSnapshot {
     initialized_slots: HashSet<LocalSlotId>,
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
-    switch_exit_arms: Vec<(BlockId, Vec<IfArmExit>)>,
+    join_edge_arms: Vec<(BlockId, Vec<IfArmExit>)>,
     loop_carried_missing_strings: Vec<HashSet<String>>,
     finally_stack: Vec<FinallyFrame>,
     try_loop_depths: Vec<usize>,
@@ -418,9 +418,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
-    /// The `break`/`continue` edges into each enclosing `switch` exit, innermost last, keyed by
-    /// that exit block, so the exit joins every edge's facts instead of the last case's.
-    pub(crate) switch_exit_arms: Vec<(BlockId, Vec<IfArmExit>)>,
+    /// The deferred `break`/`continue` edges into each enclosing join point, innermost last,
+    /// keyed by the join block: a `switch` exit, and the exit and latch of a loop whose body
+    /// jumps (see `stmt::conditionals::LoopJumpJoins`). Each join reconciles every edge's facts
+    /// instead of keeping whichever path was lowered last.
+    pub(crate) join_edge_arms: Vec<(BlockId, Vec<IfArmExit>)>,
     /// Locals each enclosing loop assigns a value that may still be the missing-string
     /// sentinel. A cast inside the loop must see those stores even when they are lowered
     /// later in the body, because the back-edge runs them before the next iteration.
@@ -652,7 +654,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
-            switch_exit_arms: Vec::new(),
+            join_edge_arms: Vec::new(),
             loop_carried_missing_strings: Vec::new(),
             finally_stack: Vec::new(),
             try_loop_depths: Vec::new(),
@@ -733,7 +735,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             initialized_slots: self.initialized_slots.clone(),
             constants: self.constants.clone(),
             loop_stack: self.loop_stack.clone(),
-            switch_exit_arms: self.switch_exit_arms.clone(),
+            join_edge_arms: self.join_edge_arms.clone(),
             loop_carried_missing_strings: self.loop_carried_missing_strings.clone(),
             finally_stack: self.finally_stack.clone(),
             try_loop_depths: self.try_loop_depths.clone(),
@@ -844,7 +846,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots = snapshot.initialized_slots;
         self.constants = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
-        self.switch_exit_arms = snapshot.switch_exit_arms;
+        self.join_edge_arms = snapshot.join_edge_arms;
         self.loop_carried_missing_strings = snapshot.loop_carried_missing_strings;
         self.finally_stack = snapshot.finally_stack;
         self.try_loop_depths = snapshot.try_loop_depths;
