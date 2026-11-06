@@ -69,6 +69,7 @@ extern "elephc_pdo" {
     function elephc_pdo_rollback(int $conn): int;
     function elephc_pdo_errcode(int $conn): int;
     function elephc_pdo_errmsg(int $conn): string;
+    // $emulated: 0 native prepare, 1 emulated (PDO placeholders), 2 MySQL raw text (mysqli).
     function elephc_pdo_prepare(int $conn, string $sql, int $emulated): int;
     function elephc_pdo_bind_parameter_index(int $stmt, string $name): int;
     function elephc_pdo_bind_int(int $stmt, int $idx, int $val): int;

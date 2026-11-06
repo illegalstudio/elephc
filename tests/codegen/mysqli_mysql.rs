@@ -1726,6 +1726,30 @@ echo "|", $db->affected_rows, "|", $db->info, "\n";
     assert_eq!(out, "true|2|Rows matched: 2  Changed: 2  Warnings: 0|3|Rows matched: 3  Changed: 3  Warnings: 0\n");
 }
 
+/// mysqli sends query text exactly as written: `?` and `:name` are not PDO placeholders, so
+/// a malformed `SELECT :a, ?` is the server's syntax error (1064) for both a sync and an async
+/// query, the async reap gives the client back to the link, and a literal '?' is just data.
+/// Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_query_text_is_sent_without_placeholder_parsing() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("SELECT :a, ?", MYSQLI_ASYNC);
+$read = [$db];
+$error = [];
+$reject = [];
+mysqli_poll($read, $error, $reject, 5);
+echo var_export($db->reap_async_query(), true), ":", $db->errno;
+echo "|", $db->query("SELECT 5")->fetch_row()[0];
+echo "|", var_export($db->query("SELECT :a, ?"), true), ":", $db->errno;
+echo "|", $db->query("SELECT '?' AS q")->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "false:1064|5|false:1064|?\n");
+}
+
 /// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
 /// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
 /// the set is unread, and the statistics count one unbuffered set. Expected output is

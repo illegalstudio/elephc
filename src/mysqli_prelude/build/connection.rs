@@ -3154,13 +3154,13 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_not(e_var("unbuffered")),
                         vec![
-                            s_return(e_call("elephc_pdo_prepare", vec![e_this_prop("conn"), e_var("query"), e_int(1)])),
+                            s_return(e_call("elephc_pdo_prepare", vec![e_this_prop("conn"), e_var("query"), e_int(2)])),
                         ],
                         vec![],
                         None,
                     ),
                     s_expr(e_call("elephc_pdo_set_buffered_query", vec![e_this_prop("conn"), e_int(0)])),
-                    s_assign("_stmt", e_call("elephc_pdo_prepare", vec![e_this_prop("conn"), e_var("query"), e_int(1)])),
+                    s_assign("_stmt", e_call("elephc_pdo_prepare", vec![e_this_prop("conn"), e_var("query"), e_int(2)])),
                     s_expr(e_call("elephc_pdo_set_buffered_query", vec![e_this_prop("conn"), e_int(1)])),
                     s_return(e_var("_stmt")),
                 ]),

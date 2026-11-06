@@ -3780,7 +3780,8 @@ pub unsafe extern "C" fn elephc_pdo_prepare(
                     None => Err(()),
                 },
                 Some(Conn::Mysql(c)) => match cstr_arg(sql) {
-                    Some(s) => match c.prepare(s, emulated != 0) {
+                    // `emulated == 2`: mysqli's raw text query, sent without placeholder parsing.
+                    Some(s) => match if emulated == 2 { c.prepare_text(s) } else { c.prepare(s, emulated != 0) } {
                         Ok(mut st) => {
                             st.conn_id = conn_id;
                             Ok(Stmt::Mysql(st))

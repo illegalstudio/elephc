@@ -2026,11 +2026,13 @@ class mysqli {
     // (unbuffered) mode when $unbuffered: the connection's buffering default is
     // flipped only around the prepare, which snapshots it.
     private function prepareText(string $query, bool $unbuffered): int {
+        // Mode 2: the query text reaches the server exactly as written, like mysqlnd
+        // (no PDO placeholder parsing of `?` / `:name`).
         if (!$unbuffered) {
-            return elephc_pdo_prepare($this->conn, $query, 1);
+            return elephc_pdo_prepare($this->conn, $query, 2);
         }
         elephc_pdo_set_buffered_query($this->conn, 0);
-        $_stmt = elephc_pdo_prepare($this->conn, $query, 1);
+        $_stmt = elephc_pdo_prepare($this->conn, $query, 2);
         elephc_pdo_set_buffered_query($this->conn, 1);
         return $_stmt;
     }

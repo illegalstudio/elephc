@@ -401,6 +401,9 @@ pub struct MyStmt {
     /// The error that interrupted reading the active buffered set's rows, reported by
     /// `step()` once the rows read before it are consumed.
     pending_row_error: Option<mysql::Error>,
+    /// A mysqli text query (`MyConn::prepare_text`): its SQL is sent exactly as written, with
+    /// no placeholder interpolation.
+    raw_text: bool,
     /// Current 0-based row index; `-1` before the first `step()`.
     cursor: isize,
     /// Whether the query has been executed yet.
@@ -2803,9 +2806,19 @@ impl MyConn {
         responses: mpsc::Receiver<MyStreamResponse>,
         worker: JoinHandle<()>,
     ) -> Result<MyStmt, ()> {
-        // Built before the stream is installed: an emulated prepare runs no command, and
+        // Built before the stream is installed: a raw text statement runs no command and
+        // parses no placeholders (the server already answered the query as written), and
         // the busy guard must not see the stream this statement is about to own.
-        let mut stmt = self.prepare(sql, true).map_err(|_| ())?;
+        let mut stmt = match self.prepare_text(sql) {
+            Ok(stmt) => stmt,
+            Err(_) => {
+                // Never strand the worker-owned client: take the stream over and finish it.
+                if self.activate_stream(commands, responses, worker).is_ok() {
+                    self.finish_active_stream();
+                }
+                return Err(());
+            }
+        };
         let (stream_id, rowset) = self.activate_stream(commands, responses, worker).map_err(|_| ())?;
         stmt.buffered = false;
         stmt.stream_id = Some(stream_id);
@@ -3038,6 +3051,19 @@ impl MyConn {
     /// how many placeholders the statement has. This is the only place the flag can
     /// be read: `translate_placeholders` is a free function with no connection.
     pub fn prepare(&mut self, sql: &str, emulated: bool) -> Result<MyStmt, String> {
+        self.prepare_inner(sql, emulated, false)
+    }
+
+    /// Builds a text statement that sends `sql` exactly as written, without PDO placeholder
+    /// parsing: mysqli's `query()` / `real_query()` / `multi_query()` and an async reap, where
+    /// `?` and `:name` reach the server untouched (and a misuse is the server's syntax error).
+    pub fn prepare_text(&mut self, sql: &str) -> Result<MyStmt, String> {
+        self.prepare_inner(sql, true, true)
+    }
+
+    /// Shared body of [`MyConn::prepare`] and [`MyConn::prepare_text`]; `raw` skips the
+    /// placeholder translation and implies the emulated (text-protocol) path.
+    fn prepare_inner(&mut self, sql: &str, emulated: bool, raw: bool) -> Result<MyStmt, String> {
         if !self.ensure_not_busy() {
             return Err(self.errmsg.clone());
         }
@@ -3048,8 +3074,11 @@ impl MyConn {
             self.errmsg = "Multiple statements are disabled for this connection".to_string();
             return Err(self.errmsg.clone());
         }
-        let (translated, named_map, order, mixed) =
-            translate_placeholders(sql, no_backslash_escape);
+        let (translated, named_map, order, mixed) = if raw {
+            (sql.to_string(), HashMap::new(), Vec::new(), false)
+        } else {
+            translate_placeholders(sql, no_backslash_escape)
+        };
         if mixed {
             // Nonzero native code like every other error path here, and `1`
             // specifically to match pg's identical HY093 branch (`pg.rs`,
@@ -3087,6 +3116,7 @@ impl MyConn {
                 remaining_rowsets: Vec::new(),
                 trailing_error: None,
                 pending_row_error: None,
+                raw_text: raw,
                 cursor: -1,
                 executed: false,
                 is_call: sql_is_call_statement(sql),
@@ -3162,6 +3192,7 @@ impl MyConn {
                     remaining_rowsets: Vec::new(),
                     trailing_error: None,
                     pending_row_error: None,
+                    raw_text: false,
                     cursor: -1,
                     executed: false,
                     is_call: sql_is_call_statement(sql),
@@ -3941,22 +3972,23 @@ impl MyStmt {
             conn.errmsg = "Invalid parameter number: number of bound variables does not match number of tokens".to_string();
             return Err(-1);
         }
-        let values = self.build_values();
-        let national = self.build_national_flags();
-        let sql = match interpolate_emulated_sql(
-            self.emulated_sql
-                .as_deref()
-                .expect("emulated MySQL statement missing SQL"),
-            &values,
-            &national,
-            self.no_backslash_escape,
-        ) {
-            Ok(sql) => sql,
-            Err(message) => {
-                conn.sqlstate = "HY093".to_string();
-                conn.errcode = 1;
-                conn.errmsg = message;
-                return Err(-1);
+        let emulated_sql = self
+            .emulated_sql
+            .as_deref()
+            .expect("emulated MySQL statement missing SQL");
+        let sql = if self.raw_text {
+            emulated_sql.to_string()
+        } else {
+            let values = self.build_values();
+            let national = self.build_national_flags();
+            match interpolate_emulated_sql(emulated_sql, &values, &national, self.no_backslash_escape) {
+                Ok(sql) => sql,
+                Err(message) => {
+                    conn.sqlstate = "HY093".to_string();
+                    conn.errcode = 1;
+                    conn.errmsg = message;
+                    return Err(-1);
+                }
             }
         };
         self.sent_sql = sql.clone();
