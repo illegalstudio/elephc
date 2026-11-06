@@ -231,6 +231,7 @@ fn emit_array_intersect_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r11, [r10 + 24]");                                 // compute the first array payload base
     emitter.instruction("mov r8, QWORD PTR [r11 + rcx * 8]");                   // load the candidate boxed Mixed cell
     emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // save the candidate for the result append
+    emitter.instruction("mov rax, r8");                                         // pass the box in the string-cast result register
     emitter.instruction("mov rdi, r8");                                         // pass the candidate box to the string cast
     emitter.instruction("call __rt_mixed_cast_string");                         // render the candidate as PHP would for array_intersect
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the borrowed or owned candidate text pointer
@@ -248,6 +249,7 @@ fn emit_array_intersect_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_array_isect_mixed_after_inner_x86");          // stop scanning once no element can match
     emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // reload the second array payload base
     emitter.instruction("mov r8, QWORD PTR [r10 + r9 * 8]");                    // load the current second-array boxed cell
+    emitter.instruction("mov rax, r8");                                         // pass the box in the string-cast result register
     emitter.instruction("mov rdi, r8");                                         // pass the second box to the string cast
     emitter.instruction("call __rt_mixed_cast_string");                         // render the second value by its PHP string form
     emitter.instruction("mov QWORD PTR [rbp - 88], rax");                       // save the second text pointer across the comparison
@@ -312,6 +314,7 @@ fn emit_array_intersect_mixed_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r11, [r10 + 24]");                                 // compute the first array payload base
     emitter.instruction("mov r8, QWORD PTR [r11 + rcx * 8]");                   // load the candidate boxed Mixed cell
     emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // save the candidate for the result append
+    emitter.instruction("mov rax, r8");                                         // pass the box in the string-cast result register
     emitter.instruction("mov rdi, r8");                                         // pass the candidate box to the string cast
     emitter.instruction("call __rt_mixed_cast_string");                         // render the candidate as PHP would for array_intersect
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the borrowed or owned candidate text pointer
@@ -360,4 +363,30 @@ fn emit_array_intersect_mixed_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // release the mixed/string intersect stack frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the result array in rax
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Pins the x86_64 string-cast input register on all three call sites.
+    ///
+    /// `__rt_mixed_cast_string` unboxes from the integer result register (`rax`) on x86_64.
+    /// The intersect loops overwrite `rax` with the previous string pointer, so each cast must
+    /// publish its box there first; passing only the documented `rdi` argument unboxes a string
+    /// pointer as a Mixed cell and answers empty strings or crashes.
+    #[test]
+    fn x86_intersect_helpers_publish_the_box_to_the_string_cast() {
+        let mut emitter = Emitter::new(Target::parse("linux-x86_64").unwrap());
+        emit_array_intersect_mixed(&mut emitter);
+        emit_array_intersect_mixed_str(&mut emitter);
+        let asm = emitter.output();
+        assert_eq!(
+            asm.matches("mov rax, r8\n    mov rdi, r8\n    call __rt_mixed_cast_string")
+                .count(),
+            3,
+            "{asm}"
+        );
+    }
 }

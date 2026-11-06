@@ -166,7 +166,6 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while mixed string casting uses nested helpers
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the helper
-    emitter.instruction("mov rax, rdi");                                        // move the documented boxed-mixed input into the unbox register
     emitter.instruction("call __rt_mixed_unbox");                               // rax=tag, rdi=value_lo, rdx=value_hi for the boxed payload
     emitter.instruction("cmp rax, 0");                                          // does the mixed payload hold an int?
     emitter.instruction("je __rt_mixed_cast_string_from_int");                  // ints cast through itoa
@@ -283,23 +282,6 @@ mod tests {
         let mut emitter = Emitter::new(target);
         emit_mixed_cast_string(&mut emitter);
         emitter.output()
-    }
-
-    /// Pins the x86_64 prologue to the documented `rdi` box input.
-    ///
-    /// `__rt_mixed_unbox` reads its cell from `rax` on x86_64. Callers pass the box in `rdi`
-    /// (the string ABI), so the cast must move it before unboxing. Without this move a caller
-    /// whose `rax` still held the previous result (our intersect helpers) unboxed a string
-    /// pointer as a cell, which answered empty strings or crashed.
-    #[test]
-    fn test_mixed_cast_string_x86_64_reads_the_documented_box_input() {
-        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
-        assert!(
-            asm.contains(
-                "__rt_mixed_cast_string:\n    push rbp\n    mov rbp, rsp\n    mov rax, rdi\n    call __rt_mixed_unbox"
-            ),
-            "{asm}"
-        );
     }
 
     /// Pins the AArch64 tag-9 arm: a boxed resource must reach
