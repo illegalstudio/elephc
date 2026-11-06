@@ -11,9 +11,9 @@
 //!   boxed Mixed cells; `__rt_array_intersect_mixed_str` scans a boxed first array
 //!   against a 16-byte string second array. Both preserve first-array order and
 //!   retain each matched box for the result.
-//! - `__rt_mixed_cast_string` owns its string result for string and object tags and
-//!   returns shared scratch for scalars, so `__rt_heap_free` releases exactly the
-//!   allocations and ignores the borrowed values, as its contract already does.
+//! - `__rt_mixed_cast_string` may hand back the boxed value's live string or shared
+//!   scratch; the intersect helpers compare it and never release it, matching the
+//!   existing assoc set-operation contract.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -75,17 +75,11 @@ pub fn emit_array_intersect_mixed(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x8, x9, lsl #3]");                           // load the current second-array boxed cell
     emitter.instruction("mov x0, x10");                                         // pass the second box to the string cast
     emitter.instruction("bl __rt_mixed_cast_string");                           // render the second value by its PHP string form
-    emitter.instruction("str x1, [sp, #80]");                                   // save the second text pointer across the comparison
-    emitter.instruction("str x2, [sp, #88]");                                   // save the second text length across the comparison
     emitter.instruction("mov x3, x1");                                          // move the second text pointer into the equality argument
     emitter.instruction("mov x4, x2");                                          // move the second text length into the equality argument
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload the candidate text pointer
     emitter.instruction("ldr x2, [sp, #48]");                                   // reload the candidate text length
     emitter.instruction("bl __rt_str_eq");                                      // compare the two string renderings by value
-    emitter.instruction("str x0, [sp, #96]");                                   // save the equality result across the release
-    emitter.instruction("ldr x0, [sp, #80]");                                   // reload the second text pointer for release
-    emitter.instruction("bl __rt_heap_free");                                   // release only a cast string that owns heap bytes
-    emitter.instruction("ldr x0, [sp, #96]");                                   // reload the equality result
     emitter.instruction("cbnz x0, __rt_array_isect_mixed_match");               // append the candidate once a value matches
 
     emitter.label("__rt_array_isect_mixed_next_inner");
@@ -101,8 +95,6 @@ pub fn emit_array_intersect_mixed(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // persist the result pointer after possible growth
 
     emitter.label("__rt_array_isect_mixed_after_inner");
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the candidate text pointer for release
-    emitter.instruction("bl __rt_heap_free");                                   // release only a cast string that owns heap bytes
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload the outer scan index
     emitter.instruction("add x4, x4, #1");                                      // advance to the next first-array slot
     emitter.instruction("str x4, [sp, #24]");                                   // persist the outer scan index
@@ -192,8 +184,6 @@ pub fn emit_array_intersect_mixed_str(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // persist the result pointer after possible growth
 
     emitter.label("__rt_array_isect_mixed_str_after_inner");
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the candidate text pointer for release
-    emitter.instruction("bl __rt_heap_free");                                   // release only a cast string that owns heap bytes
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload the outer scan index
     emitter.instruction("add x4, x4, #1");                                      // advance to the next first-array slot
     emitter.instruction("str x4, [sp, #24]");                                   // persist the outer scan index
@@ -252,17 +242,11 @@ fn emit_array_intersect_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r8");                                         // pass the box in the string-cast result register
     emitter.instruction("mov rdi, r8");                                         // pass the second box to the string cast
     emitter.instruction("call __rt_mixed_cast_string");                         // render the second value by its PHP string form
-    emitter.instruction("mov QWORD PTR [rbp - 88], rax");                       // save the second text pointer across the comparison
-    emitter.instruction("mov QWORD PTR [rbp - 96], rdx");                       // save the second text length across the comparison
+    emitter.instruction("mov rcx, rdx");                                        // move the second text length into the equality argument
     emitter.instruction("mov rdx, rax");                                        // move the second text pointer into the equality argument
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 96]");                       // move the second text length into the equality argument
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the candidate text pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // reload the candidate text length
     emitter.instruction("call __rt_str_eq");                                    // compare the two string renderings by value
-    emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // save the equality result across the release
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 88]");                       // reload the second text pointer for release
-    emitter.instruction("call __rt_heap_free");                                 // release only a cast string that owns heap bytes
-    emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // reload the equality result
     emitter.instruction("test rax, rax");                                       // did the two values match?
     emitter.instruction("jne __rt_array_isect_mixed_match_x86");                // append the candidate once a value matches
 
@@ -277,8 +261,6 @@ fn emit_array_intersect_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // persist the result pointer after possible growth
 
     emitter.label("__rt_array_isect_mixed_after_inner_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the candidate text pointer for release
-    emitter.instruction("call __rt_heap_free");                                 // release only a cast string that owns heap bytes
     emitter.instruction("add QWORD PTR [rbp - 32], 1");                         // advance to the next first-array slot
     emitter.instruction("jmp __rt_array_isect_mixed_outer_x86");                // continue scanning the first array
 
@@ -353,8 +335,6 @@ fn emit_array_intersect_mixed_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // persist the result pointer after possible growth
 
     emitter.label("__rt_array_isect_mixed_str_after_inner_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the candidate text pointer for release
-    emitter.instruction("call __rt_heap_free");                                 // release only a cast string that owns heap bytes
     emitter.instruction("add QWORD PTR [rbp - 32], 1");                         // advance to the next first-array slot
     emitter.instruction("jmp __rt_array_isect_mixed_str_outer_x86");            // continue scanning the first array
 
