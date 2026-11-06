@@ -530,8 +530,19 @@ pub(super) fn emit_ref_arg_cell_block(
     temp_cells: &mut [RefArgTempCell],
 ) -> Result<()> {
     let writeback_bytes = writebacks.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
-    let total_bytes = writeback_bytes + temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
+    let cell_bytes = writeback_bytes + temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
+    let guard = ref_writebacks_need_result_guard(writebacks);
+    let total_bytes = cell_bytes + if guard { CALL_ARG_TEMP_CLEANUP_BYTES } else { 0 };
     abi::emit_reserve_temporary_stack(ctx.emitter, total_bytes);
+    if guard {
+        // The result guard is linked first, so it sits beneath every cell record: the
+        // writebacks retire theirs innermost first and the guard is detached last.
+        let scratch = abi::tertiary_scratch_reg(ctx.emitter);
+        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+        abi::emit_store_to_sp(ctx.emitter, scratch, cell_bytes);
+        abi::emit_temporary_stack_address(ctx.emitter, scratch, cell_bytes);
+        abi::emit_link_call_operand_owner_at_stack(ctx.emitter, scratch, false, cell_bytes + 16);
+    }
     for (index, writeback) in writebacks.iter_mut().enumerate() {
         // A managed Mixed reference cell holding the boxed value: the callee may capture the
         // reference in a closure that outlives the call (`__rt_reference_cell_owner` then
@@ -733,6 +744,47 @@ pub(super) fn emit_ref_arg_writebacks(
     ctx: &mut FunctionContext<'_>,
     call_args: &CallArgMaterialization,
 ) -> Result<()> {
+    emit_ref_arg_writebacks_guarding_result(ctx, call_args, None)
+}
+
+/// Whether a call's writebacks can release a previous heap value, whose destructor may throw:
+/// such a call reserves a result guard beneath its cell records (see
+/// [`emit_ref_arg_writebacks_guarding_result`]).
+fn ref_writebacks_need_result_guard(writebacks: &[RefArgWriteback]) -> bool {
+    writebacks.iter().any(|writeback| {
+        matches!(
+            writeback.source_ty.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+        )
+    })
+}
+
+/// [`emit_ref_arg_writebacks`] for a call whose result is already stored: an owned heap
+/// result is published in the call's result guard while the writebacks run, so a destructor
+/// that throws when a writeback releases the previous value unwinds the result too (it is
+/// not yet in the caller's own result slot).
+pub(super) fn emit_ref_arg_writebacks_guarding_result(
+    ctx: &mut FunctionContext<'_>,
+    call_args: &CallArgMaterialization,
+    result: Option<ValueId>,
+) -> Result<()> {
+    let cell_bytes = call_args.ref_writebacks.len() * CALL_ARG_TEMP_CLEANUP_BYTES
+        + call_args.ref_temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
+    let guard = ref_writebacks_need_result_guard(&call_args.ref_writebacks);
+    if guard {
+        if let Some(result) = result {
+            let guarded = ctx.value_ownership(result)? == Ownership::Owned
+                && matches!(
+                    ctx.value_php_type(result)?.codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Mixed
+                );
+            if guarded {
+                let reg = abi::int_result_reg(ctx.emitter);
+                ctx.load_value_to_reg(result, reg)?;
+                abi::emit_store_to_sp(ctx.emitter, reg, cell_bytes);
+            }
+        }
+    }
     for cell in call_args.ref_temp_cells.iter().rev() {
         abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, cell.cell_offset + 16);
         abi::emit_load_temporary_stack_slot(
@@ -777,8 +829,12 @@ pub(super) fn emit_ref_arg_writebacks(
         abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
         ctx.emitter.label(&released);
     }
-    let block_bytes = call_args.ref_writebacks.len() * CALL_ARG_TEMP_CLEANUP_BYTES
-        + call_args.ref_temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
+    let mut block_bytes = cell_bytes;
+    if guard {
+        // Every writeback is done: the result is the caller's again.
+        abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, cell_bytes + 16);
+        block_bytes += CALL_ARG_TEMP_CLEANUP_BYTES;
+    }
     abi::emit_release_temporary_stack(ctx.emitter, block_bytes);
     for cell in call_args.preleased_ref_cells.iter().rev() {
         abi::emit_pop_call_operand_owner(ctx.emitter);

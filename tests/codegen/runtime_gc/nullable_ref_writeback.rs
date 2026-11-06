@@ -596,3 +596,36 @@ run();
     );
     assert_clean(out, "2:1|caught:2|caught:12\n");
 }
+
+/// A call whose writeback releases a previous object with a throwing destructor still owns the
+/// value it returned: the result guard unwinds it (function, method and `mixed` returns), so
+/// nothing leaks although the caller never stores it. Output matches php 8.5, where the
+/// destructor already throws inside the callee.
+#[test]
+fn test_declared_reference_writeback_throw_releases_the_call_result() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {
+    public function __construct(public int $id) {}
+    public function __destruct() { if ($this->id === 1) { throw new RuntimeException("d"); } }
+}
+class R { public array $items = [1, 2]; }
+class M { public function swap(?C &$c): R { $c = new C(2); return new R(); } }
+function replace(?C &$c): R { $c = new C(2); return new R(); }
+function replaceMixed(?array &$a): mixed { $a = [new C(2)]; return [new R()]; }
+function run(): void {
+    C $x = new C(1);
+    try { $r = replace($x); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $x->id; }
+    echo "|";
+    C $y = new C(1);
+    try { $r = (new M())->swap($y); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $y->id; }
+    echo "|";
+    array<C> $arr = [new C(1)];
+    try { $m = replaceMixed($arr); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $arr[0]->id; }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "caught:2|caught:2|caught:2\n");
+}
