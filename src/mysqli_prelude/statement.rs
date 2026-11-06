@@ -62,9 +62,8 @@ class mysqli_stmt {
     // bind_result(): a closure that writes one fetched row into the bound
     // variables (captured by reference).
     private ?Closure $resultWriter = null;
-    // send_long_data() chunks, one slot per parameter (0-based), plus whether
-    // the slot received any chunk since the last execute().
-    private array $longData = [];
+    // Whether each parameter (0-based) received a send_long_data() chunk since the
+    // last execute(): the chunks are already on the server (COM_STMT_SEND_LONG_DATA).
     private array $longDataSent = [];
 
     // Cursor state: execute() pre-steps once; fetch()/get_result()/store_result()
@@ -290,14 +289,14 @@ class mysqli_stmt {
                 $_value = $_values[$_i];
                 $_char = substr($this->bindTypes, $_i, 1);
                 if ($_char === "b") {
-                    // mysqlnd sends a "b" parameter only through send_long_data();
-                    // a NULL variable stays NULL, anything else without chunks is "".
+                    // mysqlnd sends a "b" parameter only through send_long_data() (the
+                    // execution leaves a sent one's value out); a NULL variable stays NULL,
+                    // anything else without chunks is "".
                     $_sent = (bool) $this->longDataSent[$_i];
                     if ($_value === null && !$_sent) {
                         elephc_pdo_bind_null($this->stmt, $_i + 1);
                     } else {
-                        $_blob = (string) $this->longData[$_i];
-                        elephc_pdo_bind_blob($this->stmt, $_i + 1, $_blob, strlen($_blob));
+                        elephc_pdo_bind_blob($this->stmt, $_i + 1, "", 0);
                     }
                 } elseif ($_value === null) {
                     elephc_pdo_bind_null($this->stmt, $_i + 1);
@@ -632,10 +631,21 @@ class mysqli_stmt {
         if ($_link !== null && $_link->__elephcBusyFor($this->stmt)) {
             return false;
         }
-        // Chunks accumulate until the next execute() sends them as one value.
-        $this->longData[$param_num] = ((string) $this->longData[$param_num]) . $data;
-        $this->longDataSent[$param_num] = true;
+        // Each chunk goes to the server at once (COM_STMT_SEND_LONG_DATA, no response);
+        // a lost connection fails without mysqli_report(), like mysqlnd.
+        $_rc = elephc_pdo_mysql_send_long_data($this->stmt, $param_num, $data, strlen($data));
+        if ($_rc == 0) {
+            return false;
+        }
         $this->linkBump("com_stmt_send_long_data");
+        if ($_rc < 0) {
+            $this->adoptBridgeError();
+            if ($_link !== null) {
+                $_link->__elephcAdoptBridgeError();
+            }
+            return false;
+        }
+        $this->longDataSent[$param_num] = true;
         return true;
     }
 
@@ -913,13 +923,10 @@ class mysqli_stmt {
 
     // Resets every parameter's long-data slot to "no chunk sent".
     private function clearLongData(): void {
-        $_data = [];
         $_sent = [];
         for ($_i = 0; $_i < $this->param_count; $_i++) {
-            $_data[] = "";
             $_sent[] = false;
         }
-        $this->longData = $_data;
         $this->longDataSent = $_sent;
     }
 

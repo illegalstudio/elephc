@@ -180,8 +180,10 @@ while ($sel->fetch()) {            // writes the row into $id / $userName
   values and every `fetch()` writes the row back into the result variables.
   The `i` / `d` / `s` / `b` type characters are validated, and the counts throw
   php's `ArgumentCountError`s.
-- A `b` parameter is sent through `send_long_data()` chunks (collected until
-  the next `execute()`); without chunks it sends an empty string, like mysqlnd.
+- A `b` parameter is sent through `send_long_data()` chunks: each one goes to the
+  server at once (`COM_STMT_SEND_LONG_DATA`) and the next `execute()` leaves that
+  value out of `COM_STMT_EXECUTE`; without chunks it sends an empty string (or
+  NULL for a NULL variable), like mysqlnd.
 - `execute(?array $params = null)` optionally binds an array per execution
   (every element as a string, `null` as SQL NULL); a non-list array or a wrong
   element count throws php's `ValueError`.

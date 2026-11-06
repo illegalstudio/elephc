@@ -4623,6 +4623,38 @@ pub extern "C" fn elephc_pdo_mysql_execute(stmt_id: i64) -> i64 {
     })
 }
 
+/// mysqli_stmt::send_long_data(): sends one chunk (`data`, `len` bytes) of parameter `index`
+/// (0-based) as `COM_STMT_SEND_LONG_DATA` (see `MyStmt::send_long_data`). `1` when sent, `0`
+/// when the link is not ready, `-1` on failure (the error is the connection's) or for a
+/// non-MySQL or unknown handle.
+///
+/// # Safety
+/// `data` must point to `len` readable bytes (or be null when `len` is 0).
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_mysql_send_long_data(
+    stmt_id: i64,
+    index: i64,
+    data: *const c_char,
+    len: i64,
+) -> i64 {
+    // SAFETY: the caller passes a live buffer of `len` bytes (the PHP string payload).
+    let bytes = bytes_arg(data, len);
+    ffi_guard(-1, || {
+        let mut sguard = lock_recover(stmts());
+        match sguard.get_mut(&stmt_id) {
+            Some(Stmt::Mysql(s)) => {
+                let conn_id = s.conn_id;
+                let mut cguard = lock_recover(conns());
+                match cguard.get_mut(&conn_id) {
+                    Some(Conn::Mysql(c)) => instr_io::timed(|| s.send_long_data(c, index, &bytes)),
+                    _ => -1,
+                }
+            }
+            _ => -1,
+        }
+    })
+}
+
 /// mysqli_stmt::reset(): resets the statement locally and sends `COM_STMT_RESET` (see
 /// `MyStmt::server_reset`). `1` on success, `-1` on failure (the error is the connection's) or
 /// for a non-MySQL or unknown handle.

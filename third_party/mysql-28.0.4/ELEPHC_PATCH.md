@@ -21,6 +21,11 @@ workspace `Cargo.toml`, with these additions in `src/conn/mod.rs` (marked `eleph
   `MYSQLI_CURSOR_TYPE_READ_ONLY` statements).
 - `Conn::stmt_reset(stmt_id)`: `COM_STMT_RESET` with its OK packet (mysqli's
   `mysqli_stmt::reset()`).
+- `Conn::stmt_send_long_data(stmt_id, param_index, data)`: one `COM_STMT_SEND_LONG_DATA`
+  chunk sent immediately (mysqli's `mysqli_stmt::send_long_data()`); the connection remembers
+  the parameters per statement (`ConnInner::long_data_params`, cleared by execution, reset and
+  close), and the next `COM_STMT_EXECUTE` (`write_execute_with_long_data`) types them
+  `MYSQL_TYPE_LONG_BLOB`, not null, without a value, like mysqlnd.
 - mysqlnd-exact wire statistics: `IO_STAT_NAMES`, `IoCounters`, the per-command response
   state machine that picks the mysqlnd packet reader of each received packet, and the
   `CountedStream` wrapper that counts raw received bytes.

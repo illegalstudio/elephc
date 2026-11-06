@@ -10,7 +10,7 @@ use bytes::{Buf, BufMut};
 #[cfg(feature = "binlog")]
 use mysql_common::packets::binlog_request::BinlogRequest;
 use mysql_common::{
-    constants::UTF8MB4_GENERAL_CI,
+    constants::{ColumnType, UTF8MB4_GENERAL_CI},
     crypto,
     io::{ParseBuf, ReadMysqlExt},
     named_params::ParsedNamedParams,
@@ -667,6 +667,10 @@ struct ConnInner {
     io_counters: Arc<IoCounters>,
     /// elephc patch: the mysqlnd packet reader the next received packet goes through.
     response_state: ResponseState,
+    /// elephc patch: per prepared statement id, the parameters that received
+    /// `COM_STMT_SEND_LONG_DATA` since its last execution, whose values the next
+    /// `COM_STMT_EXECUTE` leaves out (the server already holds them).
+    long_data_params: std::collections::HashMap<u32, Vec<bool>>,
 }
 
 impl ConnInner {
@@ -691,6 +695,7 @@ impl ConnInner {
             reset_upon_return: opts.get_pool_opts().reset_connection(),
             io_counters: Arc::new(IoCounters::default()),
             response_state: ResponseState::Greeting,
+            long_data_params: std::collections::HashMap::new(),
 
             opts,
         }
@@ -1574,6 +1579,11 @@ impl Conn {
             )));
         }
 
+        if let Some(sent) = self.0.long_data_params.remove(&stmt.id()) {
+            self.write_execute_with_long_data(stmt.id(), &params, &sent, 0)?;
+            return self.handle_result_set();
+        }
+
         let (exec_request, as_long_data) =
             ComStmtExecuteRequestBuilder::new(stmt.id()).build(&params);
 
@@ -1604,6 +1614,11 @@ impl Conn {
                 stmt.num_params(),
                 params.len(),
             )));
+        }
+
+        if let Some(sent) = self.0.long_data_params.remove(&stmt.id()) {
+            self.write_execute_with_long_data(stmt.id(), &params, &sent, cursor_type)?;
+            return self.handle_result_set_reading_cursor(cursor_type != 0);
         }
 
         let (exec_request, as_long_data) =
@@ -1676,10 +1691,84 @@ impl Conn {
         Ok((rows, exhausted))
     }
 
+    /// elephc patch: [`COM_STMT_SEND_LONG_DATA`](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_send_long_data.html):
+    /// sends one chunk of parameter `param_index` of statement `stmt_id` right away (the server
+    /// sends no response), like mysqlnd's `mysqli_stmt::send_long_data()`, and remembers it so
+    /// the statement's next execution leaves that parameter's value out.
+    pub fn stmt_send_long_data(&mut self, stmt_id: u32, param_index: u16, data: &[u8]) -> Result<()> {
+        let cmd = ComStmtSendLongData::new(stmt_id, param_index, Cow::Borrowed(data));
+        self.write_command_raw(&cmd)?;
+        let sent = self.0.long_data_params.entry(stmt_id).or_default();
+        let index = usize::from(param_index);
+        if sent.len() <= index {
+            sent.resize(index + 1, false);
+        }
+        sent[index] = true;
+        Ok(())
+    }
+
+    /// elephc patch: writes a `COM_STMT_EXECUTE` whose parameters flagged in `sent` (long data
+    /// already on the server) are typed `MYSQL_TYPE_LONG_BLOB`, not null, and carry no value,
+    /// like mysqlnd's request for parameters sent with `send_long_data()`. Every other parameter
+    /// is encoded as the upstream request builder does.
+    fn write_execute_with_long_data(
+        &mut self,
+        stmt_id: u32,
+        params: &[Value],
+        sent: &[bool],
+        cursor_type: u8,
+    ) -> Result<()> {
+        let is_sent = |index: usize| sent.get(index).copied().unwrap_or(false);
+        let mut buf = get_buffer();
+        let out = buf.as_mut();
+        out.put_u8(Command::COM_STMT_EXECUTE as u8);
+        out.put_u32_le(stmt_id);
+        out.put_u8(cursor_type);
+        out.put_u32_le(1);
+        if !params.is_empty() {
+            let mut bitmap = vec![0_u8; params.len().div_ceil(8)];
+            for (index, param) in params.iter().enumerate() {
+                if !is_sent(index) && matches!(param, Value::NULL) {
+                    bitmap[index / 8] |= 1 << (index % 8);
+                }
+            }
+            out.extend_from_slice(&bitmap);
+            out.put_u8(1);
+            for (index, param) in params.iter().enumerate() {
+                let (column_type, unsigned) = if is_sent(index) {
+                    (ColumnType::MYSQL_TYPE_LONG_BLOB, false)
+                } else {
+                    match param {
+                        Value::NULL => (ColumnType::MYSQL_TYPE_NULL, false),
+                        Value::Bytes(_) => (ColumnType::MYSQL_TYPE_VAR_STRING, false),
+                        Value::Int(_) => (ColumnType::MYSQL_TYPE_LONGLONG, false),
+                        Value::UInt(_) => (ColumnType::MYSQL_TYPE_LONGLONG, true),
+                        Value::Float(_) => (ColumnType::MYSQL_TYPE_FLOAT, false),
+                        Value::Double(_) => (ColumnType::MYSQL_TYPE_DOUBLE, false),
+                        Value::Date(..) => (ColumnType::MYSQL_TYPE_DATETIME, false),
+                        Value::Time(..) => (ColumnType::MYSQL_TYPE_TIME, false),
+                    }
+                };
+                out.put_slice(&[column_type as u8, if unsigned { 0x80 } else { 0 }]);
+            }
+            for (index, param) in params.iter().enumerate() {
+                if !is_sent(index) && !matches!(param, Value::NULL) {
+                    param.serialize(&mut *out);
+                }
+            }
+        }
+        self.reset_seq_id();
+        self.0.last_command = buf[0];
+        self.begin_command(buf[0]);
+        self.write_packet(&mut &*buf)
+    }
+
     /// elephc patch: [`COM_STMT_RESET`](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_reset.html):
     /// resets the server-side state of statement `stmt_id` (long data, an open cursor) and
     /// reads its OK packet, like mysqlnd's `mysqli_stmt::reset()`.
     pub fn stmt_reset(&mut self, stmt_id: u32) -> Result<()> {
+        // The server forgets the statement's long data too.
+        self.0.long_data_params.remove(&stmt_id);
         self.write_command(Command::COM_STMT_RESET, &stmt_id.to_le_bytes())?;
         self.drop_packet()
     }
@@ -2096,6 +2185,7 @@ impl Queryable for Conn {
 
     fn close(&mut self, stmt: Statement) -> Result<()> {
         self.0.stmt_cache.remove(stmt.id());
+        self.0.long_data_params.remove(&stmt.id());
         let cmd = ComStmtClose::new(stmt.id());
         self.write_command_raw(&cmd)
     }

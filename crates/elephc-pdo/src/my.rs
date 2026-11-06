@@ -1166,9 +1166,11 @@ fn sql_is_call_statement(sql: &str) -> bool {
 
 /// Whether a mysqli text statement can return several result sets while multi-statements are
 /// off: a `CALL`, or an `EXECUTE` (of an SQL-level prepared `CALL`), behind any leading
-/// whitespace and comments, including inside a MySQL `/*!` / `/*!NNNNN` or MariaDB `/*M!`
-/// executable comment, whose body the server runs as SQL. Such a statement streams so that
-/// `query()` buffers only its first set (mysqlnd's `store_result()`).
+/// whitespace and inert comments. A leading MySQL `/*!` / `/*!NNNNN` or MariaDB `/*M!`
+/// executable comment answers `true` conservatively: whether its body runs depends on the
+/// server version, and what follows it may be the statement. Such a statement streams so that
+/// `query()` buffers only its first set (mysqlnd's `store_result()`); streaming a single-set
+/// statement is still correct.
 fn sql_may_return_several_sets(sql: &str) -> bool {
     let bytes = sql.as_bytes();
     let len = bytes.len();
@@ -1181,18 +1183,8 @@ fn sql_may_return_several_sets(sql: &str) -> bool {
         if let Some(end) = scan_my_comment(bytes, i) {
             i = end;
         }
-        let marker = if bytes[i..].starts_with(b"/*!") {
-            3
-        } else if bytes[i..].starts_with(b"/*M!") {
-            4
-        } else {
-            0
-        };
-        if marker > 0 {
-            i += marker;
-            while i < len && bytes[i].is_ascii_digit() {
-                i += 1;
-            }
+        if bytes[i..].starts_with(b"/*!") || bytes[i..].starts_with(b"/*M!") {
+            return true;
         }
         if i == start {
             break;
@@ -3647,6 +3639,30 @@ impl MyStmt {
         1
     }
 
+    /// mysqli_stmt::send_long_data(): sends one `COM_STMT_SEND_LONG_DATA` chunk of parameter
+    /// `index` (0-based) right away, like mysqlnd; the connection remembers it so the next
+    /// execution leaves that value out. `1` when sent, `0` without traffic when the link is not
+    /// ready (an unbuffered or async result owns the client, or the statement is not native),
+    /// `-1` with the connection's error recorded when the command fails.
+    pub fn send_long_data(&mut self, conn: &mut MyConn, index: i64, data: &[u8]) -> i64 {
+        let Some(statement) = self.statement.as_ref() else {
+            return 0;
+        };
+        let Ok(index) = u16::try_from(index) else {
+            return 0;
+        };
+        if conn.unbuffered_active || conn.conn.0.is_none() {
+            return 0;
+        }
+        match conn.conn.stmt_send_long_data(statement.id(), index, data) {
+            Ok(()) => 1,
+            Err(error) => {
+                conn.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
     /// mysqli_stmt::reset(): the local [`MyStmt::reset`] (which finishes this statement's own
     /// unread stream), then `COM_STMT_RESET` for a native statement. `1` on success, `-1`
     /// with the connection's error recorded when the command fails (a lost connection).
@@ -4535,10 +4551,10 @@ mod tests {
         assert_eq!(ColKind::from_column(&varchar_utf8mb4), ColKind::Other);
     }
 
-    /// `sql_may_return_several_sets` finds `CALL` and `EXECUTE` behind whitespace, inert
-    /// comments and MySQL / MariaDB executable comments (with or without a version), and
-    /// nothing else: an identifier that merely starts with the keyword, a keyword inside an
-    /// inert comment, and an ordinary statement inside an executable comment are rejected.
+    /// `sql_may_return_several_sets` finds `CALL` and `EXECUTE` behind whitespace and inert
+    /// comments, answers `true` for any leading MySQL / MariaDB executable comment (active or
+    /// not, empty or not), and nothing else: an identifier that merely starts with the keyword
+    /// and a keyword inside an inert comment are rejected.
     #[test]
     fn sql_may_return_several_sets_sees_through_executable_comments() {
         assert!(sql_may_return_several_sets("CALL p()"));
@@ -4552,7 +4568,9 @@ mod tests {
         assert!(!sql_may_return_several_sets("CALLBACK()"));
         assert!(!sql_may_return_several_sets("EXECUTED()"));
         assert!(!sql_may_return_several_sets("/* CALL p() */ SELECT 1"));
-        assert!(!sql_may_return_several_sets("/*!50000 SELECT 1 */"));
+        assert!(sql_may_return_several_sets("/*! */ CALL p()"));
+        assert!(sql_may_return_several_sets("/*!99999 SELECT 1 */ CALL p()"));
+        assert!(sql_may_return_several_sets("/*!50000 SELECT 1 */"));
         assert!(!sql_may_return_several_sets("SELECT 1"));
         assert!(!sql_may_return_several_sets(""));
     }

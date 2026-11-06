@@ -85,7 +85,6 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
         .private_prop("bindTypes", TypeExpr::Str, Some(e_str("")))
         .private_prop("paramReader", t_nullable(t_class("Closure")), Some(e_null()))
         .private_prop("resultWriter", t_nullable(t_class("Closure")), Some(e_null()))
-        .private_prop("longData", t_array(), Some(e_array(vec![])))
         .private_prop("longDataSent", t_array(), Some(e_array(vec![])))
         .private_prop("executedOnce", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("executeCount", TypeExpr::Int, Some(e_int(0)))
@@ -444,8 +443,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                                             ],
                                             vec![],
                                             Some(vec![
-                                            s_assign("_blob", e_cast(CastType::String, e_index(e_this_prop("longData"), e_var("_i")))),
-                                            s_expr(e_call("elephc_pdo_bind_blob", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_var("_blob"), e_call("strlen", vec![e_var("_blob")])])),
+                                            s_expr(e_call("elephc_pdo_bind_blob", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_str(""), e_int(0)])),
                                         ]),
                                         ),
                                     ],
@@ -980,9 +978,32 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_prop_array_assign(e_this(), "longData", e_var("param_num"), e_binop(e_cast(CastType::String, e_index(e_this_prop("longData"), e_var("param_num"))), BinOp::Concat, e_var("data"))),
-                    s_prop_array_assign(e_this(), "longDataSent", e_var("param_num"), e_bool(true)),
+                    s_assign("_rc", e_call("elephc_pdo_mysql_send_long_data", vec![e_this_prop("stmt"), e_var("param_num"), e_var("data"), e_call("strlen", vec![e_var("data")])])),
+                    s_if(
+                        e_binop(e_var("_rc"), BinOp::Eq, e_int(0)),
+                        vec![s_return(e_bool(false))],
+                        vec![],
+                        None,
+                    ),
                     s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_send_long_data")])),
+                    s_if(
+                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "adoptBridgeError", vec![])),
+                            s_if(
+                                e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
+                                vec![
+                                    s_expr(e_method_call(e_var("_link"), "__elephcAdoptBridgeError", vec![])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_array_assign(e_this(), "longDataSent", e_var("param_num"), e_bool(true)),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -1464,13 +1485,10 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                 .private()
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_assign("_data", e_array(vec![])),
                     s_assign("_sent", e_array(vec![])),
                     s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("param_count"))), Some(s_expr(e_post_inc("_i"))), vec![
-                        s_array_push("_data", e_str("")),
                         s_array_push("_sent", e_bool(false)),
                     ]),
-                    s_prop_assign(e_this(), "longData", e_var("_data")),
                     s_prop_assign(e_this(), "longDataSent", e_var("_sent")),
                 ]),
         )

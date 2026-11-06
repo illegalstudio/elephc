@@ -1704,7 +1704,8 @@ echo "\n";
 /// A stored synchronous `query()` of a `CALL` returns once its first set is buffered (mysqlnd's
 /// store_result()); the later sets stay on the server, keep the link out of sync (2014) and are
 /// read by `next_result()`, which waits for the slow statement between them, also for a `CALL`
-/// inside an executable comment. Expected output is php 8.5 + mysqlnd's.
+/// inside or after an executable comment (active or not). Expected output is php 8.5 +
+/// mysqlnd's.
 #[test]
 #[ignore]
 fn test_mysqli_query_call_reads_later_sets_on_next_result() {
@@ -1713,7 +1714,7 @@ fn test_mysqli_query_call_reads_later_sets_on_next_result() {
 mysqli_report(MYSQLI_REPORT_OFF);
 $db->query("DROP PROCEDURE IF EXISTS msyncslow");
 $db->query("CREATE PROCEDURE msyncslow() BEGIN SELECT 1 AS a; DO SLEEP(1.5); SELECT 2 AS b; END");
-foreach (["CALL msyncslow()", "/*!50000 CALL msyncslow() */"] as $sql) {
+foreach (["CALL msyncslow()", "/*!50000 CALL msyncslow() */", "/*! */ CALL msyncslow()", "/*!99999 SELECT 1 */ CALL msyncslow()"] as $sql) {
     $start = microtime(true);
     $first = $db->query($sql);
     echo $first->fetch_row()[0], ":", microtime(true) - $start < 1.0 ? "early" : "late";
@@ -1726,7 +1727,46 @@ foreach (["CALL msyncslow()", "/*!50000 CALL msyncslow() */"] as $sql) {
 }
 "#,
     ));
-    assert_eq!(out, "1:early:true:false2014|2:waited|9\n1:early:true:false2014|2:waited|9\n");
+    assert_eq!(out, "1:early:true:false2014|2:waited|9\n".repeat(4));
+}
+
+/// send_long_data() sends each chunk to the server at once (one COM_STMT_SEND_LONG_DATA
+/// command, counted in the wire statistics before execute()), and the execution leaves the
+/// parameter's value out of COM_STMT_EXECUTE; the chunks are forgotten after it, so a NULL
+/// variable is NULL again. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_send_long_data_sends_each_chunk() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS mld");
+$db->query("CREATE TABLE mld (id INT, b LONGBLOB)");
+$st = function () use ($db) {
+    $s = $db->get_connection_stats();
+    return [$s["packets_sent_command"], $s["bytes_sent"], $s["com_stmt_send_long_data"]];
+};
+$s = $db->prepare("INSERT INTO mld VALUES (?, ?)");
+$id = 1;
+$null = null;
+$s->bind_param("ib", $id, $null);
+$a = $st();
+echo var_export($s->send_long_data(1, str_repeat("a", 1000)), true), ",";
+$b = $st();
+echo var_export($s->send_long_data(1, "bc"), true), "|";
+$c = $st();
+echo $b[0] - $a[0], ",", $b[1] - $a[1], ",", $b[2] - $a[2], "|", $c[0] - $b[0], ",", $c[1] - $b[1], "|";
+$d = $st();
+echo var_export($s->execute(), true), ",";
+$e = $st();
+echo $e[0] - $d[0], ",", $e[1] - $d[1], "|";
+$id = 2;
+$s->execute();
+$r = $db->query("SELECT id, LENGTH(b), RIGHT(b, 3) FROM mld ORDER BY id");
+echo json_encode($r->fetch_all()), "\n";
+"#,
+    ));
+    assert_eq!(out, "true,true|1,1015,1|1,17|true,1,32|[[\"1\",\"1002\",\"abc\"],[\"2\",null,null]]\n");
 }
 
 /// mysqli_stmt::reset() sends COM_STMT_RESET on a ready link (counted, also for a fresh or an
