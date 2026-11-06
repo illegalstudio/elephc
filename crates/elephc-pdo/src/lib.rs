@@ -2974,15 +2974,25 @@ pub unsafe extern "C" fn elephc_pdo_mysql_async_send(
     sql: *const c_char,
     unbuffered: i64,
 ) -> i64 {
+    // One statement execution, like elephc_pdo_exec / a statement's reset: the async query
+    // counts once, with its SQL text, when it is sent.
+    instr_io::note();
+    if instr_io::query_active() {
+        if let Some(text) = cstr_arg(sql) {
+            instr_io::note_query(text);
+        }
+    }
     ffi_guard(-1, || {
         let Some(sql) = cstr_arg(sql) else {
             return -1;
         };
         let mut guard = lock_recover(conns());
-        match guard.get_mut(&conn_id) {
+        // The COM_QUERY write is synchronous database work; the map lock is taken outside
+        // the timed span, as on the other driver calls.
+        instr_io::timed(|| match guard.get_mut(&conn_id) {
             Some(Conn::Mysql(c)) => c.async_send(sql, unbuffered != 0),
             _ => -1,
-        }
+        })
     })
 }
 
@@ -3003,16 +3013,19 @@ pub extern "C" fn elephc_pdo_mysql_async_wait(conn_id: i64, timeout_us: i64) -> 
             return -1;
         };
         let (flag, condvar) = &*signal;
-        let done = lock_recover(flag);
         let timeout = std::time::Duration::from_micros(timeout_us.max(0) as u64);
-        let (done, _) = condvar
-            .wait_timeout_while(done, timeout, |finished| !*finished)
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if *done {
-            1
-        } else {
-            0
-        }
+        // Blocking on the server's answer is database wait (mysqli_poll's).
+        instr_io::timed(|| {
+            let done = lock_recover(flag);
+            let (done, _) = condvar
+                .wait_timeout_while(done, timeout, |finished| !*finished)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if *done {
+                1
+            } else {
+                0
+            }
+        })
     })
 }
 
@@ -3024,10 +3037,11 @@ pub extern "C" fn elephc_pdo_mysql_async_reap(conn_id: i64) -> i64 {
     ffi_guard(-1, || {
         let reaped = {
             let mut guard = lock_recover(conns());
-            match guard.get_mut(&conn_id) {
+            // Reaping blocks until the worker has the answer: database wait.
+            instr_io::timed(|| match guard.get_mut(&conn_id) {
                 Some(Conn::Mysql(c)) => c.async_reap(),
                 _ => Err(()),
-            }
+            })
         };
         match reaped {
             Ok(mut stmt) => {
@@ -4334,19 +4348,26 @@ fn stmt_query_text(guard: &HashMap<i64, Stmt>, stmt_id: i64) -> Option<String> {
 /// panic reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_reset(stmt_id: i64) -> i64 {
-    // execute() resets before each run, so one reset ~ one statement execution.
-    instr_io::note();
-    // Report the statement's SQL text (once per execution) so the exact
-    // profiler can aggregate distinct queries — the N+1 view. Recovered in a
-    // short scoped lock so the reset below re-locks cleanly.
-    if instr_io::query_active() {
-        let text = {
-            let guard = lock_recover(stmts());
+    // execute() resets before each run, so one reset ~ one statement execution. A MySQL
+    // statement is counted where it actually executes instead (`MyStmt::execute`), since
+    // mysqli runs statements without a reset before each one. Its SQL text is reported once
+    // per execution so the exact profiler can aggregate distinct queries (the N+1 view),
+    // recovered in a short scoped lock so the reset below re-locks cleanly.
+    let (counted_here, text) = {
+        let guard = lock_recover(stmts());
+        let counted_here = !matches!(guard.get(&stmt_id), Some(Stmt::Mysql(_)));
+        let text = if counted_here && instr_io::query_active() {
             stmt_query_text(&guard, stmt_id)
+        } else {
+            None
         };
-        if let Some(t) = text {
-            instr_io::note_query(&t);
-        }
+        (counted_here, text)
+    };
+    if counted_here {
+        instr_io::note();
+    }
+    if let Some(t) = text {
+        instr_io::note_query(&t);
     }
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());

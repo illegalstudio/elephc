@@ -1964,6 +1964,16 @@ impl Conn {
         self.drop_packet()
     }
 
+    /// elephc patch: sends `COM_STATISTICS` and returns the server's status line (mysqli's
+    /// `stat()`, PDO's `ATTR_SERVER_INFO`). The counters' `BeyondTable` reader already charges
+    /// the answer the way mysqlnd does (2 sent packets, `L + 14` bytes for an `L`-byte answer,
+    /// measured on PHP 8.5).
+    pub fn statistics(&mut self) -> Result<String, Error> {
+        self.write_command(Command::COM_STATISTICS, &[])?;
+        let packet = self.read_packet()?;
+        Ok(String::from_utf8_lossy(&packet).into_owned())
+    }
+
     /// elephc patch: this connection's wire traffic counters, shared so they stay readable
     /// while another thread owns the `Conn`.
     pub fn io_counters(&self) -> Arc<IoCounters> {

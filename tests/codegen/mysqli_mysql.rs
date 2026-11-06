@@ -3235,3 +3235,95 @@ echo "\n";
         "mcsig:true:0:true:1,2:true:next=false:1644:late:9|mcok:true:0:true:1,2:true:next=true:0::3:9|exec-ok:stored:throw:1644:late\n"
     );
 }
+
+/// stat() sends one real COM_STATISTICS (no COM_QUERY, no result set) and returns the
+/// server's status line; its statistics follow mysqlnd's accounting of that exchange (two
+/// sent packets, the answer's length plus 14 bytes sent and plus 4 received). Expected
+/// output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stat_sends_com_statistics() {
+    let out = compile_and_run(&my_program(
+        r#"
+$a = $db->get_connection_stats();
+$s = $db->stat();
+$b = $db->get_connection_stats();
+$len = strlen($s);
+$d = [];
+foreach (["packets_sent", "packets_sent_command", "packets_received", "protocol_overhead_in", "protocol_overhead_out", "com_statistics", "com_query", "packets_received_rset_header", "packets_received_ok"] as $n) {
+    $d[] = $n . "=" . ($b[$n] - $a[$n]);
+}
+echo substr($s, 0, 8), "|sent-len=", $b["bytes_sent"] - $a["bytes_sent"] - $len, "|recv-len=", $b["bytes_received"] - $a["bytes_received"] - $len, "|", implode(",", $d), "\n";
+"#,
+    ));
+    assert_eq!(out, "Uptime: |sent-len=14|recv-len=4|packets_sent=2,packets_sent_command=1,packets_received=1,protocol_overhead_in=4,protocol_overhead_out=8,com_statistics=1,com_query=0,packets_received_rset_header=0,packets_received_ok=0\n");
+}
+
+/// Under `elephc monitor`, every mysqli execution counts once with its SQL text for the exact
+/// profiler: a stored query(), a real_query(), a multi_query() batch, each prepared execute()
+/// (the first included), and a MYSQLI_ASYNC query (counted when it is sent, its blocking reap
+/// timed as database wait). The capture lists each distinct statement shape with its count.
+#[test]
+#[ignore]
+fn test_mysqli_queries_reach_the_monitor() {
+    let dir = make_cli_test_dir("elephc_mysqli_monitor_queries");
+    let program = my_program(
+        r#"
+function run(mysqli $db): void {
+    $db->query("SELECT 41 AS sync_probe")->fetch_row();
+    $db->real_query("SELECT 3 AS real_probe");
+    $db->store_result()->free();
+    $db->multi_query("SELECT 1 AS multi_a; SELECT 2 AS multi_b");
+    do { if ($r = $db->store_result()) { $r->free(); } } while ($db->more_results() && $db->next_result());
+    $s = $db->prepare("SELECT ? AS prep_probe");
+    $v = 1;
+    $s->bind_param("i", $v);
+    $s->execute();
+    $s->execute();
+    $s->close();
+    $db->query("SELECT 42 AS async_probe", MYSQLI_ASYNC);
+    $db->reap_async_query()->fetch_row();
+    echo "ran\n";
+}
+run($db);
+"#,
+    );
+    std::fs::write(dir.join("queries.php"), program).expect("failed to write the monitored fixture");
+    let output = elephc_cli_command(&dir)
+        .args(["monitor", "queries.php", "--save", "queries.json"])
+        .output()
+        .expect("failed to run elephc monitor");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "monitor failed\nstdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("ran"), "the program did not run: {stdout}");
+    let capture: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("queries.json")).expect("saved capture"),
+    )
+    .expect("valid capture JSON");
+    let mut shapes: Vec<(String, u64)> = capture["queries"]
+        .as_array()
+        .expect("query list")
+        .iter()
+        .map(|entry| {
+            (
+                entry[0].as_str().expect("query shape").to_string(),
+                entry[1].as_u64().expect("query count"),
+            )
+        })
+        .filter(|(shape, _)| shape.contains("_probe") || shape.contains("multi_"))
+        .collect();
+    shapes.sort();
+    assert_eq!(
+        shapes,
+        vec![
+            ("SELECT ? AS async_probe".to_string(), 1),
+            ("SELECT ? AS multi_a; SELECT ? AS multi_b".to_string(), 1),
+            ("SELECT ? AS prep_probe".to_string(), 2),
+            ("SELECT ? AS real_probe".to_string(), 1),
+            ("SELECT ? AS sync_probe".to_string(), 1),
+        ],
+        "capture: {capture}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

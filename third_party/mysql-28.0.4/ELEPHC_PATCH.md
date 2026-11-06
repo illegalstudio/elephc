@@ -24,6 +24,8 @@ workspace `Cargo.toml`, with these additions in `src/conn/mod.rs` (marked `eleph
 - `Conn::change_user_with_collation(opts, collation)`: `COM_CHANGE_USER` announcing the
   caller's client collation instead of the hardcoded `utf8mb4_general_ci`, so mysqli's
   `change_user()` keeps the charset `set_charset()` chose, like mysqlnd.
+- `Conn::statistics()`: `COM_STATISTICS` returning the server's status line (mysqli's
+  `stat()`, PDO's `ATTR_SERVER_INFO`), counted like mysqlnd by the `BeyondTable` reader.
 - `Conn::send_query(query)` / `Conn::read_query_result()`: the two halves of `query_iter`
   (write `COM_QUERY`, then read its response), so mysqli's `MYSQLI_ASYNC` send reports a
   write failure at once and the worker only reads.

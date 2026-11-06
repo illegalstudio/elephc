@@ -2740,38 +2740,22 @@ impl MyConn {
         self.fetch_table_names = enabled;
     }
 
-    /// Reconstructs MySQL's `COM_STATISTICS` text from live `SHOW STATUS` values.
-    /// The Rust client does not expose the protocol command, but the same server
-    /// counters are available without relying on fabricated constants.
+    /// Sends a real `COM_STATISTICS` and returns the server's status line ("Uptime: …
+    /// Threads: …"), backing mysqli's `stat()` and PDO's `ATTR_SERVER_INFO` like mysqlnd's
+    /// `mysql_stat()`. Empty when the client is busy or the command fails (error recorded).
     pub fn server_info(&mut self) -> String {
         if !self.ensure_not_busy() {
             return String::new();
         }
-        let rows: Vec<(String, String)> = match self.conn.query("SHOW STATUS") {
-            Ok(rows) => rows,
-            Err(_) => return String::new(),
-        };
-        let values: HashMap<String, String> = rows.into_iter().collect();
-        let value = |name: &str| values.get(name).map(String::as_str).unwrap_or("0");
-        let uptime = value("Uptime").parse::<f64>().unwrap_or(0.0);
-        let questions = value("Questions").parse::<f64>().unwrap_or(0.0);
-        let queries_per_second = if uptime > 0.0 {
-            questions / uptime
-        } else {
-            0.0
-        };
-        format!(
-            "Uptime: {}  Threads: {}  Questions: {}  Slow queries: {}  Opens: {}  Flush tables: {}  Open tables: {}  Queries per second avg: {:.3}",
-            value("Uptime"),
-            value("Threads_connected"),
-            value("Questions"),
-            value("Slow_queries"),
-            value("Opened_tables"),
-            value("Flush_commands"),
-            value("Open_tables"),
-            queries_per_second,
-        )
+        match self.conn.statistics() {
+            Ok(line) => line,
+            Err(error) => {
+                self.record_mysql_error(&error);
+                String::new()
+            }
+        }
     }
+
 
     /// Returns the warning count captured from the final OK/EOF packet of the last
     /// completed operation, including SELECT and prepared-statement results.
@@ -3901,6 +3885,13 @@ impl MyStmt {
     /// `is_call` placeholder (see its doc comment), the prelude picks the
     /// throwaway branch and discards this method's very first materialized row.
     fn execute(&mut self, conn: &mut MyConn) -> Result<(), i64> {
+        // Every MySQL execution, PDO's and mysqli's (query(), real_query(), multi_query(),
+        // a prepared execute()), passes here exactly once: count it, with its SQL, for the
+        // exact profiler (an async query counts at its send instead).
+        crate::instr_io::note();
+        if crate::instr_io::query_active() {
+            crate::instr_io::note_query(&self.query_string);
+        }
         if self.emulated_sql.is_some() {
             return self.execute_emulated(conn);
         }
