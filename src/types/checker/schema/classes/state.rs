@@ -276,6 +276,7 @@ impl ClassBuildState {
             property_declared_slots: self.property_declared_slots,
             final_properties: self.final_properties,
             readonly_properties: self.readonly_properties,
+            lazily_unset_properties: HashSet::new(),
             backed_hooked_properties: self.backed_hooked_properties,
             reference_properties: self.reference_properties,
             owned_reference_properties: HashSet::new(),

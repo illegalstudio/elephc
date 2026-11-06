@@ -63,11 +63,22 @@ fn lower_polymorphic_object_prop_get_from_loaded_object(
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
         let base_reg = abi::int_result_reg(ctx.emitter);
-        if candidate.slot.is_declared {
-            emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
-        }
+        let read_done = if candidate.slot.is_declared {
+            emit_property_read_state_guard(
+                ctx,
+                &candidate.slot,
+                base_reg,
+                PropertyFetchMode::Read,
+                PropertyReadMissingResult::Instruction(inst),
+            )?
+        } else {
+            None
+        };
         emit_property_load(ctx, &candidate.slot, base_reg)?;
         materialize_loaded_property_result(ctx, inst, &candidate.slot.php_type)?;
+        if let Some(read_done) = read_done {
+            ctx.emitter.label(&read_done);
+        }
         store_if_result(ctx, inst)?;
         abi::emit_jump(ctx.emitter, &done_label);
     }

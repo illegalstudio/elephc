@@ -1215,3 +1215,108 @@ echo json_encode($v->probe($o));
     );
     assert_eq!(out, "[false,false][true,false]");
 }
+
+/// php's lazy initialization: a constructor unsets a typed property, `__get` fills it on first
+/// read and `__isset` answers meanwhile. Symfony's `Constraint::$groups` is that shape, and the
+/// read goes through `$this`, a class receiver and an `object` receiver alike.
+#[test]
+fn a_typed_property_emptied_by_unset_is_read_through_magic_get() {
+    let out = compile_and_run(
+        r#"<?php
+class Lazy {
+    public ?array $groups = null;
+    public function __construct(?array $groups = null) {
+        unset($this->groups);
+        if (null !== $groups) {
+            $this->groups = $groups;
+        }
+    }
+    public function __get(string $option): mixed {
+        echo "get($option) ";
+        $this->groups = ['Default'];
+        return $this->groups;
+    }
+    public function __isset(string $option): bool {
+        echo "isset($option) ";
+        return true;
+    }
+    public function first(): string {
+        return $this->groups[0];
+    }
+}
+class Blank extends Lazy {}
+function viaObject(object $o): array { return $o->groups; }
+echo json_encode((new Blank())->groups), "\n";
+echo json_encode((new Blank(['X']))->groups), "\n";
+echo (new Blank())->first(), "\n";
+echo json_encode(viaObject(new Blank())), "\n";
+echo json_encode(isset((new Blank())->groups)), "\n";
+$read = new Blank();
+$read->groups;
+echo json_encode($read->groups), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "get(groups) [\"Default\"]\n[\"X\"]\nget(groups) Default\nget(groups) [\"Default\"]\n\
+         isset(groups) true\nget(groups) [\"Default\"]\n"
+    );
+}
+
+/// A typed property nothing unsets keeps php's `Error`, `__get` or not.
+#[test]
+fn a_typed_property_never_unset_is_not_read_through_magic_get() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain {
+    public array $groups;
+    public function __get(string $option): mixed { return ['magic']; }
+}
+try {
+    echo json_encode((new Plain())->groups), "\n";
+} catch (Error $e) {
+    echo get_class($e), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "Error\n");
+}
+
+/// Every link of a quiet fetch is quiet: an element a typed array does not hold is null for
+/// `empty()`, `isset()` and `??`, past further properties too. Doctrine's `UnitOfWork` asks
+/// `empty($class->fieldMappings[$name]->enumType)` for association names on every flush.
+#[test]
+fn a_quiet_fetch_of_a_property_of_a_missing_element_stays_quiet() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function ($no, $message) { echo "raised: $message\n"; return true; });
+class M { public ?string $type = null; public array $list = []; }
+class Meta { public array $mappings = []; }
+$meta = new Meta;
+$meta->mappings['a'] = new M;
+$meta->mappings['b'] = new M;
+$meta->mappings['b']->type = 'T';
+foreach (['a', 'b', 'missing'] as $name) {
+    echo json_encode([
+        empty($meta->mappings[$name]->type),
+        isset($meta->mappings[$name]->type),
+        $meta->mappings[$name]->type ?? 'default',
+        empty($meta->mappings[$name]->list['x']),
+    ]), "\n";
+}
+$list = ['x' => new M];
+echo json_encode([
+    empty($list['y']->type),
+    empty($list['y']->list),
+    isset($list['y']->list),
+    $list['y']->type ?? 'default',
+    empty($list['y']->a->b),
+]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "[true,false,\"default\",true]\n[false,true,\"T\",true]\n\
+         [true,false,\"default\",true]\n[true,true,false,\"default\",true]\n"
+    );
+}

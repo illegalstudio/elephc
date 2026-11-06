@@ -427,6 +427,9 @@ pub struct ClassInfo {
     pub property_declared_slots: Vec<bool>,
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
+    /// Declared properties a reachable `unset()` empties on a class with `__get`: php's lazy
+    /// initialization, where a read of the emptied slot is `__get`'s rather than an `Error`.
+    pub lazily_unset_properties: HashSet<String>,
     /// Hooked properties that keep a backing slot because a hook names `$this-><prop>`.
     ///
     /// PHP refuses a write only to a VIRTUAL hooked property — one whose hooks never touch the

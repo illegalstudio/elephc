@@ -20,6 +20,69 @@ pub(super) fn slot_supports_untyped_unset_marker(slot: &PropertySlot) -> bool {
         && slot.php_type.codegen_repr() == PhpType::Mixed
 }
 
+/// The class whose `__get` answers a read of this slot once `unset()` emptied it, if any.
+///
+/// php's lazy-initialization idiom: a constructor unsets a typed property and `__get` fills it on
+/// first read (Symfony's `Constraint::$groups`). A property nothing unsets keeps php's `Error`,
+/// and so does a read inside `__get`, which php's recursion guard answers from the slot. Only a
+/// boxed `__get` answer is taken: its representation is the one every read result accepts.
+fn lazy_property_get_class(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> Option<String> {
+    let class_name = slot.class_name.trim_start_matches('\\');
+    let info = ctx.module.class_infos.get(class_name)?;
+    let get = info.methods.get("__get")?;
+    let answers_boxed = matches!(get.return_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+    (info.lazily_unset_properties.contains(&slot.property)
+        && answers_boxed
+        && !ctx.function.name.ends_with("__get"))
+    .then(|| class_name.to_string())
+}
+
+/// Reads an emptied slot through `__get`; the returned label follows the slot read.
+fn emit_lazy_property_get(
+    ctx: &mut FunctionContext<'_>,
+    slot: &PropertySlot,
+    object_reg: &str,
+    class_name: &str,
+    missing_result: PropertyReadMissingResult<'_>,
+) -> Result<String> {
+    let initialized_label = ctx.next_label("lazy_property_present");
+    let done_label = ctx.next_label("lazy_property_read_done");
+    let target = super::resolve_method_call_target(ctx, class_name, "__get", 2)?;
+    let (label, len) = ctx.data.add_string(slot.property.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov x0, {}", object_reg));        // keep the receiver across the marker probe
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // spill the receiver for the magic call
+            emit_typed_property_initialized_bool(ctx, slot, object_reg);
+            ctx.emitter.instruction("mov x1, x0");                              // hold the initialized flag
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the receiver
+            ctx.emitter.instruction(&format!("cbnz x1, {}", initialized_label)); // read the slot once it holds a value
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov rdi, {}", object_reg));       // keep the receiver across the marker probe
+            emit_typed_property_initialized_bool(ctx, slot, object_reg);
+            ctx.emitter.instruction("test rax, rax");                           // test the initialized flag
+            ctx.emitter.instruction(&format!("jne {}", initialized_label));     // read the slot once it holds a value
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        }
+    }
+    super::super::emit_resolved_method_call(ctx, &target)?;
+    if let PropertyReadMissingResult::Instruction(inst) = missing_result {
+        cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr());
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&initialized_label);
+    if ctx.emitter.target.arch == Arch::AArch64 {
+        ctx.emitter.instruction(&format!("mov {}, x0", object_reg));            // the slot read continues from the receiver
+    } else {
+        ctx.emitter.instruction(&format!("mov {}, rdi", object_reg));           // the slot read continues from the receiver
+    }
+    Ok(done_label)
+}
+
 /// Result representation one guarded property read must materialize on an absent slot.
 pub(super) enum PropertyReadMissingResult<'a> {
     /// Match the EIR instruction's declared result registers.
@@ -46,6 +109,9 @@ pub(super) fn emit_property_read_state_guard(
             let cell_reg = reference_pointer_reg(ctx, object_reg);
             abi::emit_load_from_address(ctx.emitter, cell_reg, object_reg, slot.offset);
             emit_uninitialized_owned_ref_property_guard(ctx, slot, cell_reg);
+        } else if let Some(class_name) = lazy_property_get_class(ctx, slot) {
+            return emit_lazy_property_get(ctx, slot, object_reg, &class_name, missing_result)
+                .map(Some);
         } else {
             emit_uninitialized_typed_property_guard(ctx, slot, object_reg);
         }

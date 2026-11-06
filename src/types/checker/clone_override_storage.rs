@@ -249,9 +249,16 @@ pub(super) fn widen_property_unset_storage(checker: &mut Checker) {
             ),
         };
         for class_name in classes {
-            let Some(info) = checker.classes.get(&class_name) else {
+            let Some(info) = checker.classes.get_mut(&class_name) else {
                 continue;
             };
+            // Past this `unset()` a read of a declared slot is `__get`'s, not php's `Error`.
+            if let Some(name) = property.as_ref().filter(|_| info.methods.contains_key("__get")) {
+                if info.properties.iter().any(|(slot_name, _)| slot_name == name) {
+                    info.lazily_unset_properties.insert(name.clone());
+                }
+            }
+            let info = &*info;
             let Some(view) = views.get(&class_name) else {
                 continue;
             };

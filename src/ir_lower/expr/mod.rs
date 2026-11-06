@@ -853,6 +853,26 @@ fn lower_initialized_property_isset(
     });
 
     ctx.builder.position_at_end(uninitialized_block);
+    // Emptied by `unset()` on a class with `__isset`: php's lazy-initialization idiom asks it.
+    let object_type = ctx.builder.value_php_type(object.value);
+    let lazily_unset = singular_object_class(&object_type).is_some_and(|(class_name, _)| {
+        ctx.classes.get(class_name.trim_start_matches('\\')).is_some_and(|info| {
+            info.lazily_unset_properties.contains(property) && info.methods.contains_key("__isset")
+        })
+    });
+    if lazily_unset {
+        let answered = native_isset::lower_magic_property_isset(ctx, object, property, arg);
+        store_value_into_temp(ctx, &temp_name, PhpType::Bool, answered, arg.span);
+        branch_to(ctx, merge);
+        ctx.builder.position_at_end(read_block);
+        let read_value = property_access::lower_initialized_slot_read(ctx, object, property, arg);
+        let is_set = emit_builtin_call_value(ctx, "isset", vec![read_value.value], PhpType::Int, arg.span, None);
+        let is_set = ctx.truthy_consuming(is_set, Some(arg.span));
+        store_value_into_temp(ctx, &temp_name, PhpType::Bool, is_set, arg.span);
+        branch_to(ctx, merge);
+        ctx.builder.position_at_end(merge);
+        return take_owned_temp(ctx, &temp_name, arg.span);
+    }
     // The READ arm hands the receiver to `lower_property_get_from_value`, which consumes it. This
     // arm answers without reading, so an OWNING receiver has nowhere to go and leaked one object
     // per call: `isset(mk()->p)` three times reported `allocs=3 frees=0`, where the same program
