@@ -100,6 +100,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_user_wrapper_fclose(emitter);
     io::emit_user_wrapper_fread(emitter);
     io::emit_user_wrapper_read_excess_warning(emitter);
+    io::emit_user_wrapper_cast_error(emitter);
     io::emit_user_wrapper_fwrite(emitter);
     io::emit_user_wrapper_feof(emitter);
     io::emit_user_wrapper_flock(emitter);

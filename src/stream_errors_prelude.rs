@@ -57,6 +57,7 @@ pub(crate) fn requested(usage: &crate::prelude_prune::usage::Usage) -> bool {
             || name == "stream_clear_errors"
             || name == "fread"
             || name == "stream_get_contents"
+            || name == "stream_select"
             || name.starts_with("stream_context_")
     }) || usage
         .classes

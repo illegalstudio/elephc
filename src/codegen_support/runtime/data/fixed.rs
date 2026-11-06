@@ -75,6 +75,8 @@ pub(crate) fn emit_runtime_data_fixed(
         "__elephc_stream_read_count",
         "__elephc_stream_read_excess",
         "__elephc_stream_read_class",
+        "__elephc_stream_cast_count",
+        "__elephc_stream_cast_class",
     ] {
         out.push_str(&comm_directive(&crate::names::ir_global_symbol(name), 8, target));
     }
@@ -1809,6 +1811,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _uwrw_after_total\n_uwrw_after_total:\n    .ascii \" read, 8192 max) - excess data will be lost\\n\"\n");
     out.push_str(".globl _php_memory_url\n_php_memory_url:\n    .ascii \"php://memory\"\n");
     out.push_str(".globl _php_temp_url\n_php_temp_url:\n    .ascii \"php://temp\"\n");
+    out.push_str(".globl _php_stdin_url\n_php_stdin_url:\n    .ascii \"php://stdin\"\n");
+    out.push_str(".globl _php_stdout_url\n_php_stdout_url:\n    .ascii \"php://stdout\"\n");
+    out.push_str(".globl _php_stderr_url\n_php_stderr_url:\n    .ascii \"php://stderr\"\n");
     out.push_str(".globl _stat_key_atime\n_stat_key_atime:\n    .ascii \"atime\"\n");
     out.push_str(".globl _stat_key_mtime\n_stat_key_mtime:\n    .ascii \"mtime\"\n");
     out.push_str(".globl _stat_key_ctime\n_stat_key_ctime:\n    .ascii \"ctime\"\n");

@@ -109,6 +109,40 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("ldp x3, x4, [sp], #16");                               // restore the mode pair
     emitter.instruction("ldp x1, x2, [sp], #16");                               // restore the filename pair
 
+    // -- php://stdin, php://stdout, and php://stderr map to the standard descriptors --
+    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // save the filename pair across the descriptor probes
+    emitter.instruction("stp x3, x4, [sp, #-16]!");                             // save the mode pair across the descriptor probes
+    abi::emit_symbol_address(emitter, "x3", "_php_stdin_url");
+    emitter.instruction("mov x4, #11");                                         // php://stdin byte length
+    abi::emit_call_label(emitter, "__rt_str_eq");
+    emitter.instruction("cbnz x0, __rt_fopen_stdin");                           // exact php://stdin match
+    emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload the filename pair advanced by the probe
+    abi::emit_symbol_address(emitter, "x3", "_php_stdout_url");
+    emitter.instruction("mov x4, #12");                                         // php://stdout byte length
+    abi::emit_call_label(emitter, "__rt_str_eq");
+    emitter.instruction("cbnz x0, __rt_fopen_stdout");                          // exact php://stdout match
+    emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload the filename pair advanced by the probe
+    abi::emit_symbol_address(emitter, "x3", "_php_stderr_url");
+    emitter.instruction("mov x4, #12");                                         // php://stderr byte length
+    abi::emit_call_label(emitter, "__rt_str_eq");
+    emitter.instruction("cbnz x0, __rt_fopen_stderr");                          // exact php://stderr match
+    emitter.instruction("ldp x1, x2, [sp, #16]");                               // restore the filename pair
+    emitter.instruction("ldp x3, x4, [sp], #32");                               // restore the mode pair and release the probe slots
+    emitter.instruction("b __rt_fopen_std_done");                               // continue with ordinary file opening
+    emitter.label("__rt_fopen_stdin");
+    emitter.instruction("add sp, sp, #32");                                     // discard the saved pairs
+    emitter.instruction("mov x0, #0");                                          // STDIN_FILENO
+    emitter.instruction("b __rt_fopen_opened");                                 // clear the EOF flag and share the return path
+    emitter.label("__rt_fopen_stdout");
+    emitter.instruction("add sp, sp, #32");                                     // discard the saved pairs
+    emitter.instruction("mov x0, #1");                                          // STDOUT_FILENO
+    emitter.instruction("b __rt_fopen_opened");                                 // clear the EOF flag and share the return path
+    emitter.label("__rt_fopen_stderr");
+    emitter.instruction("add sp, sp, #32");                                     // discard the saved pairs
+    emitter.instruction("mov x0, #2");                                          // STDERR_FILENO
+    emitter.instruction("b __rt_fopen_opened");                                 // clear the EOF flag and share the return path
+    emitter.label("__rt_fopen_std_done");
+
     // -- save mode string for later parsing --
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save mode ptr and len on stack
 
@@ -371,6 +405,51 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rax");                                             // restore the filename pointer
     emitter.instruction("pop rsi");                                             // restore the mode length
     emitter.instruction("pop rdi");                                             // restore the mode pointer
+
+    // -- php://stdin, php://stdout, and php://stderr map to the standard descriptors --
+    emitter.instruction("push rdi");                                            // save the mode pointer across the descriptor probes
+    emitter.instruction("push rsi");                                            // save the mode length across the descriptor probes
+    emitter.instruction("push rax");                                            // save the filename pointer across the descriptor probes
+    emitter.instruction("push rdx");                                            // save the filename length across the descriptor probes
+    emitter.instruction("mov rdi, rax");                                        // probe the filename against php://stdin
+    emitter.instruction("mov rsi, rdx");                                        // filename byte length
+    abi::emit_symbol_address(emitter, "rdx", "_php_stdin_url");
+    emitter.instruction("mov ecx, 11");                                         // php://stdin byte length
+    abi::emit_call_label(emitter, "__rt_str_eq");
+    emitter.instruction("test rax, rax");                                       // exact php://stdin match?
+    emitter.instruction("jnz __rt_fopen_stdin_x86");                            // return STDIN_FILENO
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                        // reload the filename pointer advanced by the probe
+    emitter.instruction("mov rsi, QWORD PTR [rsp]");                            // reload the filename length
+    abi::emit_symbol_address(emitter, "rdx", "_php_stdout_url");
+    emitter.instruction("mov ecx, 12");                                         // php://stdout byte length
+    abi::emit_call_label(emitter, "__rt_str_eq");
+    emitter.instruction("test rax, rax");                                       // exact php://stdout match?
+    emitter.instruction("jnz __rt_fopen_stdout_x86");                           // return STDOUT_FILENO
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                        // reload the filename pointer advanced by the probe
+    emitter.instruction("mov rsi, QWORD PTR [rsp]");                            // reload the filename length
+    abi::emit_symbol_address(emitter, "rdx", "_php_stderr_url");
+    emitter.instruction("mov ecx, 12");                                         // php://stderr byte length
+    abi::emit_call_label(emitter, "__rt_str_eq");
+    emitter.instruction("test rax, rax");                                       // exact php://stderr match?
+    emitter.instruction("jnz __rt_fopen_stderr_x86");                           // return STDERR_FILENO
+    emitter.instruction("pop rdx");                                             // restore the filename length
+    emitter.instruction("pop rax");                                             // restore the filename pointer
+    emitter.instruction("pop rsi");                                             // restore the mode length
+    emitter.instruction("pop rdi");                                             // restore the mode pointer
+    emitter.instruction("jmp __rt_fopen_std_done_x86");                         // continue with ordinary file opening
+    emitter.label("__rt_fopen_stdin_x86");
+    emitter.instruction("add rsp, 32");                                         // discard the saved pairs
+    emitter.instruction("xor eax, eax");                                        // STDIN_FILENO
+    emitter.instruction("jmp __rt_fopen_opened_x86");                           // clear the EOF flag and share the return path
+    emitter.label("__rt_fopen_stdout_x86");
+    emitter.instruction("add rsp, 32");                                         // discard the saved pairs
+    emitter.instruction("mov eax, 1");                                          // STDOUT_FILENO
+    emitter.instruction("jmp __rt_fopen_opened_x86");                           // clear the EOF flag and share the return path
+    emitter.label("__rt_fopen_stderr_x86");
+    emitter.instruction("add rsp, 32");                                         // discard the saved pairs
+    emitter.instruction("mov eax, 2");                                          // STDERR_FILENO
+    emitter.instruction("jmp __rt_fopen_opened_x86");                           // clear the EOF flag and share the return path
+    emitter.label("__rt_fopen_std_done_x86");
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the elephc mode pointer while the filename string is converted to a C string
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the elephc mode length while the filename string is converted to a C string

@@ -272,7 +272,7 @@ pub(crate) use user_wrapper::{
 pub(crate) use user_wrapper_unbox::emit_wrapper_unbox_int;
 pub(crate) use path_is_wrapper::emit_path_is_wrapper;
 pub(crate) use readfile_wrapper::emit_readfile_wrapper;
-pub(crate) use user_wrapper_cast::emit_user_wrapper_stream_cast;
+pub(crate) use user_wrapper_cast::{emit_user_wrapper_cast_error, emit_user_wrapper_stream_cast};
 pub(crate) use user_wrapper_read_warning::emit_user_wrapper_read_excess_warning;
 pub(crate) use user_wrapper_dir::{
     emit_user_wrapper_dir_closedir, emit_user_wrapper_dir_readdir, emit_user_wrapper_dir_rewinddir,

@@ -8,6 +8,8 @@
 //! - Fixtures requiring `--SKIPIF--` are not run; the corpus records them as skipped.
 //! - Known non-passing fixtures are listed explicitly so the set cannot silently grow.
 //! - Outputs merge stderr onto stdout, matching PHP's interleaved diagnostics.
+//! - Blank lines are ignored because php-src's run-tests captures stdout and stderr
+//!   separately; their interleaving differs from a single merged descriptor.
 
 use elephc::php_version::PhpVersion;
 use regex::Regex;
@@ -17,11 +19,7 @@ use std::path::Path;
 use crate::support::*;
 
 /// Fixtures that still exercise unimplemented stream-error store/handler plumbing.
-const KNOWN_NON_PASSING: &[&str] = &[
-    "stream_errors_invalid_types",
-    "stream_errors_mix_modes_storage",
-    "stream_errors_wrapper_nested_operation",
-];
+const KNOWN_NON_PASSING: &[&str] = &["stream_errors_wrapper_nested_operation"];
 
 /// Fixtures whose `--SKIPIF--` section requires a harness feature elephc does not emulate.
 const HARNESS_SKIPS: &[&str] = &[
@@ -91,13 +89,13 @@ fn test_stream_errors_corpus_php86() {
         failed.len(),
         HARNESS_SKIPS.len()
     );
-    assert_eq!(passed.len(), 11, "passing fixtures: {passed:?}");
-    assert_eq!(failed.len(), 3, "known non-passing fixtures: {failed:?}");
+    assert_eq!(passed.len(), 13, "passing fixtures: {passed:?}");
+    assert_eq!(failed.len(), 1, "known non-passing fixtures: {failed:?}");
 }
 
 /// Splits one PHPT fixture into its FILE source and EXPECT/EXPECTF expectation.
 fn parse_fixture(stem: &str, text: &str) -> (String, String, bool) {
-    let mut file = text
+    let file = text
         .split_once("--FILE--\n")
         .and_then(|(_, rest)| rest.split_once("\n--EXPECT"))
         .expect("FILE section");
@@ -120,14 +118,22 @@ fn parse_fixture(stem: &str, text: &str) -> (String, String, bool) {
 
 /// Matches an expectation, translating PHP's EXPECTF wildcards when needed.
 fn matches_expected(actual: &str, expected: &str, expectf: bool) -> bool {
-    let actual = actual.trim_end();
-    let expected = expected.trim_end();
+    let actual = without_blank_lines(actual);
+    let expected = without_blank_lines(expected);
     if !expectf {
         return actual == expected;
     }
-    Regex::new(&expectf_pattern(expected))
-        .map(|regex| regex.is_match(actual))
+    Regex::new(&expectf_pattern(&expected))
+        .map(|regex| regex.is_match(&actual))
         .unwrap_or(false)
+}
+
+/// Drops empty lines from a diagnostic transcript.
+fn without_blank_lines(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Translates PHP run-tests EXPECTF wildcards into an anchored regular expression.

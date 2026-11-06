@@ -27,6 +27,7 @@ pub(crate) fn rewrite(program: Program, version: crate::php_version::PhpVersion)
         && !wrappers.default_context
         && !wrappers.fread
         && !wrappers.stream_get_contents
+        && !wrappers.stream_select
     {
         return program;
     }
@@ -44,6 +45,7 @@ struct Wrappers {
     default_context: bool,
     fread: bool,
     stream_get_contents: bool,
+    stream_select: bool,
 }
 
 /// Scans the top-level declarations for the two wrapper functions.
@@ -56,6 +58,7 @@ fn wrappers_present(program: &[Stmt]) -> Wrappers {
                 "__elephc_stream_context_set_default" => wrappers.default_context = true,
                 "__elephc_fread" => wrappers.fread = true,
                 "__elephc_stream_get_contents" => wrappers.stream_get_contents = true,
+                "__elephc_stream_select" => wrappers.stream_select = true,
                 _ => {}
             }
         }
@@ -93,6 +96,7 @@ impl Pass for Rewriter {
             "stream_get_contents" if self.wrappers.stream_get_contents => {
                 Some("__elephc_stream_get_contents")
             }
+            "stream_select" if self.wrappers.stream_select => Some("__elephc_stream_select"),
             _ => None,
         };
         let name = replacement.map_or(name, |replacement| {
@@ -109,6 +113,7 @@ impl Pass for Rewriter {
                 | "__elephc_stream_context_set_default"
                 | "__elephc_fread"
                 | "__elephc_stream_get_contents"
+                | "__elephc_stream_select"
         ) {
             self.wrapper_depth += 1;
         }

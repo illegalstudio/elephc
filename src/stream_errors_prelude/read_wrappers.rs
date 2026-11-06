@@ -1,99 +1,50 @@
 //! Purpose:
-//! Builds the PHP 8.6 `fread()` / `stream_get_contents()` error-aware wrappers.
+//! Builds the PHP 8.6 `fread()`, `stream_get_contents()`, and `stream_select()` error wrappers.
 //!
 //! Called from:
 //! - `crate::stream_errors_prelude::declarations()`.
 //!
 //! Key details:
-//! - The runtime records `UserspaceInvalidReturn` events in three program globals; the
-//!   wrappers turn them into `StreamError` objects and apply the stream context's
-//!   mode/store/handler policy after the underlying read.
+//! - The runtime records userspace `UserspaceInvalidReturn` and `stream_cast` failures in
+//!   program globals; the wrappers turn them into `StreamError` objects and apply the
+//!   stream context's mode/store/handler policy after the underlying operation.
 //! - Nested reads save and restore the tracking globals, so an inner operation cannot
 //!   consume the outer operation's pending errors.
-//! - The helpers are ordinary PHP functions, so every supported target shares one
-//!   implementation and the checker validates the whole surface.
+//! - A store that receives no errors leaves the previous operation's store untouched,
+//!   which is what `stream_last_errors()` exposes after a terminating-only operation.
 
 use crate::parser::ast::{BinOp, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_binop, e_bool, e_call, e_class_const, e_concat, e_concat_all, e_const, e_int,
     e_instance_of, e_new, e_not, e_null, e_null_coalesce, e_post_inc, e_prop, e_str, e_var,
     function, s_array_push, s_assign, s_expr, s_foreach, s_global, s_if, s_return, s_return_void,
-    s_static_prop_assign, s_throw, s_while, t_mixed,
+    s_static_prop_assign, s_throw, s_while, t_array, t_mixed, t_nullable,
 };
 
-/// Builds the read-time error wrappers.
+/// Builds the read-time and select-time error wrappers.
 pub(super) fn declarations() -> Program {
     vec![
+        apply_errors_helper(),
         stream_read_flush_helper(),
+        stream_select_flush_helper(),
         fread_wrapper(),
         stream_get_contents_wrapper(),
+        stream_select_wrapper(),
     ]
 }
 
-/// Builds the shared UserspaceInvalidReturn dispatcher used by the read wrappers.
-fn stream_read_flush_helper() -> Stmt {
-    let count = e_var("count");
-    let excess = e_var("excess");
-    let class = e_var("class");
+/// Builds the shared policy helper that stores errors and runs the context handler.
+fn apply_errors_helper() -> Stmt {
     let errors = e_var("errors");
     let mode = e_var("mode");
     let store = e_var("store");
     let stream = e_var("stream");
     let handler = e_var("handler");
-    let message = e_concat_all(vec![
-        class,
-        e_str("::stream_read - read "),
-        excess.clone(),
-        e_str(" bytes more data than requested ("),
-        e_binop(e_int(8192), BinOp::Add, excess),
-        e_str(" read, 8192 max) - excess data will be lost"),
-    ]);
-    function("__elephc_stream_read_flush")
+    function("__elephc_stream_apply_errors")
+        .param("errors", t_array())
+        .param("prefix", TypeExpr::Str)
         .returns(TypeExpr::Void)
         .body(vec![
-            s_global(tracking_globals()),
-            s_assign(
-                "count",
-                e_null_coalesce(e_var("__elephc_stream_read_count"), e_int(0)),
-            ),
-            s_if(
-                e_binop(
-                    e_binop(
-                        e_not(e_call("is_int", vec![count.clone()])),
-                        BinOp::Or,
-                        e_binop(count.clone(), BinOp::LtEq, e_int(0)),
-                    ),
-                    BinOp::Or,
-                    e_bool(false),
-                ),
-                vec![s_return_void()],
-                Vec::new(),
-                None,
-            ),
-            s_assign("excess", e_var("__elephc_stream_read_excess")),
-            s_assign("class", e_var("__elephc_stream_read_class")),
-            s_assign("errors", e_array(vec![])),
-            s_assign("i", e_int(0)),
-            s_while(
-                e_binop(e_var("i"), BinOp::Lt, count),
-                vec![
-                    s_assign("message", message),
-                    s_array_push(
-                        "errors",
-                        e_new(
-                            "StreamError",
-                            vec![
-                                e_class_const("StreamErrorCode", "UserspaceInvalidReturn"),
-                                e_var("message"),
-                                e_str("user-space"),
-                                e_const("E_WARNING"),
-                                e_bool(false),
-                            ],
-                        ),
-                    ),
-                    s_expr(e_post_inc("i")),
-                ],
-            ),
             s_assign(
                 "options",
                 e_call(
@@ -156,7 +107,25 @@ fn stream_read_flush_helper() -> Stmt {
                             BinOp::StrictEq,
                             e_class_const("StreamErrorStore", "NonTerminating"),
                         ),
-                        vec![s_assign("keep", e_bool(true))],
+                        vec![s_if(
+                            e_not(e_prop(e_index_key(errors.clone(), "0"), "terminating")),
+                            vec![s_assign("keep", e_bool(true))],
+                            Vec::new(),
+                            None,
+                        )],
+                    ),
+                    (
+                        e_binop(
+                            store.clone(),
+                            BinOp::StrictEq,
+                            e_class_const("StreamErrorStore", "Terminating"),
+                        ),
+                        vec![s_if(
+                            e_prop(e_index_key(errors.clone(), "0"), "terminating"),
+                            vec![s_assign("keep", e_bool(true))],
+                            Vec::new(),
+                            None,
+                        )],
                     ),
                     (
                         e_binop(
@@ -167,16 +136,23 @@ fn stream_read_flush_helper() -> Stmt {
                         vec![s_if(
                             e_binop(
                                 e_binop(
-                                    mode.clone(),
-                                    BinOp::StrictEq,
-                                    e_class_const("StreamErrorMode", "Silent"),
+                                    e_binop(
+                                        mode.clone(),
+                                        BinOp::StrictEq,
+                                        e_class_const("StreamErrorMode", "Silent"),
+                                    ),
+                                    BinOp::Or,
+                                    e_binop(
+                                        mode.clone(),
+                                        BinOp::StrictEq,
+                                        e_class_const("StreamErrorMode", "Exception"),
+                                    ),
                                 ),
-                                BinOp::Or,
-                                e_binop(
-                                    mode.clone(),
-                                    BinOp::StrictEq,
-                                    e_class_const("StreamErrorMode", "Exception"),
-                                ),
+                                BinOp::And,
+                                e_not(e_prop(
+                                    e_index_key(errors.clone(), "0"),
+                                    "terminating",
+                                )),
                             ),
                             vec![s_assign("keep", e_bool(true))],
                             Vec::new(),
@@ -194,11 +170,7 @@ fn stream_read_flush_helper() -> Stmt {
                     errors.clone(),
                 )],
                 Vec::new(),
-                Some(vec![s_static_prop_assign(
-                    "__ElephcStreamErrors",
-                    "errors",
-                    e_array(vec![]),
-                )]),
+                None,
             ),
             s_assign(
                 "handler",
@@ -226,7 +198,10 @@ fn stream_read_flush_helper() -> Stmt {
                     vec![s_expr(e_call(
                         "trigger_error",
                         vec![
-                            e_concat(e_str("fread(): "), e_prop(e_var("entry"), "message")),
+                            e_concat(
+                                e_concat(e_var("prefix"), e_prop(e_var("entry"), "message")),
+                                e_str(""),
+                            ),
                             e_const("E_USER_WARNING"),
                         ],
                     ))],
@@ -236,9 +211,13 @@ fn stream_read_flush_helper() -> Stmt {
             ),
             s_if(
                 e_binop(
-                    mode,
-                    BinOp::StrictEq,
-                    e_class_const("StreamErrorMode", "Exception"),
+                    e_binop(
+                        mode,
+                        BinOp::StrictEq,
+                        e_class_const("StreamErrorMode", "Exception"),
+                    ),
+                    BinOp::And,
+                    e_prop(e_index_key(errors.clone(), "0"), "terminating"),
                 ),
                 vec![s_throw(e_new(
                     "StreamException",
@@ -252,6 +231,143 @@ fn stream_read_flush_helper() -> Stmt {
                 Vec::new(),
                 None,
             ),
+            s_return_void(),
+        ])
+        .build()
+}
+
+/// Builds the shared UserspaceInvalidReturn dispatcher used by the read wrappers.
+fn stream_read_flush_helper() -> Stmt {
+    let count = e_var("count");
+    let excess = e_var("excess");
+    let class = e_var("class");
+    let message = e_concat_all(vec![
+        class,
+        e_str("::stream_read - read "),
+        excess.clone(),
+        e_str(" bytes more data than requested ("),
+        e_binop(e_int(8192), BinOp::Add, excess),
+        e_str(" read, 8192 max) - excess data will be lost"),
+    ]);
+    function("__elephc_stream_read_flush")
+        .returns(TypeExpr::Void)
+        .body(vec![
+            s_global(tracking_globals()),
+            s_assign(
+                "count",
+                e_null_coalesce(e_var("__elephc_stream_read_count"), e_int(0)),
+            ),
+            s_if(
+                e_binop(
+                    e_binop(
+                        e_not(e_call("is_int", vec![count.clone()])),
+                        BinOp::Or,
+                        e_binop(count.clone(), BinOp::LtEq, e_int(0)),
+                    ),
+                    BinOp::Or,
+                    e_bool(false),
+                ),
+                vec![s_return_void()],
+                Vec::new(),
+                None,
+            ),
+            s_assign("excess", e_var("__elephc_stream_read_excess")),
+            s_assign("class", e_var("__elephc_stream_read_class")),
+            s_assign("errors", e_array(vec![])),
+            s_assign("i", e_int(0)),
+            s_while(
+                e_binop(e_var("i"), BinOp::Lt, count),
+                vec![
+                    s_assign("message", message),
+                    s_array_push(
+                        "errors",
+                        e_new(
+                            "StreamError",
+                            vec![
+                                e_class_const("StreamErrorCode", "UserspaceInvalidReturn"),
+                                e_var("message"),
+                                e_str("user-space"),
+                                e_const("E_WARNING"),
+                                e_bool(false),
+                            ],
+                        ),
+                    ),
+                    s_expr(e_post_inc("i")),
+                ],
+            ),
+            s_expr(e_call(
+                "__elephc_stream_apply_errors",
+                vec![e_var("errors"), e_str("fread(): ")],
+            )),
+            s_return_void(),
+        ])
+        .build()
+}
+
+/// Builds the `stream_select()` cast-failure dispatcher.
+fn stream_select_flush_helper() -> Stmt {
+    let count = e_var("count");
+    function("__elephc_stream_select_flush")
+        .returns(TypeExpr::Void)
+        .body(vec![
+            s_global(cast_globals()),
+            s_assign(
+                "count",
+                e_null_coalesce(e_var("__elephc_stream_cast_count"), e_int(0)),
+            ),
+            s_if(
+                e_binop(
+                    e_binop(
+                        e_not(e_call("is_int", vec![count.clone()])),
+                        BinOp::Or,
+                        e_binop(count.clone(), BinOp::LtEq, e_int(0)),
+                    ),
+                    BinOp::Or,
+                    e_bool(false),
+                ),
+                vec![s_return_void()],
+                Vec::new(),
+                None,
+            ),
+            s_assign("class", e_var("__elephc_stream_cast_class")),
+            s_assign("errors", e_array(vec![])),
+            s_assign("i", e_int(0)),
+            s_while(
+                e_binop(e_var("i"), BinOp::Lt, count),
+                vec![
+                    s_array_push(
+                        "errors",
+                        e_new(
+                            "StreamError",
+                            vec![
+                                e_class_const("StreamErrorCode", "NotImplemented"),
+                                e_concat(e_var("class"), e_str("::stream_cast is not implemented!")),
+                                e_str("user-space"),
+                                e_const("E_WARNING"),
+                                e_bool(true),
+                            ],
+                        ),
+                    ),
+                    s_array_push(
+                        "errors",
+                        e_new(
+                            "StreamError",
+                            vec![
+                                e_class_const("StreamErrorCode", "CastNotSupported"),
+                                e_str("Cannot represent a stream of type user-space as a select()able descriptor"),
+                                e_str("user-space"),
+                                e_const("E_WARNING"),
+                                e_bool(true),
+                            ],
+                        ),
+                    ),
+                    s_expr(e_post_inc("i")),
+                ],
+            ),
+            s_expr(e_call(
+                "__elephc_stream_apply_errors",
+                vec![e_var("errors"), e_str("stream_select(): ")],
+            )),
             s_return_void(),
         ])
         .build()
@@ -336,12 +452,57 @@ fn stream_get_contents_wrapper() -> Stmt {
         .build()
 }
 
+/// Builds the `stream_select()` wrapper that reports missing `stream_cast()` methods.
+fn stream_select_wrapper() -> Stmt {
+    function("__elephc_stream_select")
+        .param_by_ref("read", Some(t_mixed()))
+        .param_by_ref("write", Some(t_mixed()))
+        .param_by_ref("except", Some(t_mixed()))
+        .param("seconds", t_nullable(TypeExpr::Int))
+        .param_default("microseconds", t_nullable(TypeExpr::Int), e_null())
+        .param_default("context", t_mixed(), e_null())
+        .returns(t_mixed())
+        .body(vec![
+            s_global(cast_globals()),
+            s_assign("prevCount", e_var("__elephc_stream_cast_count")),
+            s_assign("prevClass", e_var("__elephc_stream_cast_class")),
+            s_assign("__elephc_stream_cast_count", e_int(0)),
+            s_assign(
+                "result",
+                e_call(
+                    "stream_select",
+                    vec![
+                        e_var("read"),
+                        e_var("write"),
+                        e_var("except"),
+                        e_var("seconds"),
+                        e_var("microseconds"),
+                        e_var("context"),
+                    ],
+                ),
+            ),
+            s_expr(e_call("__elephc_stream_select_flush", vec![])),
+            s_assign("__elephc_stream_cast_count", e_var("prevCount")),
+            s_assign("__elephc_stream_cast_class", e_var("prevClass")),
+            s_return(e_var("result")),
+        ])
+        .build()
+}
+
 /// Returns the three program globals the runtime uses to publish excess reads.
 fn tracking_globals() -> Vec<String> {
     vec![
         "__elephc_stream_read_count".to_string(),
         "__elephc_stream_read_excess".to_string(),
         "__elephc_stream_read_class".to_string(),
+    ]
+}
+
+/// Returns the two program globals the runtime uses to publish cast failures.
+fn cast_globals() -> Vec<String> {
+    vec![
+        "__elephc_stream_cast_count".to_string(),
+        "__elephc_stream_cast_class".to_string(),
     ]
 }
 

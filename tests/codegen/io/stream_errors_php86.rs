@@ -509,3 +509,46 @@ fclose($stream);
     );
     assert_eq!(out, "handler: 2\nint(8192)\nint(2)\n");
 }
+
+/// A user wrapper without `stream_cast()` reports the two terminating cast errors
+/// through the context handler when `stream_select()` probes it.
+#[test]
+fn test_user_wrapper_stream_select_cast_errors_php86() {
+    let out = run86(
+        r#"<?php
+class NoCastStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_read(int $count): string { return str_repeat('A', $count); }
+    public function stream_eof(): bool { return true; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('no-cast-stream', NoCastStream::class);
+$context = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_store' => StreamErrorStore::All,
+    'error_handler' => static function (array $errors): void {
+        echo 'handler: ', count($errors), "\n";
+        foreach ($errors as $error) {
+            echo $error->code->name, ':', $error->terminating ? 'yes' : 'no', "\n";
+        }
+    },
+]]);
+$stream = fopen('no-cast-stream://x', 'r', false, $context);
+$read = [$stream];
+$write = null;
+$except = null;
+var_dump(stream_select($read, $write, $except, 0, 0, $context));
+var_dump(count(stream_last_errors()));
+fclose($stream);
+"#,
+    );
+    assert_eq!(
+        out,
+        "handler: 2\n\
+NotImplemented:yes\n\
+CastNotSupported:yes\n\
+int(0)\n\
+int(2)\n"
+    );
+}

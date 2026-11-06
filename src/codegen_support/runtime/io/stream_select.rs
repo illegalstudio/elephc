@@ -120,6 +120,7 @@ fn emit_build_fdset_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, s
     emitter.instruction("str x12, [sp, #128]");                                 // spill the data-region pointer
     emitter.instruction("mov x0, x13");                                         // synthetic fd → stream_cast argument
     emitter.instruction("mov x1, #3");                                          // STREAM_CAST_FOR_SELECT
+    emitter.instruction("mov x2, #1");                                          // build pass records cast failures
     emitter.instruction("bl __rt_user_wrapper_stream_cast");                    // resolve to the wrapper's underlying fd (or -1)
     emitter.instruction("mov x13, x0");                                         // adopt the resolved descriptor
     emitter.instruction("ldr x9, [sp, #96]");                                   // reload the array pointer
@@ -192,6 +193,7 @@ fn emit_compact_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     emitter.instruction("str x15, [sp, #128]");                                 // spill the original slot value (kept on a match)
     emitter.instruction("mov x0, x16");                                         // synthetic fd → stream_cast argument
     emitter.instruction("mov x1, #3");                                          // STREAM_CAST_FOR_SELECT
+    emitter.instruction("mov x2, #0");                                          // keep pass must not record a duplicate failure
     emitter.instruction("bl __rt_user_wrapper_stream_cast");                    // resolve to the wrapper's underlying fd (idempotent with build)
     emitter.instruction("mov x16, x0");                                         // adopt the resolved descriptor
     emitter.instruction("ldr x9, [sp, #96]");                                   // reload the array pointer
@@ -309,6 +311,7 @@ fn emit_build_fdset_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     emitter.instruction("mov QWORD PTR [rbp - 104], rsi");                      // spill the descriptor index
     emitter.instruction("mov rdi, rdx");                                        // synthetic fd → stream_cast argument
     emitter.instruction("mov esi, 3");                                          // STREAM_CAST_FOR_SELECT
+    emitter.instruction("mov edx, 1");                                          // build pass records cast failures
     emitter.instruction("call __rt_user_wrapper_stream_cast");                  // resolve to the wrapper's underlying fd (or -1)
     emitter.instruction("mov rdx, rax");                                        // adopt the resolved descriptor
     emitter.instruction("mov r11, QWORD PTR [rbp - 88]");                       // reload the array pointer
@@ -372,6 +375,7 @@ fn emit_compact_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffix: &
     emitter.instruction("mov QWORD PTR [rbp - 120], r9");                       // spill the destination (kept) index
     emitter.instruction("mov rdi, rdx");                                        // synthetic fd → stream_cast argument
     emitter.instruction("mov esi, 3");                                          // STREAM_CAST_FOR_SELECT
+    emitter.instruction("mov edx, 0");                                          // keep pass must not record a duplicate failure
     emitter.instruction("call __rt_user_wrapper_stream_cast");                  // resolve to the wrapper's underlying fd (idempotent with build)
     emitter.instruction("mov rdx, rax");                                        // adopt the resolved descriptor
     emitter.instruction("mov r11, QWORD PTR [rbp - 88]");                       // reload the array pointer
