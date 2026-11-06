@@ -411,8 +411,11 @@ pub fn emit_pr_write(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_ob_append");                                   // append the bytes to the top output buffer
     emitter.instruction("b __rt_pr_write_done");                                // capture handled the bytes — skip the syscall path
     emitter.label("__rt_pr_write_raw");
-    emitter.instruction("mov x0, #1");                                          // syscall fd = stdout (buf already in x1, len already in x2)
-    emitter.syscall(4);                                                         // write the bytes to stdout
+    // A `--web` response is captured on this one path, which a raw write(1, ...) bypasses: the
+    // structure of `print_r($array)` used to land on the server's stdout, not in the response.
+    emitter.instruction("mov x0, x1");                                          // __rt_stdout_write buf arg
+    emitter.instruction("mov x1, x2");                                          // __rt_stdout_write len arg
+    emitter.instruction("bl __rt_stdout_write");                                // write through the terminal path
 
     emitter.label("__rt_pr_write_done");
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
@@ -454,10 +457,9 @@ fn emit_pr_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_ob_append");                                 // append the bytes to the top output buffer
     emitter.instruction("jmp __rt_pr_write_done");                              // capture handled the bytes — skip the syscall path
     emitter.label("__rt_pr_write_raw_x86");
-    emitter.instruction("mov rdi, 1");                                          // syscall fd = stdout
-    // buf is already in rsi; len is already in rdx
-    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // write the bytes to stdout
+    emitter.instruction("mov rdi, rsi");                                        // __rt_stdout_write buf arg
+    emitter.instruction("mov rsi, rdx");                                        // __rt_stdout_write len arg
+    emitter.instruction("call __rt_stdout_write");                              // write through the terminal path
 
     emitter.label("__rt_pr_write_done");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
