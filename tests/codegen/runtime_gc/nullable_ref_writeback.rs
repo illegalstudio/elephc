@@ -676,3 +676,34 @@ run();
     );
     assert_clean(out, "caught:2|caught:2|caught:2|caught:2|caught:2\n");
 }
+
+/// The writeback result guard also covers a returned heap string (through its spilled
+/// return-ownership status) and a nullsafe `?->` method call: a destructor thrown while the
+/// writeback releases the previous object leaks neither result. Output matches php 8.5.
+#[test]
+fn test_declared_reference_writeback_throw_releases_strings_and_nullsafe_results() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {
+    public function __construct(public int $id) {}
+    public function __destruct() { if ($this->id === 1) { throw new RuntimeException("d"); } }
+}
+class R { public array $items = [1, 2]; }
+class M { public function swap(?C &$c): R { $c = new C(2); return new R(); } }
+function replaceStr(?C &$c): string { $c = new C(2); return str_repeat("x", 1000); }
+function viaNullsafe(?M $m): void {
+    C $x = new C(1);
+    try { $r = $m?->swap($x); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $x->id; }
+}
+function run(): void {
+    C $a = new C(1);
+    try { $s = replaceStr($a); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $a->id; }
+    echo "|";
+    viaNullsafe(new M());
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "caught:2|caught:2\n");
+}

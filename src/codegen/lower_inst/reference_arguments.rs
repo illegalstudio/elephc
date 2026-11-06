@@ -745,9 +745,11 @@ pub(super) fn emit_ref_arg_writebacks(
 }
 
 /// Stores the call result in the guard slot at `guard_offset` when it owns something: a
-/// by-reference return's transferred cell and any owned refcounted value go through the guard's
-/// `__rt_decref_any` cleanup (which releases a cell lease too), an owned callable descriptor
-/// switches the record to the descriptor cleanup. Other results leave the slot empty.
+/// by-reference return's transferred cell, an owned refcounted value and an owned string go
+/// through the guard's `__rt_decref_any` cleanup (which releases a cell lease and a string's
+/// owner too), an owned callable descriptor switches the record to the descriptor cleanup. A
+/// `MaybeOwned` result is guarded only when its spilled return-ownership status says the call
+/// transferred an owner. Other results leave the slot empty.
 fn emit_publish_guarded_call_result(
     ctx: &mut FunctionContext<'_>,
     result: ValueId,
@@ -756,13 +758,34 @@ fn emit_publish_guarded_call_result(
 ) -> Result<()> {
     let repr = ctx.value_php_type(result)?.codegen_repr();
     let callable = !by_ref_return && repr == PhpType::Callable;
-    let owned = by_ref_return
-        || (ctx.value_ownership(result)? == Ownership::Owned && (callable || repr.is_refcounted()));
-    if !owned {
+    let string = !by_ref_return && repr == PhpType::Str;
+    if !by_ref_return && !callable && !string && !repr.is_refcounted() {
         return Ok(());
     }
+    let skip = ctx.next_label("ref_writeback_result_unguarded");
+    if !by_ref_return {
+        match ctx.value_ownership(result)? {
+            Ownership::Owned => {}
+            Ownership::MaybeOwned => {
+                let Some(status) = ctx.runtime_return_ownership_offset(result) else {
+                    return Ok(());
+                };
+                let owned = ctx.next_label("ref_writeback_result_owned");
+                crate::codegen::return_ownership::emit_load_status(ctx.emitter, status);
+                crate::codegen::return_ownership::emit_branch_if_owned(ctx.emitter, &owned);
+                abi::emit_jump(ctx.emitter, &skip);
+                ctx.emitter.label(&owned);
+            }
+            _ => return Ok(()),
+        }
+    }
     let reg = abi::int_result_reg(ctx.emitter);
-    ctx.load_value_to_reg(result, reg)?;
+    if string {
+        let len = abi::tertiary_scratch_reg(ctx.emitter);
+        ctx.load_string_value_to_regs(result, reg, len)?;
+    } else {
+        ctx.load_value_to_reg(result, reg)?;
+    }
     abi::emit_store_to_sp(ctx.emitter, reg, guard_offset);
     if callable {
         // The record's cleanup entry follows its chain link.
@@ -770,6 +793,7 @@ fn emit_publish_guarded_call_result(
         abi::emit_symbol_address(ctx.emitter, scratch, "__rt_cleanup_call_operand_descriptor");
         abi::emit_store_to_sp(ctx.emitter, scratch, guard_offset + 16 + 8);
     }
+    ctx.emitter.label(&skip);
     Ok(())
 }
 
