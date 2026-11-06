@@ -31,6 +31,8 @@ extern "C" {
     /// clean C name here resolves to `_elephc_web_capture` on macOS and
     /// `elephc_web_capture` on Linux — matching the runtime's `.comm` and load.
     static mut elephc_web_capture: u8;
+    /// `PHP_VERSION` of the compile profile, as a C string in the runtime's data.
+    static mut elephc_web_php_version: u8;
 }
 
 /// Process-static fallback body. Normal responses stream directly; trans-SID
@@ -395,13 +397,33 @@ pub unsafe extern "C" fn elephc_web_response_header_line(index: i64, out_len: *m
     line.as_ptr()
 }
 
+/// The unit tests link no compiled program, so no runtime data defines the version.
+#[cfg(test)]
+fn powered_by() -> String {
+    "PHP/8.5.10".to_string()
+}
+
+/// The `X-Powered-By` value of the php version this program was compiled for.
+#[cfg(not(test))]
+fn powered_by() -> String {
+    // SAFETY: the runtime data defines this symbol as a NUL-terminated string.
+    let version = unsafe {
+        core::ffi::CStr::from_ptr(core::ptr::addr_of!(elephc_web_php_version).cast())
+    };
+    format!("PHP/{}", version.to_string_lossy())
+}
+
 /// Resets the response status (200) and clears the response headers. Called by
 /// the worker before each request's handler runs.
 pub fn reset_response() {
     // SAFETY: single-threaded per worker; reached only through raw pointers.
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STATUS), 200);
-        (*core::ptr::addr_of_mut!(RESPONSE_HEADERS)).clear();
+        let headers = &mut *core::ptr::addr_of_mut!(RESPONSE_HEADERS);
+        headers.clear();
+        // php's SAPI layer opens every response with this header (`expose_php` is On unless an
+        // ini file says otherwise), so `headers_list()` shows it and `header_remove()` drops it.
+        headers.push(("X-Powered-By".to_string(), powered_by()));
         core::ptr::write(core::ptr::addr_of_mut!(SEND_DEFAULT_CONTENT_TYPE), true);
         core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_COMMITTED), false);
         core::ptr::write(core::ptr::addr_of_mut!(LATE_HEADER_WARNED), false);
@@ -828,20 +850,28 @@ mod tests {
         }
     }
 
+    /// Resets the response and drops the header php opens it with, so a test sees only its own.
+    unsafe fn reset_without_powered_by() {
+        reset_response();
+        elephc_web_header_remove(core::ptr::null(), -1);
+    }
+
     /// Verifies the bridge response logic matches PHP header()/http_response_code().
     #[test]
     fn response_control_matches_php() {
         unsafe {
             reset_response();
+            assert_eq!(take_headers(), vec![("X-Powered-By".to_string(), powered_by())]);
+            elephc_web_header_remove(core::ptr::null(), -1);
             assert_eq!(take_status(), 200); // default
 
             // http_response_code: set returns previous; 0 reads.
-            reset_response();
+            reset_without_powered_by();
             assert_eq!(elephc_web_set_status(404), 200);
             assert_eq!(elephc_web_set_status(0), 404);
 
             // Regular header, default replace=true → same-name (case-insensitive) replaced.
-            reset_response();
+            reset_without_powered_by();
             let a = b"X-Foo: a";
             elephc_web_header(a.as_ptr(), a.len(), 1, 0);
             let b = b"x-foo: b";
@@ -849,7 +879,7 @@ mod tests {
             assert_eq!(take_headers(), vec![("x-foo".to_string(), "b".to_string())]);
 
             // replace=false → append duplicates.
-            reset_response();
+            reset_without_powered_by();
             let c = b"X: 1";
             elephc_web_header(c.as_ptr(), c.len(), 0, 0);
             let d = b"X: 2";
@@ -860,7 +890,7 @@ mod tests {
             );
 
             // Value keeps later colons; Location implies 302.
-            reset_response();
+            reset_without_powered_by();
             let l = b"Location: http://h/p:8080/x";
             elephc_web_header(l.as_ptr(), l.len(), 1, 0);
             assert_eq!(take_status(), 302);
@@ -870,27 +900,27 @@ mod tests {
             );
 
             // HTTP status line sets status, adds no header.
-            reset_response();
+            reset_without_powered_by();
             let h = b"HTTP/1.1 404 Not Found";
             elephc_web_header(h.as_ptr(), h.len(), 1, 0);
             assert_eq!(take_status(), 404);
             assert!(take_headers().is_empty());
 
             // "Status:" sets status, adds no header.
-            reset_response();
+            reset_without_powered_by();
             let s = b"Status: 503 Unavailable";
             elephc_web_header(s.as_ptr(), s.len(), 1, 0);
             assert_eq!(take_status(), 503);
             assert!(take_headers().is_empty());
 
             // 3rd arg forces status (Location does not override an explicit code).
-            reset_response();
+            reset_without_powered_by();
             let r = b"Location: /perm";
             elephc_web_header(r.as_ptr(), r.len(), 1, 301);
             assert_eq!(take_status(), 301);
 
             // Location does NOT downgrade an already-3xx status to 302.
-            reset_response();
+            reset_without_powered_by();
             elephc_web_set_status(303);
             let r2 = b"Location: /x";
             elephc_web_header(r2.as_ptr(), r2.len(), 1, 0);
@@ -899,7 +929,7 @@ mod tests {
             // `headers_list()` lines come out in send order and stop past the last header.
             // (Kept in this test: the response state is process-global, so a second test
             // touching it would race this one under the parallel harness.)
-            reset_response();
+            reset_without_powered_by();
             let mut len = -1i64;
             assert!(elephc_web_response_header_line(0, &mut len).is_null());
             let a = b"X-A: 1";
@@ -922,7 +952,7 @@ mod tests {
             elephc_web_header_remove(name.as_ptr(), name.len() as i64);
             assert_eq!(line(0).as_deref(), Some("Set-Cookie: s=1; path=/"));
             assert_eq!(line(1), None);
-            reset_response();
+            reset_without_powered_by();
         }
     }
 }

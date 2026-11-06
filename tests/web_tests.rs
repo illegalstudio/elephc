@@ -2666,8 +2666,8 @@ fn web_superglobal_reference_cell_survives_element_writes_in_functions() {
 /// Verifies `headers_list()` reports the pending `Name: value` lines in send order, from compiled
 /// code and from `eval()`, and that `header_remove()` in `eval()` edits the same list.
 ///
-/// The expected body is `php -d expose_php=0 -S` 8.5.10's (`expose_php` only adds its own
-/// `X-Powered-By` line, which elephc does not send). Symfony's `SessionUtils::popSessionCookie()`
+/// The expected body is `php -S` 8.5.10's: `expose_php` opens the list with `X-Powered-By`, which
+/// `header_remove()` drops like any other. Symfony's `SessionUtils::popSessionCookie()`
 /// walks this list to find the session cookie, so every route that starts a session died on the
 /// undefined function.
 #[test]
@@ -2699,9 +2699,10 @@ fn web_headers_list_reports_pending_lines_in_compiled_and_eval_code() {
     let _ = child.wait();
     assert_eq!(
         raw_response_body(&resp),
-        "[[],[\"X-A: 1\",\"Set-Cookie: s=1; path=\\/\",\"Set-Cookie: t=2\",\"x-b: two\"],\
-         [\"X-A: 1\",\"Set-Cookie: s=1; path=\\/\",\"Set-Cookie: t=2\",\"x-b: two\"],\
-         [\"Set-Cookie: s=1; path=\\/\",\"Set-Cookie: t=2\",\"x-b: two\"],[],[\"X-D: 4\"]]",
+        "[[\"X-Powered-By: PHP\\/8.5.0\"],\
+         [\"X-Powered-By: PHP\\/8.5.0\",\"X-A: 1\",\"Set-Cookie: s=1; path=\\/\",\"Set-Cookie: t=2\",\"x-b: two\"],\
+         [\"X-Powered-By: PHP\\/8.5.0\",\"X-A: 1\",\"Set-Cookie: s=1; path=\\/\",\"Set-Cookie: t=2\",\"x-b: two\"],\
+         [\"X-Powered-By: PHP\\/8.5.0\",\"Set-Cookie: s=1; path=\\/\",\"Set-Cookie: t=2\",\"x-b: two\"],[],[\"X-D: 4\"]]",
         "response: {resp:?}"
     );
     let head = resp.split_once("\r\n\r\n").map_or("", |(head, _)| head).to_lowercase();

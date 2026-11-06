@@ -689,6 +689,12 @@ pub(crate) fn emit_runtime_data_fixed(
         8,
         target,
     ));
+    // The version behind the --web bridge's `X-Powered-By`, mangled like the slot above.
+    let web_php_version = target.extern_symbol("elephc_web_php_version");
+    out.push_str(&format!(
+        ".globl {web_php_version}\n{web_php_version}:\n    .asciz \"{}\"\n",
+        php_version.reported_version_string()
+    ));
     // Heap headers and object-handle side-table indices use 16-byte granules.
     // Keep payload alignment stable when preceding runtime symbols change.
     out.push_str(&comm_directive_aligned("_heap_buf", heap_size, 16, target));
@@ -1962,6 +1968,12 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _ucwords_default_seps\n_ucwords_default_seps:\n    .byte 32, 9, 13, 10, 12, 11\n",
     );
     out.push_str(".globl _b64_encode_tbl\n_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
+    // One halfword of class bits per byte, indexed by compiled `ctype_*` loops.
+    out.push_str(".p2align 1\n.globl _ctype_classes\n_ctype_classes:\n");
+    for byte in 0..=255u8 {
+        let bits = elephc_builtin_contract::ctype_class_bits(byte, target.platform == Platform::MacOS);
+        out.push_str(&format!("    .short {}\n", bits));
+    }
     out.push_str(".globl _b64_decode_tbl\n_b64_decode_tbl:\n");
 
     // php-src's `base64_reverse_table`, transposed from its signed `short` entries onto
