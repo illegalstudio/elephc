@@ -130,11 +130,11 @@ $GLOBALS['count']++;
 echo $GLOBALS['count'], "\n";          // 2
 ```
 
-Only literal string keys are lowered this way. Computed keys
-(`$GLOBALS[$name]`), nested writes (`$GLOBALS['a']['b'] = 1`), `unset()` on a
-`$GLOBALS` entry, appending with `$GLOBALS[] = ...`, and enumerating `$GLOBALS`
-as an array are not supported yet; declare the variable with `global` or pass it
-explicitly instead.
+Only literal string keys are lowered this way. `unset($GLOBALS['name'])`
+clears the top-level value. Computed keys (`$GLOBALS[$name]`), nested writes
+(`$GLOBALS['a']['b'] = 1`), appending with `$GLOBALS[] = ...`, and enumerating
+`$GLOBALS` as an array are not supported yet; declare the variable with `global`
+or pass it explicitly instead.
 
 ## PHP version surface
 

@@ -404,8 +404,7 @@ receiver name opaque. This models PHP's aliasing conservatively for declaration
 retention. Literal-key `$GLOBALS['name']` reads and writes are lowered directly to the
 matching program-global slot, so top-level assignments and reads share storage
 across scopes and a literal write kills the key's propagated constant; computed
-keys, nested writes, `unset()`, and a materialized `$GLOBALS` array remain
-unsupported. Likewise, an expression call such as `($value)()` intentionally
+keys, nested writes, and a materialized `$GLOBALS` array remain unsupported. Likewise, an expression call such as `($value)()` intentionally
 sets both the dynamic-function and dynamic-method hazards because the value may
 be a function, closure, or callable array. Keeping every method of every live
 class in that case is a documented precision cost, not a correctness defect.

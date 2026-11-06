@@ -22,15 +22,6 @@ pub(super) fn lower_unset_locals(
         if let Some(message) = unset_property_element_refusal(ctx, arg) {
             crate::ir_lower::diagnostics::refuse(arg.span, &message);
         }
-        if let ExprKind::ArrayAccess { array, .. } = &arg.kind {
-            if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
-                crate::ir_lower::diagnostics::refuse(
-                    arg.span,
-                    "unset($GLOBALS[...]) is not supported yet; assign null to the top-level variable instead",
-                );
-                return None;
-            }
-        }
     }
     if !args.iter().all(|arg| unset_target_supported(ctx, arg)) {
         return None;
@@ -45,7 +36,23 @@ pub(super) fn lower_unset_locals(
                 None
             }
             ExprKind::ArrayAccess { array, index } => {
-                lower_unset_array_access(ctx, array, index, arg)
+                if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                    if let ExprKind::StringLiteral(key) = &index.kind {
+                        let data = ctx.intern_global_name(key);
+                        ctx.emit_void(
+                            Op::StoreGlobal,
+                            vec![null.value],
+                            Some(Immediate::GlobalName(data)),
+                            Op::StoreGlobal.default_effects(),
+                            Some(arg.span),
+                        );
+                        None
+                    } else {
+                        lower_unset_array_access(ctx, array, index, arg)
+                    }
+                } else {
+                    lower_unset_array_access(ctx, array, index, arg)
+                }
             }
             ExprKind::PropertyAccess { object, property }
             | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -72,7 +79,10 @@ pub(super) fn lower_unset_locals(
 pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
     match &arg.kind {
         ExprKind::Variable(_) => true,
-        ExprKind::ArrayAccess { array, .. } => {
+        ExprKind::ArrayAccess { array, index } => {
+            if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                return matches!(&index.kind, ExprKind::StringLiteral(_));
+            }
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
                 || unset_array_access_property_array_type(ctx, array).is_some()

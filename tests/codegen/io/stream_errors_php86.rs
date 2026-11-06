@@ -363,6 +363,20 @@ var_dump(isset($GLOBALS['fresh']), isset($GLOBALS['absent']));
     assert_eq!(out, "5\n9\n12\ncreated\nbool(true)\nbool(false)\n");
 }
 
+/// `unset($GLOBALS['name'])` removes the top-level value.
+#[test]
+fn test_globals_literal_unset_php86() {
+    let out = run86(r#"<?php
+$count = 1;
+unset($GLOBALS['count']);
+var_dump(isset($count), isset($GLOBALS['count']));
+$GLOBALS['fresh'] = 5;
+unset($GLOBALS['fresh']);
+echo $GLOBALS['fresh'] ?? 'gone', "\n";
+"#);
+    assert_eq!(out, "bool(false)\nbool(false)\ngone\n");
+}
+
 /// A user wrapper's excess `stream_read()` data reports PHP's legacy warning with the
 /// wrapper class name and 8192-byte chunk accounting, then truncates to the request.
 #[test]
@@ -442,10 +456,6 @@ fn test_unsupported_globals_shapes_are_rejected_php86() {
         (
             "<?php $x = 1; $GLOBALS['a']['b'] = 9;",
             "Writes through $GLOBALS are not supported yet",
-        ),
-        (
-            "<?php $x = 1; unset($GLOBALS['x']);",
-            "unset($GLOBALS[...]) is not supported yet",
         ),
     ];
     for (source, expected) in cases {
