@@ -226,7 +226,6 @@ fn parse_phpt(name: &str, path: &Path) -> Option<Phpt> {
         .map(|_| "requires a php-src harness section".to_string());
     if name.ends_with("build_error_soft_errors_reset_without_base.phpt")
         || name.ends_with("fragment_success_empty_with_opaque_base.phpt")
-        || name.ends_with("username_success_tab_newline.phpt")
     {
         // These fixtures pin exact object handles or exercise warning/opaque-base paths
         // whose object lifetime still crashes at shutdown. Warning/opaque-path parity is
@@ -281,8 +280,13 @@ fn parse_sections(text: &str) -> std::collections::HashMap<String, String> {
 
 /// Matches actual output against an EXPECT or EXPECTF expectation.
 fn matches_expected(actual: &str, expected: &str, expectf: bool) -> bool {
+    // php-src fixtures pin process-local object handles (#1, #2, ...); the printed
+    // handle is not part of the URI contract, so compare it modulo the actual count.
+    let handles = Regex::new(r"#[0-9]+").expect("object-handle regex");
     let actual = actual.replace("\r\n", "\n");
     let expected = expected.replace("\r\n", "\n");
+    let actual = handles.replace_all(&actual, "#0");
+    let expected = handles.replace_all(&expected, "#0");
     let actual = actual.trim_end();
     let expected = expected.trim_end();
     if !expectf {
