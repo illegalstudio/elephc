@@ -183,6 +183,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::ImplicitIntCast => {
             let _ = write!(out, " implicit_int_cast");
         }
+        Immediate::PromotableArray => {
+            let _ = write!(out, " promotable_array");
+        }
         Immediate::Data(id) => {
             let _ = write!(out, " data[{}]", id.as_raw());
         }

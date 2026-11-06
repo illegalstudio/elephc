@@ -51,6 +51,9 @@ pub(super) fn stabilize_loop_storage(
     }).collect();
     let mut call_types: std::collections::HashMap<crate::span::Span, PhpType> =
         std::collections::HashMap::new();
+    // Taken before `infer` borrows the checker: the candidates a promotable write keeps typed.
+    let mut promotable_candidates = checker.promotable_array_candidates.clone();
+    promotable_candidates.disqualify(checker.ref_aliased_locals.iter());
     let entry_storage = checker.guarded_union_types.clone();
     let entry_origins = checker.narrowed_local_origins.clone();
     let entry_captures = checker.by_ref_captured_locals.clone();
@@ -99,7 +102,7 @@ pub(super) fn stabilize_loop_storage(
         Some(inferred)
     };
     let analysis = super::super::loop_storage::analyze_loop_storage(body, update, condition,
-        &snapshot, packed_counter, &tagged_integer_locals, &mut infer);
+        &snapshot, packed_counter, &tagged_integer_locals, &promotable_candidates, &mut infer);
     let mut incoming = Vec::new();
     for name in &backedges.references {
         if !narrowed.contains(*name) { continue; }

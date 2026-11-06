@@ -12,9 +12,9 @@ use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, Expr, ExprKind, NESTED_APPEND_TEMP_PREFIX};
 use crate::span::Span;
 use crate::types::{
-    array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type,
-    nonempty_array_key_forces_hash_storage, static_array_key_forces_hash_storage, PhpType,
-    TypeEnv,
+    array_key_contiguity_is_unproven, merge_array_key_types, nonempty_array_key_forces_hash_storage,
+    nonempty_array_key_stays_in_range, normalized_array_key_type,
+    static_array_key_forces_hash_storage, PhpType, TypeEnv,
 };
 
 use super::super::super::{Checker, GuardedLocalStorage};
@@ -96,19 +96,59 @@ pub(super) fn check_array_assign(
         // slot per iteration — so `for ($i = 0; …; $i++) { $a[$i] = … }` keeps packed storage.
         let forces_hash = matches!(normalized_idx_ty, PhpType::Str)
             || (matches!(idx_ty, PhpType::Str) && !index_is_foreach_key)
-            || (!matches!(elem_ty.as_ref(), PhpType::Never)
-                && (nonempty_array_key_forces_hash_storage(index)
-                    || (matches!(normalized_idx_ty, PhpType::Int)
-                        && !index_is_foreach_key
-                        && !checker.index_is_packed_loop_counter(array, index)
-                        && array_key_contiguity_is_unproven(index))))
             || (matches!(elem_ty.as_ref(), PhpType::Never)
                 && (static_array_key_forces_hash_storage(index)
                     || (matches!(normalized_idx_ty, PhpType::Int)
                         && !index_is_foreach_key
                         && !checker.index_is_packed_loop_counter(array, index)
                         && array_key_contiguity_is_unproven(index))));
-        if forces_hash {
+        // The same gap exists past the end of a NON-empty packed array: `$a = [1, 2]; $a[5] = 3;`
+        // zero-filled slots 2..4 where php has `{"0":1,"1":2,"5":3}`, and a negative key cannot
+        // live in packed storage at all. A literal key is decided below (only `0` and `1` are
+        // always in range). A non-literal key the checker cannot bound takes hash storage here
+        // too, and the site is recorded so lowering promotes the packed value it holds there.
+        // Boxed `Mixed` elements are left out: `Op::ArraySetMixedKey` already promotes an
+        // out-of-range integer key at run time. A foreach key or a boxed key (`Mixed`, or the
+        // `int|float` every `$i++` counter carries) keeps the existing runtime-tagged route, which
+        // reaches that same helper, so loop counters need no range proof here. The bare
+        // packed-counter exemption above is not reused: an existing array can shrink under it
+        // (`array_pop($a)` in the body), and its counter is boxed anyway.
+        // A candidate `array<int>` local written under a key nothing bounds stays typed instead:
+        // codegen keeps the packed write for a key in range and promotes the storage to a hash
+        // only when the key really skips a slot, so the loop keeps raw integer slots where
+        // widening to `Array(Mixed)` would box every one of them.
+        let promotable = !forces_hash
+            && checker.promotable_array_write(
+                array, index, elem_ty, &idx_ty, &normalized_idx_ty, index_is_foreach_key, &val_ty,
+            );
+        // A literal key past `1` may skip a slot of any non-empty packed array, and a negative one
+        // never fits packed storage: the static type moves to a hash, unless the local is a
+        // promotable candidate, whose codegen decides at run time whether the key really skips.
+        let forces_hash = forces_hash
+            || (!promotable
+                && !matches!(elem_ty.as_ref(), PhpType::Never)
+                && nonempty_array_key_forces_hash_storage(index));
+        if promotable {
+            checker.record_promotable_array_local(array);
+        }
+        let skips_nonempty_slot = !forces_hash
+            && !promotable
+            && !matches!(elem_ty.as_ref(), PhpType::Never)
+            && elem_ty.codegen_repr() != PhpType::Mixed
+            && matches!(normalized_idx_ty, PhpType::Int)
+            && !index_is_foreach_key
+            && !matches!(idx_ty, PhpType::Mixed | PhpType::Union(_))
+            && !nonempty_array_key_stays_in_range(index);
+        if skips_nonempty_slot {
+            checker
+                .sparse_key_write_sites
+                .entry(span)
+                .or_default()
+                .insert(array.to_string());
+        }
+        if promotable {
+            // The local keeps its `array<int>` storage; nothing in its static type changes.
+        } else if forces_hash || skips_nonempty_slot {
             let merged_key = if matches!(elem_ty.as_ref(), PhpType::Never) {
                 normalized_idx_ty
             } else {

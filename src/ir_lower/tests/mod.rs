@@ -26,6 +26,7 @@ mod string_offset_writes;
 mod arrays;
 mod unset_collection;
 mod array_edge_guards;
+mod sparse_key_writes;
 mod assoc_push;
 mod append_writes;
 mod nullable_array_merges;

@@ -224,6 +224,11 @@ pub enum Immediate {
     StringOffsetCast,
     /// Binds an already validated float-shaped runtime argument to int with precision diagnostics.
     ImplicitIntCast,
+    /// Marks an element op on a typed scalar packed local whose storage may already have been
+    /// promoted to a hash at run time (heap kind 3). Codegen dispatches on the heap kind, and an
+    /// `ArraySet` whose integer key would skip a slot (or is negative) promotes the array to a
+    /// hash instead of zero-filling the gap, as PHP does.
+    PromotableArray,
     Data(DataId),
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {
