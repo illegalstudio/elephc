@@ -550,6 +550,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_prop_assign(e_this(), "conn", e_var("_conn")),
+                    s_assign("_priorStatus", e_this_prop("linkStatus")),
                     s_prop_assign(e_this(), "linkStatus", e_int(1)),
                     s_prop_assign(e_this(), "linkGone", e_bool(false)),
                     s_prop_assign(e_this(), "multiStatementsOn", e_bool(false)),
@@ -614,7 +615,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         s_if(
                             e_binop(e_call("elephc_pdo_exec", vec![e_var("_conn"), e_cast(CastType::String, e_index(e_this_prop("optInitCommands"), e_var("_i")))]), BinOp::Lt, e_int(0)),
                             vec![
-                                s_expr(e_method_call(e_this(), "opFailed", vec![])),
+                                s_expr(e_method_call(e_this(), "__elephcAdoptBridgeError", vec![])),
                                 s_static_prop_assign("mysqli", "openLinks", e_binop(e_static_prop("mysqli", "openLinks"), BinOp::Sub, e_int(1))),
                                 s_expr(e_method_call(e_this(), "dropActive", vec![])),
                                 s_expr(e_method_call(e_this(), "releaseConnection", vec![])),
@@ -625,8 +626,11 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                                         s_prop_assign(e_this(), "linkStatus", e_int(2)),
                                     ],
                                     vec![],
-                                    None,
+                                    Some(vec![
+                                        s_prop_assign(e_this(), "linkStatus", e_var("_priorStatus")),
+                                    ]),
                                 ),
+                                s_expr(e_method_call(e_this(), "__elephcReportError", vec![])),
                                 s_return(e_bool(false)),
                             ],
                             vec![],
@@ -710,11 +714,19 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_binop(e_this_prop("conn"), BinOp::GtEq, e_int(0)), BinOp::And, e_this_prop("persistent")),
                         vec![
-                            s_assign("_stats", e_static_prop("mysqli", "plinkStats")),
-                            s_array_assign("_stats", e_this_prop("conn"), e_this_prop("connStats")),
-                            s_static_prop_assign("mysqli", "plinkStats", e_var("_stats")),
-                            s_static_prop_assign("mysqli", "cachedPlinks", e_binop(e_static_prop("mysqli", "cachedPlinks"), BinOp::Add, e_int(1))),
+                            s_assign("_handle", e_this_prop("conn")),
                             s_expr(e_method_call(e_this(), "releaseConnection", vec![])),
+                            s_if(
+                                e_binop(e_call("elephc_pdo_driver_name", vec![e_var("_handle")]), BinOp::StrictEq, e_str("mysql")),
+                                vec![
+                                    s_assign("_stats", e_static_prop("mysqli", "plinkStats")),
+                                    s_array_assign("_stats", e_var("_handle"), e_this_prop("connStats")),
+                                    s_static_prop_assign("mysqli", "plinkStats", e_var("_stats")),
+                                    s_static_prop_assign("mysqli", "cachedPlinks", e_binop(e_static_prop("mysqli", "cachedPlinks"), BinOp::Add, e_int(1))),
+                                ],
+                                vec![],
+                                None,
+                            ),
                             s_prop_assign(e_this(), "handleAllocated", e_bool(false)),
                             s_return_void(),
                         ],

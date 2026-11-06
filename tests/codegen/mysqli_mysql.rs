@@ -1558,6 +1558,98 @@ echo "\n";
     assert_eq!(out, "mysqli_result:1|true|false:1644:boom|5|sync:0\n");
 }
 
+/// A failed second `MYSQLI_INIT_COMMAND` under STRICT throws its error (1146) only after the
+/// connection is released: the link count is unchanged and the object is unconnected
+/// afterwards. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_failed_init_command_releases_the_connection_before_throwing() {
+    let out = compile_and_run(&my_program(
+        r#"
+$before = mysqli_get_links_stats()["total"];
+$x = mysqli_init();
+$x->options(MYSQLI_INIT_COMMAND, "SET @a = 1");
+$x->options(MYSQLI_INIT_COMMAND, "SELECT * FROM missing_init_tbl");
+try {
+    $x->real_connect($host, $user, $pass, $dbname, $port);
+    echo "no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo $e->getCode();
+}
+echo "|links+", mysqli_get_links_stats()["total"] - $before;
+try {
+    $x->query("SELECT 1");
+    echo "|queried";
+} catch (Throwable $e) {
+    echo "|", get_class($e), ":", $e->getMessage();
+}
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "1146|links+0|Error:mysqli object is not fully initialized\n");
+}
+
+/// A row read that fails in a later set of a buffered `CALL` (sync and `MYSQLI_ASYNC`) leaves
+/// `next_result()` successful and fails the `store_result()` that buffers that set (1242),
+/// after which the link is usable, like mysqlnd. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_call_later_set_row_error_fails_at_store_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS mrr");
+$db->query("CREATE TABLE mrr (v INT)");
+$db->query("INSERT INTO mrr VALUES (1), (2), (3)");
+$db->query("DROP PROCEDURE IF EXISTS mrrp");
+$db->query("CREATE PROCEDURE mrrp() BEGIN SELECT 1 AS a; SELECT (SELECT v FROM mrr) AS s FROM mrr; END");
+foreach (["sync", "async"] as $mode) {
+    if ($mode === "sync") {
+        $r = $db->query("CALL mrrp()");
+    } else {
+        $db->query("CALL mrrp()", MYSQLI_ASYNC);
+        $read = [$db];
+        $error = [];
+        $reject = [];
+        mysqli_poll($read, $error, $reject, 5);
+        $r = $db->reap_async_query();
+    }
+    echo $mode, ":", is_object($r) ? $r->fetch_row()[0] : "F" . $db->errno;
+    echo ",", var_export($db->next_result(), true), ":", $db->errno;
+    $s = $db->store_result();
+    echo ",", $s === false ? "F" . $db->errno : "rows" . $s->num_rows;
+    echo ",", $db->query("SELECT 6")->fetch_row()[0], "|";
+}
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "sync:1,true:0,F1242,6|async:1,true:0,F1242,6|\n");
+}
+
+/// Persistent links closed with a pending async query do not inflate
+/// `mysqli_get_links_stats()['cached_plinks']`: after three such closes and one ordinary
+/// open/close of the same key, one link is cached, as in php 8.5 + mysqlnd.
+#[test]
+#[ignore]
+fn test_mysqli_cached_plinks_ignores_evicted_async_links() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$start = mysqli_get_links_stats()["cached_plinks"];
+for ($i = 0; $i < 3; $i++) {
+    $p = new mysqli("p:" . $host, $user, $pass, $dbname, $port);
+    $p->query("SELECT SLEEP(1)", MYSQLI_ASYNC);
+    $p->close();
+}
+$afterAsync = mysqli_get_links_stats()["cached_plinks"] - $start;
+$q = new mysqli("p:" . $host, $user, $pass, $dbname, $port);
+$q->close();
+echo mysqli_get_links_stats()["cached_plinks"] - $start, "\n";
+"#,
+    ));
+    assert_eq!(out, "1\n");
+}
+
 /// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
 /// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
 /// the set is unread, and the statistics count one unbuffered set. Expected output is

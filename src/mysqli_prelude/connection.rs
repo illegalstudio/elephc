@@ -395,6 +395,9 @@ class mysqli {
             return $this->connectFailure(2002, "elephc mysqli opened a non-mysql bridge connection", "HY000");
         }
         $this->conn = $_conn;
+        // real_connect() on a mysqli_init() link that fails below (an init command)
+        // leaves it initialized but unconnected again, like php-src.
+        $_priorStatus = $this->linkStatus;
         $this->linkStatus = 1;
         $this->linkGone = false;
         $this->multiStatementsOn = false;
@@ -443,14 +446,19 @@ class mysqli {
         $_n = count($this->optInitCommands);
         for ($_i = 1; $_i < $_n; $_i++) {
             if (elephc_pdo_exec($_conn, (string) $this->optInitCommands[$_i]) < 0) {
-                $this->opFailed();
+                // Record the error, release the connection, then report: under
+                // STRICT the report throws, and the object must be closed by then.
+                $this->__elephcAdoptBridgeError();
                 mysqli::$openLinks = mysqli::$openLinks - 1;
                 $this->dropActive();
                 $this->releaseConnection();
                 if (!$isRealConnect) {
                     $this->freeHandle();
                     $this->linkStatus = 2;
+                } else {
+                    $this->linkStatus = $_priorStatus;
                 }
+                $this->__elephcReportError();
                 return false;
             }
         }
@@ -509,11 +517,16 @@ class mysqli {
             mysqli::$openLinks = mysqli::$openLinks - 1;
         }
         if ($this->conn >= 0 && $this->persistent) {
-            $_stats = mysqli::$plinkStats;
-            $_stats[$this->conn] = $this->connStats;
-            mysqli::$plinkStats = $_stats;
-            mysqli::$cachedPlinks = mysqli::$cachedPlinks + 1;
+            $_handle = $this->conn;
             $this->releaseConnection();
+            // Only a link the bridge actually parks is cached: one closed with
+            // an unreaped async query is evicted instead.
+            if (elephc_pdo_driver_name($_handle) === "mysql") {
+                $_stats = mysqli::$plinkStats;
+                $_stats[$_handle] = $this->connStats;
+                mysqli::$plinkStats = $_stats;
+                mysqli::$cachedPlinks = mysqli::$cachedPlinks + 1;
+            }
             $this->handleAllocated = false;
             return;
         }
