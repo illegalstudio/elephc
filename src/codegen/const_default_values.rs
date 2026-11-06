@@ -636,12 +636,7 @@ pub(in crate::codegen) fn resolve_const_default_class<'a>(
     module: &'a Module,
     class_name: &str,
 ) -> Option<(&'a str, &'a ClassInfo)> {
-    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
-    module
-        .class_infos
-        .iter()
-        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
-        .map(|(name, info)| (name.as_str(), info))
+    module.class_info_by_key(&php_symbol_key(class_name.trim_start_matches('\\')))
 }
 
 /// Looks up interface metadata by PHP-style case-insensitive name.
@@ -649,10 +644,5 @@ pub(in crate::codegen) fn resolve_const_default_interface<'a>(
     module: &'a Module,
     interface_name: &str,
 ) -> Option<(&'a str, &'a InterfaceInfo)> {
-    let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
-    module
-        .interface_infos
-        .iter()
-        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == interface_key)
-        .map(|(name, info)| (name.as_str(), info))
+    module.interface_info_by_key(&php_symbol_key(interface_name.trim_start_matches('\\')))
 }

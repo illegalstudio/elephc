@@ -255,6 +255,7 @@ struct FactCache {
         FactCell<crate::fast_hash::FastMap<String, usize>>,
     shared_ref_cell_globals: FactCell<crate::fast_hash::FastSet<String>>,
     runtime_referenced_class_names: FactCell<HashSet<String>>,
+    function_names: FactCell<crate::fast_hash::FastSet<String>>,
     class_names_by_key: FactCell<crate::fast_hash::FastMap<String, String>>,
     interface_names_by_key:
         FactCell<crate::fast_hash::FastMap<String, String>>,
@@ -273,6 +274,12 @@ fn folded_name_index<'a>(names: impl Iterator<Item = &'a String>) -> crate::fast
             .or_insert_with(|| name.clone());
     }
     index
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many whole-module facts this thread computed: the cost a test can hold still.
+    pub(crate) static FACT_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// One cached whole-module fact and the module shape it was computed for.
@@ -474,6 +481,8 @@ impl Module {
                 }
             }
         }
+        #[cfg(test)]
+        FACT_BUILDS.with(|builds| builds.set(builds.get() + 1));
         // Built outside the lock: a fact may ask another one.
         let value = std::sync::Arc::new(build());
         if let Ok(mut cached) = cell.0.write() {
@@ -550,13 +559,10 @@ impl Module {
     /// The `class_infos` entry whose name folds to `key` (`php_symbol_key` without the leading
     /// `\\`), the first one in iteration order as the linear scan this replaces found it.
     pub(crate) fn class_info_by_key(&self, key: &str) -> Option<(&str, &crate::types::ClassInfo)> {
-        let name = self
-            .cached_fact(&self.fact_cache.class_names_by_key, || {
-                folded_name_index(self.class_infos.keys())
-            })
-            .get(key)
-            .cloned()?;
-        self.class_infos.get_key_value(&name).map(|(name, info)| (name.as_str(), info))
+        let names = self.cached_fact(&self.fact_cache.class_names_by_key, || {
+            folded_name_index(self.class_infos.keys())
+        });
+        self.class_infos.get_key_value(names.get(key)?).map(|(name, info)| (name.as_str(), info))
     }
 
     /// The `interface_infos` entry whose name folds to `key`, as [`Self::class_info_by_key`].
@@ -564,13 +570,21 @@ impl Module {
         &self,
         key: &str,
     ) -> Option<(&str, &crate::types::InterfaceInfo)> {
-        let name = self
-            .cached_fact(&self.fact_cache.interface_names_by_key, || {
-                folded_name_index(self.interface_infos.keys())
-            })
-            .get(key)
-            .cloned()?;
-        self.interface_infos.get_key_value(&name).map(|(name, info)| (name.as_str(), info))
+        let names = self.cached_fact(&self.fact_cache.interface_names_by_key, || {
+            folded_name_index(self.interface_infos.keys())
+        });
+        self.interface_infos
+            .get_key_value(names.get(key)?)
+            .map(|(name, info)| (name.as_str(), info))
+    }
+
+    /// Whether `functions` holds a body under exactly `name`. A dynamic `new` asks this of every
+    /// candidate class at every site, so a scan of the table cost classes x functions x sites.
+    pub(crate) fn has_function_named(&self, name: &str) -> bool {
+        self.cached_fact(&self.fact_cache.function_names, || {
+            self.functions.iter().map(|function| function.name.clone()).collect()
+        })
+        .contains(name)
     }
 
     /// The classes allocation, `instanceof` and static access can name at run time

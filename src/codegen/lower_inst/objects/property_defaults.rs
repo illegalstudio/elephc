@@ -124,12 +124,7 @@ pub(super) fn emit_stacked_property_initialization(
 /// Calls one emitted class-property initializer with the object in ABI argument zero.
 fn emit_property_init_thunk_call(ctx: &mut FunctionContext<'_>, class_id: u64) -> Result<()> {
     let thunk = format!("_class_propinit_{class_id}");
-    if !ctx
-        .module
-        .functions
-        .iter()
-        .any(|function| function.name == thunk)
-    {
+    if !ctx.module.has_function_named(&thunk) {
         return Err(CodegenIrError::unsupported(format!(
             "object property initializer thunk {thunk} was not emitted"
         )));

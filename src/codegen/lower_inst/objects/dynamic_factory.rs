@@ -62,11 +62,10 @@ pub(super) fn class_is_same_or_descends_from(
     class_name: &str,
     required_parent: &str,
 ) -> bool {
+    let required_parent = required_parent.trim_start_matches('\\');
     let mut current = Some(class_name);
     while let Some(name) = current {
-        if php_symbol_key(name.trim_start_matches('\\'))
-            == php_symbol_key(required_parent.trim_start_matches('\\'))
-        {
+        if name.trim_start_matches('\\').eq_ignore_ascii_case(required_parent) {
             return true;
         }
         current = ctx
@@ -128,12 +127,7 @@ pub(super) fn dynamic_new_candidate(
                     thunk_class_id,
                     arg_count,
                 );
-                let emitted = ctx
-                    .module
-                    .functions
-                    .iter()
-                    .any(|function| function.name == thunk);
-                if !emitted {
+                if !ctx.module.has_function_named(&thunk) {
                     return Ok(None);
                 }
                 padding_thunk = Some(thunk);
