@@ -356,3 +356,30 @@ echo put(2.5, 3.5), "\n";
     assert_eq!(out.stdout, "3\n");
     assert_eq!(float_key_deprecations(&out.stderr), 2, "{}", out.stderr);
 }
+
+/// A packed `array<int>` local nothing writes reads as `mixed` under a counter key, as without
+/// promotable locals: reassigning an `int` local from it and indexing a buffer with it compile.
+#[test]
+fn test_unwritten_int_array_counter_reads_keep_mixed_view() {
+    let out = compile_and_run(r#"<?php
+function pick(int $n): string {
+    $cells = [2, 0, 1];
+    $y = 0;
+    if ($n > 0) {
+        $y = $cells[$n + 1];
+    }
+    $out = "";
+    for ($i = $n - 1; $i < 3; $i++) {
+        $out .= $cells[$i] . ",";
+    }
+    return $out . ($y ?? -1);
+}
+$cellOf = [1, 0, 1];
+$slots = buffer_new<int>(2);
+for ($item = 2; $item >= 0; $item--) {
+    $slots[$cellOf[$item]] += $item + 1;
+}
+echo pick($argc), "|", $slots[0], ",", $slots[1], "\n";
+"#);
+    assert_eq!(out, "2,0,1,1|2,4\n");
+}

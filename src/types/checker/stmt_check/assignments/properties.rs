@@ -252,6 +252,7 @@ pub(super) fn check_property_array_assign(
                 checker,
                 &prop_ty,
                 property_has_declared_type,
+                true,
                 &format!("Property {}::${}[]", class_name, property),
                 index,
                 &normalized_idx_ty,
@@ -1006,7 +1007,7 @@ fn updated_array_property_push_type(
 /// Handles `PhpType::Array` and `PhpType::AssocArray` storage:
 /// - For `Array`: validates element type compatibility, handles `Never`-element arrays specially
 ///   (converts to `AssocArray` when a static key forces hash storage), converts an untyped
-///   property to `AssocArray` for any integer key that may skip a slot, and merges element
+///   instance property to `AssocArray` for any integer key that may skip a slot, and merges element
 ///   types for untyped properties.
 /// - For `AssocArray`: merges the key type with the index type and merges the value type with
 ///   the assigned value, preserving declared-type constraints.
@@ -1016,10 +1017,15 @@ fn updated_array_property_push_type(
 /// untyped `[]` slot stores a hash instead of an indexed array that drops the key. A key that
 /// is not provably an integer on a declared packed `array<T>` is refused, since that slot
 /// keeps its packed storage and the write would coerce the key into an index.
+///
+/// `instance_slot` limits the skipping-key promotion to instance properties: a static slot keeps
+/// its packed storage under an integer key, because its compound writes (`C::$p[$k] ??= v`) store
+/// the promoted hash with boxed values, which the typed static slot does not accept.
 pub(super) fn updated_array_property_assign_type(
     checker: &Checker,
     prop_ty: &PhpType,
     property_has_declared_type: bool,
+    instance_slot: bool,
     element_label: &str,
     index: &Expr,
     normalized_idx_ty: &PhpType,
@@ -1034,7 +1040,9 @@ pub(super) fn updated_array_property_assign_type(
             if !matches!(normalized_idx_ty, PhpType::Int)
                 || (matches!(elem_ty.as_ref(), PhpType::Never)
                     && static_array_key_forces_hash_storage(index))
-                || (!property_has_declared_type && untyped_property_key_may_skip(index))
+                || (instance_slot
+                    && !property_has_declared_type
+                    && untyped_property_key_may_skip(index))
             {
                 // A declared `array<T>` is a packed vector that keeps its storage, so a key
                 // that is not provably an integer would be coerced into an index and a string

@@ -126,8 +126,14 @@ impl Checker {
 
     /// Returns whether an element read of the candidate `array` reads as `?int` under a boxed or
     /// counter key, which would otherwise read as `mixed`.
+    ///
+    /// Only a local that can really hold a promotable array takes that view: one the body writes
+    /// by element, or one already recorded promotable (an activated parameter, a promotable value
+    /// assigned to it). A packed local nothing writes keeps the `mixed` read it has without this
+    /// pass, so a buffer index, an `int` local it is reassigned into, and every other consumer
+    /// that accepts `mixed` but not `?int` keeps compiling.
     pub(crate) fn promotable_array_element_read(&self, array: &str, elem_ty: &PhpType, idx_ty: &PhpType) -> bool {
-        self.promotable_array_candidates.contains(array)
+        (self.promotable_array_candidates.written(array) || self.is_promotable_array_local(array))
             && promotable_element(elem_ty)
             && promotable_read_key(idx_ty)
     }
@@ -555,6 +561,8 @@ pub(crate) struct PromotableCandidates {
     disqualified: HashSet<String>,
     /// Locals the body assigns as a whole.
     assigned: HashSet<String>,
+    /// Locals the body writes by element or appends to.
+    written: HashSet<String>,
     /// Whether the body holds a construct a typed clone would duplicate.
     clone_blocked: bool,
 }
@@ -563,6 +571,11 @@ impl PromotableCandidates {
     /// Returns whether `name` may hold a promotable array in this body.
     pub(crate) fn contains(&self, name: &str) -> bool {
         self.active && !self.scope_escape && !self.disqualified.contains(name)
+    }
+
+    /// Returns whether candidate `name` is written by element or appended to in this body.
+    pub(crate) fn written(&self, name: &str) -> bool {
+        self.contains(name) && self.written.contains(name)
     }
 
     /// Returns whether a typed clone of this body may declare parameter `name` as `array<int>`:
@@ -596,6 +609,7 @@ pub(crate) fn find_candidates(checker: &Checker, body: &[Stmt]) -> PromotableCan
         scope_escape: scan.scope_escape,
         disqualified,
         assigned: scan.assigned,
+        written: scan.written,
         clone_blocked: scan.clone_blocked,
     }
 }
