@@ -3965,6 +3965,24 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "sodium",
+      "name": "SodiumException",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
         "kind": "checker-injected",
         "supported": true
       },
@@ -22309,6 +22327,168 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_ARGON2I",
+      "route": "prelude",
+      "since": null,
+      "value": "argon2i"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_ARGON2ID",
+      "route": "prelude",
+      "since": null,
+      "value": "argon2id"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_ARGON2_DEFAULT_MEMORY_COST",
+      "route": "prelude",
+      "since": null,
+      "value": 65536
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_ARGON2_DEFAULT_THREADS",
+      "route": "prelude",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_ARGON2_DEFAULT_TIME_COST",
+      "route": "prelude",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_ARGON2_PROVIDER",
+      "route": "prelude",
+      "since": null,
+      "value": "sodium"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_BCRYPT",
+      "route": "prelude",
+      "since": null,
+      "value": "2y"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_BCRYPT_DEFAULT_COST",
+      "route": "prelude",
+      "since": null,
+      "value": 12
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_DEFAULT",
+      "route": "prelude",
+      "since": null,
+      "value": "2y"
+    },
+    {
+      "aot": {
         "kind": "language-intrinsic",
         "supported": true
       },
@@ -23930,6 +24110,1842 @@
       "route": "dynamic",
       "since": null,
       "value": ""
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_BASE64_VARIANT_ORIGINAL",
+      "route": "prelude",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_BASE64_VARIANT_ORIGINAL_NO_PADDING",
+      "route": "prelude",
+      "since": null,
+      "value": 3
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_BASE64_VARIANT_URLSAFE",
+      "route": "prelude",
+      "since": null,
+      "value": 5
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING",
+      "route": "prelude",
+      "since": null,
+      "value": 7
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_AEGIS128L_ABYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_AEGIS128L_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_AEGIS128L_NPUBBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_AEGIS128L_NSECBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_AEGIS256_ABYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_AEGIS256_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_AEGIS256_NPUBBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_AEGIS256_NSECBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_AES256GCM_ABYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_AES256GCM_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_AES256GCM_NPUBBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 12
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_AES256GCM_NSECBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_ABYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_ABYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 12
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NSECBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_NPUBBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_NSECBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_ABYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 24
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NSECBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AUTH_BYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_AUTH_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_BOX_KEYPAIRBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_BOX_MACBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_BOX_NONCEBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 24
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_BOX_PUBLICKEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_BOX_SEALBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 48
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_BOX_SECRETKEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_BOX_SEEDBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_CORE_RISTRETTO255_HASHBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_CORE_RISTRETTO255_NONREDUCEDSCALARBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_CORE_RISTRETTO255_SCALARBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_GENERICHASH_BYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_GENERICHASH_BYTES_MAX",
+      "route": "prelude",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_GENERICHASH_BYTES_MIN",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_GENERICHASH_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_GENERICHASH_KEYBYTES_MAX",
+      "route": "prelude",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_GENERICHASH_KEYBYTES_MIN",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_KDF_BYTES_MAX",
+      "route": "prelude",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_KDF_BYTES_MIN",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_KDF_CONTEXTBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_KDF_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_KX_KEYPAIRBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_KX_PUBLICKEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_KX_SECRETKEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_KX_SEEDBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_KX_SESSIONKEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_ALG_ARGON2I13",
+      "route": "prelude",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_ALG_ARGON2ID13",
+      "route": "prelude",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_ALG_DEFAULT",
+      "route": "prelude",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_MEMLIMIT_INTERACTIVE",
+      "route": "prelude",
+      "since": null,
+      "value": 67108864
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_MEMLIMIT_MODERATE",
+      "route": "prelude",
+      "since": null,
+      "value": 268435456
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_MEMLIMIT_SENSITIVE",
+      "route": "prelude",
+      "since": null,
+      "value": 1073741824
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_OPSLIMIT_INTERACTIVE",
+      "route": "prelude",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_OPSLIMIT_MODERATE",
+      "route": "prelude",
+      "since": null,
+      "value": 3
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_OPSLIMIT_SENSITIVE",
+      "route": "prelude",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_SALTBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_MEMLIMIT_INTERACTIVE",
+      "route": "prelude",
+      "since": null,
+      "value": 16777216
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_MEMLIMIT_SENSITIVE",
+      "route": "prelude",
+      "since": null,
+      "value": 1073741824
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_OPSLIMIT_INTERACTIVE",
+      "route": "prelude",
+      "since": null,
+      "value": 524288
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_OPSLIMIT_SENSITIVE",
+      "route": "prelude",
+      "since": null,
+      "value": 33554432
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_SALTBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_STRPREFIX",
+      "route": "prelude",
+      "since": null,
+      "value": "$7$"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_PWHASH_STRPREFIX",
+      "route": "prelude",
+      "since": null,
+      "value": "$argon2id$"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SCALARMULT_BYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_BYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_SCALARBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SCALARMULT_SCALARBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SECRETBOX_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SECRETBOX_MACBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SECRETBOX_NONCEBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 24
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_ABYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 17
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_HEADERBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 24
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_MESSAGEBYTES_MAX",
+      "route": "prelude",
+      "since": null,
+      "value": 274877906816
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_FINAL",
+      "route": "prelude",
+      "since": null,
+      "value": 3
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_MESSAGE",
+      "route": "prelude",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_PUSH",
+      "route": "prelude",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_REKEY",
+      "route": "prelude",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SHORTHASH_BYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SHORTHASH_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SIGN_BYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SIGN_KEYPAIRBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 96
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SIGN_SECRETKEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_SIGN_SEEDBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_STREAM_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_STREAM_NONCEBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 24
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_CRYPTO_STREAM_XCHACHA20_NONCEBYTES",
+      "route": "prelude",
+      "since": null,
+      "value": 24
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_LIBRARY_MAJOR_VERSION",
+      "route": "prelude",
+      "since": null,
+      "value": 26
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_LIBRARY_MINOR_VERSION",
+      "route": "prelude",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "sodium",
+      "name": "SODIUM_LIBRARY_VERSION",
+      "route": "prelude",
+      "since": null,
+      "value": "1.0.22"
     },
     {
       "aot": {

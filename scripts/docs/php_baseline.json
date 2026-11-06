@@ -2241,7 +2241,13 @@
   "zip_read": "zip",
   "zlib_decode": "zlib",
   "zlib_encode": "zlib",
-  "zlib_get_coding_type": "zlib"
+  "zlib_get_coding_type": "zlib",
+  "sodium_crypto_aead_aegis128l_decrypt": "sodium",
+  "sodium_crypto_aead_aegis128l_encrypt": "sodium",
+  "sodium_crypto_aead_aegis128l_keygen": "sodium",
+  "sodium_crypto_aead_aegis256_decrypt": "sodium",
+  "sodium_crypto_aead_aegis256_encrypt": "sodium",
+  "sodium_crypto_aead_aegis256_keygen": "sodium"
  },
  "classes": {
   "__php_incomplete_class": {
@@ -10729,7 +10735,7 @@
   },
   "PASSWORD_ARGON2_PROVIDER": {
    "extension": "standard",
-   "value": "standard"
+   "value": "sodium"
   },
   "PASSWORD_BCRYPT": {
    "extension": "standard",
@@ -13209,15 +13215,15 @@
   },
   "SODIUM_LIBRARY_MAJOR_VERSION": {
    "extension": "sodium",
-   "value": 10
+   "value": 26
   },
   "SODIUM_LIBRARY_MINOR_VERSION": {
    "extension": "sodium",
-   "value": 3
+   "value": 4
   },
   "SODIUM_LIBRARY_VERSION": {
    "extension": "sodium",
-   "value": "1.0.18"
+   "value": "1.0.22"
   },
   "SOL_SOCKET": {
    "extension": "sockets",
@@ -16620,6 +16626,38 @@
   "ZLIB_VERSION_ERROR": {
    "extension": "zlib",
    "value": -6
+  },
+  "SODIUM_CRYPTO_AEAD_AEGIS128L_ABYTES": {
+   "extension": "sodium",
+   "value": 32
+  },
+  "SODIUM_CRYPTO_AEAD_AEGIS128L_KEYBYTES": {
+   "extension": "sodium",
+   "value": 16
+  },
+  "SODIUM_CRYPTO_AEAD_AEGIS128L_NPUBBYTES": {
+   "extension": "sodium",
+   "value": 16
+  },
+  "SODIUM_CRYPTO_AEAD_AEGIS128L_NSECBYTES": {
+   "extension": "sodium",
+   "value": 0
+  },
+  "SODIUM_CRYPTO_AEAD_AEGIS256_ABYTES": {
+   "extension": "sodium",
+   "value": 32
+  },
+  "SODIUM_CRYPTO_AEAD_AEGIS256_KEYBYTES": {
+   "extension": "sodium",
+   "value": 32
+  },
+  "SODIUM_CRYPTO_AEAD_AEGIS256_NPUBBYTES": {
+   "extension": "sodium",
+   "value": 32
+  },
+  "SODIUM_CRYPTO_AEAD_AEGIS256_NSECBYTES": {
+   "extension": "sodium",
+   "value": 0
   }
  }
 }

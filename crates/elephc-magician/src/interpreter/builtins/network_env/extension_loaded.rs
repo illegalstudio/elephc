@@ -81,7 +81,7 @@ pub(in crate::interpreter) fn eval_extension_is_loaded_in(
     if name.eq_ignore_ascii_case("xml") || name.eq_ignore_ascii_case("xmlwriter") {
         return context.native_function("xml_parser_create").is_some();
     }
-    if eval_gmp_bridge_extension(name, context) {
+    if eval_gmp_bridge_extension(name, context) || eval_sodium_bridge_extension(name, context) {
         return true;
     }
     eval_extension_is_loaded(name)

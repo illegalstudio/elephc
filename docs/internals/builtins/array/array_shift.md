@@ -37,7 +37,7 @@ description: "Compiler internals for array_shift(): lowering path, type checks, 
 ## Signature summary
 
 ```php
-function array_shift(array $array): mixed
+function array_shift(array &$array): mixed
 ```
 
 ## What the type checker enforces

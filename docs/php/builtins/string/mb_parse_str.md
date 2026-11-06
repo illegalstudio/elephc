@@ -6,7 +6,7 @@ description: "Parses URL-encoded input with shared encoding detection and writes
 ## mb_parse_str()
 
 ```php
-function mb_parse_str(string $string, mixed $result): bool
+function mb_parse_str(string $string, mixed &$result): bool
 ```
 
 Parses URL-encoded input with shared encoding detection and writes decoded variables by reference.

@@ -36,6 +36,8 @@ AREAS: list[str] = [
     "Web",
     "Image",
     "XML",
+    "Sodium",
+    "Password",
 ]
 
 
@@ -86,6 +88,10 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     "xml": ("XML", "XML"),
     # `ext/random` procedural functions declared by the random prelude.
     "random": ("Math", "Random"),
+    # `ext/sodium` procedural functions backed by the libsodium bridge.
+    "sodium": ("Sodium", "Sodium"),
+    # The core `password` extension's Argon2 provider on top of the sodium bridge.
+    "password": ("Password", "Password"),
 }
 
 

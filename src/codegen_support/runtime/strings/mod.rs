@@ -161,7 +161,7 @@ pub(crate) use concat_scratch::{FLOAT_SPILL_SLOTS, FLOAT_WINDOW_BYTES};
 pub use strbuf::emit_strbuf;
 /// Emit the growable output buffer used by `json_encode()` and `serialize()`.
 pub(crate) use strbuf::{STRBUF_SIZE, STRBUF_WRITE};
-pub use str_persist::emit_str_persist;
+pub use str_persist::{emit_str_persist, emit_str_zero};
 /// Emit string persistence helper.
 pub use str_inc_dec::{emit_mixed_inc_dec, emit_str_inc_dec};
 /// Emit PHP's `++`/`--` on a string value and its boxed dispatch entry point.

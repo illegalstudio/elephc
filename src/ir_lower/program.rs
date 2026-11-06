@@ -172,6 +172,16 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     )?;
+    // Sodium prelude helpers carry cryptographic operands. php-src strips argument values
+    // from every frame of an exception raised by ext/sodium; hiding these generated helper
+    // frames removes the bridge-level copies from uncaught traces before codegen publishes
+    // backtrace readers.
+    for function in &mut module.functions {
+        if function.name.starts_with("__elephc_sodium_") {
+            function.source_name = None;
+            function.flags.is_synthetic = true;
+        }
+    }
     super::boxed_array_appends::normalize_module(&mut module);
     super::closure_scopes::specialize_module(&mut module);
     super::effect_refinement::refine_module(&mut module);

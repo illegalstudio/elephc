@@ -26,6 +26,7 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.directory_resource |= features.directory_resource;
     module.required_runtime_features.handler_state |= features.handler_state;
     module.required_runtime_features.object_clone |= features.object_clone;
+    module.required_runtime_features.sodium |= features.sodium;
     // Not derived from the instruction stream like the rest: a Fiber object can only exist if the
     // builtin class was registered, and `types::checker::builtin_class_gate` has already decided
     // that from the program's own text. Reading the answer here is exact, where scanning EIR for
@@ -95,6 +96,8 @@ pub(crate) fn module_runs_interpreted_code(module: &Module) -> bool {
 /// [`lowered_runtime_features`], optionally leaving out the OPcache operations' bridge links.
 fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> RuntimeFeatures {
     let mut features = RuntimeFeatures::none();
+    features.sodium = all_lowered_functions(module)
+        .any(|function| function.name.starts_with("__elephc_sodium_"));
     // Computed lazily and once: only a program that names a file-cache operation pays for it.
     let mut live_file_cache: Option<bool> = None;
     for function in all_lowered_functions(module) {
@@ -175,6 +178,7 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                         Some(Immediate::I64(value)) => CoreBuiltinOp::from_i64(value),
                         _ => None,
                     };
+                    features.sodium |= operation == Some(CoreBuiltinOp::StrZero);
                     features.handler_state |= matches!(
                         operation,
                         Some(

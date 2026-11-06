@@ -459,3 +459,81 @@ mod tests {
         assert!(asm.contains("mov QWORD PTR [rax - 8], r10\n"));
     }
 }
+
+/// Emits `__rt_str_zero`, which wipes a uniquely owned PHP string payload in place.
+///
+/// `sodium_memzero()` resets the caller variable to null, but php-src first overwrites the
+/// string bytes when the payload is uniquely owned. The helper accepts the pointer/length pair
+/// in the target's string result registers, verifies the managed owned-string heap kind and a
+/// refcount of one, then writes volatile zero bytes over the payload. Shared, static, transient
+/// and null strings are left untouched, exactly like `zend_string` separation.
+pub fn emit_str_zero(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_str_zero_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: str_zero ---");
+    emitter.label_global("__rt_str_zero");
+    emitter.instruction("cbz x2, __rt_str_zero_done");                         // an empty payload has no secret bytes to wipe
+    emitter.instruction("cbz x1, __rt_str_zero_done");                         // the null-string sentinel has no storage
+    emitter.instruction("stp x29, x30, [sp, #-32]!");                          // preserve linkage and reserve the pointer/length spill slots
+    emitter.instruction("mov x29, sp");                                        // establish the helper frame pointer
+    emitter.instruction("str x1, [sp, #16]");                                  // retain the payload pointer across heap classification
+    emitter.instruction("str x2, [sp, #24]");                                  // retain the exact byte length
+    emitter.instruction("mov x0, x1");                                         // classify the candidate as a managed heap payload
+    emitter.instruction("bl __rt_heap_kind");                                 // load the uniform heap kind
+    emitter.instruction("cmp x0, #1");                                         // heap kind 1 is an owned elephc string
+    emitter.instruction("b.ne __rt_str_zero_restore");                        // static, transient and foreign strings are not wiped
+    emitter.instruction("ldr x1, [sp, #16]");                                  // recover the owned payload pointer
+    emitter.instruction("ldr w9, [x1, #-12]");                                 // read the payload's live refcount
+    emitter.instruction("cmp w9, #1");                                         // only a uniquely owned string may be overwritten
+    emitter.instruction("b.ne __rt_str_zero_restore");                         // shared aliases keep their bytes
+    emitter.instruction("ldr x2, [sp, #24]");                                  // recover the exact byte length
+    emitter.instruction("mov x10, #0");                                        // start the wipe at byte zero
+    emitter.label("__rt_str_zero_loop");
+    emitter.instruction("strb wzr, [x1, x10]");                                // overwrite one secret byte with zero
+    emitter.instruction("add x10, x10, #1");                                   // advance to the next payload byte
+    emitter.instruction("cmp x10, x2");                                        // have all bytes been overwritten?
+    emitter.instruction("b.lo __rt_str_zero_loop");                            // continue until the length is exhausted
+    emitter.label("__rt_str_zero_restore");
+    emitter.instruction("ldp x29, x30, [sp], #32");                            // restore the caller frame and linkage
+    emitter.label("__rt_str_zero_done");
+    emitter.instruction("ret");                                                // return to the prelude helper
+}
+
+/// Emits the x86_64 Linux variant of `__rt_str_zero`.
+fn emit_str_zero_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: str_zero ---");
+    emitter.label_global("__rt_str_zero");
+    emitter.instruction("test rdx, rdx");                                      // an empty payload has no secret bytes to wipe
+    emitter.instruction("jz __rt_str_zero_done_x86");                         // skip the null and empty fast paths
+    emitter.instruction("test rax, rax");                                     // the null-string sentinel has no storage
+    emitter.instruction("jz __rt_str_zero_done_x86");                         // skip the null sentinel
+    emitter.instruction("push rbp");                                          // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                      // establish the helper frame pointer
+    emitter.instruction("sub rsp, 32");                                       // reserve the pointer/length spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                      // retain the payload pointer across heap classification
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                     // retain the exact byte length
+    emitter.instruction("mov rdi, rax");                                      // classify the candidate as a managed heap payload
+    emitter.instruction("call __rt_heap_kind");                               // load the uniform heap kind
+    emitter.instruction("cmp rax, 1");                                        // heap kind 1 is an owned elephc string
+    emitter.instruction("jne __rt_str_zero_restore_x86");                    // static, transient and foreign strings are not wiped
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                      // recover the owned payload pointer
+    emitter.instruction("cmp DWORD PTR [rax - 12], 1");                       // only a uniquely owned string may be overwritten
+    emitter.instruction("jne __rt_str_zero_restore_x86");                    // shared aliases keep their bytes
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                     // recover the exact byte length
+    emitter.instruction("xor ecx, ecx");                                      // start the wipe at byte zero
+    emitter.label("__rt_str_zero_loop_x86");
+    emitter.instruction("mov BYTE PTR [rax + rcx], 0");                       // overwrite one secret byte with zero
+    emitter.instruction("inc rcx");                                           // advance to the next payload byte
+    emitter.instruction("cmp rcx, rdx");                                      // have all bytes been overwritten?
+    emitter.instruction("jb __rt_str_zero_loop_x86");                         // continue until the length is exhausted
+    emitter.label("__rt_str_zero_restore_x86");
+    emitter.instruction("add rsp, 32");                                       // release the pointer/length spill slots
+    emitter.instruction("pop rbp");                                           // restore the caller frame pointer
+    emitter.label("__rt_str_zero_done_x86");
+    emitter.instruction("ret");                                               // return to the prelude helper
+}

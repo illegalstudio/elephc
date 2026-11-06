@@ -37,7 +37,7 @@ description: "Compiler internals for usort(): lowering path, type checks, and ru
 ## Signature summary
 
 ```php
-function usort(array $array, callable $callback): bool
+function usort(array &$array, callable $callback): bool
 ```
 
 ## What the type checker enforces

@@ -37,7 +37,7 @@ description: "Compiler internals for settype(): lowering path, type checks, and 
 ## Signature summary
 
 ```php
-function settype(mixed $var, string $type): bool
+function settype(mixed &$var, string $type): bool
 ```
 
 ## What the type checker enforces

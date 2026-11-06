@@ -397,6 +397,118 @@ const GMP_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: GMP_HEADERS,
     provides: &["gmp"],
 }];
+/// libsodium's single static archive. The bridge calls only libsodium's public C API.
+const SODIUM_ARCHIVES: &[&str] = &["lib/libsodium.a"];
+/// Every public libsodium 1.0.22 header: the pristine source headers plus
+/// `sodium/version.h`, which `configure` generates from `version.h.in`.
+const SODIUM_HEADERS: &[&str] = &[
+    "include/sodium.h",
+    "include/sodium/core.h",
+    "include/sodium/crypto_aead_aegis128l.h",
+    "include/sodium/crypto_aead_aegis256.h",
+    "include/sodium/crypto_aead_aes256gcm.h",
+    "include/sodium/crypto_aead_chacha20poly1305.h",
+    "include/sodium/crypto_aead_xchacha20poly1305.h",
+    "include/sodium/crypto_auth.h",
+    "include/sodium/crypto_auth_hmacsha256.h",
+    "include/sodium/crypto_auth_hmacsha512.h",
+    "include/sodium/crypto_auth_hmacsha512256.h",
+    "include/sodium/crypto_box.h",
+    "include/sodium/crypto_box_curve25519xchacha20poly1305.h",
+    "include/sodium/crypto_box_curve25519xsalsa20poly1305.h",
+    "include/sodium/crypto_core_ed25519.h",
+    "include/sodium/crypto_core_hchacha20.h",
+    "include/sodium/crypto_core_hsalsa20.h",
+    "include/sodium/crypto_core_keccak1600.h",
+    "include/sodium/crypto_core_ristretto255.h",
+    "include/sodium/crypto_core_salsa20.h",
+    "include/sodium/crypto_core_salsa2012.h",
+    "include/sodium/crypto_core_salsa208.h",
+    "include/sodium/crypto_generichash.h",
+    "include/sodium/crypto_generichash_blake2b.h",
+    "include/sodium/crypto_hash.h",
+    "include/sodium/crypto_hash_sha256.h",
+    "include/sodium/crypto_hash_sha3.h",
+    "include/sodium/crypto_hash_sha512.h",
+    "include/sodium/crypto_ipcrypt.h",
+    "include/sodium/crypto_kdf.h",
+    "include/sodium/crypto_kdf_blake2b.h",
+    "include/sodium/crypto_kdf_hkdf_sha256.h",
+    "include/sodium/crypto_kdf_hkdf_sha512.h",
+    "include/sodium/crypto_kem.h",
+    "include/sodium/crypto_kem_mlkem768.h",
+    "include/sodium/crypto_kem_xwing.h",
+    "include/sodium/crypto_kx.h",
+    "include/sodium/crypto_onetimeauth.h",
+    "include/sodium/crypto_onetimeauth_poly1305.h",
+    "include/sodium/crypto_pwhash.h",
+    "include/sodium/crypto_pwhash_argon2i.h",
+    "include/sodium/crypto_pwhash_argon2id.h",
+    "include/sodium/crypto_pwhash_scryptsalsa208sha256.h",
+    "include/sodium/crypto_scalarmult.h",
+    "include/sodium/crypto_scalarmult_curve25519.h",
+    "include/sodium/crypto_scalarmult_ed25519.h",
+    "include/sodium/crypto_scalarmult_ristretto255.h",
+    "include/sodium/crypto_secretbox.h",
+    "include/sodium/crypto_secretbox_xchacha20poly1305.h",
+    "include/sodium/crypto_secretbox_xsalsa20poly1305.h",
+    "include/sodium/crypto_secretstream_xchacha20poly1305.h",
+    "include/sodium/crypto_shorthash.h",
+    "include/sodium/crypto_shorthash_siphash24.h",
+    "include/sodium/crypto_sign.h",
+    "include/sodium/crypto_sign_ed25519.h",
+    "include/sodium/crypto_sign_edwards25519sha512batch.h",
+    "include/sodium/crypto_stream.h",
+    "include/sodium/crypto_stream_chacha20.h",
+    "include/sodium/crypto_stream_salsa20.h",
+    "include/sodium/crypto_stream_salsa2012.h",
+    "include/sodium/crypto_stream_salsa208.h",
+    "include/sodium/crypto_stream_xchacha20.h",
+    "include/sodium/crypto_stream_xsalsa20.h",
+    "include/sodium/crypto_verify_16.h",
+    "include/sodium/crypto_verify_32.h",
+    "include/sodium/crypto_verify_64.h",
+    "include/sodium/crypto_xof_shake128.h",
+    "include/sodium/crypto_xof_shake256.h",
+    "include/sodium/crypto_xof_turboshake128.h",
+    "include/sodium/crypto_xof_turboshake256.h",
+    "include/sodium/export.h",
+    "include/sodium/private/asm_cet.h",
+    "include/sodium/private/chacha20_ietf_ext.h",
+    "include/sodium/private/common.h",
+    "include/sodium/private/ed25519_ref10.h",
+    "include/sodium/private/ed25519_ref10_fe_25_5.h",
+    "include/sodium/private/ed25519_ref10_fe_51.h",
+    "include/sodium/private/implementations.h",
+    "include/sodium/private/mutex.h",
+    "include/sodium/private/quirks.h",
+    "include/sodium/private/softaes.h",
+    "include/sodium/private/sse2_64_32.h",
+    "include/sodium/randombytes.h",
+    "include/sodium/randombytes_internal_random.h",
+    "include/sodium/randombytes_sysrandom.h",
+    "include/sodium/runtime.h",
+    "include/sodium/utils.h",
+    "include/sodium/version.h",
+];
+/// libsodium 1.0.22 is the exact library the PHP 8.5.10 oracle links, so every
+/// `SODIUM_*` constant (including AEGIS availability and the version triple) matches.
+const SODIUM_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "1.0.22",
+    source: SourceArchive {
+        https_url: "https://github.com/jedisct1/libsodium/releases/download/1.0.22-RELEASE/libsodium-1.0.22.tar.gz",
+        sha256: "adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349",
+        exact_size: 2_008_529,
+        body_limit: 16 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &[],
+    supported_targets: TARGETS,
+    ordered_link_outputs: SODIUM_ARCHIVES,
+    retained_headers: SODIUM_HEADERS,
+    provides: &["libsodium"],
+}];
+
 /// Pinned file/libmagic with a database embedded by the reviewed recipe.
 const LIBMAGIC_VERSIONS: &[PackageVersion] = &[PackageVersion {
     version: "5.46",
@@ -464,6 +576,11 @@ const PACKAGES: &[PackageSpec] = &[
         name: "gmp",
         default_version: "6.3.0",
         versions: GMP_VERSIONS,
+    },
+    PackageSpec {
+        name: "libsodium",
+        default_version: "1.0.22",
+        versions: SODIUM_VERSIONS,
     },
 ];
 
@@ -587,7 +704,7 @@ mod tests {
     fn catalog_rejects_unknown_selection() {
         assert_eq!(
             package("libfoo").unwrap_err().to_string(),
-            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, openssl-crypto, nghttp2, libssh2, curl, oniguruma, libxml2, gmp"
+            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, openssl-crypto, nghttp2, libssh2, curl, oniguruma, libxml2, gmp, libsodium"
         );
         assert!(version("pcre2", Some("10.46")).is_err());
     }

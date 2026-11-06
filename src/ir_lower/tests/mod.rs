@@ -201,6 +201,8 @@ fn try_lower_source_at_for_target(
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::gmp_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::sodium_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);

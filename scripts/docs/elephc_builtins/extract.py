@@ -196,13 +196,14 @@ def build_home_file_map(repo: Path) -> dict[str, str]:
         if path.name in _NON_HOME_FILES:
             continue
         text = path.read_text(encoding="utf-8")
-        contract_match = _CONTRACT_RE.search(text)
-        if contract_match is None:
-            contract_match = _CORE_HOME_RE.search(text)
-        if not contract_match:
-            continue
-        canonical = contract_match.group(1).lower()
-        out[canonical] = str(path.relative_to(repo))
+        # A home file may declare one contract directly or a macro-generated family
+        # (the sodium bindings keep 110 mechanically identical registrations in one
+        # auditable table), so record every contract spelled in the file.
+        contracts = [match.group(1).lower() for match in _CONTRACT_RE.finditer(text)]
+        if not contracts:
+            contracts = [match.group(1).lower() for match in _CORE_HOME_RE.finditer(text)]
+        for canonical in contracts:
+            out[canonical] = str(path.relative_to(repo))
     return out
 
 
@@ -583,6 +584,19 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
         "version_prelude.rs",
         "version",
         "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    # The PHP-visible by-reference sodium mutators are ordinary prelude functions so
+    # both AOT and eval use the shared reference-call machinery.
+    "sodium": (
+        "sodium_prelude/mutators.rs",
+        "sodium",
+        "crates/elephc-builtin-contract/src/catalog_sodium.rs",
+    ),
+    # The core password provider is declared by its own sodium-prelude module.
+    "password": (
+        "sodium_prelude/password.rs",
+        "password",
+        "crates/elephc-builtin-contract/src/catalog_password.rs",
     ),
     "random": (
         "random_prelude.rs",

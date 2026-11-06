@@ -174,6 +174,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("GmagickException", "gmagickexception", Class, Gmagick, Prelude),
     class!("GmagickPixel", "gmagickpixel", Class, Gmagick, Prelude),
     class!("GmagickPixelException", "gmagickpixelexception", Class, Gmagick, Prelude),
+    class!("SodiumException", "sodiumexception", Class, Sodium, Prelude),
     class!("GMP", "gmp", Class, Gmp, Prelude, since: Php82, operators: &crate::GMP_OPERATORS, dynamic_deprecated: true, dynamic_first: true, hidden_properties: &["__elephc_num"], visible_methods: &["__construct", "__serialize", "__unserialize"]),
     class!("HashContext", "hashcontext", Class, Hash, Prelude),
     class!("ImageException", "imageexception", Class, Gd, Prelude, extension: true),

@@ -106,9 +106,9 @@ def _signature_line(b: dict) -> str:
         # PHP-style render: `string $name`
         if p.get("default") is not None:
             # already rendered PHP literal
-            parts.append(f"{p['type']} ${p['name']} = {p['default']}")
+            parts.append(f"{p['type']} {prefix}${p['name']} = {p['default']}")
         else:
-            parts.append(f"{p['type']} ${p['name']}")
+            parts.append(f"{p['type']} {prefix}${p['name']}")
     params = ", ".join(parts)
     if b["sig"]["variadic"]:
         sep = ", " if parts else ""
@@ -336,6 +336,14 @@ def _eval_internals_section(b: dict) -> str:
         return (
             "_Not callable from eval'd code - the magician interpreter has no "
             "entry for this builtin._"
+        )
+    if ev.get("kind") == "native-prelude":
+        home = ev.get("home_file") or ""
+        return (
+            "Eval resolves the same native prelude declaration the AOT program calls "
+            f"([`{home}`](https://github.com/illegalstudio/elephc/blob/main/{home})); "
+            "there is no separate `eval_builtin!` binding, so named and dynamic calls "
+            "share the compiled by-reference call machinery."
         )
     if ev.get("kind") == "date-alias":
         home = ev.get("home_file") or ""

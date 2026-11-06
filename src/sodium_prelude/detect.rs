@@ -1,0 +1,41 @@
+//! Purpose:
+//! Decides whether a parsed program references the sodium or core password provider surface.
+//!
+//! Called from:
+//! - `crate::sodium_prelude::inject_if_used`.
+//!
+//! Key details:
+//! - Runs before name resolution, so names are raw source text and PHP function/class
+//!   lookup is case-insensitive. Only the unqualified last segment is compared, which
+//!   matches `sodium_bin2hex`, `\sodium_bin2hex` and `\App\sodium_bin2hex`.
+//! - The function set is exact, never a prefix: `sodium_chloride` or a user function
+//!   named `sodium_helper` must not inject the surface or link the bridge. The core
+//!   `password_*` provider is included because it is implemented over the same bridge.
+//! - Soundness beats precision here: a missed reference would remove declarations a
+//!   valid program needs, while a false positive only adds harmless declarations.
+
+use crate::parser::ast::Program;
+
+/// Returns whether any top-level statement references the sodium surface.
+pub(super) fn program_uses_sodium(program: &Program) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    usage.functions.iter().any(|name| {
+        name.rsplit('\\')
+            .next()
+            .is_some_and(|segment| elephc_builtin_contract::SODIUM_FUNCTIONS
+                .iter()
+                .any(|candidate| segment.eq_ignore_ascii_case(candidate)))
+    }) || usage.functions.iter().any(|name| {
+        name.rsplit('\\')
+            .next()
+            .is_some_and(|segment| elephc_builtin_contract::PASSWORD_FUNCTIONS
+                .iter()
+                .any(|candidate| segment.eq_ignore_ascii_case(candidate)))
+    }) || usage.constants.iter().any(|name| {
+        name.starts_with("SODIUM_") || name.starts_with("PASSWORD_")
+    }) || usage.classes.iter().any(|name| {
+        name.rsplit('\\')
+            .next()
+            .is_some_and(|segment| segment.eq_ignore_ascii_case("SodiumException"))
+    })
+}

@@ -37,7 +37,7 @@ description: "Compiler internals for array_splice(): lowering path, type checks,
 ## Signature summary
 
 ```php
-function array_splice(array $array, int $offset, int $length = null, array $replacement = []): array
+function array_splice(array &$array, int $offset, int $length = null, array $replacement = []): array
 ```
 
 ## What the type checker enforces

@@ -37,7 +37,7 @@ description: "Compiler internals for array_pop(): lowering path, type checks, an
 ## Signature summary
 
 ```php
-function array_pop(array $array): mixed
+function array_pop(array &$array): mixed
 ```
 
 ## What the type checker enforces

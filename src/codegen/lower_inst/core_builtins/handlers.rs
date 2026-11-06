@@ -29,6 +29,22 @@ const E_USER_DEPRECATED: i64 = 16_384;
 const INVALID_TRIGGER_LEVEL_MESSAGE: &str =
     "trigger_error(): Argument #2 ($error_level) must be one of E_USER_ERROR, E_USER_WARNING, E_USER_NOTICE, or E_USER_DEPRECATED";
 
+/// Wipes a uniquely owned string payload through the shared runtime helper.
+///
+/// The operand is loaded into the target's string result pair (`x1`/`x2` or `rax`/`rdx`),
+/// which is exactly the pair `__rt_str_zero` classifies and overwrites.
+pub(super) fn lower_str_zero(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let actual = ctx.load_value_to_result(value)?.codegen_repr();
+    if actual != PhpType::Str {
+        return Err(crate::codegen::CodegenIrError::invalid_module(format!(
+            "typed runtime __rt_str_zero expected Str, got {actual:?}",
+        )));
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_zero");
+    Ok(())
+}
+
 /// Gets or replaces the process-local PHP error reporting mask.
 pub(super) fn lower_error_reporting(
     ctx: &mut FunctionContext<'_>,

@@ -27,6 +27,7 @@ mod mbstring_callback;
 mod string;
 mod math;
 pub(crate) mod gmp;
+pub(crate) mod sodium;
 mod spl;
 mod pointers;
 mod system;

@@ -37,6 +37,8 @@ pub fn contracts() -> &'static [BuiltinContract] {
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
                     + crate::catalog_gmp::CONTRACTS.len()
+                    + crate::catalog_sodium::CONTRACTS.len()
+                    + crate::catalog_password::CONTRACTS.len()
                     + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
@@ -45,6 +47,8 @@ pub fn contracts() -> &'static [BuiltinContract] {
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_gmp::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_sodium::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_password::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
@@ -166,7 +170,8 @@ mod tests {
         // +4: the internal `__elephc_ptr_get` and `__elephc_zval_{pack,free,unpack}` aliases
         // the extension-hosting prelude calls.
         // +2: PHP 8.5 array value-edge functions.
-        assert_eq!(contracts().len(), 1248 + curl_surface);
+        // +1: the internal `__elephc_str_zero` payload-wipe helper.
+        assert_eq!(contracts().len(), 1364 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

@@ -292,6 +292,11 @@ impl Scanner<'_> {
         for helper in crate::builtins::gmp::prelude_helpers_for(&key) {
             self.record_callable(helper);
         }
+        // The sodium registry builtins' EIR lowerings call their prelude helpers directly;
+        // root the whole family next to that lowering contract.
+        for helper in crate::builtins::sodium::prelude_helpers_for(&key) {
+            self.record_callable(helper);
+        }
         let normalized = self.normalized_function_arguments(&key, args);
         let first = normalized.first().map(unwrap_named_arg);
         match key.as_str() {

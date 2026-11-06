@@ -37,7 +37,7 @@ description: "Compiler internals for uksort(): lowering path, type checks, and r
 ## Signature summary
 
 ```php
-function uksort(array $array, callable $callback): bool
+function uksort(array &$array, callable $callback): bool
 ```
 
 ## What the type checker enforces

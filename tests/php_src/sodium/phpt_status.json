@@ -1,0 +1,126 @@
+{
+  "bug78114.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "bug78516.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_aead.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_auth.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_box.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_core_ristretto255.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_generichash.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_hex.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_kdf.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_kx.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_scalarmult.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_scalarmult_ristretto255.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_secretbox.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_secretstream.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_shorthash.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_sign.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_stream.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "crypto_stream_xchacha20.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "exception_trace_without_args.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "inc_add.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "installed.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "php_password_hash_argon2i.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "php_password_hash_argon2id.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "php_password_verify.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "pwhash_argon2i.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "pwhash_memlimit_below_min.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "pwhash_scrypt.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "sodium_crypto_sign_ed25519_pk_to_curve25519_failure_leak.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "sodium_error_001.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "utils.phpt": {
+    "reason": "",
+    "status": "PASS"
+  },
+  "version.phpt": {
+    "reason": "",
+    "status": "PASS"
+  }
+}

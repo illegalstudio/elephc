@@ -6,7 +6,7 @@ description: "Performs a regular expression match."
 ## preg_match()
 
 ```php
-function preg_match(string $pattern, string $subject, array $matches = null): int|false
+function preg_match(string $pattern, string $subject, array &$matches = null): int|false
 ```
 
 Performs a regular expression match.

@@ -17,6 +17,7 @@ use std::cell::Cell;
 // its own flag and the compile consumes it, so a failing case cannot leak into the next.
 thread_local! {
     static FORCE_GMP_PRELUDE: Cell<bool> = const { Cell::new(false) };
+    static FORCE_SODIUM_PRELUDE: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Resets the one-shot GMP override even when the compile panics.
@@ -27,6 +28,25 @@ impl Drop for ForceGmpGuard {
     fn drop(&mut self) {
         FORCE_GMP_PRELUDE.with(|flag| flag.set(false));
     }
+}
+
+/// Resets the one-shot sodium override even when the compile panics.
+struct ForceSodiumGuard;
+
+impl Drop for ForceSodiumGuard {
+    /// Clears the thread-local override on every exit path.
+    fn drop(&mut self) {
+        FORCE_SODIUM_PRELUDE.with(|flag| flag.set(false));
+    }
+}
+
+/// Compiles and runs one corpus fixture with ext/sodium guaranteed to be loaded.
+pub(crate) fn compile_and_run_capture_merged_with_sodium(source: &str) -> ProgramOutput {
+    FORCE_SODIUM_PRELUDE.with(|flag| flag.set(true));
+    let _guard = ForceSodiumGuard;
+    // php-src's CLI runs the corpus with its default 128 MiB memory_limit; Argon2id's
+    // interactive memory limit is 64 MiB and the password-hash tests use it directly.
+    compile_and_run_capture_merged_with_heap(source, 128 * 1024 * 1024)
 }
 
 /// Compiles and runs one corpus fixture with ext/gmp guaranteed to be loaded.
@@ -374,6 +394,8 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let force_gmp = FORCE_GMP_PRELUDE.with(|flag| flag.replace(false));
     let resolved = elephc::gmp_prelude::inject_if_used(resolved, force_gmp, &mut prelude_inventory);
+    let force_sodium = FORCE_SODIUM_PRELUDE.with(|flag| flag.get());
+    let resolved = elephc::sodium_prelude::inject_if_used(resolved, force_sodium, &mut prelude_inventory);
     let resolved = elephc::random_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);

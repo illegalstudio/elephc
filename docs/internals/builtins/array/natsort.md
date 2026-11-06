@@ -37,7 +37,7 @@ description: "Compiler internals for natsort(): lowering path, type checks, and 
 ## Signature summary
 
 ```php
-function natsort(array $array): bool
+function natsort(array &$array): bool
 ```
 
 ## What the type checker enforces

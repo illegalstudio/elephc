@@ -6,7 +6,7 @@ description: "Sorts an array by values using a user-defined comparison function.
 ## usort()
 
 ```php
-function usort(array $array, callable $callback): bool
+function usort(array &$array, callable $callback): bool
 ```
 
 Sorts an array by values using a user-defined comparison function.

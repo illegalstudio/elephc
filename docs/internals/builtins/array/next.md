@@ -37,7 +37,7 @@ description: "Compiler internals for next(): lowering path, type checks, and run
 ## Signature summary
 
 ```php
-function next(array $array): mixed
+function next(array &$array): mixed
 ```
 
 ## What the type checker enforces

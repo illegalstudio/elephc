@@ -37,7 +37,7 @@ description: "Compiler internals for array_multisort(): lowering path, type chec
 ## Signature summary
 
 ```php
-function array_multisort(array $array1, array $array2): bool
+function array_multisort(array &$array1, array &$array2): bool
 ```
 
 ## What the type checker enforces

@@ -7,7 +7,7 @@ sidebar:
 
 ## Builtins
 
-Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Database](./builtins/database.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [IO](./builtins/io.md) · [Image](./builtins/image.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Network](./builtins/network.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Type](./builtins/type.md) · [Web](./builtins/web.md) · [XML](./builtins/xml.md)
+Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Database](./builtins/database.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [IO](./builtins/io.md) · [Image](./builtins/image.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Network](./builtins/network.md) · [Password](./builtins/password.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Sodium](./builtins/sodium.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Type](./builtins/type.md) · [Web](./builtins/web.md) · [XML](./builtins/xml.md)
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
@@ -38,52 +38,52 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`array_map()`](./builtins/array/array_map.md) | `(?callable $callback, array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_merge()`](./builtins/array/array_merge.md) | `(...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_merge_recursive()`](./builtins/array/array_merge_recursive.md) | `(...$arrays): array` | `array` | ✓ | - |
-| [`array_multisort()`](./builtins/array/array_multisort.md) | `(array $array1, array $array2): bool` | `bool` | ✓ | - |
+| [`array_multisort()`](./builtins/array/array_multisort.md) | `(array &$array1, array &$array2): bool` | `bool` | ✓ | - |
 | [`array_pad()`](./builtins/array/array_pad.md) | `(array $array, int $length, mixed $value): array` | `array` | ✓ | ✓ |
-| [`array_pop()`](./builtins/array/array_pop.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
+| [`array_pop()`](./builtins/array/array_pop.md) | `(array &$array): mixed` | `mixed` | ✓ | ✓ |
 | [`array_product()`](./builtins/array/array_product.md) | `(array $array): int|float` | `int|float` | ✓ | ✓ |
-| [`array_push()`](./builtins/array/array_push.md) | `(array $array, ...$values): int` | `int` | ✓ | ✓ |
+| [`array_push()`](./builtins/array/array_push.md) | `(array &$array, ...$values): int` | `int` | ✓ | ✓ |
 | [`array_rand()`](./builtins/array/array_rand.md) | `(array $array, int $num = 1): int|string|array` | `int|string|array` | ✓ | ✓ |
 | [`array_reduce()`](./builtins/array/array_reduce.md) | `(array $array, callable $callback, mixed $initial = null): mixed` | `mixed` | ✓ | ✓ |
 | [`array_replace()`](./builtins/array/array_replace.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | - |
 | [`array_replace_recursive()`](./builtins/array/array_replace_recursive.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | - |
 | [`array_reverse()`](./builtins/array/array_reverse.md) | `(array $array, bool $preserve_keys = false): array` | `array` | ✓ | ✓ |
 | [`array_search()`](./builtins/array/array_search.md) | `(mixed $needle, array $haystack, bool $strict = false): mixed` | `mixed` | ✓ | ✓ |
-| [`array_shift()`](./builtins/array/array_shift.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
+| [`array_shift()`](./builtins/array/array_shift.md) | `(array &$array): mixed` | `mixed` | ✓ | ✓ |
 | [`array_slice()`](./builtins/array/array_slice.md) | `(array $array, int $offset, int $length = null, bool $preserve_keys = false): array` | `array` | ✓ | ✓ |
-| [`array_splice()`](./builtins/array/array_splice.md) | `(array $array, int $offset, int $length = null, array $replacement = []): array` | `array` | ✓ | ✓ |
+| [`array_splice()`](./builtins/array/array_splice.md) | `(array &$array, int $offset, int $length = null, array $replacement = []): array` | `array` | ✓ | ✓ |
 | [`array_sum()`](./builtins/array/array_sum.md) | `(array $array): int|float` | `int|float` | ✓ | ✓ |
 | [`array_udiff()`](./builtins/array/array_udiff.md) | `(array $array1, array $array2, callable $callback): array` | `array` | ✓ | - |
 | [`array_uintersect()`](./builtins/array/array_uintersect.md) | `(array $array1, array $array2, callable $callback): array` | `array` | ✓ | - |
 | [`array_unique()`](./builtins/array/array_unique.md) | `(array $array): array` | `array` | ✓ | ✓ |
-| [`array_unshift()`](./builtins/array/array_unshift.md) | `(array $array, ...$values): int` | `int` | ✓ | ✓ |
+| [`array_unshift()`](./builtins/array/array_unshift.md) | `(array &$array, ...$values): int` | `int` | ✓ | ✓ |
 | [`array_values()`](./builtins/array/array_values.md) | `(array $array): array` | `array` | ✓ | ✓ |
-| [`array_walk()`](./builtins/array/array_walk.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |
-| [`array_walk_recursive()`](./builtins/array/array_walk_recursive.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | - |
-| [`arsort()`](./builtins/array/arsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
-| [`asort()`](./builtins/array/asort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
+| [`array_walk()`](./builtins/array/array_walk.md) | `(array &$array, callable $callback): bool` | `bool` | ✓ | ✓ |
+| [`array_walk_recursive()`](./builtins/array/array_walk_recursive.md) | `(array &$array, callable $callback): bool` | `bool` | ✓ | - |
+| [`arsort()`](./builtins/array/arsort.md) | `(array &$array): bool` | `bool` | ✓ | ✓ |
+| [`asort()`](./builtins/array/asort.md) | `(array &$array): bool` | `bool` | ✓ | ✓ |
 | [`call_user_func()`](./builtins/array/call_user_func.md) | `(callable $callback, ...$args): mixed` | `mixed` | ✓ | ✓ |
 | [`call_user_func_array()`](./builtins/array/call_user_func_array.md) | `(callable $callback, array $args): mixed` | `mixed` | ✓ | ✓ |
 | [`count()`](./builtins/array/count.md) | `(array $value, int $mode = 0): int` | `int` | ✓ | ✓ |
 | [`current()`](./builtins/array/current.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
-| [`end()`](./builtins/array/end.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
+| [`end()`](./builtins/array/end.md) | `(array &$array): mixed` | `mixed` | ✓ | ✓ |
 | [`in_array()`](./builtins/array/in_array.md) | `(mixed $needle, array $haystack, bool $strict = false): bool` | `bool` | ✓ | ✓ |
 | [`key()`](./builtins/array/key.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
-| [`krsort()`](./builtins/array/krsort.md) | `(array $array, int $flags = 0): bool` | `bool` | ✓ | ✓ |
-| [`ksort()`](./builtins/array/ksort.md) | `(array $array, int $flags = 0): bool` | `bool` | ✓ | ✓ |
-| [`natcasesort()`](./builtins/array/natcasesort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
-| [`natsort()`](./builtins/array/natsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
-| [`next()`](./builtins/array/next.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
-| [`prev()`](./builtins/array/prev.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
+| [`krsort()`](./builtins/array/krsort.md) | `(array &$array, int $flags = 0): bool` | `bool` | ✓ | ✓ |
+| [`ksort()`](./builtins/array/ksort.md) | `(array &$array, int $flags = 0): bool` | `bool` | ✓ | ✓ |
+| [`natcasesort()`](./builtins/array/natcasesort.md) | `(array &$array): bool` | `bool` | ✓ | ✓ |
+| [`natsort()`](./builtins/array/natsort.md) | `(array &$array): bool` | `bool` | ✓ | ✓ |
+| [`next()`](./builtins/array/next.md) | `(array &$array): mixed` | `mixed` | ✓ | ✓ |
+| [`prev()`](./builtins/array/prev.md) | `(array &$array): mixed` | `mixed` | ✓ | ✓ |
 | [`range()`](./builtins/array/range.md) | `(mixed $start, mixed $end, int $step = 1): array` | `array` | ✓ | ✓ |
-| [`reset()`](./builtins/array/reset.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
-| [`rsort()`](./builtins/array/rsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
-| [`shuffle()`](./builtins/array/shuffle.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
+| [`reset()`](./builtins/array/reset.md) | `(array &$array): mixed` | `mixed` | ✓ | ✓ |
+| [`rsort()`](./builtins/array/rsort.md) | `(array &$array): bool` | `bool` | ✓ | ✓ |
+| [`shuffle()`](./builtins/array/shuffle.md) | `(array &$array): bool` | `bool` | ✓ | ✓ |
 | [`sizeof()`](./builtins/array/sizeof.md) | `(mixed $value, int $mode = 0): int` | `int` | ✓ | ✓ |
-| [`sort()`](./builtins/array/sort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
-| [`uasort()`](./builtins/array/uasort.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |
-| [`uksort()`](./builtins/array/uksort.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |
-| [`usort()`](./builtins/array/usort.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |
+| [`sort()`](./builtins/array/sort.md) | `(array &$array): bool` | `bool` | ✓ | ✓ |
+| [`uasort()`](./builtins/array/uasort.md) | `(array &$array, callable $callback): bool` | `bool` | ✓ | ✓ |
+| [`uksort()`](./builtins/array/uksort.md) | `(array &$array, callable $callback): bool` | `bool` | ✓ | ✓ |
+| [`usort()`](./builtins/array/usort.md) | `(array &$array, callable $callback): bool` | `bool` | ✓ | ✓ |
 | [`buffer_free()`](./builtins/buffer/buffer_free.md) | `(buffer $buffer): void` | `void` | ✓ | ✓ |
 | [`buffer_len()`](./builtins/buffer/buffer_len.md) | `(buffer $buffer): int` | `int` | ✓ | ✓ |
 | [`buffer_ptr()`](./builtins/buffer/buffer_ptr.md) | `(buffer $buffer): pointer` | `pointer` | ✓ | ✓ |
@@ -338,7 +338,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`finfo_file()`](./builtins/io/finfo_file.md) | `(finfo $finfo, string $filename, int $flags = 0, ?resource $context = null): string|false` | `string|false` | ✓ | ✓ |
 | [`finfo_open()`](./builtins/io/finfo_open.md) | `(int $flags = 0, ?string $magic_database = null): finfo|false` | `finfo|false` | ✓ | ✓ |
 | [`finfo_set_flags()`](./builtins/io/finfo_set_flags.md) | `(finfo $finfo, int $flags): bool` | `bool` | ✓ | ✓ |
-| [`flock()`](./builtins/io/flock.md) | `(resource $stream, int $operation, bool $would_block = null): bool` | `bool` | ✓ | ✓ |
+| [`flock()`](./builtins/io/flock.md) | `(resource $stream, int $operation, bool &$would_block = null): bool` | `bool` | ✓ | ✓ |
 | [`fopen()`](./builtins/io/fopen.md) | `(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`fpassthru()`](./builtins/io/fpassthru.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`fprintf()`](./builtins/io/fprintf.md) | `(resource $stream, string $format, ...$values): int` | `int` | ✓ | ✓ |
@@ -398,18 +398,18 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`stream_is_local()`](./builtins/io/stream_is_local.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_isatty()`](./builtins/io/stream_isatty.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_resolve_include_path()`](./builtins/io/stream_resolve_include_path.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_select()`](./builtins/io/stream_select.md) | `(array $read, array $write, array $except, int $seconds, int $microseconds = 0): int` | `int` | ✓ | ✓ |
+| [`stream_select()`](./builtins/io/stream_select.md) | `(array &$read, array &$write, array &$except, int $seconds, int $microseconds = 0): int` | `int` | ✓ | ✓ |
 | [`stream_set_blocking()`](./builtins/io/stream_set_blocking.md) | `(resource $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
 | [`stream_set_chunk_size()`](./builtins/io/stream_set_chunk_size.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`stream_set_read_buffer()`](./builtins/io/stream_set_read_buffer.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`stream_set_timeout()`](./builtins/io/stream_set_timeout.md) | `(resource $stream, int $seconds, int $microseconds = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_set_write_buffer()`](./builtins/io/stream_set_write_buffer.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
-| [`stream_socket_accept()`](./builtins/io/stream_socket_accept.md) | `(resource $socket, float $timeout = null, string $peer_name = null): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_accept()`](./builtins/io/stream_socket_accept.md) | `(resource $socket, float $timeout = null, string &$peer_name = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_client()`](./builtins/io/stream_socket_client.md) | `(string $address): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_enable_crypto()`](./builtins/io/stream_socket_enable_crypto.md) | `(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool` | `bool` | ✓ | ✓ |
 | [`stream_socket_get_name()`](./builtins/io/stream_socket_get_name.md) | `(resource $socket, bool $remote): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_pair()`](./builtins/io/stream_socket_pair.md) | `(int $domain, int $type, int $protocol): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_recvfrom()`](./builtins/io/stream_socket_recvfrom.md) | `(resource $socket, int $length, int $flags = 0, string $address = ''): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_recvfrom()`](./builtins/io/stream_socket_recvfrom.md) | `(resource $socket, int $length, int $flags = 0, string &$address = ''): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_sendto()`](./builtins/io/stream_socket_sendto.md) | `(resource $socket, string $data, int $flags = 0, string $address = ''): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_server()`](./builtins/io/stream_socket_server.md) | `(string $address): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_shutdown()`](./builtins/io/stream_socket_shutdown.md) | `(resource $stream, int $mode): bool` | `bool` | ✓ | ✓ |
@@ -469,7 +469,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`exif_imagetype()`](./builtins/image/exif_imagetype.md) | `(string $filename): mixed` | `mixed` | ✓ | - |
 | [`exif_read_data()`](./builtins/image/exif_read_data.md) | `(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed` | `mixed` | ✓ | - |
 | [`exif_tagname()`](./builtins/image/exif_tagname.md) | `(int $index): mixed` | `mixed` | ✓ | - |
-| [`exif_thumbnail()`](./builtins/image/exif_thumbnail.md) | `(string $filename, mixed $width = 0, mixed $height = 0, mixed $image_type = 0): mixed` | `mixed` | ✓ | - |
+| [`exif_thumbnail()`](./builtins/image/exif_thumbnail.md) | `(string $filename, mixed &$width = 0, mixed &$height = 0, mixed &$image_type = 0): mixed` | `mixed` | ✓ | - |
 | [`gd_info()`](./builtins/image/gd_info.md) | `(): array` | `array` | ✓ | - |
 | [`getimagesize()`](./builtins/image/getimagesize.md) | `(string $filename): mixed` | `mixed` | ✓ | - |
 | [`getimagesizefromstring()`](./builtins/image/getimagesizefromstring.md) | `(string $data): mixed` | `mixed` | ✓ | - |
@@ -744,14 +744,14 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`pcntl_signal()`](./builtins/misc/pcntl_signal.md) | `(int $signal, mixed $handler, bool $restart_syscalls = true): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_signal_dispatch()`](./builtins/misc/pcntl_signal_dispatch.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_signal_get_handler()`](./builtins/misc/pcntl_signal_get_handler.md) | `(int $signal): mixed` | `mixed` | ✓ | ✓ |
-| [`pcntl_sigprocmask()`](./builtins/misc/pcntl_sigprocmask.md) | `(int $mode, mixed $signals, mixed $old_signals = []): bool` | `bool` | ✓ | ✓ |
-| [`pcntl_sigtimedwait()`](./builtins/misc/pcntl_sigtimedwait.md) | `(mixed $signals, mixed $info = [], int $seconds = 0, int $nanoseconds = 0): mixed` | `mixed` | ✓ | ✓ |
-| [`pcntl_sigwaitinfo()`](./builtins/misc/pcntl_sigwaitinfo.md) | `(mixed $signals, mixed $info = []): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_sigprocmask()`](./builtins/misc/pcntl_sigprocmask.md) | `(int $mode, mixed $signals, mixed &$old_signals = []): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_sigtimedwait()`](./builtins/misc/pcntl_sigtimedwait.md) | `(mixed $signals, mixed &$info = [], int $seconds = 0, int $nanoseconds = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_sigwaitinfo()`](./builtins/misc/pcntl_sigwaitinfo.md) | `(mixed $signals, mixed &$info = []): mixed` | `mixed` | ✓ | ✓ |
 | [`pcntl_strerror()`](./builtins/misc/pcntl_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
 | [`pcntl_unshare()`](./builtins/misc/pcntl_unshare.md) | `(int $flags): bool` | `bool` | ✓ | ✓ |
-| [`pcntl_wait()`](./builtins/misc/pcntl_wait.md) | `(mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
-| [`pcntl_waitid()`](./builtins/misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4, mixed $resource_usage = []): bool` | `bool` | ✓ | ✓ |
-| [`pcntl_waitpid()`](./builtins/misc/pcntl_waitpid.md) | `(int $process_id, mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
+| [`pcntl_wait()`](./builtins/misc/pcntl_wait.md) | `(mixed &$status, int $flags = 0, mixed &$resource_usage = []): int` | `int` | ✓ | ✓ |
+| [`pcntl_waitid()`](./builtins/misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed &$info = [], int $flags = 4, mixed &$resource_usage = []): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_waitpid()`](./builtins/misc/pcntl_waitpid.md) | `(int $process_id, mixed &$status, int $flags = 0, mixed &$resource_usage = []): int` | `int` | ✓ | ✓ |
 | [`pcntl_wexitstatus()`](./builtins/misc/pcntl_wexitstatus.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
 | [`pcntl_wifcontinued()`](./builtins/misc/pcntl_wifcontinued.md) | `(int $status): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_wifexited()`](./builtins/misc/pcntl_wifexited.md) | `(int $status): bool` | `bool` | ✓ | ✓ |
@@ -787,10 +787,10 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`curl_multi_add_handle()`](./builtins/network/curl_multi_add_handle.md) | `(CurlMultiHandle $multi_handle, mixed $handle): int` | `int` | ✓ | ✓ |
 | [`curl_multi_close()`](./builtins/network/curl_multi_close.md) | `(CurlMultiHandle $multi_handle): void` | `void` | ✓ | ✓ |
 | [`curl_multi_errno()`](./builtins/network/curl_multi_errno.md) | `(CurlMultiHandle $multi_handle): int` | `int` | ✓ | ✓ |
-| [`curl_multi_exec()`](./builtins/network/curl_multi_exec.md) | `(CurlMultiHandle $multi_handle, int $still_running): int` | `int` | ✓ | ✓ |
+| [`curl_multi_exec()`](./builtins/network/curl_multi_exec.md) | `(CurlMultiHandle $multi_handle, int &$still_running): int` | `int` | ✓ | ✓ |
 | [`curl_multi_get_handles()`](./builtins/network/curl_multi_get_handles.md) | `(CurlMultiHandle $multi_handle): array` | `array` | ✓ | ✓ |
 | [`curl_multi_getcontent()`](./builtins/network/curl_multi_getcontent.md) | `(mixed $handle): ?string` | `?string` | ✓ | ✓ |
-| [`curl_multi_info_read()`](./builtins/network/curl_multi_info_read.md) | `(CurlMultiHandle $multi_handle, ?int $queued_messages = null): mixed` | `mixed` | ✓ | ✓ |
+| [`curl_multi_info_read()`](./builtins/network/curl_multi_info_read.md) | `(CurlMultiHandle $multi_handle, ?int &$queued_messages = null): mixed` | `mixed` | ✓ | ✓ |
 | [`curl_multi_init()`](./builtins/network/curl_multi_init.md) | `(): CurlMultiHandle` | `CurlMultiHandle` | ✓ | ✓ |
 | [`curl_multi_remove_handle()`](./builtins/network/curl_multi_remove_handle.md) | `(CurlMultiHandle $multi_handle, mixed $handle): int` | `int` | ✓ | ✓ |
 | [`curl_multi_select()`](./builtins/network/curl_multi_select.md) | `(CurlMultiHandle $multi_handle, float $timeout = 1.0): int` | `int` | ✓ | ✓ |
@@ -810,6 +810,11 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`curl_unescape()`](./builtins/network/curl_unescape.md) | `(CurlHandle $handle, string $string): string` | `string` | ✓ | ✓ |
 | [`curl_upkeep()`](./builtins/network/curl_upkeep.md) | `(CurlHandle $handle): bool` | `bool` | ✓ | ✓ |
 | [`curl_version()`](./builtins/network/curl_version.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`password_algos()`](./builtins/password/password_algos.md) | `(): array` | `array` | ✓ | - |
+| [`password_get_info()`](./builtins/password/password_get_info.md) | `(string $hash): array` | `array` | ✓ | - |
+| [`password_hash()`](./builtins/password/password_hash.md) | `(string $password, string|int|null $algo, array $options = []): string` | `string` | ✓ | - |
+| [`password_needs_rehash()`](./builtins/password/password_needs_rehash.md) | `(string $hash, string|int|null $algo, array $options = []): bool` | `bool` | ✓ | - |
+| [`password_verify()`](./builtins/password/password_verify.md) | `(string $password, string $hash): bool` | `bool` | ✓ | - |
 | [`buffer_new()`](./builtins/pointer/buffer_new.md) | `(int $length): mixed` | `mixed` | ✓ | ✓ |
 | [`ptr()`](./builtins/pointer/ptr.md) | `(mixed $value): pointer` | `pointer` | ✓ | ✓ |
 | [`ptr_get()`](./builtins/pointer/ptr_get.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
@@ -846,8 +851,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`system()`](./builtins/process/system.md) | `(string $command): string` | `string` | ✓ | ✓ |
 | [`usleep()`](./builtins/process/usleep.md) | `(int $microseconds): void` | `void` | ✓ | ✓ |
 | [`mb_ereg_match()`](./builtins/regex/mb_ereg_match.md) | `(string $pattern, string $string, ?string $options = null): bool` | `bool` | ✓ | ✓ |
-| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null): int|false` | `int|false` | ✓ | ✓ |
-| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0): int|false` | `int|false` | ✓ | ✓ |
+| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array &$matches = null): int|false` | `int|false` | ✓ | ✓ |
+| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed &$matches = null, int $flags = 0): int|false` | `int|false` | ✓ | ✓ |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |
@@ -863,8 +868,118 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`spl_classes()`](./builtins/spl/spl_classes.md) | `(): array` | `array` | ✓ | ✓ |
 | [`spl_object_hash()`](./builtins/spl/spl_object_hash.md) | `(object $object): string` | `string` | ✓ | ✓ |
 | [`spl_object_id()`](./builtins/spl/spl_object_id.md) | `(object $object): int` | `int` | ✓ | ✓ |
-| [`fsockopen()`](./builtins/streams/fsockopen.md) | `(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed` | `mixed` | ✓ | ✓ |
-| [`pfsockopen()`](./builtins/streams/pfsockopen.md) | `(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed` | `mixed` | ✓ | ✓ |
+| [`sodium_add()`](./builtins/sodium/sodium_add.md) | `(string &$string1, string $string2): void` | `void` | ✓ | ✓ |
+| [`sodium_base642bin()`](./builtins/sodium/sodium_base642bin.md) | `(string $string, int $id, string $ignore = ''): string` | `string` | ✓ | ✓ |
+| [`sodium_bin2base64()`](./builtins/sodium/sodium_bin2base64.md) | `(string $string, int $id): string` | `string` | ✓ | ✓ |
+| [`sodium_bin2hex()`](./builtins/sodium/sodium_bin2hex.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`sodium_compare()`](./builtins/sodium/sodium_compare.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
+| [`sodium_crypto_aead_aegis128l_decrypt()`](./builtins/sodium/sodium_crypto_aead_aegis128l_decrypt.md) | `(string $ciphertext, string $additional_data, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_aead_aegis128l_encrypt()`](./builtins/sodium/sodium_crypto_aead_aegis128l_encrypt.md) | `(string $message, string $additional_data, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_aegis128l_keygen()`](./builtins/sodium/sodium_crypto_aead_aegis128l_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_aegis256_decrypt()`](./builtins/sodium/sodium_crypto_aead_aegis256_decrypt.md) | `(string $ciphertext, string $additional_data, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_aead_aegis256_encrypt()`](./builtins/sodium/sodium_crypto_aead_aegis256_encrypt.md) | `(string $message, string $additional_data, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_aegis256_keygen()`](./builtins/sodium/sodium_crypto_aead_aegis256_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_aes256gcm_decrypt()`](./builtins/sodium/sodium_crypto_aead_aes256gcm_decrypt.md) | `(string $ciphertext, string $additional_data, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_aead_aes256gcm_encrypt()`](./builtins/sodium/sodium_crypto_aead_aes256gcm_encrypt.md) | `(string $message, string $additional_data, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_aes256gcm_is_available()`](./builtins/sodium/sodium_crypto_aead_aes256gcm_is_available.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_aead_aes256gcm_keygen()`](./builtins/sodium/sodium_crypto_aead_aes256gcm_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_chacha20poly1305_decrypt()`](./builtins/sodium/sodium_crypto_aead_chacha20poly1305_decrypt.md) | `(string $ciphertext, string $additional_data, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_aead_chacha20poly1305_encrypt()`](./builtins/sodium/sodium_crypto_aead_chacha20poly1305_encrypt.md) | `(string $message, string $additional_data, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_chacha20poly1305_ietf_decrypt()`](./builtins/sodium/sodium_crypto_aead_chacha20poly1305_ietf_decrypt.md) | `(string $ciphertext, string $additional_data, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_aead_chacha20poly1305_ietf_encrypt()`](./builtins/sodium/sodium_crypto_aead_chacha20poly1305_ietf_encrypt.md) | `(string $message, string $additional_data, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_chacha20poly1305_ietf_keygen()`](./builtins/sodium/sodium_crypto_aead_chacha20poly1305_ietf_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_chacha20poly1305_keygen()`](./builtins/sodium/sodium_crypto_aead_chacha20poly1305_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_xchacha20poly1305_ietf_decrypt()`](./builtins/sodium/sodium_crypto_aead_xchacha20poly1305_ietf_decrypt.md) | `(string $ciphertext, string $additional_data, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_aead_xchacha20poly1305_ietf_encrypt()`](./builtins/sodium/sodium_crypto_aead_xchacha20poly1305_ietf_encrypt.md) | `(string $message, string $additional_data, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_xchacha20poly1305_ietf_keygen()`](./builtins/sodium/sodium_crypto_aead_xchacha20poly1305_ietf_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_auth()`](./builtins/sodium/sodium_crypto_auth.md) | `(string $message, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_auth_keygen()`](./builtins/sodium/sodium_crypto_auth_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_auth_verify()`](./builtins/sodium/sodium_crypto_auth_verify.md) | `(string $mac, string $message, string $key): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_box()`](./builtins/sodium/sodium_crypto_box.md) | `(string $message, string $nonce, string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_keypair()`](./builtins/sodium/sodium_crypto_box_keypair.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_keypair_from_secretkey_and_publickey()`](./builtins/sodium/sodium_crypto_box_keypair_from_secretkey_and_publickey.md) | `(string $secret_key, string $public_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_open()`](./builtins/sodium/sodium_crypto_box_open.md) | `(string $ciphertext, string $nonce, string $key_pair): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_box_publickey()`](./builtins/sodium/sodium_crypto_box_publickey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_publickey_from_secretkey()`](./builtins/sodium/sodium_crypto_box_publickey_from_secretkey.md) | `(string $secret_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_seal()`](./builtins/sodium/sodium_crypto_box_seal.md) | `(string $message, string $public_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_seal_open()`](./builtins/sodium/sodium_crypto_box_seal_open.md) | `(string $ciphertext, string $key_pair): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_box_secretkey()`](./builtins/sodium/sodium_crypto_box_secretkey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_seed_keypair()`](./builtins/sodium/sodium_crypto_box_seed_keypair.md) | `(string $seed): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_add()`](./builtins/sodium/sodium_crypto_core_ristretto255_add.md) | `(string $p, string $q): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_from_hash()`](./builtins/sodium/sodium_crypto_core_ristretto255_from_hash.md) | `(string $s): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_is_valid_point()`](./builtins/sodium/sodium_crypto_core_ristretto255_is_valid_point.md) | `(string $s): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_random()`](./builtins/sodium/sodium_crypto_core_ristretto255_random.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_add()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_add.md) | `(string $x, string $y): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_complement()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_complement.md) | `(string $s): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_invert()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_invert.md) | `(string $s): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_mul()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_mul.md) | `(string $x, string $y): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_negate()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_negate.md) | `(string $s): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_random()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_random.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_reduce()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_reduce.md) | `(string $s): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_sub()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_sub.md) | `(string $x, string $y): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_sub()`](./builtins/sodium/sodium_crypto_core_ristretto255_sub.md) | `(string $p, string $q): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_generichash()`](./builtins/sodium/sodium_crypto_generichash.md) | `(string $message, string $key = '', int $length = 32): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_generichash_final()`](./builtins/sodium/sodium_crypto_generichash_final.md) | `(string &$state, int $length = 32): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_generichash_init()`](./builtins/sodium/sodium_crypto_generichash_init.md) | `(string $key = '', int $length = 32): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_generichash_keygen()`](./builtins/sodium/sodium_crypto_generichash_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_generichash_update()`](./builtins/sodium/sodium_crypto_generichash_update.md) | `(string &$state, string $message): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_kdf_derive_from_key()`](./builtins/sodium/sodium_crypto_kdf_derive_from_key.md) | `(int $subkey_length, int $subkey_id, string $context, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_kdf_keygen()`](./builtins/sodium/sodium_crypto_kdf_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_kx_client_session_keys()`](./builtins/sodium/sodium_crypto_kx_client_session_keys.md) | `(string $client_key_pair, string $server_key): array` | `array` | ✓ | ✓ |
+| [`sodium_crypto_kx_keypair()`](./builtins/sodium/sodium_crypto_kx_keypair.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_kx_publickey()`](./builtins/sodium/sodium_crypto_kx_publickey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_kx_secretkey()`](./builtins/sodium/sodium_crypto_kx_secretkey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_kx_seed_keypair()`](./builtins/sodium/sodium_crypto_kx_seed_keypair.md) | `(string $seed): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_kx_server_session_keys()`](./builtins/sodium/sodium_crypto_kx_server_session_keys.md) | `(string $server_key_pair, string $client_key): array` | `array` | ✓ | ✓ |
+| [`sodium_crypto_pwhash()`](./builtins/sodium/sodium_crypto_pwhash.md) | `(int $length, string $password, string $salt, int $opslimit, int $memlimit, int $algo = 2): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_pwhash_scryptsalsa208sha256()`](./builtins/sodium/sodium_crypto_pwhash_scryptsalsa208sha256.md) | `(int $length, string $password, string $salt, int $opslimit, int $memlimit): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_pwhash_scryptsalsa208sha256_str()`](./builtins/sodium/sodium_crypto_pwhash_scryptsalsa208sha256_str.md) | `(string $password, int $opslimit, int $memlimit): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_pwhash_scryptsalsa208sha256_str_verify()`](./builtins/sodium/sodium_crypto_pwhash_scryptsalsa208sha256_str_verify.md) | `(string $hash, string $password): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_pwhash_str()`](./builtins/sodium/sodium_crypto_pwhash_str.md) | `(string $password, int $opslimit, int $memlimit): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_pwhash_str_needs_rehash()`](./builtins/sodium/sodium_crypto_pwhash_str_needs_rehash.md) | `(string $password, int $opslimit, int $memlimit): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_pwhash_str_verify()`](./builtins/sodium/sodium_crypto_pwhash_str_verify.md) | `(string $hash, string $password): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_scalarmult()`](./builtins/sodium/sodium_crypto_scalarmult.md) | `(string $n, string $p): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_scalarmult_base()`](./builtins/sodium/sodium_crypto_scalarmult_base.md) | `(string $secret_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_scalarmult_ristretto255()`](./builtins/sodium/sodium_crypto_scalarmult_ristretto255.md) | `(string $n, string $p): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_scalarmult_ristretto255_base()`](./builtins/sodium/sodium_crypto_scalarmult_ristretto255_base.md) | `(string $n): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_secretbox()`](./builtins/sodium/sodium_crypto_secretbox.md) | `(string $message, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_secretbox_keygen()`](./builtins/sodium/sodium_crypto_secretbox_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_secretbox_open()`](./builtins/sodium/sodium_crypto_secretbox_open.md) | `(string $ciphertext, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_secretstream_xchacha20poly1305_init_pull()`](./builtins/sodium/sodium_crypto_secretstream_xchacha20poly1305_init_pull.md) | `(string $header, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_secretstream_xchacha20poly1305_init_push()`](./builtins/sodium/sodium_crypto_secretstream_xchacha20poly1305_init_push.md) | `(string $key): array` | `array` | ✓ | ✓ |
+| [`sodium_crypto_secretstream_xchacha20poly1305_keygen()`](./builtins/sodium/sodium_crypto_secretstream_xchacha20poly1305_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_secretstream_xchacha20poly1305_pull()`](./builtins/sodium/sodium_crypto_secretstream_xchacha20poly1305_pull.md) | `(string &$state, string $ciphertext, string $additional_data = ''): array|false` | `array|false` | ✓ | ✓ |
+| [`sodium_crypto_secretstream_xchacha20poly1305_push()`](./builtins/sodium/sodium_crypto_secretstream_xchacha20poly1305_push.md) | `(string &$state, string $message, string $additional_data = '', int $tag = 0): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_secretstream_xchacha20poly1305_rekey()`](./builtins/sodium/sodium_crypto_secretstream_xchacha20poly1305_rekey.md) | `(string &$state): void` | `void` | ✓ | ✓ |
+| [`sodium_crypto_shorthash()`](./builtins/sodium/sodium_crypto_shorthash.md) | `(string $message, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_shorthash_keygen()`](./builtins/sodium/sodium_crypto_shorthash_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign()`](./builtins/sodium/sodium_crypto_sign.md) | `(string $message, string $secret_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_detached()`](./builtins/sodium/sodium_crypto_sign_detached.md) | `(string $message, string $secret_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_ed25519_pk_to_curve25519()`](./builtins/sodium/sodium_crypto_sign_ed25519_pk_to_curve25519.md) | `(string $public_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_ed25519_sk_to_curve25519()`](./builtins/sodium/sodium_crypto_sign_ed25519_sk_to_curve25519.md) | `(string $secret_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_keypair()`](./builtins/sodium/sodium_crypto_sign_keypair.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_keypair_from_secretkey_and_publickey()`](./builtins/sodium/sodium_crypto_sign_keypair_from_secretkey_and_publickey.md) | `(string $secret_key, string $public_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_open()`](./builtins/sodium/sodium_crypto_sign_open.md) | `(string $signed_message, string $public_key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_sign_publickey()`](./builtins/sodium/sodium_crypto_sign_publickey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_publickey_from_secretkey()`](./builtins/sodium/sodium_crypto_sign_publickey_from_secretkey.md) | `(string $secret_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_secretkey()`](./builtins/sodium/sodium_crypto_sign_secretkey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_seed_keypair()`](./builtins/sodium/sodium_crypto_sign_seed_keypair.md) | `(string $seed): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_verify_detached()`](./builtins/sodium/sodium_crypto_sign_verify_detached.md) | `(string $signature, string $message, string $public_key): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_stream()`](./builtins/sodium/sodium_crypto_stream.md) | `(int $length, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_stream_keygen()`](./builtins/sodium/sodium_crypto_stream_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_stream_xchacha20()`](./builtins/sodium/sodium_crypto_stream_xchacha20.md) | `(int $length, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_stream_xchacha20_keygen()`](./builtins/sodium/sodium_crypto_stream_xchacha20_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_stream_xchacha20_xor()`](./builtins/sodium/sodium_crypto_stream_xchacha20_xor.md) | `(string $message, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_stream_xchacha20_xor_ic()`](./builtins/sodium/sodium_crypto_stream_xchacha20_xor_ic.md) | `(string $message, string $nonce, int $counter, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_stream_xor()`](./builtins/sodium/sodium_crypto_stream_xor.md) | `(string $message, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_hex2bin()`](./builtins/sodium/sodium_hex2bin.md) | `(string $string, string $ignore = ''): string` | `string` | ✓ | ✓ |
+| [`sodium_increment()`](./builtins/sodium/sodium_increment.md) | `(string &$string): void` | `void` | ✓ | ✓ |
+| [`sodium_memcmp()`](./builtins/sodium/sodium_memcmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
+| [`sodium_memzero()`](./builtins/sodium/sodium_memzero.md) | `(string &$string): void` | `void` | ✓ | ✓ |
+| [`sodium_pad()`](./builtins/sodium/sodium_pad.md) | `(string $string, int $block_size): string` | `string` | ✓ | ✓ |
+| [`sodium_unpad()`](./builtins/sodium/sodium_unpad.md) | `(string $string, int $block_size): string` | `string` | ✓ | ✓ |
+| [`fsockopen()`](./builtins/streams/fsockopen.md) | `(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): mixed` | `mixed` | ✓ | ✓ |
+| [`pfsockopen()`](./builtins/streams/pfsockopen.md) | `(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_bucket_append()`](./builtins/streams/stream_bucket_append.md) | `(mixed $brigade, mixed $bucket): void` | `void` | ✓ | ✓ |
 | [`stream_bucket_prepend()`](./builtins/streams/stream_bucket_prepend.md) | `(mixed $brigade, mixed $bucket): void` | `void` | ✓ | ✓ |
 | [`stream_filter_append()`](./builtins/streams/stream_filter_append.md) | `(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed` | `mixed` | ✓ | ✓ |
@@ -919,7 +1034,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mb_convert_case()`](./builtins/string/mb_convert_case.md) | `(string $string, int $mode, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`mb_convert_encoding()`](./builtins/string/mb_convert_encoding.md) | `(array|string $string, string $to_encoding, array|string|null $from_encoding = null): array|string|false` | `array|string|false` | ✓ | ✓ |
 | [`mb_convert_kana()`](./builtins/string/mb_convert_kana.md) | `(string $string, string $mode = 'KV', ?string $encoding = null): string` | `string` | ✓ | ✓ |
-| [`mb_convert_variables()`](./builtins/string/mb_convert_variables.md) | `(string $to_encoding, array|string $from_encoding, mixed $var, ...$vars): string|false` | `string|false` | ✓ | ✓ |
+| [`mb_convert_variables()`](./builtins/string/mb_convert_variables.md) | `(string $to_encoding, array|string $from_encoding, mixed &$var, ...$vars): string|false` | `string|false` | ✓ | ✓ |
 | [`mb_decode_mimeheader()`](./builtins/string/mb_decode_mimeheader.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`mb_decode_numericentity()`](./builtins/string/mb_decode_numericentity.md) | `(string $string, array $map, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`mb_detect_encoding()`](./builtins/string/mb_detect_encoding.md) | `(string $string, array|string|null $encodings = null, bool $strict = false): string|false` | `string|false` | ✓ | ✓ |
@@ -927,7 +1042,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mb_encode_mimeheader()`](./builtins/string/mb_encode_mimeheader.md) | `(string $string, ?string $charset = null, ?string $transfer_encoding = null, string $newline = "\r\n", int $indent = 0): string` | `string` | ✓ | ✓ |
 | [`mb_encode_numericentity()`](./builtins/string/mb_encode_numericentity.md) | `(string $string, array $map, ?string $encoding = null, bool $hex = false): string` | `string` | ✓ | ✓ |
 | [`mb_encoding_aliases()`](./builtins/string/mb_encoding_aliases.md) | `(string $encoding): array` | `array` | ✓ | ✓ |
-| [`mb_ereg()`](./builtins/string/mb_ereg.md) | `(string $pattern, string $string, mixed $matches = null): bool` | `bool` | ✓ | ✓ |
+| [`mb_ereg()`](./builtins/string/mb_ereg.md) | `(string $pattern, string $string, mixed &$matches = null): bool` | `bool` | ✓ | ✓ |
 | [`mb_ereg_replace()`](./builtins/string/mb_ereg_replace.md) | `(string $pattern, string $replacement, string $string, ?string $options = null): string|false|null` | `string|false|null` | ✓ | ✓ |
 | [`mb_ereg_replace_callback()`](./builtins/string/mb_ereg_replace_callback.md) | `(string $pattern, callable $callback, string $string, ?string $options = null): string|false|null` | `string|false|null` | ✓ | ✓ |
 | [`mb_ereg_search()`](./builtins/string/mb_ereg_search.md) | `(?string $pattern = null, ?string $options = null): bool` | `bool` | ✓ | ✓ |
@@ -937,7 +1052,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mb_ereg_search_pos()`](./builtins/string/mb_ereg_search_pos.md) | `(?string $pattern = null, ?string $options = null): array|false` | `array|false` | ✓ | ✓ |
 | [`mb_ereg_search_regs()`](./builtins/string/mb_ereg_search_regs.md) | `(?string $pattern = null, ?string $options = null): array|false` | `array|false` | ✓ | ✓ |
 | [`mb_ereg_search_setpos()`](./builtins/string/mb_ereg_search_setpos.md) | `(int $offset): bool` | `bool` | ✓ | ✓ |
-| [`mb_eregi()`](./builtins/string/mb_eregi.md) | `(string $pattern, string $string, mixed $matches = null): bool` | `bool` | ✓ | ✓ |
+| [`mb_eregi()`](./builtins/string/mb_eregi.md) | `(string $pattern, string $string, mixed &$matches = null): bool` | `bool` | ✓ | ✓ |
 | [`mb_eregi_replace()`](./builtins/string/mb_eregi_replace.md) | `(string $pattern, string $replacement, string $string, ?string $options = null): string|false|null` | `string|false|null` | ✓ | ✓ |
 | [`mb_get_info()`](./builtins/string/mb_get_info.md) | `(string $type = 'all'): array|string|int|false|null` | `array|string|int|false|null` | ✓ | ✓ |
 | [`mb_http_input()`](./builtins/string/mb_http_input.md) | `(?string $type = null): array|string|false` | `array|string|false` | ✓ | ✓ |
@@ -949,7 +1064,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mb_ltrim()`](./builtins/string/mb_ltrim.md) | `(string $string, ?string $characters = null, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`mb_ord()`](./builtins/string/mb_ord.md) | `(string $string, ?string $encoding = null): int|false` | `int|false` | ✓ | ✓ |
 | [`mb_output_handler()`](./builtins/string/mb_output_handler.md) | `(string $string, int $status): string` | `string` | ✓ | ✓ |
-| [`mb_parse_str()`](./builtins/string/mb_parse_str.md) | `(string $string, mixed $result): bool` | `bool` | ✓ | ✓ |
+| [`mb_parse_str()`](./builtins/string/mb_parse_str.md) | `(string $string, mixed &$result): bool` | `bool` | ✓ | ✓ |
 | [`mb_preferred_mime_name()`](./builtins/string/mb_preferred_mime_name.md) | `(string $encoding): string|false` | `string|false` | ✓ | ✓ |
 | [`mb_regex_encoding()`](./builtins/string/mb_regex_encoding.md) | `(?string $encoding = null): string|bool` | `string|bool` | ✓ | ✓ |
 | [`mb_regex_set_options()`](./builtins/string/mb_regex_set_options.md) | `(?string $options = null): string` | `string` | ✓ | ✓ |
@@ -983,7 +1098,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`number_format()`](./builtins/string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |
 | [`openssl_cipher_iv_length()`](./builtins/string/openssl_cipher_iv_length.md) | `(string $cipher_algo): mixed` | `mixed` | ✓ | ✓ |
 | [`openssl_decrypt()`](./builtins/string/openssl_decrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = ''): mixed` | `mixed` | ✓ | ✓ |
-| [`openssl_encrypt()`](./builtins/string/openssl_encrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = '', int $tag_length = 16): mixed` | `mixed` | ✓ | ✓ |
+| [`openssl_encrypt()`](./builtins/string/openssl_encrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed &$tag = null, string $aad = '', int $tag_length = 16): mixed` | `mixed` | ✓ | ✓ |
 | [`openssl_get_cipher_methods()`](./builtins/string/openssl_get_cipher_methods.md) | `(bool $aliases = false): array` | `array` | ✓ | ✓ |
 | [`ord()`](./builtins/string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
 | [`parse_url()`](./builtins/string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |
@@ -1061,7 +1176,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`is_resource()`](./builtins/type/is_resource.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_scalar()`](./builtins/type/is_scalar.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_string()`](./builtins/type/is_string.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
-| [`settype()`](./builtins/type/settype.md) | `(mixed $var, string $type): bool` | `bool` | ✓ | ✓ |
+| [`settype()`](./builtins/type/settype.md) | `(mixed &$var, string $type): bool` | `bool` | ✓ | ✓ |
 | [`strval()`](./builtins/type/strval.md) | `(mixed $value): string` | `string` | ✓ | ✓ |
 | [`var_export()`](./builtins/type/var_export.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | - |
 | [`error_log()`](./builtins/web/error_log.md) | `(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool` | `bool` | ✓ | - |
@@ -1099,7 +1214,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`xml_get_current_line_number()`](./builtins/xml/xml_get_current_line_number.md) | `(mixed $parser): int` | `int` | ✓ | ✓ |
 | [`xml_get_error_code()`](./builtins/xml/xml_get_error_code.md) | `(mixed $parser): int` | `int` | ✓ | ✓ |
 | [`xml_parse()`](./builtins/xml/xml_parse.md) | `(mixed $parser, string $data, bool $is_final = false): int` | `int` | ✓ | ✓ |
-| [`xml_parse_into_struct()`](./builtins/xml/xml_parse_into_struct.md) | `(mixed $parser, string $data, mixed $values, mixed $index = null): int` | `int` | ✓ | ✓ |
+| [`xml_parse_into_struct()`](./builtins/xml/xml_parse_into_struct.md) | `(mixed $parser, string $data, mixed &$values, mixed &$index = null): int` | `int` | ✓ | ✓ |
 | [`xml_parser_create()`](./builtins/xml/xml_parser_create.md) | `(?string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
 | [`xml_parser_create_ns()`](./builtins/xml/xml_parser_create_ns.md) | `(?string $encoding = null, string $separator = ':'): mixed` | `mixed` | ✓ | ✓ |
 | [`xml_parser_free()`](./builtins/xml/xml_parser_free.md) | `(mixed $parser): bool` | `bool` | ✓ | ✓ |

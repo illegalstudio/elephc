@@ -37,7 +37,7 @@ description: "Compiler internals for end(): lowering path, type checks, and runt
 ## Signature summary
 
 ```php
-function end(array $array): mixed
+function end(array &$array): mixed
 ```
 
 ## What the type checker enforces

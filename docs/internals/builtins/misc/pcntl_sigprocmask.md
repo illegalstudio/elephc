@@ -37,7 +37,7 @@ description: "Compiler internals for pcntl_sigprocmask(): lowering path, type ch
 ## Signature summary
 
 ```php
-function pcntl_sigprocmask(int $mode, mixed $signals, mixed $old_signals = []): bool
+function pcntl_sigprocmask(int $mode, mixed $signals, mixed &$old_signals = []): bool
 ```
 
 ## What the type checker enforces

@@ -6,7 +6,7 @@ description: "Encrypts data with a cipher from the OpenSSL 3.6.4 default-provide
 ## openssl_encrypt()
 
 ```php
-function openssl_encrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = '', int $tag_length = 16): mixed
+function openssl_encrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed &$tag = null, string $aad = '', int $tag_length = 16): mixed
 ```
 
 Encrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog.

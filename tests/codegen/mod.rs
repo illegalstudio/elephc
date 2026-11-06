@@ -117,6 +117,8 @@ mod runtime_reachability;
 mod runtime_introspection;
 mod math;
 mod gmp_phpt;
+mod sodium;
+mod sodium_php_src;
 mod gmp_eval;
 mod gmp_class;
 mod gmp_math;

@@ -37,7 +37,7 @@ description: "Compiler internals for stream_socket_recvfrom(): lowering path, ty
 ## Signature summary
 
 ```php
-function stream_socket_recvfrom(resource $socket, int $length, int $flags = 0, string $address = ''): mixed
+function stream_socket_recvfrom(resource $socket, int $length, int $flags = 0, string &$address = ''): mixed
 ```
 
 ## What the type checker enforces

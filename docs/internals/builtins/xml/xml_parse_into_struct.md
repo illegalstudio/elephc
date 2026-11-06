@@ -35,7 +35,7 @@ description: "Compiler internals for xml_parse_into_struct(): lowering path, typ
 ## Signature summary
 
 ```php
-function xml_parse_into_struct(mixed $parser, string $data, mixed $values, mixed $index = null): int
+function xml_parse_into_struct(mixed $parser, string $data, mixed &$values, mixed &$index = null): int
 ```
 
 ## What the type checker enforces

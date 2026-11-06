@@ -6,7 +6,7 @@ description: "Sets the type of a variable."
 ## settype()
 
 ```php
-function settype(mixed $var, string $type): bool
+function settype(mixed &$var, string $type): bool
 ```
 
 Sets the type of a variable.

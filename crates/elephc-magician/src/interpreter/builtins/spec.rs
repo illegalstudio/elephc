@@ -40,6 +40,8 @@ pub(in crate::interpreter) enum EvalArea {
     Formatting,
     /// `ext/gmp` procedural builtins, forwarded to the compiled GMP prelude helpers.
     Gmp,
+    /// `ext/sodium` procedural builtins, forwarded to the compiled sodium prelude helpers.
+    Sodium,
     /// JSON encoding, decoding, validation, and error-state builtins.
     Json,
     /// Numeric and mathematical builtins.
@@ -75,6 +77,7 @@ impl EvalArea {
             EvalArea::Filesystem => "filesystem",
             EvalArea::Formatting => "formatting",
             EvalArea::Gmp => "gmp",
+            EvalArea::Sodium => "sodium",
             EvalArea::Json => "json",
             EvalArea::Math => "math",
             EvalArea::NetworkEnv => "network_env",

@@ -27,6 +27,8 @@ const BRIDGE_NATIVE_PACKAGES: &[(&str, &[&str])] = &[
     ("elephc_xml", &["libxml2"]),
     // The bridge is a thin adapter over libgmp.
     ("elephc_gmp", &["gmp"]),
+    // The bridge is a thin adapter over libsodium.
+    ("elephc_sodium", &["libsodium"]),
     ("elephc_fileinfo", &["libmagic"]),
     // The cipher bridge declares libcrypto's provider/EVP symbols without
     // linking them; the package's zlib dependency supplies `libz.a` after it.

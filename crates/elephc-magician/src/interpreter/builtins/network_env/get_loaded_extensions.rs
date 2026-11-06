@@ -94,8 +94,10 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
     let with_curl = !zend_extensions && cfg!(feature = "curl");
     let with_xml = !zend_extensions && eval_xml_bridge_linked(context);
     let with_gmp = !zend_extensions && eval_gmp_bridge_linked(context);
+    let with_sodium = !zend_extensions && eval_sodium_bridge_linked(context);
     let extra_capacity = usize::from(with_curl)
         + usize::from(with_gmp)
+        + usize::from(with_sodium)
         + if with_xml { XML_BRIDGE_EXTENSIONS.len() } else { 0 };
     let mut names = values.string_array_new(set.len().max(1) + extra_capacity)?;
     for name in set {
@@ -106,6 +108,9 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
     }
     if with_gmp {
         names = values.string_array_push(names, "gmp")?;
+    }
+    if with_sodium {
+        names = values.string_array_push(names, "sodium")?;
     }
     if !zend_extensions && context.native_function("finfo_open").is_some() {
         names = values.string_array_push(names, "fileinfo")?;

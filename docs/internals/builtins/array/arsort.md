@@ -37,7 +37,7 @@ description: "Compiler internals for arsort(): lowering path, type checks, and r
 ## Signature summary
 
 ```php
-function arsort(array $array): bool
+function arsort(array &$array): bool
 ```
 
 ## What the type checker enforces

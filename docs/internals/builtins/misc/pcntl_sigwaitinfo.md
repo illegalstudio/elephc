@@ -37,7 +37,7 @@ description: "Compiler internals for pcntl_sigwaitinfo(): lowering path, type ch
 ## Signature summary
 
 ```php
-function pcntl_sigwaitinfo(mixed $signals, mixed $info = []): mixed
+function pcntl_sigwaitinfo(mixed $signals, mixed &$info = []): mixed
 ```
 
 ## What the type checker enforces

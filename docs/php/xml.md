@@ -333,7 +333,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`xml_get_current_line_number()`](./builtins/xml/xml_get_current_line_number.md) | `(mixed $parser): int` | `int` | ✓ | ✓ |
 | [`xml_get_error_code()`](./builtins/xml/xml_get_error_code.md) | `(mixed $parser): int` | `int` | ✓ | ✓ |
 | [`xml_parse()`](./builtins/xml/xml_parse.md) | `(mixed $parser, string $data, bool $is_final = false): int` | `int` | ✓ | ✓ |
-| [`xml_parse_into_struct()`](./builtins/xml/xml_parse_into_struct.md) | `(mixed $parser, string $data, mixed $values, mixed $index = null): int` | `int` | ✓ | ✓ |
+| [`xml_parse_into_struct()`](./builtins/xml/xml_parse_into_struct.md) | `(mixed $parser, string $data, mixed &$values, mixed &$index = null): int` | `int` | ✓ | ✓ |
 | [`xml_parser_create()`](./builtins/xml/xml_parser_create.md) | `(?string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
 | [`xml_parser_create_ns()`](./builtins/xml/xml_parser_create_ns.md) | `(?string $encoding = null, string $separator = ':'): mixed` | `mixed` | ✓ | ✓ |
 | [`xml_parser_free()`](./builtins/xml/xml_parser_free.md) | `(mixed $parser): bool` | `bool` | ✓ | ✓ |

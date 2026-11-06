@@ -6,7 +6,7 @@ description: "Shifts an element off the beginning of array."
 ## array_shift()
 
 ```php
-function array_shift(array $array): mixed
+function array_shift(array &$array): mixed
 ```
 
 Shifts an element off the beginning of array.

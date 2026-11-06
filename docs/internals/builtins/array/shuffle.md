@@ -37,7 +37,7 @@ description: "Compiler internals for shuffle(): lowering path, type checks, and 
 ## Signature summary
 
 ```php
-function shuffle(array $array): bool
+function shuffle(array &$array): bool
 ```
 
 ## What the type checker enforces

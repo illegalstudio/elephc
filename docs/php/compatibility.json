@@ -1,9 +1,9 @@
 {
   "baseline": {
     "classes": 329,
-    "constants": 3180,
+    "constants": 3188,
     "extensions": 68,
-    "functions": 2169,
+    "functions": 2175,
     "generated_at": "2026-09-04",
     "php_version": "8.5.10"
   },
@@ -187,16 +187,16 @@
   ],
   "coverage": {
     "classes": {
-      "have": 185,
+      "have": 186,
       "total": 329
     },
     "constants": {
-      "have": 1349,
-      "total": 3180
+      "have": 1460,
+      "total": 3188
     },
     "functions": {
-      "have": 1053,
-      "total": 2169
+      "have": 1168,
+      "total": 2175
     }
   },
   "dynamic_constants": [
@@ -1423,21 +1423,21 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 1,
+        "have": 1,
         "total": 1
       },
       "constants": {
         "eval": 0,
-        "have": 0,
-        "total": 94
+        "have": 102,
+        "total": 102
       },
       "docs": null,
       "extension": "sodium",
       "functions": {
-        "eval": 0,
-        "have": 0,
-        "total": 104
+        "eval": 110,
+        "have": 110,
+        "total": 110
       },
       "name": "sodium",
       "tier": "optional"
@@ -1484,14 +1484,14 @@
       },
       "constants": {
         "eval": 142,
-        "have": 163,
+        "have": 172,
         "total": 400
       },
       "docs": null,
       "extension": "standard",
       "functions": {
         "eval": 350,
-        "have": 390,
+        "have": 395,
         "total": 545
       },
       "name": "standard",

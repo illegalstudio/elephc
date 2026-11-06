@@ -6,7 +6,7 @@ description: "Searches without case sensitivity and optionally writes multibyte 
 ## mb_eregi()
 
 ```php
-function mb_eregi(string $pattern, string $string, mixed $matches = null): bool
+function mb_eregi(string $pattern, string $string, mixed &$matches = null): bool
 ```
 
 Searches without case sensitivity and optionally writes multibyte captures by reference.

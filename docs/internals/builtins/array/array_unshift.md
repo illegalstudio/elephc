@@ -37,7 +37,7 @@ description: "Compiler internals for array_unshift(): lowering path, type checks
 ## Signature summary
 
 ```php
-function array_unshift(array $array, ...$values): int
+function array_unshift(array &$array, ...$values): int
 ```
 
 ## What the type checker enforces

@@ -37,7 +37,7 @@ description: "Compiler internals for stream_socket_accept(): lowering path, type
 ## Signature summary
 
 ```php
-function stream_socket_accept(resource $socket, float $timeout = null, string $peer_name = null): mixed
+function stream_socket_accept(resource $socket, float $timeout = null, string &$peer_name = null): mixed
 ```
 
 ## What the type checker enforces
