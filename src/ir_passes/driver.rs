@@ -57,6 +57,7 @@ use super::iconv_mime_literal_sink::IconvMimeLiteralSink;
 use super::iconv_position_const_sink::IconvPositionConstSink;
 use super::mb_parse_str_literal_sink::MbParseStrLiteralSink;
 use super::mb_strlen_const_local_sink::MbStrlenConstLocalSink;
+use super::mb_chr_len_local_sink::MbChrLenLocalSink;
 use super::openssl_cbc_len_sink::OpensslCbcLenSink;
 use super::openssl_cipher_iv_length_const_sink::OpensslCipherIvLengthConstSink;
 use super::mb_strstr_len_const_sink::MbStrstrLenConstSink;
@@ -204,6 +205,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(IconvPositionConstSink),
         Box::new(MbParseStrLiteralSink),
         Box::new(MbStrlenConstLocalSink),
+        Box::new(MbChrLenLocalSink),
         Box::new(OpensslCbcLenSink),
         Box::new(OpensslCipherIvLengthConstSink),
         Box::new(MbNumericentityLenSink),

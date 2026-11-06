@@ -746,6 +746,15 @@ length-only mode of `__rt_inet_pton`: the address is still validated and IPv4/IP
 return 4/16, while an invalid address returns zero for `strlen(false)`. A value
 observation, including an `=== false` check, keeps the boxed helper.
 
+`src/ir_passes/mb_chr_len_local_sink.rs` handles the local form
+`$x = mb_chr($codepoint, "UTF-8"); strlen($x)`. It traces the boxed call through its
+clone/acquire/store scaffolding to the single local slot, proves every load feeds
+one `Cast` to `Str` and one `StrLen`, then retargets the call to `MbChrLen` and
+retires the local. Multiple `strlen()` observations share one retargeted call;
+UTF-16, malformed codepoints, and the bridge fallback keep PHP's byte length and
+`false` result. Echoing the string, an identity check, or any other value observer
+keeps the boxed `mb_chr()`.
+
 `src/ir_passes/strip_tags_len_sink.rs` folds `strlen(strip_tags(...))` into the
 count mode of `__rt_strip_tags`. The scanner still evaluates the subject and the
 allow-list exactly once, including array/Mixed coercion and strict `TypeError`s,
@@ -834,7 +843,8 @@ user-code argument falls back to the ordinary owner ledger.
 ## Performance regression guards
 
 The optimized string paths are pinned by deterministic IR assertions rather than
-wall-clock thresholds: `tests/codegen/optimizer/strpos_int_sink.rs` checks the raw
+wall-clock thresholds: `tests/codegen/optimizer/mb_chr_len_local_sink.rs` pins the local
+`mb_chr()` length retarget and its value-observation fallbacks; `strpos_int_sink.rs` checks the raw
 integer variants for all four searches, `strstr_len_sink.rs` checks the length helper
 and the absence of the haystack owner pin, and `string_len_sink.rs` checks the
 length-only folds for `strtr`, `chunk_split`, the case transforms and `ucwords`;
