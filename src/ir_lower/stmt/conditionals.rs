@@ -137,18 +137,31 @@ fn lower_if_chain(
 }
 
 /// Defers one reachable arm's merge edge so representation conversions can be inserted later.
+///
+/// The arm's current block stays unterminated and becomes the edge's tail: the join appends its
+/// conversions there and then branches to the merge. Every caller moves the builder to another
+/// block right away, so nothing else is lowered into the tail meanwhile. A separate tail block
+/// per edge doubled the blocks of every lazy `&&`/`||`, and dominator validation grows faster
+/// than the block count.
 pub(super) fn record_if_arm_exit(ctx: &mut LoweringContext<'_, '_>, arms: &mut Vec<IfArmExit>) {
-    let tail = ctx.builder.create_named_block("if.arm", Vec::new());
+    let tail = ctx
+        .builder
+        .insertion_block()
+        .expect("a reachable arm has an insertion block");
+    arms.push(pending_join_edge(ctx, tail));
+}
+
+/// Defers a jump's edge into a fresh tail and terminates the current block with the branch to it.
+///
+/// A `break`/`continue` ends its block, and lowering may still emit unreachable statements after
+/// it into the same position, so its edge cannot leave the block open the way an arm does.
+fn record_terminated_arm_exit(ctx: &mut LoweringContext<'_, '_>, arms: &mut Vec<IfArmExit>) {
+    let tail = ctx.builder.create_named_block("join.edge", Vec::new());
     ctx.builder.terminate(Terminator::Br {
         target: tail,
         args: Vec::new(),
     });
-    arms.push(IfArmExit {
-        tail,
-        types: ctx.local_types_snapshot(),
-        initialized: ctx.initialized_slots_snapshot(),
-        static_callables: ctx.static_callable_locals_snapshot(),
-    });
+    arms.push(pending_join_edge(ctx, tail));
 }
 
 /// Defers a `break`/`continue` edge whose target is a join point being lowered.
@@ -166,7 +179,7 @@ pub(super) fn record_join_edge(ctx: &mut LoweringContext<'_, '_>, target: BlockI
         return false;
     };
     let mut arms = std::mem::take(&mut ctx.join_edge_arms[index].1);
-    record_if_arm_exit(ctx, &mut arms);
+    record_terminated_arm_exit(ctx, &mut arms);
     ctx.join_edge_arms[index].1 = arms;
     true
 }

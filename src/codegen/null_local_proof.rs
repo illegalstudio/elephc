@@ -270,17 +270,20 @@ w($argc);
             .find(|local| local.name.as_deref() == Some("o"))
             .expect("w: missing local $o")
             .id;
+        // The `var_dump($o)` argument, picked by source column: the switch exit's merge edges
+        // also load `$o` (to box it), and the one in `case 1` follows the null store.
+        let var_dump_col = 121;
         let after_switch = w
             .blocks
             .iter()
             .flat_map(|block| block.instructions.iter().copied())
-            .filter(|inst_id| {
+            .find(|inst_id| {
                 w.instruction(*inst_id).is_some_and(|inst| {
                     inst.op == Op::LoadLocal
                         && inst.immediate == Some(Immediate::LocalSlot(slot))
+                        && inst.span.is_some_and(|span| span.line == 2 && span.col == var_dump_col)
                 })
             })
-            .last()
             .expect("w reads $o after the switch");
         assert!(!null_store_reaches_load(w, after_switch, slot, false));
         assert!(
