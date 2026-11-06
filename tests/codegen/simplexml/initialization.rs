@@ -17,7 +17,9 @@ fn test_simplexml_initialization_state_bundle() {
     let source = r#"<?php
 class StateXmlNoParent extends SimpleXMLElement { public function __construct() {} }
 function StateXmlMissingNode(SimpleXMLElement $xml, int $selectedOperation): void {
-    echo 'scalars:', (int)$xml, ':', (float)$xml, ':[', (string)$xml, ']|';
+    if ($selectedOperation < 0 || $selectedOperation === 25) {
+        echo 'scalars:', (int)$xml, ':', (float)$xml, ':[', (string)$xml, ']|';
+    }
     for ($operation = 0; $operation < 25; $operation++) {
         if ($selectedOperation >= 0 && $operation !== $selectedOperation) { continue; }
         echo $operation, ':';
@@ -50,18 +52,30 @@ function StateXmlMissingNode(SimpleXMLElement $xml, int $selectedOperation): voi
             echo 'accepted|';
         } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
     }
-    var_dump($xml->valid(), $xml->hasChildren(), $xml->getChildren());
-    try { $xml->current(); } catch (Error $error) { echo $error->getMessage(), '|'; }
-    try { $xml->key(); } catch (Error $error) { echo $error->getMessage(), '|'; }
-    $xml->next(); echo 'next|';
-    try { var_dump($xml->getDocNamespaces(false, true)); }
-    catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
-    try { var_dump($xml->registerXPathNamespace('p', 'urn:p')); }
-    catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
-    $copy = clone $xml;
-    echo 'copy:[', (string)$copy, ']|';
-    try { var_dump($copy->getDocNamespaces()); }
-    catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    if ($selectedOperation < 0 || $selectedOperation === 26) {
+        var_dump($xml->valid(), $xml->hasChildren(), $xml->getChildren());
+    }
+    if ($selectedOperation < 0 || $selectedOperation === 27) {
+        try { $xml->current(); } catch (Error $error) { echo $error->getMessage(), '|'; }
+    }
+    if ($selectedOperation < 0 || $selectedOperation === 28) {
+        try { $xml->key(); } catch (Error $error) { echo $error->getMessage(), '|'; }
+    }
+    if ($selectedOperation < 0 || $selectedOperation === 29) { $xml->next(); echo 'next|'; }
+    if ($selectedOperation < 0 || $selectedOperation === 30) {
+        try { var_dump($xml->getDocNamespaces(false, true)); }
+        catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    }
+    if ($selectedOperation < 0 || $selectedOperation === 31) {
+        try { var_dump($xml->registerXPathNamespace('p', 'urn:p')); }
+        catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    }
+    if ($selectedOperation < 0 || $selectedOperation === 32) {
+        $copy = clone $xml;
+        echo 'copy:[', (string)$copy, ']|';
+        try { var_dump($copy->getDocNamespaces()); }
+        catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    }
     unset($copy, $error);
 }
 function StateXmlEmpty(SimpleXMLElement $xml): void {
@@ -99,11 +113,26 @@ unset($loaded, $file, $constructed, $url, $bare, $root, $children, $attributes, 
 "#;
     let error = "Error:SimpleXMLElement is not properly initialized|";
     let expected_for = |selected: Option<usize>| {
-        let failures: String = (0..25).filter(|index| selected.is_none_or(|selected| selected == *index))
+        let enabled = |index| selected.is_none_or(|selected| selected == index);
+        let failures: String = (0..25).filter(|index| enabled(*index))
             .map(|index| format!("{index}:{error}")).collect();
-        let common = format!("scalars:0:0:[]|{failures}bool(false)\nbool(false)\nNULL\nIterator not initialized or already consumed|Iterator not initialized or already consumed|next|");
-        let recovered = format!("warning|warning|warning|{common}bool(false)\nbool(true)\ncopy:[]|bool(false)\n");
-        let bare = format!("{common}{error}{error}copy:[]|{error}");
+        let mut common = String::new();
+        if enabled(25) { common.push_str("scalars:0:0:[]|"); }
+        common.push_str(&failures);
+        if enabled(26) { common.push_str("bool(false)\nbool(false)\nNULL\n"); }
+        for index in [27, 28] {
+            if enabled(index) { common.push_str("Iterator not initialized or already consumed|"); }
+        }
+        if enabled(29) { common.push_str("next|"); }
+        let mut recovered = format!("warning|warning|warning|{common}");
+        let mut bare = common;
+        for (index, output) in [(30, "bool(false)\n"), (31, "bool(true)\n")] {
+            if enabled(index) { recovered.push_str(output); bare.push_str(error); }
+        }
+        if enabled(32) {
+            recovered.push_str("copy:[]|bool(false)\n");
+            bare.push_str(&format!("copy:[]|{error}"));
+        }
         let empty = "empty:0::0:[]:{}|bool(false)\nNULL\nNULL\nNULL\n[]:[]:[]|bool(true)\n";
         format!("{}{bare}root:0:0:[]:r|{}", recovered.repeat(4), empty.repeat(3))
     };
@@ -115,7 +144,7 @@ unset($loaded, $file, $constructed, $url, $bare, $root, $children, $attributes, 
         BundleCase { name: "initialization_aot", source, expected: &expected },
         BundleCase { name: "initialization_eval", source: &eval, expected: &expected },
     ];
-    let selections: Vec<String> = (0..=25).map(|index| index.to_string()).collect();
+    let selections: Vec<String> = (0..=33).map(|index| index.to_string()).collect();
     let mut argvs: Vec<Vec<&str>> = vec![vec![]];
     argvs.extend(selections.iter().map(|selection| vec![selection.as_str()]));
     let argvs: Vec<&[&str]> = argvs.iter().map(Vec::as_slice).collect();
