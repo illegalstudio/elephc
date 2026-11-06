@@ -13,6 +13,18 @@ use crate::support::*;
 #[test]
 fn test_simplexml_load_argument_overflow_bundle() {
     if skip_without_xml_native("test_simplexml_load_argument_overflow_bundle") { return; }
+    assert_simplexml_load_argument_overflow();
+}
+
+/// Runs the same load-option boundary checks with EIR optimization disabled.
+#[test]
+fn test_simplexml_load_argument_overflow_without_ir_opt_bundle() {
+    if skip_without_xml_native("test_simplexml_load_argument_overflow_without_ir_opt_bundle") { return; }
+    without_ir_opt(assert_simplexml_load_argument_overflow);
+}
+
+/// Keeps both optimizer modes on identical AOT/eval fixtures and strict default-heap assertions.
+fn assert_simplexml_load_argument_overflow() {
     let source = r#"<?php
 set_error_handler(function(int $level, string $message): bool { echo 'unexpected-warning|'; return true; });
 function checkLoadOptions(int $options): void {
@@ -49,12 +61,10 @@ unset($options, $error);
         BundleCase { name: "load_options_aot", source, expected: &expected },
         BundleCase { name: "load_options_eval", source: &eval, expected: &expected },
     ];
-    let run = || assert_bundle_with(&cases, |source| {
+    assert_bundle_with(&cases, |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
         assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
         out.stdout
     });
-    run();
-    without_ir_opt(run);
 }

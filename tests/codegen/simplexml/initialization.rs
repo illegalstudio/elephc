@@ -15,6 +15,18 @@ use crate::support::*;
 #[test]
 fn test_simplexml_initialization_state_bundle() {
     if skip_without_xml_native("test_simplexml_initialization_state_bundle") { return; }
+    assert_simplexml_initialization_state();
+}
+
+/// Runs the same initialization and ownership checks with EIR optimization disabled.
+#[test]
+fn test_simplexml_initialization_state_without_ir_opt_bundle() {
+    if skip_without_xml_native("test_simplexml_initialization_state_without_ir_opt_bundle") { return; }
+    without_ir_opt(assert_simplexml_initialization_state);
+}
+
+/// Keeps both optimizer modes on identical AOT/eval fixtures and strict default-heap assertions.
+fn assert_simplexml_initialization_state() {
     let source = r#"<?php
 class StateXmlNoParent extends SimpleXMLElement { public function __construct() {} }
 function StateXmlStringKey(int $copies): string { return str_repeat('id', $copies); }
@@ -153,12 +165,10 @@ unset($loaded, $file, $constructed, $url, $bare, $root, $children, $attributes, 
         BundleCase { name: "initialization_aot", source, expected: &expected },
         BundleCase { name: "initialization_eval", source: &eval, expected: &expected },
     ];
-    let run = || assert_bundle_with(&cases, |source| {
+    assert_bundle_with(&cases, |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
         assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
         out.stdout
     });
-    run();
-    without_ir_opt(run);
 }
