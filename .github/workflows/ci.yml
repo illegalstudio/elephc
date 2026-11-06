@@ -921,15 +921,18 @@ jobs:
           retention-days: 7
 
   non-codegen-tests-linux-x86_64:
-    name: Non-Codegen Tests (linux-x86_64 ${{ matrix.shard }}/8)
+    name: Non-Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-linux-x86_64]
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # Cross-target XML/native tests overloaded one of the eight partitions.
+    # Split the full suite more finely while retaining eight jobs and four workers per job.
     strategy:
       fail-fast: false
+      max-parallel: 8
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
@@ -952,7 +955,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
-            --partition hash:${{ matrix.shard }}/8 \
+            --partition hash:${{ matrix.shard }}/16 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 4
