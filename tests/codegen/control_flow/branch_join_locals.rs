@@ -645,3 +645,24 @@ var_dump(whileBreak(2), whileBreak(9), forContinue(1), forContinue(7), doBreak(4
          string(4) \"hit2\"\nNULL\nint(10)\nNULL\nint(4)\nbool(false)\nint(3)\n"
     );
 }
+
+/// A `continue` that skips an append leaves the loop's latch with the head's fact for the array
+/// (`array<never>` for the `[]` it starts from) while the body's end holds `array<string>`. The
+/// loop joins keep the carried layout instead of widening it to `array<mixed>`: the widened
+/// array came back from an untyped function the caller reads as `array<string>`, so a strict
+/// `in_array` matched nothing (`pdo_drivers()` stopped listing its drivers).
+#[test]
+fn test_loop_jump_joins_keep_carried_array_layout() {
+    let out = compile_and_run(
+        r#"<?php
+function names(int $n): array { $out = []; for ($i = 0; $i < $n; $i++) { $name = str_repeat("n", $i + 1); if ($name === "nn") { continue; } $out[] = $name; } return $out; }
+function names2(array $src) { $out = []; foreach ($src as $s) { $v = strtoupper($s); if ($v === "B") { continue; } $out[] = $v; } return $out; }
+function names3(int $n) { $out = []; $i = 0; while ($i < $n) { $v = "w" . $i; $i++; if ($v === "w1") { continue; } $out[] = $v; } return $out; }
+echo in_array("nnn", names(3), true) ? "yes" : "no", "|";
+echo in_array("C", names2(["a", "b", "c"]), true) ? "yes" : "no", "|";
+echo in_array("w2", names3(3), true) ? "yes" : "no", "|";
+echo implode(",", names(3)), "|", implode(",", names2(["a", "b", "c"])), "\n";
+"#,
+    );
+    assert_eq!(out, "yes|yes|yes|n,nnn|A,C\n");
+}

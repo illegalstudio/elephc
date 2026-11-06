@@ -219,9 +219,10 @@ pub(super) fn join_edges(
     edges: Vec<IfArmExit>,
     merge: BlockId,
     span: Span,
+    containers: ContainerJoin,
 ) {
     let Some(first) = edges.first() else {
-        finish_if_type_join(ctx, edges, merge, span);
+        finish_type_join(ctx, edges, merge, span, containers);
         return;
     };
     ctx.restore_local_types(first.types.clone());
@@ -230,8 +231,21 @@ pub(super) fn join_edges(
     for edge in edges.iter().skip(1) {
         initialized.retain(|slot| edge.initialized.contains(slot));
     }
-    finish_if_type_join(ctx, edges, merge, span);
+    finish_type_join(ctx, edges, merge, span, containers);
     ctx.restore_initialized_slots(initialized);
+}
+
+/// Whether a join reconciles array and hash layouts that its edges disagree on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ContainerJoin {
+    /// Convert each edge's container to the common layout, as an `if` merge does.
+    Reconcile,
+    /// Keep the first edge's container fact without converting. A loop's carried layouts are
+    /// fixed by the checker's storage contracts and the `for` fixed point; an edge leaving the
+    /// body early still holds the head's fact (`array<never>` for a `[]` the body appends to),
+    /// and reconciling it widened the array to `array<mixed>` under a caller that reads the
+    /// function's `array<string>` result, so `in_array(…, true)` matched nothing.
+    KeepFirst,
 }
 
 /// The join points of a loop whose body may `break` or `continue` it.
@@ -323,11 +337,17 @@ impl LoopJumpJoins {
     /// The builder is left in the latch with the joined facts. A latch that is not itself the
     /// next lowered block is terminated with the branch to the next iteration.
     pub(super) fn finish_latch(&self, ctx: &mut LoweringContext<'_, '_>, span: Span) {
-        if !ctx.builder.insertion_block_is_terminated() {
+        let falls_through = !ctx.builder.insertion_block_is_terminated();
+        if falls_through {
             record_join_edge(ctx, self.latch);
         }
-        let edges = take_join_edges(ctx, self.latch);
-        join_edges(ctx, edges, self.latch, span);
+        let mut edges = take_join_edges(ctx, self.latch);
+        // The body's end goes first: its facts are what the next iteration saw before these
+        // joins existed, and the join keeps them for every local the edges do not disagree on.
+        if falls_through {
+            edges.rotate_right(1);
+        }
+        join_edges(ctx, edges, self.latch, span, ContainerJoin::KeepFirst);
         ctx.builder.position_at_end(self.latch);
         if let Some(target) = self.after_latch {
             branch_to(ctx, target);
@@ -341,7 +361,7 @@ impl LoopJumpJoins {
         self.retype_entry_divergent_locals(ctx);
         let mut edges = vec![pending_join_edge(ctx, self.natural_exit)];
         edges.extend(take_join_edges(ctx, self.exit));
-        join_edges(ctx, edges, self.exit, span);
+        join_edges(ctx, edges, self.exit, span, ContainerJoin::KeepFirst);
         ctx.builder.position_at_end(self.exit);
     }
 
@@ -410,6 +430,17 @@ pub(super) fn finish_if_type_join(
     merge: BlockId,
     span: Span,
 ) {
+    finish_type_join(ctx, arms, merge, span, ContainerJoin::Reconcile);
+}
+
+/// Reconciles flow-sensitive types on all incoming merge edges, and container layouts when asked.
+fn finish_type_join(
+    ctx: &mut LoweringContext<'_, '_>,
+    arms: Vec<IfArmExit>,
+    merge: BlockId,
+    span: Span,
+    containers: ContainerJoin,
+) {
     if arms.len() < 2 {
         if let Some(arm) = arms.first() {
             ctx.restore_local_types(arm.types.clone());
@@ -427,7 +458,7 @@ pub(super) fn finish_if_type_join(
         return;
     }
 
-    let (joined, edge_boxed) = join_arm_types(ctx, &arms);
+    let (joined, edge_boxed) = join_arm_types(ctx, &arms, containers);
     let joined_callables = join_arm_static_callables(&arms);
     let saved_types = ctx.local_types_snapshot();
     for arm in &arms {
@@ -529,6 +560,7 @@ fn join_arm_static_callables(
 fn join_arm_types(
     ctx: &LoweringContext<'_, '_>,
     arms: &[IfArmExit],
+    containers: ContainerJoin,
 ) -> (TypeEnv, HashSet<String>) {
     let Some(first) = arms.first() else {
         return (TypeEnv::new(), HashSet::new());
@@ -557,6 +589,13 @@ fn join_arm_types(
             }
         }
         if arm_types.windows(2).all(|pair| pair[0] == pair[1]) {
+            continue;
+        }
+        if containers == ContainerJoin::KeepFirst
+            && arm_types
+                .iter()
+                .all(|ty| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }))
+        {
             continue;
         }
         if arm_types.iter().any(|ty| *ty == PhpType::Mixed) {

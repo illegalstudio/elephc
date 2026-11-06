@@ -380,7 +380,7 @@ pub(super) fn lower_switch_bodies(
         exit_edges.extend(default_edge.take());
     }
     ctx.loop_stack.pop();
-    join_edges(ctx, exit_edges, exit, span);
+    join_edges(ctx, exit_edges, exit, span, ContainerJoin::Reconcile);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
 }
@@ -406,7 +406,7 @@ fn enter_switch_body(
         return;
     }
     let body = ctx.builder.create_named_block("switch.body", Vec::new());
-    join_edges(ctx, dispatch, body, span);
+    join_edges(ctx, dispatch, body, span, ContainerJoin::Reconcile);
     ctx.builder.position_at_end(body);
 }
 
