@@ -1,8 +1,6 @@
 ---
 title: "addcslashes()"
 description: "Returns a string with backslashes before characters listed in a character set, including ranges."
-sidebar:
-  order: 808
 ---
 
 ## addcslashes()
@@ -21,8 +19,9 @@ Returns a string with backslashes before characters listed in a character set, i
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/addcslashes.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/addcslashes.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

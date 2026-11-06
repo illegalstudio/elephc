@@ -190,4 +190,3 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 elephc-fileinfo = { path = "crates/elephc-fileinfo" }
-elephc-filter = { path = "crates/elephc-filter" }

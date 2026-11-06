@@ -187,15 +187,15 @@
   ],
   "coverage": {
     "classes": {
-      "have": 185,
+      "have": 187,
       "total": 329
     },
     "constants": {
-      "have": 1349,
+      "have": 1412,
       "total": 3180
     },
     "functions": {
-      "have": 1053,
+      "have": 1063,
       "total": 2169
     }
   },
@@ -767,20 +767,20 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 2,
+        "have": 2,
         "total": 2
       },
       "constants": {
-        "eval": 0,
-        "have": 0,
+        "eval": 56,
+        "have": 56,
         "total": 56
       },
       "docs": null,
       "extension": "filter",
       "functions": {
-        "eval": 0,
-        "have": 0,
+        "eval": 7,
+        "have": 7,
         "total": 7
       },
       "name": "filter",
@@ -1483,15 +1483,15 @@
         "total": 6
       },
       "constants": {
-        "eval": 142,
-        "have": 163,
+        "eval": 149,
+        "have": 170,
         "total": 400
       },
       "docs": null,
       "extension": "standard",
       "functions": {
-        "eval": 350,
-        "have": 390,
+        "eval": 351,
+        "have": 393,
         "total": 545
       },
       "name": "standard",

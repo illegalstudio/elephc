@@ -1,8 +1,6 @@
 ---
 title: "setlocale()"
 description: "Sets locale information and returns the new locale name, or false when unavailable."
-sidebar:
-  order: 934
 ---
 
 ## setlocale()
@@ -22,8 +20,9 @@ Sets locale information and returns the new locale name, or false when unavailab
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected locale prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

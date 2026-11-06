@@ -1,8 +1,6 @@
 ---
 title: "parse_str() - internals"
 description: "Compiler internals for parse_str(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 926
 ---
 
 ## `parse_str()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/parse_str_prelude.rs`:62](https://github.com/illegalstudio/elephc/blob/main/src/parse_str_prelude.rs#L62) (`parse_str`)
+- **Lowering**: [`src/parse_str_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/parse_str_prelude.rs) (`parse_str`)
 - **Function symbol**: `parse_str()`
 
 

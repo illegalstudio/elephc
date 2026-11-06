@@ -1,8 +1,6 @@
 ---
 title: "setlocale() - internals"
 description: "Compiler internals for setlocale(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 934
 ---
 
 ## `setlocale()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/locale_prelude.rs`:31](https://github.com/illegalstudio/elephc/blob/main/src/locale_prelude.rs#L31) (`setlocale`)
+- **Lowering**: [`src/locale_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/locale_prelude.rs) (`setlocale`)
 - **Function symbol**: `setlocale()`
 
 
