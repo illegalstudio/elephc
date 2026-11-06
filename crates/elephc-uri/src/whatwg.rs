@@ -61,6 +61,21 @@ pub fn parse(
         append_drive_warnings(input, trimmed, &mut log);
     }
 
+    // An empty reference (after leading/trailing C0-control and space trimming) keeps the
+    // base's scheme, authority, path, and query but drops its fragment. The `url` crate
+    // refuses this shape against an opaque base, while WHATWG and php-src accept it.
+    if let Some(base) = base {
+        if trimmed.0 == trimmed.1 {
+            let mut url = base.clone();
+            url.set_fragment(None);
+            let file_path = file_path_override(&input[trimmed.0..trimmed.1], &url);
+            return Ok((
+                WhatWgUri { url, long_host: None, file_path },
+                log.into_iter().rev().collect::<Vec<_>>(),
+            ));
+        }
+    }
+
     match parse_url(input, base) {
         Ok(mut url) => {
             normalize_path_encoding(&mut url);

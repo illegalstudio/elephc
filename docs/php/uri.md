@@ -206,8 +206,8 @@ var_export($uri);
 - `--INI-- memory_limit` is honored as the runtime heap ceiling and the fatal message
   matches php-src's `Allowed memory size of N bytes exhausted …` form. All 330 vendored
   8.5 fixtures pass, including the twelve `oom_*` cases. The 8.6 builder/getter corpus
-  passes 197 of 204 fixtures; the 7 skipped fixtures cover opaque-path space preservation,
-  opaque-base warning/reset behavior, and the typed-property by-reference shape.
+  passes 198 of 204 fixtures; the 6 skipped fixtures cover opaque-path space preservation,
+  a mixed-object `array_map()` comparison, and the typed-property by-reference shape.
 - The URI implementations retain one path-segment node per segment (an estimated 32-byte
   node) plus copied text for non-empty segments. Because that storage lives inside the Rust
   bridge rather than in the elephc heap, the prelude mirrors the footprint in hidden PHP
