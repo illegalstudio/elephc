@@ -457,6 +457,18 @@ fn test_untyped_function_body_error_reached_through_callbacks_is_reported() {
             "<?php {f} function arr(): array {{ return [1]; }} $a = arr(); \
              var_dump(call_user_func('f', ...$a));"
         ),
+        format!(
+            "<?php {f} function arr(): array {{ return [1]; }} $a = arr(); \
+             var_dump(call_user_func(f(...), ...$a));"
+        ),
+        format!(
+            "<?php {f} function arr(): array {{ return [1]; }} $a = arr(); $h = f(...); \
+             var_dump(call_user_func($h, ...$a));"
+        ),
+        format!(
+            "<?php {f} function src(): array<int>|array<string, int> {{ return [1]; }} \
+             $a = src(); var_dump(call_user_func('f', ...$a));"
+        ),
         format!("<?php {f} var_dump(call_user_func('f', 1, 2)); echo f(1);"),
         format!("<?php {f} $h = f(...); var_dump($h(1, 2)); echo f(1);"),
         "<?php function id<T>(T $x) { $a = 5; return $a[0]; } \
@@ -495,6 +507,10 @@ fn test_callback_rewalk_refreshes_helper_return_built_from_late_static_property(
         "$h = a(...); $xs = [1]; var_dump(call_user_func_array($h, $xs));",
         "function arr(): array { return [1]; } var_dump(call_user_func_array('a', arr()));",
         "function arr(): array { return [1]; } $xs = arr(); var_dump(call_user_func('a', ...$xs));",
+        "function arr(): array { return [1]; } $xs = arr(); \
+         var_dump(call_user_func(a(...), ...$xs));",
+        "function src(): array<int>|array<string, int> { return [1]; } $xs = src(); \
+         var_dump(call_user_func('a', ...$xs));",
     ] {
         expect_no_error(&format!("<?php {helpers} {call} C::$v = [9];"));
     }
@@ -530,7 +546,8 @@ fn test_failed_body_rewalk_survives_calls_under_eval_barrier() {
 /// variadic tail included, to the list's value type, so a body that indexes it stays accepted
 /// when the re-walk runs from it: beside a by-reference parameter (whose first walk bound the
 /// by-value one to `int`), for a `mixed` list, for an empty list, and for a variadic tail that
-/// a spread of the list would have typed `array<int>`.
+/// a spread of the list would have typed `array<int>`; a `call_user_func` spread of a union of
+/// array shapes, which the spread binder refuses, is accepted as well.
 #[test]
 fn test_call_user_func_array_variable_list_rewalk_accepts_valid_body() {
     for program in [
@@ -548,6 +565,9 @@ fn test_call_user_func_array_variable_list_rewalk_accepts_valid_body() {
          var_dump(call_user_func_array('f', $a));",
         "<?php function f($n, &$r, ...$rest) { return $n[0]; } $a = [[1], [2], [3]]; \
          var_dump(call_user_func_array('f', $a));",
+        "<?php function f($n) { return $n + 1; } \
+         function src(): array<int>|array<string, int> { return [1]; } $a = src(); \
+         var_dump(call_user_func('f', ...$a));",
     ] {
         expect_no_error(program);
     }

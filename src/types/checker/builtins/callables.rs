@@ -1335,22 +1335,40 @@ fn validate_static_cufa_reference_arguments(
 }
 
 
-/// Returns the type a variable `call_user_func_array` argument list binds each parameter to, or
-/// `None` when the list is no array (an iterator or an object the call refuses or iterates at
-/// run time).
+/// Returns the type a variable `call_user_func_array` argument list (or a spread source) binds
+/// each parameter to, or `None` when the source is no array storage (an iterator or an object
+/// the call refuses or iterates at run time).
 ///
 /// The rules follow the spread binder (`spread_source_element_type`): a packed or keyed list
-/// binds its value type, and a declared `array` or a `mixed` value binds `mixed`. An empty list
+/// binds its value type, and a declared `array` or a `mixed` value binds `mixed`. A union of
+/// array shapes binds the value its members share, or `mixed` when they differ. An empty list
 /// (`never`) binds `mixed` as well, so a body error that no argument decides is still reported.
 fn variable_list_value_type(list_ty: &PhpType) -> Option<PhpType> {
-    let value_ty = match list_ty {
-        PhpType::Array(elem_ty) => (**elem_ty).clone(),
-        PhpType::AssocArray { value, .. } => (**value).clone(),
-        PhpType::Mixed => PhpType::Mixed,
-        ty if ty.is_php_array() => PhpType::Mixed,
-        _ => return None,
-    };
+    let value_ty = array_storage_value_type(list_ty)?;
     Some(if value_ty == PhpType::Never { PhpType::Mixed } else { value_ty })
+}
+
+/// Returns the value type of an array-storage source for `variable_list_value_type`, keeping
+/// `never` for an empty list so a union with one joins the other members' value type.
+fn array_storage_value_type(list_ty: &PhpType) -> Option<PhpType> {
+    match list_ty {
+        PhpType::Array(elem_ty) => Some((**elem_ty).clone()),
+        PhpType::AssocArray { value, .. } => Some((**value).clone()),
+        PhpType::Mixed => Some(PhpType::Mixed),
+        ty if ty.is_php_array() => Some(PhpType::Mixed),
+        PhpType::Union(members) => {
+            let mut joined = PhpType::Never;
+            for member in members {
+                let value_ty = array_storage_value_type(member)?;
+                if value_ty == PhpType::Never || value_ty == joined {
+                    continue;
+                }
+                joined = if joined == PhpType::Never { value_ty } else { PhpType::Mixed };
+            }
+            Some(joined)
+        }
+        _ => None,
+    }
 }
 
 /// Walks a marked failed body of the function `name` again for a `call_user_func_array` call
@@ -1376,29 +1394,50 @@ fn rewalk_marked_function_over_variable_list(
     }
 }
 
-/// Reports whether a descriptor call spreads a source that only a runtime iterator walk can
-/// unpack (an `iterable`, an object, or a union holding one), as opposed to array storage.
+/// Walks a marked failed body of the function `name` again for a `call_user_func` call with
+/// the arguments `call_args`, before the call reads the callee's signature.
 ///
-/// `descriptor_call_has_traversable_spread` also counts a declared `array`, a union of array
-/// shapes, so it cannot gate the re-walk of a marked failed body: `call_user_func('f', ...$a)`
-/// over an `array` binds `mixed` parameters like any other array spread.
-fn descriptor_args_have_iterator_spread(
+/// Positional arguments and spreads of array storage the spread binder accepts (an array, a
+/// keyed array, a declared `array`, `mixed`) re-walk through `check_function_call`, like a
+/// direct call. The binder refuses a union of array shapes (`array<int>|array<string, int>`),
+/// so a call whose only argument spreads one binds its parameters directly to the union's value
+/// type (`rewalk_marked_function_from_initial_params`). Any other spread, an `iterable` or an
+/// object that only a runtime iterator walk unpacks, keeps the provisional signature, as does a
+/// union spread beside other arguments.
+fn rewalk_marked_descriptor_call_target(
     checker: &mut Checker,
-    args: &[Expr],
+    name: &str,
+    call_args: &[Expr],
+    span: crate::span::Span,
     env: &TypeEnv,
-) -> Result<bool, CompileError> {
-    for arg in args {
+) -> Result<(), CompileError> {
+    let mut binder_accepts_spreads = true;
+    let mut sole_spread_value_ty = None;
+    for arg in call_args {
         let ExprKind::Spread(inner) = &arg.kind else {
             continue;
         };
         let ty = checker.infer_type(inner, env)?;
-        if variable_list_value_type(&ty).is_none()
-            && checker.descriptor_spread_source_may_be_traversable(&ty)
+        if matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed)
+            || ty.is_php_array()
         {
-            return Ok(true);
+            continue;
+        }
+        binder_accepts_spreads = false;
+        if call_args.len() == 1 {
+            sole_spread_value_ty = variable_list_value_type(&ty);
         }
     }
-    Ok(false)
+    if binder_accepts_spreads {
+        return checker.rewalk_marked_callable_target(name, call_args, span, env);
+    }
+    let Some(value_ty) = sole_spread_value_ty else {
+        return Ok(());
+    };
+    let name = checker
+        .canonical_function_name_folded(name)
+        .unwrap_or_else(|| name.to_string());
+    checker.rewalk_marked_function_from_initial_params(&name, &value_ty)
 }
 
 /// Type-checks a `call_user_func_array` call: resolves the callback (first-class callable,
@@ -1733,6 +1772,9 @@ pub(crate) fn check_call_user_func(
         )? {
             return Ok(ret_ty);
         }
+        if let CallableTarget::Function(name) = target {
+            rewalk_marked_descriptor_call_target(checker, name.as_str(), &args[1..], span, env)?;
+        }
         let sig = if has_traversable_spread {
             checker.resolve_first_class_callable_sig(target, span, env)?
         } else {
@@ -1761,6 +1803,15 @@ pub(crate) fn check_call_user_func(
                 env,
             )? {
                 return Ok(ret_ty);
+            }
+            if let CallableTarget::Function(name) = &target {
+                rewalk_marked_descriptor_call_target(
+                    checker,
+                    name.as_str(),
+                    &args[1..],
+                    span,
+                    env,
+                )?;
             }
             let sig = if has_traversable_spread {
                 checker.resolve_first_class_callable_sig(&target, span, env)?
@@ -1826,9 +1877,7 @@ pub(crate) fn check_call_user_func(
             .unwrap_or_else(|| cb_name.clone());
         // A marked failed body is walked again before the descriptor promotion below
         // re-resolves the signature, so the promotion starts from the settled one.
-        if !descriptor_args_have_iterator_spread(checker, &args[1..], env)? {
-            checker.rewalk_marked_callable_target(&cb_name, &args[1..], span, env)?;
-        }
+        rewalk_marked_descriptor_call_target(checker, &cb_name, &args[1..], span, env)?;
         // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
         // this function a named entry, so its collector has to be compiled for the descriptor
         // container before its signature is read here.
