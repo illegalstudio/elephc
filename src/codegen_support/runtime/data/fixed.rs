@@ -705,6 +705,10 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _php_error_reporting\n_php_error_reporting:\n    .quad {}\n",
         php_version.error_reporting_mask()
     ));
+    // One-shot mbstring literal-registration stamps. `__rt_mbstring_ini_reset`
+    // increments this generation before each request, so literal flags left by a
+    // previous request never suppress re-registration into the fresh identity map.
+    out.push_str(".globl _mbstring_request_generation\n_mbstring_request_generation:\n    .quad 1\n");
     // PHP user-handler state. Each current callback owns one boxed Mixed cell and
     // one normalized callable descriptor. Replacements move the previous state
     // into an unbounded heap-backed linked stack so restore_*_handler() can unwind

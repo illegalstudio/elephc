@@ -593,7 +593,9 @@ bridge, so PHP's Unicode and substitution behavior remains authoritative. Catalo
 count and `mb_get_info("internal_encoding")` queries use dedicated allocation-free
 C ABI entry points. The bridge identity header bit marks strings that actually
 acquired INI metadata, letting `__rt_heap_free` skip the metadata callback for the
-ordinary strings that never did.
+ordinary strings that never did. Each deduplicated string literal also owns a
+one-byte registration flag in the program data: `__rt_mbstring_ini_literal` runs on
+the literal's first use and later uses skip its full register save and bridge call.
 
 The Rust encoding catalog is one immutable static slice. Codec selection and
 encoding lookup share its metadata and embedded byte tables, rather than
