@@ -1169,6 +1169,28 @@ fn sql_is_call_statement(sql: &str) -> bool {
     rest.get(4).is_none_or(|&b| !is_ident_byte(b))
 }
 
+/// Returns the exclusive end of a `--` line comment at `bytes[i]` under the server's lexer
+/// rule, which is wider than php-src's client-side one in `scan_my_comment`: the second dash
+/// may be followed by any whitespace or control byte (`my_isspace` / `my_iscntrl`, so LF,
+/// 0x00-0x1f and 0x7f too) or by the end of the query. Only classifiers that predict what the
+/// server runs use it; placeholder translation keeps php's rule.
+fn scan_server_dash_comment(bytes: &[u8], i: usize) -> Option<usize> {
+    if !bytes.get(i..)?.starts_with(b"--") {
+        return None;
+    }
+    match bytes.get(i + 2) {
+        None => Some(i + 2),
+        Some(&b) if b <= b' ' || b == 0x7f => {
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j] != b'\n' {
+                j += 1;
+            }
+            Some(j)
+        }
+        Some(_) => None,
+    }
+}
+
 /// Whether a mysqli text statement can return several result sets while multi-statements are
 /// off: a `CALL`, or an `EXECUTE` (of an SQL-level prepared `CALL`), behind any leading
 /// whitespace and inert comments. A leading MySQL `/*!` / `/*!NNNNN` or MariaDB `/*M!`
@@ -1187,9 +1209,8 @@ fn sql_may_return_several_sets(sql: &str) -> bool {
         }
         if let Some(end) = scan_my_comment(bytes, i) {
             i = end;
-        } else if bytes[i..].starts_with(b"--\n") {
-            // The server also ends a `--` comment at a newline right after it.
-            i += 2;
+        } else if let Some(end) = scan_server_dash_comment(bytes, i) {
+            i = end;
         }
         if bytes[i..].starts_with(b"/*!") || bytes[i..].starts_with(b"/*M!") {
             return true;
@@ -4570,6 +4591,9 @@ mod tests {
         assert!(!sql_may_return_several_sets("EXECUTED()"));
         assert!(!sql_may_return_several_sets("/* CALL p() */ SELECT 1"));
         assert!(sql_may_return_several_sets("--\nCALL p()"));
+        assert!(sql_may_return_several_sets("--\x01\nCALL p()"));
+        assert!(sql_may_return_several_sets("--\x7f x\nCALL p()"));
+        assert!(!sql_may_return_several_sets("--x\nCALL p()"));
         assert!(sql_may_return_several_sets("/*! */ CALL p()"));
         assert!(sql_may_return_several_sets("/*!99999 SELECT 1 */ CALL p()"));
         assert!(sql_may_return_several_sets("/*!50000 SELECT 1 */"));
