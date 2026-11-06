@@ -772,6 +772,7 @@ fn render(value: &Expr) -> (String, u8) {
         ExprKind::Variable(name) => (format!("${name}"), ATOM),
         ExprKind::ConstRef(name) => (name_source(name), ATOM),
         ExprKind::PostIncrement(name) => (format!("${name}++"), ATOM),
+        ExprKind::ErrorSuppress(inner) => (format!("@{}", at(inner, 90)), 90),
         ExprKind::Negate(inner) => (format!("-{}", at(inner, 85)), 85),
         ExprKind::Not(inner) => (format!("!{}", at(inner, 75)), 75),
         ExprKind::Cast { target, expr } => {

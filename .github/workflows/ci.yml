@@ -48,6 +48,7 @@ env:
     -p elephc-pcntl
     -p elephc-xml
     -p elephc-fileinfo
+    -p elephc-tidy
     -p elephc-tokenizer
     -p elephc-magician
     -p elephc-web
@@ -285,6 +286,12 @@ jobs:
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Materialize managed native libtidy
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/tidy/elephc.toml
+
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this
         # installation; the guard makes the step a no-op on macOS and warm images.
@@ -335,6 +342,11 @@ jobs:
         run: |
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh macos-aarch64)" \
             cargo test -p elephc-xml
+
+      - name: Test the tidy bridge against managed libtidy
+        run: |
+          ELEPHC_TIDY_LIBTIDY_LIB_DIR="$(sh scripts/ci/libtidy_lib_dir.sh macos-aarch64)" \
+            cargo test -p elephc-tidy
 
       - name: Upload test archive
         # Only when this run's test jobs for the platform consume it (see `plan`).
@@ -501,6 +513,12 @@ jobs:
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Materialize managed native libtidy
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/tidy/elephc.toml
+
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this
         # installation; the guard makes the step a no-op on macOS and warm images.
@@ -551,6 +569,11 @@ jobs:
         run: |
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-x86_64)" \
             cargo test -p elephc-xml
+
+      - name: Test the tidy bridge against managed libtidy
+        run: |
+          ELEPHC_TIDY_LIBTIDY_LIB_DIR="$(sh scripts/ci/libtidy_lib_dir.sh linux-x86_64)" \
+            cargo test -p elephc-tidy
 
       - name: Upload test archive
         # Only when this run's test jobs for the platform consume it (see `plan`).
@@ -709,6 +732,12 @@ jobs:
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Materialize managed native libtidy
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/tidy/elephc.toml
+
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this
         # installation; the guard makes the step a no-op on macOS and warm images.
@@ -759,6 +788,11 @@ jobs:
         run: |
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-aarch64)" \
             cargo test -p elephc-xml
+
+      - name: Test the tidy bridge against managed libtidy
+        run: |
+          ELEPHC_TIDY_LIBTIDY_LIB_DIR="$(sh scripts/ci/libtidy_lib_dir.sh linux-aarch64)" \
+            cargo test -p elephc-tidy
 
       - name: Upload test archive
         # Only when this run's test jobs for the platform consume it (see `plan`).
@@ -1392,6 +1426,12 @@ jobs:
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Materialize managed native libtidy
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/tidy/elephc.toml
+
       - name: Cache managed native gmp
         # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
         # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
@@ -1432,6 +1472,7 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_TIDY_NATIVE: "1"
           # Same fail-closed rule for the GMP PHPT corpus: the managed libgmp
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
@@ -1515,6 +1556,12 @@ jobs:
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Materialize managed native libtidy
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/tidy/elephc.toml
+
       - name: Cache managed native gmp
         # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
         # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
@@ -1555,6 +1602,7 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_TIDY_NATIVE: "1"
           # Same fail-closed rule for the GMP PHPT corpus: the managed libgmp
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
@@ -1638,6 +1686,12 @@ jobs:
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Materialize managed native libtidy
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/tidy/elephc.toml
+
       - name: Cache managed native gmp
         # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
         # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
@@ -1678,6 +1732,7 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_TIDY_NATIVE: "1"
           # Same fail-closed rule for the GMP PHPT corpus: the managed libgmp
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
@@ -2605,6 +2660,49 @@ jobs:
             "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
             "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
 
+  tidy-ios-compile-link:
+    name: Tidy iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust with the iOS standard library
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache managed native libtidy for iOS
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/elephc-native
+          key: libtidy-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/tidy/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libtidy.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libtidy-native-${{ matrix.elephc_target }}-
+
+      - name: Build and link tidy with the managed libtidy
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
+        run: |
+          bash scripts/ci/test_ios_tidy_link.sh \
+            "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
+
   tokenizer-ios-compile-link:
     name: Tokenizer iOS Compile & Link (${{ matrix.elephc_target }})
     needs: plan
@@ -3333,6 +3431,19 @@ jobs:
             examples/xml/elephc.toml \
             examples/xml/elephc.lock
 
+      - name: Materialize catalog libtidy from verified source
+        # The tidy bridge's parser is libtidy itself and the package has no
+        # catalog dependencies. `native add` builds the reviewed direct-CC
+        # recipe against the project's pinned lock (~1 minute from source).
+        shell: bash
+        run: |
+          ./target/debug/elephc native add libtidy \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/tidy/elephc.toml
+          git diff --exit-code -- \
+            examples/tidy/elephc.toml \
+            examples/tidy/elephc.lock
+
       - name: Compile and run regex through the production resolver
         shell: bash
         run: |
@@ -3367,6 +3478,21 @@ jobs:
           ./target/debug/elephc --target "${{ matrix.target }}" examples/fileinfo/main.php
           ./examples/fileinfo/main > "$RUNNER_TEMP/fileinfo.out"
           grep -Fx "text/plain; charset=us-ascii" "$RUNNER_TEMP/fileinfo.out"
+
+      - name: Compile and run tidy through the production resolver
+        # Exercises the chain every tests/codegen/tidy fixture also needs: the
+        # elephc_tidy bridge staticlib linked against the managed libtidy.a from
+        # the project's lock. The malformed `<i>` in the example is repaired to
+        # `</b>`, which proves the output came from real libtidy.
+        shell: bash
+        run: |
+          ./target/debug/elephc \
+            --target "${{ matrix.target }}" \
+            examples/tidy/main.php
+          ./examples/tidy/main > "$RUNNER_TEMP/tidy.out" 2> "$RUNNER_TEMP/tidy.err"
+          grep -F '<!DOCTYPE html>' "$RUNNER_TEMP/tidy.out"
+          grep -F '      Hello <b>world</b>' "$RUNNER_TEMP/tidy.out"
+          grep -F 'replacing unexpected i with </i>' "$RUNNER_TEMP/tidy.err"
 
       - name: Compile and run xml through the production resolver
         # Exercises the chain every tests/codegen/xml fixture also needs (see
@@ -3409,6 +3535,11 @@ jobs:
             --offline \
             --target "${{ matrix.target }}" \
             --manifest-path examples/xml/elephc.toml
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/tidy/elephc.toml
 
   frame-assertions-release:
     name: Frame assertions (release)
@@ -3469,6 +3600,8 @@ jobs:
       - curl-ios-compile-link
       - xml-ios-compile-link
       - fileinfo-ios-compile-link
+      - gmp-ios-compile-link
+      - tidy-ios-compile-link
       - tokenizer-ios-compile-link
       - eval-codegen-tests-macos-aarch64
       - eval-codegen-tests-linux-x86_64
@@ -3523,7 +3656,7 @@ jobs:
           extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
             web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
             curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64
-            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link"
+            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link gmp-ios-compile-link tidy-ios-compile-link tokenizer-ios-compile-link"
           in_list() { case " $(echo $2) " in *" $1 "*) return 0 ;; esac; return 1; }
           echo "tiers: run=$RUN_TIER extended=$EXTENDED_TIER"
           status=0

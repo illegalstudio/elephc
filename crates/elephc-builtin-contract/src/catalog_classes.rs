@@ -298,6 +298,8 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("stdClass", "stdclass", Class, Core, LanguageIntrinsic),
     class!("Stringable", "stringable", Interface, Core, CheckerInjected),
     class!("Throwable", "throwable", Interface, Core, CheckerInjected),
+    class!("tidy", "tidy", Class, Tidy, Prelude, operators: &crate::TIDY_OPERATORS, cloneable: false, hidden_properties: &["__elephc_handles", "__elephc_minting", "__elephc_minted_handle"], visible_methods: &["__construct", "__destruct", "__debugInfo", "__clone", "__toString", "getOpt", "cleanRepair", "parseFile", "parseString", "repairString", "repairFile", "diagnose", "getRelease", "getConfig", "getStatus", "getHtmlVer", "getOptDoc", "isXhtml", "isXml", "root", "head", "html", "body"]),
+    class!("tidyNode", "tidynode", Class, Tidy, Prelude, operators: &crate::TIDY_OPERATORS, cloneable: false, hidden_properties: &["__elephc_handle", "__elephc_minting"], visible_methods: &["__construct", "__destruct", "__debugInfo", "__clone", "__toString", "hasChildren", "hasSiblings", "isComment", "isHtml", "isText", "isJste", "isAsp", "isPhp", "getParent", "getPreviousSibling", "getNextSibling"]),
     class!("Traversable", "traversable", Interface, Core, CheckerInjected),
     class!("TypeError", "typeerror", Class, Core, CheckerInjected),
     class!("UnderflowException", "underflowexception", Class, Spl, CheckerInjected),

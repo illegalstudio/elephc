@@ -327,6 +327,22 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_tidy",
+        env_var: "ELEPHC_TIDY_LIB_DIR",
+        crate_name: "elephc-tidy",
+        flag_name: "tidy",
+        whole_archive: false,
+        apple_frameworks: &[],
+        // The bridge's parser IS libtidy (the managed `libtidy` catalog package,
+        // spliced in by `src/pipeline/backend.rs` whenever this bridge is planned).
+        // libtidy is plain C and needs neither a framework nor iconv.
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The libtidy-backed bridge implements PHP's `tidy` extension.
+        php_extensions: &["tidy"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_magician",
         env_var: "ELEPHC_MAGICIAN_LIB_DIR",
         crate_name: "elephc-magician",

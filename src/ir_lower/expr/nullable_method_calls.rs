@@ -108,11 +108,41 @@ pub(super) fn lower_method_call_with_receiver(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    // The ordinary call path applies this gate before dispatching; the nullsafe call reaches
+    // this helper directly after its own null check, so it needs the same static-only reroute.
+    if op == Op::NullsafeMethodCall {
+        if let Some(result) = try_static_only_method_through_receiver(
+            ctx, object, method, args, expr,
+        ) {
+            return result;
+        }
+    }
     let object = refine_member_receiver(ctx, object, expr);
     if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
         return call;
     }
     lower_method_call_with_receiver_direct(ctx, object, method, args, op, expr)
+}
+
+/// Redirects `$receiver->method()` to the static-method path when only a static method exists.
+///
+/// The receiver has already been evaluated and, for a nullsafe chain, has already passed its
+/// null guard. Returns `None` when the class declares an instance method of the same name, so
+/// the caller keeps ordinary instance dispatch.
+pub(super) fn try_static_only_method_through_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let class_name = static_only_method_class(ctx, object.value, method)?;
+    let receiver = static_receiver_for_class_name(&class_name);
+    let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
+    let result = lower_static_method_call(ctx, &receiver, method, args, expr);
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    release_owning_receiver_temporary(ctx, object, expr.span);
+    Some(result)
 }
 
 /// Lowers an already selected concrete or fallback receiver without redispatching its interface.

@@ -153,14 +153,33 @@ impl Checker {
                         && !self.can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
                         && !self.can_construct_pdo_row_from_prelude_fetch(&class_name)
                     {
-                        return Err(CompileError::new(
-                            expr.span,
-                            &format!(
-                                "Cannot access {} constructor: {}::__construct",
-                                Self::visibility_label(visibility),
-                                declaring_class
-                            ),
-                        ));
+                        // elephc normally rejects an inaccessible constructor at compile
+                        // time. `tidyNode` is the one prelude class whose php-src corpus
+                        // observes PHP's runtime `Call to private ...::__construct()`
+                        // Error, so its call site is recorded and lowered to that throw
+                        // before the constructor is entered (keeping `#0 {main}`).
+                        if self.defers_private_constructor_to_runtime(&class_name) {
+                            crate::types::checker::record_throw_access_site(
+                                &mut self.throw_access_sites,
+                                expr.span,
+                                crate::types::ThrowAccessInfo {
+                                    span: expr.span,
+                                    kind: crate::types::ThrowAccessKind::PrivateConstructor {
+                                        visibility: Self::visibility_label(visibility).to_string(),
+                                        class_name: declaring_class.to_string(),
+                                    },
+                                },
+                            );
+                        } else {
+                            return Err(CompileError::new(
+                                expr.span,
+                                &format!(
+                                    "Cannot access {} constructor: {}::__construct",
+                                    Self::visibility_label(visibility),
+                                    declaring_class
+                                ),
+                            ));
+                        }
                     }
                 }
                 let declared_flags =
@@ -294,6 +313,18 @@ impl Checker {
     }
 
     /// Allows PDOStatement::fetch() to allocate the private internal PDORow view.
+    /// Whether an inaccessible constructor is lowered to PHP's runtime `Error`.
+    ///
+    /// `tidyNode`'s constructor is declared private by the extension and the php-src
+    /// corpus asserts the runtime `Call to private tidyNode::__construct()` fatal. Other
+    /// classes keep elephc's compile-time rejection.
+    fn defers_private_constructor_to_runtime(&self, class_name: &str) -> bool {
+        elephc_builtin_contract::lookup_class(class_name).is_some_and(|contract| {
+            contract.module == elephc_builtin_contract::PhpModule::Tidy
+                && contract.name == "tidyNode"
+        })
+    }
+
     fn can_construct_pdo_row_from_prelude_fetch(&self, class_name: &str) -> bool {
         class_name == "PDORow"
             && self.current_class.as_deref() == Some("PDOStatement")

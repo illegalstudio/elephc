@@ -601,6 +601,13 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
         "xml",
         "crates/elephc-builtin-contract/src/catalog_xml.rs",
     ),
+    # The tidy surface is built AST; the extractor's builder pattern finds
+    # `function("tidy_*")` in the generated functions module.
+    "tidy": (
+        "tidy_prelude/build/functions.rs",
+        "tidy",
+        "crates/elephc-builtin-contract/src/catalog_tidy.rs",
+    ),
 }
 
 

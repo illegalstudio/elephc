@@ -644,6 +644,43 @@ fn test_cli_with_xml_final_link_requires_managed_libxml2_project() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a final `--with-tidy` link without a project fails closed with the
+/// managed-`libtidy` recovery. The source never names a tidy symbol; the explicit
+/// flag forces `elephc_tidy` into the plan, which must emit the `libtidy` native
+/// requirement and never fall back to a system `-ltidy`.
+#[test]
+fn test_cli_with_tidy_final_link_requires_managed_libtidy_project() {
+    let dir = make_cli_test_dir("elephc_cli_tidy_requires_native");
+    let cache = dir.join("native-cache-must-not-exist");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-tidy")
+        .arg(&php_path)
+        .env("ELEPHC_NATIVE_CACHE", &cache)
+        .output()
+        .expect("failed to run --with-tidy compilation");
+    assert!(!output.status.success(), "--with-tidy link without a project must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("tidy support requires managed native package libtidy"),
+        "unexpected missing-project diagnostic: {stderr}"
+    );
+    assert!(stderr.contains("project: not found"), "missing project context: {stderr}");
+    assert!(
+        stderr.contains("recovery: cd --") && stderr.contains("elephc native add libtidy"),
+        "missing copy-paste recovery command: {stderr}"
+    );
+    assert!(
+        !stderr.contains("-ltidy") && !stderr.contains("required Elephc bridge"),
+        "the managed-package diagnostic must fire before any link attempt: {stderr}"
+    );
+    assert!(!cache.exists(), "failed compilation must not create the native cache");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--check` stops after type-checking and produces "Checked" output
 /// without emitting any assembly (.s), object (.o), or binary files.
 #[test]

@@ -187,15 +187,15 @@
   ],
   "coverage": {
     "classes": {
-      "have": 185,
+      "have": 187,
       "total": 329
     },
     "constants": {
-      "have": 1349,
+      "have": 1510,
       "total": 3180
     },
     "functions": {
-      "have": 1053,
+      "have": 1077,
       "total": 2169
     }
   },
@@ -319,6 +319,16 @@
       ],
       "notes": "ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost",
       "php": "https://www.php.net/manual/en/book.xml.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/tidy.md",
+      "feature": "Tidy",
+      "modules": [
+        "tidy"
+      ],
+      "notes": "ext/tidy (24 functions, tidy/tidyNode, 161 TIDY_* constants) on a pinned static libtidy 5.8.0 from the native catalog (elephc native add libtidy); auto-linked or forced with --with-tidy; the full php-src ext/tidy PHPT corpus is migrated under tests/php_src/tidy",
+      "php": "https://www.php.net/manual/en/book.tidy.php",
       "status": "supported"
     },
     {
@@ -1554,20 +1564,20 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 2,
+        "have": 2,
         "total": 2
       },
       "constants": {
-        "eval": 0,
-        "have": 0,
+        "eval": 161,
+        "have": 161,
         "total": 161
       },
-      "docs": null,
+      "docs": "docs/php/tidy.md#functions",
       "extension": "tidy",
       "functions": {
-        "eval": 0,
-        "have": 0,
+        "eval": 24,
+        "have": 24,
         "total": 24
       },
       "name": "tidy",

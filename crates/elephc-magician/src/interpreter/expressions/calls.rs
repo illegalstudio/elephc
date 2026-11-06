@@ -112,6 +112,9 @@ fn eval_call_with_error_name(
     if eval_xml_builtin_name(name) {
         return eval_builtin_xml_call(name, args, context, scope, values);
     }
+    if eval_tidy_builtin_name(name) {
+        return eval_builtin_tidy_call(name, args, context, scope, values);
+    }
     // ALL EIGHT OPcache functions are prelude-provided on the native side (they are not
     // catalog builtins), so eval carries a fallback handler for each. Every one of those
     // handlers is guarded the same way, and the uniformity is the point rather than a

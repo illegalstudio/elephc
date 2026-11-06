@@ -1,0 +1,202 @@
+{
+  "001.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "002.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "003.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "004.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "005-mb.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "005.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "006.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "007.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "008.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "009.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "010.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "011.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "012.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "013.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "014.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "015.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "016.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "017.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "018.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "019.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "020.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "021.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "023.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "024.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "025.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "026.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "027.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "028.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "029.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "030.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "031.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "032.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "033.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "034.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "035.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "036.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "bug54682.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "bug77040.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "bug77594.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "bug_50558.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "gh10636.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "gh12980.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "gh20374.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "open_basedir_failure_config.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "parsing_file_too_large.phpt": {
+    "status": "SKIP",
+    "reason": "RUN_RESOURCE_HEAVY_TESTS/GITHUB_ACTIONS guard; writes a multi-gigabyte fixture"
+  },
+  "parsing_inexistent_file.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "sibling_nodes.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "tidy_error.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "tidy_error1.phpt": {
+    "status": "PASS",
+    "reason": ""
+  },
+  "uninitialized.phpt": {
+    "status": "PASS",
+    "reason": ""
+  }
+}
