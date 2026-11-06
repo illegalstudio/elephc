@@ -174,6 +174,9 @@ impl Checker {
         // sequence is periodic from here. See `PASS_CYCLE_WINDOW`.
         let mut recent_tables = std::collections::VecDeque::with_capacity(PASS_CYCLE_WINDOW);
         self.seed_runtime_contract_param_types();
+        let verify_worklist = std::env::var_os("ELEPHC_CHECK_VERIFY").is_some();
+        let mut worklist = super::method_worklist::MethodWorklist::default();
+        let mut verifying = None;
         loop {
             passes += 1;
             let mut mark = std::time::Instant::now();
@@ -195,8 +198,8 @@ impl Checker {
             self.interface_implementers_cache.borrow_mut().1.clear();
             self.method_impl_users_index = None;
 
-            for class in flattened_classes {
-                for method in &class.methods {
+            for (class_index, class) in flattened_classes.iter().enumerate() {
+                for (method_index, method) in class.methods.iter().enumerate() {
                     if method.is_abstract {
                         continue;
                     }
@@ -209,6 +212,21 @@ impl Checker {
                         continue;
                     }
                     let method_key = php_symbol_key(&method.name);
+                    let unit = (class_index, method_index);
+                    if let Some(kept) = worklist.kept_result(unit, &method_key) {
+                        pass_errors.extend(kept.errors.iter().cloned());
+                        for parameter in &kept.seed_params {
+                            self.unspecialized_seed_params.insert((
+                                class.name.clone(),
+                                method_key.clone(),
+                                method.is_static,
+                                *parameter,
+                            ));
+                        }
+                        continue;
+                    }
+                    let first_method_error = pass_errors.len();
+                    let mut method_seed_params = Vec::new();
                     let mut method_env = Self::seed_method_env();
                     if !method.is_static {
                         method_env.insert("this".to_string(), PhpType::Object(class.name.clone()));
@@ -251,6 +269,7 @@ impl Checker {
                             // published once the pass loop settles -- on any earlier round the
                             // call site that refines it may simply not have been walked yet.
                             if was_seed && body_ty == PhpType::Mixed {
+                                method_seed_params.push(i);
                                 self.unspecialized_seed_params.insert((
                                     class.name.clone(),
                                     method_key.clone(),
@@ -507,6 +526,12 @@ impl Checker {
                     self.current_method_is_static = false;
                     self.current_by_ref_return = false;
                     self.current_loop_storage_scope = previous_loop_storage_scope;
+                    worklist.record(
+                        unit,
+                        method,
+                        pass_errors[first_method_error..].to_vec(),
+                        method_seed_params,
+                    );
                 }
             }
 
@@ -580,6 +605,20 @@ impl Checker {
             if trace {
                 compare_secs += mark.elapsed().as_secs_f64();
             }
+            // A round that kept bodies proves nothing on its own: the verification repeats the
+            // full walk once and names anything the kept bodies would have moved.
+            if let Some(kept_errors) = verifying.take() {
+                if !stabilized || kept_errors != pass_errors.len() {
+                    eprintln!(
+                        "[elephc-methodpass] worklist diverged: stable={stabilized} errors {kept_errors} -> {}",
+                        pass_errors.len()
+                    );
+                }
+            } else if stabilized && verify_worklist && worklist.kept_any() {
+                worklist.check_everything();
+                verifying = Some(pass_errors.len());
+                continue;
+            }
             if stabilized || cycling || out_of_passes {
                 errors.extend(pass_errors);
                 if trace {
@@ -595,6 +634,11 @@ impl Checker {
 
             while recent_tables.len() >= PASS_CYCLE_WINDOW {
                 recent_tables.pop_front();
+            }
+            if self.recursive_mixed_methods.len() == recursive_mixed_before {
+                worklist.prepare_next_pass(&classes_before_pass, &self.classes);
+            } else {
+                worklist.check_everything();
             }
             // The clone the stabilization check already made, reused rather than repeated.
             recent_tables.push_back(classes_before_pass);

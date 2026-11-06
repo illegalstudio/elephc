@@ -39,6 +39,7 @@ mod inference;
 pub(crate) use inference::INTERFACE_IMPLEMENTATION_SIG_COPIES;
 pub(crate) mod loop_storage;
 mod method_pass;
+mod method_worklist;
 mod member_receivers;
 mod mixed_storage_scan;
 mod numeric_regions;
