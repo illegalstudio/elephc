@@ -12,7 +12,7 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 use std::collections::HashSet;
 
-use crate::types::checker::Checker;
+use crate::types::checker::{Checker, FnDecl};
 
 impl Checker {
     /// Determines the element type for a variadic parameter's container.
@@ -162,10 +162,7 @@ impl Checker {
         }
 
         self.refresh_completed_inferred_callee(name);
-        if self.rewalk_failed_body_at_next_call.contains(name)
-            && !self.resolving_functions.contains(name)
-            && self.fn_decls.contains_key(name)
-        {
+        if self.failed_body_rewalk_is_due(name) {
             return self.rewalk_failed_function_body_at_call(name, args, span, caller_env);
         }
 
@@ -683,6 +680,167 @@ impl Checker {
 }
 
 impl Checker {
+    /// Walks the body of a failed untyped-parameter function again when a callback or a
+    /// first-class callable reaches it, from the arguments that invocation passes, instead of
+    /// reading the provisional signature its failed walk left.
+    ///
+    /// The driver marks such a function for `rewalk_failed_function_body_at_call`, which a
+    /// direct call reaches through `check_function_call`. `array_map(f(...), $xs)`,
+    /// `call_user_func('f', 1)` or `$h = f(...); $h(1)` read the signature instead, so the final
+    /// pass never walked the body again and a real error went with the dropped initial one. An
+    /// error this walk raises belongs to the calling statement of the final pass and is
+    /// reported. A first-class callable call is not a direct call, so the walk leaves
+    /// `functions_called_directly` (which decides the pass-through return widening) as it was.
+    /// A callback builtin's opaque placeholder argument is no settled type, so arguments that
+    /// hold one keep the provisional signature (`callback_args_have_opaque_placeholder`).
+    pub(in crate::types::checker) fn rewalk_marked_callable_target(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let name = self
+            .canonical_function_name_folded(name)
+            .unwrap_or_else(|| name.to_string());
+        if !self.failed_body_rewalk_is_due(name.as_str())
+            || crate::types::checker::builtins::callback_args_have_opaque_placeholder(
+                args, caller_env,
+            )
+        {
+            return Ok(());
+        }
+        let called_directly = self.functions_called_directly.contains(name.as_str());
+        let result = self.rewalk_failed_function_body_at_call(&name, args, span, caller_env);
+        if !called_directly {
+            self.functions_called_directly.remove(name.as_str());
+        }
+        result.map(|_| ())
+    }
+
+    /// Walks the failed body of a marked function again for `call_user_func_array` over a
+    /// variable argument list, from the declaration's initial parameter types with every
+    /// untyped by-value parameter bound to the list's value type, and returns the errors that
+    /// still hold.
+    ///
+    /// A spread of the list cannot bind a by-reference parameter, and its binder types an
+    /// untyped variadic tail `array<int>` beside a regular parameter, which refuses
+    /// `$rest[0][0]` over a list of arrays; binding the parameters directly avoids both. The
+    /// walk runs once the final pass has settled property and return types, so a stale error
+    /// vanishes and a real one is reported for the calling statement. By-reference and
+    /// declared parameters keep their initial types. Completed callees with an inferred return
+    /// are refreshed as for any other re-walk (`refresh_completed_inferred_callee`).
+    ///
+    /// A variable list has no static length, so an untyped by-value parameter with a default
+    /// holds its default for a short list and a list value for a longer one; neither binding
+    /// alone checks the body soundly (`function f(&$r, $m = [1])` indexes `$m`, while
+    /// `function f($n = 0, &$r)` over `[[1], 2]` indexes `$n`). Such a function is not
+    /// re-walked here and keeps its mark, so a later call with concrete arguments walks it.
+    pub(in crate::types::checker) fn rewalk_marked_function_from_initial_params(
+        &mut self,
+        name: &str,
+        list_value_ty: &PhpType,
+    ) -> Result<(), CompileError> {
+        if !self.failed_body_rewalk_is_due(name) {
+            return Ok(());
+        }
+        let Some(decl) = self.fn_decls.get(name).cloned() else {
+            return Ok(());
+        };
+        let has_untyped_defaulted_by_value_param = (0..decl.params.len()).any(|idx| {
+            decl.param_types.get(idx).is_some_and(Option::is_none)
+                && !decl.ref_params.get(idx).copied().unwrap_or(false)
+                && decl.defaults.get(idx).is_some_and(Option::is_some)
+        });
+        if has_untyped_defaulted_by_value_param {
+            return Ok(());
+        }
+        self.rewalk_failed_body_at_next_call.remove(name);
+        let param_types = self.list_value_param_types(name, &decl, list_value_ty)?;
+        let outer_walk = self.refreshed_inferred_callees.is_none();
+        if outer_walk {
+            self.refreshed_inferred_callees = Some(HashSet::new());
+        }
+        let result = self.resolve_function_signature(name, &decl, param_types);
+        if outer_walk {
+            self.refreshed_inferred_callees = None;
+        }
+        result.map(|_| ())
+    }
+
+    /// Returns the declaration's initial parameter types with every untyped by-value
+    /// parameter bound to `list_value_ty`, the value type of a variable argument list, and an
+    /// untyped by-value variadic tail bound to an array of it. By-reference and declared
+    /// parameters keep their initial types.
+    pub(in crate::types::checker) fn list_value_param_types(
+        &mut self,
+        name: &str,
+        decl: &FnDecl,
+        list_value_ty: &PhpType,
+    ) -> Result<Vec<(String, PhpType)>, CompileError> {
+        let mut param_types = self.initial_function_param_types(name, decl)?;
+        for (idx, (_, ty)) in param_types.iter_mut().enumerate().take(decl.params.len()) {
+            let untyped = decl.param_types.get(idx).is_some_and(Option::is_none);
+            let by_ref = decl.ref_params.get(idx).copied().unwrap_or(false);
+            if untyped && !by_ref {
+                *ty = list_value_ty.clone();
+            }
+        }
+        if decl.variadic.is_some() && decl.variadic_type.is_none() && !decl.variadic_by_ref {
+            if let Some((_, ty)) = param_types.get_mut(decl.params.len()) {
+                *ty = PhpType::Array(Box::new(list_value_ty.clone()));
+            }
+        }
+        Ok(param_types)
+    }
+
+    /// Reports whether a call reaching `name` now has to walk its failed body again
+    /// (`rewalk_failed_function_body_at_call`) instead of reading its provisional signature.
+    ///
+    /// Under the eval barrier a call to a function without a signature returns `mixed` without
+    /// walking the body, so a walk started there would consume the mark and check nothing; the
+    /// mark stays for the next call outside the barrier (`function o() { eval(""); f(1); }`).
+    fn failed_body_rewalk_is_due(&self, name: &str) -> bool {
+        self.rewalk_failed_body_at_next_call.contains(name)
+            && !self.eval_barrier_active
+            && !self.resolving_functions.contains(name)
+            && self.fn_decls.contains_key(name)
+    }
+
+    /// Returns the errors of `error` that the latest failed walk of a function body raised, so a
+    /// callback check that discards its call's result still reports them.
+    ///
+    /// A string callback whose function has no signature yet is resolved through
+    /// `check_function_call` from checker-only placeholder arguments, and its result was
+    /// discarded whole. A body error then reached no statement, so the driver never walked the
+    /// body again and `array_map('f', $xs)` compiled a body that `f(1)` refuses. Only errors
+    /// recorded for a failed body come back; an argument refusal of the placeholders stays
+    /// discarded as before. Every failed body is searched, not only the callback's own name: a
+    /// generic template walks and records its instantiation (`id<int>`) instead.
+    pub(in crate::types::checker) fn failed_callback_body_errors(
+        &self,
+        error: &CompileError,
+    ) -> Option<CompileError> {
+        let recorded: Vec<&CompileError> = self
+            .failed_function_body_errors
+            .iter()
+            .filter(|(name, _)| !self.completed_function_signatures.contains(*name))
+            .flat_map(|(_, errors)| errors)
+            .collect();
+        let body_errors: Vec<CompileError> = error
+            .flatten()
+            .into_iter()
+            .filter(|error| {
+                recorded.iter().any(|seen| {
+                    seen.span == error.span
+                        && seen.file == error.file
+                        && seen.message == error.message
+                })
+            })
+            .collect();
+        (!body_errors.is_empty()).then(|| CompileError::from_many(body_errors))
+    }
+
     /// Walks the body of a failed untyped-parameter function again from this call's settled
     /// argument types, as the first call did, instead of reusing its provisional signature.
     ///
@@ -691,8 +849,8 @@ impl Checker {
     /// signature is set aside so the call resolves through the first-call path, which binds
     /// every untyped parameter to its argument type; a clean walk publishes the full
     /// signature, and a failed one leaves its own provisional signature and returns the body
-    /// errors to the calling statement. The previous signature comes back only when the walk
-    /// published none.
+    /// errors to the calling statement. The previous signature, and the mark, come back only
+    /// when the walk published none.
     fn rewalk_failed_function_body_at_call(
         &mut self,
         name: &str,
@@ -711,6 +869,9 @@ impl Checker {
             self.refreshed_inferred_callees = None;
         }
         if !self.functions.contains_key(name) {
+            // The call failed before walking the body (an arity refusal), so the next call
+            // still has to walk it.
+            self.rewalk_failed_body_at_next_call.insert(name.to_string());
             if let Some(sig) = provisional {
                 self.publish_function_signature(name.to_string(), sig);
             }
