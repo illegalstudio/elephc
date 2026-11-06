@@ -108,9 +108,10 @@ foreach ($argv as $i => $arg) {   // correct
 
 ### `$GLOBALS`
 
-`$GLOBALS['name']` reads the program-global slot for `$name`, so a top-level
-variable is visible from any function or method without a `global` declaration.
-`isset()`, `empty()`, and `??` use the same slot:
+`$GLOBALS['name']` reads and writes the program-global slot for `$name`, so a
+top-level variable is visible and mutable from any function or method without a
+`global` declaration. `isset()`, `empty()`, `??`, simple assignments, compound
+assignments, and increments use the same slot:
 
 ```php
 $config = ['mode' => 'debug'];
@@ -121,12 +122,19 @@ function current_mode(): string {
 
 echo current_mode(), "\n";             // debug
 var_dump(isset($GLOBALS['config'])); // bool(true)
+
+$GLOBALS['config'] = ['mode' => 'release'];
+echo current_mode(), "\n";             // release
+$GLOBALS['count'] = 1;
+$GLOBALS['count']++;
+echo $GLOBALS['count'], "\n";          // 2
 ```
 
-Only literal string keys are lowered this way. A computed key
-(`$GLOBALS[$name]`), a write through `$GLOBALS` (`$GLOBALS['x'] = 1`), and
-enumerating `$GLOBALS` as an array are not supported yet; declare the variable
-with `global` or pass it explicitly instead.
+Only literal string keys are lowered this way. Computed keys
+(`$GLOBALS[$name]`), nested writes (`$GLOBALS['a']['b'] = 1`), `unset()` on a
+`$GLOBALS` entry, appending with `$GLOBALS[] = ...`, and enumerating `$GLOBALS`
+as an array are not supported yet; declare the variable with `global` or pass it
+explicitly instead.
 
 ## PHP version surface
 

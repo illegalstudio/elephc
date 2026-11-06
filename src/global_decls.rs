@@ -187,8 +187,16 @@ fn collect_in_stmt(stmt: &Stmt, names: &mut HashSet<String>) {
         | StmtKind::StaticPropertyArrayPush { value, .. } => collect_in_expr(value, names),
         StmtKind::RefAssign { source, .. } => collect_in_expr(source, names),
         StmtKind::StaticVar { init, .. } => collect_in_expr(init, names),
-        StmtKind::ArrayAssign { index, value, .. }
-        | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+        StmtKind::ArrayAssign { array, index, value } => {
+            if array == "GLOBALS" {
+                if let ExprKind::StringLiteral(key) = &index.kind {
+                    names.insert(key.clone());
+                }
+            }
+            collect_in_expr(index, names);
+            collect_in_expr(value, names);
+        }
+        StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             collect_in_expr(index, names);
             collect_in_expr(value, names);
         }

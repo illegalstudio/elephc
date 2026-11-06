@@ -215,10 +215,22 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             value,
         } => {
             if array == "GLOBALS" {
-                crate::ir_lower::diagnostics::refuse(
-                    stmt.span,
-                    "Writes through $GLOBALS are not supported yet; assign the top-level variable directly",
-                );
+                if let ExprKind::StringLiteral(name) = &index.kind {
+                    let value = lower_expr(ctx, value);
+                    let data = ctx.intern_global_name(name);
+                    ctx.emit_void(
+                        Op::StoreGlobal,
+                        vec![value.value],
+                        Some(Immediate::GlobalName(data)),
+                        Op::StoreGlobal.default_effects(),
+                        Some(stmt.span),
+                    );
+                } else {
+                    crate::ir_lower::diagnostics::refuse(
+                        index.span,
+                        "Computed $GLOBALS keys are not supported yet; use a literal string key",
+                    );
+                }
             } else {
                 lower_array_assign(ctx, array, index, value, stmt.span);
             }

@@ -37,6 +37,13 @@ pub(super) fn check_array_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    if array == "GLOBALS" {
+        // `$GLOBALS['name'] = ...` lowers to a direct global store; it must not create a
+        // local `$GLOBALS` binding, which would shadow the literal-key read path.
+        checker.infer_type_with_assignment_effects(index, env)?;
+        checker.infer_type_with_assignment_effects(value, env)?;
+        return Ok(());
+    }
     // PHP auto-vivifies an undefined variable on `$a[$k] = ...`: the write creates an
     // array (associative for a string key, indexed for an integer key). Mirror that
     // instead of rejecting the target, exactly as the append form already does.

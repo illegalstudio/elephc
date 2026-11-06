@@ -342,6 +342,27 @@ fclose($stream);
     assert_eq!(out, "int(3)\n");
 }
 
+/// Literal-key `$GLOBALS['name']` writes reach the top-level slot from every scope,
+/// including compound assignments.
+#[test]
+fn test_globals_literal_write_php86() {
+    let out = run86(r#"<?php
+$count = 1;
+$GLOBALS['count'] = 5;
+echo $count, "\n";
+function setIt(): void { $GLOBALS['count'] = 9; }
+setIt();
+echo $GLOBALS['count'], "\n";
+$GLOBALS['count'] += 2;
+$GLOBALS['count']++;
+echo $GLOBALS['count'], "\n";
+$GLOBALS['fresh'] = 'created';
+echo $GLOBALS['fresh'], "\n";
+var_dump(isset($GLOBALS['fresh']), isset($GLOBALS['absent']));
+"#);
+    assert_eq!(out, "5\n9\n12\ncreated\nbool(true)\nbool(false)\n");
+}
+
 /// A user wrapper's excess `stream_read()` data reports PHP's legacy warning with the
 /// wrapper class name and 8192-byte chunk accounting, then truncates to the request.
 #[test]
@@ -415,16 +436,16 @@ fn test_unsupported_globals_shapes_are_rejected_php86() {
             "Computed $GLOBALS keys are not supported yet",
         ),
         (
-            "<?php $x = 1; $GLOBALS['y'] = 9;",
-            "Writes through $GLOBALS are not supported yet",
-        ),
-        (
             "<?php $x = 1; $GLOBALS[] = 9;",
             "Writes through $GLOBALS are not supported yet",
         ),
         (
             "<?php $x = 1; $GLOBALS['a']['b'] = 9;",
             "Writes through $GLOBALS are not supported yet",
+        ),
+        (
+            "<?php $x = 1; unset($GLOBALS['x']);",
+            "unset($GLOBALS[...]) is not supported yet",
         ),
     ];
     for (source, expected) in cases {

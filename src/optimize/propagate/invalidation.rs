@@ -701,7 +701,15 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
         } => {
             let mut inv = expr_invalidation(index).union(expr_invalidation(value));
             inv.add(array);
-            inv
+            if array == "GLOBALS" {
+                if let ExprKind::StringLiteral(key) = &index.kind {
+                    inv.union(Invalidation::Names([key.clone()].into_iter().collect()))
+                } else {
+                    inv
+                }
+            } else {
+                inv
+            }
         }
         StmtKind::NestedArrayAssign { target, value } => {
             assignment_target_invalidation(target).union(expr_invalidation(value))

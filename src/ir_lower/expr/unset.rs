@@ -22,6 +22,15 @@ pub(super) fn lower_unset_locals(
         if let Some(message) = unset_property_element_refusal(ctx, arg) {
             crate::ir_lower::diagnostics::refuse(arg.span, &message);
         }
+        if let ExprKind::ArrayAccess { array, .. } = &arg.kind {
+            if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                crate::ir_lower::diagnostics::refuse(
+                    arg.span,
+                    "unset($GLOBALS[...]) is not supported yet; assign null to the top-level variable instead",
+                );
+                return None;
+            }
+        }
     }
     if !args.iter().all(|arg| unset_target_supported(ctx, arg)) {
         return None;
@@ -159,6 +168,13 @@ pub(super) fn lower_unset_array_access(
     index: &Expr,
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+        crate::ir_lower::diagnostics::refuse(
+            expr.span,
+            "unset($GLOBALS[...]) is not supported yet; assign null to the top-level variable instead",
+        );
+        return None;
+    }
     let can_gate = super::unset_collection::key_has_no_callbacks(ctx, index);
     if let ExprKind::PropertyAccess { object, property } = &array.kind {
         if let Some(property_ty) = unset_array_access_property_array_type(ctx, array) {
