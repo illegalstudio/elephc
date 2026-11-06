@@ -567,7 +567,15 @@ class mysqli_stmt {
 
     public function more_results(): bool {
         $this->requireValid();
-        return $this->moreResults;
+        if ($this->moreResults) {
+            return true;
+        }
+        // mysqlnd reads the connection's last server status: a set still being read already
+        // carries its metadata EOF's more-results flag.
+        if ($this->hasPending && $this->stmt >= 0) {
+            return elephc_pdo_mysql_more_results($this->stmt) == 1;
+        }
+        return false;
     }
 
     public function next_result(): bool {

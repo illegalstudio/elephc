@@ -866,7 +866,14 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireValid", vec![])),
-                    s_return(e_this_prop("moreResults")),
+                    s_if(e_this_prop("moreResults"), vec![s_return(e_bool(true))], vec![], None),
+                    s_if(
+                        e_binop(e_this_prop("hasPending"), BinOp::And, e_binop(e_this_prop("stmt"), BinOp::GtEq, e_int(0))),
+                        vec![s_return(e_binop(e_call("elephc_pdo_mysql_more_results", vec![e_this_prop("stmt")]), BinOp::Eq, e_int(1)))],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_bool(false)),
                 ]),
         )
         .method(

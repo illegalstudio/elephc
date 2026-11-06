@@ -3530,15 +3530,15 @@ fn drive_mysql_stream_signalled<T: mysql::prelude::Protocol>(
             set.last_insert_id(),
             fetch_table_names,
         );
-        // A column-less set is its OK packet, the last packet read: its status flags
-        // and info are known now (mysqlnd's next_result() sees them without a fetch).
-        let (more, info) = if columns.is_empty() {
-            (
-                Some(counters.last_status() & 0x0008 != 0),
-                set.info_str().into_owned(),
-            )
+        // The last packet read carries the set's status flags: a column-less set's OK packet
+        // (its info too), or a row set's metadata EOF (the client never negotiates
+        // CLIENT_DEPRECATE_EOF). mysqlnd's more_results() reads that status at once, before
+        // the set is consumed; its next_result() still waits for the set's own end.
+        let more = Some(counters.last_status() & 0x0008 != 0);
+        let info = if columns.is_empty() {
+            set.info_str().into_owned()
         } else {
-            (None, String::new())
+            String::new()
         };
         if responses.send(MyStreamResponse::Rowset(rowset, more, info)).is_err() {
             return Ok(());

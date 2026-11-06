@@ -3131,3 +3131,59 @@ echo "\n";
         "truetrue:latin1:latin1_swedish_ci:bf5c27|utf8mb4:utf8mb4_general_ci|utf8mb4:utf8mb4_general_ci|false:2019:Invalid character set was provided:utf8mb4|false:2019:Invalid character set was provided:utf8mb4|false:2019:Invalid character set was provided:utf8mb4|throw:2019\n"
     );
 }
+
+/// more_results() reads the connection's last server status like mysqlnd, so a row set's
+/// metadata EOF already announces a following set: right after multi_query(), during an
+/// unbuffered read, and after a prepared CALL's execute() (on the statement and on the link),
+/// while next_result() still needs the current set consumed. Expected output is php 8.5 +
+/// mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_more_results_is_known_before_the_set_is_read() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function mr(mysqli $db): string { return var_export($db->more_results(), true); }
+$db->multi_query("SELECT 1 UNION ALL SELECT 2; SELECT 3");
+echo "a:", mr($db), ",";
+$r = $db->use_result();
+echo mr($db), ",";
+$r->fetch_row();
+echo mr($db), ",";
+$r->fetch_row();
+$r->fetch_row();
+echo mr($db), ",";
+$r->free();
+echo mr($db), "|";
+$db->next_result();
+$db->store_result()->free();
+echo "b:", mr($db), "|";
+$db->multi_query("SELECT 1; SELECT 2");
+$r = $db->store_result();
+echo "c:", mr($db), ",";
+$r->free();
+while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+$db->multi_query("DO 1; SELECT 2");
+echo "d:", mr($db), "|";
+while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+$db->query("DROP PROCEDURE IF EXISTS mmr");
+$db->query("CREATE PROCEDURE mmr() BEGIN SELECT 1 UNION ALL SELECT 2; SELECT 3; END");
+$st = $db->prepare("CALL mmr()");
+$st->execute();
+echo "e:", var_export($st->more_results(), true), ":", mr($db), ",";
+$v = 0;
+$st->bind_result($v);
+$st->fetch();
+echo var_export($st->more_results(), true), ":", mr($db), ",";
+$st->fetch(); $st->fetch();
+echo var_export($st->more_results(), true), ":", mr($db), "|";
+$st->close();
+$db->query("CALL mmr()");
+echo "f:", mr($db), "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "a:true,true,true,true,true|b:false|c:true,d:true|e:true:true,true:true,true:true|f:true\n"
+    );
+}

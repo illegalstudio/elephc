@@ -2107,7 +2107,20 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireInitialized", vec![])),
-                    s_return(e_this_prop("multiMore")),
+                    s_if(e_this_prop("multiMore"), vec![s_return(e_bool(true))], vec![], None),
+                    s_if(
+                        e_binop(e_binop(e_this_prop("liveStmt"), BinOp::GtEq, e_int(0)), BinOp::And, e_binop(e_this_prop("liveSetPending"), BinOp::Or, e_this_prop("streaming"))),
+                        vec![s_return(e_binop(e_call("elephc_pdo_mysql_more_results", vec![e_this_prop("liveStmt")]), BinOp::Eq, e_int(1)))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_this_prop("busyStatement"), BinOp::GtEq, e_int(0)),
+                        vec![s_return(e_binop(e_call("elephc_pdo_mysql_more_results", vec![e_this_prop("busyStatement")]), BinOp::Eq, e_int(1)))],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_bool(false)),
                 ]),
         )
         .method(

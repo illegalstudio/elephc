@@ -1388,7 +1388,19 @@ class mysqli {
 
     public function more_results(): bool {
         $this->requireInitialized();
-        return $this->multiMore;
+        if ($this->multiMore) {
+            return true;
+        }
+        // mysqlnd reads the connection's last server status, so the more-results flag of a
+        // set still being read (its metadata EOF) shows at once, for the link's own set or a
+        // statement holding the link.
+        if ($this->liveStmt >= 0 && ($this->liveSetPending || $this->streaming)) {
+            return elephc_pdo_mysql_more_results($this->liveStmt) == 1;
+        }
+        if ($this->busyStatement >= 0) {
+            return elephc_pdo_mysql_more_results($this->busyStatement) == 1;
+        }
+        return false;
     }
 
     public function next_result(): bool {
