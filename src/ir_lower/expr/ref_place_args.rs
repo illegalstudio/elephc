@@ -126,8 +126,11 @@ pub(super) fn rewrite_typed_property_ref_args(
             continue;
         };
         // The call ABI boxes typed references as Mixed; the write-back narrows the cell back
-        // to the property's declared storage before the ordinary assignment runs.
-        let mixed_expected = expected_ty.codegen_repr() == PhpType::Mixed;
+        // to the property's declared storage before the ordinary assignment runs. Declared
+        // array properties keep their concrete writable-local path: builtins like rsort and
+        // array_multisort require the unboxed element contract the backend selects there.
+        let mixed_expected = expected_ty.codegen_repr() == PhpType::Mixed
+            && !is_array_storage_type(&place_ty);
         let accepted = mixed_expected
             || crate::types::param_binding::by_ref_property_storage_compatible(
                 &expected_ty,
@@ -221,7 +224,23 @@ pub(super) fn rewrite_typed_property_ref_args(
 /// Maps a local that aliases `$object->property` to the property place for a call boundary.
 fn alias_property_place(ctx: &LoweringContext<'_, '_>, place: &Expr) -> Option<Expr> {
     let ExprKind::Variable(name) = &place.kind else { return None; };
+    // A compiler-generated alias already IS the property's live reference cell. Mapping it
+    // back to the property would rewrite the same receiver a second time, and the inner
+    // scoped aliasing path retires its receiver snapshot before that outer write-back runs.
+    // Only user-written `$alias =& $object->property` locals need the property mapping.
+    if crate::names::is_generated_local_name(name) {
+        return None;
+    }
     ctx.property_ref_alias_sources.get(name).cloned()
+}
+
+/// Returns whether a place's static type is backed by PHP array storage.
+///
+/// `array` is represented as the widened `array<mixed>|assoc<mixed,mixed>` union when the
+/// checker cannot pick one shape, so `codegen_repr()` alone would hide the array storage
+/// behind `Mixed`.
+fn is_array_storage_type(ty: &PhpType) -> bool {
+    ty.is_php_array() || matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
 /// Returns whether a property place can be rewritten for a mixed by-reference parameter.
@@ -235,7 +254,12 @@ fn is_mixed_property_place(
             place.kind,
             ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
         )
-        && static_place_type(ctx, place).is_some()
+        && static_place_type(ctx, place).is_some_and(|ty| {
+            // Declared array properties keep the writable-local path: the backend COW
+            // sorter and rsort already understand their concrete element contract, while a
+            // boxed Mixed cell would lose the typed storage they require.
+            !is_array_storage_type(&ty)
+        })
 }
 
 /// Formats the `Class::$property` label php-src uses in typed-reference diagnostics.
@@ -699,13 +723,11 @@ pub(super) fn lower_builtin_ref_place_call(
         let read = lower_expr(ctx, &place);
         let value_type = normalize_value_php_type(ctx.builder.value_php_type(read.value));
         // Only a property place needs the boxed-cell treatment. An array element keeps its
-        // concrete storage type so the builtin's result and write-back stay typed.
-        let mixed_expected = matches!(
-            place.kind,
-            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
-        ) && ref_param_binding(&sig, index, arg)
+        // concrete storage type so the builtin's result and write-back stay typed, and a
+        // declared array property keeps the backend's writable-local COW path.
+        let mixed_expected = ref_param_binding(&sig, index, arg)
             .and_then(|(param_index, _)| sig.params.get(param_index))
-            .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed);
+            .is_some_and(|(_, ty)| is_mixed_property_place(ctx, &place, ty));
         let temp_type = if mixed_expected { PhpType::Mixed } else { value_type.clone() };
         let temp = ctx.declare_synthetic_php_local(temp_type.clone());
         if mixed_expected {
