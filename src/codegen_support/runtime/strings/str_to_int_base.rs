@@ -49,6 +49,14 @@ pub fn emit_str_to_int_base(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_to_int_base ---");
     emitter.label_global("__rt_str_to_int_base");
 
+    // -- base 10 uses PHP's numeric-string rules --
+    // `intval("1e3", 10)` is 1000 and `intval("9.9e18", 10)` caps at PHP_INT_MAX, while every
+    // other base parses digits only (`intval("1e3", 16)` is 0x1e3). The general string-to-int
+    // helper already implements the base-10 float form, so tail-call it without touching the
+    // string registers.
+    emitter.instruction("cmp x3, #10");                                         // is decimal the requested base?
+    emitter.instruction("b.eq __rt_str_to_int");                                // base 10 follows the numeric-string parser
+
     // -- reject the bases strtol() answers with EINVAL --
     emitter.instruction("cbz x3, __rt_str_to_int_base_scan");                   // base 0 asks for prefix auto-detection
     emitter.instruction("cmp x3, #2");                                          // is the requested base below strtol()'s minimum?
@@ -192,6 +200,15 @@ fn emit_str_to_int_base_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_to_int_base ---");
     emitter.label_global("__rt_str_to_int_base");
+
+    // -- base 10 uses PHP's numeric-string rules --
+    // Forward to the general string-to-int helper, whose System V string arguments are rdi/rsi.
+    emitter.instruction("cmp rdx, 10");                                         // is decimal the requested base?
+    emitter.instruction("jne __rt_str_to_int_base_not_ten_linux_x86_64");       // other bases keep digit-only parsing
+    emitter.instruction("mov rax, rdi");                                        // move the string pointer into the general helper's first string register
+    emitter.instruction("mov rdx, rsi");                                        // move the string length into the general helper's second string register
+    emitter.instruction("jmp __rt_str_to_int");                                 // base 10 follows the numeric-string parser
+    emitter.label("__rt_str_to_int_base_not_ten_linux_x86_64");
 
     // -- reject the bases strtol() answers with EINVAL --
     emitter.instruction("mov rcx, rdx");                                        // keep the requested base in a stable register

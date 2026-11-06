@@ -351,6 +351,14 @@ Both answers are what php-src produces; they differ because the string path runs
 the *capping* helper, not the wrapping one — using the sibling turned `(int)"1e19"` into the
 negative wrapped value.
 
+`__rt_str_to_int` first scans a plain decimal run in place: optional ASCII whitespace and
+sign, then digits, saturating at `PHP_INT_MAX`/`PHP_INT_MIN`. A digit run followed by `.`,
+`e`, or `E` bails to the general libc-backed parser so the float-form cap still applies;
+any other terminator returns the accumulated integer exactly as PHP stops at the first
+non-digit. `__rt_str_to_int_base` forwards base 10 to that helper because
+`intval("1e3", 10)` is PHP's numeric-string 1000, while every other base keeps digit-only
+`strtol` rules (`intval("1e3", 16)` is 0x1e3).
+
 The hardware conversion instructions disagree on non-finite input, and that disagreement is
 the reason these are shared helpers at all: AArch64's `fcvtzs` saturates by definition, while
 x86_64's `cvttsd2si` answers with the "integer indefinite" pattern `0x8000000000000000`. A bare
@@ -424,7 +432,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_php_num_scan` | Clip a C string to PHP's leading numeric run (`_is_numeric_string_ex` grammar) in place and report whether the whole string was numeric. Runs between `__rt_cstr` and libc so `strtod`/`strtoll` never see hexadecimal, `INF`/`NAN` or underscore forms PHP does not accept | `x0` = C string | `x0` = run pointer, `x1` = fully-numeric flag |
 | `__rt_str_to_number` | Parse a PHP numeric string for loose comparison, `is_numeric()`, and numeric-string casts (via `__rt_php_num_scan`) | `x1`/`x2` | numeric payload + success flag |
 | `__rt_str_looks_like_int_for_coercion` | Validate PHP coercive int-parameter numeric strings while rejecting libc-only `strtod` forms such as `0x`, `INF`, and `NAN` | `x1`/`x2` | `x0` (0 or 1) |
-| `__rt_str_to_int` | Parse a PHP numeric-string prefix with integer/float forms and truncate toward zero like PHP `(int)` casts | `x1`/`x2` | `x0` (integer) |
+| `__rt_str_to_int` | Parse a PHP numeric-string prefix with integer/float forms and truncate toward zero like PHP `(int)` casts. A plain saturating decimal run is parsed in place; a following `.`/`e`/`E` bails to the libc float-form parser | `x1`/`x2` | `x0` (integer) |
 | `__rt_str_loose_eq` | Compare two strings using PHP loose-comparison numeric-string rules before falling back to bytes | two strings | `x0` (0 or 1) |
 | `__rt_strtolower` | Lowercase conversion | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strtoupper` | Uppercase conversion | `x1`/`x2` | `x1`/`x2` |
