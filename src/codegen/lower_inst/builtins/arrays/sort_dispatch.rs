@@ -21,6 +21,9 @@ pub(super) fn lower_indexed_array_set_op(
     super::super::ensure_arg_count(inst, name, 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
+    if name == "array_intersect" && lower_mixed_array_intersect(ctx, inst, first, second)? {
+        return Ok(());
+    }
     let first_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(first)?, name)?;
     let second_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(second)?, name)?;
     require_set_op_compatible_element_types(name, &first_elem_ty, &second_elem_ty)?;
@@ -47,6 +50,62 @@ pub(super) fn lower_indexed_array_set_op(
         &first_elem_ty,
     );
     store_if_result(ctx, inst)
+}
+
+/// Lowers `array_intersect()` when the first operand holds boxed Mixed elements.
+///
+/// PHP compares these elements by their string rendering, which the raw-word helpers cannot
+/// model. The runtime helper is selected from the second operand's known storage: a boxed
+/// second array uses `__rt_array_intersect_mixed`, while a concrete string array uses the
+/// 16-byte-slot `__rt_array_intersect_mixed_str` variant. Any other second element type still
+/// reaches the ordinary compatibility gate and its explicit diagnostic.
+fn lower_mixed_array_intersect(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    first: ValueId,
+    second: ValueId,
+) -> Result<bool> {
+    let first_ty = ctx.value_php_type(first)?.codegen_repr();
+    let result_ty = inst.result_php_type.codegen_repr();
+    let boxed_first = matches!(
+        &first_ty,
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+    );
+    let boxed_result = matches!(
+        &result_ty,
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+    );
+    if !boxed_first || !boxed_result {
+        return Ok(false);
+    }
+    let second_ty = ctx.value_php_type(second)?.codegen_repr();
+    let helper = match &second_ty {
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
+            "__rt_array_intersect_mixed"
+        }
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Str => {
+            "__rt_array_intersect_mixed_str"
+        }
+        _ => return Ok(false),
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(first, "x0")?;
+            ctx.load_value_to_reg(second, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(first, "rdi")?;
+            ctx.load_value_to_reg(second, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, helper);
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &PhpType::Mixed,
+    );
+    store_if_result(ctx, inst)?;
+    Ok(true)
 }
 
 /// Calls a key set-operation helper after validating associative-array hash operands.

@@ -9,30 +9,25 @@
 
 use super::*;
 
-/// Verifies the value-comparing array builtins refuse BOXED elements rather than compare their
-/// addresses.
+/// Verifies the set builtins that still compare raw slots refuse BOXED elements rather than
+/// compare their addresses.
 ///
-/// These helpers compare slots as raw 8-byte words — the value itself for an int or float, a
-/// POINTER for anything heap-backed. Boxed elements therefore compared cell addresses, and two
-/// separately boxed `3`s never matched:
+/// `array_diff` and `array_unique` compare slots as raw 8-byte words — the value itself for an
+/// int or float, a POINTER for anything heap-backed. Boxed elements therefore compared cell
+/// addresses, and two separately boxed `3`s never matched:
 ///
 /// - `array_diff([1,"b",3,4], [3,"z"])` answered `1,b,3,4`, PHP answers `1,b,4`
-/// - `array_intersect` of the same pair answered NOTHING, PHP answers `3`
 /// - `array_unique([1,"b",1,4])` answered `1,b,1,4`, PHP answers `1,b,4`
 ///
-/// All three silent. PHP compares these elements by their STRING rendering, which needs a
-/// by-value comparison in the runtime; until that exists the calls are refused, exactly as
-/// `array<string>` already is — its 16-byte slots do not fit these helpers either.
+/// Both are silent. PHP compares these elements by their STRING rendering; `array_intersect`
+/// now has that by-value comparison (see the mixed helper test below), but these two helpers
+/// keep the explicit refusal until they share it.
 #[test]
 fn test_value_comparing_builtins_refuse_boxed_elements() {
     for (source, message) in [
         (
             r#"<?php $a = [1, "b", 3, 4]; $b = [3, "z"]; $r = array_diff($a, $b);"#,
             "array_diff compares boxed elements by identity",
-        ),
-        (
-            r#"<?php $a = [1, "b", 3, 4]; $b = [3, "z"]; $r = array_intersect($a, $b);"#,
-            "array_intersect compares boxed elements by identity",
         ),
         (
             r#"<?php $a = [1, "b", 1, 4]; $r = array_unique($a);"#,
@@ -47,14 +42,29 @@ fn test_value_comparing_builtins_refuse_boxed_elements() {
     }
 }
 
+/// Verifies `array_intersect()` compares boxed Mixed elements by their string rendering,
+/// including a boxed first array against a concrete string second array. The assertion asks
+/// only for values: key preservation is a separate gap shared with the typed helpers.
+#[test]
+fn test_array_intersect_compares_boxed_and_string_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", array_values(array_intersect([1, "b", 3, 4], [3, "z"]))), "|";
+echo implode(",", array_values(array_intersect([1, "2", 3], ["2", "x"])));
+"#,
+    );
+    assert_eq!(out, "3|2");
+}
+
 /// Verifies the refusal of BOXED elements did not take the typed cases with it.
 ///
-/// `array_diff`, `array_intersect` and `array_unique` refuse a boxed source because they would
-/// compare cell addresses (see `test_error_value_comparing_builtins_refuse_boxed_elements`).
-/// The refusal has to be narrow: an `array<int>` slot IS the value, so raw comparison is the
-/// right one, and these three must keep working. `array_reverse` and `array_merge` share the
-/// element gate but never compare, so they still accept a boxed array — that is why the
-/// refusal sits at each comparing builtin rather than in the gate.
+/// `array_diff` and `array_unique` refuse a boxed source because they would compare cell
+/// addresses (see `test_value_comparing_builtins_refuse_boxed_elements`). The refusal has to
+/// be narrow: an `array<int>` slot IS the value, so raw comparison is the right one, and these
+/// two must keep working. `array_intersect` has its own Mixed helper and is covered below.
+/// `array_reverse` and `array_merge` share the element gate but never compare, so they still
+/// accept a boxed array — that is why the refusal sits at each comparing builtin rather than in
+/// the gate.
 #[test]
 fn test_value_comparing_builtins_still_accept_typed_elements() {
     let out = compile_and_run(

@@ -191,6 +191,70 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
         ExprKind::FunctionCall { name, args } => {
             let args = args.into_iter().map(fold_expr).collect::<Vec<_>>();
+            // `array_values(array_intersect($assoc, ...))` only needs the intersection's
+            // VALUES. Feeding each operand's values to the intersection lets it use the
+            // indexed Mixed/string path; the outer call still renumbers the sparse result
+            // keys, so values and order are unchanged.
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("array_values")
+                && args.len() == 1
+            {
+                if let ExprKind::FunctionCall {
+                    name: inner_name,
+                    args: inner_args,
+                } = &args[0].kind
+                {
+                    let inner_is_intersect = inner_name
+                        .as_canonical()
+                        .trim_start_matches('\\')
+                        .eq_ignore_ascii_case("array_intersect");
+                    let first_is_values = matches!(
+                        inner_args.first().map(|arg| &arg.kind),
+                        Some(ExprKind::FunctionCall { name, .. })
+                            if name
+                                .as_canonical()
+                                .trim_start_matches('\\')
+                                .eq_ignore_ascii_case("array_values")
+                    );
+                    if inner_is_intersect && inner_args.len() >= 2 && !first_is_values {
+                        let mut rewritten = inner_args.clone();
+                        for operand in &mut rewritten {
+                            if !matches!(
+                                operand.kind,
+                                ExprKind::FunctionCall { ref name, .. }
+                                    if name
+                                        .as_canonical()
+                                        .trim_start_matches('\\')
+                                        .eq_ignore_ascii_case("array_values")
+                            ) {
+                                *operand = Expr::new(
+                                    ExprKind::FunctionCall {
+                                        name: crate::names::Name::unqualified("array_values"),
+                                        args: vec![operand.clone()],
+                                    },
+                                    operand.span,
+                                );
+                            }
+                        }
+                        let inner = Expr::new(
+                            ExprKind::FunctionCall {
+                                name: inner_name.clone(),
+                                args: rewritten,
+                            },
+                            args[0].span,
+                        );
+                        return Expr::new(
+                            ExprKind::FunctionCall {
+                                name,
+                                args: vec![inner],
+                            },
+                            span,
+                        );
+                    }
+                }
+            }
             // The runtime `strtotime` parser does not know tzdb abbreviations and cannot
             // combine a textual date with a trailing numeric offset. A literal argument can
             // be split here: parse the zone-free text and apply the fixed offset.
