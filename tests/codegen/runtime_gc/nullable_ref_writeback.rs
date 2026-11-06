@@ -802,3 +802,35 @@ run();
     );
     assert_clean(out, "truetruetruetrue\n");
 }
+
+/// A null-only local passed BY VALUE to a `?ptr<T>` parameter of a method, a static method,
+/// or beside a by-reference `?array &` parameter (method or function) keeps its natural
+/// null storage: only by-reference positions without a pointer type take boxed null-output
+/// storage, so the by-value pointer binding still type-checks.
+#[test]
+fn test_null_locals_pass_by_value_to_nullable_pointer_parameters() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+packed class Vec2 { public int $x; }
+class Sink {
+    public function take(?ptr<Vec2> $p): string { return $p === null ? "n" : "p"; }
+    public static function stake(?ptr<Vec2> $p): string { return $p === null ? "n" : "p"; }
+    public function both(?array &$a, ?ptr<Vec2> $p): string { $a = [1]; return $p === null ? "n" : "p"; }
+}
+function fboth(?array &$a, ?ptr<Vec2> $p): string { $a = [2]; return $p === null ? "n" : "p"; }
+function run(): void {
+    $sink = new Sink();
+    $p = null;
+    echo $sink->take($p);
+    $q = null;
+    echo Sink::stake($q);
+    $a = null; $r = null;
+    echo $sink->both($a, $r), count($a);
+    $b = null; $s = null;
+    echo fboth($b, $s), count($b), "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "nnn1n1\n");
+}

@@ -1106,16 +1106,17 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
                 for arg in args {
                     disqualify_root(facts, arg);
                 }
-            } else if let Some(rejects_null) = declared_by_ref_null_rejection(checker, name, args) {
+            } else if let Some(promotable) = declared_by_ref_null_promotion(checker, name, args) {
                 // A user / prelude function whose by-reference positions are known: only a
-                // parameter that admits `null` can take a null-only local as boxed storage.
-                // One that rejects it (`int &$n`) keeps the local's `null` storage, so the
-                // binding check reports php's TypeError at compile time.
-                for (arg, rejects) in args.iter().zip(rejects_null) {
-                    if rejects {
-                        disqualify_root(facts, arg);
-                    } else {
+                // by-reference parameter that admits `null` can take a null-only local as
+                // boxed storage. One that rejects it (`int &$n`) keeps the local's `null`
+                // storage, so the binding check reports php's TypeError at compile time, and
+                // a by-value position (a `?ptr<T> $p` included) keeps its natural storage.
+                for (arg, promotable) in args.iter().zip(promotable) {
+                    if promotable {
                         disqualify_call_arguments(facts, std::slice::from_ref(arg));
+                    } else {
+                        disqualify_root(facts, arg);
                     }
                 }
             } else if callee_may_bind_arguments_by_ref(checker, name) {
@@ -1378,40 +1379,72 @@ fn disqualify_args(facts: &mut Facts, args: &[Expr]) {
 }
 
 /// Handles the arguments of a call to a method named `method` on a receiver the scan cannot
-/// resolve. When any class declares a method of that name with a `?ptr<T> &` parameter, the
-/// arguments are disqualified without null-only promotion (that parameter needs pointer
-/// storage); otherwise they take the generic by-reference handling.
+/// resolve, against every class method (instance or static, case-insensitive) of that name.
+/// Per positional argument, a null-only local may take boxed storage only where some
+/// candidate binds that position by reference and none declares a pointer type there (a
+/// `?ptr<T>` parameter, by reference or by value, needs the local's own null/pointer storage);
+/// every other position is disqualified plainly. A method no class declares keeps the generic
+/// by-reference handling, and named or spread arguments fall back to the whole-call rule.
 fn disqualify_named_method_arguments(checker: &Checker, method: &str, facts: &mut Facts, args: &[Expr]) {
-    if any_method_binds_pointer_by_ref(checker, method) {
-        disqualify_args(facts, args);
-    } else {
+    let sigs: Vec<&crate::types::FunctionSig> = checker
+        .classes
+        .values()
+        .flat_map(|class| class.methods.iter().chain(class.static_methods.iter()))
+        .filter(|(name, _)| name.eq_ignore_ascii_case(method))
+        .map(|(_, sig)| sig)
+        .collect();
+    if sigs.is_empty() {
         disqualify_call_arguments(facts, args);
+        return;
+    }
+    if args
+        .iter()
+        .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
+    {
+        if sigs.iter().any(|sig| (0..sig.params.len()).any(|index| sig_param_mentions_pointer(sig, index))) {
+            disqualify_args(facts, args);
+        } else {
+            disqualify_call_arguments(facts, args);
+        }
+        return;
+    }
+    for (index, arg) in args.iter().enumerate() {
+        let by_ref = sigs.iter().any(|sig| sig_param_is_by_ref(sig, index));
+        let pointer = sigs.iter().any(|sig| sig_param_mentions_pointer(sig, index));
+        if by_ref && !pointer {
+            disqualify_call_arguments(facts, std::slice::from_ref(arg));
+        } else {
+            disqualify_root(facts, arg);
+        }
     }
 }
 
-/// Whether any class declares an instance or static method named `method` (case-insensitive,
-/// as php resolves method names) with a by-reference parameter of pointer type.
-fn any_method_binds_pointer_by_ref(checker: &Checker, method: &str) -> bool {
-    checker.classes.values().any(|class| {
-        class
-            .methods
-            .iter()
-            .chain(class.static_methods.iter())
-            .filter(|(name, _)| name.eq_ignore_ascii_case(method))
-            .any(|(_, sig)| sig_binds_pointer_by_ref(sig))
-    })
+/// The declared parameter a positional argument `index` binds: its own, or the trailing
+/// variadic one past the end.
+fn sig_param_index(sig: &crate::types::FunctionSig, index: usize) -> Option<usize> {
+    if index < sig.params.len() {
+        Some(index)
+    } else if sig.variadic.is_some() && !sig.params.is_empty() {
+        Some(sig.params.len() - 1)
+    } else {
+        None
+    }
 }
 
-/// Whether a resolved signature has a by-reference parameter of pointer type (`?ptr<T> &$p`).
-fn sig_binds_pointer_by_ref(sig: &crate::types::FunctionSig) -> bool {
-    sig.ref_params.iter().enumerate().any(|(index, by_ref)| {
-        *by_ref
-            && (sig
-                .param_type_exprs
-                .get(index)
-                .and_then(|ty| ty.as_ref())
-                .is_some_and(type_expr_mentions_pointer)
-                || sig.params.get(index).is_some_and(|(_, ty)| php_type_mentions_pointer(ty)))
+/// Whether positional argument `index` binds a by-reference parameter of `sig`.
+fn sig_param_is_by_ref(sig: &crate::types::FunctionSig, index: usize) -> bool {
+    sig_param_index(sig, index).is_some_and(|param| sig.ref_params.get(param).copied().unwrap_or(false))
+}
+
+/// Whether positional argument `index` binds a parameter of `sig` whose type is, or contains,
+/// a pointer (by reference or by value).
+fn sig_param_mentions_pointer(sig: &crate::types::FunctionSig, index: usize) -> bool {
+    sig_param_index(sig, index).is_some_and(|param| {
+        sig.param_type_exprs
+            .get(param)
+            .and_then(|ty| ty.as_ref())
+            .is_some_and(type_expr_mentions_pointer)
+            || sig.params.get(param).is_some_and(|(_, ty)| php_type_mentions_pointer(ty))
     })
 }
 
@@ -1425,10 +1458,11 @@ fn php_type_mentions_pointer(ty: &PhpType) -> bool {
 }
 
 /// For a call to a declared function with plain positional arguments, returns per argument
-/// whether it binds a BY-REFERENCE parameter whose declared type rejects `null` (`int &$n`,
-/// `array &$a`). `None` when the mapping is not reliable (unknown callee, a named or spread
-/// argument, or no by-reference parameter at all), leaving the caller's generic handling.
-fn declared_by_ref_null_rejection(checker: &Checker, name: &Name, args: &[Expr]) -> Option<Vec<bool>> {
+/// whether a null-only local there may take boxed storage: it binds a BY-REFERENCE parameter
+/// whose declared type admits `null` (`?array &$a`, not `int &$n` nor a by-value one). `None`
+/// when the mapping is not reliable (unknown callee, a named or spread argument, or no
+/// by-reference parameter at all), leaving the caller's generic handling.
+fn declared_by_ref_null_promotion(checker: &Checker, name: &Name, args: &[Expr]) -> Option<Vec<bool>> {
     let raw = name.as_str();
     let trimmed = raw.trim_start_matches('\\');
     let decl = checker
@@ -1448,7 +1482,7 @@ fn declared_by_ref_null_rejection(checker: &Checker, name: &Name, args: &[Expr])
         (0..args.len())
             .map(|index| {
                 decl.ref_params.get(index).copied().unwrap_or(false)
-                    && decl
+                    && !decl
                         .param_types
                         .get(index)
                         .and_then(|ty| ty.as_ref())
