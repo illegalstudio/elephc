@@ -16,6 +16,7 @@ mod methods;
 mod state;
 mod switches;
 mod tail;
+mod ternary;
 mod tries;
 mod writes;
 
@@ -41,6 +42,7 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
     let mut eliminated = Vec::new();
     let mut stmts = body.into_iter();
     while let Some(stmt) = stmts.next() {
+        let stmt = ternary::discarded_ternary_as_if(stmt);
         let has_tail = !stmts.as_slice().is_empty();
         let mut use_tail_sink = has_tail
             && matches!(
@@ -127,6 +129,7 @@ fn stmt_contains_control_flow(stmt: &Stmt) -> bool {
         | StmtKind::DoWhile { .. }
         | StmtKind::For { .. }
         | StmtKind::Foreach { .. } => true,
+        StmtKind::ExprStmt(Expr { kind: ExprKind::Ternary { .. }, .. }) => true,
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. } => stmts_contain_control_flow(body),
