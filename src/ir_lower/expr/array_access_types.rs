@@ -83,7 +83,7 @@ pub(in crate::ir_lower) fn class_implements_interface_for_ir(
 }
 
 /// Returns true when an interface extends the requested ancestor interface.
-pub(super) fn interface_extends_interface_for_ir(
+pub(crate) fn interface_extends_interface_for_ir(
     ctx: &LoweringContext<'_, '_>,
     interface_name: &str,
     ancestor_name: &str,

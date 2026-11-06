@@ -258,6 +258,18 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 2);
             store_if_result(ctx, inst)
         }
+        // A plain `object` names no class to decide on: `Countable` is the run-time class's answer.
+        PhpType::Object(class_name) if class_name.is_empty() => {
+            ctx.load_value_to_result(value)?;
+            super::lower_narrowed_interface_method_call_or_type_error(
+                ctx,
+                inst,
+                "Countable",
+                "count",
+                "count(): Argument #1 ($value) must be of type Countable|array, object given",
+            )?;
+            store_if_result(ctx, inst)
+        }
         // Any other object: PHP raises, naming the class. It is known statically on this path,
         // so the message is a constant — the `Mixed` path has to resolve the name at run time.
         PhpType::Object(class_name) => {

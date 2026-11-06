@@ -1107,6 +1107,11 @@ pub(super) fn class_implements_interface(
     interface_name: &str,
 ) -> bool {
     let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
+    // The receiver can be an interface that inherits the contract: a method returning Symfony's
+    // `ConstraintViolationListInterface`, which extends `Countable`.
+    if ctx.module.interface_infos.contains_key(class_name.trim_start_matches('\\')) {
+        return interface_satisfies_interface(ctx, class_name.trim_start_matches('\\'), interface_name);
+    }
     let mut current = Some(class_name.trim_start_matches('\\'));
     while let Some(candidate) = current {
         let Some(info) = ctx.module.class_infos.get(candidate) else {

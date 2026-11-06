@@ -1180,6 +1180,13 @@ fn normalize_plain_object_foreach_source(
     let traversable = ["Traversable", "Iterator", "IteratorAggregate"]
         .iter()
         .any(|name| class_name.trim_start_matches('\\').eq_ignore_ascii_case(name))
+        // An interface that inherits `Traversable` (Symfony's `ConstraintViolationListInterface`)
+        // leaves the question to the run-time object: walking its properties loses every element.
+        || crate::ir_lower::expr::array_access_types::interface_extends_interface_for_ir(
+            ctx,
+            class_name.trim_start_matches('\\'),
+            "Traversable",
+        )
         || crate::ir_lower::expr::array_access_types::class_implements_interface_for_ir(
             ctx,
             &class_name,
