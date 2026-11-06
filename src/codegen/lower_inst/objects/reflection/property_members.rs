@@ -37,7 +37,7 @@ pub(super) fn reflection_class_property_member(
         )
     })?;
     let type_metadata = reflection_property_type_metadata(info, property_name);
-    let default_value = reflection_property_default_value(info, property_name);
+    let default_value = reflection_property_default_value(ctx, info, property_name);
     let declaring_class_name = reflection_property_declaring_class_name(info, property_name)
         .or_else(|| {
             (is_reflection_enum(ctx, class_name) && property_name == "name")
@@ -126,6 +126,15 @@ pub(super) fn reflection_property_hook_members(
             .and_then(|contract| contract.get_type.as_ref())
             .and_then(|ty| reflection_parameter_type_metadata(None, ty))
             .or_else(|| property_type_metadata.cloned());
+        // `&get` is the only hook PHP lets return by reference, declared on a concrete body
+        // or on an abstract contract.
+        let get_by_ref = if has_concrete_get {
+            info.property_hooks
+                .get(property_name)
+                .is_some_and(|hooks| hooks.get_by_ref)
+        } else {
+            contract.is_some_and(|contract| contract.get_by_ref)
+        };
         members.push((
             String::from("get"),
             reflection_property_hook_method_member(
@@ -134,6 +143,7 @@ pub(super) fn reflection_property_hook_members(
                 declaring_class_name.clone(),
                 property_flags,
                 !has_concrete_get,
+                get_by_ref,
                 return_type,
                 None,
             ),
@@ -149,9 +159,12 @@ pub(super) fn reflection_property_hook_members(
             reflection_property_hook_method_member(
                 property_name,
                 "set",
-                declaring_class_name,
+                if has_concrete_set { declaring_class_name } else {
+                    contract.map(|contract| contract.declaring_type.clone()).or(declaring_class_name)
+                },
                 property_flags,
                 !has_concrete_set,
+                false,
                 Some(ReflectionParameterTypeMetadata::Named(
                     reflection_builtin_named_type("void", false),
                 )),
@@ -162,13 +175,16 @@ pub(super) fn reflection_property_hook_members(
     members
 }
 
-/// Builds one ReflectionMethod metadata record for a property hook.
+/// Builds one ReflectionMethod metadata record for a property hook. `returns_reference` is the
+/// hook's `&get` declaration, which `ReflectionMethod::returnsReference()` reports.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn reflection_property_hook_method_member(
     property_name: &str,
     hook_name: &str,
     declaring_class_name: Option<String>,
     property_flags: ReflectionMemberFlags,
     is_abstract: bool,
+    returns_reference: bool,
     return_type: Option<ReflectionParameterTypeMetadata>,
     parameter_type: Option<ReflectionParameterTypeMetadata>,
 ) -> ReflectionListedMember {
@@ -186,7 +202,7 @@ pub(super) fn reflection_property_hook_method_member(
         type_metadata: return_type.clone(),
         is_deprecated: false,
         is_generator: false,
-        returns_reference: false,
+        returns_reference,
     };
     let parameters = if hook_name == "set" {
         vec![reflection_property_hook_parameter_member(
@@ -213,7 +229,7 @@ pub(super) fn reflection_property_hook_method_member(
         required_parameter_count,
         is_deprecated: false,
         is_generator: false,
-        returns_reference: false,
+        returns_reference,
         prototype_member: None,
         parameters,
     }
@@ -247,18 +263,22 @@ pub(super) fn reflection_property_hook_parameter_member(
         type_metadata,
         default_value: None,
         default_value_constant_name: None,
+        default_value_export: None,
     }
 }
 
 /// Returns supported default metadata for one reflected property.
 pub(super) fn reflection_property_default_value(
+    ctx: &FunctionContext<'_>,
     info: &crate::types::ClassInfo,
     property_name: &str,
 ) -> Option<ReflectionParameterDefaultValue> {
-    if let Some((index, (name, _))) = info.visible_property(property_name) {
+    if let Some((index, (name, ty))) = info.visible_property(property_name) {
         return reflection_property_slot_default_value(
+            ctx, reflection_property_declaring_class_name(info, property_name).as_deref(),
             info.property_slot_is_declared(index, name),
             info.defaults.get(index).and_then(Option::as_ref),
+            ty,
         );
     }
     info.static_properties
@@ -266,21 +286,48 @@ pub(super) fn reflection_property_default_value(
         .position(|(name, _)| name == property_name)
         .and_then(|index| {
             reflection_property_slot_default_value(
+                ctx, reflection_property_declaring_class_name(info, property_name).as_deref(),
                 info.declared_static_properties.contains(property_name),
                 info.static_defaults.get(index).and_then(Option::as_ref),
+                &info.static_properties[index].1,
             )
         })
 }
 
 /// Converts one physical property slot default into PHP Reflection metadata.
 pub(super) fn reflection_property_slot_default_value(
+    ctx: &FunctionContext<'_>,
+    declaring_class: Option<&str>,
     is_declared: bool,
     default: Option<&Expr>,
+    php_type: &PhpType,
 ) -> Option<ReflectionParameterDefaultValue> {
     match default {
-        Some(default) => reflection_literal_parameter_default_value(default),
+        Some(default) => reflection_deferred_default_value(default)
+            .or_else(|| crate::types::deferred_defaults::unconditional_error_message(default)
+                .map(|message| ReflectionParameterDefaultValue::DeferredError(message.to_string())))
+            .or_else(|| reflection_folded_property_default(ctx, declaring_class, default))
+            .or_else(|| reflection_literal_parameter_default_value(default)),
         None if !is_declared => Some(ReflectionParameterDefaultValue::Null),
         None => None,
+    }
+    .map(|value| coerce_reflection_property_default(value, php_type))
+}
+
+/// Applies a float slot's integer coercion, including beneath retained enum reads.
+fn coerce_reflection_property_default(
+    value: ReflectionParameterDefaultValue, php_type: &PhpType,
+) -> ReflectionParameterDefaultValue {
+    match value {
+        ReflectionParameterDefaultValue::Int(value) if php_type.coerces_integer_to_float() => {
+            ReflectionParameterDefaultValue::Float(value as f64)
+        }
+        ReflectionParameterDefaultValue::Evaluated { value, enum_cases } => {
+            ReflectionParameterDefaultValue::Evaluated {
+                value: Box::new(coerce_reflection_property_default(*value, php_type)), enum_cases,
+            }
+        }
+        value => value,
     }
 }
 
@@ -336,22 +383,12 @@ pub(super) fn reflection_property_visibility_label(flags: ReflectionMemberFlags)
 pub(super) fn reflection_type_metadata_to_string(type_metadata: &ReflectionParameterTypeMetadata) -> String {
     match type_metadata {
         ReflectionParameterTypeMetadata::Named(named) => {
-            if named.allows_null && named.name != "mixed" {
-                format!("?{}", named.name)
-            } else {
-                named.name.clone()
-            }
+            elephc_builtin_contract::reflection_format::named_type(&named.name, named.allows_null)
         }
         ReflectionParameterTypeMetadata::Union(union) => {
-            let mut names = union
-                .types
-                .iter()
-                .map(|type_metadata| type_metadata.name.clone())
-                .collect::<Vec<_>>();
-            if union.allows_null && names.iter().all(|name| name != "null") {
-                names.push(String::from("null"));
-            }
-            names.join("|")
+            elephc_builtin_contract::reflection_format::union(
+                union.types.iter().map(|ty| ty.name.clone()).collect(), union.allows_null,
+            )
         }
         ReflectionParameterTypeMetadata::Intersection(intersection) => intersection
             .types
@@ -367,14 +404,19 @@ pub(super) fn reflection_default_value_to_string(
     default: &ReflectionParameterDefaultValue,
 ) -> Option<String> {
     match default {
+        ReflectionParameterDefaultValue::EnumCase(_) => Some(reflection_dump_default_value(default)),
+        ReflectionParameterDefaultValue::Evaluated { value, .. } => reflection_default_value_to_string(value),
         ReflectionParameterDefaultValue::Int(value) => Some(value.to_string()),
         ReflectionParameterDefaultValue::Bool(value) => Some(value.to_string()),
         ReflectionParameterDefaultValue::Float(value) => Some(value.to_string()),
-        ReflectionParameterDefaultValue::Str(value) => Some(format!("'{value}'")),
+        ReflectionParameterDefaultValue::Str(value) => Some(elephc_builtin_contract::reflection_format::string(
+            &elephc_builtin_contract::string_literal::literal_bytes(value),
+        )),
         ReflectionParameterDefaultValue::Null => Some(String::from("NULL")),
         ReflectionParameterDefaultValue::Object { .. }
+        | ReflectionParameterDefaultValue::DeferredError(_)
+        | ReflectionParameterDefaultValue::EirHelper(_)
         | ReflectionParameterDefaultValue::Array(_)
         | ReflectionParameterDefaultValue::AssocArray(_) => None,
     }
 }
-

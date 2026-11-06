@@ -1,8 +1,6 @@
 ---
 title: "tempnam()"
 description: "Creates a file with a unique filename."
-sidebar:
-  order: 304
 ---
 
 ## tempnam()
@@ -21,8 +19,9 @@ Creates a file with a unique filename.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/tempnam.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/tempnam.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

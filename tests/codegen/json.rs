@@ -10,8 +10,16 @@
 
 use crate::support::*;
 
+#[path = "json/compatibility_constants.rs"]
+mod compatibility_constants;
 #[path = "json/constants.rs"]
 mod constants;
+#[path = "json/encode_length_sink.rs"]
+mod encode_length_sink;
+#[path = "json/decode_ownership.rs"]
+mod decode_ownership;
+#[path = "json/encode_fast_paths.rs"]
+mod encode_fast_paths;
 #[path = "json/last_error.rs"]
 mod last_error;
 #[path = "json/last_error_msg.rs"]
@@ -42,6 +50,8 @@ mod encode_invalid_utf8;
 mod encode_control_chars;
 #[path = "json/encode_list_shape.rs"]
 mod encode_list_shape;
+#[path = "json/encode_integer_tree.rs"]
+mod encode_integer_tree;
 #[path = "json/decode_mixed.rs"]
 mod decode_mixed;
 #[path = "json/decode_stdclass.rs"]
@@ -56,3 +66,18 @@ mod decode_bigint;
 mod case_insensitive;
 #[path = "json/evaluation_order.rs"]
 mod evaluation_order;
+#[path = "json/error_location.rs"]
+mod error_location;
+#[path = "json/diagnostic_regressions.rs"]
+mod diagnostic_regressions;
+
+#[path = "json/coordinate_regressions.rs"]
+mod coordinate_regressions;
+
+#[path = "json/token_dispatch.rs"]
+mod token_dispatch;
+
+#[path = "json/packed_integer.rs"]
+mod packed_integer;
+#[path = "json/encode_large_string.rs"]
+mod encode_large_string;

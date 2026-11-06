@@ -12,10 +12,15 @@
 //!   `_concat_buf` slices that were passed in by the caller.
 //! - Executable and library PHP frames publish cleanup activations so escaping exceptions
 //!   release owned locals before control reaches the surviving catch or native host.
+//! - Every frame saves the reserved nested-call register (x19/r12) unless it is a scalar leaf
+//!   of register-neutral instructions, so the unwinder, frame cleanup callbacks, generator
+//!   wrappers and native hosts that keep state in it across PHP calls get it back intact.
+//! - Web handlers preserve every host callee-saved register before request reset can run.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::abi;
+use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
@@ -25,8 +30,8 @@ use crate::codegen::{
 use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
 use crate::ir::{
-    CoreBuiltinOp, Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op,
-    RuntimeCallTarget, ValueDef, ValueId,
+    Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op, RuntimeCallTarget,
+    Terminator, ValueDef, ValueId,
 };
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::names::ir_global_symbol;
@@ -38,11 +43,14 @@ use super::stack_guard;
 use super::value_placement::{self, ValuePlacement};
 
 mod destructor_cleanup;
+mod gc_owners;
+mod web_host_abi;
 pub(super) use destructor_cleanup::is_destructor;
+pub(super) use web_host_abi::preserve_host_callee_saved;
 
 const FRAME_FOOTER_BYTES: usize = 16;
 // Every activation has readable reader/line words, including synthetic frames hidden from backtraces.
-const EXCEPTION_ACTIVATION_BYTES: usize = 40;
+const EXCEPTION_ACTIVATION_BYTES: usize = crate::codegen_support::try_handlers::ACTIVATION_OWNER_VISITOR_OFFSET + 8;
 
 /// Bytes reserved for one addressable iterator state record.
 ///
@@ -63,6 +71,10 @@ pub(super) const WEB_HANDLER_SYMBOL: &str = "_elephc_web_handler";
 pub(super) struct FrameLayout {
     pub(super) value_placement: ValuePlacement,
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
+    pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
+    pub(super) numeric_seed_offsets: HashMap<LocalSlotId, usize>,
+    pub(super) numeric_local_slots: HashSet<LocalSlotId>,
+    pub(super) numeric_values: HashSet<ValueId>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
     pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
@@ -78,8 +90,8 @@ pub(super) struct FrameLayout {
 
 /// Computes the register allocation and fixed stack slots for a function.
 ///
-/// Every SSA value keeps a spill slot (register-allocated values simply leave
-/// theirs unused), and each callee-saved register the allocator uses gets a
+/// Scalar constants use recipes or registers without spill slots. Other SSA
+/// values keep backing slots, and each callee-saved register gets a
 /// dedicated save slot so the prologue/epilogue can preserve it. When
 /// `regalloc_linear` is false the allocation is all-spilled, reproducing the
 /// original stack-only behavior.
@@ -96,7 +108,7 @@ pub(super) fn layout_for_function(
         Allocation::all_spilled()
     };
 
-    let value_placement = value_placement::allocate(function);
+    let value_placement = value_placement::allocate(function, &allocation);
     let local_analysis = LocalSlotAnalysis::new(function);
     let mut local_offsets = HashMap::new();
     let mut offset = value_placement.total_slot_bytes;
@@ -123,6 +135,19 @@ pub(super) fn layout_for_function(
         }
         offset += bytes;
         local_offsets.insert(local.id, offset);
+    }
+    let mut numeric_cell_offsets = HashMap::new();
+    let numeric = super::stack_numeric::plan(function);
+    for group in numeric.cell_groups {
+        offset += 24;
+        for value in group {
+            numeric_cell_offsets.insert(value, offset);
+        }
+    }
+    let mut numeric_seed_offsets = HashMap::new();
+    for slot in numeric.seed_slots {
+        offset += 24;
+        numeric_seed_offsets.insert(slot, offset);
     }
     let mut ref_cell_state_offsets = HashMap::new();
     let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
@@ -152,8 +177,8 @@ pub(super) fn layout_for_function(
     // Method/callable dispatch hand-uses the reserved nested-call register
     // (x19/r12) to hold a receiver across argument-lowering calls; it is
     // callee-saved but outside the allocator's tracking, so reserve a save slot
-    // when the function needs it (issue #511).
-    if function_uses_nested_call_reg(function) {
+    // unless the function provably never touches it (issue #511).
+    if function_may_use_nested_call_reg(function) {
         let reg = nested_call_reg_name(target.arch);
         if !callee_saved_offsets.iter().any(|(saved, _)| *saved == reg) {
             offset += 8;
@@ -172,6 +197,10 @@ pub(super) fn layout_for_function(
     FrameLayout {
         value_placement,
         local_offsets,
+        numeric_cell_offsets,
+        numeric_seed_offsets,
+        numeric_local_slots: numeric.locals,
+        numeric_values: numeric.proven_values,
         ref_cell_state_offsets,
         try_handler_offsets,
         exception_guard_offsets,
@@ -187,37 +216,41 @@ pub(super) fn layout_for_function(
 }
 
 /// Returns whether any emitted EIR body can request a PHP Core backtrace.
+///
+/// The predicate lives on `Module` beside `Module::calls_php_backtrace`, the narrower question
+/// the inliner asks before splicing a method frame away. A module that can `throw` also keeps the
+/// frame readers: the uncaught-exception report prints PHP's `Stack trace:` block by walking the
+/// activation chain with them.
 pub(super) fn module_uses_backtrace(module: &Module) -> bool {
-    if module.required_runtime_features.eval_bridge {
-        return true;
-    }
-    let functions = || {
-        module
-            .functions
-            .iter()
-            .chain(module.class_methods.iter())
-            .chain(module.closures.iter())
-            .chain(module.fiber_wrappers.iter())
-            .chain(module.callback_wrappers.iter())
-            .chain(module.extern_callback_trampolines.iter())
-            .chain(module.runtime_callable_invokers.iter())
-    };
-    if functions().any(function_keeps_backtrace_argument_snapshot) {
-        return true;
-    }
-    functions()
-        .flat_map(|function| function.instructions.iter())
-        .any(|inst| {
-            inst.op == Op::CoreBuiltin
-                && matches!(
-                    inst.immediate,
-                    Some(Immediate::I64(selector))
-                        if matches!(
-                            CoreBuiltinOp::from_i64(selector),
-                            Some(CoreBuiltinOp::DebugBacktrace | CoreBuiltinOp::DebugPrintBacktrace)
-                        )
-                )
+    module.uses_php_backtrace() || module_throws(module)
+}
+
+/// Returns whether the module can raise an exception itself through a `throw` statement.
+fn module_throws(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .any(|function| {
+            function
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator, Some(Terminator::Throw { .. })))
+                || function.instructions.iter().any(|inst| {
+                    matches!(
+                        inst.op,
+                        Op::ThrowException | Op::ThrowError | Op::ThrowErrorValue
+                    )
+                })
         })
+}
+
+/// Returns whether any emitted EIR body can request a materialized `debug_backtrace()` array.
+///
+/// Only these modules need the heavy frame reader that builds a PHP frame hash.
+pub(super) fn module_materializes_backtrace(module: &Module) -> bool {
+    module.uses_php_backtrace()
 }
 
 /// Returns whether an emitted body can observe per-request GC timing metrics.
@@ -281,41 +314,14 @@ fn module_uses_resource_inventory_cleanup(module: &Module) -> bool {
         })
 }
 
-/// Returns true when the frontend retained one frame's arguments for a dynamic backtrace.
-///
-/// Descriptor-only calls to `debug_backtrace()` and `debug_print_backtrace()` do not leave a
-/// `CoreBuiltin` instruction in EIR. The argument-introspection pass marks their reachability by
-/// retaining a generated collector, count, or source-variadic snapshot in each PHP frame. The
-/// physical EIR parameters are authoritative because public signature metadata may omit generated
-/// ABI slots. Reading both shapes here keeps activation emission aligned with the frontend gate. A
-/// frame using the same storage for `func_get_args()` is an intentional conservative match: it
-/// costs an inactive reader slot but cannot change PHP behavior.
-fn function_keeps_backtrace_argument_snapshot(function: &Function) -> bool {
-    function.params.iter().any(|param| {
-        matches!(
-            param.name.as_str(),
-            crate::func_args::HIDDEN_ARGS_PARAM | crate::func_args::HIDDEN_ARGC_PARAM
-        )
-    }) || function.signature.as_ref().is_some_and(|signature| {
-        crate::func_args::sig_collects_surplus_args(signature)
-            || crate::func_args::sig_has_hidden_argc_param(signature)
-    }) || function.locals.iter().any(|local| {
-        matches!(
-            local.name.as_deref(),
-            Some(crate::func_args::SNAPSHOT_KEY_LOCAL)
-                | Some(crate::func_args::SNAPSHOT_VALUE_LOCAL)
-        )
-    })
-}
-
-/// Saves the callee-saved registers the allocator used into their reserved
+/// Saves the callee-saved registers required by this frame into their reserved
 /// frame slots, preserving the caller's values for the function's lifetime.
 fn emit_callee_saved_saves(ctx: &mut FunctionContext<'_>) {
     if ctx.callee_saved_offsets.is_empty() {
         return;
     }
     ctx.emitter
-        .comment("save callee-saved registers used by the register allocator");
+        .comment("save callee-saved registers required by this frame");
     for (reg, offset) in ctx.callee_saved_offsets.clone() {
         abi::store_at_offset(ctx.emitter, reg, offset);
     }
@@ -328,7 +334,7 @@ fn emit_callee_saved_restores(ctx: &mut FunctionContext<'_>) {
         return;
     }
     ctx.emitter
-        .comment("restore callee-saved registers used by the register allocator");
+        .comment("restore callee-saved registers required by this frame");
     for (reg, offset) in ctx.callee_saved_offsets.clone() {
         abi::load_at_offset(ctx.emitter, reg, offset);
     }
@@ -364,44 +370,56 @@ fn nested_call_reg_name(arch: Arch) -> &'static str {
     }
 }
 
-/// Detects dispatch paths that preserve a receiver in the reserved nested-call register.
-/// Mixed/union method calls, dynamic construction and Mixed string coercion use this
-/// callee-saved register outside the allocator's tracking. Each function must therefore
-/// save and restore it explicitly, including when all SSA values are stack allocated.
-fn function_uses_nested_call_reg(function: &Function) -> bool {
-    function.instructions.iter().any(|inst| {
-        // Dynamic constructors preserve their receiver across managed reference-cell staging.
-        if matches!(inst.op, Op::DynamicObjectNew | Op::DynamicObjectNewMixed) {
-            return true;
-        }
-        // A runtime-name property write can dispatch a missing name to `__set`, preserving the
-        // selected receiver in the same callee-saved register while its arguments are staged.
-        if inst.op == Op::DynamicPropSet {
-            return true;
-        }
-        // A boxed-Mixed STRING context holds its `__toString` receiver in the same register
-        // and is neither of the method-call opcodes below, so it used to slip through: a
-        // function whose only use was `echo $mixed` wrote `mov x19, x1` under a prologue that
-        // saved nothing. No caller shape was found that turns that into a wrong answer — the
-        // receiver is established AFTER argument lowering, which closes the obvious window —
-        // so this restores the callee-saved discipline rather than fixing a reproduced
-        // failure; per the note above, over-detection costs one store and one load.
-        if crate::codegen::shared_mixed_string::instruction_uses_mixed_string_ladder(function, inst)
-        {
-            return true;
-        }
-        if !matches!(inst.op, Op::MethodCall | Op::NullsafeMethodCall) {
-            return false;
-        }
-        let Some(receiver) = inst.operands.first() else {
-            return false;
-        };
-        let Some(value) = function.value(*receiver) else {
-            return false;
-        };
-        matches!(value.php_type, PhpType::Union(_))
-            || matches!(value.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-    })
+/// Decides whether a frame must save the reserved nested-call register.
+///
+/// The register is callee-saved but hand-used outside the allocator's tracking by many
+/// lowerings: direct, virtual, interface and nullsafe method dispatch, closure and callable
+/// descriptor invocation, dynamic construction, `__set` dispatch, the `__toString` ladder,
+/// builtin callback dispatch, and x86_64 scratch sequences. A predicate that listed those users
+/// missed a concrete-receiver method call, so a destructor calling `$this->close()` overwrote
+/// the register the exception unwinder and its frame cleanup callbacks keep their state in,
+/// and a generator body returned through a wrapper that had lost its Generator pointer.
+///
+/// The rule is therefore inverted: every frame saves the register unless all of its
+/// instructions are register-neutral (see `op_is_nested_call_reg_neutral`) and every local is
+/// a one-word scalar, so neither the body nor the prologue's parameter retains nor the
+/// epilogue's local releases call anything that returns to this frame. Some x86_64 runtime
+/// helpers treat r12 as scratch, so even a frame that only calls runtime code must save it.
+/// Leaving an opcode out of the neutral set costs one store and one load per activation; only
+/// adding one wrongly can lose the caller's register, which is why the set stays small.
+fn function_may_use_nested_call_reg(function: &Function) -> bool {
+    let scalar_locals = function
+        .locals
+        .iter()
+        .all(|local| matches!(local.ir_type, crate::ir::IrType::I64 | crate::ir::IrType::F64));
+    !(scalar_locals
+        && function
+            .instructions
+            .iter()
+            .all(|inst| op_is_nested_call_reg_neutral(inst.op)))
+}
+
+/// Returns true for opcodes whose lowering never writes the reserved nested-call register.
+///
+/// Each member lowers inline to the result and fixed scratch registers and makes no call that
+/// returns to this frame: the only calls are on error paths (a zero divisor, a negative shift
+/// count), which throw through the unwinder. The default is `false`,
+/// so a new opcode saves the register until its lowering is audited.
+fn op_is_nested_call_reg_neutral(op: Op) -> bool {
+    matches!(
+        op,
+        // Scalar constants materialized into the result register.
+        Op::ConstI64 | Op::ConstBool | Op::ConstNull | Op::ConstF64
+        // Integer arithmetic, bitwise and shifts (`lower_inst::arithmetic`).
+        | Op::IAdd | Op::ISub | Op::IMul | Op::INeg | Op::IDiv | Op::ISMod
+        | Op::IBitAnd | Op::IBitOr | Op::IBitXor | Op::IBitNot | Op::IShl | Op::IShrA
+        // Floating-point arithmetic (`lower_inst::floats` and `arithmetic::lower_float_div`).
+        | Op::FAdd | Op::FSub | Op::FMul | Op::FDiv | Op::FNeg
+        // Scalar comparisons and int-to-float promotion.
+        | Op::ICmp | Op::FCmp | Op::IToF
+        // Value forwarding and statement markers.
+        | Op::Move | Op::Borrow | Op::Nop | Op::ConcatReset
+    )
 }
 
 /// Emits the process-entry prologue for the EIR main function.
@@ -416,6 +434,12 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     emit_callee_saved_saves(ctx);
     ctx.emitter.comment("save argc/argv to globals");
     abi::emit_store_process_args_to_globals(ctx.emitter);
+    if let Some(hook) = ctx.emitter.exit_hook.clone() {
+        ctx.emitter.comment("let the runtime's exit paths shut the hosted PHP extensions down");
+        let scratch = abi::int_result_reg(ctx.emitter);
+        abi::emit_symbol_address(ctx.emitter, scratch, &hook);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_exit_hook", 0);
+    }
     // Measure the stack only after argc/argv are safe in globals: the initializer is an
     // ordinary call and clobbers the C-ABI argument registers they arrive in. `main` itself
     // is never guarded — it is the root of every call chain and runs before the floor exists.
@@ -426,11 +450,13 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     emit_probe_init(ctx);
     register_main_instr(ctx);
     emit_instr_init(ctx);
+    emit_opcache_configuration(ctx);
     if ctx.heap_debug {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
     }
     zero_initialize_main_cleanup_locals(ctx);
+    initialize_nullable_scalar_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
@@ -440,6 +466,8 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     store_argc_local_if_present(ctx);
     store_argv_local_if_present(ctx);
     emit_registered_instr_enter(ctx);
+    let entry_label = ctx.emitter.entry_symbol();
+    emit_exception_activation_push(ctx, entry_label);
 }
 
 /// Emits a callable function prologue using an already-resolved entry label.
@@ -488,9 +516,27 @@ pub(super) fn emit_function_prologue_with_label(
         let converted_to_owned_mixed = !param.by_ref
             && local_ty.codegen_repr() == PhpType::Mixed
             && param.php_type.codegen_repr() != PhpType::Mixed;
+        // Before any widening box: a `?ptr<T>` slot later widened to `mixed` boxes the
+        // normalized word, so a null bound by the caller becomes a PHP null cell.
+        if !param.by_ref && crate::types::is_nullable_pointer_type(&param.php_type) {
+            normalize_nullable_pointer_param(ctx, offset);
+        }
+        if param.by_ref && crate::types::is_nullable_pointer_type(&param.php_type) {
+            normalize_nullable_pointer_ref_param(ctx, offset);
+        }
+        // A `null` parameter (such as a by-value capture of a `null` local) carries no ABI
+        // value, so nothing above wrote its slot. When the body also stores pointers or packed
+        // record addresses into it, the slot is a pointer word and must start as address 0.
+        if !param.by_ref
+            && matches!(param.php_type.codegen_repr(), PhpType::Void | PhpType::Never)
+            && matches!(local_ty.codegen_repr(), PhpType::Pointer(_))
+        {
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        }
         if converted_to_owned_mixed {
             abi::emit_load(ctx.emitter, &param.php_type.codegen_repr(), offset);
-            emit_box_current_value_as_mixed(ctx.emitter, &param.php_type.codegen_repr());
+            // The declared type, so a `?ptr<T>` parameter boxes address 0 as PHP null.
+            emit_box_current_value_as_mixed(ctx.emitter, &param.php_type);
             abi::emit_store(ctx.emitter, &PhpType::Mixed, offset);
         }
         if !param.by_ref && ctx.owns_parameter_slot(slot) && !converted_to_owned_mixed {
@@ -498,6 +544,7 @@ pub(super) fn emit_function_prologue_with_label(
         }
     }
     zero_initialize_function_cleanup_locals(ctx);
+    initialize_nullable_scalar_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
@@ -508,6 +555,66 @@ pub(super) fn emit_function_prologue_with_label(
     // registers is safe. Callee-saved registers are already preserved above.
     emit_instr_enter(ctx);
     Ok(())
+}
+
+/// Rewrites a PHP null bound to a `?ptr<T>` parameter into the null pointer word.
+///
+/// Every call surface (methods, constructors, closures, callables, omitted `= null` defaults)
+/// binds a literal `null` as the shared null sentinel, which would read as a live address. The
+/// callee is the one place they all meet, so the slot is normalized here: the sentinel becomes
+/// address 0, the null of a `?ptr<T>`, and every real address is left alone.
+fn normalize_nullable_pointer_param(ctx: &mut FunctionContext<'_>, offset: usize) {
+    // -- rewrite a null sentinel bound to a ?ptr<T> parameter into the null pointer word --
+    abi::emit_load(ctx.emitter, &PhpType::Int, offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::sentinels::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp x0, x9");                              // did the caller bind PHP null to this pointer parameter?
+            ctx.emitter.instruction("csel x0, xzr, x0, eq");                    // turn the null sentinel into the null pointer word
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r11", crate::codegen::sentinels::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp rax, r11");                            // did the caller bind PHP null to this pointer parameter?
+            abi::emit_load_int_immediate(ctx.emitter, "r11", 0);
+            ctx.emitter.instruction("cmove rax, r11");                          // turn the null sentinel into the null pointer word
+        }
+    }
+    abi::emit_store(ctx.emitter, &PhpType::Int, offset);
+}
+
+/// Rewrites a null sentinel in the caller's storage bound to a `?ptr<T>` by-reference parameter.
+///
+/// The slot holds the address of the caller's variable. A caller variable that holds PHP null
+/// (`$x = null`, or a value only known to be null after a guard) carries the shared null
+/// sentinel, which the callee would read as a live address; it becomes address 0 in place, so
+/// both sides agree that the pointer is null. Mixed or hash-backed caller variables never reach
+/// here: the checker refuses them for a typed by-reference parameter.
+fn normalize_nullable_pointer_ref_param(ctx: &mut FunctionContext<'_>, offset: usize) {
+    // -- rewrite a null sentinel in the caller's ?ptr<T> storage into the null pointer word --
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(ctx.emitter, "x10", offset);
+            abi::emit_load_from_address(ctx.emitter, "x0", "x10", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::sentinels::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp x0, x9");                              // does the caller's variable hold PHP null?
+            ctx.emitter.instruction("csel x0, xzr, x0, eq");                    // turn the null sentinel into the null pointer word
+            abi::emit_store_to_address(ctx.emitter, "x0", "x10", 0);
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(ctx.emitter, "r10", offset);
+            abi::emit_load_from_address(ctx.emitter, "rax", "r10", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "r11", crate::codegen::sentinels::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp rax, r11");                            // does the caller's variable hold PHP null?
+            abi::emit_load_int_immediate(ctx.emitter, "r11", 0);
+            ctx.emitter.instruction("cmove rax, r11");                          // turn the null sentinel into the null pointer word
+            abi::emit_store_to_address(ctx.emitter, "rax", "r10", 0);
+        }
+    }
+}
+
+/// Returns the label of the function-level frame reader published in the activation record.
+fn frame_reader_label(entry_label: &str) -> String {
+    format!("{entry_label}__bt_reader")
 }
 
 /// Publishes one cleanup and/or backtrace activation for a PHP frame.
@@ -534,12 +641,29 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
         Arch::X86_64 => "rbp",
     };
     abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
-    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    // Main carries source coordinates for generated diagnostics but is not a PHP-visible
+    // backtrace frame, so its reader stays null.
+    if ctx.backtrace_activation && !ctx.is_main {
+        abi::emit_symbol_address(ctx.emitter, scratch, &frame_reader_label(entry_label));
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    }
     abi::store_at_offset(ctx.emitter, scratch, offset - 24);
-    if ctx.backtrace_activation {
+    // Synthetic cleanup frames still retain their incoming source coordinate. Their
+    // reader stays absent, so PHP backtraces omit them while generated diagnostics can
+    // recover source coordinates through helpers that do not appear in PHP backtraces.
+    if ctx.backtrace_enabled {
         abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
     }
     abi::store_at_offset(ctx.emitter, scratch, offset - 32);
+    if ctx.exception_cleanup_activation
+        && (ctx.module.required_runtime_features.fiber || ctx.module.required_runtime_features.generator)
+    {
+        abi::emit_symbol_address(ctx.emitter, scratch, &format!("{entry_label}__gc_frame_owners"));
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    }
+    abi::store_at_offset(ctx.emitter, scratch, offset - crate::codegen_support::try_handlers::ACTIVATION_OWNER_VISITOR_OFFSET);
     abi::emit_frame_slot_address(ctx.emitter, scratch, offset);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
 }
@@ -562,8 +686,20 @@ pub(super) fn emit_exception_cleanup_callback(
     ctx: &mut FunctionContext<'_>,
     entry_label: &str,
 ) {
+    if ctx.backtrace_activation && !ctx.is_main && ctx.exception_activation_offset.is_some() {
+        let materialize = module_materializes_backtrace(ctx.module);
+        super::lower_inst::emit_function_frame_reader(
+            ctx,
+            &frame_reader_label(entry_label),
+            materialize,
+        )
+        .expect("frame reader emission");
+    }
     if !ctx.exception_cleanup_activation {
         return;
+    }
+    if ctx.module.required_runtime_features.fiber || ctx.module.required_runtime_features.generator {
+        gc_owners::emit(ctx, entry_label);
     }
     let callback = format!("{entry_label}__cdylib_exception_cleanup");
     ctx.emitter.blank();
@@ -646,18 +782,37 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
-    emit_main_static_property_cleanup(ctx);
+    let (static_properties, hosting_tables) =
+        super::runtime_metadata::static_properties_hosting_last(ctx.module);
+    emit_main_static_property_cleanup(ctx, static_properties);
+    emit_shutdown_cycle_collection(ctx.emitter);
+    // Hosted extensions end the request (RSHUTDOWN) after the program's destructors, then their
+    // hosting tables release the engine objects (`free_obj` may still use module state), and the
+    // exit sequence's hook runs MSHUTDOWN last: php-src's `php_request_shutdown` frees the object
+    // store before `php_module_shutdown`. The hook's own RSHUTDOWN then finds no request left.
+    if !hosting_tables.is_empty() && super::block_emit::module_hosts_php_ext(ctx.module) {
+        let symbol = ctx.emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_SHUTDOWN);
+        abi::emit_call_label(ctx.emitter, &symbol);
+    }
+    emit_main_static_property_cleanup(ctx, hosting_tables);
+    // Last owner teardown: a destructor above, or an engine object a hosting table released, may
+    // still reach C code that calls a callback.
+    if module_binds_extern_callbacks(ctx.module) {
+        abi::emit_call_label(ctx.emitter, EXTERN_CALLBACK_RELEASE_LABEL);
+    }
     if module_uses_resource_inventory_cleanup(ctx.module) {
         abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
     }
     if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_release_catalog");
     }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_registry_cleanup");
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
     // it exits earlier, those functions become disconnected graph roots and
     // their work no longer partitions `{main}`.
     emit_instr_exit(ctx);
+    emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     // Everything below is a call on a torn-down frame, and on x86_64 that frame
@@ -682,9 +837,55 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.epilogue_emitted = true;
 }
 
+/// Routine that releases every callable descriptor an extern callback slot retains.
+pub(super) const EXTERN_CALLBACK_RELEASE_LABEL: &str = "__rt_release_extern_callbacks";
+
+/// Returns whether any extern takes a callable, so a callback slot may hold a descriptor.
+pub(super) fn module_binds_extern_callbacks(module: &Module) -> bool {
+    module
+        .extern_decls
+        .iter()
+        .any(|decl| decl.params.iter().any(|param| matches!(param.php_type, PhpType::Callable)))
+}
+
+/// Emits the routine releasing each extern callback slot's descriptor and clearing the slot.
+///
+/// A slot keeps the last callable handed to a C callback alive for the program's life, since C
+/// may call it at any time. Program exit releases them before the heap report, and the `--web`
+/// reset does too: the descriptor lives in the request arena, so a slot surviving the reset
+/// would hand the next binding a retired descriptor to release.
+pub(super) fn emit_extern_callback_release_routine(emitter: &mut Emitter, data: &DataSection) {
+    if emitter.target.arch == Arch::AArch64 {
+        emitter.raw(".align 2");
+    }
+    emitter.blank();
+    emitter.comment("--- extern callback descriptor slots release ---");
+    emitter.label_global(EXTERN_CALLBACK_RELEASE_LABEL);
+    abi::emit_frame_prologue(emitter, 16);
+    for slot in data.extern_callback_slots() {
+        abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), slot, 0);
+        abi::emit_store_zero_to_symbol(emitter, slot, 0);
+        crate::codegen::callable_descriptor::emit_release_current_descriptor(emitter);
+    }
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
+}
+
+/// Destroys the objects that only a reference cycle keeps alive once every root is released.
+///
+/// PHP destructs every object still alive at shutdown, cycles included. The epilogue
+/// cleanups release locals, statics, globals and static properties, so an object
+/// reachable only through a cycle is garbage by now; one explicit collection runs its
+/// destructor before teardown, and a destructor throw propagates as from the cleanups.
+fn emit_shutdown_cycle_collection(emitter: &mut Emitter) {
+    emitter.comment("shutdown: collect cycles so their destructors run, as PHP's shutdown does");
+    abi::emit_call_label(emitter, "__rt_gc_collect_cycles_explicit");
+    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), "_exc_value", 0);
+    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
+}
+
 /// Retires class static owners once, finishing every property before propagating a destructor throw.
-fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>) {
-    let properties = super::runtime_metadata::refcounted_static_properties(ctx.module);
+fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>, properties: Vec<(String, PhpType)>) {
     if properties.is_empty() { return; }
     for (symbol, php_type) in properties {
         let ty = php_type.codegen_repr();
@@ -818,6 +1019,9 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.label_global(WEB_HANDLER_SYMBOL);
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    // The bridge calls this entry with the host C ABI. Reset and runtime helpers can use
+    // registers outside the allocator's pool, so preserve host state before the first call.
+    emit_callee_saved_saves(ctx);
     // Reset all process-persistent state (function static locals, refcounted
     // static property values, and `_concat_off`) BEFORE this frame captures the
     // concat base and BEFORE the body's re-run static/enum initializers, so each
@@ -825,9 +1029,23 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // every function is emitted; the call here forward-references its label.
     ctx.emitter.comment("reset per-request persistent state");
     abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    if ctx.module.web_application {
+        let register = abi::int_result_reg(ctx.emitter);
+        abi::emit_symbol_address(ctx.emitter, register, crate::codegen_support::runtime::data::WEB_STREAM_CLOSE_ENTRY);
+        abi::emit_store_reg_to_symbol(ctx.emitter, register, crate::codegen_support::runtime::data::WEB_STREAM_CLOSE_SLOT, 0);
+    }
+    // A hosted PHP extension lives for the whole worker, but its request does not: the reset
+    // ended the previous request (RSHUTDOWN); start this one (RINIT).
+    if super::block_emit::module_hosts_php_ext(ctx.module) {
+        ctx.emitter.comment("hosted PHP extensions: request startup");
+        let symbol = ctx.emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_STARTUP);
+        abi::emit_call_label(ctx.emitter, &symbol);
+    }
+    emit_opcache_configuration(ctx);
+    emit_opcache_restart_boundary(ctx);
     capture_concat_base(ctx);
-    emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
+    initialize_nullable_scalar_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
@@ -837,6 +1055,99 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // profiler before the bridge invokes this handler.
     register_main_instr(ctx);
     emit_registered_instr_enter(ctx);
+    emit_exception_activation_push(ctx, WEB_HANDLER_SYMBOL);
+}
+
+/// Installs the compiled OPcache configuration before any of the program's code runs.
+///
+/// php-src configures OPcache during module startup, so every directive is in force for the
+/// first statement. elephc installed it lazily at the first `ensure_eval_context` instead,
+/// which made the ANSWER depend on program order: `opcache_compile_file()` returned `false`
+/// before the program's first `eval()` and `true` after it, and
+/// `opcache_get_configuration()['blacklist']` was `[]` then populated — same binary, same
+/// directives, two answers decided by where the call happened to sit.
+///
+/// Emitted only when the binary links the eval bridge, so pay-for-use is unchanged: without
+/// one there is no runtime cache to configure and every `rt_*` call folds away anyway.
+///
+/// Under `--web` this runs per request rather than once. The call is a setter over
+/// compile-time constants, so re-installing is idempotent, and putting it in the handler
+/// prologue is what guarantees a recycled worker starts configured.
+fn emit_opcache_configuration(ctx: &mut FunctionContext<'_>) {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return;
+    }
+    ctx.emitter
+        .comment("install the compiled OPcache configuration (php-src does this at startup)");
+    crate::codegen::lower_inst::builtins::configure_eval_opcache(ctx);
+}
+
+/// Runs `opcache.preload`'s top-level code ONCE, here in the master, before serving starts.
+///
+/// php-src runs preload during startup, before any request exists. elephc's `--web` top-level
+/// body IS the per-request handler, so the preload's statements used to execute inside the
+/// FIRST request of every worker — and again after each `--max-requests` recycle. MEASURED on
+/// reference `php -S`: the preload's output goes to the server log once, no header it sets
+/// reaches a response, and a global it assigns reads back as `NULL` in the request. elephc put
+/// all three into response 1.
+///
+/// `web_prelude::lift_preload_to_startup` has already moved those statements into a synthetic
+/// function, leaving the preload file's DECLARATIONS at the top level where they compile into
+/// the binary. This calls that function.
+///
+/// POSITION IS THE WHOLE FIX, in two ways that both fall out of it rather than needing code:
+/// this runs in the master before `elephc_web_run` forks, so it happens once for every worker
+/// rather than once per worker; and `_elephc_web_capture` is still clear, so `__rt_stdout_write`
+/// takes its plain `write(1, …)` path and the output reaches the server's stdout instead of a
+/// response body.
+fn emit_web_preload_startup(ctx: &mut FunctionContext<'_>) -> crate::codegen::Result<()> {
+    let declared = ctx
+        .module
+        .functions
+        .iter()
+        .any(|function| function.name == crate::web_prelude::PRELOAD_STARTUP_FN);
+    if !declared {
+        return Ok(());
+    }
+    // STATIC PROPERTY DEFAULTS FIRST. They are written by a runtime store into a
+    // zero-initialized symbol, not baked into the data section, and the store lives in the
+    // per-request HANDLER body — which runs after this stub. A preload reading
+    // `SomeClass::$n` therefore saw `0` where reference sees the declared default, while
+    // every request after it saw the right value. Reference initializes class statics during
+    // startup, before preload runs, so seeding them here is the ordering php-src has.
+    //
+    // The handler still seeds them per request, and must: `__rt_web_reset` clears
+    // process-persistent state between requests, so each one needs its own fresh defaults.
+    // This call is the master's copy, which is what the preload reads.
+    super::block_emit::emit_static_property_initializers(ctx)?;
+    ctx.emitter
+        .comment("run opcache.preload once, before serving (php-src does this at startup)");
+    let symbol = crate::names::function_symbol(crate::web_prelude::PRELOAD_STARTUP_FN);
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(())
+}
+
+/// Emits the request-boundary call that performs a deferred `opcache_reset()`.
+///
+/// php-src schedules a restart and performs it at the START of the next request, so this
+/// sits beside the other per-request resets rather than inside `opcache_reset()` itself.
+/// A request that calls `opcache_reset()` therefore keeps being served by the cache, and
+/// the one after it starts cold — which is what reference PHP does.
+///
+/// PAY-FOR-USE, the same rule the `opcache_get_status()` readers follow: a binary with no
+/// eval bridge has no runtime script cache to restart, so the call is not emitted at all
+/// and the interpreter archive stays unlinked.
+fn emit_opcache_restart_boundary(ctx: &mut FunctionContext<'_>) {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return;
+    }
+    ctx.emitter
+        .comment("apply a restart scheduled by opcache_reset() in an earlier request");
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_apply_restart");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits the `--web` top-level handler epilogue and returns to the bridge.
@@ -876,6 +1187,7 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     // opened. Dumping from the epilogue as well wrote a profile for every request
     // including the ones that never started a slice, which is how an unprofiled
     // service filled its log.
+    emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
@@ -893,7 +1205,7 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_web_entry_stub(
     ctx: &mut FunctionContext<'_>,
     isolation: super::WebIsolation,
-) {
+) -> crate::codegen::Result<()> {
     let target = ctx.emitter.target;
     if target.arch == Arch::AArch64 {
         ctx.emitter.raw(".align 2");
@@ -926,18 +1238,66 @@ pub(super) fn emit_web_entry_stub(
     // request. (A `--no-web-heap-guard` opt-out for benchmarking is a follow-up.)
     ctx.emitter.comment("enable web heap-guard flag");
     abi::emit_enable_web_heap_guard_flag(ctx.emitter);
+    // BEFORE the preload, not after. The preload's own code can call `opcache_*`, and every
+    // one of those answers comes from the bridge. Running it first left the bridge at its
+    // DEFAULT configuration — a disabled cache — so `opcache_compile_file()` in a preload
+    // answered `false` while the same call in every request answered `true`: one binary, one
+    // file, opposite answers. That is the order-dependence the prologue install was added to
+    // remove, reintroduced by the hoist in the one place that now runs ahead of it.
+    //
+    // The handler prologue still installs it per request, and that is not redundant: a worker
+    // forked from this master inherits the installed configuration, but the handler call is
+    // what a RECYCLED worker relies on. The call is a setter over compile-time constants, so
+    // installing twice costs two stores.
+    emit_opcache_configuration(ctx);
+    emit_web_preload_startup(ctx)?;
     let argc_reg = abi::int_arg_reg_name(target, 0);
     let argv_reg = abi::int_arg_reg_name(target, 1);
     let handler_reg = abi::int_arg_reg_name(target, 2);
     abi::emit_load_symbol_to_reg(ctx.emitter, argc_reg, "_global_argc", 0);
     abi::emit_load_symbol_to_reg(ctx.emitter, argv_reg, "_global_argv", 0);
-    abi::emit_symbol_address(ctx.emitter, handler_reg, WEB_HANDLER_SYMBOL);
+    let bridge_symbol = if ctx.module.web_application {
+        use crate::codegen::data_section::DataWord;
+        let callbacks = ctx.data.add_words(vec![
+            DataWord::Symbol(WEB_HANDLER_SYMBOL.to_string()),
+            DataWord::Symbol(crate::names::function_symbol(crate::web_prelude::application::READY)),
+            DataWord::Symbol(crate::names::function_symbol(crate::web_prelude::application::REQUEST)),
+            DataWord::Symbol(crate::names::function_symbol(crate::web_prelude::application::SHUTDOWN)),
+        ]);
+        abi::emit_symbol_address(ctx.emitter, handler_reg, &callbacks);
+        "elephc_web_run_application"
+    } else {
+        abi::emit_symbol_address(ctx.emitter, handler_reg, WEB_HANDLER_SYMBOL);
+        isolation.bridge_symbol()
+    };
     // The selected entry is a `#[no_mangle] extern "C"` Rust symbol in the bridge
     // staticlib, so it carries the platform's C-ABI underscore: resolve it through
     // `extern_symbol` (`_elephc_web_run` on macOS, `elephc_web_run` on Linux).
-    let bridge_entry = target.extern_symbol(isolation.bridge_symbol());
+    let bridge_entry = target.extern_symbol(bridge_symbol);
     abi::emit_call_label(ctx.emitter, &bridge_entry);
     abi::emit_exit_with_result_reg(ctx.emitter);
+    if ctx.module.web_application {
+        crate::codegen::lower_inst::builtins::io::emit_application_stream_closer(ctx);
+    }
+    Ok(())
+}
+
+/// Gives nullable scalar frame locals a null tag before any conditional store can be skipped.
+fn initialize_nullable_scalar_locals(ctx: &mut FunctionContext<'_>) {
+    let slots: Vec<_> = ctx.function.locals.iter().filter(|local|
+        local.kind == crate::ir::LocalKind::PhpLocal && local.ir_type == crate::ir::IrType::TaggedScalar
+            && !local_slot_is_parameter(ctx.function, local.id))
+        .map(|local| local.id).collect();
+    for slot in slots {
+        let offset = ctx.local_offset(slot).expect("declared nullable frame slot");
+        let scratch = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_load_int_immediate(ctx.emitter, scratch,
+            crate::codegen_support::sentinels::NULL_SENTINEL);
+        abi::store_at_offset(ctx.emitter, scratch, offset);
+        abi::emit_load_int_immediate(ctx.emitter, scratch,
+            crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL);
+        abi::store_at_offset(ctx.emitter, scratch, offset - 8);
+    }
 }
 
 /// Zero-initializes cleanup-tracked locals so skipped assignments stay safe at epilogue.
@@ -1267,13 +1627,13 @@ pub(super) fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: us
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the local string pointer to the validating heap-free helper
+                .instruction(&format!("mov {}, {}", result_reg, ptr_reg));      // pass the local string pointer to the validating heap-free helper
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
         Arch::X86_64 => {
             if ptr_reg != result_reg {
                 ctx.emitter
-                    .instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the local string pointer to the validating heap-free helper
+                    .instruction(&format!("mov {}, {}", result_reg, ptr_reg));  // pass the local string pointer to the validating heap-free helper
             }
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
@@ -1288,11 +1648,11 @@ pub(super) fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cbz {}, {}", result_reg, done)); // skip uninitialized refcounted locals
+                .instruction(&format!("cbz {}, {}", result_reg, done));         // skip uninitialized refcounted locals
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the refcounted local is initialized
+                .instruction(&format!("test {}, {}", result_reg, result_reg));  // check whether the refcounted local is initialized
             ctx.emitter.instruction(&format!("je {}", done));                   // skip uninitialized refcounted locals
         }
     }
@@ -1458,6 +1818,30 @@ pub(super) fn emit_owned_local_cleanup(
     offset: usize,
     ty: &PhpType,
 ) {
+    if ctx.numeric_local_slots.contains(&slot) {
+        // -- numeric cells have no child that can run a PHP destructor --
+        let result = abi::int_result_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, result, offset);
+        let done = ctx.next_label("numeric_local_cleanup_done");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        let cells = ctx.numeric_cell_offsets_sorted();
+        if !cells.is_empty() && cells.len() <= 4 {
+            // -- a checked numeric local may hold a transient frame cell instead of a heap box --
+            let scratch = abi::secondary_scratch_reg(ctx.emitter);
+            for cell_offset in cells {
+                abi::emit_frame_slot_address(ctx.emitter, scratch, cell_offset);
+                ctx.emitter.instruction(&format!(                               // compare the retiring pointer with this frame cell
+                    "cmp {}, {}",
+                    result, scratch
+                ));
+                abi::emit_branch_if_equal_wide(ctx.emitter, &done);                // frame cells own no heap payload
+            }
+        }
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        ctx.emitter.label(&done);
+        return;
+    }
     let done = ctx
         .ref_cell_state_offset(slot)
         .map(|_| ctx.next_label("raw_local_cleanup_done"));
@@ -1475,7 +1859,7 @@ pub(super) fn emit_owned_local_cleanup(
                     &format!("test {}, {}", state_reg, state_reg)
                 );
                 ctx.emitter
-                    .instruction(&format!("jne {}", done));                      // skip raw cleanup for the ref-cell representation
+                    .instruction(&format!("jne {}", done));                     // skip raw cleanup for the ref-cell representation
             }
         }
     }
@@ -1998,16 +2382,17 @@ fn emit_registered_instr_enter(ctx: &mut FunctionContext<'_>) {
 
 /// Emits the `--instrument` entry hook at the end of a user function's prologue:
 /// registers the function (assigning its id), records the id on the context for
-/// the epilogue, and calls `elephc_instr_enter(id)`. Synthetic bodies are not
-/// user code and stay uninstrumented; `{main}` is registered by its dedicated
+/// the epilogue, and calls `elephc_instr_enter(id)`. Private PHP implementation
+/// variants reuse their source identity; synthetic scaffolding stays uninstrumented.
+/// `{main}` is registered by its dedicated
 /// process/web prologue before the name table is initialized.
 fn emit_instr_enter(ctx: &mut FunctionContext<'_>) {
-    // Synthetic bodies are not user code. Beyond that, a selective set hooks
-    // only the functions it names — the rest run at full speed.
-    if ctx.function.flags.is_synthetic || !ctx.shared.instrument.covers(&ctx.function.name) {
+    // Source implementation variants share the PHP identity. A selective set hooks
+    // only the source functions it names — the rest run at full speed.
+    if !ctx.function.has_source_identity() || !ctx.shared.instrument.covers(ctx.function.display_name()) {
         return;
     }
-    let id = ctx.shared.register_instr(ctx.function.name.clone());
+    let id = ctx.shared.register_instr(ctx.function.display_name().to_owned());
     ctx.instr_id = Some(id);
     emit_registered_instr_enter(ctx);
 }
@@ -2187,17 +2572,22 @@ fn emit_instr_dump(ctx: &mut FunctionContext<'_>) {
 ///
 /// Placed with the stack guard, before the parameter spill: only scratch
 /// registers are touched (AArch64 x9/x10, x86_64 r10), so the incoming ABI
-/// arguments are undisturbed. The count is a plain load/add/store — a lost
-/// update under threads costs a tick of precision, never correctness. Synthetic
-/// bodies are not user code and stay uncounted; `main` never reaches this
-/// prologue (it has its own), which keeps the dump to functions the user wrote.
+/// arguments are undisturbed. The count is a plain load/add/store; a lost
+/// update under threads costs a tick of precision, never correctness. Private
+/// PHP variants share their source counter, while synthetic scaffolding stays
+/// uncounted. Main has its own prologue and does not register an extra entry.
 fn emit_call_counter_increment(ctx: &mut FunctionContext<'_>, entry_label: &str) {
-    if !ctx.shared.counters || ctx.function.flags.is_synthetic {
+    if !ctx.shared.counters || !ctx.function.has_source_identity() {
         return;
     }
-    let slot = ctx.data.add_comm(format!("_elephc_cnt{}", entry_label), 8);
-    ctx.shared
-        .register_counter(ctx.function.name.clone(), slot.clone());
+    let name = ctx.function.display_name().to_owned();
+    let slot = if let Some((_, slot)) = ctx.shared.counter_registry().iter().find(|(registered, _)| *registered == name) {
+        slot.clone()
+    } else {
+        let slot = ctx.data.add_comm(format!("_elephc_cnt{}", entry_label), 8);
+        ctx.shared.register_counter(name, slot.clone());
+        slot
+    };
     ctx.emitter.comment("call counter (--counters)");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -2398,3 +2788,6 @@ fn argv_array_type() -> PhpType {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod web_abi_tests;

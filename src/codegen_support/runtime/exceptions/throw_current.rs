@@ -84,6 +84,13 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // install the throw helper's frame pointer
     emit_instr_throw_hook(emitter);
     abi::emit_load_symbol_to_reg(emitter, "x19", "_exc_handler_top", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_debuginfo_guard", 0);
+    emitter.instruction("cbz x10, __rt_throw_current_no_debuginfo");            // no run-time __debugInfo() call in flight: ordinary dispatch
+    emitter.instruction("orr x11, x19, #1");                                    // tag the handler top so an empty stack still compares non-zero
+    emitter.instruction("cmp x10, x11");                                        // did the exception escape the __debugInfo() call without a newer handler?
+    emitter.instruction("b.ne __rt_throw_current_no_debuginfo");                // a newer handler (a `try` inside the method) catches it as usual
+    emitter.instruction("b __rt_report_debuginfo_exception");                   // PHP: `Warning: Uncaught ...` then `__debuginfo() must return an array`
+    emitter.label("__rt_throw_current_no_debuginfo");
     emitter.instruction("cbz x19, __rt_throw_current_uncaught");                // fall back to a fatal uncaught-exception path when no handler exists
     emitter.instruction("bl __rt_pcntl_abort_dispatch");                        // restore PCNTL mask/guard state before a handler exception longjmps
     emitter.instruction("ldr x0, [x19, #8]");                                   // x0 = activation record that should survive this catch
@@ -91,7 +98,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "xzr", "_concat_off", 0);
     emitter.instruction(&format!("add x0, x19, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // x0 = jmp_buf base stored inside the active handler record
     emitter.instruction("mov x1, #1");                                          // longjmp return value = 1 to indicate exceptional control flow
-    emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
+    emitter.resume_exception_handler();                                         // transfer control directly back to the saved catch resume point
 
     // -- uncaught exceptions terminate the process with a fatal message --
     emitter.label("__rt_throw_current_uncaught");
@@ -116,6 +123,14 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r13");                                            // preserve the scratch callee-saved register used for the fatal path
     emit_instr_throw_hook(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r12", "_exc_handler_top", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_debuginfo_guard", 0);
+    emitter.instruction("test r10, r10");                                       // is a run-time __debugInfo() call in flight?
+    emitter.instruction("jz __rt_throw_current_no_debuginfo");                  // no: ordinary dispatch
+    emitter.instruction("mov r11, r12");                                        // copy the handler top
+    emitter.instruction("or r11, 1");                                           // tag it so an empty stack still compares non-zero
+    emitter.instruction("cmp r10, r11");                                        // did the exception escape the __debugInfo() call without a newer handler?
+    emitter.instruction("je __rt_report_debuginfo_exception");                  // PHP: `Warning: Uncaught ...` then `__debuginfo() must return an array`
+    emitter.label("__rt_throw_current_no_debuginfo");
     emitter.instruction("test r12, r12");                                       // is there an active exception handler to receive this throw?
     emitter.instruction("jz __rt_throw_current_uncaught");                      // fall back to a fatal uncaught-exception path when no handler exists
     emitter.instruction("call __rt_pcntl_abort_dispatch");                      // restore PCNTL mask/guard state before a handler exception longjmps
@@ -124,7 +139,7 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
     emitter.instruction(&format!("lea rdi, [r12 + {}]", TRY_HANDLER_JMP_BUF_OFFSET)); // rdi = jmp_buf base stored inside the active handler record
     emitter.instruction("mov esi, 1");                                          // longjmp return value = 1 to indicate exceptional control flow
-    emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
+    emitter.resume_exception_handler();                                         // transfer control directly back to the saved catch resume point
 
     emitter.label("__rt_throw_current_uncaught");
     emitter.instruction("jmp __rt_dispatch_uncaught_exception");                // invoke a registered PHP handler or report the uncaught Throwable
@@ -135,8 +150,8 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
 fn emit_uncaught_exception_handler_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_dispatch_uncaught_exception");
     abi::emit_load_symbol_to_reg(emitter, "x19", "_php_exception_handler_callable", 0);
-    emitter.instruction("cbnz x19, 1f");                                       // dispatch through the PHP handler when one is active
-    emitter.instruction("b __rt_report_uncaught_exception");                   // preserve the ordinary fatal report through a linkable branch
+    emitter.instruction("cbnz x19, 1f");                                        // dispatch through the PHP handler when one is active
+    emitter.instruction("b __rt_report_uncaught_exception");                    // preserve the ordinary fatal report through a linkable branch
     emitter.label("1");
     abi::emit_store_zero_to_symbol(emitter, "_php_exception_handler_callable", 0);
     abi::emit_load_symbol_to_reg(emitter, "x22", "_php_exception_handler_value", 0);
@@ -165,8 +180,8 @@ fn emit_uncaught_exception_handler_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_any");                                  // the boxed container now owns the array
 
     emitter.instruction(&format!("ldr x9, [x19, #{CALLABLE_DESC_INVOKER_OFFSET}]")); // load the handler's uniform invoker entry
-    emitter.instruction("cbnz x9, 2f");                                        // continue only with a valid uniform invoker
-    emitter.instruction("b __rt_report_uncaught_exception");                   // fall back to the safe fatal report through a linkable branch
+    emitter.instruction("cbnz x9, 2f");                                         // continue only with a valid uniform invoker
+    emitter.instruction("b __rt_report_uncaught_exception");                    // fall back to the safe fatal report through a linkable branch
     emitter.label("2");
     emitter.instruction("mov x0, x19");                                         // invoker argument 0 is the callable descriptor
     emitter.instruction("mov x1, x20");                                         // invoker argument 1 is the boxed argument array

@@ -16,17 +16,31 @@
 //! - Only **pure** (`Effects::PURE`) instructions with a `NonHeap`/`Persistent`
 //!   result are eligible. Purity means the result depends only on immutable inputs
 //!   and the op neither reads mutable state nor faults, so evaluating it once in the
-//!   preheader — unconditionally, even if the original site was only reached on some
-//!   iterations — is safe (no speculation hazard). The ownership bound keeps the move
-//!   refcount-neutral. Nullary constant/address materializations are moved only when
-//!   they are operands of a computation being hoisted; standalone materializations
-//!   remain in place. A `load_local` proven immutable by the dedicated analysis is also
+//!   preheader (unconditionally, even if the original site was only reached on some
+//!   iterations) is safe (no speculation hazard). The ownership bound keeps the move
+//!   refcount-neutral. Standalone nullary constant/address materializations move
+//!   only from blocks dominating every latch, keeping conditional constants near
+//!   varying uses instead of inflating loop live sets and zero-trip entry work.
+//!   Nullary dependencies can still accompany an invariant computation.
+//!   A `load_local` proven immutable by the dedicated analysis is also
 //!   eligible: moving that load is what makes local-backed invariant arithmetic
-//!   available in the preheader.
+//!   available in the preheader. A pure immutable string load may return a
+//!   borrowed value; moving it is refcount-neutral.
+//! - A small whitelist of mbstring calls (`mb_strlen`, `mb_strwidth`,
+//!   `mb_check_encoding`, `mb_substr_count`, `mb_ord`, and the four position
+//!   searches) may move despite their conservative runtime effects when their
+//!   explicit `UTF-8` arguments make them total and deterministic. The call must
+//!   return a raw int or bool, use a literal zero offset where the function would
+//!   otherwise validate a range, and sit in a loop with no other global writer
+//!   except the concatenation scratch reset. `mb_ord` additionally needs a
+//!   non-empty literal subject. These checks live in `pure_mbstring_calls`.
+//! - Checked integer operations feeding raw slots can fatal on overflow despite
+//!   PURE metadata. They stay in the loop unless range analysis removes the check;
+//!   explicit cast sinks have a total conversion path and may be hoisted.
 //! - Hoisting needs a preheader to move into. The loop analysis detects an
-//!   existing one (PHP loops lower to slot-based CFGs whose init block is a
-//!   natural preheader); loops without a detected preheader are skipped rather
-//!   than have one synthesized here.
+//!   existing one (the loop init block is commonly a natural preheader even
+//!   after scalar promotion adds block arguments); loops without a detected
+//!   preheader are skipped rather than have one synthesized here.
 //! - Loops are processed innermost-first and moves are applied immediately, so a
 //!   value hoisted to an inner preheader (which lies in the enclosing loop) can
 //!   be hoisted again to the outer preheader in the same run when it is invariant
@@ -40,7 +54,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::{BlockId, DataPool, Function, InstId, Op, Ownership, ValueDef, ValueId};
+use crate::ir::{BlockId, DataPool, Function, Immediate, InstId, Op, Ownership, ValueDef, ValueId};
 
 use super::cfg::has_exception_handlers;
 use super::dominance::{compute_dominance, DominanceInfo};
@@ -56,10 +70,9 @@ impl IrPass for Licm {
         "licm"
     }
 
-    /// Hoists loop-invariant pure computations into loop preheaders, returning
-    /// true on any change. The literal pool is unused: the pass only relocates
-    /// existing instructions.
-    fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
+    /// Hoists loop-invariant pure computations and whitelisted mbstring reads into
+    /// loop preheaders, returning true on any change.
+    fn run(&self, function: &mut Function, data: &mut DataPool) -> bool {
         if has_exception_handlers(function) {
             return false;
         }
@@ -84,7 +97,9 @@ impl IrPass for Licm {
             let Some(preheader) = loop_ref.preheader else {
                 continue;
             };
-            let hoistable = find_hoistable(function, loop_ref, preheader, &dominance, &def_block);
+            let hoistable = find_hoistable(
+                function, data, loop_ref, preheader, &dominance, &def_block,
+            );
             for inst_id in hoistable {
                 move_instruction(function, inst_id, preheader, &mut def_block);
                 changed = true;
@@ -99,21 +114,29 @@ impl IrPass for Licm {
 }
 
 /// Builds the loop-invariant instruction set for one loop and returns it ordered
-/// by instruction id (a valid topological order, since SSA definitions precede
-/// their uses). The set is grown to a fixed point: an instruction joins once all
+/// by dependency discovery, independent of instruction table IDs after CFG rewrites.
+/// The set is grown to a fixed point: an instruction joins once all
 /// its operands are available at the preheader, which can be enabled by another
 /// instruction joining first.
 fn find_hoistable(
     function: &Function,
+    data: &DataPool,
     loop_ref: &NaturalLoop,
     preheader: BlockId,
     dominance: &DominanceInfo,
     def_block: &HashMap<ValueId, BlockId>,
 ) -> Vec<InstId> {
+    // Dominance walks the idom chain. Classify blocks once, not for each
+    // materialization and each invariant-discovery sweep.
+    let blocks: Vec<_> = loop_ref.blocks.iter().map(|&block| {
+        let dominates_latches = loop_ref.latches.iter().all(|&latch| dominance.dominates(block, latch));
+        (block, dominates_latches)
+    }).collect();
     let mut hoistable: HashSet<InstId> = HashSet::new();
+    let mut ordered = Vec::new();
     loop {
         let mut added = false;
-        for &block in &loop_ref.blocks {
+        for &(block, dominates_latches) in &blocks {
             let Some(basic_block) = function.block(block) else {
                 continue;
             };
@@ -124,7 +147,23 @@ fn find_hoistable(
                 let Some(inst) = function.instruction(inst_id) else {
                     continue;
                 };
-                if !is_hoist_eligible(inst) {
+                let hoistable_mbstring_call = super::pure_mbstring_calls::is_hoistable_mbstring_call(
+                    function, data, inst_id, inst, loop_ref,
+                );
+                let hoistable_string_producer =
+                    super::pure_mbstring_calls::is_hoistable_string_producer_call(
+                        function, data, inst_id, inst, loop_ref,
+                    );
+                let hoistable_release =
+                    is_hoistable_string_release(function, inst_id, inst, &hoistable);
+                if !hoistable_mbstring_call
+                    && !hoistable_string_producer
+                    && !hoistable_release
+                    && !is_hoist_eligible(inst)
+                {
+                    continue;
+                }
+                if is_rematerializable_dependency(inst) && !dominates_latches {
                     continue;
                 }
                 let mut materializations = HashSet::new();
@@ -141,8 +180,12 @@ fn find_hoistable(
                     )
                 });
                 if ready {
-                    hoistable.extend(materializations);
-                    hoistable.insert(inst_id);
+                    let mut dependencies: Vec<_> = materializations.into_iter().collect();
+                    dependencies.sort_unstable();
+                    for dependency in dependencies {
+                        if hoistable.insert(dependency) { ordered.push(dependency); }
+                    }
+                    if hoistable.insert(inst_id) { ordered.push(inst_id); }
                     added = true;
                 }
             }
@@ -151,9 +194,57 @@ fn find_hoistable(
             break;
         }
     }
-    let mut ordered: Vec<InstId> = hoistable.into_iter().collect();
-    ordered.sort_unstable_by_key(|id| id.as_raw());
     ordered
+}
+
+/// Returns true when a `Release` retires a hoisted owned string after a hoisted
+/// length observer. The value must have no other uses, so moving the producer,
+/// observer, and release as one preheader group cannot leave a live string behind.
+fn is_hoistable_string_release(
+    function: &Function,
+    release_id: InstId,
+    release: &crate::ir::Instruction,
+    hoistable: &HashSet<InstId>,
+) -> bool {
+    if release.op != Op::Release || release.operands.len() != 1 {
+        return false;
+    }
+    let Some(call_id) = defining_inst(function, release.operands[0]) else {
+        return false;
+    };
+    if !hoistable.contains(&call_id) {
+        return false;
+    }
+    let Some(call) = function.instruction(call_id) else {
+        return false;
+    };
+    let Some(target) = super::pure_mbstring_calls::instruction_target(call) else {
+        return false;
+    };
+    if call.result_ownership != Ownership::Owned
+        || !super::pure_mbstring_calls::is_string_producer_target(target)
+    {
+        return false;
+    }
+    let Some(result) = call.result else {
+        return false;
+    };
+    let mut length_observers = 0;
+    for (raw, other) in function.instructions.iter().enumerate() {
+        if !other.operands.contains(&result) {
+            continue;
+        }
+        let id = InstId::from_raw(raw as u32);
+        if id == release_id {
+            continue;
+        }
+        if other.op == Op::StrLen && hoistable.contains(&id) {
+            length_observers += 1;
+            continue;
+        }
+        return false;
+    }
+    length_observers == 1
 }
 
 /// Returns true when `op` is available at the preheader: it is produced by an
@@ -191,7 +282,7 @@ fn operand_available(
     }
 }
 
-/// Returns true for a pure nullary value that may move only with a dependent computation.
+/// Returns true for a pure nullary materialization that may accompany a hoisted computation.
 fn is_rematerializable_dependency(inst: &crate::ir::Instruction) -> bool {
     inst.result.is_some()
         && inst.op != Op::Nop
@@ -202,29 +293,47 @@ fn is_rematerializable_dependency(inst: &crate::ir::Instruction) -> bool {
 }
 
 /// Returns true when an instruction may be hoisted: it produces a value, is not a
-/// `nop`, is pure (no side effects, no fault, no mutable-state read), is either a
-/// computation or a proven-immutable `load_local`, and its result carries no
+/// `nop`, is pure (no side effects, no fault, no mutable-state read), and carries no
 /// owned-heap cleanup.
+///
+/// A pure `load_local` may return a borrowed string. Moving that load is
+/// refcount-neutral: it neither retains nor releases the slot's storage, and the
+/// immutable-local proof guarantees the slot still owns it across the loop.
 fn is_hoist_eligible(inst: &crate::ir::Instruction) -> bool {
+    // Raw integer-slot overflow is fatal even though checked scalar operations
+    // carry PURE metadata. Only explicit cast sinks have a total overflow path.
+    if matches!(inst.op, Op::ICheckedAddToInt | Op::ICheckedSubToInt | Op::ICheckedMulToInt)
+        && inst.immediate != Some(Immediate::Bool(true))
+    {
+        return false;
+    }
+    let ownership_ok = matches!(inst.result_ownership, Ownership::NonHeap | Ownership::Persistent)
+        || (inst.op == Op::LoadLocal
+            && matches!(inst.result_ownership, Ownership::MaybeOwned | Ownership::Borrowed));
     inst.result.is_some()
         && inst.op != Op::Nop
         && inst.effects.is_pure()
-        && (!inst.operands.is_empty() || inst.op == Op::LoadLocal)
-        && matches!(inst.result_ownership, Ownership::NonHeap | Ownership::Persistent)
+        && ownership_ok
 }
 
 /// Moves an instruction out of its current block and appends it to the preheader
 /// (before the preheader's terminator), updating the current-definition-block map.
-fn move_instruction(
+pub(super) fn move_instruction(
     function: &mut Function,
     inst_id: InstId,
     preheader: BlockId,
     def_block: &mut HashMap<ValueId, BlockId>,
 ) {
-    let Some(result) = function.instruction(inst_id).and_then(|inst| inst.result) else {
-        return;
+    let result = function.instruction(inst_id).and_then(|inst| inst.result);
+    let current = match result {
+        Some(result) => def_block.get(&result).copied(),
+        None => function
+            .blocks
+            .iter()
+            .find(|block| block.instructions.contains(&inst_id))
+            .map(|block| block.id),
     };
-    let Some(&current) = def_block.get(&result) else {
+    let Some(current) = current else {
         return;
     };
     if current == preheader {
@@ -241,12 +350,14 @@ fn move_instruction(
     if let Some(inst) = function.instruction_mut(inst_id) {
         inst.origin = Some(crate::ir::PassOrigin::Licm);
     }
-    def_block.insert(result, preheader);
+    if let Some(result) = result {
+        def_block.insert(result, preheader);
+    }
 }
 
 /// Builds the map from each value to the block that currently defines it (block
 /// parameters and instruction results).
-fn build_def_block(function: &Function) -> HashMap<ValueId, BlockId> {
+pub(super) fn build_def_block(function: &Function) -> HashMap<ValueId, BlockId> {
     let mut map: HashMap<ValueId, BlockId> = HashMap::new();
     for block in &function.blocks {
         for &param in &block.params {
@@ -271,7 +382,7 @@ fn defining_inst(function: &Function, value: ValueId) -> Option<InstId> {
 
 /// Recomputes every instruction-result value's definition site from the current
 /// block layout, so the value table matches after instructions have moved.
-fn recompute_instruction_defs(function: &mut Function) {
+pub(super) fn recompute_instruction_defs(function: &mut Function) {
     let mut updates: Vec<(ValueId, ValueDef)> = Vec::new();
     for block in &function.blocks {
         for (index, &inst_id) in block.instructions.iter().enumerate() {

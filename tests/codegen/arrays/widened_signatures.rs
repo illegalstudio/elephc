@@ -367,6 +367,32 @@ fn test_array_slice_preserve_keys_false() {
     assert_eq!(out, "20,30,40");
 }
 
+/// Verifies the key-preserving slice owns the refcounted elements it copies.
+///
+/// `__rt_array_slice_to_hash` retains every heap-backed element it copies, but on x86_64 it
+/// handed `__rt_incref` the pointer in the wrong register, so nothing was retained: replacing
+/// the first result released arrays the source still held, which crashed or printed garbage.
+#[test]
+fn test_array_slice_preserve_keys_retains_refcounted_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$i = 1;
+$nested = [[$i], [2], [3]];
+$a = array_slice($nested, 1, null, true);
+$a = array_slice($nested, 1, null, true);
+echo json_encode($a), "|", json_encode($nested), "|";
+$mixed = ["p" . $i, 2, [3]];
+$b = array_slice($mixed, 1, 2, true);
+$b = array_slice($mixed, 1, 2, true);
+echo json_encode($b), "|", json_encode($mixed), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"1\":[2],\"2\":[3]}|[[1],[2],[3]]|{\"1\":2,\"2\":[3]}|[\"p1\",2,[3]]\n"
+    );
+}
+
 /// Verifies the key-preserving slice stays key-addressable and reports the window's count.
 #[test]
 fn test_array_slice_preserve_keys_lookup() {
@@ -385,10 +411,10 @@ fn test_array_slice_preserve_keys_mixed_and_float_payloads() {
     assert_eq!(out, "1=>two 2=>3.5 |2=>3.5 3=>4.5 ");
 }
 
-/// Verifies dynamic `array_slice` dispatch still produces a concrete indexed array.
+/// Verifies dynamic `array_slice` dispatch without a flag renumbers like the direct call.
 ///
-/// Both callable spellings drop the shape-changing `$preserve_keys` flag from the wrapper ABI,
-/// so they must keep working exactly like the three-argument direct call.
+/// The callable wrapper keeps `$preserve_keys` as a runtime parameter; when the caller omits it,
+/// both callable spellings must keep working exactly like the three-argument direct call.
 #[test]
 fn test_array_slice_dynamic_callable_dispatch() {
     let out = compile_and_run(

@@ -95,11 +95,21 @@ try { mb_detect_encoding("", "bad"); } catch (ValueError $error) { echo $error->
 /// Retains a cached array across cycle collection and balances repeated independent mutations.
 #[test]
 fn test_mbstring_detect_encoding_catalog_ownership() {
-    for eval in [false, true] {
-        let mut residual = Vec::new();
-        for count in [1, 20] {
-            let calls = "$copy = mb_list_encodings(); mb_detect_encoding($text, $copy); $copy[$index] = $replacement;\n".repeat(count);
-            let body = format!(r#"
+    check_detection_catalog_ownership(false);
+}
+
+/// Eval catalog ownership retains both repetition counts with an independent timeout.
+#[test]
+fn test_mbstring_detect_encoding_catalog_ownership_eval() {
+    check_detection_catalog_ownership(true);
+}
+
+/// Compares catalog allocation residuals for one execution mode without compiling the other.
+fn check_detection_catalog_ownership(eval: bool) {
+    let mut residual = Vec::new();
+    for count in [1, 20] {
+        let calls = "$copy = mb_list_encodings(); mb_detect_encoding($text, $copy); $copy[$index] = $replacement;\n".repeat(count);
+        let body = format!(r#"
 $text = "caff" . chr(168) . chr(168) . " Stra?e";
 $index = 0;
 $replacement = "ASCII";
@@ -107,14 +117,13 @@ $replacement = "ASCII";
 unset($copy);
 echo mb_detect_encoding($text, mb_list_encodings());
 "#);
-            let output = compile_and_run_with_gc_stats(&program(&body, eval));
-            assert!(output.success, "{}", output.stderr);
-            assert_eq!(output.stdout, "GB18030");
-            let (allocated, freed) = parse_gc_stats(&output.stderr);
-            residual.push(allocated as i64 - freed as i64);
-        }
-        assert_eq!(residual[0], residual[1], "catalog result ownership grew; eval={eval}");
+        let output = compile_and_run_with_gc_stats(&program(&body, eval));
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, "GB18030");
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        residual.push(allocated as i64 - freed as i64);
     }
+    assert_eq!(residual[0], residual[1], "catalog result ownership grew; eval={eval}");
 }
 
 /// Reads later candidate references after a callback through the detection parameter at index one.

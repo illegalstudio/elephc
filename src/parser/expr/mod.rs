@@ -9,10 +9,14 @@
 //! - Assignment-value parsing intentionally permits assignment expressions where PHP syntax allows them.
 
 mod assignment_targets;
+mod append_writes;
+mod arrow_preludes;
 mod calls;
 mod prefix;
 mod prefix_complex;
 mod pratt;
+
+pub(crate) use assignment_targets::{compound_assignment_expression, plain_assignment_expression};
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};

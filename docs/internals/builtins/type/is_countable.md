@@ -1,0 +1,54 @@
+---
+title: "is_countable() - internals"
+description: "Compiler internals for is_countable(): lowering path, type checks, and runtime helpers."
+---
+
+## `is_countable()` - internals
+
+## Where it lives
+
+- **Signature**: [`src/builtins/types/is_countable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_countable.rs)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
+
+
+### Lowering notes
+
+- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
+
+## Semantic descriptor
+
+- **Target strategy**: `eir_primitive`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `non_heap`
+- **Effects**: `shared`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `dynamic`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
+
+## Signature summary
+
+```php
+function is_countable(mixed $value): bool
+```
+
+## What the type checker enforces
+
+- **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_countable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_countable.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Dispatch hooks**: `direct`, `values`
+
+## Cross-references
+
+- [User reference for `is_countable()`](../../../php/builtins/type/is_countable.md)

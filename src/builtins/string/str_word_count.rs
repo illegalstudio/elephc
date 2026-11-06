@@ -42,7 +42,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         return Ok(PhpType::Int);
     };
     let ExprKind::IntLiteral(format) = format.kind else {
-        return Err(CompileError::new(
+        return Err(CompileError::aot_literal_required(
             cx.span,
             "str_word_count() format argument must be an integer literal in AOT mode",
         ));

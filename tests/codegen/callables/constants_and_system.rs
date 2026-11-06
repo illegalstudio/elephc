@@ -178,6 +178,38 @@ fn test_const_concat() {
     assert_eq!(out, "hello world");
 }
 
+/// Verifies a file-scope `const` declarator list declares every name, in order (issue #1142).
+///
+/// `const A = 1, B = A + 1, C = "c";` was a parse error (`Expected ';'`). Each declarator is its
+/// own constant, so `B` reads the `A` declared before it and a function body sees the list like
+/// any other top-level constant. Reference PHP 8.5 prints `12c|20`.
+#[test]
+fn test_file_scope_const_declarator_list_declares_every_name() {
+    let out = compile_and_run(
+        "<?php\nconst A = 1, B = A + 1, C = \"c\";\nfunction scaled() { return B * 10; }\necho A, B, C, \"|\", scaled();\n",
+    );
+    assert_eq!(out, "12c|20");
+}
+
+/// Verifies a namespaced declarator list declares NAMESPACED constants, in both namespace
+/// spellings.
+///
+/// The first program names its constants after a predefined one (`E_ALL`): an unqualified read
+/// inside the namespace must find `App\E_ALL`, which only happens when name resolution collected
+/// every constant of the list as a namespace symbol, while `\E_ALL` still reads PHP's own.
+/// Reference PHP 8.5 prints `7|8|8|30719` and `1-10`.
+#[test]
+fn test_namespaced_const_declarator_lists_declare_namespaced_constants() {
+    let out = compile_and_run(
+        "<?php\nnamespace App;\nconst E_ALL = 7, E_NEXT = E_ALL + 1;\necho E_ALL, \"|\", E_NEXT, \"|\", \\App\\E_NEXT, \"|\", \\E_ALL;\n",
+    );
+    assert_eq!(out, "7|8|8|30719");
+    let out = compile_and_run(
+        "<?php\nnamespace Shop {\n    const MIN = 1, MAX = MIN + 9;\n}\nnamespace {\n    echo \\Shop\\MIN, \"-\", \\Shop\\MAX;\n}\n",
+    );
+    assert_eq!(out, "1-10");
+}
+
 // --- List unpacking ---
 
 // Tests `[$a, $b, $c] = [10, 20, 30]; echo $a . " " . $b . " " . $c;` outputs "10 20 30".

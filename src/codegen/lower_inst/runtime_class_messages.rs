@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `count()`'s non-`Countable` refusal in `builtins::count_empty`.
+//! - The boxed array-edge argument guard in `builtins::arrays::mixed_array_argument_guard`.
 //! - The weak-mode typed-property guard in `objects::mixed_property_type_guard`.
 //!
 //! Key details:
@@ -54,7 +55,7 @@ pub(in crate::codegen::lower_inst) fn emit_runtime_class_name_to_string_result(
 
 /// The target-specific half of the lookup, written against the emitter alone so both
 /// architectures can be asserted without building a whole function context.
-fn emit_class_name_lookup(
+pub(super) fn emit_class_name_lookup(
     emitter: &mut Emitter,
     object_reg: &str,
     fallback: &(String, usize),
@@ -99,10 +100,7 @@ fn emit_class_name_table_read(
             emitter.instruction("lea r10, [rip + _class_name_entries]");        // materialize the class-name metadata table base
             emitter.instruction("shl r9, 4");                                   // scale the class id to the 16-byte class-name row
             emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9]", name_ptr_reg)); // borrow the class-name pointer
-            emitter.instruction(&format!(
-                "mov {}, QWORD PTR [r10 + r9 + 8]",
-                name_len_reg
-            ));                                                                 // borrow the class-name byte length
+            emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", name_len_reg)); // borrow the class-name byte length
         }
     }
     abi::emit_jump(emitter, done_label);
@@ -172,7 +170,7 @@ pub(in crate::codegen::lower_inst) fn emit_static_diagnostic(
 }
 
 /// The register pair `__rt_concat` reads its right operand from.
-fn concat_right_operand_regs(emitter: &Emitter) -> (&'static str, &'static str) {
+pub(super) fn concat_right_operand_regs(emitter: &Emitter) -> (&'static str, &'static str) {
     match emitter.target.arch {
         Arch::AArch64 => ("x3", "x4"),
         Arch::X86_64 => ("rdi", "rsi"),

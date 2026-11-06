@@ -1,8 +1,6 @@
 ---
 title: "mysqli_ping()"
 description: "Checks the connection and reconnects when that is enabled."
-sidebar:
-  order: 145
 ---
 
 ## mysqli_ping()
@@ -20,8 +18,9 @@ Checks the connection and reconnects when that is enabled.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

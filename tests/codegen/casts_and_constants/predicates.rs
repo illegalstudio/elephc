@@ -9,6 +9,71 @@
 
 use super::*;
 
+/// Object truthiness through direct, opaque string and first-class callable surfaces.
+const BOOLVAL_OBJECT_CALLABLE_SOURCE: &str = r#"<?php
+class TruthyCallableObject {}
+function chooseBoolFunction(string $name): string { return $name; }
+$callback = chooseBoolFunction("BoOlVaL");
+$object = new TruthyCallableObject();
+echo boolval($object) ? "1" : "0";
+echo $callback($object) ? "1" : "0";
+echo call_user_func($callback, $object) ? "1" : "0";
+echo call_user_func_array($callback, [$object]) ? "1" : "0";
+$firstClass = boolval(...);
+echo $firstClass($object) ? "1" : "0";
+unset($firstClass, $object, $callback);
+"#;
+
+/// Callable boolval wrappers accept objects with the same truthiness as direct calls.
+#[test]
+fn test_boolval_object_callable_surfaces() {
+    assert_eq!(compile_and_run(BOOLVAL_OBJECT_CALLABLE_SOURCE), "11111");
+}
+
+/// Object callable conversion leaves no source or descriptor ownership behind.
+#[test]
+fn test_boolval_object_callable_ownership() {
+    let out = compile_and_run_with_heap_debug(BOOLVAL_OBJECT_CALLABLE_SOURCE);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "11111", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Capturing closures remain truthy through runtime-selected boolval calls without leaks.
+#[test]
+fn test_boolval_closure_callable_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function chooseClosureBoolFunction(string $name): string { return $name; }
+$callback = chooseClosureBoolFunction("BoOlVaL");
+$captured = str_repeat("closure", 4);
+$closure = function () use ($captured): string { return $captured; };
+echo $callback($closure) ? "1" : "0";
+echo call_user_func($callback, $closure) ? "1" : "0";
+echo call_user_func_array($callback, [$closure]) ? "1" : "0";
+unset($closure, $captured, $callback);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "111", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Runtime-selected boolval retains false and true scalar/container conversions.
+#[test]
+fn test_boolval_runtime_callable_truthiness_controls() {
+    let out = compile_and_run(
+        r#"<?php
+function chooseBoolControl(string $name): string { return $name; }
+$callback = chooseBoolControl("boolval");
+foreach ([0, 1, "", "0", "ok", null, false, true, [], [1]] as $value) {
+    echo $callback($value) ? "1" : "0";
+}
+"#,
+    );
+    assert_eq!(out, "0100100101");
+}
+
 /// Compiles `boolval(42)` and verifies it outputs "1" (non-zero truthy value).
 #[test]
 fn test_boolval_true() {
@@ -352,4 +417,24 @@ var_dump($two ** ($argc + 2), $two ** ($argc + 61), $two ** ($argc + 62), $ten *
     assert_eq!(&lines[..8], &lines[8..], "folded and runtime `**` disagree");
     assert_eq!(lines[0], "int(8)");
     assert_eq!(lines[2], "float(9.223372036854776E+18)");
+}
+
+/// A nullable scalar parameter is stored as the inline tagged pair; the `is_*` predicates and
+/// `is_numeric` must answer from its runtime tag instead of treating the pair as a Mixed cell
+/// (#1999). PHP: null is null and nothing else; 0 and -3 are int/scalar/numeric.
+#[test]
+fn test_tagged_nullable_scalar_type_predicates_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+function n(?int $x): string {
+    return (is_null($x) ? "n" : "-") . (is_int($x) ? "i" : "-") . (is_scalar($x) ? "S" : "-")
+        . (is_numeric($x) ? "N" : "-") . (is_callable($x) ? "c" : "-")
+        . (is_resource($x) ? "r" : "-") . (is_object($x) ? "o" : "-")
+        . (is_array($x) ? "a" : "-") . (is_string($x) ? "s" : "-")
+        . (is_bool($x) ? "b" : "-") . (is_float($x) ? "f" : "-");
+}
+echo n(null), "|", n(0), "|", n(-3), "\n";
+"#,
+    );
+    assert_eq!(out, "n----------|-iSN-------|-iSN-------\n");
 }

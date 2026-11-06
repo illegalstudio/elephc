@@ -110,7 +110,11 @@ impl Downloader for HttpsDownloader {
 /// Returns whether another request can safely recover from a transient transport or server error.
 fn retryable_download_error(error: &UreqError) -> bool {
     match error {
-        UreqError::StatusCode(status) => *status == 408 || *status == 429 || (500..=599).contains(status),
+        // Public artifact CDNs can answer 403 for a transient edge or rate-limit denial.
+        // Catalog URLs are fixed and trusted, so the existing bounded retry remains safe.
+        UreqError::StatusCode(status) => {
+            *status == 403 || *status == 408 || *status == 429 || (500..=599).contains(status)
+        }
         UreqError::Protocol(_)
         | UreqError::Io(_)
         | UreqError::Timeout(_)
@@ -236,6 +240,7 @@ mod tests {
     /// Verifies retries are limited to transient transport and HTTP failures.
     #[test]
     fn retryability_rejects_permanent_http_errors() {
+        assert!(retryable_download_error(&UreqError::StatusCode(403)));
         assert!(retryable_download_error(&UreqError::StatusCode(408)));
         assert!(retryable_download_error(&UreqError::StatusCode(429)));
         assert!(retryable_download_error(&UreqError::StatusCode(500)));

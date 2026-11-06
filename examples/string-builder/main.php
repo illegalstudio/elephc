@@ -1,5 +1,6 @@
 <?php
-function repeat($str, $times) {
+// Repeated local append keeps the input string as a borrowed source.
+function repeat(string $str, int $times): string {
     $result = "";
     $i = 0;
     while ($i < $times) {

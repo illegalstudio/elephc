@@ -28,12 +28,13 @@ pub struct FunctionVariantLabel {
 
 /// Parses the string payload used by EIR function-variant metadata.
 pub fn parse_variant_label(label: &str) -> Option<FunctionVariantLabel> {
-    let (name, variants) = label.split_once(':')?;
+    let fields = split_metadata(label, ':')?;
+    let [name, variants] = fields.as_slice() else { return None };
     if name.is_empty() || variants.is_empty() {
         return None;
     }
-    let variants = variants
-        .split(',')
+    let variants = split_metadata(variants, ',')?
+        .into_iter()
         .filter(|variant| !variant.is_empty())
         .map(str::to_string)
         .collect::<Vec<_>>();
@@ -44,6 +45,27 @@ pub fn parse_variant_label(label: &str) -> Option<FunctionVariantLabel> {
         name: name.to_string(),
         variants,
     })
+}
+
+/// Splits dispatch fields outside generic arguments, which can contain commas and colons.
+fn split_metadata(value: &str, delimiter: char) -> Option<Vec<&str>> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, ch) in value.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.checked_sub(1)?,
+            _ if ch == delimiter && depth == 0 => {
+                parts.push(&value[start..index]);
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 { return None; }
+    parts.push(&value[start..]);
+    Some(parts)
 }
 
 /// Normalizes a PHP function name for case-insensitive comparisons (matches resolver/codegen).
@@ -120,4 +142,19 @@ pub fn resolve_variant_callee_name(module: &Module, group: u32, variant: u32) ->
 pub fn resolve_variant_callee<'a>(module: &'a Module, group: u32, variant: u32) -> Option<&'a crate::ir::Function> {
     resolve_variant_callee_name(module, group, variant)
         .and_then(|name| function_by_php_name(module, &name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Generic argument separators and callable return colons belong to the function name.
+    #[test]
+    fn generic_variant_metadata_keeps_nested_type_delimiters() {
+        let args = "array<string, int>, callable(int, string): string";
+        let name = format!("choose<{}>", args);
+        let variants = vec![format!("left<{}>", args), format!("right<{}>", args)];
+        let label = format!("{}:{}", name, variants.join(","));
+        assert_eq!(parse_variant_label(&label), Some(FunctionVariantLabel { name, variants }));
+    }
 }

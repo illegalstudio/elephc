@@ -1,8 +1,6 @@
 ---
 title: "die()"
 description: "Terminates execution with an optional status."
-sidebar:
-  order: 748
 ---
 
 ## die()
@@ -20,8 +18,9 @@ Terminates execution with an optional status.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a dedicated compiler language-construct path.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/die.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/die.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

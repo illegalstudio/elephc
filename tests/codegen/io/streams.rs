@@ -1152,6 +1152,47 @@ fclose($m);
     assert_eq!(out, "4");
 }
 
+/// Verifies a `convert.iconv` write filter keeps its own `//TRANSLIT` choice while the iconv
+/// bridge converts the same charset pair between its writes.
+///
+/// Apple's iconv (Citrus-based since macOS 14) keeps the transliterate and discard options on
+/// the converter it shares between every descriptor of one charset pair, and each
+/// `iconv_open()` or option change rewrites them. The write filter keeps its descriptor open
+/// across writes, so a bridge `iconv()` call in between used to decide how the filter's next
+/// write converted: a plain filter started transliterating after an `ASCII//TRANSLIT` call, and
+/// a `//TRANSLIT` filter stopped after a plain one. The first half checks that a plain filter
+/// never approximates `é` (PHP rejects the write, elephc writes the prefix, and neither
+/// transliterates); the second that a `//TRANSLIT` filter approximates it on both writes.
+///
+/// glibc keeps the options on each descriptor, so this passes on Linux before and after the
+/// fix and can only fail on macOS. The bridge call comes first because it installs the UTF-8
+/// `LC_CTYPE` that glibc's `//TRANSLIT` needs. The approximation is the platform iconv's: `e`
+/// under glibc, `'e` under Apple's.
+#[test]
+fn test_stream_filter_iconv_write_keeps_its_options_across_bridge_conversions() {
+    let out = compile_and_run(
+        r#"<?php
+$plain = fopen("php://temp", "r+");
+stream_filter_append($plain, "convert.iconv.UTF-8/ASCII", STREAM_FILTER_WRITE);
+echo iconv("UTF-8", "ASCII//TRANSLIT", "caf\u{e9}"), "|";
+@fwrite($plain, "d\u{e9}j\u{e0}");
+rewind($plain);
+echo str_contains(stream_get_contents($plain), "e") ? "transliterated" : "plain", "|";
+fclose($plain);
+$translit = fopen("php://temp", "r+");
+stream_filter_append($translit, "convert.iconv.UTF-8/ASCII//TRANSLIT", STREAM_FILTER_WRITE);
+fwrite($translit, "caf\u{e9}|");
+echo iconv("UTF-8", "ASCII", "plain"), "|";
+fwrite($translit, "caf\u{e9}");
+rewind($translit);
+echo stream_get_contents($translit);
+fclose($translit);
+"#,
+    );
+    let cafe = if cfg!(any(target_os = "macos", target_os = "ios")) { "caf'e" } else { "cafe" };
+    assert_eq!(out, format!("{cafe}|plain|plain|{cafe}|{cafe}"));
+}
+
 /// Verifies compiled PHP output for stream filter base64 encode pads correctly.
 #[test]
 fn test_stream_filter_base64_encode_pads_correctly() {
@@ -5152,11 +5193,9 @@ fclose($m);
 /// Verifies compiled PHP output for stream context create returns resource.
 #[test]
 fn test_stream_context_create_returns_resource() {
-    // v1 stub: stream_context_create/get_default return a resource so PHP
-    // code that constructs or consults stream contexts compiles. The options
-    // are not yet persisted on the resource.
-    let out = compile_and_run(
-        r#"<?php
+    // The first ternary introduces a join before the default context is tested.
+    // Integer storage must preserve the context's logical resource type there.
+    let source = r#"<?php
 $c = stream_context_create(["http" => ["method" => "POST"]]);
 $d = stream_context_get_default();
 echo is_resource($c) ? "ok" : "FAIL";
@@ -5164,9 +5203,10 @@ echo "|";
 echo is_resource($d) ? "ok" : "FAIL";
 echo "|";
 echo stream_context_set_option($c, "http", "method", "GET") ? "set-ok" : "FAIL";
-"#,
-    );
-    assert_eq!(out, "ok|ok|set-ok");
+"#;
+    for out in [compile_and_run(source), without_ir_opt(|| compile_and_run(source))] {
+        assert_eq!(out, "ok|ok|set-ok");
+    }
 }
 
 /// Verifies compiled PHP output for stream context get options returns array.
@@ -6292,6 +6332,68 @@ echo "|", filemtime("typew://file");
     assert_eq!(out, "D-F-|4321");
 }
 
+/// Verifies every integer stat getter reaches a registered wrapper's `url_stat()` (issue #724).
+///
+/// `fileatime()`, `filectime()`, `fileperms()`, `fileowner()`, `filegroup()` and `fileinode()`
+/// lowered straight to native `stat()` on the literal `scheme://...` path, so the wrapper was
+/// never asked and each call answered `false`, while `filesize()` and `filemtime()` already
+/// dispatched. PHP asks `url_stat()` once per call with the no-cache flag (4), answers `false`
+/// when the wrapper reports the path absent, and still stats real files natively. Every call
+/// uses its own path so the output does not depend on PHP's last-path stat cache.
+#[test]
+fn test_scalar_stat_getters_dispatch_to_wrapper_url_stat() {
+    let out = compile_and_run(
+        r#"<?php
+class GetterW {
+    public $context;
+    public function url_stat(string $path, int $flags) {
+        echo substr($path, 10), "=", $flags, " ";
+        if (strpos($path, "gone") !== false) { return false; }
+        return ['dev'=>1,'ino'=>4242,'mode'=>33188,'nlink'=>1,'uid'=>501,'gid'=>20,
+                'rdev'=>0,'size'=>7,'atime'=>1111,'mtime'=>2222,'ctime'=>3333,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+stream_wrapper_register("getterw", "GetterW");
+echo fileatime("getterw://a"), "|";
+echo filectime("getterw://c"), "|";
+echo fileperms("getterw://p"), "|";
+echo fileowner("getterw://o"), "|";
+echo filegroup("getterw://g"), "|";
+echo fileinode("getterw://i"), "|";
+echo filemtime("getterw://m"), "|";
+echo filesize("getterw://s"), "\n";
+$gone = [
+    @fileatime("getterw://gone-a"),
+    @filectime("getterw://gone-c"),
+    @fileperms("getterw://gone-p"),
+    @fileowner("getterw://gone-o"),
+    @filegroup("getterw://gone-g"),
+    @fileinode("getterw://gone-i"),
+];
+echo "\n";
+foreach ($gone as $g) { echo $g === false ? "F" : "?"; }
+echo "\n";
+file_put_contents("getter_real.txt", "x");
+$st = stat("getter_real.txt");
+echo fileperms("getter_real.txt") === $st["mode"] ? "p" : "!";
+echo fileinode("getter_real.txt") === $st["ino"] ? "i" : "!";
+echo fileowner("getter_real.txt") === $st["uid"] ? "o" : "!";
+echo filegroup("getter_real.txt") === $st["gid"] ? "g" : "!";
+echo fileatime("getter_real.txt") === $st["atime"] ? "a" : "!";
+echo filectime("getter_real.txt") === $st["ctime"] ? "c" : "!";
+unlink("getter_real.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "a=4 1111|c=4 3333|p=4 33188|o=4 501|g=4 20|i=4 4242|m=4 2222|s=4 7\n\
+         gone-a=4 gone-c=4 gone-p=4 gone-o=4 gone-g=4 gone-i=4 \n\
+         FFFFFF\n\
+         piogac"
+    );
+}
+
 /// Verifies compiled PHP output for filesize and is file dispatch to wrapper url stat.
 #[test]
 fn test_filesize_and_is_file_dispatch_to_wrapper_url_stat() {
@@ -7216,6 +7318,32 @@ echo $n . ":" . count($r);
     assert_eq!(out, "1:1");
 }
 
+/// Verifies `stream_select()` accepts `null` for a descriptor set, PHP's usual idiom for the
+/// write and except sets, and a `?array` set that holds `null` or an array at run time. A null
+/// set reached the runtime as the null sentinel, which was read as an array header: exit 139.
+#[test]
+fn test_stream_select_accepts_null_descriptor_sets() {
+    let out = compile_and_run(
+        r#"<?php
+$p = stream_socket_pair(1, 1, 0);
+fwrite($p[0], "x");
+$r = [$p[1]]; $w = null; $e = null;
+$n1 = stream_select($r, $w, $e, 0, 0);
+$r2 = null; $w2 = [$p[0]]; $e2 = null;
+$n2 = stream_select($r2, $w2, $e2, 0, 0);
+$w3 = $argc > 5 ? [$p[0]] : null;
+$r3 = [$p[1]]; $e3 = null;
+$n3 = stream_select($r3, $w3, $e3, 0, 0);
+$w4 = $argc > 0 ? [$p[0]] : null;
+$r4 = [$p[1]]; $e4 = null;
+$n4 = stream_select($r4, $w4, $e4, 0, 0);
+echo $n1, ":", count($r), ":", $w === null ? "null" : "set", " ", $n2, ":", count($w2), ":", $r2 === null ? "null" : "set",
+    " ", $n3, ":", count($r3), ":", $w3 === null ? "null" : "set", " ", $n4, ":", count($r4), ":", count($w4), "\n";
+"#,
+    );
+    assert_eq!(out, "1:1:null 1:1:null 1:1:null 2:1:1\n");
+}
+
 /// Verifies compiled PHP output for stream bucket append then pop in order.
 #[test]
 fn test_stream_bucket_append_then_pop_in_order() {
@@ -8096,5 +8224,60 @@ mkdir("pathop://dir", 0700, true);
     assert_eq!(
         out,
         "M(pathop://dir,511,8)M(pathop://dir,448,8)M(pathop://dir,448,9)"
+    );
+}
+
+/// Issue #1739: repeated `stream_context_set_option()` calls on the same wrapper must not
+/// leak the nested options hash. The helper retains the sub-hash so `__rt_hash_set`'s
+/// overwrite-decref cannot free the entry the context still references; on linux-x86_64
+/// that retain must pass the pointer in `__rt_incref`'s input register (`rax`), not in the
+/// SysV argument register `rdi`.
+///
+/// The process-lifetime context stays live at exit, so the heap is never literally empty;
+/// the regression instead compares the live set after one call against five calls — it must
+/// not grow. The x86_64 register setup itself is pinned by
+/// `stream_context_set_option_4::tests::test_stream_context_set_option_4_x86_64_retains_use_incref_input_register`.
+#[test]
+fn test_stream_context_set_option_nested_hash_retain_does_not_leak() {
+    /// Builds a fixture that writes the same option `iterations` times and echoes the last
+    /// value, so a successful read-back proves the nested hash survived the overwrites.
+    fn fixture(iterations: usize) -> String {
+        format!(
+            "<?php\n\
+             $ctx = stream_context_create([\"http\" => [\"method\" => \"GET\"]]);\n\
+             for ($i = 0; $i < {iterations}; $i++) {{\n\
+                 stream_context_set_option($ctx, \"http\", \"header\", \"X-Test: \" . $i);\n\
+             }}\n\
+             $opts = stream_context_get_options($ctx);\n\
+             echo ($opts[\"http\"][\"header\"] ?? \"missing\"), \"\\n\";\n"
+        )
+    }
+
+    /// Reads the `(live_blocks, live_bytes)` pair from a heap-debug leak summary.
+    fn live_set(stderr: &str) -> (u64, u64) {
+        let summary = stderr
+            .lines()
+            .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+            .unwrap_or_else(|| panic!("no heap-debug leak summary in:\n{stderr}"));
+        let field = |name: &str| -> u64 {
+            summary
+                .split_whitespace()
+                .find_map(|token| token.strip_prefix(name))
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_else(|| panic!("missing {name} in: {summary}"))
+        };
+        (field("live_blocks="), field("live_bytes="))
+    }
+
+    let single = compile_and_run_with_heap_debug(&fixture(1));
+    let repeated = compile_and_run_with_heap_debug(&fixture(5));
+    assert!(single.success, "{}", single.stderr);
+    assert!(repeated.success, "{}", repeated.stderr);
+    assert_eq!(single.stdout, "X-Test: 0\n");
+    assert_eq!(repeated.stdout, "X-Test: 4\n");
+    assert_eq!(
+        live_set(&single.stderr),
+        live_set(&repeated.stderr),
+        "repeated stream_context_set_option() calls grew the live heap"
     );
 }

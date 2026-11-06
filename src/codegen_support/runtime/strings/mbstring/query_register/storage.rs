@@ -42,7 +42,7 @@ fn root(emitter: &mut Emitter) {
         emitter.instruction("call __rt_mbstring_reference_child_slot");         // return the writable child slot
         emitter.instruction("add rsp, 8");                                      // restore the callback entry stack
         emitter.instruction("test rax, rax");                                   // reject ordinary boxed values without mutation
-        emitter.instruction("jz __rt_mbstring_query_root_invalid");
+        emitter.instruction("jz __rt_mbstring_query_root_invalid");             // reject malformed references before query initialization
         emitter.instruction("mov rax, QWORD PTR [rax]");                        // borrow the current boxed PHP value
         emitter.instruction("sub rsp, 24");                                     // align native calls and preserve the cursor output
         emitter.instruction("mov QWORD PTR [rsp], rdx");                        // retain the executor's cursor output across helper calls

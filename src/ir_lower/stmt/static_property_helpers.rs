@@ -27,6 +27,9 @@ pub(super) fn load_static_property_as(
     php_type: PhpType,
     span: Span,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, span) {
+        return error;
+    }
     let name = format!("{}::{}", receiver_name(receiver), property);
     let data = ctx.intern_string(&name);
     ctx.emit_value(
@@ -47,6 +50,9 @@ pub(super) fn store_static_property(
     value: crate::ir::ValueId,
     span: Span,
 ) {
+    if crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, span).is_some() {
+        return;
+    }
     let name = format!("{}::{}", receiver_name(receiver), property);
     let data = ctx.intern_string(&name);
     ctx.emit_void(
@@ -60,7 +66,16 @@ pub(super) fn store_static_property(
 
 /// Formats a static receiver for metadata immediates.
 pub(super) fn receiver_name(receiver: &StaticReceiver) -> String {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => name.as_str().to_string(),
         StaticReceiver::Self_ => "self".to_string(),
         StaticReceiver::Static => "static".to_string(),
@@ -69,7 +84,7 @@ pub(super) fn receiver_name(receiver: &StaticReceiver) -> String {
 }
 
 /// Resolves the declared PHP type of a static property for statement lowering.
-pub(super) fn static_property_type(
+pub(crate) fn static_property_type(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     property: &str,
@@ -88,7 +103,16 @@ pub(super) fn static_receiver_class_name(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
 ) -> Option<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone(),
         StaticReceiver::Parent => {
@@ -106,10 +130,16 @@ pub(super) fn object_property_type(
     object: crate::ir::ValueId,
     property: &str,
 ) -> Option<PhpType> {
-    let object_ty = ctx.builder.value_php_type(object);
-    let PhpType::Object(class_name) = object_ty else {
-        return None;
-    };
+    object_type_property_type(ctx, &ctx.builder.value_php_type(object), property)
+}
+
+/// Resolves the declared PHP type of a property on a receiver of the given static type.
+pub(super) fn object_type_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    property: &str,
+) -> Option<PhpType> {
+    let (class_name, _) = crate::ir_lower::expr::singular_object_class(object_ty)?;
     ctx.classes
         .get(class_name.trim_start_matches('\\'))?
         .visible_property(property)

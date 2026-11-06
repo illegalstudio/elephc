@@ -8,6 +8,8 @@
 //! Key details:
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr};
@@ -35,6 +37,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
             if self.interfaces.contains_key(class_name) {
                 return self
@@ -222,6 +225,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
         let Some((class_name, nullable)) =
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
         else {
@@ -294,14 +298,83 @@ impl Checker {
                     &format!("Undefined method: {}::{}", interface_name, method),
                 )
             })?;
-        self.check_user_declared_call(
-            &sig,
-            args,
-            expr.span,
-            env,
-            &format!("Method {}::{}", interface_name, method),
-            interface_name,
-        )?;
+        // The interface governs shared calls; enum-specific extensions are allowed when
+        // any concrete signature accepts them. The selected runtime branch owns binding.
+        let mut implementations: Vec<_> = self.classes.iter()
+            .filter(|(_, info)| info.interfaces.iter().any(|name| name == interface_name))
+            .map(|(name, info)| (name.clone(), info.methods.get(&method_key).cloned()))
+            .collect();
+        implementations.sort_by(|left, right| left.0.cmp(&right.0));
+        if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+            && crate::types::call_args::expand_planned_positional_spreads(args).is_none()
+        {
+            // Runtime enum unpacks can retain named tail keys, even when the
+            // interface also has ordinary class implementations. Recheck enum
+            // bodies against boxed collectors without changing source element hints.
+            for (name, _) in &implementations {
+                if self.enums.contains_key(name) {
+                    self.promote_descriptor_variadic_container_for_method(name, &method_key, false);
+                }
+            }
+        }
+        if !implementations.is_empty()
+            && implementations.iter().all(|(name, _)| self.enums.contains_key(name))
+        {
+            let shared = self.check_user_declared_call(
+                &sig, args, expr.span, env,
+                &format!("Method {interface_name}::{method}"), interface_name,
+            );
+            if let Err(shared_error) = shared {
+                let mut accepted = false;
+                let mut missing = false;
+                let mut runtime_shortage = false;
+                let mut satisfiable_error = None;
+                for (name, implementation) in implementations {
+                    let Some(implementation) = implementation else {
+                        // Schema validation already recorded the missing contract. Continue
+                        // collecting diagnostics without turning that error into a panic.
+                        missing = true;
+                        continue;
+                    };
+                    // Final enum dispatch diagnoses omissions in the selected branch,
+                    // including named slots and defaults before a later required parameter.
+                    let binding = crate::types::call_args::required_argument_binding_signature(&implementation);
+                    let (shortage, satisfiable) = match crate::types::call_args::plan_call_args(
+                        &binding, args, expr.span, false, true,
+                    ) {
+                        Ok(plan) => {
+                            let shortage = plan.statically_missing_positionals(&implementation).is_some();
+                            (shortage, !shortage)
+                        }
+                        Err(crate::types::call_args::CallArgPlanError::MissingRequired { .. }) => (true, false),
+                        Err(_) => (false, false),
+                    };
+                    runtime_shortage |= shortage;
+                    match self.check_user_declared_call(
+                        &implementation, args, expr.span, env,
+                        &format!("Method {name}::{method}"), &name,
+                    ) {
+                        Ok(_) => { accepted = true; break; }
+                        Err(error) if satisfiable && satisfiable_error.is_none() => {
+                            satisfiable_error = Some(error);
+                        }
+                        Err(_) => {}
+                    }
+                }
+                if !accepted && !missing {
+                    if let Some(error) = satisfiable_error { return Err(error); }
+                    if !runtime_shortage { return Err(shared_error); }
+                    // Deferring binding must not skip validation of the caller's source
+                    // expressions when a missing slot made every signature check stop early.
+                    for arg in args { self.infer_type(arg, env)?; }
+                }
+            }
+        } else {
+            self.check_user_declared_call(
+                &sig, args, expr.span, env,
+                &format!("Method {}::{}", interface_name, method), interface_name,
+            )?;
+        }
         let late_static_return = self.instance_method_late_static_return(interface_name, &method_key);
         match late_static_return {
             Some(return_type) => self.resolve_late_static_return_type_hint(
@@ -380,6 +453,14 @@ impl Checker {
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
         let method_key = php_symbol_key(method);
+        if self.enums.contains_key(class_name)
+            && args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+            && crate::types::call_args::expand_planned_positional_spreads(args).is_none()
+        {
+            // Concrete and nullsafe enum calls share the selected runtime binder.
+            // Its boxed collector must also be the layout the method body reads.
+            self.promote_descriptor_variadic_container_for_method(class_name, &method_key, false);
+        }
         self.reject_unsupported_reflection_attribute_filter_flags(
             Some(class_name),
             &method_key,
@@ -517,6 +598,12 @@ impl Checker {
                 }
                 magic_return_ty = Some(effective_sig.return_type.clone());
                 magic_original_args = Some(args.to_vec());
+            } else if let Some(return_ty) =
+                self.infer_generic_method_call(class_name, method, args, expr, env)?
+            {
+                // A generic method has no signature, so every lookup above has already missed.
+                // It is resolved here, one round before its instantiation exists.
+                return Ok(return_ty);
             } else {
                 return Err(CompileError::new(
                     expr.span,
@@ -569,7 +656,7 @@ impl Checker {
                             &impl_class_name,
                             &method_key,
                         )
-                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && Self::sharpens_to_call_site_array(sig, i)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
                         // Sharpen a declared generic `array` parameter to the call-site array
@@ -628,7 +715,7 @@ impl Checker {
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            widen_method_variadic_element(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
                 return Ok(late_static_return_type
@@ -637,6 +724,48 @@ impl Checker {
             }
         }
         Ok(PhpType::Int)
+    }
+
+    /// Returns `ancestor` (when it is a registered class) and every registered class below it.
+    ///
+    /// The same set the parent-chain walk `class is ancestor or one of its subclasses` selects
+    /// over the whole table, found from the children index instead: a cycle in the parent
+    /// links is cut by the visited set, exactly where the walk's hop limit cut it.
+    pub(crate) fn class_and_descendants(&mut self, ancestor: &str) -> Vec<String> {
+        let class_count = self.classes.len();
+        if self
+            .class_children_index
+            .as_ref()
+            .is_none_or(|(built_for, _)| *built_for != class_count)
+        {
+            let mut children: HashMap<String, Vec<String>> = HashMap::new();
+            for (name, info) in &self.classes {
+                if let Some(parent) = &info.parent {
+                    children.entry(parent.clone()).or_default().push(name.clone());
+                }
+            }
+            self.class_children_index = Some((class_count, children));
+        }
+        let children = &self
+            .class_children_index
+            .as_ref()
+            .expect("children index built above")
+            .1;
+        let mut found = Vec::new();
+        let mut visited: HashSet<&str> = HashSet::new();
+        let mut stack: Vec<&str> = vec![ancestor];
+        while let Some(name) = stack.pop() {
+            if !visited.insert(name) {
+                continue;
+            }
+            if self.classes.contains_key(name) {
+                found.push(name.to_string());
+            }
+            if let Some(direct) = children.get(name) {
+                stack.extend(direct.iter().map(String::as_str));
+            }
+        }
+        found
     }
 
     /// Returns preserved late-static return syntax for an instance method.
@@ -865,9 +994,28 @@ impl Checker {
         env: &TypeEnv,
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
+        // `Box::of(5)` on a generic class, BEFORE the receiver is resolved against the class
+        // table: a template is stripped from the program, so the table has no entry for it and
+        // the ordinary path reports it as an undefined class.
+        if let StaticReceiver::Named(class_name) = receiver {
+            if let Some(inferred) =
+                self.infer_generic_static_call(class_name.as_str(), method, args, expr, env)?
+            {
+                return Ok(inferred);
+            }
+        }
         let parent_call = matches!(receiver, StaticReceiver::Parent);
         let self_call = matches!(receiver, StaticReceiver::Self_);
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         let resolved_class_name = match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
             StaticReceiver::Self_ => self.current_class.as_ref().cloned().ok_or_else(|| {
                 CompileError::new(expr.span, "Cannot use self:: outside class method scope")
@@ -901,6 +1049,13 @@ impl Checker {
             return Ok(PhpType::Callable);
         }
         if let Some(enum_info) = self.enums.get(class_name).cloned() {
+            let has_signature = self.classes.get(class_name)
+                .is_some_and(|info| info.static_methods.contains_key(&php_symbol_key(method)));
+            if !has_signature {
+                if let Some(return_ty) = self.infer_generic_method_call(class_name, method, args, expr, env)? {
+                    return Ok(return_ty);
+                }
+            }
             return self
                 .check_enum_static_call(&enum_info, class_name, method, args, env, expr.span);
         }
@@ -991,6 +1146,15 @@ impl Checker {
                     env,
                     allow_by_ref_spread,
                 )?;
+                if class_name == "WeakReference" && method_key == "create" {
+                    if let Some(argument) = normalized_args.first() {
+                        let actual = self.infer_type(argument, env)?;
+                        if !matches!(actual, PhpType::Object(_) | PhpType::Callable | PhpType::Mixed) {
+                            return Err(CompileError::new(argument.span,
+                                "WeakReference::create() argument must be an object"));
+                        }
+                    }
+                }
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
@@ -1135,6 +1299,16 @@ impl Checker {
                 magic_return_ty = Some(effective_sig.return_type.clone());
                 magic_original_args = Some(args.to_vec());
             } else {
+                // A generic method called STATICALLY (`C::id(42)`). The generic-class attempt at
+                // the top of this function answers for `Box<int>::of()`, where the CLASS carries
+                // the type parameters; a method's own parameters are a different template, and it
+                // is not in the class table either — so like the instance form, every ordinary
+                // lookup has already missed by the time this runs.
+                if let Some(inferred) =
+                    self.infer_generic_method_call(class_name, method, args, expr, env)?
+                {
+                    return Ok(inferred);
+                }
                 return Err(CompileError::new(
                     expr.span,
                     &format!("Undefined method: {}::{}", class_name, method),
@@ -1203,7 +1377,7 @@ impl Checker {
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
                         && static_declared_flags.get(i).copied().unwrap_or(false)
-                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && Self::sharpens_to_call_site_array(sig, i)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
                         // Sharpen a declared generic `array` parameter to the call-site array
@@ -1259,7 +1433,7 @@ impl Checker {
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            widen_method_variadic_element(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
                 return Ok(late_static_static_return_type
@@ -1286,7 +1460,7 @@ impl Checker {
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
                         && instance_declared_flags.get(i).copied().unwrap_or(false)
-                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && Self::sharpens_to_call_site_array(sig, i)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
                         // Sharpen a declared generic `array` parameter to the call-site array
@@ -1324,7 +1498,7 @@ impl Checker {
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            widen_method_variadic_element(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
                 return Ok(late_static_instance_return_type
@@ -1447,6 +1621,24 @@ fn method_variadic_tail_needs_iterable(
                     .any(|(param_name, _)| param_name == name)
         )
     })
+}
+
+/// Joins a call site's argument type into a method's untyped variadic element type.
+///
+/// MONOTONE: the stored element only ever widens. `wider_type_syntactic` follows PHP's coercion
+/// order, in which `Str` absorbs every other arm, so on its own it turned a `mixed` element back
+/// into `string` whenever a string argument arrived. `mixed` is exactly what a first-class
+/// callable or callable array promotes the collector to (the descriptor container,
+/// `crate::types::signatures::descriptor_variadic_container`), so the method pass promoted it,
+/// the top-level re-check of a string call site narrowed it again, and the outer fixpoint
+/// alternated between the two until its pass budget ran out (Laravel's
+/// `Illuminate\Http\Request::is(...$patterns)`: thousands of rounds). A `mixed` element holds any
+/// argument already, so it stays.
+fn widen_method_variadic_element(existing: &PhpType, incoming: &PhpType) -> PhpType {
+    if *existing == PhpType::Mixed {
+        return PhpType::Mixed;
+    }
+    wider_type_syntactic(existing, incoming)
 }
 
 /// Returns whether a method signature stores its variadic slot by reference.

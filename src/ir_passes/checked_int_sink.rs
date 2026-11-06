@@ -15,17 +15,22 @@
 //!   a loop counter: `store_local` only counts as an integer sink once the slot is `I64`, and
 //!   the slot is only `mixed` because its sole writer is the boxed producer. Neither end can
 //!   move first, so the slot and its producers are proven together and committed at once.
+//! - A third phase (`bound_comparisons`) unboxes `X - c` when its only observers are strict
+//!   `L < (X - c)` comparisons with an integer `L` and `1 <= c <= 1024`, where the cast-mode
+//!   overflow result PHP_INT_MIN compares exactly like PHP's promoted -2^63.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
-    DataPool, Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind,
+    BlockId, DataPool, Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind,
     LocalSlotId, Op, Ownership, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 
 use super::driver::IrPass;
 use super::rewrite::{neutralize_to_nop, replace_all_uses, resolve_chains};
+
+mod bound_comparisons;
 
 /// Rewrites checked arithmetic whose complete use graph observes only a PHP integer.
 pub struct CheckedIntSink;
@@ -36,15 +41,19 @@ impl IrPass for CheckedIntSink {
         "checked_int_sink"
     }
 
-    /// Skips functions with neither an integer sink nor a narrowable boxed integer local.
+    /// Skips functions with no integer sink, narrowable boxed integer local or bound comparison.
     fn is_applicable(&self, function: &Function) -> bool {
-        has_potential_integer_sink(function) || has_narrowable_integer_slot(function)
+        has_potential_integer_sink(function)
+            || has_narrowable_integer_slot(function)
+            || bound_comparisons::has_candidate(function)
     }
 
-    /// Specializes every independently proven producer, then every provable boxed int local.
+    /// Specializes every independently proven producer, then every provable boxed int local,
+    /// then every `L < (X - c)` bound comparison (`bound_comparisons`).
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
         let mut changed = sink_proven_producers(function);
         changed |= sink_integer_slots(function);
+        changed |= bound_comparisons::sink(function);
         changed
     }
 }
@@ -97,6 +106,19 @@ struct SinkRewrite {
     replacements: HashMap<ValueId, ValueId>,
     neutralize: HashSet<InstId>,
     saw_integer_sink: bool,
+    /// Whether an explicit `(int)` CAST is among the accepted observations.
+    ///
+    /// It decides what an overflow may do. php converts a promoted float back to an int at a
+    /// cast, so wrapping there is php's own answer; at a plain store into an int slot php keeps
+    /// the float, and wrapping would print a value php never produces.
+    saw_cast_sink: bool,
+    /// Whether a declared-return `int` boundary is the only observation.
+    ///
+    /// The boundary throws PHP's catchable `TypeError` when the promoted value is a float, so
+    /// the specialized producer's overflow path carries that same TypeError message data.
+    saw_boundary_sink: bool,
+    /// Boundary message data installed on the specialized producer's overflow path.
+    throw_message: Option<Immediate>,
 }
 
 /// Builds the instruction-use adjacency list for every SSA value.
@@ -125,11 +147,15 @@ fn terminator_used_values(function: &Function) -> HashSet<ValueId> {
 fn has_potential_integer_sink(function: &Function) -> bool {
     function.instructions.iter().any(|user| {
         let accepts_integer = match user.op {
-            Op::Cast => matches!(user.immediate, Some(Immediate::CastTarget(IrType::I64))),
+            Op::Cast => user.result_php_type == PhpType::Int
+                && matches!(user.immediate, Some(Immediate::CastTarget(IrType::I64))),
             Op::StoreLocal | Op::StoreStaticLocal | Op::InitStaticLocal => {
                 local_store_is_integer(function, user.immediate.as_ref())
             }
             Op::StoreRefCell => matches!(user.result_php_type.codegen_repr(), PhpType::Int),
+            Op::ReturnBoundaryMixedToInt => {
+                matches!(user.immediate, Some(Immediate::Data(_)))
+            }
             _ => false,
         };
         accepts_integer
@@ -189,13 +215,45 @@ fn analyze_sink_graph(
             return false;
         };
         match user.op {
-            Op::Cast if matches!(user.immediate, Some(Immediate::CastTarget(IrType::I64))) => {
+            Op::Cast if user.result_php_type == PhpType::Int
+                && matches!(user.immediate, Some(Immediate::CastTarget(IrType::I64))) =>
+            {
+                if rewrite.saw_boundary_sink {
+                    return false;
+                }
                 let Some(cast_result) = user.result else {
                     return false;
                 };
                 rewrite.replacements.insert(cast_result, value);
                 rewrite.neutralize.insert(*use_id);
                 rewrite.saw_integer_sink = true;
+                rewrite.saw_cast_sink = true;
+            }
+            Op::ReturnBoundaryMixedToInt
+                if matches!(user.immediate, Some(Immediate::Data(_))) =>
+            {
+                if rewrite.saw_cast_sink || rewrite.saw_boundary_sink {
+                    return false;
+                }
+                let Some(boundary_result) = user.result else {
+                    return false;
+                };
+                if let Some(boundary_uses) = uses.get(&boundary_result) {
+                    for use_id in boundary_uses {
+                        let Some(use_inst) = function.instruction(*use_id) else {
+                            return false;
+                        };
+                        if use_inst.op != Op::Release {
+                            return false;
+                        }
+                        rewrite.neutralize.insert(*use_id);
+                    }
+                }
+                rewrite.replacements.insert(boundary_result, value);
+                rewrite.neutralize.insert(*use_id);
+                rewrite.saw_integer_sink = true;
+                rewrite.saw_boundary_sink = true;
+                rewrite.throw_message = user.immediate.clone();
             }
             Op::StoreLocal | Op::StoreStaticLocal | Op::InitStaticLocal
                 if local_store_is_integer(function, user.immediate.as_ref()) =>
@@ -277,8 +335,13 @@ fn apply_specialization(
         }
     }
 
-    specialize_checked_producer(function, candidate)
-        .expect("checked-int sink candidate retained its opcode until commit");
+    specialize_checked_producer(
+        function,
+        candidate,
+        rewrite.saw_cast_sink,
+        rewrite.throw_message,
+    )
+    .expect("checked-int sink candidate retained its opcode until commit");
     if let Some(value) = function.value_mut(result) {
         value.ir_type = IrType::I64;
         value.php_type = PhpType::Int;
@@ -290,15 +353,28 @@ fn apply_specialization(
 ///
 /// Returns `None` when the instruction is no longer a boxed checked operation, which lets
 /// callers distinguish an already-specialized producer from a commit-time inconsistency.
-fn specialize_checked_producer(function: &mut Function, candidate: InstId) -> Option<()> {
+fn specialize_checked_producer(
+    function: &mut Function,
+    candidate: InstId,
+    cast_justified: bool,
+    throw_message: Option<Immediate>,
+) -> Option<()> {
     let replacement_op = checked_to_int_op(function.instruction(candidate)?.op)?;
     let result = function.instruction(candidate)?.result;
     if let Some(inst) = function.instruction_mut(candidate) {
         inst.op = replacement_op;
+        // What the overflow path is allowed to do. See `SinkRewrite::saw_cast_sink` and
+        // `SinkRewrite::saw_boundary_sink`.
+        inst.immediate = throw_message.or(Some(Immediate::Bool(cast_justified)));
         inst.result_type = IrType::I64;
         inst.result_php_type = PhpType::Int;
         inst.result_ownership = Ownership::NonHeap;
         inst.effects = replacement_op.default_effects();
+        if matches!(inst.immediate, Some(Immediate::Data(_))) {
+            // The boundary overflow throws PHP's catchable TypeError, so the specialized
+            // producer must keep throw/fatal effects visible to every optimizer.
+            inst.effects |= crate::ir::Effects::MAY_THROW | crate::ir::Effects::MAY_FATAL;
+        }
     }
     if let Some(value) = result.and_then(|result| function.value_mut(result)) {
         value.ir_type = IrType::I64;
@@ -391,10 +467,14 @@ fn plan_slot_specialization(
             Op::LoadLocal => {
                 accept_slot_reader(function, inst, inst_id, uses, terminator_uses, &mut plan)?
             }
-            Op::ReleaseLocalSlot if retirement_precedes_overwrite(function, inst_id, slot) => {
+            Op::ReleaseLocalSlot
+                if retirement_precedes_overwrite(function, inst_id, slot)
+                    || retirement_ends_binding(function, inst_id, slot) =>
+            {
                 // The complete slot proof excludes objects, aliases, and boxed readers.
-                // Its numeric owner cannot run a destructor, and the next store makes
-                // clearing the old slot unobservable once storage becomes a raw int.
+                // Its numeric owner cannot run a destructor, and the next store (or, at the end
+                // of the binding, the absence of any later access) makes clearing the old slot
+                // unobservable once storage becomes a raw int.
                 plan.neutralize.insert(inst_id);
             }
             // `unset`, ref-cell promotion, by-ref exposure, and every future slot-naming
@@ -421,8 +501,67 @@ fn retirement_precedes_overwrite(function: &Function, retirement: InstId, slot: 
     })
 }
 
+/// Requires a retirement that ENDS the slot's binding: no path from it reaches another access.
+///
+/// A straight-line re-bind or `unset` kill releases the old binding's occupant and then maps the
+/// name to a fresh slot, so nothing reads the old slot again. Exceptional edges are absent from
+/// the explicit CFG, so a function with handlers keeps the retirement and the boxed slot.
+fn retirement_ends_binding(function: &Function, retirement: InstId, slot: LocalSlotId) -> bool {
+    if super::cfg::has_exception_handlers(function) {
+        return false;
+    }
+    let Some((block, position)) = function.blocks.iter().find_map(|block| {
+        block
+            .instructions
+            .iter()
+            .position(|id| *id == retirement)
+            .map(|position| (block, position))
+    }) else {
+        return false;
+    };
+    if instructions_name_slot(function, &block.instructions[position + 1..], slot) {
+        return false;
+    }
+    // The retiring block itself is only revisited through a cycle, and then every one of its
+    // instructions (the retirement included) counts as a later access.
+    let mut pending: Vec<BlockId> = block
+        .terminator
+        .as_ref()
+        .map(super::cfg::successors)
+        .unwrap_or_default();
+    let mut seen = HashSet::new();
+    while let Some(next) = pending.pop() {
+        if !seen.insert(next) {
+            continue;
+        }
+        let Some(reached) = function.block(next) else {
+            return false;
+        };
+        if instructions_name_slot(function, &reached.instructions, slot) {
+            return false;
+        }
+        pending.extend(
+            reached
+                .terminator
+                .as_ref()
+                .map(super::cfg::successors)
+                .unwrap_or_default(),
+        );
+    }
+    true
+}
+
+/// Returns true when any of `instructions` names `slot`.
+fn instructions_name_slot(function: &Function, instructions: &[InstId], slot: LocalSlotId) -> bool {
+    instructions.iter().any(|id| {
+        function
+            .instruction(*id)
+            .is_some_and(|inst| instruction_mentions_slot(inst, slot))
+    })
+}
+
 /// Returns true when an instruction names `slot` through either slot-carrying immediate.
-fn instruction_mentions_slot(inst: &Instruction, slot: LocalSlotId) -> bool {
+pub(super) fn instruction_mentions_slot(inst: &Instruction, slot: LocalSlotId) -> bool {
     match inst.immediate.as_ref() {
         Some(Immediate::LocalSlot(named)) => *named == slot,
         Some(Immediate::LocalSlotPair { first, second }) => *first == slot || *second == slot,
@@ -560,7 +699,9 @@ fn apply_slot_specialization(function: &mut Function, slot: LocalSlotId, plan: S
         }
     }
     for producer in &plan.producers {
-        specialize_checked_producer(function, *producer);
+        // The slot path accepts loads and stores, never a cast, so an overflow here is never
+        // php's own conversion — see `SinkRewrite::saw_cast_sink`.
+        specialize_checked_producer(function, *producer, false, None);
     }
     if let Some(local) = function.locals.get_mut(slot.as_raw() as usize) {
         local.ir_type = IrType::I64;

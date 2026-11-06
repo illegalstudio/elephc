@@ -1,8 +1,6 @@
 ---
 title: "imagefilledpolygon() - internals"
 description: "Compiler internals for imagefilledpolygon(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 503
 ---
 
 ## `imagefilledpolygon()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2875](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2875) (`imagefilledpolygon`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagefilledpolygon`)
 - **Function symbol**: `imagefilledpolygon()`
 
 

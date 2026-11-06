@@ -12,6 +12,174 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// Generic child redeclarations discard the parent's default and leave typed storage unset.
+#[test]
+fn execute_program_asymmetric_main_merge_generic_default_override() {
+    let program = parse_fragment(br#"class Base<T> { public int $value = 7; }
+class Child<T> extends Base<T> { public int $value; }
+$child = new Child<int>(); echo isset($child->value) ? 'bad' : 'unset'; return true;"#)
+        .expect("parse generic property redeclarations");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("allocate a generic child with an uninitialized override");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(values.output, "unset");
+}
+
+/// Legal readonly storage keeps the abstract setter from writing its backing slot.
+#[test]
+fn execute_program_asymmetric_eighth_review_abstract_setter_storage() {
+    let program = parse_fragment(br#"abstract class Base { abstract public int $x { set; } }
+abstract class Child extends Base {
+    public public(set) readonly int $x;
+    public function probe(): bool { $this->x = 4; return isset($this->x); }
+}
+class Grandchild extends Child {}
+return (new Grandchild())->probe();"#).expect("parse retained abstract setter");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("a concrete descendant can retain the abstract setter");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
+/// An abstract child can store readonly values without implementing its inherited abstract setter.
+#[test]
+fn execute_program_asymmetric_latest_review_abstract_set_readonly() {
+    let program = parse_fragment(br#"abstract class Base { abstract public int $x { get; set; } }
+abstract class Child extends Base { public public(set) readonly int $x; }
+return true;"#).expect("parse abstract readonly storage");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("abstract parent does not impose concrete readonly invariance");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Rechecking an abstract ancestor's legal readonly storage does not reject a later subclass.
+#[test]
+fn execute_program_asymmetric_latest_review_abstract_readonly_storage_descendant() {
+    let program = parse_fragment(br#"abstract class Base { abstract public int $x { get; set; } }
+abstract class Child extends Base { public public(set) readonly int $x; }
+class Grandchild extends Child {}
+return true;"#).expect("parse abstract readonly ancestor");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("legal ancestor storage retains its declaration context");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Broadening the abstract exception never permits a concrete missing setter or narrowed access.
+#[test]
+fn execute_program_asymmetric_latest_review_abstract_set_readonly_refusals() {
+    for child in [
+        "class Child extends Base { public public(set) readonly int $x; }",
+        "class Child extends Base { public readonly int $x; }",
+        "abstract class Child extends Base { public readonly int $x; }",
+    ] {
+        let source = format!("abstract class Base {{ abstract public int $x {{ get; set; }} }} {child}");
+        let program = parse_fragment(source.as_bytes()).expect("parse readonly refusals");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        assert_eq!(execute_program(&program, &mut scope, &mut values)
+            .expect_err("setter visibility and concrete implementation remain required"), EvalStatus::RuntimeFatal);
+    }
+}
+
+/// Eval rejects adding readonly to an inherited mutable property regardless of setter access.
+#[test]
+fn execute_program_asymmetric_fifth_review_rejects_added_readonly() {
+    for (parent, child) in [
+        ("public int $x;", "public readonly int $x;"),
+        ("protected int $x;", "protected readonly int $x;"),
+        ("public int $x;", "public public(set) readonly int $x;"),
+        ("public int $x;", "public function __construct(public public(set) readonly int $x) {}"),
+        ("public int $x { get => 1; }", "public readonly int $x;"),
+        ("public int $x { get => 1; set {} }", "public public(set) readonly int $x;"),
+    ] {
+        let source = format!("class Base {{ {parent} }} class Child extends Base {{ {child} }} return 1;");
+        let program = parse_fragment(source.as_bytes()).expect("parse readonly override");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        assert_eq!(execute_program(&program, &mut scope, &mut values)
+            .expect_err("readonly cannot change across an override"), EvalStatus::RuntimeFatal);
+    }
+}
+
+/// Only abstract getter-only contracts permit a readonly backed implementation.
+#[test]
+fn execute_program_asymmetric_ci_abstract_getter_readonly() {
+    let program = parse_fragment(br#"abstract class Base { abstract public int $value { get; } }
+class Child extends Base {
+    public readonly int $value;
+    public function __construct(int $value) { $this->value = $value; }
+}
+class Promoted extends Base { public function __construct(public readonly int $value) {} }
+echo (new Child(42))->value, ":", (new Promoted(7))->value;
+return true;"#).expect("parse readonly implementations");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("readonly storage implements an abstract getter");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(values.output, "42:7");
+}
+
+/// A private child cannot narrow a public or protected parent property, matching PHP.
+#[test]
+fn execute_program_asymmetric_oct9_rejects_private_child_narrowing() {
+    for visibility in ["public", "protected"] {
+        let source = format!("class Base {{ {visibility} int $value = 1; public function read() {{ return $this->value; }} }} class Child extends Base {{ private int $value = 2; }} return (new Child())->read();");
+        let program = parse_fragment(source.as_bytes()).expect("parse property declarations");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        assert_eq!(execute_program(&program, &mut scope, &mut values)
+            .expect_err("a private child reduces inherited read access"), EvalStatus::RuntimeFatal);
+    }
+}
+
+/// Legal parent and child private slots keep their own defaults and declaring scope.
+#[test]
+fn execute_program_asymmetric_oct9_private_slots_keep_defaults() {
+    let program = parse_fragment(br#"class Base { private int $value = 1; public function read() { return $this->value; } }
+class Child extends Base { private int $value = 2; public function childRead() { return $this->value; } }
+$child = new Child(); echo $child->read(), ':', $child->childRead(); return true;"#)
+        .expect("parse separate private properties");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("separate private slots");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(values.output, "1:2");
+}
+
+/// Public readonly properties without explicit set access accept protected-set redeclarations.
+#[test]
+fn execute_program_asymmetric_review_readonly_effective_set_visibility() {
+    for source in [
+        &b"class Base { public readonly int $x; } class Child extends Base { public protected(set) readonly int $x; } return 1;"[..],
+        &b"readonly class Base { public int $x; } readonly class Child extends Base { public protected(set) int $x; } return 1;"[..],
+        &b"class Base { public int $x { get => 1; } } class Child extends Base { public protected(set) int $x { get => 2; set { } } } return 1;"[..],
+    ] {
+        let program = parse_fragment(source).expect("parse property redeclaration");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values).expect("compatible set access");
+        assert_eq!(values.get(result), FakeValue::Int(1));
+    }
+}
+
+/// Omitting set access on a readonly child cannot reduce an explicitly public parent setter.
+#[test]
+fn execute_program_asymmetric_review_rejects_implicit_set_access_reduction() {
+    let program = parse_fragment(b"class Base { public public(set) readonly int $x; } class Child extends Base { public readonly int $x; }")
+        .expect("parse readonly properties");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    assert_eq!(execute_program(&program, &mut scope, &mut values).expect_err("narrowed setter"), EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval-declared asymmetric properties allow owner and subclass writes as PHP does.
 #[test]
 fn execute_program_allows_asymmetric_property_writes_from_allowed_scopes() {
@@ -236,18 +404,18 @@ class EvalPropertyRelativeBase {
     public EvalPropertyRelativeBase $parentValue;
 }
 class EvalPropertyRelativeChild extends EvalPropertyRelativeBase {
-    public self $selfValue;
+    public EvalPropertyRelativeBase $selfValue;
     public parent $parentValue;
 }
-class EvalPropertyReadonlyAddBase {
-    public int $count = 0;
+class EvalPropertyReadonlyPreserveBase {
+    public public(set) readonly int $count;
 }
-class EvalPropertyReadonlyAddChild extends EvalPropertyReadonlyAddBase {
-    public readonly int $count;
+class EvalPropertyReadonlyPreserveChild extends EvalPropertyReadonlyPreserveBase {
+    public public(set) readonly int $count;
     public function __construct() { $this->count = 7; }
 }
 class EvalPropertyReadonlyWidenBase {
-    protected int $count = 0;
+    protected readonly int $count;
     public function count() { return $this->count; }
 }
 class EvalPropertyReadonlyWidenChild extends EvalPropertyReadonlyWidenBase {
@@ -256,7 +424,7 @@ class EvalPropertyReadonlyWidenChild extends EvalPropertyReadonlyWidenBase {
 }
 $box = new EvalPropertyRedeclareChild();
 $box->value = "ok";
-$readonly = new EvalPropertyReadonlyAddChild();
+$readonly = new EvalPropertyReadonlyPreserveChild();
 $widened = new EvalPropertyReadonlyWidenChild();
 return $box->value . ":" . $readonly->count . ":" . $widened->count . ":" . $widened->count();"#,
     )
@@ -267,6 +435,27 @@ return $box->value . ":" . $readonly->count . ":" . $widened->count . ":" . $wid
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
     assert_eq!(values.get(result), FakeValue::String("ok:7:9:9".to_string()));
+}
+
+/// Redeclaring concrete storage with child-relative self violates the parent's invariant type.
+#[test]
+fn execute_program_rejects_owner_relative_self_property_redeclaration() {
+    let program = parse_fragment(
+        br#"class EvalPropertyOwnerRelativeBase {
+    public self $value;
+}
+class EvalPropertyOwnerRelativeChild extends EvalPropertyOwnerRelativeBase {
+    public self $value;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("child self must not narrow inherited concrete storage");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
 /// Verifies eval rejects inherited property redeclarations that violate PHP invariance.

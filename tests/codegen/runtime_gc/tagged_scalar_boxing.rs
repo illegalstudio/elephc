@@ -115,3 +115,33 @@ echo $total;
     );
     assert_clean(out, "900");
 }
+
+/// Every object walker over a `?int` property, 200 times, leaves the heap clean (#1503).
+///
+/// The walkers now read the slot's tag and box an int or a null on demand (`print_r`, `var_export`,
+/// `get_object_vars`, `(array)`), and the GC descriptor no longer calls the slot a Mixed cell, so
+/// freeing and cloning these objects must neither release nor retain anything for it.
+#[test]
+fn test_tagged_nullable_int_property_walkers_leave_clean_heap() {
+    let out = compile_and_run_with_heap_debug_tagged(
+        r#"<?php
+class P { public ?int $n = null; public string $s = "x"; }
+class W { public ?P $inner = null; public ?int $w = 2; }
+$t = 0;
+for ($i = 0; $i < 200; $i++) {
+    $p = new P();
+    $p->n = $i % 3 === 0 ? null : $i;
+    $w = new W();
+    $w->inner = $p;
+    $c = clone $w;
+    $t += strlen(print_r($w, true)) + strlen(var_export($p, true)) + strlen(json_encode($w));
+    ob_start();
+    var_dump($c);
+    $t += strlen(ob_get_clean());
+    $t += strlen(serialize($c)) + count(get_object_vars($p)) + count((array)$p);
+}
+echo $t, "\n";
+"#,
+    );
+    assert_clean(out, "82437\n");
+}

@@ -274,6 +274,7 @@ fn receiver_refs_image(receiver: &StaticReceiver) -> bool {
 fn instanceof_target_refs_image(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(name) => name_is_image_class(name),
+        InstanceOfTarget::Generic(class_type) => type_refs_image(class_type),
         InstanceOfTarget::Expr(expr) => expr_refs_image(expr),
     }
 }
@@ -301,11 +302,20 @@ fn type_refs_image(type_expr: &TypeExpr) -> bool {
         | TypeExpr::Void
         | TypeExpr::Never
         | TypeExpr::Iterable => false,
-        TypeExpr::Ptr(target) => target.as_ref().is_some_and(name_is_image_class),
+        TypeExpr::Ptr(target) => target.as_ref().is_some_and(|name| name_is_image_class(&crate::names::pointer_target_leaf_name(name))),
         TypeExpr::Array(inner) | TypeExpr::Buffer(inner) | TypeExpr::Nullable(inner) => {
             type_refs_image(inner)
         }
+        TypeExpr::AssocArray { key, value } => type_refs_image(key) || type_refs_image(value),
+        // A declared signature can name one of these classes, and a program
+        // that mentions it only through a callback still needs the prelude.
+        TypeExpr::CallableSig { params, ret } => {
+            params.iter().any(type_refs_image) || type_refs_image(ret)
+        }
         TypeExpr::Named(name) => name_is_image_class(name),
+        TypeExpr::GenericClass { name, args } => {
+            name_is_image_class(name) || args.iter().any(type_refs_image)
+        }
         TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
             members.iter().any(type_refs_image)
         }
@@ -473,6 +483,9 @@ fn expr_refs_image(expr: &Expr) -> bool {
         }
         ExprKind::NewObject { class_name, args } => {
             name_is_image_class(class_name) || args.iter().any(expr_refs_image)
+        }
+        ExprKind::NewGeneric { class_type, args } => {
+            type_refs_image(class_type) || args.iter().any(expr_refs_image)
         }
         ExprKind::NewDynamic { name_expr, args } => {
             expr_refs_image(name_expr) || args.iter().any(expr_refs_image)

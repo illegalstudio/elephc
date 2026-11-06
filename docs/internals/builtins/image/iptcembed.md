@@ -1,8 +1,6 @@
 ---
 title: "iptcembed() - internals"
 description: "Compiler internals for iptcembed(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 538
 ---
 
 ## `iptcembed()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:4063](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4063) (`iptcembed`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`iptcembed`)
 - **Function symbol**: `iptcembed()`
 
 

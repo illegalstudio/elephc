@@ -8,8 +8,8 @@
 //!
 //! Key details:
 //! - Functions are built by hand with `crate::ir::Builder`; only CFG shape
-//!   matters, so blocks carry just enough to terminate. PHP loops lower to
-//!   slot-based CFGs with no block parameters, which these fixtures mirror.
+//!   matters, so blocks carry just enough to terminate. These fixtures model
+//!   the CFG before scalar promotion adds any block parameters.
 
 use crate::ir::{Builder, Function, IrType, Terminator};
 use crate::ir_passes::{compute_dominance, compute_loops};

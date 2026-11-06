@@ -54,6 +54,9 @@ pub(super) fn eval_reflection_function_method_target(
                 is_static: closure.is_static(),
                 is_closure: true,
                 is_deprecated,
+                // Eval's grammar has no `function &()`, so an eval closure never returns by
+                // reference.
+                returns_reference: false,
                 return_type_metadata,
             }));
         }
@@ -93,6 +96,8 @@ pub(super) fn eval_reflection_function_method_target(
                 is_static: eval_reflection_closure_target_is_static(closure_target.as_ref()),
                 is_closure: closure_target.is_some(),
                 is_deprecated,
+                // Eval's grammar has no `function &name()` either.
+                returns_reference: false,
                 return_type_metadata,
             }));
         }
@@ -114,7 +119,8 @@ pub(super) fn eval_reflection_function_method_target(
                 is_variadic,
                 is_static: eval_reflection_closure_target_is_static(closure_target.as_ref()),
                 is_closure: closure_target.is_some(),
-                is_deprecated: false,
+                is_deprecated: eval_reflection_attributes_include_deprecated(function.attributes()),
+                returns_reference: function.returns_reference(),
                 return_type_metadata,
             }));
         }
@@ -130,6 +136,7 @@ pub(super) fn eval_reflection_function_method_target(
             is_static: eval_reflection_closure_target_is_static(closure_target.as_ref()),
             is_closure: closure_target.is_some(),
             is_deprecated: false,
+            returns_reference: false,
             return_type_metadata: None,
         }));
     }
@@ -195,6 +202,28 @@ pub(super) fn eval_reflection_function_method_target(
     };
     let static_method =
         eval_reflection_eval_method_static_target(declaring_class, method_name, context);
+    // An eval method answers from its declaration, where only an `&get` hook (stored under its
+    // synthetic name) can return by reference, and an abstract or interface `&get` contract,
+    // which has no accessor, from the property declaring it; a generated AOT method from the
+    // flag its metadata row carries.
+    let eval_method_name = eval_reflection_property_hook_synthetic_method_name(method_name)
+        .unwrap_or_else(|| method_name.to_string());
+    let returns_reference =
+        match eval_reflection_eval_method_static_target(declaring_class, &eval_method_name, context)
+        {
+            Some((_, method)) => method.returns_by_ref(),
+            None if eval_reflection_get_contract_returns_reference(
+                declaring_class,
+                method_name,
+                context,
+            ) =>
+            {
+                true
+            }
+            None => values
+                .reflection_method_flags(declaring_class, method_name)?
+                .is_some_and(|flags| flags & EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE != 0),
+        };
     let declaring_class = static_method
         .as_ref()
         .map(|(declaring_class, _)| declaring_class.clone());
@@ -219,6 +248,7 @@ pub(super) fn eval_reflection_function_method_target(
         is_final,
         is_abstract,
         is_deprecated,
+        returns_reference,
         return_type_metadata,
     }))
 }
@@ -690,6 +720,20 @@ pub(super) fn eval_reflection_function_closure_class_object_result(
         return values.null();
     };
     eval_reflection_full_class_object_result(&class_name, context, values)
+}
+
+/// Returns whether a reflected function or method is declared to return by reference.
+pub(super) fn eval_reflection_function_method_returns_reference(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> bool {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function {
+            returns_reference, ..
+        }
+        | EvalReflectionFunctionMethodTarget::Method {
+            returns_reference, ..
+        } => *returns_reference,
+    }
 }
 
 /// Returns the retained return type metadata for a reflected function or method.

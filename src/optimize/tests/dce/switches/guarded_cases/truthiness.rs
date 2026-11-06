@@ -16,6 +16,7 @@ fn test_eliminate_dead_code_prunes_truthy_switch_cases_and_default() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -83,6 +84,7 @@ fn test_eliminate_dead_code_prunes_falsy_scalar_labels_from_truthy_switch_subjec
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -148,6 +150,7 @@ fn test_eliminate_dead_code_combines_exclusion_and_truthy_switch_guards() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

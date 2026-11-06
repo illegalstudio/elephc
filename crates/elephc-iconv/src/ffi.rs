@@ -10,6 +10,12 @@
 //!   glibc and musl provide the same symbols from libc itself.
 //! - Opening a converter first installs a UTF-8 `LC_CTYPE`, because glibc drives
 //!   `//TRANSLIT` from that locale and the PHP CLI installs one at startup too.
+//! - Apple's iconv (Citrus-based since macOS 14) stores the `//TRANSLIT` and `//IGNORE`
+//!   options on the converter it shares between every descriptor of one charset pair, and
+//!   each `iconv_open()` overwrites them. Each call therefore re-applies its own descriptor's
+//!   options through `iconvctl()` first, under a process-wide lock (#811). The compiler's
+//!   `convert.iconv` write filter, which keeps its own descriptor open across writes, restores
+//!   its options the same way (`codegen_support::stream_filters::iconv_write`).
 //! - `Converter::convert_all` grows its own output buffer, so callers never handle `E2BIG`.
 //! - A charset name containing an interior NUL can never reach libc, and is reported as
 //!   an unusable charset exactly like an unknown name.
@@ -17,12 +23,16 @@
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Once;
+#[cfg(target_vendor = "apple")]
+use std::sync::{Mutex, MutexGuard};
 
 use crate::error::{IconvError, IconvResult};
 
 #[cfg_attr(target_os = "macos", link(name = "iconv"))]
 unsafe extern "C" {
+    /// Opens a native conversion descriptor for the requested source and destination charsets.
     fn iconv_open(tocode: *const c_char, fromcode: *const c_char) -> *mut c_void;
+    /// Converts input bytes through the descriptor, updating buffer pointers and remaining lengths.
     fn iconv(
         cd: *mut c_void,
         inbuf: *mut *mut c_char,
@@ -30,15 +40,83 @@ unsafe extern "C" {
         outbuf: *mut *mut c_char,
         outbytesleft: *mut usize,
     ) -> usize;
+    /// Closes a native conversion descriptor and releases its resources.
     fn iconv_close(cd: *mut c_void) -> c_int;
+    /// Queries or replaces the process locale for the requested category.
     fn setlocale(category: c_int, locale: *const c_char) -> *mut c_char;
+    /// Sets one GNU-compatible option on a descriptor; Apple stores it per charset pair.
+    #[cfg(target_vendor = "apple")]
+    fn iconvctl(cd: *mut c_void, request: c_int, argument: *mut c_void) -> c_int;
 }
 
-/// POSIX `LC_CTYPE` category number, identical on Linux and macOS' BSD libc.
-#[cfg(target_os = "macos")]
+/// `LC_CTYPE` category number. glibc and musl number it 0, but Apple's BSD-derived libc
+/// numbers it 2 and uses 0 for `LC_ALL`, where the same value would replace every category.
+#[cfg(target_vendor = "apple")]
+const LC_CTYPE: c_int = 2;
+#[cfg(not(target_vendor = "apple"))]
 const LC_CTYPE: c_int = 0;
-#[cfg(not(target_os = "macos"))]
-const LC_CTYPE: c_int = 0;
+
+/// `LC_NUMERIC` category number, read by the tests that check only `LC_CTYPE` changes.
+#[cfg(all(test, target_vendor = "apple"))]
+const LC_NUMERIC: c_int = 4;
+#[cfg(all(test, not(target_vendor = "apple")))]
+const LC_NUMERIC: c_int = 1;
+
+/// `iconvctl()` request that sets a descriptor's transliteration (GNU libiconv numbering).
+#[cfg(target_vendor = "apple")]
+const ICONV_SET_TRANSLITERATE: c_int = 2;
+/// `iconvctl()` request that sets whether a descriptor discards illegal sequences.
+#[cfg(target_vendor = "apple")]
+const ICONV_SET_DISCARD_ILSEQ: c_int = 4;
+
+/// Serializes Apple iconv calls that read or rewrite a charset pair's shared options.
+#[cfg(target_vendor = "apple")]
+static PAIR_OPTIONS_LOCK: Mutex<()> = Mutex::new(());
+
+/// Takes the Apple pair-options lock, recovering it if a panicking holder poisoned it.
+#[cfg(target_vendor = "apple")]
+fn pair_options_lock() -> MutexGuard<'static, ()> {
+    PAIR_OPTIONS_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The target options one descriptor was opened with, re-applied before each Apple call.
+#[cfg(target_vendor = "apple")]
+#[derive(Clone, Copy)]
+struct PairOptions {
+    transliterate: c_int,
+    discard_ilseq: c_int,
+}
+
+#[cfg(target_vendor = "apple")]
+impl PairOptions {
+    /// Reads the options from a target charset the way Apple's `iconv_open()` does: a
+    /// case-insensitive `//TRANSLIT` or `//IGNORE` anywhere in the name enables it.
+    fn from_target(to: &[u8]) -> Self {
+        let has = |option: &[u8]| {
+            to.windows(option.len()).any(|window| window.eq_ignore_ascii_case(option))
+        };
+        Self {
+            transliterate: c_int::from(has(b"//TRANSLIT")),
+            discard_ilseq: c_int::from(has(b"//IGNORE")),
+        }
+    }
+
+    /// Writes these options back onto the charset pair `descriptor` belongs to.
+    fn apply(mut self, descriptor: *mut c_void) {
+        unsafe {
+            iconvctl(
+                descriptor,
+                ICONV_SET_TRANSLITERATE,
+                (&mut self.transliterate as *mut c_int).cast::<c_void>(),
+            );
+            iconvctl(
+                descriptor,
+                ICONV_SET_DISCARD_ILSEQ,
+                (&mut self.discard_ilseq as *mut c_int).cast::<c_void>(),
+            );
+        }
+    }
+}
 
 /// Guards the one-time character-classification locale setup.
 static LOCALE_INIT: Once = Once::new();
@@ -79,6 +157,9 @@ const CHUNK: usize = 256;
 /// One open libc conversion descriptor, closed when the wrapper is dropped.
 pub struct Converter {
     descriptor: *mut c_void,
+    /// Options Apple's iconv shares across the charset pair, re-applied per call.
+    #[cfg(target_vendor = "apple")]
+    options: PairOptions,
 }
 
 impl Converter {
@@ -94,11 +175,44 @@ impl Converter {
         };
         let from_c = CString::new(from).map_err(|_| wrong_charset())?;
         let to_c = CString::new(to).map_err(|_| wrong_charset())?;
-        let descriptor = unsafe { iconv_open(to_c.as_ptr(), from_c.as_ptr()) };
+        let descriptor = {
+            // Opening rewrites the pair's shared options, so it must not land between
+            // another descriptor's re-applied options and its conversion.
+            #[cfg(target_vendor = "apple")]
+            let _pair_options = pair_options_lock();
+            unsafe { iconv_open(to_c.as_ptr(), from_c.as_ptr()) }
+        };
         if descriptor as isize == -1 {
             return Err(wrong_charset());
         }
-        Ok(Self { descriptor })
+        Ok(Self {
+            descriptor,
+            #[cfg(target_vendor = "apple")]
+            options: PairOptions::from_target(to),
+        })
+    }
+
+    /// Runs one libc `iconv()` call on this descriptor.
+    ///
+    /// On Apple platforms the descriptor's own `//TRANSLIT` and `//IGNORE` options are
+    /// re-applied first, because another descriptor of the same charset pair may have been
+    /// opened since and overwritten them; the lock keeps another thread from doing so
+    /// between the two steps. Elsewhere the options already belong to the descriptor.
+    ///
+    /// # Safety
+    /// The pointers must follow `iconv(3)`'s contract for this descriptor.
+    unsafe fn call(
+        &mut self,
+        inbuf: *mut *mut c_char,
+        inbytesleft: *mut usize,
+        outbuf: *mut *mut c_char,
+        outbytesleft: *mut usize,
+    ) -> usize {
+        #[cfg(target_vendor = "apple")]
+        let _pair_options = pair_options_lock();
+        #[cfg(target_vendor = "apple")]
+        self.options.apply(self.descriptor);
+        unsafe { iconv(self.descriptor, inbuf, inbytesleft, outbuf, outbytesleft) }
     }
 
     /// Converts `input` completely, returning the transcoded bytes.
@@ -190,7 +304,7 @@ impl Converter {
         output.resize(start + CHUNK, 0);
         let mut out_ptr = unsafe { output.as_mut_ptr().add(start) }.cast::<c_char>();
         let mut out_left = CHUNK;
-        let status = unsafe { iconv(self.descriptor, cursor, left, &mut out_ptr, &mut out_left) };
+        let status = unsafe { self.call(cursor, left, &mut out_ptr, &mut out_left) };
         let produced = CHUNK - out_left;
         output.truncate(start + produced);
         if status != usize::MAX {
@@ -211,13 +325,7 @@ impl Converter {
         let mut out_ptr = unsafe { output.as_mut_ptr().add(start) }.cast::<c_char>();
         let mut out_left = CHUNK;
         let status = unsafe {
-            iconv(
-                self.descriptor,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut out_ptr,
-                &mut out_left,
-            )
+            self.call(std::ptr::null_mut(), std::ptr::null_mut(), &mut out_ptr, &mut out_left)
         };
         output.truncate(start + (CHUNK - out_left));
         if status == usize::MAX {
@@ -240,8 +348,7 @@ impl Converter {
         let mut left = input.len();
         let mut out_ptr = out.as_mut_ptr().cast::<c_char>();
         let mut out_left = out.len();
-        let status =
-            unsafe { iconv(self.descriptor, &mut cursor, &mut left, &mut out_ptr, &mut out_left) };
+        let status = unsafe { self.call(&mut cursor, &mut left, &mut out_ptr, &mut out_left) };
         let produced = out.len() - out_left;
         *input = &input[input.len() - left..];
         if status != usize::MAX {
@@ -263,13 +370,7 @@ impl Converter {
         let mut out_ptr = out.as_mut_ptr().cast::<c_char>();
         let mut out_left = out.len();
         let status = unsafe {
-            iconv(
-                self.descriptor,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut out_ptr,
-                &mut out_left,
-            )
+            self.call(std::ptr::null_mut(), std::ptr::null_mut(), &mut out_ptr, &mut out_left)
         };
         let produced = out.len() - out_left;
         if status != usize::MAX {
@@ -299,21 +400,9 @@ impl Converter {
         let mut out_left = out.len();
         let status = unsafe {
             if feed {
-                iconv(
-                    self.descriptor,
-                    &mut cursor,
-                    &mut left,
-                    &mut out_ptr,
-                    &mut out_left,
-                )
+                self.call(&mut cursor, &mut left, &mut out_ptr, &mut out_left)
             } else {
-                iconv(
-                    self.descriptor,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    &mut out_ptr,
-                    &mut out_left,
-                )
+                self.call(std::ptr::null_mut(), std::ptr::null_mut(), &mut out_ptr, &mut out_left)
             }
         };
         let produced = out.len() - out_left;
@@ -338,13 +427,7 @@ impl Converter {
         let mut out_ptr = sink.as_mut_ptr().cast::<c_char>();
         let mut out_left = sink.len();
         unsafe {
-            iconv(
-                self.descriptor,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut out_ptr,
-                &mut out_left,
-            );
+            self.call(std::ptr::null_mut(), std::ptr::null_mut(), &mut out_ptr, &mut out_left);
         }
     }
 }
@@ -366,4 +449,14 @@ pub fn charsets_are_convertible(from: &[u8], to: &[u8]) -> bool {
 /// Reads the platform `errno` value libc's `iconv` just published.
 fn last_errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+}
+
+/// Returns the process's current `LC_NUMERIC` locale name, for locale-isolation tests.
+#[cfg(test)]
+pub(crate) fn numeric_locale_name() -> Vec<u8> {
+    let name = unsafe { setlocale(LC_NUMERIC, std::ptr::null()) };
+    if name.is_null() {
+        return Vec::new();
+    }
+    unsafe { std::ffi::CStr::from_ptr(name) }.to_bytes().to_vec()
 }

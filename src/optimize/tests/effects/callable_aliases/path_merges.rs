@@ -81,6 +81,7 @@ fn test_program_function_effects_merge_callable_aliases_across_if_paths() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            type_params: Vec::new(),
             params: vec![("flag".to_string(), None, None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -151,6 +152,7 @@ fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -174,6 +176,7 @@ fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
                             Span::dummy(),
                         )],
                         catches: vec![crate::parser::ast::CatchClause {
+                            exception_type_args: Vec::new(),
                             exception_types: vec![Name::from("Exception")],
                             variable: Some("e".to_string()),
                             body: vec![Stmt::new(
@@ -219,14 +222,15 @@ fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
     );
 }
 
-/// Verifies that callable aliases assigned in switch cases and the default arm are merged.
-/// `switch ($flag) { case 1: $g = strlen; case 2: ...; default: $g = strlen }` assigns
-/// the same callable target in multiple arms; the merged effect must reflect `strlen` reachability.
+/// Pure callable aliases do not hide the loose switch comparison warning boundary.
+/// The cases merge the same strlen target, while the switch can invoke a handler,
+/// mutate globals, or throw before the callable is reached.
 #[test]
 fn test_program_function_effects_merge_callable_aliases_across_switch_paths() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            type_params: Vec::new(),
             params: vec![("flag".to_string(), None, None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -293,6 +297,11 @@ fn test_program_function_effects_merge_callable_aliases_across_switch_paths() {
 
     assert_eq!(
         function_effects.get("relay"),
-        Some(&Effect::PURE.with_side_effects())
+        Some(
+            &Effect::PURE
+                .with_side_effects()
+                .with_may_throw()
+                .with_writes_globals()
+        )
     );
 }

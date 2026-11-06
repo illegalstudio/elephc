@@ -1,8 +1,6 @@
 ---
 title: "getservbyport() - internals"
 description: "Compiler internals for getservbyport(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 339
 ---
 
 ## `getservbyport()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/getservbyport.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/getservbyport.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

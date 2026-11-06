@@ -1,8 +1,6 @@
 ---
 title: "rtrim()"
 description: "Strips whitespace (or other characters) from the end of a string."
-sidebar:
-  order: 906
 ---
 
 ## rtrim()
@@ -21,8 +19,9 @@ Strips whitespace (or other characters) from the end of a string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/rtrim.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/rtrim.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

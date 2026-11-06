@@ -1,0 +1,1497 @@
+{
+  "schema_version": 2,
+  "suite": "hot-path",
+  "branch": "main",
+  "sampling": "latest-per-UTC-day-and-platform",
+  "points": 24,
+  "series": [
+    {
+      "date": "2026-10-13",
+      "timestamp": "2026-10-13T12:42:06Z",
+      "measurement_timestamp": "2026-10-13T12:38:34Z",
+      "commit": "ea49e1b0f1f4ec74910f1ada8a8933409b7fd662",
+      "run_id": 38396942712,
+      "run_attempt": 1,
+      "artifact_id": 11814352110,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 5.754499999966356,
+              "samples_ms": [
+                5.754499999966356,
+                5.810166999935973,
+                5.439375000150903
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 27.298749999999927,
+              "samples_ms": [
+                26.63679200009028,
+                27.298749999999927,
+                27.74487500005307
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 32.81575000005432,
+              "samples_ms": [
+                32.24070900000697,
+                38.22008299994195,
+                32.81575000005432
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-14",
+      "timestamp": "2026-10-14T22:04:36Z",
+      "measurement_timestamp": "2026-10-14T22:00:30Z",
+      "commit": "0dd7acd0c7b2e733f9c8bb9f74450d623ebd4b5a",
+      "run_id": 38642646762,
+      "run_attempt": 1,
+      "artifact_id": 11931134713,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 7.954500000096232,
+              "samples_ms": [
+                8.58616699997583,
+                7.622792000120171,
+                7.954500000096232
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 32.66299999995681,
+              "samples_ms": [
+                32.66299999995681,
+                31.881665999890174,
+                36.62591700003759
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 40.518041000041194,
+              "samples_ms": [
+                40.518041000041194,
+                33.802958000023864,
+                45.214999999871
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-15",
+      "timestamp": "2026-10-15T17:46:13Z",
+      "measurement_timestamp": "2026-10-15T17:42:40Z",
+      "commit": "132b4da6f74da2da0956bc25026a9d5570f49689",
+      "run_id": 38771231076,
+      "run_attempt": 1,
+      "artifact_id": 11994933255,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 5.540333999988434,
+              "samples_ms": [
+                5.628458000046521,
+                5.451332999882652,
+                5.540333999988434
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 36.43670800011023,
+              "samples_ms": [
+                32.278874999974505,
+                36.43670800011023,
+                40.048583000043436
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 59.10016699999687,
+              "samples_ms": [
+                62.866666999980225,
+                59.10016699999687,
+                38.79954200010616
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-16",
+      "timestamp": "2026-10-16T22:43:52Z",
+      "measurement_timestamp": "2026-10-16T22:40:35Z",
+      "commit": "4dc973eafbd9072332acee5f88415e6b91eccbb9",
+      "run_id": 38973248707,
+      "run_attempt": 1,
+      "artifact_id": 12079826083,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 5.608291000044119,
+              "samples_ms": [
+                6.364541000039026,
+                5.608291000044119,
+                5.47608300007596
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 27.97645900000134,
+              "samples_ms": [
+                27.97645900000134,
+                27.860124999961045,
+                32.85254200000054
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 34.36133299987887,
+              "samples_ms": [
+                32.296416999997746,
+                37.87166699999034,
+                34.36133299987887
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-17",
+      "timestamp": "2026-10-17T22:24:42Z",
+      "measurement_timestamp": "2026-10-17T22:21:22Z",
+      "commit": "4b5681d5fc4da297073dbae64d0b7c811913803e",
+      "run_id": 39073279895,
+      "run_attempt": 1,
+      "artifact_id": 12117025368,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 9.082291999902736,
+              "samples_ms": [
+                11.164083000039682,
+                9.082291999902736,
+                7.422207999979946
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 31.151708999914263,
+              "samples_ms": [
+                31.151708999914263,
+                30.749207999861028,
+                33.44558399999187
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 29.989625000098385,
+              "samples_ms": [
+                29.724375000114378,
+                29.989625000098385,
+                52.35979199983376
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-18",
+      "timestamp": "2026-10-18T19:15:09Z",
+      "measurement_timestamp": "2026-10-18T19:11:16Z",
+      "commit": "f96ee9e4ab12df423509327882491d9d64dbea8d",
+      "run_id": 39156522487,
+      "run_attempt": 1,
+      "artifact_id": 12147702215,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 8.548625000003085,
+              "samples_ms": [
+                5.47241699996448,
+                13.022458000023107,
+                8.548625000003085
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 48.011499999802254,
+              "samples_ms": [
+                48.011499999802254,
+                53.3360829999765,
+                27.735249999977896
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 28.596375000006446,
+              "samples_ms": [
+                28.596375000006446,
+                27.853207999896767,
+                30.27350000002116
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-19",
+      "timestamp": "2026-10-19T18:55:26Z",
+      "measurement_timestamp": "2026-10-19T18:51:13Z",
+      "commit": "0842fca95e7a68c3f7542d291430d02e0199a122",
+      "run_id": 39302767374,
+      "run_attempt": 1,
+      "artifact_id": 12214281686,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 10.161791999962588,
+              "samples_ms": [
+                10.161791999962588,
+                11.432915999876059,
+                5.994375000000218
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 154.3487090000326,
+              "samples_ms": [
+                157.45333399991068,
+                154.3487090000326,
+                145.57300000001305
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 46.657500000037544,
+              "samples_ms": [
+                46.657500000037544,
+                44.395333000011306,
+                54.448540999828765
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-20",
+      "timestamp": "2026-10-20T21:33:12Z",
+      "measurement_timestamp": "2026-10-20T21:29:15Z",
+      "commit": "3c39673c06606f4b381df4c1cedca7b9deeb2a4b",
+      "run_id": 39498557059,
+      "run_attempt": 1,
+      "artifact_id": 12301685254,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 6.834708000042156,
+              "samples_ms": [
+                6.459333000066181,
+                15.572792000057234,
+                6.834708000042156
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 170.74737500001902,
+              "samples_ms": [
+                184.81020900003386,
+                161.27854199999092,
+                170.74737500001902
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 52.76291600011973,
+              "samples_ms": [
+                52.663917000018046,
+                52.76291600011973,
+                69.04899999994996
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-21",
+      "timestamp": "2026-10-21T18:01:44Z",
+      "measurement_timestamp": "2026-10-21T17:58:36Z",
+      "commit": "e2db603f8732c1ab2fc789adc0c8e7b4a7f19a1e",
+      "run_id": 39643663056,
+      "run_attempt": 1,
+      "artifact_id": 12367459186,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 6.572165999955359,
+              "samples_ms": [
+                6.534249999958774,
+                6.572165999955359,
+                9.7467499999766
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 139.3172499999764,
+              "samples_ms": [
+                152.17299999994793,
+                139.3172499999764,
+                134.2904580000095
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 51.46229199999652,
+              "samples_ms": [
+                42.3433330000762,
+                74.0397079999866,
+                51.46229199999652
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-22",
+      "timestamp": "2026-10-22T22:11:45Z",
+      "measurement_timestamp": "2026-10-22T22:07:45Z",
+      "commit": "d06aed36d5e221ed4097349bd33fb2eddb4f98fb",
+      "run_id": 39860822118,
+      "run_attempt": 1,
+      "artifact_id": 12462129113,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 4.78962500005764,
+              "samples_ms": [
+                4.487790999974095,
+                5.2221660000668635,
+                4.78962500005764
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 58.13004200012983,
+              "samples_ms": [
+                46.63112499997624,
+                58.13004200012983,
+                64.64304200017068
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 41.20045800004846,
+              "samples_ms": [
+                38.439749999952255,
+                41.20045800004846,
+                73.0727919999481
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-23",
+      "timestamp": "2026-10-23T22:48:20Z",
+      "measurement_timestamp": "2026-10-23T22:44:58Z",
+      "commit": "360f5de4da364a1b68f771a952a1775b9dc862a7",
+      "run_id": 40034316755,
+      "run_attempt": 1,
+      "artifact_id": 12536359542,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 4.858624999997119,
+              "samples_ms": [
+                5.284833000018807,
+                4.858624999997119,
+                4.850833999967108
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 56.65070800000649,
+              "samples_ms": [
+                42.159832999914215,
+                56.65070800000649,
+                61.663332999955855
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 33.63075000004301,
+              "samples_ms": [
+                33.63075000004301,
+                33.58329100001356,
+                35.9885000000304
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-24",
+      "timestamp": "2026-10-24T23:12:35Z",
+      "measurement_timestamp": "2026-10-24T23:08:40Z",
+      "commit": "65ee3fad266c26930149a37f8f7e5733a7345607",
+      "run_id": 40140369518,
+      "run_attempt": 1,
+      "artifact_id": 12578713762,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 5.0202499999159045,
+              "samples_ms": [
+                5.0202499999159045,
+                5.473666999932902,
+                4.744041999856563
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 46.29324999996243,
+              "samples_ms": [
+                46.29324999996243,
+                42.789166000147816,
+                57.132208999973955
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 33.651875000032305,
+              "samples_ms": [
+                36.43237500000396,
+                32.9157920000398,
+                33.651875000032305
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-25",
+      "timestamp": "2026-10-25T16:43:37Z",
+      "measurement_timestamp": "2026-10-25T16:39:57Z",
+      "commit": "fb777dda9ed5250c8ed97b99285dd5435bf65b42",
+      "run_id": 40211568114,
+      "run_attempt": 1,
+      "artifact_id": 12605528767,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 5.49604099978751,
+              "samples_ms": [
+                4.320083000038721,
+                5.49604099978751,
+                11.023582999996506
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 50.295583999968585,
+              "samples_ms": [
+                50.295583999968585,
+                62.774416000138444,
+                48.870041999862224
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 67.670833999955,
+              "samples_ms": [
+                69.96312499995838,
+                52.84512499997618,
+                67.670833999955
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-26",
+      "timestamp": "2026-10-26T21:46:40Z",
+      "measurement_timestamp": "2026-10-26T21:43:52Z",
+      "commit": "96086f2f330b1be39f7289d47899d46f058a7be4",
+      "run_id": 40405212061,
+      "run_attempt": 1,
+      "artifact_id": 12691243414,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 3.6317499999540814,
+              "samples_ms": [
+                3.693959000088398,
+                3.6317499999540814,
+                3.5321249999924476
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 37.81279199995424,
+              "samples_ms": [
+                37.42341699989993,
+                37.81279199995424,
+                40.83933300000808
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 26.985707999983788,
+              "samples_ms": [
+                27.458249999995132,
+                26.952957999924365,
+                26.985707999983788
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-27",
+      "timestamp": "2026-10-27T23:26:51Z",
+      "measurement_timestamp": "2026-10-27T23:23:17Z",
+      "commit": "7c085a99fcead9d79d934b23952897e42781722e",
+      "run_id": 40598511321,
+      "run_attempt": 1,
+      "artifact_id": 12778938626,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 6.287541000119745,
+              "samples_ms": [
+                10.340082999846345,
+                6.287541000119745,
+                4.952624999987165
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 46.55049999996663,
+              "samples_ms": [
+                45.06812499994339,
+                46.55049999996663,
+                53.45308399978421
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 42.02916700000969,
+              "samples_ms": [
+                61.440917000027184,
+                35.650416999942536,
+                42.02916700000969
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-28",
+      "timestamp": "2026-10-28T23:14:31Z",
+      "measurement_timestamp": "2026-10-28T23:10:58Z",
+      "commit": "c51420b6c2e850ad0ee6b05125e089bd763b530f",
+      "run_id": 40782871291,
+      "run_attempt": 1,
+      "artifact_id": 12858469527,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 4.7680830000444985,
+              "samples_ms": [
+                4.802124999969237,
+                4.7680830000444985,
+                4.195250000066153
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 45.31804200018996,
+              "samples_ms": [
+                42.20758300016314,
+                45.31804200018996,
+                56.902707999825
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 36.457582999901206,
+              "samples_ms": [
+                36.19854199996553,
+                36.457582999901206,
+                49.20020800000202
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-29",
+      "timestamp": "2026-10-29T20:25:09Z",
+      "measurement_timestamp": "2026-10-29T20:21:17Z",
+      "commit": "00350105ba330730239325bbc41bb65aafa22283",
+      "run_id": 40945465276,
+      "run_attempt": 1,
+      "artifact_id": 12929753863,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 5.356500000061715,
+              "samples_ms": [
+                4.881000000068525,
+                5.356500000061715,
+                7.883624999976746
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 60.16629200007628,
+              "samples_ms": [
+                40.48329199986256,
+                60.83075000015015,
+                60.16629200007628
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 55.25679200013656,
+              "samples_ms": [
+                55.25679200013656,
+                53.429833000109284,
+                57.55762500007222
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-30",
+      "timestamp": "2026-10-30T20:39:28Z",
+      "measurement_timestamp": "2026-10-30T20:35:48Z",
+      "commit": "668247040d3d830771d482e12aa4ee5a6097ff22",
+      "run_id": 41121964571,
+      "run_attempt": 1,
+      "artifact_id": 13009453391,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 6.9527499999821885,
+              "samples_ms": [
+                8.537625000144544,
+                6.9527499999821885,
+                5.2528329999859125
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 75.21229099984339,
+              "samples_ms": [
+                54.09079199989719,
+                75.21229099984339,
+                102.57366699988779
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 43.19091699994715,
+              "samples_ms": [
+                35.039708999875074,
+                43.19091699994715,
+                89.84220899992579
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-31",
+      "timestamp": "2026-10-31T15:50:53Z",
+      "measurement_timestamp": "2026-10-31T15:48:18Z",
+      "commit": "95e4948d2c40751f699ef67a21d009b843acf4da",
+      "run_id": 41215542035,
+      "run_attempt": 1,
+      "artifact_id": 13048212988,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 4.28404199999477,
+              "samples_ms": [
+                4.790124999999534,
+                4.28404199999477,
+                3.3806249999770444
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 39.148041999965244,
+              "samples_ms": [
+                39.148041999965244,
+                39.79925000010098,
+                39.041167000050336
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 28.69662499995229,
+              "samples_ms": [
+                28.69662499995229,
+                28.9551669999355,
+                28.615790999992896
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-11-01",
+      "timestamp": "2026-11-01T23:15:16Z",
+      "measurement_timestamp": "2026-11-01T23:11:48Z",
+      "commit": "a9526cd4bfb98a591880dd881f8072137647c318",
+      "run_id": 41359594624,
+      "run_attempt": 1,
+      "artifact_id": 13105525880,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 4.446415999836972,
+              "samples_ms": [
+                5.310834000056275,
+                4.206875000136279,
+                4.446415999836972
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 56.3663750001524,
+              "samples_ms": [
+                52.34004199996889,
+                58.68437499998436,
+                56.3663750001524
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 51.98216600001615,
+              "samples_ms": [
+                51.98216600001615,
+                56.91591699996934,
+                42.682334000119226
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-11-02",
+      "timestamp": "2026-11-02T21:19:34Z",
+      "measurement_timestamp": "2026-11-02T21:16:29Z",
+      "commit": "80c4125960bd533bfda9dad57298e0617bc4451f",
+      "run_id": 41522685672,
+      "run_attempt": 1,
+      "artifact_id": 13180995010,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 3.6766670000361046,
+              "samples_ms": [
+                3.776750000042739,
+                3.6766670000361046,
+                3.6745840000094177
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 38.240082999891456,
+              "samples_ms": [
+                41.61804199998187,
+                38.240082999891456,
+                38.138832999948136
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 27.93608399997538,
+              "samples_ms": [
+                27.925500000037573,
+                27.93608399997538,
+                28.7062079999032
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-11-03",
+      "timestamp": "2026-11-03T18:52:38Z",
+      "measurement_timestamp": "2026-11-03T18:49:22Z",
+      "commit": "4f4597330bc4442e4dfe01bb77f283792536a2f3",
+      "run_id": 41694133079,
+      "run_attempt": 1,
+      "artifact_id": 13262545363,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 8.952542000088215,
+              "samples_ms": [
+                8.952542000088215,
+                11.002082999993945,
+                7.3051250001299195
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 40.28529099991829,
+              "samples_ms": [
+                40.445374999990236,
+                40.28529099991829,
+                39.04595799986055
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 31.810791999987487,
+              "samples_ms": [
+                31.235791999961293,
+                31.810791999987487,
+                38.84383300010086
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-11-04",
+      "timestamp": "2026-11-04T22:18:05Z",
+      "measurement_timestamp": "2026-11-04T22:14:17Z",
+      "commit": "4b2734bfe48e10749c6ae7f72ed337a213a058e8",
+      "run_id": 41920224889,
+      "run_attempt": 1,
+      "artifact_id": 13368605906,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 4.602250000061758,
+              "samples_ms": [
+                4.602250000061758,
+                4.193999999870357,
+                5.4013750000194705
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 47.07654200001343,
+              "samples_ms": [
+                47.07654200001343,
+                42.78841700011071,
+                47.98475000006874
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 48.936375000039334,
+              "samples_ms": [
+                42.575541000132944,
+                48.936375000039334,
+                55.02991599996676
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-11-05",
+      "timestamp": "2026-11-05T19:58:14Z",
+      "measurement_timestamp": "2026-11-05T19:54:00Z",
+      "commit": "68c9c53d47874c5af24afa2788efd91857763acd",
+      "run_id": 42094970780,
+      "run_attempt": 1,
+      "artifact_id": 13448283070,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 6.07008300016787,
+              "samples_ms": [
+                10.021917000130998,
+                5.116790999863952,
+                6.07008300016787
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 45.439708999992945,
+              "samples_ms": [
+                39.799042000140616,
+                46.76837500005604,
+                45.439708999992945
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 41.65804200010825,
+              "samples_ms": [
+                37.87254100006976,
+                41.65804200010825,
+                69.14470800006711
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

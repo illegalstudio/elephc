@@ -86,6 +86,14 @@ fn emit_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> R
 
 /// Emits 1 when a loaded scalar, boxed Mixed, or null-like value is absent for `isset`.
 fn emit_loaded_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    // A `?ptr<T>` is one pointer word where 0 is null, and a buffer handle one raw word where 0
+    // is the missing element of a buffer array; neither is set when 0.
+    let raw_ty = ctx.raw_value_php_type(value)?;
+    if crate::types::is_nullable_pointer_type(&raw_ty) || matches!(raw_ty, PhpType::Buffer(_)) {
+        ctx.load_value_to_result(value)?;
+        super::emit_int_result_zero_bool(ctx);
+        return Ok(());
+    }
     match ctx.value_php_type(value)? {
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
@@ -162,6 +170,10 @@ fn emit_isset_array_offset_missing_result(
 ) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let index = expect_operand(inst, 1)?;
+    if matches!(ctx.value_ir_type(index)?, crate::ir::IrType::Str
+        | crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)) {
+        return emit_isset_mixed_key_offset_missing_result(ctx, array, index);
+    }
     require_isset_integer_like_index(ctx, index, "array offset")?;
     let elem_ty = match ctx.value_php_type(array)? {
         PhpType::Array(elem_ty) => elem_ty.codegen_repr(),
@@ -187,6 +199,51 @@ fn emit_isset_array_offset_missing_result(
             &done,
         )?,
     }
+    Ok(())
+}
+
+/// Probes indexed or promoted storage under a runtime key and retires the detached probe cell.
+fn emit_isset_mixed_key_offset_missing_result(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    key: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            super::super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_load_int_immediate(ctx.emitter, "x3", 0);
+        }
+        Arch::X86_64 => {
+            super::super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", 0);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_get_mixed_key");
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #8");                              // a quiet absent or null key reads as canonical PHP null
+            ctx.emitter.instruction("cset x0, eq");                             // report the missing predicate before retiring the probe owner
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 8");                              // a quiet absent or null key reads as canonical PHP null
+            ctx.emitter.instruction("sete al");                                 // report the missing predicate before retiring the probe owner
+            ctx.emitter.instruction("movzx rax, al");                           // widen the missing predicate into the integer result register
+        }
+    }
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
 }
 
@@ -275,10 +332,24 @@ fn emit_isset_hash_found_null_check_aarch64(
     value_ty: &PhpType,
     missing: &str,
 ) -> Result<()> {
-    if matches!(value_ty.codegen_repr(), PhpType::Mixed) {
+    // A buffer handle is a raw word too: 0 is the missing element, so it is not set.
+    let pointer = matches!(value_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_));
+    if pointer {
+        // -- a stored null pointer word is a missing entry for isset --
+        ctx.emitter.instruction(&format!("cbz x1, {}", missing));               // a stored null pointer word is PHP null for isset
+    }
+    // A pointer hash can also hold boxed entries (a literal built without a pointer destination),
+    // so it shares the Mixed entry checks below.
+    if pointer || matches!(value_ty.codegen_repr(), PhpType::Mixed) {
         let concrete_non_null = ctx.next_label("isset_hash_concrete_non_null");
         ctx.emitter.instruction("cmp x3, #8");                                  // detect an unboxed per-entry null tag before inspecting its payload
         ctx.emitter.instruction(&format!("b.eq {}", missing));                  // concrete null entries make isset return false
+        let not_pointer = ctx.next_label("isset_hash_not_pointer_word");
+        ctx.emitter.instruction(&format!("cmp x3, #{}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // is this entry a raw ?ptr<T> word?
+        ctx.emitter.instruction(&format!("b.ne {}", not_pointer));              // other tags keep the boxed-entry checks
+        ctx.emitter.instruction(&format!("cbz x1, {}", missing));               // the null pointer word is PHP null for isset
+        ctx.emitter.instruction(&format!("b {}", concrete_non_null));           // a live pointer word is set
+        ctx.emitter.label(&not_pointer);
         ctx.emitter.instruction("cmp x3, #7");                                  // tag 7 means value_lo points to an already-boxed Mixed cell
         ctx.emitter.instruction(&format!("b.ne {}", concrete_non_null));        // every other concrete runtime tag is non-null
         ctx.emitter.instruction("mov x0, x1");                                  // pass the boxed Mixed hash value to the unbox helper
@@ -299,10 +370,26 @@ fn emit_isset_hash_found_null_check_x86_64(
     value_ty: &PhpType,
     missing: &str,
 ) -> Result<()> {
-    if matches!(value_ty.codegen_repr(), PhpType::Mixed) {
+    // A buffer handle is a raw word too: 0 is the missing element, so it is not set.
+    let pointer = matches!(value_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_));
+    if pointer {
+        // -- a stored null pointer word is a missing entry for isset --
+        ctx.emitter.instruction("test rdi, rdi");                               // a stored null pointer word is PHP null for isset
+        ctx.emitter.instruction(&format!("jz {}", missing));                    // treat the null pointer entry as missing
+    }
+    // A pointer hash can also hold boxed entries (a literal built without a pointer destination),
+    // so it shares the Mixed entry checks below.
+    if pointer || matches!(value_ty.codegen_repr(), PhpType::Mixed) {
         let concrete_non_null = ctx.next_label("isset_hash_concrete_non_null");
         ctx.emitter.instruction("cmp rcx, 8");                                  // detect an unboxed per-entry null tag before inspecting its payload
         ctx.emitter.instruction(&format!("je {}", missing));                    // concrete null entries make isset return false
+        let not_pointer = ctx.next_label("isset_hash_not_pointer_word");
+        ctx.emitter.instruction(&format!("cmp rcx, {}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // is this entry a raw ?ptr<T> word?
+        ctx.emitter.instruction(&format!("jne {}", not_pointer));               // other tags keep the boxed-entry checks
+        ctx.emitter.instruction("test rdi, rdi");                               // is this entry the null pointer word?
+        ctx.emitter.instruction(&format!("jz {}", missing));                    // the null pointer word is PHP null for isset
+        ctx.emitter.instruction(&format!("jmp {}", concrete_non_null));         // a live pointer word is set
+        ctx.emitter.label(&not_pointer);
         ctx.emitter.instruction("cmp rcx, 7");                                  // tag 7 means value_lo points to an already-boxed Mixed cell
         ctx.emitter.instruction(&format!("jne {}", concrete_non_null));         // every other concrete runtime tag is non-null
         ctx.emitter.instruction("mov rax, rdi");                                // pass the boxed Mixed hash value to the unbox helper
@@ -496,6 +583,37 @@ fn emit_isset_array_in_bounds_missing_aarch64(
             ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 means the indexed-array element is PHP null
             ctx.emitter.instruction("cset x0, eq");                             // return missing when the in-bounds Mixed element is null
         }
+        // A buffer element is a raw word too, and handle 0 is the missing element.
+        PhpType::Pointer(_) | PhpType::Buffer(_) => {
+            // -- a null pointer element is missing for isset --
+            // An array built without a pointer destination (a merged or spread literal) reaches a
+            // pointer slot with mixed storage, so its runtime value type decides how to read it.
+            let tag_reg = abi::secondary_scratch_reg(ctx.emitter);
+            let boxed = ctx.next_label("isset_pointer_elem_boxed");
+            let checked = ctx.next_label("isset_pointer_elem_checked");
+            ctx.emitter.instruction(
+                &format!("ldr {}, [{}, #-8]", tag_reg, array_reg)
+            );                                                                  // load the packed kind word holding the array's runtime value type
+            ctx.emitter.instruction(
+                &format!("ubfx {}, {}, #8, #7", tag_reg, tag_reg)
+            );                                                                  // extract the runtime value_type tag, dropping the COW bit
+            ctx.emitter.instruction(
+                &format!("add {}, {}, #24", array_reg, array_reg)
+            );                                                                  // skip the indexed-array header to reach the elements
+            ctx.emitter.instruction(
+                &format!("ldr x0, [{}, {}, lsl #3]", array_reg, index_reg)
+            );                                                                  // load the element word for its null check
+            ctx.emitter.instruction(&format!("cmp {}, #7", tag_reg));           // value type 7 means each element is a boxed Mixed cell
+            ctx.emitter.instruction(&format!("b.eq {}", boxed));                // inspect the boxed cell's tag instead of the raw word
+            ctx.emitter.instruction("cmp x0, #0");                              // a null pointer word is PHP null for isset
+            ctx.emitter.instruction("cset x0, eq");                             // return missing when the in-bounds pointer element is null
+            ctx.emitter.instruction(&format!("b {}", checked));                 // skip the boxed-element check after a raw pointer word
+            ctx.emitter.label(&boxed);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 means the boxed element is PHP null
+            ctx.emitter.instruction("cset x0, eq");                             // return missing when the boxed in-bounds element is null
+            ctx.emitter.label(&checked);
+        }
         _ => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
@@ -525,6 +643,38 @@ fn emit_isset_array_in_bounds_missing_x86_64(
             ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the indexed-array element is PHP null
             ctx.emitter.instruction("sete al");                                 // return missing when the in-bounds Mixed element is null
             ctx.emitter.instruction("movzx rax, al");                           // widen the Mixed null-check result into the integer result register
+        }
+        // A buffer element is a raw word too, and handle 0 is the missing element.
+        PhpType::Pointer(_) | PhpType::Buffer(_) => {
+            // -- a null pointer element is missing for isset --
+            // An array built without a pointer destination (a merged or spread literal) reaches a
+            // pointer slot with mixed storage, so its runtime value type decides how to read it.
+            let tag_reg = abi::secondary_scratch_reg(ctx.emitter);
+            let boxed = ctx.next_label("isset_pointer_elem_boxed");
+            let checked = ctx.next_label("isset_pointer_elem_checked");
+            ctx.emitter.instruction(
+                &format!("mov {}, QWORD PTR [{} - 8]", tag_reg, array_reg)
+            );                                                                  // load the packed kind word holding the array's runtime value type
+            ctx.emitter.instruction(&format!("shr {}, 8", tag_reg));            // move the runtime value_type tag byte into the low lane
+            ctx.emitter.instruction(&format!("and {}, 0x7f", tag_reg));         // isolate the runtime value_type tag, dropping the COW bit
+            ctx.emitter.instruction(
+                &format!("lea {}, [{} + 24]", array_reg, array_reg)
+            );                                                                  // skip the indexed-array header to reach the elements
+            ctx.emitter.instruction(
+                &format!("mov rax, QWORD PTR [{} + {} * 8]", array_reg, index_reg)
+            );                                                                  // load the element word for its null check
+            ctx.emitter.instruction(&format!("cmp {}, 7", tag_reg));            // value type 7 means each element is a boxed Mixed cell
+            ctx.emitter.instruction(&format!("je {}", boxed));                  // inspect the boxed cell's tag instead of the raw word
+            ctx.emitter.instruction("test rax, rax");                           // a null pointer word is PHP null for isset
+            ctx.emitter.instruction("sete al");                                 // return missing when the in-bounds pointer element is null
+            ctx.emitter.instruction("movzx rax, al");                           // widen the pointer null-check result into the integer result register
+            ctx.emitter.instruction(&format!("jmp {}", checked));               // skip the boxed-element check after a raw pointer word
+            ctx.emitter.label(&boxed);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the boxed element is PHP null
+            ctx.emitter.instruction("sete al");                                 // return missing when the boxed in-bounds element is null
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boxed null-check result into the integer result register
+            ctx.emitter.label(&checked);
         }
         _ => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);

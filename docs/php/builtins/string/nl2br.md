@@ -1,8 +1,6 @@
 ---
 title: "nl2br()"
 description: "Inserts HTML line breaks before newlines in a string."
-sidebar:
-  order: 893
 ---
 
 ## nl2br()
@@ -20,8 +18,9 @@ Inserts HTML line breaks before newlines in a string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/nl2br.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/nl2br.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -28,15 +28,17 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
-        let mut class_names: Vec<String> = self
-            .classes
-            .keys()
-            .filter(|name| self.class_is_same_or_descends_from(name, base_class))
-            .cloned()
-            .collect();
+        // Every registered class at or below `base_class`, from the children index rather than a
+        // parent-chain walk from every class in the table (`new static` sits in hot factories).
+        let mut class_names: Vec<String> = self.class_and_descendants(base_class);
         class_names.sort();
 
         for class_name in class_names {
+            // Abstract receivers fail at runtime. Their concrete descendants still need
+            // constructor validation, but an abstract candidate is never instantiated here.
+            if self.classes.get(&class_name).is_some_and(|class| class.is_abstract) {
+                continue;
+            }
             let constructor = self
                 .classes
                 .get(&class_name)
@@ -75,22 +77,6 @@ impl Checker {
         Ok(())
     }
 
-    /// Checks whether `class_name` is either `base_class` itself or a descendant of it
-    /// by walking the parent chain.
-    fn class_is_same_or_descends_from(&self, class_name: &str, base_class: &str) -> bool {
-        let mut current = Some(class_name);
-        while let Some(name) = current {
-            if name == base_class {
-                return true;
-            }
-            current = self
-                .classes
-                .get(name)
-                .and_then(|info| info.parent.as_deref());
-        }
-        false
-    }
-
     /// Infers the type of a class constant or enum case accessed via scope resolution
     /// (e.g., `MyClass::CONSTANT` or `Color::Red`).
     ///
@@ -120,7 +106,10 @@ impl Checker {
         while let Some(cn) = current_class.as_deref() {
             if let Some(info) = self.classes.get(cn) {
                 if let Some(type_expr) = info.constant_types.get(name).cloned() {
-                    return self.resolve_type_expr(&type_expr, expr.span);
+                    let previous = self.current_class.replace(cn.to_string());
+                    let result = self.resolve_type_expr(&type_expr, expr.span);
+                    self.current_class = previous;
+                    return result;
                 }
                 if let Some(value_expr) = info.constants.get(name).cloned() {
                     if let Some(reason) = info.constant_deprecations.get(name).cloned() {
@@ -135,7 +124,7 @@ impl Checker {
                         self.warnings
                             .push(crate::errors::CompileWarning::new(expr.span, &message));
                     }
-                    return self.infer_type(&value_expr, &TypeEnv::default());
+                    return self.infer_constant_initializer_type(cn, &value_expr);
                 }
             }
             current_class = self.classes.get(cn).and_then(|i| i.parent.clone());
@@ -143,20 +132,14 @@ impl Checker {
         // Fallback: search implemented interfaces (and parent interfaces).
         if let Some(class_info) = self.classes.get(&class_name).cloned() {
             for iface_name in &class_info.interfaces {
-                if let Some((value, type_expr)) = self.lookup_interface_constant(iface_name, name) {
-                    if let Some(type_expr) = type_expr {
-                        return self.resolve_type_expr(&type_expr, expr.span);
-                    }
-                    return self.infer_type(&value, &TypeEnv::default());
+                if let Some((owner, value, type_expr)) = self.lookup_interface_constant(iface_name, name) {
+                    return self.infer_interface_constant_type(&owner, &value, type_expr.as_ref(), expr.span);
                 }
             }
         }
         // Direct interface receiver (`Limits::MAX`).
-        if let Some((value, type_expr)) = self.lookup_interface_constant(&class_name, name) {
-            if let Some(type_expr) = type_expr {
-                return self.resolve_type_expr(&type_expr, expr.span);
-            }
-            return self.infer_type(&value, &TypeEnv::default());
+        if let Some((owner, value, type_expr)) = self.lookup_interface_constant(&class_name, name) {
+            return self.infer_interface_constant_type(&owner, &value, type_expr.as_ref(), expr.span);
         }
         // On an enum, a `::name` that is neither a declared case nor a constant is an undefined
         // case — report that rather than the generic class-constant message.
@@ -172,6 +155,28 @@ impl Checker {
         ))
     }
 
+    /// Infers a constant initializer in its declaration scope and restores the consumer scope.
+    fn infer_constant_initializer_type(&mut self, owner: &str, value: &Expr) -> Result<PhpType, CompileError> {
+        let previous = self.current_class.replace(owner.to_string());
+        let result = self.infer_type(value, &TypeEnv::default());
+        self.current_class = previous;
+        result
+    }
+
+    /// Resolves a declared interface constant type or initializer in the original interface.
+    fn infer_interface_constant_type(
+        &mut self, owner: &str, value: &Expr,
+        declared: Option<&crate::parser::ast::TypeExpr>, span: Span,
+    ) -> Result<PhpType, CompileError> {
+        let Some(declared) = declared else {
+            return self.infer_constant_initializer_type(owner, value);
+        };
+        let previous = self.current_class.replace(owner.to_string());
+        let result = self.resolve_type_expr(declared, span);
+        self.current_class = previous;
+        result
+    }
+
     /// Returns whether a scoped-constant receiver is known in static class-like metadata.
     fn scoped_constant_receiver_is_known(&self, class_name: &str) -> bool {
         self.classes.contains_key(class_name)
@@ -181,12 +186,12 @@ impl Checker {
     }
 
     /// Looks up a constant by name on an interface, traversing parent interfaces breadth-first
-    /// to find it. Returns its value expression and optional declared type.
+    /// to find it. Returns its declaring interface, value and optional declared type.
     fn lookup_interface_constant(
         &self,
         interface_name: &str,
         const_name: &str,
-    ) -> Option<(crate::parser::ast::Expr, Option<crate::parser::ast::TypeExpr>)> {
+    ) -> Option<(String, crate::parser::ast::Expr, Option<crate::parser::ast::TypeExpr>)> {
         let mut visited = std::collections::HashSet::new();
         let mut queue: Vec<String> = vec![interface_name.to_string()];
         while let Some(name) = queue.pop() {
@@ -196,6 +201,7 @@ impl Checker {
             if let Some(iface) = self.interfaces.get(&name) {
                 if let Some(value) = iface.constants.get(const_name) {
                     return Some((
+                        iface.constant_declaring_interfaces.get(const_name).cloned().unwrap_or_else(|| name.clone()),
                         value.clone(),
                         iface.constant_types.get(const_name).cloned(),
                     ));
@@ -216,7 +222,16 @@ impl Checker {
         receiver: &StaticReceiver,
         span: Span,
     ) -> Result<String, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(name) => Ok(name.as_canonical()),
             StaticReceiver::Self_ | StaticReceiver::Static => self
                 .current_class
@@ -247,7 +262,16 @@ impl Checker {
         receiver: &StaticReceiver,
         span: Span,
     ) -> Result<(), CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(_) => Ok(()),
             StaticReceiver::Self_ | StaticReceiver::Static => {
                 if self.current_class.is_some() {

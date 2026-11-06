@@ -15,12 +15,21 @@ mod fixed;
 pub(crate) mod instanceof;
 mod user;
 mod throwable_previous;
+mod serialization;
+
+pub(crate) use serialization::SerializableReturnAbi;
 
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;
 pub(crate) use user::{is_user_filter_contract_method, is_user_wrapper_contract_method};
 pub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
+pub(crate) use user::USER_WRAPPER_VTABLE_CAST_RESULT_OFFSET;
+
+/// Optional native stream closer installed only by an application worker after its startup reset.
+pub(crate) const WEB_STREAM_CLOSE_SLOT: &str = "_web_application_stream_close";
+/// Program-specific close body shared with explicit fclose lowering.
+pub(crate) const WEB_STREAM_CLOSE_ENTRY: &str = "__rt_web_application_close_stream";
 
 /// Fatal error message when `php_uname()` receives a `$mode` argument whose length is not exactly 1.
 pub(crate) const PHP_UNAME_MODE_LEN_MSG: &str =
@@ -138,11 +147,30 @@ pub(crate) const BUFFER_ALLOC_SIZE_MSG: &str =
 /// has no per-call-site operand context, so it reports the shared cause.
 pub(crate) const ALLOC_OVERFLOW_MSG: &str =
     "Fatal error: Possible integer overflow in memory allocation\n";
+/// Fatal error message when a runtime writer would append past the shared `_concat_buf`
+/// arena. A writer that calls `__rt_concat_headroom` before an append fails closed here rather
+/// than overwriting `_concat_off` and the adjacent heap. `json_encode()` and `serialize()` do
+/// not stop here: they write through the growable `__rt_strbuf_*` buffer, which moves to the
+/// heap past the arena, as PHP grows its result buffer.
+pub(crate) const CONCAT_OVERFLOW_MSG: &str =
+    "Fatal error: string result exceeds the configured string buffer\n";
 /// Fatal error message when `str_repeat()` receives a `$times` argument less than 0.
 pub(crate) const STR_REPEAT_TIMES_MSG: &str =
     "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";
 /// Catchable TypeError for a magic serializer that returns a non-array value.
 pub(crate) const SERIALIZE_RETURN_ARRAY_MSG: &str = "__serialize() must return an array";
+/// Uncatchable fatal for a `__debugInfo()` that returns a non-array, non-null value.
+///
+/// The text stops before the ` in <file> on line <n>` suffix and the newline, which
+/// `__rt_debuginfo_fatal_text` appends from the dump call site recorded in `_debuginfo_call_line`.
+pub(crate) const DEBUGINFO_FATAL_MSG: &str = "\nFatal error: __debuginfo() must return an array";
+/// Prefix of the report PHP prints for an exception escaping `__debugInfo()`, before the fatal.
+pub(crate) const DEBUGINFO_WARNING_PREFIX: &str = "\nWarning: Uncaught ";
+/// Deprecation prefix for a `__debugInfo()` that returns null; the class name follows.
+pub(crate) const DEBUGINFO_NULL_PREFIX: &str = "Deprecated: Returning null from ";
+/// Deprecation suffix for a `__debugInfo()` that returns null, following the class name.
+pub(crate) const DEBUGINFO_NULL_SUFFIX: &str =
+    "::__debugInfo() is deprecated, return an empty array instead\n";
 /// Runtime warning prefix for legacy serializer return validation.
 pub(crate) const SLEEP_WARNING_PREFIX: &str = "Warning: serialize(): ";
 /// Class-qualified warning suffix for invalid legacy serializer property names.
@@ -151,6 +179,17 @@ pub(crate) const SLEEP_WARNING_SUFFIX: &str =
 /// Prefix for a catchable TypeError naming a non-array `unserialize()` options argument.
 pub(crate) const UNSER_OPTIONS_TYPE_PREFIX: &str =
     "unserialize(): Argument #2 ($options) must be of type array, ";
+/// Runtime warning fragments for malformed `unserialize()` wire data.
+///
+/// php-src reports the failing byte offset and the total source length before returning
+/// `false`; the runtime composes the same line from these pieces plus `_script_source_file`
+/// and the call-site line.
+pub(crate) const UNSER_ERROR_PREFIX: &str = "Warning: unserialize(): Error at offset ";
+pub(crate) const UNSER_ERROR_OF: &str = " of ";
+pub(crate) const UNSER_ERROR_BYTES_IN: &str = " bytes in ";
+pub(crate) const UNSER_ERROR_ON_LINE: &str = " on line ";
+pub(crate) const UNSER_ERROR_NEWLINE: &str = "\n";
+
 /// Prefix for a catchable TypeError naming an invalid `allowed_classes` policy value.
 pub(crate) const UNSER_ALLOWED_CLASSES_POLICY_PREFIX: &str =
     "unserialize(): Option \"allowed_classes\" must be of type array|bool, ";
@@ -172,8 +211,83 @@ pub(crate) const OBJECT_NOT_ARRAY_SUFFIX: &str = " as array";
 /// allowed` (php-src's `ZEND_ACC_NOT_SERIALIZABLE`), wherever the object sits: nested in an array
 /// or behind `mixed` too, so the class name is only known at run time.
 pub(crate) const SERIALIZATION_DENIED_PREFIX: &str = "Serialization of '";
-/// Suffix for PHP's catchable Exception when an object's class forbids serialization.
+/// Suffix for PHP's catchable Exception when an object's class forbids serialization, shared by
+/// the `unserialize()` direction.
 pub(crate) const SERIALIZATION_DENIED_SUFFIX: &str = "' is not allowed";
+
+/// PHP's runtime contract for legacy Serializable hook results.
+pub(crate) const SERIALIZABLE_RESULT_SUFFIX: &str = "::serialize() must return a string or NULL";
+/// Prefix for PHP's catchable Exception when `unserialize()` meets a class that forbids it.
+///
+/// php-src refuses a `ZEND_ACC_NOT_SERIALIZABLE` class right after looking it up, before it
+/// creates the object or decodes its body, and names the class as declared rather than as the
+/// wire spells it: `Unserialization of 'ReflectionClass' is not allowed`.
+pub(crate) const UNSERIALIZATION_DENIED_PREFIX: &str = "Unserialization of '";
+/// PHP spelling of the class a Closure value reports when `serialize()` refuses it.
+pub(crate) const CLOSURE_CLASS_NAME: &str = "Closure";
+/// The builtin classes elephc registers (natively or through a prelude) that PHP refuses to
+/// serialize or unserialize, spelled as PHP declares them.
+///
+/// These are the classes php-src flags `ZEND_ACC_NOT_SERIALIZABLE`, directly or through a parent,
+/// intersected with the builtin class catalog; measured on PHP 8.5.10 by unserializing every
+/// declared class, plus the `PDO` driver subclasses of extensions that build did not load. A PHP
+/// internal elephc does not register (`ReflectionReference`, `ReflectionType`, ...) is absent on purpose: a
+/// user class may carry that name and must serialize like any other user class. A listed name
+/// refuses a declared class only when elephc itself declares it (`ClassInfo::is_internal`), since
+/// a program that does not load the curl or PDO prelude may declare a `CurlHandle` of its own.
+/// Every entry is listed, subclasses included, because the `unserialize()` refusal must also
+/// recognize a class the program never declares, and so cannot walk its ancestry.
+pub(crate) const NOT_SERIALIZABLE_BUILTIN_CLASSES: &[&str] = &[
+    "WeakReference",
+    "WeakMap",
+    "SensitiveParameterValue",
+    "CURLFile",
+    "Closure",
+    "CurlHandle",
+    "CurlMultiHandle",
+    "CurlShareHandle",
+    "CurlSharePersistentHandle",
+    "DirectoryIterator",
+    "Fiber",
+    "FilesystemIterator",
+    "GdImage",
+    "finfo",
+    "Generator",
+    "GlobIterator",
+    "InternalIterator",
+    "PDO",
+    "PDORow",
+    "PDOStatement",
+    "Pdo\\Dblib",
+    "Pdo\\Firebird",
+    "Pdo\\Ibm",
+    "Pdo\\Mysql",
+    "Pdo\\Odbc",
+    "Pdo\\Pgsql",
+    "Pdo\\Sqlite",
+    "Phar",
+    "PharData",
+    "PharFileInfo",
+    "RecursiveDirectoryIterator",
+    "ReflectionAttribute",
+    "ReflectionClass",
+    "ReflectionClassConstant",
+    "ReflectionEnum",
+    "ReflectionEnumBackedCase",
+    "ReflectionEnumUnitCase",
+    "ReflectionFunction",
+    "ReflectionIntersectionType",
+    "ReflectionMethod",
+    "ReflectionNamedType",
+    "ReflectionObject",
+    "ReflectionParameter",
+    "ReflectionProperty",
+    "ReflectionUnionType",
+    "SplFileInfo",
+    "SplFileObject",
+    "SplTempFileObject",
+    "XMLParser",
+];
 /// Prefix for PHP's catchable Error when a name and its positional alias both arrive.
 ///
 /// A descriptor argument container can carry BOTH the positional key `0` and the name of the
@@ -211,6 +325,9 @@ pub(crate) const SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX: &str =
     " could not be converted to float\n";
 /// Suffix shared by PHP's runtime unserialize TypeError diagnostics.
 pub(crate) const UNSER_TYPE_GIVEN_SUFFIX: &str = " given";
+/// Prefix of PHP's typed-property hydration TypeError
+/// (`Cannot assign <value> to property C::$p of type <T>`), shared by every rejected slot.
+pub(crate) const UNSER_PROPERTY_ASSIGN_PREFIX: &str = "Cannot assign ";
 /// Fatal error message when a `printf`-family conversion requests a field width outside
 /// PHP's accepted range. PHP raises `ValueError: Width must be between 0 and 2147483647`;
 /// elephc has no catchable-error path inside `__rt_sprintf`, so it reports the same text
@@ -218,11 +335,10 @@ pub(crate) const UNSER_TYPE_GIVEN_SUFFIX: &str = " given";
 pub(crate) const SPRINTF_WIDTH_MSG: &str =
     "Fatal error: Uncaught ValueError: Width must be between 0 and 2147483647\n";
 /// Fatal error message when a `printf`-family conversion would write past the shared
-/// 64 KiB `_concat_buf` result arena. PHP grows its result buffer on the heap; elephc's
-/// formatted results live in the fixed concat arena, so an oversized result is reported
-/// instead of overrunning the arena.
+/// `_concat_buf` result arena. The arena follows `--heap-size`, so this only reports a
+/// result larger than the program's configured memory budget.
 pub(crate) const SPRINTF_OVERFLOW_MSG: &str =
-    "Fatal error: sprintf(): formatted result exceeds the 65536-byte string buffer\n";
+    "Fatal error: sprintf(): formatted result exceeds the configured string buffer\n";
 /// Fatal error message when a `printf`-family format string consumes more arguments than
 /// were supplied. PHP raises `ArgumentCountError`; elephc reports the same class of error
 /// as a controlled fatal because the alternative is reading past the pushed argument records.

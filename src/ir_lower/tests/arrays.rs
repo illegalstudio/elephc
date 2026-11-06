@@ -10,6 +10,47 @@
 
 use crate::ir::print_module;
 
+/// Released nested-append property probes are independently acquired or boxed owned results.
+#[test]
+fn nested_property_append_probe_ownership_on_all_targets() {
+    use crate::ir::{Op, ValueDef};
+    let source = r#"<?php
+class Box { public array $items = [[1]]; }
+$box = new Box(); $box->items[0][] = 2; echo $box->items[0][1]; unset($box);
+class ObjectBox {
+    public ArrayObject $items;
+    public function __construct() { $this->items = new ArrayObject([[1]]); }
+}
+$object = new ObjectBox(); $object->items[0][] = 2;
+echo json_encode($object->items[0]); unset($object);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source,
+            std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap());
+        let main = module.functions.iter().find(|function| function.flags.is_main).unwrap();
+        let mut probes = 0;
+        for release in main.instructions.iter().filter(|inst| inst.op == Op::Release) {
+            let value = main.value(release.operands[0]).unwrap();
+            let ValueDef::Instruction { inst, .. } = value.def else { continue; };
+            let origin = main.instruction(inst).unwrap();
+            if origin.op == Op::PropGet {
+                probes += 1;
+                assert!(!value.ownership.may_require_release()
+                    || matches!(value.php_type.codegen_repr(), crate::types::PhpType::Mixed),
+                    "{target}: raw property release without a retained box\n{}", print_module(&module));
+            } else if origin.op == Op::Acquire {
+                let parent = main.value(origin.operands[0]).unwrap();
+                if let ValueDef::Instruction { inst, .. } = parent.def {
+                    if main.instruction(inst).unwrap().op == Op::PropGet { probes += 1; }
+                }
+            }
+        }
+        assert!(probes > 0, "{target}: expected retained property probes\n{}", print_module(&module));
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// A dynamic callable may widen an object local without making its array property unwritable.
 #[test]
 fn widened_object_property_array_push_rewrites_through_a_local_on_every_target() {
@@ -350,7 +391,7 @@ echo implode(",", $values);
         );
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         for helper in ["__rt_array_cell_ensure_unique", "__rt_array_to_mixed", "__rt_array_ensure_unique",
-            "__rt_mixed_sort_require_scalars", "__rt_php_compare_slots", "__rt_php_compare_slots_desc"]
+            "__rt_mixed_sort_require_scalars", "__rt_sort_mixed"]
         {
             assert!(asm.contains(helper), "{target}: {helper}");
         }
@@ -1202,7 +1243,8 @@ echo count($owner->items), count(PhpArrayWrites::$shared);
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
-        let instructions = module.functions.iter().chain(&module.class_methods)
+        let instructions = module.class_methods.iter()
+            .filter(|function| function.name == "PhpArrayWrites::write")
             .flat_map(|function| &function.instructions)
             .collect::<Vec<_>>();
         let fetches = instructions.iter().filter(|inst| inst.op == Op::PropGetForWrite)
@@ -1376,7 +1418,8 @@ if ($argc > 1) { $a = 0; $b[0] = "x"; } else { $a = "ciao"; }
 echo $a, "|", $b[0];
 "#,
     );
-    let text = print_module(&module);
+    let main = module.functions.iter().find(|function| function.flags.is_main).unwrap();
+    let text = crate::ir::print_function(main);
     assert_eq!(
         text.matches("php=mixed own=maybe_owned = load_local slot[2]")
             .count(),

@@ -1,8 +1,6 @@
 ---
 title: "gzdeflate()"
 description: "Deflate a string using the DEFLATE data format."
-sidebar:
-  order: 795
 ---
 
 ## gzdeflate()
@@ -21,8 +19,9 @@ Deflate a string using the DEFLATE data format.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/gzdeflate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/gzdeflate.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

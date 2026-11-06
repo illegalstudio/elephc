@@ -1,8 +1,6 @@
 ---
 title: "mb_convert_variables()"
 description: "Detects one source encoding and converts strings in variables, nested arrays, and object properties by reference."
-sidebar:
-  order: 833
 ---
 
 ## mb_convert_variables()
@@ -23,8 +21,9 @@ Detects one source encoding and converts strings in variables, nested arrays, an
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_convert_variables.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_convert_variables.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

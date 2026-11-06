@@ -12,7 +12,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
-use crate::ir::{Immediate, Instruction, Module, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::php_symbol_key;
 use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, PhpType};
 
@@ -31,6 +31,8 @@ struct ReflectionAttributeLayout {
     property_count: usize,
     name_lo: usize,
     name_hi: usize,
+    public_name_lo: usize,
+    public_name_hi: usize,
     args_lo: usize,
     args_hi: usize,
     factory_lo: usize,
@@ -144,20 +146,26 @@ pub(in crate::codegen::lower_inst) fn emit_reflection_attribute_array(
         &PhpType::Object("ReflectionAttribute".to_string()),
     );
 
+    // Number the program's attribute factories once for this array, and only when it has
+    // attributes to number: most reflected members carry none.
+    let module = ctx.module;
+    let factory_ids = (!attr_names.is_empty()).then(|| {
+        let function_attrs =
+            crate::codegen::reflection::function_attribute_metadata(&module.functions);
+        crate::codegen::reflection::AttributeFactoryIds::new(
+            &module.class_infos,
+            &crate::codegen::reflection::borrow_attribute_metadata(&function_attrs),
+        )
+    });
+
     for (idx, attr_name) in attr_names.iter().enumerate() {
         let attr_arg_list = attr_args
             .get(idx)
             .and_then(|args| args.as_deref())
             .unwrap_or(&[]);
-        let factory_id = {
-            let function_attrs = function_attribute_sources(ctx.module);
-            crate::codegen::reflection::attribute_factory_id_with_extra(
-                &ctx.module.class_infos,
-                &function_attrs,
-                attr_name,
-                attr_arg_list,
-            )
-        };
+        let factory_id = factory_ids
+            .as_ref()
+            .map_or(0, |ids| ids.id(attr_name, attr_arg_list));
 
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_attribute_object(ctx, &layout);
@@ -177,23 +185,6 @@ pub(in crate::codegen::lower_inst) fn emit_reflection_attribute_array(
     Ok(())
 }
 
-/// Returns reflection-visible top-level function attribute metadata sources.
-fn function_attribute_sources(
-    module: &Module,
-) -> Vec<crate::codegen::reflection::AttributeMetadataSource<'_>> {
-    module
-        .functions
-        .iter()
-        .filter(|function| !function.attribute_names.is_empty())
-        .map(|function| {
-            (
-                function.attribute_names.as_slice(),
-                function.attribute_args.as_slice(),
-            )
-        })
-        .collect()
-}
-
 /// Returns the synthetic `ReflectionAttribute` class layout from EIR metadata.
 fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAttributeLayout> {
     let info = ctx
@@ -202,6 +193,7 @@ fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAt
         .get("ReflectionAttribute")
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let name_lo = reflection_property_offset(info, "__name")?;
+    let public_name_lo = reflection_property_offset(info, "name")?;
     let args_lo = reflection_property_offset(info, "__args")?;
     let factory_lo = reflection_property_offset(info, "__factory")?;
     let target_lo = reflection_property_offset(info, "__target")?;
@@ -211,6 +203,8 @@ fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAt
         property_count: info.properties.len(),
         name_lo,
         name_hi: name_lo + 8,
+        public_name_lo,
+        public_name_hi: public_name_lo + 8,
         args_lo,
         args_hi: args_lo + 8,
         factory_lo,
@@ -254,10 +248,8 @@ fn emit_reflection_attribute_object(
             ctx.emitter
                 .instruction(&format!("mov rax, {}", payload_size));            // request ReflectionAttribute object payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(
-                "mov r10, 0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            ));                                                                 // materialize the x86_64 object heap kind word
+            let heap_kind = crate::codegen_support::sentinels::x86_64_heap_kind_word(4);
+            ctx.emitter.instruction(&format!("mov r10, 0x{heap_kind:x}"));      // materialize the x86_64 object heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the object heap header before the payload
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter
@@ -274,6 +266,9 @@ fn emit_reflection_attribute_object(
 }
 
 /// Stores the reflected attribute name into the object currently parked on the stack.
+///
+/// The private `__name` slot owns a heap copy. The public `name` mirror points at the read-only
+/// literal, the representation `new` gives a declared string default, so it costs no heap block.
 fn emit_set_name_property(
     ctx: &mut FunctionContext<'_>,
     attr_name: &str,
@@ -281,22 +276,31 @@ fn emit_set_name_property(
 ) {
     let (label, len) = ctx.data.add_string(attr_name.as_bytes());
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x1", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
-            abi::emit_store_to_address(ctx.emitter, "x1", object_reg, layout.name_lo);
-            abi::emit_store_to_address(ctx.emitter, "x2", object_reg, layout.name_hi);
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rax", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
-            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, layout.name_lo);
-            abi::emit_store_to_address(ctx.emitter, "rdx", object_reg, layout.name_hi);
+    for (low_offset, high_offset, owns_copy) in [
+        (layout.name_lo, layout.name_hi, true),
+        (layout.public_name_lo, layout.public_name_hi, false),
+    ] {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_symbol_address(ctx.emitter, "x1", &label);
+                abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+                if owns_copy {
+                    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+                }
+                abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+                abi::emit_store_to_address(ctx.emitter, "x1", object_reg, low_offset);
+                abi::emit_store_to_address(ctx.emitter, "x2", object_reg, high_offset);
+            }
+            Arch::X86_64 => {
+                abi::emit_symbol_address(ctx.emitter, "rax", &label);
+                abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+                if owns_copy {
+                    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+                }
+                abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+                abi::emit_store_to_address(ctx.emitter, "rax", object_reg, low_offset);
+                abi::emit_store_to_address(ctx.emitter, "rdx", object_reg, high_offset);
+            }
         }
     }
 }
@@ -727,5 +731,6 @@ fn const_string_operand(
         .strings
         .get(data.as_raw() as usize)
         .cloned()
+        .map(|value| crate::names::literal_symbol_name(&value).unwrap_or(value))
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }

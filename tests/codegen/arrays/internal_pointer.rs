@@ -292,3 +292,54 @@ eval('$h = ["x"=>1,"y"=>2]; echo current($h), key($h); next($h); echo current($h
     );
     assert_eq!(out, "10|0|20|1|30|2|bool(false)\nNULL\n10|0\n1x2y");
 }
+
+
+/// The whole pointer family over a hash whose VALUES are boxed `Mixed` cells.
+///
+/// A hash entry carries its own `value_tag`, and `__rt_array_ptr_value` handed it straight to
+/// `__rt_mixed_from_value`. Tag 7 says the payload IS a Mixed cell, and that helper's tag-7 arm
+/// retains it and allocates ANOTHER cell around it — a Mixed holding a Mixed, which no display
+/// path unwraps twice, so every one of these printed nothing while `key()` stayed correct.
+///
+/// Checked arithmetic is what boxes the values here (`2 * $n` can overflow to float), which is
+/// the ordinary way an `array<string, mixed>` appears. Raw int and string payloads were always
+/// right, and so was an INDEXED array of boxed cells — it delegates to `__rt_array_get_mixed_key`,
+/// which understands every `value_type`. Only the hash branch boxed blind.
+#[test]
+fn test_pointer_family_over_a_hash_of_boxed_mixed_values() {
+    let out = compile_and_run(
+        r#"<?php
+$n = 2;
+$h = ["b" => 2 * $n, "a" => 1 * $n];
+echo current($h), "|", key($h), "|";
+next($h);
+echo current($h), "|", key($h), "|";
+reset($h);
+echo current($h), "|", key($h), "|";
+echo end($h), "|", key($h);
+"#,
+    );
+    assert_eq!(out, "4|b|2|a|4|b|2|a");
+}
+
+/// The entry's own cell is returned with a retain instead of a fresh wrapper, so the caller's
+/// release has to balance it. Five hundred reads would leak five hundred cells if it did not —
+/// and the boxed case now allocates FEWER blocks than the raw one, because the wrapper is gone.
+#[test]
+fn test_repeated_pointer_reads_over_boxed_values_do_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = 2;
+$h = ["b" => 2 * $n, "a" => 1 * $n];
+$t = 0;
+for ($i = 0; $i < 500; $i++) { reset($h); $t += current($h); next($h); $t += current($h); }
+echo $t;
+"#,
+    );
+    assert_eq!(out.stdout, "3000", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}

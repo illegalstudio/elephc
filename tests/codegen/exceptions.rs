@@ -1132,3 +1132,156 @@ foreach ([$runtime, $code, $previous] as $method) {
 "#);
     assert_eq!(out, "final:Exception|final:Exception|final:Exception|");
 }
+
+/// Eval reflection reports the same declaring class as AOT for PDOException's inherited final
+/// `getCode()`: the prelude's SQLSTATE body does not make `PDOException` its declarer (#1440).
+#[test]
+fn test_eval_reflection_keeps_pdo_exception_get_code_declaring_class() {
+    let out = compile_and_run(r#"<?php
+$aot = new ReflectionMethod(PDOException::class, 'getCode');
+echo "aot:", $aot->getDeclaringClass()->getName(), "|";
+eval('$code = new ReflectionMethod("PDOException", "getCode");
+echo "eval:", $code->getDeclaringClass()->getName(), ":", $code->isFinal() ? "final" : "open", "|";
+$previous = new ReflectionMethod("PDOException", "getPrevious");
+echo "previous:", $previous->getDeclaringClass()->getName(), "|";');
+"#);
+    assert_eq!(out, "aot:Exception|eval:Exception:final|previous:Exception|");
+}
+
+/// Every exit that leaves a `try`/`catch` without `finally` pops its handler; none that stays does.
+///
+/// A `break`, `continue` or `return` out of such a `try` left its handler active, so a later
+/// throw landed in the abandoned `catch` and execution resumed after it. The PR #968 review's
+/// include reproducer printed `AFTER WRONG-INNER:outside AFTER OUTER:outside` for reference's
+/// `AFTER OUTER:outside`, and a `return` carried the stale handler into the CALLER.
+///
+/// Two details keep this test able to fail, and both were found by it passing with the fix
+/// removed. The condition is a call INSIDE each `try`: with a precomputed flag the body cannot
+/// throw, the optimizer drops the `try` and its handler, and there is nothing left to leak. And
+/// each throw happens in the function that holds the stale handler, not in a caller the frame
+/// already returned to. With the fix removed, nine of these twelve lines print `WRONG-…`.
+///
+/// Every line was MEASURED on reference PHP 8.5.10. A loop opened INSIDE the `try` pins the
+/// other direction: its `break` stays in the `try`, so the handler must still catch.
+#[test]
+fn test_every_exit_leaving_a_bare_try_pops_its_handler() {
+    let out = compile_and_run(
+        r#"<?php
+// Each shape throws in the SAME function as the try the exit left, after the exit.
+// The condition is a call INSIDE each try, so the try body can throw and keeps its handler.
+function go(): bool { return getenv("ELEPHC_UNSET_PROBE") === false; }
+
+try {
+    foreach ([1, 2] as $x) {
+        try { if (go()) { break; } } catch (Exception $e) { echo "WRONG-break\n"; }
+    }
+    throw new Exception("break");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    foreach ([1, 2] as $x) {
+        try { if (go()) { continue; } } catch (Exception $e) { echo "WRONG-continue\n"; }
+    }
+    throw new Exception("continue");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    foreach ([1] as $o) {
+        foreach ([1] as $i) {
+            try { if (go()) { break 2; } } catch (Exception $e) { echo "WRONG-break2\n"; }
+        }
+    }
+    throw new Exception("break2");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    while (true) {
+        try {
+            try { if (go()) { break; } } catch (RuntimeException $e) { echo "WRONG-inner\n"; }
+        } catch (Exception $e) { echo "WRONG-outer\n"; }
+        break;
+    }
+    throw new Exception("nested");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    switch (1) {
+        case 1:
+            try { if (go()) { break; } } catch (Exception $e) { echo "WRONG-switch\n"; }
+    }
+    throw new Exception("switch");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    foreach ([1] as $x) {
+        try {
+            try { if (go()) { break; } } catch (Exception $e) { echo "WRONG-in-finally\n"; }
+        } finally { echo "F "; }
+    }
+    throw new Exception("in-finally");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    foreach ([1] as $x) {
+        try {
+            try { throw new Exception("x"); } catch (Exception $e) { if (go()) { break; } }
+        } catch (Exception $e) { echo "WRONG-from-catch\n"; }
+    }
+    throw new Exception("from-catch");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+function returns_out_of_try(): int {
+    try { if (go()) { return 1; } } catch (Exception $e) { echo "WRONG-return\n"; }
+    return 0;
+}
+try {
+    returns_out_of_try();
+    throw new Exception("return");
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+function returns_then_throws(): void {
+    foreach ([1] as $x) {
+        try { if (go()) { break; } } catch (Exception $e) { echo "WRONG-fn\n"; }
+    }
+    throw new Exception("fn");
+}
+try {
+    returns_then_throws();
+} catch (Exception $e) { echo "OUTER:", $e->getMessage(), "\n"; }
+
+try {
+    foreach ([1, 2] as $x) { if (go()) { break; } }
+    throw new Exception("inside");
+} catch (Exception $e) { echo "inner-loop CAUGHT:", $e->getMessage(), "\n"; }
+
+$n = 0;
+foreach ([1, 2, 3] as $x) {
+    try {
+        foreach ([1] as $y) {
+            try { if (go()) { break; } } catch (Exception $e) { echo "WRONG-iter\n"; }
+        }
+        if ($x === 2) { throw new Exception("iter$x"); }
+    } catch (Exception $e) {
+        echo "iter CAUGHT:", $e->getMessage(), "\n";
+    }
+    $n++;
+}
+echo "n=$n\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "OUTER:break\n\
+         OUTER:continue\n\
+         OUTER:break2\n\
+         OUTER:nested\n\
+         OUTER:switch\n\
+         F OUTER:in-finally\n\
+         OUTER:from-catch\n\
+         OUTER:return\n\
+         OUTER:fn\n\
+         inner-loop CAUGHT:inside\n\
+         iter CAUGHT:iter2\n\
+         n=3\n"
+    );
+}

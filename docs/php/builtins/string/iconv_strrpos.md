@@ -1,8 +1,6 @@
 ---
 title: "iconv_strrpos()"
 description: "Finds the last character position of a needle in a string."
-sidebar:
-  order: 818
 ---
 
 ## iconv_strrpos()
@@ -22,8 +20,9 @@ Finds the last character position of a needle in a string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/iconv_strrpos.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/iconv_strrpos.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -116,7 +116,7 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::emit_temporary_stack_address(ctx.emitter, &owner_addr, 0);
     abi::emit_link_call_operand_owner_at_stack(ctx.emitter, &owner_addr, false, 16);
 
-    emit_enum_uncloneable_guard(ctx);
+    emit_declared_uncloneable_guard(ctx);
     emit_clone_hook(ctx, object, inst.operands.get(2).copied())?;
     // An omitted second argument IS the empty override array, so there is nothing to apply.
     if let Some(properties) = inst.operands.get(1).copied() {
@@ -311,7 +311,7 @@ fn emit_eval_clone_invocation_scope(
     invocation_scope: Option<ValueId>,
 ) -> Result<()> {
     let Some(invocation_scope) = invocation_scope else {
-        let Some(lexical_class) = ctx.function.lexical_class.clone() else {
+        let Some(lexical_class) = ctx.lexical_class().map(str::to_owned) else {
             return Ok(());
         };
         emit_store_eval_clone_scope_name(ctx, &lexical_class);
@@ -532,7 +532,7 @@ fn static_type_name(ty: &PhpType) -> &str {
         PhpType::Resource(_) | PhpType::Buffer(_) | PhpType::Pointer(_) => "resource",
         PhpType::Callable => "Closure",
         PhpType::Iterable => "object",
-        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar => "mixed",
+        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar | PhpType::Narrow(_) => "mixed",
     }
 }
 
@@ -575,12 +575,12 @@ fn emit_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&cloned_label);
 }
 
-/// Refuses an enum case, which php forbids cloning, naming the enum the way php-src does.
+/// Refuses enum cases and catalogued opaque objects using their runtime class names.
 ///
-/// The shared shallow-copy adapter happily copies an enum case, so the refusal is decided here
+/// The shared shallow-copy adapter copies enum cases and opaque internal classes, so the refusal is decided here
 /// from the clone's own runtime class id. It runs INSIDE the owner window, so the copy the
 /// adapter already made is released by the unwinder instead of leaking.
-fn emit_enum_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
+fn emit_declared_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
     let mut enums = ctx
         .module
         .enum_infos
@@ -592,6 +592,11 @@ fn emit_enum_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
                 .map(|info| (info.class_id as i64, name.clone()))
         })
         .collect::<Vec<_>>();
+    for (name, info) in &ctx.module.class_infos {
+        if !crate::types::builtin_classes::class_allows_clone(name, &ctx.module.class_infos) {
+            enums.push((info.class_id as i64, name.clone()));
+        }
+    }
     if enums.is_empty() {
         return;
     }
@@ -742,10 +747,10 @@ fn emit_clone_hook_class_dispatch(
     for (candidate, label) in candidates.iter().zip(labels.iter()) {
         abi::emit_load_int_immediate(ctx.emitter, compare_reg, candidate.class_id as i64);
         ctx.emitter
-            .instruction(&format!("cmp {class_id_reg}, {compare_reg}"));
+            .instruction(&format!("cmp {class_id_reg}, {compare_reg}")); // compare the clone's class with this hook candidate
         match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),
-            Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),
+            Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")), // dispatch to the matching clone hook
+            Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),    // dispatch to the matching clone hook
         }
     }
     abi::emit_jump(ctx.emitter, no_hook);
@@ -868,10 +873,10 @@ pub(super) fn emit_branch_if_reg_equals_immediate(
 ) {
     let scratch = abi::secondary_scratch_reg(ctx.emitter).to_string();
     abi::emit_load_int_immediate(ctx.emitter, &scratch, value);
-    ctx.emitter.instruction(&format!("cmp {reg}, {scratch}"));
+    ctx.emitter.instruction(&format!("cmp {reg}, {scratch}"));                  // compare the runtime class id with the allowed scope id
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),
-        Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),     // accept the matching invocation scope
+        Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),        // accept the matching invocation scope
     }
 }
 
@@ -936,10 +941,10 @@ pub(super) fn value_is_empty_array_literal(ctx: &FunctionContext<'_>, value: Val
 /// Branches to `label` when the register holds zero.
 fn emit_branch_if_zero(ctx: &mut FunctionContext<'_>, reg: &str, label: &str) {
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {reg}, {label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {reg}, {label}")), // take the requested path when the value is zero
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {reg}, {reg}"));
-            ctx.emitter.instruction(&format!("jz {label}"));
+            ctx.emitter.instruction(&format!("test {reg}, {reg}"));             // set flags from the value being checked
+            ctx.emitter.instruction(&format!("jz {label}"));                    // take the requested path when the value is zero
         }
     }
 }
@@ -947,20 +952,20 @@ fn emit_branch_if_zero(ctx: &mut FunctionContext<'_>, reg: &str, label: &str) {
 /// Branches to `label` when the register holds a non-zero value.
 fn emit_branch_if_nonzero(ctx: &mut FunctionContext<'_>, reg: &str, label: &str) {
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz {reg}, {label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz {reg}, {label}")), // take the requested path when the value is nonzero
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {reg}, {reg}"));
-            ctx.emitter.instruction(&format!("jnz {label}"));
+            ctx.emitter.instruction(&format!("test {reg}, {reg}"));             // set flags from the value being checked
+            ctx.emitter.instruction(&format!("jnz {label}"));                   // take the requested path when the value is nonzero
         }
     }
 }
 
 /// Branches to `label` when an unboxed runtime tag register holds the object tag.
 fn emit_branch_if_tag_is_object(ctx: &mut FunctionContext<'_>, tag_reg: &str, label: &str) {
-    ctx.emitter.instruction(&format!("cmp {tag_reg}, 6"));
+    ctx.emitter.instruction(&format!("cmp {tag_reg}, 6"));                      // compare the runtime tag with the object tag
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),
-        Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {label}")),     // take the object-specific path
+        Arch::X86_64 => ctx.emitter.instruction(&format!("je {label}")),        // take the object-specific path
     }
 }
 
@@ -969,8 +974,8 @@ fn clone_hook_is_visible(ctx: &FunctionContext<'_>, candidate: &CloneHookCandida
     let declaring = candidate.declaring_class.as_str();
     match candidate.visibility {
         Visibility::Public => true,
-        Visibility::Private => ctx.function.lexical_class.as_deref() == Some(declaring),
-        Visibility::Protected => ctx.function.lexical_class.as_deref().is_some_and(|current| {
+        Visibility::Private => ctx.lexical_class() == Some(declaring),
+        Visibility::Protected => ctx.lexical_class().is_some_and(|current| {
             current == declaring
                 || class_is_subclass_of(ctx, current, declaring)
                 || class_is_subclass_of(ctx, declaring, current)
@@ -1003,9 +1008,7 @@ fn class_is_subclass_of(ctx: &FunctionContext<'_>, class_name: &str, ancestor: &
 /// PHP writes `from global scope` at the top level and `from scope Other` inside a class,
 /// so the phrase carries its own trailing word and callers must not append one.
 fn invocation_scope_phrase(ctx: &FunctionContext<'_>) -> String {
-    ctx.function
-        .lexical_class
-        .as_deref()
+    ctx.lexical_class()
         .map_or_else(|| "global scope".to_string(), |class| format!("scope {class}"))
 }
 

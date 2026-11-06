@@ -6,8 +6,10 @@
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - Concrete scalar casts stay inline; Mixed numeric casts delegate to boxed runtime helpers.
+//! - Proven numeric frame casts inline integer payloads; other Mixed casts use runtime helpers.
 //! - String numeric parsing delegates to shared runtime routines.
+//! - A string-to-string cast replaces the missing typed-array sentinel with the
+//!   canonical empty string and leaves every other string payload unchanged.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -57,6 +59,9 @@ pub(super) fn lower_str_to_float(ctx: &mut FunctionContext<'_>, inst: &Instructi
 
 /// Lowers explicit scalar casts based on the target storage immediate and result PHP type.
 pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.immediate == Some(Immediate::ImplicitIntCast) {
+        return super::implicit_int_cast::lower(ctx, inst);
+    }
     match expect_cast_target(inst)? {
         IrType::I64 if inst.result_php_type == PhpType::Bool => predicates::lower_is_truthy(ctx, inst),
         IrType::I64 => lower_cast_to_int(ctx, inst),
@@ -65,7 +70,7 @@ pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         IrType::Heap(IrHeapKind::Hash) => {
             super::builtins::types::lower_object_array_cast(ctx, inst)
         }
-        IrType::Heap(IrHeapKind::Mixed) if inst.result_php_type == PhpType::Mixed => {
+        IrType::Heap(IrHeapKind::Mixed) if inst.result_php_type.codegen_repr() == PhpType::Mixed => {
             lower_mixed_array_cast(ctx, inst)
         }
         target => Err(CodegenIrError::unsupported(format!(
@@ -90,6 +95,12 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     if matches!(raw_ty, PhpType::Resource(_)) {
         ctx.load_value_to_result(value)?;
         emit_resource_display_id_to_int(ctx);
+        return store_if_result(ctx, inst);
+    }
+    // A `?ptr<T>` converts like the PHP value it stands for: null is 0, a live address is the
+    // integer it boxes to.
+    if crate::types::is_nullable_pointer_type(&raw_ty) {
+        ctx.load_value_to_result(value)?;
         return store_if_result(ctx, inst);
     }
     match raw_ty.codegen_repr() {
@@ -124,6 +135,9 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
                 abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
                 return store_if_result(ctx, inst);
             }
+            if super::numeric_cast::try_lower_int(ctx, inst, value)? {
+                return Ok(());
+            }
             load_value_to_first_int_arg(ctx, value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
         }
@@ -147,6 +161,13 @@ fn lower_cast_to_float(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
     if matches!(raw_ty, PhpType::Resource(_)) {
         ctx.load_value_to_result(value)?;
         emit_resource_display_id_to_int(ctx);
+        abi::emit_int_result_to_float_result(ctx.emitter);
+        return store_if_result(ctx, inst);
+    }
+    // A `?ptr<T>` converts like the PHP value it stands for: null is 0.0, a live address the
+    // integer it boxes to.
+    if crate::types::is_nullable_pointer_type(&raw_ty) {
+        ctx.load_value_to_result(value)?;
         abi::emit_int_result_to_float_result(ctx.emitter);
         return store_if_result(ctx, inst);
     }
@@ -204,12 +225,18 @@ pub(super) fn lower_cast_to_string(
     match raw_ty.codegen_repr() {
         PhpType::Str => {
             ctx.load_value_to_result(value)?;
+            normalize_missing_string_cast(ctx);
             store_if_result(ctx, inst)
         }
         PhpType::Float => strings::lower_float_to_string(ctx, inst),
-        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar => {
-            strings::lower_int_like_to_string(ctx, inst)
-        }
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Void
+        | PhpType::Never
+        | PhpType::TaggedScalar
+        | PhpType::Pointer(_)
+        // A packed record address stringifies like the `ptr<T>` the checker types it as.
+        | PhpType::Packed(_) => strings::lower_int_like_to_string(ctx, inst),
         PhpType::Mixed | PhpType::Union(_) => {
             emit_mixed_string_context_result(ctx, value)?;
             if let Some(result) = inst.result {
@@ -226,6 +253,33 @@ pub(super) fn lower_cast_to_string(
             other
         ))),
     }
+}
+
+/// Converts the runtime's in-band missing-string marker into a real empty string.
+///
+/// A missing element of a concrete typed array reaches a `(string)` cast as the
+/// shared null sentinel with zero length, including after that value has been
+/// stored in a variable. The cast publishes the canonical empty string instead.
+/// A bare read keeps the sentinel, so `var_dump` and `is_null` still see null.
+/// A zero pointer is not that empty string: on x86_64 the sentinel already
+/// occupies the string pointer register, and later readers must not treat it as null.
+fn normalize_missing_string_cast(ctx: &mut FunctionContext<'_>) {
+    let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    let keep = ctx.next_label("str_cast_keep");
+    abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::sentinels::NULL_SENTINEL);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", ptr_reg, scratch));  // is the cast source the missing-string marker?
+            ctx.emitter.instruction(&format!("b.ne {}", keep));                 // real strings keep their original payload
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", ptr_reg, scratch));  // is the cast source the missing-string marker?
+            ctx.emitter.instruction(&format!("jne {}", keep));                  // real strings keep their original payload
+        }
+    }
+    strings::emit_canonical_empty_string(ctx);
+    ctx.emitter.label(&keep);
 }
 
 /// Leaves a string result for a boxed Mixed value, dispatching objects through `__toString()`.

@@ -32,6 +32,9 @@ crate-type = ["staticlib", "rlib"]
 curl = ["elephc-builtin-contract/curl"]
 
 [dependencies]
+elephc-process-context = { path = "../elephc-process-context" }
+elephc-tokenizer-engine = { path = "../elephc-tokenizer-engine" }
+elephc-generics = { path = "../elephc-generics" }
 elephc-builtin-contract = { path = "../elephc-builtin-contract" }
 elephc-crypto = { path = "../elephc-crypto" }
 elephc-iconv = { path = "../elephc-iconv" }
@@ -40,7 +43,14 @@ elephc-pcntl = { path = "../elephc-pcntl" }
 flate2 = "1"
 inventory = "0.3"
 libc = "0.2"
+# `rc` is required: a cached script segment holds its bytes and its parsed program
+# behind `Arc`, which serde only (de)serializes with that feature on.
+serde = { version = "1", features = ["derive", "rc"] }
+bincode = "1"
 unicode-segmentation = "1"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+rustyline = { version = "18", default-features = false, features = ["with-file-history"] }
 
 [dev-dependencies]
 elephc-mbstring = { path = "../elephc-mbstring" }

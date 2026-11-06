@@ -44,7 +44,7 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
                     Ok(())
                 },
             )?;
-            store_void_builtin_result(ctx, inst)?;
+            store_true_builtin_result(ctx, inst)?;
             return Ok(());
         }
         PhpType::Str => {
@@ -67,7 +67,7 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
                     Ok(())
                 },
             )?;
-            store_void_builtin_result(ctx, inst)?;
+            store_true_builtin_result(ctx, inst)?;
             return Ok(());
         }
         _ => {}
@@ -85,7 +85,7 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
-    store_void_builtin_result(ctx, inst)
+    store_true_builtin_result(ctx, inst)
 }
 
 /// Merges boxed PHP arrays through layout dispatch, retaining the concrete indexed fast path.
@@ -171,11 +171,19 @@ pub(crate) fn lower_array_intersect_key(
 /// PHP's `bool $preserve_keys = false` renumbers the selected window from zero; a literal `true`
 /// keeps the source integer keys instead. A dense indexed array cannot hold a window that does not
 /// start at key 0, so the key-preserving form lowers to `__rt_array_slice_to_hash`, which builds an
-/// owned hash. The checker guarantees the flag is a literal (it decides the result's static
-/// shape), so a non-literal operand can only mean the checker and the backend disagree.
+/// owned hash. For concrete storage the checker guarantees the flag is a literal (it decides the
+/// result's static shape), so a non-literal operand can only mean the checker and the backend
+/// disagree. A boxed source is dispatched first: its result is the boxed PHP array whatever the
+/// flag says, so it reads the flag at runtime (see `lower_mixed_array_slice`).
 pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_slice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return lower_mixed_array_slice(ctx, inst);
+    }
     let preserve_keys = slice_like_preserve_keys(ctx, inst, "array_slice")?;
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
@@ -185,12 +193,6 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
     if preserve_keys {
         return lower_array_slice_preserve_keys(ctx, inst, array);
-    }
-    if matches!(
-        ctx.value_php_type(array)?.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
-        return lower_mixed_array_slice(ctx, inst);
     }
     let offset = expect_operand(inst, 1)?;
     let length = slice_like_length_operand(inst)?;
@@ -245,19 +247,66 @@ fn lower_hash_slice(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `array_slice()` for an indexed array stored inside a boxed Mixed cell.
+/// Lowers `array_slice()` for an indexed or hash array stored inside a boxed Mixed cell.
+///
+/// A boxed result (the PHP array type the checker, the fallback, and the callable wrapper give a
+/// boxed source) receives whichever storage the slice built, boxed by its runtime heap kind. An
+/// `array<mixed>` result only comes from a checked list type whose operand EIR still boxes, such
+/// as a call-site-specialized untyped parameter; a hash payload there stays a hash-backed array,
+/// which boxing recognizes by its heap kind.
+///
+/// `$preserve_keys` is read at runtime. The callable wrapper forwards whatever its caller passed,
+/// and `call_user_func_array($f, $args)` hides that argument from the checker, so the flag is
+/// staged on the temporary stack before the payload dispatch and both payload shapes honor it: a
+/// hash hands it to `__rt_hash_slice`, and a list keeps its keys through
+/// `__rt_array_slice_to_hash`. That hash can only be carried by a boxed result, so a flag that may
+/// be set is refused for any other result type.
 pub(super) fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
     let length = slice_like_length_operand(inst)?;
-    let result_elem_ty =
-        result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
+    let preserve_keys = inst.operands.get(3).copied();
+    let result_ty = inst.result_php_type.codegen_repr();
+    let boxed_result = matches!(result_ty, PhpType::Mixed | PhpType::Union(_));
+    let result_elem_ty = if boxed_result {
+        PhpType::Mixed
+    } else {
+        result_array_element_type("array_slice", &result_ty)?
+    };
     require_array_slice_result_type(&PhpType::Mixed, &result_elem_ty)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_mixed_array_slice_aarch64(ctx, array, offset, length)?,
-        Arch::X86_64 => lower_mixed_array_slice_x86_64(ctx, array, offset, length)?,
+    let keys_may_be_kept = slice_preserve_keys_may_be_set(ctx, preserve_keys)?;
+    if keys_may_be_kept && !boxed_result {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_slice preserve_keys of a boxed source into result PHP type {:?}",
+            inst.result_php_type
+        )));
     }
-    normalize_indexed_array_result(ctx, "array_slice", &PhpType::Mixed, &result_elem_ty)?;
+    stage_slice_preserve_keys_flag(ctx, preserve_keys)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_mixed_array_slice_aarch64(
+            ctx,
+            array,
+            offset,
+            length,
+            &result_elem_ty,
+            keys_may_be_kept,
+        )?,
+        Arch::X86_64 => lower_mixed_array_slice_x86_64(
+            ctx,
+            array,
+            offset,
+            length,
+            &result_elem_ty,
+            keys_may_be_kept,
+        )?,
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    if boxed_result {
+        emit_box_current_owned_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Array(Box::new(PhpType::Mixed)),
+        );
+    }
     store_if_result(ctx, inst)
 }
 

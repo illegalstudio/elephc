@@ -19,6 +19,7 @@ use crate::span::Span;
 /// PHP-compatible diagnostics while preserving evaluation order.
 pub(crate) struct CallArgPlan {
     pub(crate) source_args: Vec<Expr>,
+    pub(super) source_origins: Vec<super::static_spread::ExpandedArgOrigin>,
     pub(crate) regular_args: Vec<PlannedRegularArg>,
     pub(crate) variadic_args: Vec<PlannedVariadicArg>,
     pub(crate) source_values: Vec<PlannedSourceValue>,
@@ -102,6 +103,11 @@ pub(crate) enum CallArgPlanError {
     PositionalAfterSpread {
         span: Span,
     },
+    /// A statically known unpack supplies a positional entry after a named one, which php
+    /// rejects with "Cannot use positional argument after named argument during unpacking".
+    PositionalAfterNamedUnpack {
+        span: Span,
+    },
     SpreadAfterNamed {
         span: Span,
     },
@@ -112,6 +118,54 @@ pub(crate) enum CallArgPlanError {
 }
 
 impl CallArgPlan {
+    /// Retains unpack provenance when literal expansion makes a value look like caller storage.
+    pub(crate) fn regular_argument_is_unpacked(&self, parameter_index: usize) -> bool {
+        let from_unpack = |source_index: usize| {
+            self.source_origins.get(source_index).is_some_and(|origin|
+                *origin != super::static_spread::ExpandedArgOrigin::Source)
+        };
+        if self.passthrough_args.is_some() {
+            return self.source_args.iter().enumerate().take(parameter_index + 1)
+                .any(|(index, arg)| matches!(arg.kind, ExprKind::Spread(_))
+                    || (index == parameter_index && from_unpack(index)));
+        }
+        match self.regular_args.get(parameter_index) {
+            Some(PlannedRegularArg::Source { source_index, .. }) => from_unpack(*source_index),
+            Some(PlannedRegularArg::SpreadElement { .. }) => true,
+            _ => false,
+        }
+    }
+
+    /// Detects too-short positional plans without replacing dynamic unpack bounds checks.
+    pub(crate) fn statically_missing_positionals(
+        &self, sig: &crate::types::FunctionSig,
+    ) -> Option<(usize, usize)> {
+        let args = self.passthrough_args.as_ref()?;
+        let provided = if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+            super::static_spread::expand_planned_positional_spreads(args)?.len()
+        } else { args.len() };
+        let required = super::matching::required_param_count(sig);
+        (provided < required).then_some((provided, required))
+    }
+
+    /// Marks defaults that may be evaluated, retaining uncertainty from dynamic unpack lengths.
+    pub(crate) fn possible_default_argument_mask(&self, sig: &crate::types::FunctionSig) -> Vec<bool> {
+        if let Some(args) = &self.passthrough_args {
+            let supplied = super::static_spread::expand_planned_positional_spreads(args)
+                .map(|values| values.len())
+                .unwrap_or_else(|| args.iter()
+                    .position(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+                    .unwrap_or(args.len()));
+            return (0..self.regular_param_count)
+                .map(|index| index >= supplied && sig.defaults.get(index).is_some_and(Option::is_some))
+                .collect();
+        }
+        self.regular_args.iter().map(|arg| matches!(arg,
+            PlannedRegularArg::Default(_)
+                | PlannedRegularArg::SpreadElement { default: Some(_), guaranteed_present: false, .. }
+        )).collect()
+    }
+
     /// Marks normalized regular slots supplied by a declaration default, not by caller storage.
     pub(crate) fn default_argument_mask(&self) -> Vec<bool> {
         self.regular_args.iter()
@@ -146,6 +200,17 @@ impl CallArgPlan {
         self.source_args
             .iter()
             .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+    }
+
+    /// Returns how many leading `normalized_args()` entries are the regular parameters in order.
+    ///
+    /// Passthrough arguments keep their source order, so none of them is tied to a parameter.
+    pub(crate) fn normalized_regular_arg_count(&self) -> usize {
+        if self.passthrough_args.is_some() {
+            0
+        } else {
+            self.regular_args.len()
+        }
     }
 
     /// Returns a flat list of expressions in parameter order suitable for codegen
@@ -429,6 +494,70 @@ mod tests {
             &sig, &[named("b", 2), named("a", 1), named("c", 3)], Span::dummy(), false, true,
         ).expect("explicit equal literals should remain source arguments");
         assert_eq!(explicit.default_argument_mask(), vec![false, false, false]);
+    }
+
+    /// Static positional shortage detection leaves named plans and unknown unpack lengths alone.
+    #[test]
+    fn positional_shortage_distinguishes_static_and_dynamic_unpacks() {
+        let sig = sig_with_defaults(vec![None, None, Some(Expr::int_lit(3))]);
+        let check = |args: &[Expr]| super::super::planner::plan_call_args(
+            &sig, args, Span::dummy(), false, true,
+        ).unwrap().statically_missing_positionals(&sig);
+        assert_eq!(check(&[]), Some((0, 2)));
+        assert_eq!(check(&[Expr::int_lit(1)]), Some((1, 2)));
+        assert_eq!(check(&[Expr::int_lit(1), Expr::int_lit(2)]), None);
+        let empty = Expr::new(ExprKind::Spread(Box::new(Expr::new(
+            ExprKind::ArrayLiteral(Vec::new()), Span::dummy(),
+        ))), Span::dummy());
+        assert_eq!(check(&[empty]), Some((0, 2)));
+        let dynamic = Expr::new(ExprKind::Spread(Box::new(Expr::var("args"))), Span::dummy());
+        assert_eq!(check(&[dynamic]), None);
+    }
+
+    /// Leading defaults cannot lower positional arity below the last required visible slot.
+    #[test]
+    fn positional_shortage_includes_defaults_before_required() {
+        let mut sig = sig_with_defaults(vec![Some(Expr::int_lit(1)), None, Some(Expr::int_lit(3))]);
+        let plan = super::super::planner::plan_call_args(
+            &sig, &[Expr::int_lit(4)], Span::dummy(), false, true,
+        ).unwrap();
+        assert_eq!(plan.statically_missing_positionals(&sig), Some((1, 2)));
+        sig.params.push((crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+            PhpType::Array(Box::new(PhpType::Mixed))));
+        sig.defaults.push(None);
+        sig.variadic = Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string());
+        assert_eq!(super::super::matching::required_param_count(&sig), 2);
+    }
+
+    /// Possible defaults respect explicit, named, static-unpack and dynamic-prefix provenance.
+    #[test]
+    fn possible_defaults_cover_omitted_slots_without_marking_supplied_values() {
+        let sig = sig_with_defaults(vec![Some(Expr::int_lit(1)); 3]);
+        let spread = |value| Expr::new(ExprKind::Spread(Box::new(value)), Span::dummy());
+        let named = Expr::new(ExprKind::NamedArg {
+            name: "b".into(), value: Box::new(Expr::int_lit(2)),
+        }, Span::dummy());
+        for (args, expected) in [
+            (vec![], vec![true, true, true]),
+            (vec![Expr::int_lit(1), Expr::int_lit(2)], vec![false, false, true]),
+            (vec![spread(Expr::new(ExprKind::ArrayLiteral(vec![Expr::int_lit(1)]), Span::dummy()))], vec![false, true, true]),
+            (vec![named], vec![true, false, true]),
+            (vec![Expr::int_lit(1), spread(Expr::var("args"))], vec![false, true, true]),
+        ] {
+            let plan = super::super::planner::plan_call_args(&sig, &args, Span::dummy(), false, true)
+                .expect("valid arguments");
+            assert_eq!(plan.possible_default_argument_mask(&sig), expected);
+        }
+        let required_tail = sig_with_defaults(vec![Some(Expr::int_lit(1)), None, None]);
+        let guaranteed = super::super::planner::plan_call_args(
+            &required_tail, &spread_then_named_c(), Span::dummy(), false, true,
+        ).unwrap();
+        assert_eq!(guaranteed.possible_default_argument_mask(&required_tail), vec![false; 3]);
+        let optional_middle = sig_with_defaults(vec![None, Some(Expr::int_lit(2)), None]);
+        let uncertain = super::super::planner::plan_call_args(
+            &optional_middle, &spread_then_named_c(), Span::dummy(), false, true,
+        ).unwrap();
+        assert_eq!(uncertain.possible_default_argument_mask(&optional_middle), vec![false, true, false]);
     }
 
     /// Implements the `normalized_args_skip_default_guard_when_spread_check_guarantees_slot`

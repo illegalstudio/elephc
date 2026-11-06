@@ -241,7 +241,9 @@ echo ":" . (($named >= 0 && $named < 2) ? "named" : "bad");
 $call = call_user_func("array_rand", [7, 8]);
 echo ":" . (($call >= 0 && $call < 2) ? "call" : "bad");
 $spread = call_user_func_array("array_rand", [["x" => 1, "y" => 2]]);
-echo ":" . (array_key_exists($spread, ["x" => 1, "y" => 2]) ? "spread" : "bad") . ":";
+echo ":" . (array_key_exists($spread, ["x" => 1, "y" => 2]) ? "spread" : "bad");
+$multi = array_rand($nums, 2);
+echo ":" . (is_array($multi) && count($multi) === 2 ? "multi" : "bad") . ":";
 return function_exists("array_rand");"#,
     )
     .expect("parse eval fragment");
@@ -250,7 +252,7 @@ return function_exists("array_rand");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "idx:assoc:named:call:spread:");
+    assert_eq!(values.output, "idx:assoc:named:call:spread:multi:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval random builtins return values inside PHP inclusive ranges.
@@ -466,4 +468,73 @@ return function_exists("array_search");"#,
 
     assert_eq!(values.output, "Y:N:1:name:F:C:k:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval `in_array()` and `array_search()` honour `$strict` on every call path.
+///
+/// Both hooks destructured exactly two arguments, so a third `$strict` argument failed the
+/// whole eval call and a strict search could not be expressed at all (#1472). The loose
+/// cases alongside show the default still compares with `==`. Expectations are PHP 8.5.
+#[test]
+fn execute_program_array_search_builtins_honour_strict() {
+    let program = parse_fragment(
+        br#"echo in_array("1", [1, 2], true) ? "bad" : "N";
+echo ":"; echo in_array("1", [1, 2], false) ? "Y" : "bad";
+echo ":"; echo in_array(1, [1, 2], true) ? "Y" : "bad";
+echo ":"; echo in_array(null, [0]) ? "Y" : "bad";
+echo ":"; echo in_array(null, [0], true) ? "bad" : "N";
+echo ":" . array_search("1", [1, "1"], true);
+echo ":" . array_search("1", [1, "1"]);
+echo ":"; echo array_search(null, [0], true) === false ? "F" : "bad";
+echo ":"; echo in_array(needle: 1.0, haystack: [1], strict: true) ? "bad" : "N";
+echo ":"; echo call_user_func("in_array", "2", [2], true) ? "bad" : "N";
+echo ":" . call_user_func_array("array_search", ["2", [2, "2"], true]);
+return array_search(strict: true, needle: null, haystack: ["a" => 0, "b" => null]);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "N:Y:Y:Y:N:1:0:F:N:N:1");
+    assert_eq!(values.get(result), FakeValue::String("b".to_string()));
+}
+
+/// Verifies eval `array_chunk()` renumbers every key unless `$preserve_keys` is set, and
+/// raises PHP's catchable `ValueError` for a length below one.
+///
+/// Eval kept string keys when not preserving (the `array_slice()` rule, not
+/// `array_chunk()`'s) and failed the whole eval call for a non-positive length (#1295).
+/// Expectations are PHP 8.5.
+#[test]
+fn execute_program_array_chunk_renumbers_keys_and_rejects_non_positive_length() {
+    let program = parse_fragment(
+        br#"$chunks = array_chunk(["a" => 1, "b" => 2, "c" => 3], 2);
+echo implode(",", array_keys($chunks[0])) . "/" . implode(",", array_keys($chunks[1]));
+$kept = array_chunk(["a" => 1, "b" => 2, "c" => 3], 2, true);
+echo ":" . implode(",", array_keys($kept[0])) . "/" . implode(",", array_keys($kept[1]));
+$mixed = array_chunk([5 => "x", "k" => "y", 9 => "z"], 2);
+echo ":" . implode(",", array_keys($mixed[0])) . "=" . implode("", $mixed[0]);
+$named = array_chunk(array: ["p" => 1], length: 1, preserve_keys: false);
+echo ":" . implode(",", array_keys($named[0]));
+foreach ([0, -3] as $length) {
+    try { array_chunk([1], $length); echo ":bad"; } catch (ValueError $e) { echo ":" . $e->getMessage(); }
+}
+try { call_user_func("array_chunk", [1], 0); echo ":bad"; } catch (ValueError $e) { echo ":" . get_class($e); }
+return count(array_chunk([], 1));"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "0,1/0:a,b/c:0,1=xy:0\
+         :array_chunk(): Argument #2 ($length) must be greater than 0\
+         :array_chunk(): Argument #2 ($length) must be greater than 0:ValueError"
+    );
+    assert_eq!(values.get(result), FakeValue::Int(0));
 }

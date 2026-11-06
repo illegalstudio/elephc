@@ -285,7 +285,7 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_free_deep_struct");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after finishing the deep-free scan
-    emitter.instruction("mov rax, QWORD PTR [rax + 40]");                        // load the separately owned entry allocation
+    emitter.instruction("mov rax, QWORD PTR [rax + 40]");                       // load the separately owned entry allocation
     emitter.instruction("call __rt_heap_free");                                 // release entry storage after its keys and values
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // recover the stable hash header after the helper call
     emitter.instruction("call __rt_heap_free");                                 // release the hash-table storage itself through the x86_64 heap wrapper

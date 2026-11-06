@@ -840,17 +840,13 @@ Further differences inside `eval()`:
   PHP itself passes for a handle with no `CURLOPT_INFILE`. Compiled code passes
   the real stream.
 
-- **Callback arguments are allocated per invocation and released with the eval
-  context, not after each call.** Every callback invocation builds fresh runtime
-  cells for `$ch` and for its data arguments (2 cells for write/header, 3 for
-  read and debug, 5 for progress/xferinfo). They are bound into the callback's
-  scope as borrowed cells, so the callback's own frame teardown does not free
-  them, and — like every other callback-taking builtin in the interpreter
-  (`preg_replace_callback()`, `array_map()`, `array_filter()`, `usort()`) — the
-  builtin does not free them either. They are reclaimed when the eval context's
-  heap is torn down. This is bounded by the number of callback invocations in one
-  eval context and matters most for `CURLOPT_WRITEFUNCTION`, which fires once per
-  received chunk.
+- **Callback arguments and results are scoped to each invocation.** Fresh runtime
+  cells for `$ch` and its data arguments remain alive until the callback returns.
+  A borrowed result is retained before those argument owners are released, and
+  the result is released after its integer or upload-byte value has been copied.
+  Partial argument construction and throwing callbacks also retire acquired owners.
+  Array-method receivers remain retained for the whole transfer, including when
+  a callback clears its own slot. Failed frame setup releases earlier receivers.
 
 **Aligned with AOT (previously diverged):**
 

@@ -1,8 +1,6 @@
 ---
 title: "gc_mem_caches() - internals"
 description: "Compiler internals for gc_mem_caches(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 619
 ---
 
 ## `gc_mem_caches()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/gc_mem_caches.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gc_mem_caches.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -5,6 +5,7 @@
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` before runtime-cache preparation.
+//! - `crate::cli::capability_report` for the native packages a forced capability needs.
 //!
 //! Key details:
 //! - Direct `preg_*` calls and emitted regex iterator classes both enable regex
@@ -203,6 +204,26 @@ pub fn runtime_features_for_program_and_classes(
     classes: &HashMap<String, ClassInfo>,
 ) -> RuntimeFeatures {
     runtime_features_for_program_and_classes_opt(program, Some(classes))
+}
+
+/// Turns on the runtime features a `--with-<flag>` capability forces.
+///
+/// Dynamic source is opaque to AOT feature detection, so these flags enable the
+/// runtime families and their native requirements explicitly: `regex` the PCRE2
+/// runtime (which eval setup then registers with Magician), and `mbstring` the
+/// multibyte, `mb_ereg*`, and MIME families. Bridge-only flags change nothing
+/// here. The backend applies this to compiled programs and `--print-capabilities`
+/// applies it to report each flag's managed native packages.
+pub fn force_runtime_features_for_flag(features: &mut RuntimeFeatures, flag: &str) {
+    match flag {
+        "regex" => features.regex = true,
+        "mbstring" => {
+            features.mbstring = true;
+            features.mbregex = true;
+            features.mbstring_mime = true;
+        }
+        _ => {}
+    }
 }
 
 /// Returns typed final-link requirements for the selected optional runtime features.
@@ -471,6 +492,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
             expr_has_regex_call(value)
                 || match target {
                     InstanceOfTarget::Name(_) => false,
+                    InstanceOfTarget::Generic(_) => false,
                     // Dynamic class targets make codegen include the builtin class universe.
                     // That universe contains RegexIterator methods that call preg runtime helpers.
                     InstanceOfTarget::Expr(_) => true,
@@ -541,6 +563,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_has_regex_call),
         ExprKind::NewDynamicObject {
             class_name,
@@ -634,7 +657,16 @@ fn expr_is_regex_callback_string(expr: &Expr) -> bool {
 
 /// Returns true when a static receiver expression can contain a regex call.
 fn static_receiver_has_regex_call(receiver: &StaticReceiver) -> bool {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(_)
         | StaticReceiver::Self_
         | StaticReceiver::Static
@@ -882,6 +914,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_needs_descriptor_invoker),
         ExprKind::NewDynamicObject {
             class_name, args, ..

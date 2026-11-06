@@ -294,6 +294,7 @@ fn test_program_function_effects_recognize_pure_user_functions() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "len3".to_string(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -329,6 +330,7 @@ fn test_program_function_effects_propagate_throwing_calls() {
         Stmt::new(
             StmtKind::FunctionDecl {
                 name: "boom".to_string(),
+                type_params: Vec::new(),
                 params: Vec::new(),
                 param_attributes: Vec::new(),
                 variadic: None,
@@ -352,6 +354,7 @@ fn test_program_function_effects_propagate_throwing_calls() {
         Stmt::new(
             StmtKind::FunctionDecl {
                 name: "wrapper".to_string(),
+                type_params: Vec::new(),
                 params: Vec::new(),
                 param_attributes: Vec::new(),
                 variadic: None,
@@ -380,4 +383,18 @@ fn test_program_function_effects_propagate_throwing_calls() {
         function_effects.get("wrapper"),
         Some(&Effect::PURE.with_side_effects().with_may_throw())
     );
+}
+
+/// Declared dynamic int returns can throw, while inferred and native int returns stay pure.
+#[test]
+fn test_function_effects_keep_declared_int_return_verification() {
+    let tokens = crate::lexer::tokenize("<?php function checked(mixed $input): int { return $input; } function inferred(mixed $input) { return $input; } function nativeInt(int $input): int { return $input; } function changed(int $input, mixed $replacement): int { $input = $replacement; return $input; } function relay(int $input): int { return NATIVEINT($input); } function strlen(mixed $input): mixed { return $input; } function shadowed(mixed $input): int { return STRLEN($input); }").unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    let (effects, _, _) = compute_program_callable_effects(&program);
+    assert!(effects["checked"].may_throw);
+    assert!(effects["changed"].may_throw);
+    assert_eq!(effects["inferred"], Effect::PURE);
+    assert_eq!(effects["nativeInt"], Effect::PURE);
+    assert_eq!(effects["relay"], Effect::PURE);
+    assert!(effects["shadowed"].may_throw);
 }

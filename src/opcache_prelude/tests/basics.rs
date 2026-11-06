@@ -51,15 +51,20 @@ pub(super) fn parse_internal(source: &str) -> Program {
     /// as the `$def` argument.
     #[test]
 pub(super) fn renders_parsable_php85_literal() {
-        let literal = rendered_expr(&configuration_expr(PhpVersion::Php85, &[]));
+        let literal = rendered_expr(&configuration_expr(PhpVersion::Php85, &[], false));
         assert!(literal.contains("'opcache.jit' => 'disable'"));
         assert!(literal.contains("'opcache.memory_consumption' => 134217728"));
         assert!(literal.contains(
             "'opcache.max_wasted_percentage' => __elephc_opcache_env_pct('ELEPHC_INI_opcache__max_wasted_percentage', 'ELEPHC_INI_opcache.max_wasted_percentage', 0.05)"
         ));
+        // A reporting-only BOOL still carries its env-override call.
         assert!(literal.contains(
-            "'opcache.file_cache_read_only' => __elephc_opcache_env_bool('ELEPHC_INI_opcache__file_cache_read_only', 'ELEPHC_INI_opcache.file_cache_read_only', false)"
+            "'opcache.protect_memory' => __elephc_opcache_env_bool('ELEPHC_INI_opcache__protect_memory', 'ELEPHC_INI_opcache.protect_memory', false)"
         ));
+        // `opcache.file_cache_read_only` is NOT one of them any more: it now bakes the
+        // startup validation of `opcache.file_cache`, so it renders as a plain literal.
+        assert!(literal.contains("'opcache.file_cache_read_only' => false"));
+        assert!(!literal.contains("ELEPHC_INI_opcache__file_cache_read_only"));
         assert!(literal.contains("'version' => '8.5.0'"));
         assert!(literal.contains("'opcache_product_name' => 'Zend OPcache'"));
         // The literal must parse as a standalone expression statement.
@@ -69,7 +74,7 @@ pub(super) fn renders_parsable_php85_literal() {
     /// The 8.2 literal flips the JIT defaults and drops the 8.5-only directive.
     #[test]
 pub(super) fn renders_php82_deltas() {
-        let literal = rendered_expr(&configuration_expr(PhpVersion::Php82, &[]));
+        let literal = rendered_expr(&configuration_expr(PhpVersion::Php82, &[], false));
         assert!(literal.contains("'opcache.jit' => 'tracing'"));
         assert!(literal.contains("'opcache.jit_buffer_size' => 0"));
         // 8.2-only, and reporting-only ⇒ it carries the runtime env-override call.
@@ -87,6 +92,42 @@ pub(super) fn skips_injection_when_unused() {
         let injected = inject_for_test(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert_eq!(injected.len(), program.len());
     }
+
+/// Bridge-capable eval supplies every target; native literals keep unused declarations absent.
+#[test]
+fn configured_eval_injects_all_opcache_targets() {
+    for (source, has_eval) in [
+        (r#"<?php eval('$f = getenv("TARGET"); return $f();');"#, true),
+        ("<?php eval(getenv('CODE'));", true),
+        (r#"<?php eval('$f = "opcache_get" . "_status"; return $f();');"#, true),
+        (r#"<?php eval('include getenv("FILE");');"#, true),
+        (r#"<?php eval('$x = 1;');"#, false),
+        (r#"<?php eval('echo 1;');"#, false),
+        (r#"<?php $x = 1; eval('echo $x;');"#, false),
+        ("<?php echo 'eval';", false),
+        ("<?php echo 1;", false),
+    ] {
+        for (web, overrides, configured) in [
+            (false, vec![], false),
+            (false, vec![("opcache.enable_cli".into(), "1".into())], true),
+            (true, vec![], true),
+        ] {
+            let injected = inject_for_test(
+                parse(source), PhpVersion::Php85, web, None, &[], &overrides, None, false,
+            ).0;
+            for name in [
+                "opcache_get_configuration", "opcache_get_status", "opcache_reset",
+                "opcache_invalidate", "opcache_compile_file", "opcache_is_script_cached",
+                "opcache_is_script_cached_in_file_cache", "opcache_jit_blacklist",
+            ] {
+                assert_eq!(
+                    detect::program_declares(&injected, name), has_eval && configured,
+                    "{name}, web={web}, overrides={overrides:?}, source={source}",
+                );
+            }
+        }
+    }
+}
 
     /// Injection fires when `opcache_get_configuration` is called.
     #[test]
@@ -150,9 +191,11 @@ pub(super) fn renders_parsable_php85_status_web() {
         let body = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &[], false, None));
         // Web SAPI bakes the enabled gate as `true === false` (never returns false).
         assert!(body.contains("if (true === false)"));
-        // memory_usage invariant: 134217728 - 6291456 = 127926272.
-        assert!(body.contains("'used_memory' => 6291456"));
-        assert!(body.contains("'free_memory' => 127926272"));
+        // memory_usage invariant: 134217728 - 6291456 = 127926272. Both figures now carry the
+        // runtime script cache's bytes as a TERM rather than being closed constants, because
+        // the dynamic tier's entries are charged against the same budget.
+        assert!(body.contains("'used_memory' => 6291456 + $__elephc_rt_used"));
+        assert!(body.contains("'free_memory' => 127926272 - $__elephc_rt_used"));
         assert!(body.contains("'wasted_memory' => 0"));
         // interned_strings_usage invariant: 8388608 - 1048576 = 7340032.
         assert!(body.contains("'buffer_size' => 8388608"));
@@ -170,8 +213,17 @@ pub(super) fn renders_parsable_php85_status_web() {
             !body.contains("'start_time' => time()"),
             "the per-call time() read is the bug this replaced"
         );
-        // Rates are floats, so `0.0` (not `0`) must be emitted.
-        assert!(body.contains("'opcache_hit_rate' => 0.0"));
+        // The live figures are read ONCE into locals before the array is built, so a call
+        // inside the literal cannot make two keys disagree.
+        assert!(body.contains("$__elephc_rt_hits = __elephc_opcache_rt_stat(0);"));
+        assert!(body.contains("$__elephc_rt_misses = __elephc_opcache_rt_stat(1);"));
+        assert!(body.contains("'hits' => $__elephc_rt_hits"));
+        assert!(body.contains("'misses' => $__elephc_rt_misses"));
+        assert!(body.contains("'opcache_hit_rate' => $__elephc_rt_rate"));
+        // Rates are floats, so the seed is `0.0` (not `0`) and the computed arm is CAST, which
+        // is what keeps the local from being retyped divergently between the two branches.
+        assert!(body.contains("$__elephc_rt_rate = 0.0;"));
+        assert!(body.contains("$__elephc_rt_rate = (float)"));
         // Default JIT (disable) sub-array is entirely zero/false.
         assert!(body.contains("'enabled' => false"));
         assert!(body.contains("'buffer_size' => 0"));

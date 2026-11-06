@@ -21,6 +21,11 @@
 //!   `_stream_filter_buf` scratch and output at 4x that (min 64 KiB). A bad
 //!   charset pair (`iconv_open` fails) leaves the stream unconverted. musl's
 //!   iconv supports a limited charset set (UTF-8/UTF-16/UTF-32 are fine).
+//! - Apple's iconv shares `//TRANSLIT` and `//IGNORE` between every descriptor of
+//!   one charset pair and `iconv_open()` rewrites them, but this transform opens
+//!   its descriptor immediately before its only conversion and closes it right
+//!   after, so it always converts under its own options and needs none of the
+//!   write filter's `iconvctl()` restore (#811).
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -216,10 +221,10 @@ pub(crate) fn emit_read_x86_64<F>(
     emitter.instruction("mov QWORD PTR [rsp + 24], r9");                        // save the output buffer capacity
     emitter.instruction("mov rax, r9");                                         // buffer size into the allocator argument
     emitter.instruction("call __rt_heap_alloc");                                // allocate the converted-data buffer
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // owned-string heap-kind word
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    )); // owned-string heap-kind word
+    ));
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer header
     emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // save the output buffer pointer
 

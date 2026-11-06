@@ -24,12 +24,33 @@ pub(super) fn builtin_reflection_owner_class(
     )];
     if has_name {
         properties.push(builtin_property(
+            "name",
+            Visibility::Public,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        properties.push(builtin_property(
             "__name",
             Visibility::Private,
             Some(TypeExpr::Str),
             empty_string(),
         ));
         methods.push(builtin_reflection_class_string_method("getName", "__name"));
+    }
+    if matches!(
+        name,
+        "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
+    ) {
+        properties.push(builtin_property(
+            "class",
+            Visibility::Public,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
     }
     if reflection_owner_has_doc_comment_method(name) {
         methods.push(builtin_reflection_constant_false_union_method(
@@ -245,7 +266,13 @@ pub(super) fn builtin_reflection_owner_class(
         Some(array_type()),
         empty_array(),
     ));
-    methods.push(builtin_reflection_owner_get_attributes_method());
+    // PHP names the class that declares `getAttributes()` in its `$flags` ValueError.
+    let attributes_owner = match name {
+        "ReflectionFunction" | "ReflectionMethod" => "ReflectionFunctionAbstract",
+        "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => "ReflectionClassConstant",
+        other => other,
+    };
+    methods.push(builtin_reflection_owner_get_attributes_method(attributes_owner));
     FlattenedClass {
         name: name.to_string(),
         span: dummy(),

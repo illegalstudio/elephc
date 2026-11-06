@@ -1,8 +1,6 @@
 ---
 title: "sha1()"
 description: "Calculates the SHA-1 hash of a string."
-sidebar:
-  order: 907
 ---
 
 ## sha1()
@@ -21,8 +19,9 @@ Calculates the SHA-1 hash of a string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/sha1.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/sha1.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

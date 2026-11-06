@@ -23,6 +23,7 @@ Physical source (.php or .lfc)
   -> (conditional)     apply compiler ifdef branches from --define
   -> autoload-build    discover autoload rules
   -> resolve           resolve include/require and declarations
+  -> autoload-prelude-probe detect preludes needed by autoloaded files
   -> pdo-prelude        inject the PDO prelude when used
   -> mysqli-prelude     inject the mysqli prelude when used (shares the elephc_pdo bridge)
   -> tz-prelude         inject the timezone-introspection prelude when used
@@ -31,16 +32,25 @@ Physical source (.php or .lfc)
   -> opcache-prelude     inject OPcache declarations and a placeholder script manifest when used
   -> image-prelude      inject the image (GD/Exif/Imagick) prelude when used
   -> hash-prelude       inject the incremental HashContext/hash_* prelude when used
+  -> testing-prelude    inject the Elephc\Testing runtime when used (forced by elephc test)
   -> curl-prelude       inject the curl prelude when used
+  -> xml-prelude        inject the XML/XMLWriter prelude when used
+  -> fileinfo-prelude   inject the finfo class prelude when used
+  -> dom-html-prelude   inject the DOM HTML fragment-walker prelude when used
   -> web-prelude        inject the web runtime prelude with --web
   -> version-prelude    inject requested PHP version/SAPI surface functions
+  -> extension-prelude inject declarations for the project's hosted PHP extensions
   -> name-resolve       apply namespace/use rules, canonicalize names
   -> autoload-run       run autoload insertion
+  -> (test-discovery)   find test classes and append the runner driver (elephc test)
+  -> dom-html-autoload-prelude discover DOM usage in newly autoloaded classes
+  -> testing-autoload-prelude discover testing runtime use in newly autoloaded classes
+  -> object-cast-prelude inject stdClass declarations when object casts need them
   -> func-args          desugar func_num_args/get_args/get_arg to a hidden variadic
   -> opcache-manifest-bake complete and bake the post-autoload OPcache script manifest
   -> opt-fold           seed CLI superglobals + AST constant folding
-  -> typecheck          Type checker / warnings
-  -> exports-scan       collect #[Export] functions (cdylib)
+  -> typecheck          Type checking, generic specialization, and warnings
+  -> exports-scan       collect #[Export] functions (cdylib, staticlib, or phpext)
   -> opt-prop           AST constant propagation
   -> opt-post           prune constant control flow
   -> opt-norm           control-flow normalization
@@ -52,6 +62,8 @@ Physical source (.php or .lfc)
   -> codegen            EIR -> target assembly
   -> write-asm          write the generated assembly
   -> source-map         write the .map sidecar (with --source-map)
+  -> php-extension-link discover the SDK, compile the adapter, and link a PHP module
+                        (with --emit phpext; then stop)
   -> runtime-cache      build/reuse the prebuilt runtime object
   -> assemble           assembler: assembly -> object file
   -> link               linker: object files -> binary
@@ -69,27 +81,55 @@ Physical source (.php or .lfc)
   each freshly parsed PHP-mode AST is audited and every elephc-only construct is
   reported before any later pass runs. Included and autoloaded files are
   classified where they are parsed (inside resolve / autoload-run); LFC and
-  compiler-injected source are exempt.
+  compiler-injected source are exempt. Supported generic PHPDoc annotations are
+  applied per physical file after this audit, so annotated PHP remains accepted
+  in strict mode while its templates still drive compilation.
 - **conditional compilation** — `ifdef` branches are resolved using the symbols
   passed with [`--define`](linking-and-conditional-compilation.md#conditional-compilation).
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
   resolved, declarations are discovered, and demand-loaded PHP preludes for PDO,
   mysqli, timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
-  OPcache, image processing, incremental hash contexts, curl, and the PHP
-  version/SAPI surface are injected only when referenced. The web runtime
+  OPcache, image processing, incremental hash contexts, curl, XML/XMLWriter, fileinfo,
+  the [DOM HTML subset](../php/dom-html.md),
+  object-cast `stdClass`, and the PHP version/SAPI surface are injected only
+  when referenced. The web runtime
   prelude is injected
   with `--web`, and namespace/`use` rules rewrite references to fully-qualified
-  names. Autoloading is wired in around these steps.
+  names. After autoload insertion, DOM usage is checked again so newly loaded
+  classes receive the same declarations before type checking. Every included
+  and autoloaded file is lexed with its own source identity, so statements at
+  the same line and column of two files never share a checker result, and a
+  diagnostic raised inside such a file names it.
+- **extension-prelude**: reads the project's hosted PHP extension declarations,
+  resolves their built surfaces and injects wrappers before name resolution.
+  Unused wrappers remain eligible for declaration reachability pruning. See
+  [Hosting PHP extensions](../beyond-php/php-extensions.md).
 - **func-args** — rewrites `func_num_args()`, `func_get_args()`, and
   `func_get_arg()` into a hidden variadic parameter plus ordinary PHP operations.
   This happens after autoloading but before manifest baking, optimization, and
   checking, so those later passes see the desugared callable shape.
+- **autoload-prelude-probe**: the autoload pass runs after name resolution, so
+  a prelude needed only by an autoloaded file would be missed. When autoload
+  rules exist, a probe (`src/autoload/prelude_probe.rs`) first runs name
+  resolution and the autoload pass on a copy of the program, checks the PDO,
+  mysqli, timezone, image, hash, curl, XML, and `var_export` detectors against
+  the result, and restores the thread-local source IDs
+  and anonymous-class counter. Process-global synthetic spans and include
+  temporaries stay monotonic, so discarding a probe cannot recycle identities
+  allocated by another compilation thread. The real pass injects the detected
+  preludes with fresh global identities. Every included and
+  autoloaded file gets its own source identity, which is how diagnostics name
+  the file they come from.
 - **opcache-manifest-bake** — after autoload insertion and argument-introspection
   desugaring, replaces the placeholder OPcache manifest with the complete
   entry/include/autoload file set before constant folding and emits any preload
   warning against that complete set.
-- **typecheck** — the [Type Checker](../internals/the-type-checker.md) infers and
-  validates types and emits warnings. By default an untyped local may retype
+- **typecheck**: the [Type Checker](../internals/the-type-checker.md) runs with
+  `src/generics.rs` to a specialization fixed point. Each reachable template
+  becomes an ordinary concrete declaration before AST optimization and EIR
+  lowering. This work shares the `typecheck` timing label; it has no separate
+  backend pass. The checker validates types and emits warnings. By default an
+  untyped local may retype
   (with a warning) instead of failing; with
   [`--strict-locals`](cli-reference.md#strict-locals-mode) an incompatible
   local retype is a compile error instead.
@@ -117,19 +157,29 @@ behind a flag.
   [The EIR Design](../internals/the-ir.md).
 - **ir-opt** — the [EIR optimization passes](optimization.md#eir-optimization-passes)
   run a fixed-point driver over each function: identity arithmetic folding,
-  local peephole rewrites, immutable-local load classification, checked-integer
-  sinking, constant folding, common-subexpression elimination,
+  local peephole rewrites, scalar local promotion, immutable-local load classification, checked-integer
+  sinking, canonical loop optimization, integer range and induction-variable analysis, boxed checked-numeric
+  chain fusion, constant folding,
+  common-subexpression elimination,
   loop-invariant code motion, CFG-aware dead-instruction elimination, dead-store
-  elimination, and branch simplification. In
+  elimination, branch simplification, and concat scratch-state optimization.
+  After the module fixed point, eligible self/mutual tail recursion becomes EIR
+  loops, scalar passes optimize those loops, and fresh numeric assignment
+  ownership is finalized without restarting representation-changing passes. In
   debug/test builds the function is re-validated after every pass. This phase
   can be turned off with [`--no-ir-opt`](optimization.md#eir-optimization-passes).
 - **ir-print** — only present with [`--emit-ir`](output-and-diagnostics.md#--emit-ir);
   formats the optimized or unoptimized EIR textual form, prints it to stdout,
   and stops before runtime preparation or code generation.
-- **codegen** — EIR is lowered to target assembly through the default backend.
+- **codegen** — EIR is lowered to target assembly through the default backend,
+  including late target-aware instruction selection and machine peepholes.
   See [The Code Generator](../internals/the-codegen.md).
 - **write-asm / source-map** — the generated assembly and optional source-map
   sidecar are materialized before runtime-object preparation.
+- **php-extension-link**: for [`--emit phpext`](../beyond-php/phpext.md),
+  discovers and probes the selected PHP 8.5 SDK, compiles the Zend adapter, and
+  links the loadable module. This producer path stops here instead of using the
+  standalone runtime-cache, assemble, and link phases below.
 - **runtime-cache** — the hand-written runtime is assembled once and cached in
   `~/.cache/elephc/`, then reused across compiles. See
   [The Runtime](../internals/the-runtime.md).
@@ -152,8 +202,8 @@ You do not have to run the whole pipeline. Several flags stop early or dump an
 intermediate artifact:
 
 - [`--check`](output-and-diagnostics.md#--check) normally runs the front end
-  only; when `#[Export]` is present it also lowers EIR and runs cdylib
-  call-graph safety without emitting code.
+  only; when `#[Export]` is present it also lowers EIR and runs library and PHP
+  extension call-graph safety without emitting code.
 - [`--emit-ir`](output-and-diagnostics.md#--emit-ir) prints EIR (after `ir-opt`) and stops.
 - [`--emit-asm`](output-and-diagnostics.md#--emit-asm) writes assembly and stops before
   runtime-object preparation, native assembly, or linking.

@@ -541,7 +541,17 @@ pub(super) fn emit_ref_arg_cell_block(
         }
         let source_ty = ctx.load_value_to_result(cell.source_value)?;
         coerce_ref_cell_store_value(ctx, &source_ty, &cell.cell_ty)?;
-        if source_ty.codegen_repr() == cell.cell_ty.codegen_repr() {
+        // A container stored under another container shape is still the source itself: the
+        // hash that named arguments build for an `array<mixed>` by-reference variadic went into
+        // the cell unretained, so releasing the cell and then the operand freed it twice.
+        let container_kept_as_is = matches!(
+            (source_ty.codegen_repr(), cell.cell_ty.codegen_repr()),
+            (
+                PhpType::Array(_) | PhpType::AssocArray { .. },
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+        );
+        if source_ty.codegen_repr() == cell.cell_ty.codegen_repr() || container_kept_as_is {
             // EIR still owns the default operand. The mutable cell needs its own retain
             // because the callee can replace it before EIR retires that original owner.
             if cell.cell_ty.codegen_repr() == PhpType::Str {

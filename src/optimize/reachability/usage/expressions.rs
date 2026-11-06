@@ -25,18 +25,24 @@ impl Scanner<'_> {
             ExprKind::FunctionCall { name, args } => self.scan_function_call(name.as_str(), args),
             ExprKind::FirstClassCallable(target) => self.scan_callable_target(target),
             ExprKind::ExprCall { callee, args } => {
-                self.usage.hazards.dynamic_function = true;
-                self.usage.hazards.dynamic_method = true;
+                self.unresolved_callable_hazard();
                 self.scan_class_introspection_callable(callee, args);
                 self.scan_expr(callee);
                 self.scan_exprs(args);
             }
             ExprKind::ClosureCall { var, args } => {
-                self.usage.hazards.dynamic_function = true;
-                self.usage.hazards.dynamic_method = true;
+                self.unresolved_callable_hazard();
                 let callable = Expr::new(ExprKind::Variable(var.clone()), expr.span);
                 self.scan_class_introspection_callable(&callable, args);
                 self.scan_exprs(args);
+            }
+            // A generic construction keeps its class alive through the TYPE it names, which
+            // the type scanner already records head and arguments of.
+            ExprKind::NewGeneric { class_type, args } => {
+                self.scan_type(class_type);
+                for arg in args {
+                    self.scan_expr(arg);
+                }
             }
             ExprKind::NewObject { class_name, args } => {
                 let key = self.record_class(class_name.as_str());
@@ -117,14 +123,30 @@ impl Scanner<'_> {
                 self.scan_expr(object); self.scan_expr(method); self.scan_exprs(args);
             }
             ExprKind::StaticMethodCall { receiver, method, args } => {
-                let classes = self.receiver_class(receiver).into_iter().collect();
+                let classes: HashSet<String> = self.receiver_class(receiver).into_iter().collect();
+                // `Closure::fromCallable('f')` invokes what it names, like `call_user_func`.
+                if classes.contains(&php_symbol_key("Closure"))
+                    && php_symbol_key(method) == php_symbol_key("fromCallable")
+                {
+                    self.callable_or_hazard(args.first().map(unwrap_named_arg));
+                }
                 self.record_static_method(receiver, method);
                 self.scan_method_signature_arguments(&classes, method, true, args);
                 self.scan_exprs(args);
             }
             ExprKind::InstanceOf { value, target } => {
                 self.scan_expr(value);
-                match target { InstanceOfTarget::Name(name) => { self.record_class(name.as_str()); }, InstanceOfTarget::Expr(expr) => { self.usage.hazards.dynamic_class = true; self.scan_expr(expr); } }
+                match target {
+                    InstanceOfTarget::Name(name) => {
+                        self.record_class(name.as_str());
+                    }
+                    // Head and arguments both keep a class alive, as in any type position.
+                    InstanceOfTarget::Generic(class_type) => self.scan_type(class_type),
+                    InstanceOfTarget::Expr(expr) => {
+                        self.usage.hazards.dynamic_class = true;
+                        self.scan_expr(expr);
+                    }
+                }
             }
             ExprKind::ClassConstant { receiver } | ExprKind::ScopedConstantAccess { receiver, .. }
             | ExprKind::StaticPropertyAccess { receiver, .. } => self.scan_receiver(receiver),
@@ -143,8 +165,21 @@ impl Scanner<'_> {
             ExprKind::BinaryOp { left, right, .. } => { self.scan_expr(left); self.scan_expr(right); }
             ExprKind::Negate(e) | ExprKind::Not(e) | ExprKind::BitNot(e) | ExprKind::Throw(e)
             | ExprKind::Clone(e) | ExprKind::ErrorSuppress(e) | ExprKind::Print(e)
-            | ExprKind::Spread(e) | ExprKind::PtrCast { expr: e, .. }
-            | ExprKind::YieldFrom(e) | ExprKind::IncludeValue { path: e, .. } => self.scan_expr(e),
+            | ExprKind::Spread(e) | ExprKind::YieldFrom(e) => self.scan_expr(e),
+            // `ptr_cast<T>` may be the only mention of a packed or extern class `T`, and field
+            // access through the resulting `ptr<T>` needs that class's layout at lowering time.
+            ExprKind::PtrCast { target_type, expr: e } => {
+                self.record_class(target_type.as_str());
+                self.scan_expr(e);
+            }
+            ExprKind::IncludeValue { path, .. } => {
+                // The resolver inlines every include it can read, so one still here resolves at
+                // runtime; inside a literal fragment the loaded file can name anything.
+                if self.in_eval_fragment {
+                    self.widen_dynamic_hazards();
+                }
+                self.scan_expr(path)
+            }
             // A `(object)` cast has no call syntax, but `ir_lower::expr::lower_cast` lowers it
             // to a call into the `object_cast_prelude` helpers. Recording both here is what
             // keeps the cast's callee reachable — otherwise the prelude is pruned and the
@@ -211,6 +246,12 @@ impl Scanner<'_> {
                     self.usage
                         .methods
                         .insert((class, php_symbol_key(method), true));
+                } else {
+                    // Named ::class constants have already folded to strings. Keep the
+                    // class edge even when a runtime call obscures the resulting value.
+                    // Text alone does not perform Reflection discovery. Strings without
+                    // a matching declaration add no graph node.
+                    self.usage.classes.insert(php_symbol_key(name));
                 }
             }
             ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
@@ -223,6 +264,10 @@ impl Scanner<'_> {
     /// Scans a direct call, distinguishing literal introspection from dynamic hazards.
     pub(super) fn scan_function_call(&mut self, name: &str, args: &[Expr]) {
         let key = self.record_callable(name);
+        if matches!(key.as_str(), "debug_backtrace" | "debug_print_backtrace") {
+            let class = self.record_class("SensitiveParameterValue");
+            self.usage.instantiated_classes.insert(class);
+        }
         self.record_builtin_requirements(name, args);
         self.scan_builtin_callback_arguments(&key, args);
         self.scan_declaration_arguments(&key, args);
@@ -240,6 +285,11 @@ impl Scanner<'_> {
         // The xml registry builtins' EIR lowerings call the xml prelude's helpers directly;
         // the same rule keeps those edges next to that lowering contract.
         for helper in crate::builtins::xml::prelude_helpers_for(&key) {
+            self.record_callable(helper);
+        }
+        // The GMP registry builtins' EIR lowerings call their prelude helpers directly;
+        // root the whole family next to that lowering contract.
+        for helper in crate::builtins::gmp::prelude_helpers_for(&key) {
             self.record_callable(helper);
         }
         let normalized = self.normalized_function_arguments(&key, args);
@@ -271,11 +321,7 @@ impl Scanner<'_> {
             "get_class_methods" => self.usage.hazards.dynamic_method = true,
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize" => self.usage.hazards.dynamic_class = true,
-            "eval" => {
-                self.usage.hazards.dynamic_function = true;
-                self.usage.hazards.dynamic_method = true;
-                self.usage.hazards.dynamic_class = true;
-            }
+            "eval" => self.literal_eval_or_hazard(first),
             _ => {}
         }
         self.scan_exprs(args);
@@ -484,16 +530,14 @@ impl Scanner<'_> {
             false,
             false,
         ) else {
-            self.usage.hazards.dynamic_function = true;
-            self.usage.hazards.dynamic_method = true;
+            self.unresolved_callable_hazard();
             return;
         };
         let normalized = plan.normalized_args();
         for index in callback_indices {
             let Some(callback) = normalized.get(index).map(unwrap_named_arg) else {
                 if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
-                    self.usage.hazards.dynamic_function = true;
-                    self.usage.hazards.dynamic_method = true;
+                    self.unresolved_callable_hazard();
                 }
                 continue;
             };
@@ -504,8 +548,7 @@ impl Scanner<'_> {
                     self.callable_or_hazard(Some(callback));
                 }
                 _ => {
-                    self.usage.hazards.dynamic_function = true;
-                    self.usage.hazards.dynamic_method = true;
+                    self.unresolved_callable_hazard();
                 }
             }
         }
@@ -548,19 +591,77 @@ impl Scanner<'_> {
         } else { self.usage.hazards.dynamic_function = true; }
     }
 
+    /// Scans a literal `eval` source as inline code, or widens every dynamic hazard when the
+    /// source is only known at runtime, or does not parse (the interpreter reports that).
+    ///
+    /// A fragment that parses can reach exactly what the same code would reach inline: the
+    /// names it calls, instantiates, extends or declares, plus whatever hazards it carries
+    /// itself (`$f()`, `new $c`, a runtime `include`, a nested non-literal `eval`). Before this,
+    /// any `eval` at all kept every declared function and class, and with them the whole
+    /// lowered builtin surface: one `eval('echo 1;')` turned a four-line program into 65 MB of
+    /// assembly. `literal_eval` records that an interpreter will still run, so the graph keeps
+    /// the core classes it can conjure without naming them.
+    pub(super) fn literal_eval_or_hazard(&mut self, expr: Option<&Expr>) {
+        if let Some(Expr { kind: ExprKind::StringLiteral(source), .. }) = expr {
+            if let Some(fragment) =
+                crate::eval_aot::parse_literal_fragment(source, crate::strict_php::is_enabled())
+            {
+                let outer = std::mem::replace(&mut self.in_eval_fragment, true);
+                self.scan_nested(&fragment, true);
+                self.in_eval_fragment = outer;
+                self.usage.hazards.literal_eval = true;
+                return;
+            }
+        }
+        self.widen_dynamic_hazards();
+    }
+
+    /// Widens the function, method and class hazards together, as a runtime-named lookup of
+    /// unknown shape requires.
+    pub(super) fn widen_dynamic_hazards(&mut self) {
+        self.usage.hazards.dynamic_function = true;
+        self.usage.hazards.dynamic_method = true;
+        self.usage.hazards.dynamic_class = true;
+    }
+
+    /// Widens the hazards of a callable whose shape is only known at runtime (`$f()`,
+    /// `call_user_func($argv[1])`, `usort($a, $cb)`, `Closure::fromCallable($x)`). Inline, the
+    /// compiled dispatcher can only reach the functions and methods of the classes the program
+    /// names elsewhere, so the class hazard stays untouched. Inside a literal eval fragment the
+    /// interpreter resolves `Hidden::ping` out of the string itself, reaching a class nothing
+    /// else keeps, so the class hazard widens there as well (this is what every eval used to do
+    /// unconditionally).
+    pub(super) fn unresolved_callable_hazard(&mut self) {
+        self.usage.hazards.dynamic_function = true;
+        self.usage.hazards.dynamic_method = true;
+        if self.in_eval_fragment {
+            self.usage.hazards.dynamic_class = true;
+        }
+    }
+
     /// Records a literal callable descriptor or widens both callable hazard classes.
     pub(super) fn callable_or_hazard(&mut self, expr: Option<&Expr>) {
         match expr.map(|expr| &expr.kind) {
             Some(ExprKind::StringLiteral(name)) if name.contains("::") => {
                 if let Some((class, method)) = name.rsplit_once("::") {
                     let class = self.record_class(class);
-                    self.usage.methods.insert((class, php_symbol_key(method), true));
+                    self.record_named_callable_method(class, method);
                 }
             }
             Some(ExprKind::StringLiteral(name)) => { self.record_callable(name); }
             Some(ExprKind::ArrayLiteral(values)) if values.len() == 2 => self.scan_array_callable(values),
-            _ => { self.usage.hazards.dynamic_function = true; self.usage.hazards.dynamic_method = true; }
+            _ => self.unresolved_callable_hazard(),
         }
+    }
+
+    /// Records a `Class::method` / `['Class', 'method']` callable target as BOTH the static and
+    /// the instance method. The runtime validates such a callable against the declared method:
+    /// a non-static method reached this way must still exist to be refused as "cannot be called
+    /// statically" rather than reported as missing, which is exactly what PHP prints.
+    fn record_named_callable_method(&mut self, class: String, method: &str) {
+        let method = php_symbol_key(method);
+        self.usage.methods.insert((class.clone(), method.clone(), true));
+        self.usage.methods.insert((class, method, false));
     }
 
     /// Scans one argument whose checker-validated parameter type permits a callable.
@@ -573,8 +674,7 @@ impl Scanner<'_> {
                 self.callable_or_hazard(Some(argument));
             }
             _ => {
-                self.usage.hazards.dynamic_function = true;
-                self.usage.hazards.dynamic_method = true;
+                self.unresolved_callable_hazard();
             }
         }
     }
@@ -638,6 +738,23 @@ impl Scanner<'_> {
     /// Recognizes a two-element literal callable array and records its method target.
     pub(super) fn scan_array_callable(&mut self, values: &[Expr]) {
         if values.len() != 2 { return; }
+        // Inside a literal fragment the interpreter resolves `[$argv[1], $argv[2]]`, `[$c, 'm']`
+        // or a receiver only partly known (`[$x ?: 'Missing', 'm']`) against every class, so a
+        // pair that is not a literal class name or a variable of known class widens the class
+        // hazard exactly like a runtime callable string does.
+        if self.in_eval_fragment {
+            let receiver = unwrap_named_arg(&values[0]);
+            let receiver_known = match &receiver.kind {
+                ExprKind::StringLiteral(_) => true,
+                ExprKind::Variable(_) => !self.expr_classes(receiver).is_empty(),
+                _ => false,
+            };
+            let method_literal =
+                matches!(unwrap_named_arg(&values[1]).kind, ExprKind::StringLiteral(_));
+            if !(receiver_known && method_literal) {
+                self.unresolved_callable_hazard();
+            }
+        }
         let ExprKind::StringLiteral(method) = &unwrap_named_arg(&values[1]).kind else {
             let receiver_classes = self.expr_classes(unwrap_named_arg(&values[0]));
             self.usage.classes.extend(receiver_classes);
@@ -646,7 +763,10 @@ impl Scanner<'_> {
         };
         let first = unwrap_named_arg(&values[0]);
         match &first.kind {
-            ExprKind::StringLiteral(class) => { let class = self.record_class(class); self.usage.methods.insert((class, php_symbol_key(method), true)); }
+            ExprKind::StringLiteral(class) => {
+                let class = self.record_class(class);
+                self.record_named_callable_method(class, method);
+            }
             _ => {
                 let classes = self.expr_classes(first);
                 if classes.is_empty() {
@@ -773,7 +893,16 @@ impl Scanner<'_> {
 
     /// Resolves a static receiver to its named, current, or immediate parent class.
     pub(super) fn receiver_class(&self, receiver: &StaticReceiver) -> Option<String> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(name) => Some(self.class_key(name.as_str())),
             StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.as_deref().map(php_symbol_key),
             StaticReceiver::Parent => self.parent_class.as_deref().map(php_symbol_key),
@@ -957,16 +1086,14 @@ impl Scanner<'_> {
             }
             let normalized = self.normalized_arguments(signature, args);
             if normalized.is_empty() && !args.is_empty() {
-                self.usage.hazards.dynamic_function = true;
-                self.usage.hazards.dynamic_method = true;
+                self.unresolved_callable_hazard();
                 continue;
             }
             for index in callable_indices {
                 if let Some(argument) = normalized.get(index) {
                     self.scan_callable_argument(argument);
                 } else if args.iter().any(|argument| matches!(argument.kind, ExprKind::Spread(_))) {
-                    self.usage.hazards.dynamic_function = true;
-                    self.usage.hazards.dynamic_method = true;
+                    self.unresolved_callable_hazard();
                 }
             }
         }
@@ -1047,6 +1174,9 @@ impl Scanner<'_> {
                 if let ExprKind::Variable(variable) = &unwrap_named_arg(argument).kind {
                     variables.insert(variable.clone());
                 }
+                if let ExprKind::ArrayAccess { array, .. } = &unwrap_named_arg(argument).kind {
+                    self.record_protocol_methods(array, &["__elephc_reference"]);
+                }
             }
         }
         for variable in variables {
@@ -1063,6 +1193,34 @@ impl Scanner<'_> {
     /// Records a class key and applies conservative Reflection hazards.
     pub(super) fn record_class(&mut self, name: &str) -> String {
         let key = self.class_key(name);
+        if self.in_eval_fragment {
+            self.usage.fragment_classes.insert(key.clone());
+        }
+        if let Some(operators) = elephc_builtin_contract::lookup_class(&key).and_then(|class| class.operators) {
+            for (_, method) in operators.arithmetic {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
+            }
+            for (_, method) in operators.bitwise {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
+            }
+            for (_, method) in operators.shift {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
+            }
+            if let Some(method) = operators.compare {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
+            }
+            if let Some(method) = operators.boolean {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+            }
+            if let Some(casts) = operators.casts {
+                for method in [casts.to_int, casts.to_float, casts.to_number, casts.to_bool]
+                    .into_iter()
+                    .flatten()
+                {
+                    self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+                }
+            }
+        }
         if key
             .rsplit('\\')
             .next()
@@ -1100,7 +1258,10 @@ impl Scanner<'_> {
             | ExprKind::NullsafeDynamicPropertyAccess { .. } => {
                 self.usage.hazards.dynamic_method = true;
             }
-            ExprKind::ArrayAccess { array, .. } => self.scan_assignment_target(array),
+            ExprKind::ArrayAccess { array, .. } => {
+                self.record_protocol_methods(array, &["__elephc_reference"]);
+                self.scan_assignment_target(array);
+            }
             _ => {}
         }
     }

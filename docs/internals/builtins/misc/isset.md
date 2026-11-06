@@ -1,8 +1,6 @@
 ---
 title: "isset() - internals"
 description: "Compiler internals for isset(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 635
 ---
 
 ## `isset()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/isset.rs`:24](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/isset.rs#L24) (`lower_isset`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/isset.rs`](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/isset.rs) (`lower_isset`)
 - **Function symbol**: `lower_isset()`
 
 

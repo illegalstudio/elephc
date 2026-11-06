@@ -92,9 +92,13 @@ pub(super) fn get_status_declaration(
 ) -> Stmt {
     let version_id = php_version.version_id();
 
-    // One manifest entry ≈ one cached script ≈ one cache key (reference OPcache keys a
-    // script by full path plus optional aliases; the MVP has one key per script).
-    let num_cached_scripts = manifest.len() as i64;
+    // The counts are no longer computed here. They are read off the finished scripts map in
+    // the generated body, because the manifest and the runtime tier share a key space: a
+    // manifest file that is also dynamically included is ONE cached script, and summing the
+    // two tiers counted it twice. Preloading's synthetic `$PRELOAD$` entry is in that map
+    // too, so it is still counted — VERIFIED: reference holding three real scripts plus a
+    // preload block reports `num_cached_scripts = 4`.
+    let preload_memory = preload.map(|stats| stats.memory_consumption);
 
     // Sum the per-script memory so `used_memory` covers the reported scripts (coherence).
     let scripts_memory_total: i64 = manifest.iter().map(|entry| entry.memory_consumption).sum();
@@ -116,8 +120,6 @@ pub(super) fn get_status_declaration(
         // INVARIANT (class-B): free = total - used - wasted, with wasted = 0.
         memory_free: memory_total - memory_used,
         interned_strings_usage: interned_strings_usage_expr(interned_buffer_size),
-        num_cached_scripts,
-        num_cached_keys: num_cached_scripts,
         // `max_cached_keys` is OPcache's prime-rounded hash capacity derived from
         // `max_accelerated_files` — the exact php-src table, byte-verified boundary by boundary.
         max_cached_keys: accel_hash_max_num_entries(directive_int(
@@ -126,7 +128,12 @@ pub(super) fn get_status_declaration(
             overrides,
         )),
         preload_statistics: preload.map(preload_statistics_expr),
-        scripts_map: scripts_map_expr(manifest, revalidate_freq, version_id),
+        scripts_map: scripts_map_expr(manifest, revalidate_freq, version_id, preload_memory),
+        // The runtime cache's entries carry `revalidate` under the SAME per-version gate the
+        // manifest entries do: php-src added the key in 8.3, and a `--php-version 8.2` build
+        // must not report a key its target runtime never has.
+        revalidate_freq: (version_id >= super::scripts_configuration::SCRIPTS_REVALIDATE_MIN_VERSION_ID)
+            .then_some(revalidate_freq),
         jit: build::JitFacts {
             enabled: jit.enabled,
             on: jit.on,

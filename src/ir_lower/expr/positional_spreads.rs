@@ -17,12 +17,16 @@ pub(super) fn lower_positional_spread_args_with_signature(
     args: &[Expr],
     builtin_name: Option<&str>,
     capture_values: bool,
+    capture_output: Option<&(usize, PhpType)>,
 ) -> Option<Vec<crate::ir::ValueId>> {
     // Keep generic source planning intact. Only by-value indexed tails can be
     // materialized into one array without losing references or named keys.
     let projected = (!sig.ref_params.iter().any(|by_ref| *by_ref))
-        .then(|| crate::types::call_args::coalesce_planned_indexed_spreads(
-            args, |source| indexed_spread_source_type(ctx, source).is_some(),
+        .then(|| crate::types::call_args::coalesce_planned_indexed_spreads_with_prefix(
+            args, if sig.variadic.is_some() {
+                crate::types::call_args::regular_param_count(sig)
+            } else { usize::MAX },
+            |source| indexed_spread_source_type(ctx, source).is_some(),
         ))
         .flatten();
     let args = projected.as_deref().unwrap_or(args);
@@ -42,7 +46,10 @@ pub(super) fn lower_positional_spread_args_with_signature(
 
     let mut operands = Vec::with_capacity(regular_param_count);
     for (index, arg) in args[..spread_idx].iter().enumerate() {
+        let previous = capture_output.filter(|(output, _)| *output == index && !capture_values)
+            .and_then(|(_, ty)| prepare_captured_output_argument(ctx, arg, ty));
         let value = lower_arg_with_signature_options(ctx, sig, index, arg, capture_values);
+        if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
         if capture_values || sig.ref_params.get(index).copied().unwrap_or(false) {
             operands.push(value);
         } else {
@@ -334,6 +341,11 @@ pub(super) fn indexed_spread_source_type(
     let ty = match &expr.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
+        // Unpacking consumes the getter's native container, rather than an ordinary
+        // literal element whose logical type must still include a missing read's null.
+        ExprKind::ArrayAccess { .. } | ExprKind::ErrorSuppress(_) => {
+            spread_source_storage_type_for_ir(ctx, expr)
+        }
         _ => array_literal_element_type_for_ir(ctx, expr),
     }
     .codegen_repr();

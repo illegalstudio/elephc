@@ -26,6 +26,7 @@ return ["warning_count" => 0, "warnings" => [], "error_count" => $ec, "errors" =
 pub(super) fn datetime_get_last_errors(class_name: &str) -> ClassMethod {
     let body = super::bodies::get_last_errors(class_name);
     ClassMethod {
+        type_params: Vec::new(),
         name: "getLastErrors".to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -66,6 +67,7 @@ return $d;
 pub(super) fn datetime_create_from_object(method_name: &str, target_class: &str) -> ClassMethod {
     let body = super::bodies::create_from_object(target_class);
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -109,6 +111,7 @@ return $d;
 pub(super) fn datetime_create_from_timestamp(class_name: &str) -> ClassMethod {
     let body = super::bodies::create_from_timestamp(class_name);
     ClassMethod {
+        type_params: Vec::new(),
         name: "createFromTimestamp".to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -156,6 +159,7 @@ return $this->setTimestamp(__elephc_mktime_raw($h, $mi, $se, 1, $day, $year));
 pub(super) fn datetime_set_isodate(class_name: &str) -> ClassMethod {
     let body = super::bodies::set_isodate();
     ClassMethod {
+        type_params: Vec::new(),
         name: "setISODate".to_string(),
         visibility: Visibility::Public,
         is_static: false,

@@ -1,8 +1,6 @@
 ---
 title: "xml_parse() - internals"
 description: "Compiler internals for xml_parse(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1008
 ---
 
 ## `xml_parse()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/parser.rs`:1454](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1454) (`xml_parse`)
+- **Lowering**: [`src/xml_prelude/build/parser.rs`](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs) (`xml_parse`)
 - **Function symbol**: `xml_parse()`
 
 

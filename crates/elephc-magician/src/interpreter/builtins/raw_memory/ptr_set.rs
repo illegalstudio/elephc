@@ -79,6 +79,18 @@ pub(super) fn eval_pointer_write_result(
     values.null()
 }
 
+/// Casts one eval value to PHP float and returns its exact IEEE 754 payload.
+///
+/// `eval_float_value()` goes through the PHP string form, which keeps only `precision`
+/// significant digits; raw memory stores need every bit of the double.
+pub(super) fn eval_exact_float_payload(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<f64, EvalStatus> {
+    let float = values.cast_float(value)?;
+    Ok(f64::from_bits(values.raw_value_word(float)?))
+}
+
 /// Widths supported by pointer write helpers.
 pub(super) enum PointerWriteWidth {
     Byte,

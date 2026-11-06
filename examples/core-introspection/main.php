@@ -55,3 +55,13 @@ $customPalette = $nativeSettings->palette;
 $customPalette['accent'][0] = 'green';
 echo 'Custom accent: ', $customPalette['accent'][0], "\n";
 echo 'Original accent: ', $nativeSettings->palette['accent'][0], "\n";
+
+// `is_countable()` guards `count()` for values that may not be countable: arrays and
+// `Countable` objects answer yes, anything else answers no instead of throwing.
+$pending = ['queue' => ['a', 'b'], 'label' => 'jobs', 'store' => new ArrayObject([1, 2, 3])];
+foreach ($pending as $name => $value) {
+    echo $name, ': ', is_countable($value) ? count($value) . ' item(s)' : 'not countable', "\n";
+}
+
+// `getmypid()` names the running process, e.g. to tag log lines or lock files.
+echo 'Process id available: ', getmypid() > 0 ? 'yes' : 'no', "\n";

@@ -21,23 +21,23 @@ pub(super) unsafe fn register_native_constructor_inner(
     class_name_ptr: *const u8,
     class_name_len: u64,
     param_count: u64,
-) -> i32 {
+) -> Result<i32, ()> {
     let Some(context) = ctx.as_mut() else {
-        return 0;
+        return Err(());
     };
     if context.abi_version() != ABI_VERSION {
-        return 0;
+        return Err(());
     }
     let Ok(class_name) = abi_name_to_string(class_name_ptr, class_name_len) else {
-        return 0;
+        return Err(());
     };
     let Ok(param_count) = usize::try_from(param_count) else {
-        return 0;
+        return Err(());
     };
-    i32::from(context.define_native_constructor_signature(
+    Ok(i32::from(context.define_native_constructor_signature(
         &class_name,
         NativeCallableSignature::new(param_count),
-    ))
+    )))
 }
 
 /// Runs native constructor shape registration after installing a panic boundary.
@@ -252,7 +252,7 @@ pub(super) unsafe fn register_native_constructor_param_default_string_inner(
     default_ptr: *const u8,
     default_len: u64,
 ) -> i32 {
-    let Ok(default) = abi_name_to_string(default_ptr, default_len) else {
+    let Ok(default) = crate::ffi::util::abi_data_bytes(default_ptr, default_len) else {
         return 0;
     };
     register_native_constructor_param_default_inner(
@@ -260,7 +260,7 @@ pub(super) unsafe fn register_native_constructor_param_default_string_inner(
         class_name_ptr,
         class_name_len,
         param_index,
-        NativeCallableDefault::String(default),
+        NativeCallableDefault::from_php_bytes(default),
     )
 }
 

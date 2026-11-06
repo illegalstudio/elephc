@@ -55,7 +55,7 @@ pub(super) fn with_owned_receiver<V: RuntimeValueOps>(
 }
 
 /// Copies a variable's value and preserves array side metadata.
-pub(super) fn copy_scope_value(
+pub(in crate::interpreter) fn copy_scope_value(
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

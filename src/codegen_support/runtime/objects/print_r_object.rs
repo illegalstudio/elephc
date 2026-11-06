@@ -42,6 +42,7 @@
 //!   `__rt_print_r_hash_entries`, in insertion order, at the same entry indent.
 
 use crate::codegen_support::abi;
+use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Byte width of one `_class_prop_desc_*` property row.
@@ -70,7 +71,7 @@ pub fn emit_pr_obj_desc(emitter: &mut Emitter) {
             emitter.instruction("ldr x0, [x11, x9, lsl #3]");                   // load this class's print_r descriptor
             emitter.instruction("ret");                                         // return to caller
             emitter.label("__rt_pr_obj_desc_missing");
-            abi::emit_symbol_address(emitter, "x0", "_class_prop_desc_missing"); // fall back to the zero-property descriptor
+            abi::emit_symbol_address(emitter, "x0", "_class_prop_desc_missing");// fall back to the zero-property descriptor
             emitter.instruction("ret");                                         // return to caller
         }
         Arch::X86_64 => {
@@ -119,6 +120,8 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
 
     // -- header: the class name from the shared class-id → (ptr, len) table --
     emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
+    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    emitter.instruction("b.eq __rt_pr_obj_incomplete_name");                    // render the synthetic internal class name
     abi::emit_symbol_address(emitter, "x10", "_class_name_count");              // resolve the class-name table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of named class ids
     emitter.instruction("cmp x9, x10");                                         // is the class id within the name table?
@@ -131,6 +134,10 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.label("__rt_pr_obj_anon");
     abi::emit_symbol_address(emitter, "x1", "_class_name_missing");             // fall back to the empty class-name slot
     emitter.instruction("mov x2, #0");                                          // a zero-length write emits nothing
+    emitter.instruction("b __rt_pr_obj_name");                                  // write the empty name slot
+    emitter.label("__rt_pr_obj_incomplete_name");
+    abi::emit_symbol_address(emitter, "x1", "_incomplete_class_name");          // __PHP_Incomplete_Class
+    emitter.instruction("mov x2, #22");                                         // byte length of __PHP_Incomplete_Class
     emitter.label("__rt_pr_obj_name");
     emitter.instruction("bl __rt_pr_write");                                    // write the class name
 
@@ -167,8 +174,17 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_vd_seen_push");                                // mark the object as being walked
 
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // paren base indent → body renderer
+    emitter.instruction("bl __rt_pr_debuginfo_object");                         // render through a run-time __debugInfo() when the class has one
+    emitter.instruction("cbnz x0, __rt_pr_obj_walked");                         // the whole body was written; only the guard pop remains
     emitter.instruction("ldr x0, [sp, #8]");                                    // base → open helper argument
     emitter.instruction("bl __rt_print_r_open");                                // write `<base>(\n`
+
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("ldr x9, [x0]");                                        // object header class id
+    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    emitter.instruction("b.eq __rt_pr_obj_incomplete_body");                    // project the synthetic name and opaque properties
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_pr_obj_desc");                                 // x0 = this class's print_r descriptor
@@ -215,6 +231,7 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
+    emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("cmp x0, #4");                                          // only pointer-shaped tags (4-7) can carry a null payload
     emitter.instruction("b.lt __rt_pr_obj_value");                              // scalar payloads keep their exact bit pattern
     crate::codegen_support::sentinels::emit_branch_if_null_container(
@@ -248,9 +265,23 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_pr_obj_close");                           // no dynamic properties to append
     emitter.instruction("ldr x1, [sp, #16]");                                   // entry indent → entry walker
     emitter.instruction("bl __rt_print_r_hash_entries");                        // write one `[name] => value` line per dynamic property
+    emitter.instruction("b __rt_pr_obj_close");                                 // skip the incomplete-object projection
+    emitter.label("__rt_pr_obj_incomplete_body");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("mov x1, #0");                                          // get_object_vars-style visibility mode
+    emitter.instruction("mov x2, #-1");                                         // global lexical scope
+    emitter.instruction("bl __rt_object_to_hash");                              // project the synthetic name and opaque properties
+    emitter.instruction("str x0, [sp, #24]");                                   // preserve the projected hash for release
+    emitter.instruction("ldr x1, [sp, #16]");                                   // entry indent
+    emitter.instruction("bl __rt_print_r_hash_entries");                        // write one `[name] => value` line per row
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the projected hash
+    emitter.instruction("bl __rt_hash_free_deep");                              // release the throwaway projection
+    emitter.instruction("b __rt_pr_obj_close");                                 // close the object body
+
     emitter.label("__rt_pr_obj_close");
     emitter.instruction("ldr x0, [sp, #8]");                                    // base → close helper argument
     emitter.instruction("bl __rt_print_r_close");                               // write `<base>)\n`
+    emitter.label("__rt_pr_obj_walked");
     emitter.instruction("bl __rt_vd_seen_pop");                                 // the object is no longer on the walk stack
     emitter.instruction("b __rt_pr_obj_exit");                                  // object rendered
 
@@ -296,6 +327,8 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the entry indent
 
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
+    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    emitter.instruction("je __rt_pr_obj_incomplete_name_x86");                  // render the synthetic internal class name
     abi::emit_symbol_address(emitter, "r10", "_class_name_count");              // resolve the class-name table extent
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of named class ids
     emitter.instruction("cmp r9, r10");                                         // is the class id within the name table?
@@ -309,6 +342,10 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pr_obj_anon_x86");
     abi::emit_symbol_address(emitter, "rsi", "_class_name_missing");            // fall back to the empty class-name slot
     emitter.instruction("xor edx, edx");                                        // a zero-length write emits nothing
+    emitter.instruction("jmp __rt_pr_obj_name_x86");                            // write the empty name slot
+    emitter.label("__rt_pr_obj_incomplete_name_x86");
+    abi::emit_symbol_address(emitter, "rsi", "_incomplete_class_name");         // __PHP_Incomplete_Class
+    emitter.instruction("mov edx, 22");                                         // byte length of __PHP_Incomplete_Class
     emitter.label("__rt_pr_obj_name_x86");
     emitter.instruction("call __rt_pr_write");                                  // write the class name
 
@@ -344,8 +381,18 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_vd_seen_push");                              // mark the object as being walked
 
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // paren base indent → body renderer
+    emitter.instruction("call __rt_pr_debuginfo_object");                       // render through a run-time __debugInfo() when the class has one
+    emitter.instruction("test rax, rax");                                       // was the whole body written?
+    emitter.instruction("jnz __rt_pr_obj_walked_x86");                          // only the guard pop remains
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → open helper argument
     emitter.instruction("call __rt_print_r_open");                              // write `<base>(\n`
+
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // object header class id
+    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    emitter.instruction("je __rt_pr_obj_incomplete_body_x86");                  // project the synthetic name and opaque properties
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_pr_obj_desc");                               // rax = this class's print_r descriptor
@@ -385,6 +432,7 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
+    emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("cmp rdi, 4");                                          // only pointer-shaped tags (4-7) can carry a null payload
     emitter.instruction("jl __rt_pr_obj_value_x86");                            // scalar payloads keep their exact bit pattern
     crate::codegen_support::sentinels::emit_branch_if_null_container(
@@ -419,9 +467,24 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // dynamic-property hash → entry walker
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // entry indent → entry walker
     emitter.instruction("call __rt_print_r_hash_entries");                      // write one `[name] => value` line per dynamic property
+    emitter.instruction("jmp __rt_pr_obj_close_x86");                           // skip the incomplete-object projection
+    emitter.label("__rt_pr_obj_incomplete_body_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // object pointer for the x86_64 projection ABI
+    emitter.instruction("xor edx, edx");                                        // get_object_vars-style visibility mode
+    emitter.instruction("mov rcx, -1");                                         // global lexical scope
+    emitter.instruction("call __rt_object_to_hash");                            // project the synthetic name and opaque properties
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the projected hash for release
+    emitter.instruction("mov rdi, rax");                                        // pass the projected hash to the entry walker
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // entry indent
+    emitter.instruction("call __rt_print_r_hash_entries");                      // write one `[name] => value` line per row
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the projected hash into the free ABI
+    emitter.instruction("call __rt_hash_free_deep");                            // release the throwaway projection
+    emitter.instruction("jmp __rt_pr_obj_close_x86");                           // close the object body
+
     emitter.label("__rt_pr_obj_close_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → close helper argument
     emitter.instruction("call __rt_print_r_close");                             // write `<base>)\n`
+    emitter.label("__rt_pr_obj_walked_x86");
     emitter.instruction("call __rt_vd_seen_pop");                               // the object is no longer on the walk stack
     emitter.instruction("jmp __rt_pr_obj_exit_x86");                            // object rendered
 

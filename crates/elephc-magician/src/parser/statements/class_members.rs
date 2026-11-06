@@ -18,6 +18,8 @@ impl Parser {
         is_abstract: bool,
         is_final: bool,
     ) -> Result<(EvalClassMethod, Vec<EvalClassProperty>), EvalParseError> {
+        let template_start = self.pos;
+        let type_scope = self.type_parameters.len();
         let source_start_line = self.current_line();
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
@@ -25,6 +27,10 @@ impl Parser {
         };
         let name = name.clone();
         self.advance();
+        let name_index = self.pos - 1;
+        let header_start = self.pos;
+        let generic_parameters = self.parse_generic_parameters()?;
+        let header_end = self.pos;
         self.expect(TokenKind::LParen)?;
         let ParsedMethodParams {
             params,
@@ -53,9 +59,8 @@ impl Parser {
             };
             (body, source_end_line)
         };
-        Ok((
-            EvalClassMethod::with_visibility_and_modifiers(
-                name,
+        let mut method = EvalClassMethod::with_visibility_and_modifiers(
+                name.clone(),
                 visibility,
                 is_static,
                 is_abstract,
@@ -69,9 +74,19 @@ impl Parser {
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_by_ref_flags(parameter_is_by_ref)
             .with_parameter_variadic_flags(parameter_is_variadic)
-            .with_return_type(return_type),
-            promoted_properties,
-        ))
+            .with_return_type(return_type);
+        self.type_parameters.truncate(type_scope);
+        self.type_parameter_origins.truncate(type_scope);
+        if !generic_parameters.is_empty() {
+            let prototype = EvalStmt::FunctionDecl { name: name.clone(), source_location: method.source_location(),
+                attributes: method.attributes().to_vec(), params: method.params().to_vec(),
+                parameter_attributes: method.parameter_attributes().to_vec(), parameter_types: method.parameter_types().to_vec(),
+                parameter_defaults: method.parameter_defaults().to_vec(), parameter_is_by_ref: method.parameter_is_by_ref().to_vec(),
+                parameter_is_variadic: method.parameter_is_variadic().to_vec(), return_type: method.return_type().cloned(), body: method.body().to_vec() };
+            let template = self.retain_template(template_start, name_index, header_start, header_end, name, generic_parameters, prototype);
+            method = method.with_generic_template(template);
+        }
+        Ok((method, promoted_properties))
     }
 
     /// Parses one property declaration, including comma-separated simple properties.
@@ -121,7 +136,7 @@ impl Parser {
                 if is_static || effective_readonly {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
-                let (requires_get_hook, requires_set_hook) =
+                let (requires_get_hook, requires_set_hook, get_returns_by_ref) =
                     self.parse_property_hook_contracts()?;
                 let property = EvalClassProperty::with_visibility_static_final_and_readonly(
                     name,
@@ -133,7 +148,8 @@ impl Parser {
                 )
                 .with_type(property_type)
                 .with_set_visibility(set_visibility)
-                .with_abstract_hook_contract(requires_get_hook, requires_set_hook);
+                .with_abstract_hook_contract(requires_get_hook, requires_set_hook)
+                .with_get_contract_returns_by_ref(get_returns_by_ref);
                 return Ok((vec![property], Vec::new()));
             }
             if self.consume(TokenKind::Comma) {
@@ -316,7 +332,8 @@ impl Parser {
             params,
             body,
         )
-        .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line));
+        .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
+        .with_returns_by_ref(returns_by_ref);
         if is_set {
             method = method.with_parameter_types(vec![
                 set_hook_type.clone().or_else(|| property_type.cloned()),

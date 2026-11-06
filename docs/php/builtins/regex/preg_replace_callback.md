@@ -1,14 +1,12 @@
 ---
 title: "preg_replace_callback()"
 description: "Performs a regular expression search and replace using a callback."
-sidebar:
-  order: 763
 ---
 
 ## preg_replace_callback()
 
 ```php
-function preg_replace_callback(string $pattern, callable $callback, string $subject): string
+function preg_replace_callback(string $pattern, callable $callback, string $subject): mixed
 ```
 
 Performs a regular expression search and replace using a callback.
@@ -18,12 +16,13 @@ Performs a regular expression search and replace using a callback.
 - `$callback` (`callable`)
 - `$subject` (`string`)
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_replace_callback.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_replace_callback.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

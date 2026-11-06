@@ -1,4 +1,5 @@
 <?php
-// PHP prints e9; the current eval lexer expands the escaped byte into UTF-8 and prints c3a9.
+// Historical discrepancy: PHP printed e9 while eval printed c3a9.
+// The lexer now has raw-byte regression coverage; qualify this full eval source before retirement.
 $source = $argc > 0 ? 'echo bin2hex("\xe9"), "\n";' : '';
 eval($source);

@@ -189,7 +189,7 @@ pub(crate) fn eval_property_set_result(
     };
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
-        if let Some((declaring_class, _, write_visibility, is_static)) =
+        if let Some((declaring_class, visibility, write_visibility, is_static)) =
             eval_native_instance_property_metadata_for_access(
                 &class_name,
                 &class_name,
@@ -198,6 +198,11 @@ pub(crate) fn eval_property_set_result(
                 values,
             )?
         {
+            if !is_static && validate_eval_member_access(&declaring_class, visibility, context).is_ok() {
+                validate_native_readonly_property_access(
+                    object, identity, &declaring_class, property_name, write_visibility, context, values,
+                )?;
+            }
             if !is_static
                 && validate_eval_member_access(&declaring_class, write_visibility, context).is_err()
             {
@@ -332,6 +337,20 @@ pub(crate) fn eval_property_set_result(
                 values,
             );
         }
+        storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
+        // An initialized readonly value rejects an overwrite before implicit protected(set)
+        // access is checked. An authorized clone can still consume its one rewrite later.
+        if property.is_readonly()
+            && context.dynamic_property_is_initialized(identity, &storage_property_name)
+            && !context.clone_property_can_be_reinitialized(identity, &storage_property_name)
+        {
+            return eval_throw_readonly_property_modification_error(
+                &declaring_class,
+                property.name(),
+                context,
+                values,
+            );
+        }
         if validate_eval_property_write_access(&declaring_class, &property, context).is_err() {
             return eval_throw_property_write_access_error(
                 &declaring_class,
@@ -340,7 +359,6 @@ pub(crate) fn eval_property_set_result(
                 values,
             );
         }
-        storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
         if validate_eval_readonly_property_write(
             &declaring_class,
             &property,
@@ -354,6 +372,12 @@ pub(crate) fn eval_property_set_result(
                 property.name(),
                 context,
                 values,
+            );
+        }
+        if property.requires_set_hook() && property.is_readonly() && !property.has_set_hook() {
+            // The inherited abstract setter is callable but has no body or backing-slot write.
+            return eval_inherited_abstract_setter_write(
+                &declaring_class, property.name(), value, context, values,
             );
         }
         if property.has_set_hook() {
@@ -395,7 +419,7 @@ pub(crate) fn eval_property_set_result(
         }
     }
     if !declared_property_found {
-        if let Some((declaring_class, _, write_visibility, is_static)) =
+        if let Some((declaring_class, visibility, write_visibility, is_static)) =
             eval_dynamic_class_native_property_metadata(
                 &object_class_name,
                 property_name,
@@ -404,6 +428,11 @@ pub(crate) fn eval_property_set_result(
             )?
         {
             if !is_static {
+                if validate_eval_member_access(&declaring_class, visibility, context).is_ok() {
+                    validate_native_readonly_property_access(
+                        object, identity, &declaring_class, property_name, write_visibility, context, values,
+                    )?;
+                }
                 if validate_eval_member_access(&declaring_class, write_visibility, context)
                     .is_err()
                 {
@@ -491,6 +520,10 @@ pub(crate) fn eval_property_set_result(
         .dynamic_property_alias(identity, &storage_property_name)
         .cloned()
     {
+        let storage = match &target {
+            EvalReferenceTarget::Cell { cell } if values.is_reference(*cell)? => *cell,
+            _ => value,
+        };
         eval_reference_target_write(
             identity,
             &storage_property_name,
@@ -502,7 +535,7 @@ pub(crate) fn eval_property_set_result(
         context.mark_dynamic_property_initialized(identity, &storage_property_name);
         return eval_with_native_property_storage_scope(
             &object_class_name, &storage_property_name, context, values,
-            |values| values.property_set(object, &storage_property_name, value),
+            |values| values.property_set(object, &storage_property_name, storage),
         );
     }
     eval_with_native_property_storage_scope(
@@ -564,36 +597,6 @@ fn eval_write_public_dynamic_property(
     Ok(())
 }
 
-/// Enforces readonly one-shot initialization for properties owned by generated classes.
-fn validate_native_readonly_property_write(
-    object: RuntimeCellHandle,
-    identity: u64,
-    declaring_class: &str,
-    property_name: &str,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let flags = values
-        .reflection_property_flags(declaring_class, property_name)?
-        .unwrap_or_default();
-    if flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY == 0 {
-        return Ok(());
-    }
-    if context.clone_initialization_is_active(identity) {
-        if context.consume_clone_reinitialization(identity, property_name) {
-            return Ok(());
-        }
-    } else if !values.property_is_initialized(object, property_name)? {
-        return Ok(());
-    }
-    eval_throw_readonly_property_modification_error(
-        declaring_class,
-        property_name,
-        context,
-        values,
-    )
-}
-
 /// Binds one eval object property to a by-reference source parameter.
 /// Checks an AOT array property before forwarding a write to its native setter.
 pub(super) fn validate_eval_native_array_property_assignment(
@@ -620,6 +623,7 @@ pub(super) fn validate_eval_native_array_property_assignment(
     )
 }
 
+/// Binds a writable instance property to a source reference and publishes its initialized storage.
 pub(super) fn eval_property_reference_bind_result(
     object: RuntimeCellHandle,
     property_name: &str,
@@ -667,7 +671,7 @@ pub(super) fn eval_property_reference_target(
     object_identity: u64,
     storage_property_name: &str,
     source_name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalReferenceTarget, EvalStatus> {
@@ -675,6 +679,11 @@ pub(super) fn eval_property_reference_target(
         return Ok(target);
     }
     if context.current_function().is_some() {
+        if !generic_local_contracts(scope, source_name, context).is_empty() {
+            if let Some(cell) = eval_persistent_variable_reference(source_name, context, scope, values)? {
+                return Ok(EvalReferenceTarget::Cell { cell });
+            }
+        }
         let cell =
             visible_scope_cell(context, scope, source_name).map_or_else(|| values.null(), Ok)?;
         return Ok(EvalReferenceTarget::Cell { cell });
@@ -766,7 +775,8 @@ pub(super) fn eval_reference_target_write(
         let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
         return write_back_owned_variable_ref_target(scope, name, value, context, values);
     }
-    if matches!(target, EvalReferenceTarget::Cell { .. }) {
+    if let EvalReferenceTarget::Cell { cell } = target {
+        if values.is_reference(cell)? { return write_back_method_ref_target(&EvalReferenceTarget::Cell { cell }, value, context, values); }
         context.bind_dynamic_property_alias(
             object_identity,
             storage_property_name,

@@ -1,8 +1,6 @@
 ---
 title: "easter_days()"
 description: "Returns the number of days from March 21 to Easter Sunday of a year."
-sidebar:
-  order: 218
 ---
 
 ## easter_days()
@@ -21,8 +19,9 @@ Returns the number of days from March 21 to Easter Sunday of a year.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

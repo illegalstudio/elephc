@@ -1,8 +1,6 @@
 ---
 title: "imagepng()"
 description: "Writes an image as PNG, to a file or to the output buffer."
-sidebar:
-  order: 521
 ---
 
 ## imagepng()
@@ -23,8 +21,9 @@ Writes an image as PNG, to a file or to the output buffer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

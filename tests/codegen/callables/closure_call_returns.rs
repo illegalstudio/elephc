@@ -1,8 +1,9 @@
 //! Purpose:
-//! Integration tests for a closure whose body is `return <user function call>;`. The EIR
-//! re-derivation of such a closure's return type consulted only the builtin call-type map, so a
-//! USER callee fell through to the syntactic `Int` default and the call's real result — a string,
-//! a float, an array — was read back through an int slot with no diagnostic.
+//! Integration tests for a closure whose body is `return <call>;`. The EIR re-derivation of such a
+//! closure's return type consulted only the builtin call-type map, so a USER callee fell through
+//! to the syntactic `Int` default and the call's real result (a string, a float, an array) was
+//! read back through an int slot with no diagnostic. Method, static-method, captured-closure,
+//! expression-call and pipe callees took the same fallback until issues #1269 and #1272.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -194,4 +195,135 @@ echo $r[0], "|", $r[1], "|", strlen($r[1]);
 "#,
     );
     assert_eq!(out, "t1|t2|2");
+}
+
+/// A closure returning an instance or static METHOD call keeps the method's return type.
+///
+/// Only free functions were resolved, so `$o->greet()`, `Greeter::shout()`, an arrow body, a
+/// typed parameter receiver, a chained receiver and `$this->greet()` inside a method all fell to
+/// the syntactic `Int` default and printed `0`; the float came back as `int(1)` and the array
+/// failed to compile (issue #1269). The nullsafe call hands back its boxed chain result. Reference
+/// PHP 8.5 output.
+#[test]
+fn test_closure_returning_a_method_call_keeps_the_method_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Greeter {
+    public function greet(string $who): string { return "hi " . $who; }
+    public static function shout(string $who): string { return strtoupper($who); }
+    public function half(int $n): float { return $n / 2; }
+    public function pair(string $a): array { return [$a, $a . $a]; }
+    public function me(): Greeter { return $this; }
+    public function run(): string {
+        $viaThis = function (string $w) { return $this->greet($w); };
+        return $viaThis("this");
+    }
+}
+$g = new Greeter();
+$instance = function (string $w) use ($g) { return $g->greet($w); };
+$static = function (string $w) { return Greeter::shout($w); };
+$arrow = fn(string $w) => $g->greet($w);
+$param = function (Greeter $h) { return $h->greet("param"); };
+$chain = fn(string $w) => $g->me()->greet($w);
+$float = fn(int $n) => $g->half($n);
+$array = function () use ($g) { return $g->pair("x"); };
+$maybe = fn(?Greeter $h) => $h?->greet("n");
+echo $instance("bob"), "|", $static("amy"), "|", $arrow("kim"), "|", $param($g), "|", $chain("ann"), "|", $g->run(), "\n";
+echo strlen($instance("bob")), "|", implode(",", $array()), "|", count($array()), "\n";
+var_dump($float(3), $maybe($g), $maybe(null));
+"#,
+    );
+    assert_eq!(
+        out,
+        "hi bob|AMY|hi kim|hi param|hi ann|hi this\n6|x,xx|2\nfloat(1.5)\nstring(4) \"hi n\"\nNULL\n"
+    );
+}
+
+/// A closure returning an EXTERN call keeps the C declaration's return type.
+///
+/// Extern functions are published in the same signature map as user functions, so this shape
+/// already resolved through the user-function lookup; pinned so that path keeps covering it
+/// (issue #1272). The message text is libc's, so it is compared against a direct call.
+#[test]
+fn test_closure_returning_an_extern_call_keeps_the_extern_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+extern function strerror(int $errnum): string;
+extern function atof(string $s): float;
+$message = function (int $code) { return strerror($code); };
+$parse = fn(string $s) => atof($s);
+echo $message(2) === strerror(2) ? "same" : "diff", "|", strlen($message(2)) > 0 ? "text" : "empty", "|";
+var_dump($parse("2.5"));
+"#,
+    );
+    assert_eq!(out, "same|text|float(2.5)\n");
+}
+
+/// A closure returning a call whose callee is only known at runtime returns the boxed result.
+///
+/// A captured closure, an expression call and a pipe all took the syntactic `Int` default, so a
+/// string result printed `0` (issue #1272). The body hands back a boxed dispatch result, which is
+/// now what the closure signature carries. Reference PHP 8.5 output.
+#[test]
+fn test_closure_returning_a_runtime_dispatched_call_boxes_the_result() {
+    let out = compile_and_run(
+        r#"<?php
+function wrap(string $s): string { return "{" . $s . "}"; }
+$inner = function (string $w): string { return "<" . $w . ">"; };
+$viaCapture = function (string $w) use ($inner) { return $inner($w); };
+$maker = fn() => fn(string $s): string => "[" . $s . "]";
+$viaExprCall = fn(string $s) => ($maker())($s);
+$viaPipe = fn(string $s) => $s |> wrap(...);
+echo $viaCapture("a"), $viaExprCall("b"), $viaPipe("c"), "|", strlen($viaCapture("xy"));
+"#,
+    );
+    assert_eq!(out, "<a>[b]{c}|4");
+}
+
+/// The checker accepts a string consumer on an element of a closure-returned container.
+///
+/// Lowering stamps `return values($v);` with the callee's boxed-element container, while the
+/// checker typed the element from the untyped parameter's `int` placeholder and refused
+/// `strlen($f("hello")[0])` with `strlen() argument must be string` (issue #1270). Reference
+/// PHP 8.5 prints `5|ABC|3`.
+#[test]
+fn test_checker_accepts_string_consumers_on_a_closure_returned_container_element() {
+    let out = compile_and_run(
+        r#"<?php
+function values($v) { return [$v]; }
+function pairs($k, $v) { return [$k => $v]; }
+$f = function ($v) { return values($v); };
+$g = fn($v) => values($v);
+$h = fn($k, $v) => pairs($k, $v);
+echo strlen($f("hello")[0]), "|", strtoupper($g("abc")[0]), "|", strlen($h("a", "xyz")["a"]);
+"#,
+    );
+    assert_eq!(out, "5|ABC|3");
+}
+
+/// The checker widens a container INSIDE a union the same way: a callee returning `[$v]` or
+/// `null` makes the closure `?array<mixed>`, so its element reaches a `string` parameter.
+///
+/// Only a bare array return was widened at first, so this union kept the parameter
+/// placeholder's element type and `take($m("hello")[0])` was refused with `Function 'take'
+/// parameter $s expects Str, got Union([Int, Void])`, while lowering already boxed the whole
+/// result (raised in review). `strlen()` accepts any union, which is why the `string` parameter
+/// is the consumer that pins it. Reference PHP 8.5 prints `[hello]|[xyz]|5` and the dump.
+#[test]
+fn test_checker_widens_a_nullable_container_returned_through_a_closure() {
+    let out = compile_and_run(
+        r#"<?php
+function maybe_values($v) { if ($v === null) { return null; } return [$v]; }
+function maybe_pairs($k, $v) { if ($v === null) { return null; } return [$k => $v]; }
+function take(string $s): string { return "[" . $s . "]"; }
+$m = function ($v) { return maybe_values($v); };
+$p = fn($k, $v) => maybe_pairs($k, $v);
+echo take($m("hello")[0]), "|", take($p("a", "xyz")["a"]), "|", strlen($m("hello")[0]), "\n";
+var_dump($m("q"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "[hello]|[xyz]|5\narray(1) {\n  [0]=>\n  string(1) \"q\"\n}\n"
+    );
 }

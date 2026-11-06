@@ -246,11 +246,20 @@ pub(super) fn eval_reflection_method_summary_to_string(
 }
 
 /// Formats one reflected function or method similarly to PHP's `__toString()` output.
+///
+/// PHP prints a blank line before `- Parameters` even when it omits the `@@ <file>` line, as it
+/// does for every internal callable; the compiled renderer prints the same line. Callables
+/// without parameters or a return type have an empty body.
 pub(super) fn eval_reflection_function_method_to_string(
     target: &EvalReflectionFunctionMethodTarget,
 ) -> String {
+    if eval_reflection_function_method_parameters(target).is_empty()
+        && eval_reflection_function_method_return_type(target).is_none()
+    {
+        return format!("{} {{\n}}\n", eval_reflection_function_method_header(target));
+    }
     let mut rendered = format!(
-        "{} {{\n  - Parameters [{}] {{\n",
+        "{} {{\n\n  - Parameters [{}] {{\n",
         eval_reflection_function_method_header(target),
         eval_reflection_function_method_parameters(target).len()
     );
@@ -274,9 +283,10 @@ pub(super) fn eval_reflection_function_method_header(
     target: &EvalReflectionFunctionMethodTarget,
 ) -> String {
     match target {
-        EvalReflectionFunctionMethodTarget::Function { name, .. } => {
+        EvalReflectionFunctionMethodTarget::Function { name, is_deprecated, .. } => {
             format!(
-                "Function [ <user> function {} ]",
+                "Function [ <user{}> function {} ]",
+                if *is_deprecated { ", deprecated" } else { "" },
                 name.trim_start_matches('\\')
             )
         }
@@ -286,6 +296,7 @@ pub(super) fn eval_reflection_function_method_header(
             is_static,
             is_final,
             is_abstract,
+            is_deprecated,
             ..
         } => {
             let mut parts = Vec::new();
@@ -303,7 +314,8 @@ pub(super) fn eval_reflection_function_method_header(
             }
             parts.push(String::from("method"));
             parts.push(name.clone());
-            format!("Method [ <user> {} ]", parts.join(" "))
+            format!("Method [ <user{}> {} ]",
+                if *is_deprecated { ", deprecated" } else { "" }, parts.join(" "))
         }
     }
 }
@@ -477,28 +489,24 @@ pub(super) fn eval_reflection_visibility_label(visibility: EvalVisibility) -> &'
     }
 }
 
+/// Shares PHP type spelling without exposing Reflection's private metadata representation.
+pub(in crate::interpreter) fn eval_parameter_type_error_label(parameter_type: &EvalParameterType) -> Option<String> {
+    eval_reflection_parameter_type_metadata(parameter_type).as_ref()
+        .map(eval_reflection_type_metadata_to_string)
+}
+
 /// Formats retained ReflectionType metadata for `ReflectionProperty::__toString()`.
 pub(super) fn eval_reflection_type_metadata_to_string(
     type_metadata: &EvalReflectionParameterTypeMetadata,
 ) -> String {
     match &type_metadata.kind {
         EvalReflectionParameterTypeKind::Named(named) => {
-            if named.allows_null && named.name != "mixed" {
-                format!("?{}", named.name)
-            } else {
-                named.name.clone()
-            }
+            elephc_builtin_contract::reflection_format::named_type(&named.name, named.allows_null)
         }
         EvalReflectionParameterTypeKind::Union(union) => {
-            let mut names = union
-                .types
-                .iter()
-                .map(|type_metadata| type_metadata.name.clone())
-                .collect::<Vec<_>>();
-            if union.allows_null && names.iter().all(|name| name != "null") {
-                names.push(String::from("null"));
-            }
-            names.join("|")
+            elephc_builtin_contract::reflection_format::union(
+                union.types.iter().map(|ty| ty.name.clone()).collect(), union.allows_null,
+            )
         }
         EvalReflectionParameterTypeKind::Intersection(intersection) => intersection
             .types
@@ -515,7 +523,7 @@ pub(super) fn eval_reflection_default_expr_to_string(default: &EvalExpr) -> Opti
         EvalExpr::Const(EvalConst::Null) => Some(String::from("NULL")),
         EvalExpr::Const(EvalConst::Bool(value)) => Some(value.to_string()),
         EvalExpr::Const(EvalConst::Int(value)) => Some(value.to_string()),
-        EvalExpr::Const(EvalConst::Float(value)) => Some(value.to_string()),
+        EvalExpr::Const(EvalConst::Float(value)) => Some(elephc_builtin_contract::reflection_format::float(*value)),
         EvalExpr::Const(EvalConst::String(value)) => Some(escaped_string_default(value.as_bytes())),
         EvalExpr::Const(EvalConst::Bytes(value)) => Some(escaped_string_default(value)),
         EvalExpr::Unary {
@@ -538,18 +546,7 @@ pub(super) fn eval_reflection_default_expr_to_string(default: &EvalExpr) -> Opti
 
 /// Escapes retained string defaults using PHP Reflection's bytewise printable representation.
 fn escaped_string_default(value: &[u8]) -> String {
-    let mut result = String::from("'");
-    for &byte in value {
-        match byte {
-            b'\t' => result.push_str("\\t"), b'\n' => result.push_str("\\n"),
-            b'\r' => result.push_str("\\r"), 0x0b => result.push_str("\\v"),
-            0x0c => result.push_str("\\f"), 0x1b => result.push_str("\\e"),
-            b'\\' => result.push_str("\\\\"), 0x20..=0x7e => result.push(byte as char),
-            _ => result.push_str(&format!("\\x{byte:02X}")),
-        }
-    }
-    result.push('\'');
-    result
+    elephc_builtin_contract::reflection_format::string(value)
 }
 
 /// Preserves binary defaults and renders UTF-8 bytes with PHP Reflection's printable escapes.

@@ -89,6 +89,12 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [x10, #24]");                                 // obj_size
     emitter.instruction("str x12, [sp, #32]");                                  // save class_id across the heap call
     emitter.instruction("str x13, [sp, #40]");                                  // save obj_size across the heap call
+    abi::emit_symbol_address(emitter, "x10", "_class_initcheck_ptrs");
+    emitter.instruction("ldr x10, [x10, x12, lsl #3]");                         // preallocation default-error thunk
+    emitter.instruction("cbz x10, __rt_nbn_initcheck_ok");                      // valid defaults need no early check
+    emitter.instruction("mov x0, #0");                                          // invalid thunk never uses a this operand
+    emitter.instruction("blr x10");                                             // raise the EIR default error before allocating
+    emitter.label("__rt_nbn_initcheck_ok");
     emit_runtime_managed_match_aarch64(emitter);
 
     // -- allocate the object payload --
@@ -187,6 +193,13 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");                       // obj_size
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // stash class_id
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // stash obj_size
+    abi::emit_symbol_address(emitter, "r10", "_class_initcheck_ptrs");
+    emitter.instruction("mov r10, QWORD PTR [r10 + rcx*8]");                    // preallocation default-error thunk
+    emitter.instruction("test r10, r10");                                       // valid defaults need no early check
+    emitter.instruction("jz __rt_nbn_initcheck_ok_x86");                        // skip the absent error thunk
+    emitter.instruction("xor edi, edi");                                        // invalid thunk never uses a this operand
+    emitter.instruction("call r10");                                            // raise the EIR default error before allocating
+    emitter.label("__rt_nbn_initcheck_ok_x86");
     emit_runtime_managed_match_x86_64(emitter);
 
     // -- allocate the object payload --
@@ -196,7 +209,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    )); // object heap-kind word with the x86_64 marker
+    ));                                                                         // object heap-kind word with the x86_64 marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
     emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload class_id
@@ -239,14 +252,17 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
 /// Emits ARM64 class-id checks for runtime-managed builtin payload layouts.
 fn emit_runtime_managed_match_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x12, [sp, #32]");                                  // reload matched class id for runtime-managed allocation checks
+    emitter.instruction("mov x1, xzr");                                         // SplDoublyLinkedList default mode: FIFO, no fix bit
     abi::emit_symbol_address(emitter, "x10", "_spl_dll_class_id");
     emitter.instruction("ldr x10, [x10]");                                      // load SplDoublyLinkedList class id
     emitter.instruction("cmp x12, x10");                                        // is the requested class SplDoublyLinkedList?
     emitter.instruction("b.eq __rt_nbn_alloc_spl_dll");                         // allocate the SPL list payload for SplDoublyLinkedList
+    emitter.instruction("mov x1, #6");                                          // SplStack default mode: FIX | LIFO
     abi::emit_symbol_address(emitter, "x10", "_spl_stack_class_id");
     emitter.instruction("ldr x10, [x10]");                                      // load SplStack class id
     emitter.instruction("cmp x12, x10");                                        // is the requested class SplStack?
     emitter.instruction("b.eq __rt_nbn_alloc_spl_dll");                         // allocate the shared SPL list payload for SplStack
+    emitter.instruction("mov x1, #4");                                          // SplQueue default mode: FIX
     abi::emit_symbol_address(emitter, "x10", "_spl_queue_class_id");
     emitter.instruction("ldr x10, [x10]");                                      // load SplQueue class id
     emitter.instruction("cmp x12, x10");                                        // is the requested class SplQueue?
@@ -269,12 +285,15 @@ fn emit_runtime_managed_match_aarch64(emitter: &mut Emitter) {
 
 /// Emits x86_64 class-id checks for runtime-managed builtin payload layouts.
 fn emit_runtime_managed_match_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("xor esi, esi");                                        // SplDoublyLinkedList default mode: FIFO, no fix bit
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_dll_class_id", 0);
     emitter.instruction("cmp rcx, r10");                                        // is the requested class SplDoublyLinkedList?
     emitter.instruction("je __rt_nbn_alloc_spl_dll_x86");                       // allocate the SPL list payload for SplDoublyLinkedList
+    emitter.instruction("mov esi, 6");                                          // SplStack default mode: FIX | LIFO
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_stack_class_id", 0);
     emitter.instruction("cmp rcx, r10");                                        // is the requested class SplStack?
     emitter.instruction("je __rt_nbn_alloc_spl_dll_x86");                       // allocate the shared SPL list payload for SplStack
+    emitter.instruction("mov esi, 4");                                          // SplQueue default mode: FIX
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_queue_class_id", 0);
     emitter.instruction("cmp rcx, r10");                                        // is the requested class SplQueue?
     emitter.instruction("je __rt_nbn_alloc_spl_dll_x86");                       // allocate the shared SPL list payload for SplQueue

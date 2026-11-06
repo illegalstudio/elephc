@@ -308,3 +308,69 @@ var_dump(array_map(__elephc_include_variant_0123456789abcdef_foo(...), ["fcc"]))
         )
     );
 }
+
+/// A BUILTIN named by string at a callback builtin's `$callback`, inside a function body.
+///
+/// `check_function_call` resolves user functions only, so the checker reported
+/// "Undefined function: strlen" for `array_map('strlen', $a)` in any function — and `origin/main`
+/// refused it at the top level too. Accepting it at the checker alone was not enough: the runtime
+/// resolves a callback STRING against user functions, and `array_filter($a, 'is_numeric')` then
+/// died with "must be a valid callback". The lowering now builds the same callable
+/// `is_numeric(...)` would, which is what both spellings name in php.
+///
+/// The named-argument form, the result of `array_map` read back as typed storage, and the heap are
+/// all part of it: the checker sees a string and the lowering a first-class callable, and those
+/// have to agree on the element type.
+#[test]
+fn test_builtin_named_by_string_is_a_callback_inside_a_function() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function t(array $a, array $w): string {
+    $lens = array_map('strlen', $a);
+    $total = 0;
+    foreach ($lens as $n) { $total += $n; }
+    $up = array_map('strtoupper', $w);
+    $num = array_filter(["1", "a", "2", "x3"], 'is_numeric');
+    $named = array_filter(array: ["4", "b"], callback: 'is_numeric');
+    return $total . "|" . implode(",", $up) . "|" . implode(",", $num) . "|" . implode(",", $named)
+        . "|" . call_user_func('strrev', "abc");
+}
+echo t(["ab", "cde"], ["x", "yz"]);
+for ($i = 0; $i < 30; $i++) { $r = t(["q"], ["z"]); }
+echo "|", $r;
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "5|X,YZ|1,2|4|cba|1|Z|1,2|4|cba", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A builtin whose helper returns an OWNED string is not copied again by the callable invoker.
+///
+/// `strtoupper` and `strtolower` persist their result before returning; the invoker still treated
+/// every non-mbstring builtin as answering in scratch and copied it, leaking the original — one
+/// string per call through `strtoupper(...)`, `$f(...)` or `call_user_func($f, ...)`. `strrev`
+/// answers in scratch and has to keep being copied, so it rides along as the control.
+#[test]
+fn test_owned_string_builtin_results_are_not_copied_by_the_invoker() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function pick(int $i): string { return ["strtoupper", "strtolower", "strrev"][$i % 3]; }
+function t(array $a, int $i): string {
+    $f = pick($i);
+    $u = array_map(strtoupper(...), $a);
+    $v = $f("MiX");
+    $w = call_user_func($f, "AbC");
+    $x = call_user_func_array('strtolower', ["QQ"]);
+    $g = strtolower(...);
+    return implode(",", $u) . "|" . $v . "|" . $w . "|" . $x . "|" . $g("ZZ");
+}
+$r = "";
+for ($i = 0; $i < 30; $i++) { $r = t(["qa", "Zb"], $i); }
+echo $r;
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "QA,ZB|XiM|CbA|qq|zz", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -1,8 +1,6 @@
 ---
 title: "strripos()"
 description: "Finds the numeric position of the last case-insensitive occurrence of a substring."
-sidebar:
-  order: 928
 ---
 
 ## strripos()
@@ -22,8 +20,9 @@ Finds the numeric position of the last case-insensitive occurrence of a substrin
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strripos.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strripos.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

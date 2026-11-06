@@ -16,6 +16,21 @@ use crate::codegen_support::platform::Arch;
 /// Emits every public BCMath runtime entry and its target-specific shared implementation.
 pub(crate) fn emit_bcmath(emitter: &mut Emitter) {
     for (label, slot, common) in [
+        ("__rt_bcnumber_add", "_elephc_bcmath_number_add_fn", "__rt_bcmath_binary"),
+        ("__rt_bcnumber_ceil", "_elephc_bcmath_number_ceil_fn", "__rt_bcmath_unary"),
+        ("__rt_bcnumber_comp", "_elephc_bcmath_number_comp_fn", "__rt_bcmath_comp"),
+        ("__rt_bcnumber_create", "_elephc_bcmath_number_create_fn", "__rt_bcmath_unary"),
+        ("__rt_bcnumber_div", "_elephc_bcmath_number_div_fn", "__rt_bcmath_binary"),
+        ("__rt_bcnumber_divmod", "_elephc_bcmath_number_divmod_fn", "__rt_bcmath_divmod"),
+        ("__rt_bcnumber_floor", "_elephc_bcmath_number_floor_fn", "__rt_bcmath_unary"),
+        ("__rt_bcnumber_mod", "_elephc_bcmath_number_mod_fn", "__rt_bcmath_binary"),
+        ("__rt_bcnumber_mul", "_elephc_bcmath_number_mul_fn", "__rt_bcmath_binary"),
+        ("__rt_bcnumber_pow", "_elephc_bcmath_number_pow_fn", "__rt_bcmath_binary"),
+        ("__rt_bcnumber_powmod", "_elephc_bcmath_number_powmod_fn", "__rt_bcmath_powmod"),
+        ("__rt_bcnumber_round", "_elephc_bcmath_number_round_fn", "__rt_bcmath_round"),
+        ("__rt_bcnumber_sqrt", "_elephc_bcmath_number_sqrt_fn", "__rt_bcmath_unary_scaled"),
+        ("__rt_bcnumber_sub", "_elephc_bcmath_number_sub_fn", "__rt_bcmath_binary"),
+
         ("__rt_bcadd", "_elephc_bcmath_add_fn", "__rt_bcmath_binary"),
         ("__rt_bcsub", "_elephc_bcmath_sub_fn", "__rt_bcmath_binary"),
         ("__rt_bcmul", "_elephc_bcmath_mul_fn", "__rt_bcmath_binary"),

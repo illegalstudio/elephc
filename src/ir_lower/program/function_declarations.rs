@@ -219,6 +219,7 @@ pub(super) fn lower_function_declarations(
                 ..
             } => function::lower_user_function(
                 name,
+                stmt.source_mode == crate::source::SourceMode::Internal,
                 params,
                 return_type.as_ref(),
                 &stmt.attributes,

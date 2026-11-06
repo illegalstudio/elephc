@@ -14,11 +14,37 @@ use super::*;
 fn test_ffi_extern_abs() {
     let out = compile_and_run(
         r#"<?php
-extern function abs(int $n): int;
+extern function abs(i32 $n): i32;
 echo abs(-42);
 "#,
     );
     assert_eq!(out, "42");
+}
+
+/// Verifies a libc `long` return declared as `int` keeps all 64 bits (issue #1901: it used to be
+/// sign-extended from 32 bits and printed 705032704).
+#[test]
+fn test_ffi_extern_labs_returns_the_full_64_bit_long() {
+    let out = compile_and_run(
+        r#"<?php
+extern function labs(int $n): int;
+echo labs(-5000000000);
+"#,
+    );
+    assert_eq!(out, "5000000000");
+}
+
+/// Verifies a libm `float` function declared `f32` returns the single-precision result widened to a PHP
+/// float (issue #1905): `sqrtf(2)` is the 32-bit square root, not the double one.
+#[test]
+fn test_ffi_extern_sqrtf_returns_single_precision() {
+    let out = compile_and_run(
+        r#"<?php
+extern function sqrtf(f32 $x): f32;
+var_dump(sqrtf(2.0));
+"#,
+    );
+    assert_eq!(out, "float(1.4142135381698608)\n");
 }
 
 /// Verifies FFI extern call to libc `atoi` with a string argument, returning integer 12345.
@@ -27,7 +53,7 @@ fn test_ffi_extern_atoi() {
     // Verifies FFI extern call to libc `atoi` with a string argument, returning integer 12345.
     let out = compile_and_run(
         r#"<?php
-extern function atoi(string $s): int;
+extern function atoi(string $s): i32;
 echo atoi("12345");
 "#,
     );
@@ -40,7 +66,7 @@ fn test_ffi_extern_strlen() {
     // Verifies FFI extern call to libc `strlen` on a static string, returning 11.
     let out = compile_and_run(
         r#"<?php
-extern function strlen(string $s): int;
+extern function strlen(string $s): u64;
 echo strlen("hello world");
 "#,
     );
@@ -53,7 +79,7 @@ fn test_ffi_extern_call_user_func_string_callback() {
     // Verifies `call_user_func("STRLEN", ...)` resolves to FFI extern `strlen` via case-insensitive builtin lookup.
     let out = compile_and_run(
         r#"<?php
-extern function strlen(string $s): int;
+extern function strlen(string $s): u64;
 echo call_user_func("STRLEN", "hello");
 "#,
     );
@@ -66,7 +92,7 @@ fn test_ffi_extern_call_user_func_array_string_callback() {
     // Verifies `call_user_func_array("STRLEN", ["hello"])` passes spread array as single argument to FFI extern `strlen`.
     let out = compile_and_run(
         r#"<?php
-extern function strlen(string $s): int;
+extern function strlen(string $s): u64;
 echo call_user_func_array("STRLEN", ["hello"]);
 "#,
     );
@@ -77,7 +103,7 @@ echo call_user_func_array("STRLEN", ["hello"]);
 #[test]
 fn test_ffi_extern_dynamic_call_user_func_array_uses_descriptor_invoker() {
     let source = r#"<?php
-extern function atoi(string $s): int;
+extern function atoi(string $s): i32;
 $callback = "ATOI";
 $args = ["1234"];
 echo call_user_func_array($callback, $args) + 8;
@@ -101,7 +127,7 @@ echo call_user_func_array($callback, $args) + 8;
 fn test_ffi_extern_dynamic_call_user_func_string_callback() {
     let out = compile_and_run(
         r#"<?php
-extern function atoi(string $s): int;
+extern function atoi(string $s): i32;
 $callback = "atoi";
 echo call_user_func($callback, "37") + 5;
 "#,
@@ -115,7 +141,7 @@ fn test_ffi_extern_named_arguments_reorder_call() {
     // Verifies named arguments (`left:`, `right:`) are correctly reordered to match FFI extern parameter order.
     let out = compile_and_run(
         r#"<?php
-extern function strcmp(string $left, string $right): int;
+extern function strcmp(string $left, string $right): i32;
 echo strcmp(right: "b", left: "a") < 0 ? "lt" : "no";
 "#,
     );
@@ -128,7 +154,7 @@ fn test_ffi_extern_named_arguments_after_spread() {
     // Verifies named arguments after a positional spread are handled correctly for FFI extern calls.
     let out = compile_and_run(
         r#"<?php
-extern function strcmp(string $left, string $right): int;
+extern function strcmp(string $left, string $right): i32;
 $args = ["a"];
 echo strcmp(...$args, right: "b") < 0 ? "lt" : "no";
 "#,
@@ -144,7 +170,7 @@ fn test_ffi_extern_named_arguments_preserve_source_evaluation_order() {
     // Output "rl:lt" confirms `right_arg()` runs before `left_arg()` (named `right:` appears before `left:` in source).
     let out = compile_and_run(
         r#"<?php
-extern function strcmp(string $left, string $right): int;
+extern function strcmp(string $left, string $right): i32;
 function left_arg() {
     echo "l";
     return "a";
@@ -165,7 +191,7 @@ fn test_ffi_extern_positional_arguments_preserve_source_evaluation_order() {
     // Verifies positional arguments evaluate source expressions left-to-right; output "LR:lt" confirms `left_arg()` runs first.
     let out = compile_and_run(
         r#"<?php
-extern function strcmp(string $left, string $right): int;
+extern function strcmp(string $left, string $right): i32;
 function left_arg() {
     echo "L";
     return "a";
@@ -188,7 +214,7 @@ fn test_ffi_extern_named_arguments_after_spread_evaluate_spread_once() {
     // Output "xr:lt" confirms `args()` prints "x" once and `right_arg()` prints "r".
     let out = compile_and_run(
         r#"<?php
-extern function strcmp(string $left, string $right): int;
+extern function strcmp(string $left, string $right): i32;
 function args() {
     echo "x";
     return ["a"];
@@ -211,7 +237,7 @@ fn test_ffi_extern_assoc_spread_literal_maps_to_named_args() {
     // `...["right" => "b", "left" => "a"]` behaves like `left: "a", right: "b"` and compares as expected ("lt").
     let out = compile_and_run(
         r#"<?php
-extern function strcmp(string $left, string $right): int;
+extern function strcmp(string $left, string $right): i32;
 echo strcmp(...["right" => "b", "left" => "a"]) < 0 ? "lt" : "no";
 "#,
     );
@@ -226,7 +252,7 @@ fn test_ffi_extern_call_in_concat_restores_concat_cursor() {
     // "len=" . strlen("hello") must produce "len=5".
     let out = compile_and_run(
         r#"<?php
-extern function strlen(string $s): int;
+extern function strlen(string $s): u64;
 echo "len=" . strlen("hello");
 "#,
     );
@@ -239,7 +265,7 @@ fn test_ffi_extern_poll_from_method_uses_local_arguments() {
     // Verifies an FFI extern `poll` call within a method body reads arguments from local variables, not from `this`.
     let out = compile_and_run(
         r#"<?php
-extern function poll(ptr $fds, int $nfds, int $timeout): int;
+extern function poll(ptr $fds, u64 $nfds, i32 $timeout): i32;
 class Server {
     public function loop(): void {
         $pollfds = ptr_null();
@@ -331,7 +357,7 @@ fn test_ffi_extern_strlen_frees_borrowed_cstr_temp() {
     // Baseline (strlen declared, not called) and variant (two strlen calls) must have equal alloc/free delta.
     let baseline = compile_and_run_with_gc_stats(
         r#"<?php
-extern function strlen(string $s): int;
+extern function strlen(string $s): u64;
 "#,
     );
     assert!(
@@ -341,7 +367,7 @@ extern function strlen(string $s): int;
     );
     let out = compile_and_run_with_gc_stats(
         r#"<?php
-extern function strlen(string $s): int;
+extern function strlen(string $s): u64;
 strlen("hello");
 strlen("world");
 "#,

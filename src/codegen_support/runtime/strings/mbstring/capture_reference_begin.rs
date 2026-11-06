@@ -75,7 +75,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("pop rdx");                                         // restore publication mode
         emitter.instruction("pop rsi");                                         // restore reference identity and callback entry stack
         emitter.instruction("test rax, rax");                                   // reject ordinary boxed PHP values
-        emitter.instruction(&format!("jz {invalid}"));
+        emitter.instruction(&format!("jz {invalid}"));                          // reject malformed references before allocating a frame
         emitter.instruction("push rbp");                                        // preserve linkage and align nested calls
         emitter.instruction("mov rbp, rsp");                                    // establish the initialization frame
         emitter.instruction("sub rsp, 64");                                     // reserve inputs, fresh ownership, and protected cleanup state

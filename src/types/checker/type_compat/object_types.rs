@@ -359,6 +359,34 @@ impl Checker {
         None
     }
 
+    /// The classes whose `prop_name` slot is the one `declaring_class` declares (see
+    /// `Checker::property_sharers_index`).
+    fn property_sharers(&mut self, prop_name: &str, declaring_class: &str) -> Vec<String> {
+        let class_count = self.classes.len();
+        if self
+            .property_sharers_index
+            .as_ref()
+            .is_none_or(|(built_for, _)| *built_for != class_count)
+        {
+            let mut index: std::collections::HashMap<(String, String), Vec<String>> =
+                std::collections::HashMap::new();
+            for (name, info) in &self.classes {
+                for (property, owner) in &info.property_declaring_classes {
+                    index
+                        .entry((property.clone(), owner.clone()))
+                        .or_default()
+                        .push(name.clone());
+                }
+            }
+            self.property_sharers_index = Some((class_count, index));
+        }
+        self.property_sharers_index
+            .as_ref()
+            .and_then(|(_, index)| index.get(&(prop_name.to_string(), declaring_class.to_string())))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Propagates a resolved constructor argument type into the corresponding constructor
     /// parameter and property slot for all classes that share an inherited property from
     /// `declaring_class`. Used to sharpen types across an inheritance hierarchy after
@@ -396,25 +424,26 @@ impl Checker {
             return;
         };
 
-        for class_info in self.classes.values_mut() {
-            let shares_inherited_property = class_info
-                .property_declaring_classes
-                .get(&prop_name)
-                .is_some_and(|owner| owner == &declaring_class);
-
-            if !shares_inherited_property {
+        // The promoted property has no default expression, so this write types its slot, and
+        // the backend builds the slot's reads and writes from it: an `array<int|null>` argument
+        // (`new Holder($a)` after `$a[] = $n ?? null`) is stored with boxed elements, as every
+        // other untyped slot update does (#1944). The parameter takes the same type so the
+        // constructor body's `$this->items = $items` sees no change.
+        let stored_ty = if param_is_ref {
+            PhpType::Mixed
+        } else {
+            crate::types::box_tagged_scalar_array_elements(arg_ty.clone())
+        };
+        for sharer in self.property_sharers(&prop_name, &declaring_class) {
+            let Some(class_info) = self.classes.get_mut(&sharer) else {
                 continue;
-            }
+            };
 
             let property_has_declared_type = class_info.visible_property_is_declared(&prop_name);
             if !property_has_declared_type {
                 if let Some(slot) = class_info.visible_property_index(&prop_name) {
                     if let Some(prop) = class_info.properties.get_mut(slot) {
-                        prop.1 = if param_is_ref {
-                            PhpType::Mixed
-                        } else {
-                            arg_ty.clone()
-                        };
+                        prop.1 = stored_ty.clone();
                     }
                 }
             }
@@ -427,11 +456,7 @@ impl Checker {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
                     if !sig.declared_params.get(param_index).copied().unwrap_or(false) {
                         if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                            *param_ty = if param_is_ref {
-                                PhpType::Mixed
-                            } else {
-                                arg_ty.clone()
-                            };
+                            *param_ty = stored_ty.clone();
                         }
                     }
                 }

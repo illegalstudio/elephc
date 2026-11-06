@@ -21,7 +21,10 @@ use std::path::Path;
 ///
 /// # Returns
 /// A `String` label safe for use as an assembly symbol name.
-pub(super) fn include_once_label(path: &Path) -> String {
+/// `pub(crate)` rather than `pub(super)`: the web prelude matches the resolved preload's
+/// guard by this label, which is the only exact way to tell it from a `require_once` the
+/// user wrote at the top of their own file.
+pub(crate) fn include_once_label(path: &Path) -> String {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in path.to_string_lossy().as_bytes() {
         hash ^= u64::from(*byte);

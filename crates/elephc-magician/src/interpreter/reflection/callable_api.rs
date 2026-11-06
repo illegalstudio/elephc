@@ -127,8 +127,14 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
                 values,
             )
         }
-        "isinternal" | "returnsreference" | "isgenerator" | "hastentativereturntype" => {
+        "isinternal" | "isgenerator" | "hastentativereturntype" => {
             eval_reflection_false_metadata_result(evaluated_args, values)
+        }
+        "returnsreference" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values
+                .bool_value(eval_reflection_function_method_returns_reference(&target))
+                .map(Some)
         }
         "isclosure" => {
             eval_reflection_bind_no_args(evaluated_args)?;

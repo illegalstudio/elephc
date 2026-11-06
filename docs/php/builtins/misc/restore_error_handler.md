@@ -1,8 +1,6 @@
 ---
 title: "restore_error_handler()"
 description: "Restores the previously active user error handler."
-sidebar:
-  order: 683
 ---
 
 ## restore_error_handler()
@@ -19,8 +17,9 @@ Restores the previously active user error handler.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/restore_error_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/restore_error_handler.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

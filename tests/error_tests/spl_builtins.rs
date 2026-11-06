@@ -334,7 +334,7 @@ fn test_error_recursive_regex_iterator_cannot_be_redeclared() {
 fn test_error_regex_iterator_requires_iterator() {
     expect_error(
         "<?php $it = new RegexIterator(new ArrayObject([]), \"/a/\");",
-        "Constructor 'RegexIterator::__construct' parameter $iterator expects Object(\"Iterator\"), got Object(\"ArrayObject\")",
+        "Constructor 'RegexIterator::__construct' parameter $iterator expects Iterator, got ArrayObject",
     );
 }
 
@@ -343,7 +343,7 @@ fn test_error_regex_iterator_requires_iterator() {
 fn test_error_recursive_regex_iterator_requires_recursive_iterator() {
     expect_error(
         "<?php $it = new RecursiveRegexIterator(new ArrayIterator([]), \"/a/\");",
-        "Constructor 'RecursiveRegexIterator::__construct' parameter $iterator expects Object(\"RecursiveIterator\"), got Object(\"ArrayIterator\")",
+        "Constructor 'RecursiveRegexIterator::__construct' parameter $iterator expects RecursiveIterator, got ArrayIterator",
     );
 }
 
@@ -352,7 +352,7 @@ fn test_error_recursive_regex_iterator_requires_recursive_iterator() {
 fn test_error_callback_filter_iterator_requires_callable() {
     expect_error(
         "<?php $it = new CallbackFilterIterator(new ArrayIterator([]), 123);",
-        "Constructor 'CallbackFilterIterator::__construct' parameter $callback expects Callable, got Int",
+        "Constructor 'CallbackFilterIterator::__construct' parameter $callback expects callable, got int",
     );
 }
 
@@ -403,35 +403,35 @@ fn test_error_filesystem_spl_constructors_validate_types() {
     for (source, expected) in [
         (
             "<?php $info = new SplFileInfo(123);",
-            "Constructor 'SplFileInfo::__construct' parameter $filename expects Str, got Int",
+            "Constructor 'SplFileInfo::__construct' parameter $filename expects string, got int",
         ),
         (
             "<?php $file = new SplFileObject(123);",
-            "Constructor 'SplFileObject::__construct' parameter $filename expects Str, got Int",
+            "Constructor 'SplFileObject::__construct' parameter $filename expects string, got int",
         ),
         (
             "<?php $tmp = new SplTempFileObject(\"bad\");",
-            "Constructor 'SplTempFileObject::__construct' parameter $maxMemory expects Int, got Str",
+            "Constructor 'SplTempFileObject::__construct' parameter $maxMemory expects int, got string",
         ),
         (
             "<?php $it = new DirectoryIterator(123);",
-            "Constructor 'DirectoryIterator::__construct' parameter $directory expects Str, got Int",
+            "Constructor 'DirectoryIterator::__construct' parameter $directory expects string, got int",
         ),
         (
             "<?php $it = new FilesystemIterator(\".\", \"bad\");",
-            "Constructor 'FilesystemIterator::__construct' parameter $flags expects Int, got Str",
+            "Constructor 'FilesystemIterator::__construct' parameter $flags expects int, got string",
         ),
         (
             "<?php $it = new GlobIterator(123);",
-            "Constructor 'GlobIterator::__construct' parameter $pattern expects Str, got Int",
+            "Constructor 'GlobIterator::__construct' parameter $pattern expects string, got int",
         ),
         (
             "<?php $it = new RecursiveDirectoryIterator(123);",
-            "Constructor 'RecursiveDirectoryIterator::__construct' parameter $directory expects Str, got Int",
+            "Constructor 'RecursiveDirectoryIterator::__construct' parameter $directory expects string, got int",
         ),
         (
             "<?php $it = new RecursiveCachingIterator(new ArrayIterator([]));",
-            "Constructor 'RecursiveCachingIterator::__construct' parameter $iterator expects Object(\"RecursiveIterator\"), got Object(\"ArrayIterator\")",
+            "Constructor 'RecursiveCachingIterator::__construct' parameter $iterator expects RecursiveIterator, got ArrayIterator",
         ),
     ] {
         expect_error(source, expected);
@@ -443,7 +443,7 @@ fn test_error_filesystem_spl_constructors_validate_types() {
 fn test_error_recursive_callback_filter_iterator_requires_callable() {
     expect_error(
         "<?php $it = new RecursiveCallbackFilterIterator(new RecursiveArrayIterator([]), 123);",
-        "Constructor 'RecursiveCallbackFilterIterator::__construct' parameter $callback expects Callable, got Int",
+        "Constructor 'RecursiveCallbackFilterIterator::__construct' parameter $callback expects callable, got int",
     );
 }
 
@@ -452,7 +452,7 @@ fn test_error_recursive_callback_filter_iterator_requires_callable() {
 fn test_error_recursive_iterator_iterator_requires_recursive_iterator() {
     expect_error(
         "<?php $it = new RecursiveIteratorIterator(new ArrayIterator([]));",
-        "Constructor 'RecursiveIteratorIterator::__construct' parameter $iterator expects Object(\"RecursiveIterator\"), got Object(\"ArrayIterator\")",
+        "Constructor 'RecursiveIteratorIterator::__construct' parameter $iterator expects RecursiveIterator, got ArrayIterator",
     );
 }
 

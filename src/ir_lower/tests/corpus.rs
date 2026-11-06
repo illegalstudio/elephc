@@ -10,6 +10,24 @@
 
 use std::path::{Path, PathBuf};
 
+/// Lowers the tokenizer example through the shared prelude pipeline for all supported targets.
+#[test]
+fn lowers_tokenizer_example_on_every_target() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/tokenizer/main.php");
+    let source = std::fs::read_to_string(&path).expect("tokenizer example");
+    let parent = path.parent().expect("example directory");
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(target).expect("target");
+        let module = super::lower_source_at_for_target(&source, &path, parent, target);
+        assert!(module.functions.iter().any(|function| function.name == "token_get_all"),
+            "tokenizer prelude on {}", target.as_str());
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .expect("tokenizer target assembly");
+        assert!(asm.contains("__rt_tokenizer_error_location"),
+            "tokenizer ParseError location on {}", target.as_str());
+    }
+}
+
 /// Lowers the PCNTL example for each desktop target without requiring cross-target linking.
 #[test]
 fn lowers_pcntl_example_on_every_desktop_target() {
@@ -124,9 +142,18 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         "web-session",
         "web-session-trans-sid",
         "web-session-upload",
+        // The application contract is injected only by --web-lifecycle=application;
+        // web_application_example_reuses_its_counter covers its real compilation profile.
+        "web-application",
         // OPcache introspection functions are provided by the pay-for-use OPcache
-        // prelude, which the plain CLI-mode corpus lowering does not inject.
+        // prelude, which the plain CLI-mode corpus lowering does not inject. The
+        // opcache_* integration suites compile both examples' surfaces for real.
         "opcache_get_configuration",
+        "opcache-runtime-cache",
+        // Hosted PHP extension functions are declared by the extension prelude
+        // from the project's built extensions, which corpus lowering does not
+        // resolve.
+        "extension",
     ];
     main_php
         .parent()

@@ -1,8 +1,6 @@
 ---
 title: "xml_get_current_byte_index() - internals"
 description: "Compiler internals for xml_get_current_byte_index(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1004
 ---
 
 ## `xml_get_current_byte_index()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/parser.rs`:1546](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1546) (`xml_get_current_byte_index`)
+- **Lowering**: [`src/xml_prelude/build/parser.rs`](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs) (`xml_get_current_byte_index`)
 - **Function symbol**: `xml_get_current_byte_index()`
 
 

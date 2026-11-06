@@ -9,6 +9,12 @@
 
 use super::*;
 
+/// `SplDoublyLinkedList::IT_MODE_LIFO`: the LIFO/FIFO iterator-mode bit.
+const SPL_ITER_MODE_LIFO: i64 = 2;
+/// `SPL_DLLIST_IT_FIX`: the internal flag PHP sets on `SplStack`/`SplQueue`, which freezes the
+/// LIFO/FIFO bit and appears in `getIteratorMode()` (a fresh `SplStack` reports 6, `SplQueue` 4).
+const SPL_ITER_MODE_FIX: i64 = 4;
+
 /// Lowers PHP object cloning for fixed-class receivers.
 pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
     ctx: &mut FunctionContext<'_>,
@@ -65,6 +71,16 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
     let dest_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, source_reg);
     ctx.load_value_to_reg(result, dest_reg)?;
+    if let Some(offset) = crate::codegen_support::throwable_layout::ordinary_creation_line_offset_by_id(
+        class_id, &ctx.module.class_infos,
+    ) {
+        let scratch = abi::tertiary_scratch_reg(ctx.emitter);
+        let stem = ctx.next_label("throwable_clone_line");
+        crate::codegen_support::runtime::emit_creation_line_load(
+            ctx.emitter, source_reg, result_reg, scratch, &stem,
+        );
+        abi::emit_store_to_address(ctx.emitter, result_reg, dest_reg, offset);
+    }
     emit_clone_declared_property_slots(ctx, source_reg, dest_reg, property_count,
         &retained_offsets, &owned_reference_property_offsets);
     if allow_dynamic_properties {
@@ -149,10 +165,20 @@ pub(super) fn lower_spl_doubly_linked_list_new(
         .get(class_name)
         .map(|info| info.class_id)
         .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", class_name)))?;
+    let default_mode = match class_name {
+        "SplStack" => SPL_ITER_MODE_LIFO | SPL_ITER_MODE_FIX,
+        "SplQueue" => SPL_ITER_MODE_FIX,
+        _ => 0,
+    };
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 0),
         class_id as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        default_mode,
     );
     abi::emit_call_label(ctx.emitter, "__rt_spl_dll_new");
     store_if_result(ctx, inst)
@@ -212,7 +238,7 @@ pub(super) fn lower_callback_filter_iterator_new(
         class_id,
         property_count,
         uninitialized_marker_offsets,
-        property_defaults,
+        property_initialization,
         callback_env_offset,
     ) = {
         let class_info =
@@ -235,7 +261,7 @@ pub(super) fn lower_callback_filter_iterator_new(
             class_info.class_id,
             class_info.properties.len(),
             uninitialized_property_marker_offsets(class_info),
-            collect_property_defaults(class_info, inst)?,
+            collect_property_initialization(ctx.module, class_info, inst),
             class_info.property_offsets.get("callbackEnv").copied(),
         )
     };
@@ -253,7 +279,7 @@ pub(super) fn lower_callback_filter_iterator_new(
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
     ctx.store_result_value(result)?;
-    emit_property_defaults(ctx, result, &property_defaults)?;
+    emit_property_initialization(ctx, result, &property_initialization)?;
     if let Some(offset) = callback_env_offset {
         emit_zero_pointer_property(ctx, result, offset)?;
     }

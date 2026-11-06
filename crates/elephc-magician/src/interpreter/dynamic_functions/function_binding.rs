@@ -106,6 +106,8 @@ fn bind_evaluated_native_function_args_with_mode(
     let mut surplus_args = Vec::new();
     let has_param_names = function.param_names().len() == function.param_count();
     let mut next_positional = 0;
+    let passed = evaluated_args.len();
+    let named_call = evaluated_args.iter().any(|arg| arg.name.is_some());
 
     for arg in evaluated_args {
         if let Some(name) = arg.name {
@@ -143,12 +145,12 @@ fn bind_evaluated_native_function_args_with_mode(
         }
     }
 
-    let supplied = supplied_regular_len(&bound_args);
-    if supplied < function.required_param_count() {
+    if let Some(message) = native_missing_argument_message(function, &bound_args, named_call, passed) {
         release_partial_native_bindings(&mut bound_args, context, values);
         release_native_bound_arg_owners(surplus_args, context, values);
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_argument_count_error(&message, context, values);
     }
+    let supplied = supplied_regular_len(&bound_args);
     // Regulars may only shrink when nothing follows them in the container.
     if surplus_args.is_empty() {
         truncate_unsupplied_native_tail(&mut bound_args, supplied);
@@ -256,6 +258,8 @@ fn bind_evaluated_native_variadic_function_args(
     let mut variadic_args: Vec<BoundMethodArg> = Vec::new();
     let mut named_variadic_args: Vec<(String, BoundMethodArg)> = Vec::new();
     let mut next_positional = 0;
+    let passed = evaluated_args.len();
+    let named_call = evaluated_args.iter().any(|arg| arg.name.is_some());
 
     let collected = (|| {
         for arg in evaluated_args {
@@ -345,6 +349,17 @@ fn bind_evaluated_native_variadic_function_args(
         return Err(status);
     }
 
+    // `required_param_count()` already stops at the variadic slot for a variadic signature.
+    if let Some(message) = native_missing_argument_message(function, &regular_args, named_call, passed) {
+        release_partial_native_bindings(&mut regular_args, context, values);
+        release_native_bound_arg_owners(variadic_args, context, values);
+        release_native_bound_arg_owners(
+            named_variadic_args.into_iter().map(|(_, bound)| bound),
+            context,
+            values,
+        );
+        return eval_throw_argument_count_error(&message, context, values);
+    }
     // Regulars may only shrink when no POSITIONAL tail follows them: a positional tail argument
     // occupies the container slot right after the regulars, so each one must be materialized to
     // reach it. Unknown named entries carry their own string keys and impose no such ordering,
@@ -352,16 +367,6 @@ fn bind_evaluated_native_variadic_function_args(
     // still passes a named tail entry.
     if variadic_args.is_empty() {
         let supplied = supplied_regular_len(&regular_args);
-        // `required_param_count()` already stops at the variadic slot for a variadic signature.
-        if supplied < function.required_param_count() {
-            release_partial_native_bindings(&mut regular_args, context, values);
-            release_native_bound_arg_owners(
-                named_variadic_args.into_iter().map(|(_, bound)| bound),
-                context,
-                values,
-            );
-            return Err(EvalStatus::RuntimeFatal);
-        }
         truncate_unsupplied_native_tail(&mut regular_args, supplied);
     }
     if let Err(status) = fill_native_function_defaults(function, &mut regular_args, context, values)
@@ -404,6 +409,29 @@ fn bind_evaluated_native_variadic_function_args(
         context,
         values,
     )
+}
+
+/// Words PHP's `ArgumentCountError` when a required native parameter is still unbound.
+///
+/// Returns `None` when every required slot is bound. The name is the lowercase one the
+/// function was registered under, which is how the compiled program keys it; PHP prints the
+/// declared spelling.
+fn native_missing_argument_message(
+    function: &NativeFunction,
+    bound_args: &[Option<BoundMethodArg>],
+    named_call: bool,
+    passed: usize,
+) -> Option<String> {
+    let required = function.required_param_count();
+    let hole = bound_args.iter().take(required).position(Option::is_none)?;
+    let param = function.param_names().get(hole).map_or("", String::as_str);
+    Some(missing_argument_message(
+        function.name(),
+        named_call.then_some((hole, param)),
+        passed,
+        required,
+        function.visible_regular_param_count(),
+    ))
 }
 
 /// Materializes omitted parameters and reclaims earlier defaults if a later default fails.

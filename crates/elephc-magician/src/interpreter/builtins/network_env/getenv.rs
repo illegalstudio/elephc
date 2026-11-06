@@ -69,15 +69,19 @@ pub(in crate::interpreter) fn eval_getenv_result(
 }
 
 /// Builds the live process environment as a string-keyed associative array.
+///
+/// Also the contents of an eval-created `$_ENV`, and the base of `$_SERVER`. Each temporary key
+/// and value is released once the array retains it.
 pub(in crate::interpreter) fn eval_getenv_all_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let entries: Vec<_> = std::env::vars_os().collect();
-    let mut result = values.assoc_new(entries.len())?;
+    let mut result = super::super::collection_builder::EvalArrayBuilder::assoc(values, entries.len())?;
     for (key, value) in entries {
-        let key = values.string_bytes_value(key.as_bytes())?;
-        let value = values.string_bytes_value(value.as_bytes())?;
-        result = values.array_set(result, key, value)?;
+        result.entry(
+            |values| values.string_bytes_value(value.as_bytes()),
+            |values, _| values.string_bytes_value(key.as_bytes()),
+        )?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

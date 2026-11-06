@@ -1,8 +1,6 @@
 ---
 title: "session_status()"
 description: "Reports whether sessions are disabled, inactive, or active."
-sidebar:
-  order: 998
 ---
 
 ## session_status()
@@ -19,8 +17,9 @@ Reports whether sessions are disabled, inactive, or active.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

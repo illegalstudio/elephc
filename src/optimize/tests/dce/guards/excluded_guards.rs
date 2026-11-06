@@ -18,6 +18,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_zero_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -69,6 +70,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_null_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -125,6 +127,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_empty_string_g
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -184,6 +187,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_string_zero_gu
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -243,6 +247,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_float_guard() 
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

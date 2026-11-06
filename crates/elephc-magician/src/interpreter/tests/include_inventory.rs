@@ -164,3 +164,29 @@ fn execute_program_without_call_site_reports_empty_include_inventory() {
         "0:0",
     );
 }
+
+/// Whole included programs hoist templates before forward calls and preserve include returns/once.
+#[test]
+fn generics_review_included_forward_calls() {
+    let fixture = IncludeFixture::new();
+    fixture.write("piece.php", "<?php echo identity(7), '|'; function identity<T>(T $value): T { return $value; } return 9;");
+    let mut context = ElephcEvalContext::new();
+    context.set_call_site(fixture.0.join("main.php").to_string_lossy().into_owned(), fixture.0.to_string_lossy().into_owned(), 1);
+    assert_eq!(inventory_output(&mut context, "echo include 'piece.php'; echo '|', require_once 'piece.php'; return true;"), "7|9|1");
+}
+
+/// Native generic includes must obey the same strict-PHP program guard as direct eval.
+#[test]
+fn generics_review_included_strict_php_guard() {
+    let fixture = IncludeFixture::new();
+    fixture.write("piece.php", "<?php function identity<T>(T $value): T { return $value; } echo identity(7);");
+    let mut context = ElephcEvalContext::new();
+    context.set_call_site(fixture.0.join("main.php").to_string_lossy().into_owned(), fixture.0.to_string_lossy().into_owned(), 1);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let program = parse_fragment(b"include 'piece.php';").unwrap();
+    let _guard = crate::strict_php_mode::scoped_enable();
+    assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values), Err(EvalStatus::ParseError));
+    assert!(context.generic_function_template("identity").is_none());
+    assert!(values.output.is_empty());
+}

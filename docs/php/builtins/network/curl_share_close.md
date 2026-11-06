@@ -1,8 +1,6 @@
 ---
 title: "curl_share_close()"
 description: "Closes a cURL share handle."
-sidebar:
-  order: 718
 ---
 
 ## curl_share_close()
@@ -20,8 +18,9 @@ Closes a cURL share handle.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_share_close.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_share_close.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

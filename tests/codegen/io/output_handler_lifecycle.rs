@@ -75,12 +75,21 @@ fn test_output_handler_lifecycle_eval_destructor_throw() {
 /// Releases the saved raw result if an eval-registered callback destructor interrupts get-and-pop.
 #[test]
 fn test_output_handler_lifecycle_eval_get_pop_destructor_throw() {
+    check_eval_get_pop_destructor_throw("ob_get_clean", "");
+}
+
+/// Releases the saved raw result when a flushing eval callback destructor throws.
+#[test]
+fn test_output_handler_lifecycle_eval_get_flush_destructor_throw() {
+    check_eval_get_pop_destructor_throw("ob_get_flush", "discarded");
+}
+
+/// Verifies one get-and-pop operation keeps callback timing and heap ownership balanced.
+fn check_eval_get_pop_destructor_throw(operation: &str, prefix: &str) {
     let owner = OWNER.replace("echo \"released:\";", "throw new Exception(\"closed\");");
-    for (operation, prefix) in [("ob_get_clean", ""), ("ob_get_flush", "discarded")] {
-        let close = CLOSE.replace("ob_end_clean();", &format!(
-            "try {{ {operation}(); }} catch (Throwable $e) {{ echo $e->getMessage(), \":\"; }}"));
-        clean(&format!("<?php {owner} {}", dynamic(&close)), &format!("{prefix}closed:depth=0\n"));
-    }
+    let close = CLOSE.replace("ob_end_clean();", &format!(
+        "try {{ {operation}(); }} catch (Throwable $e) {{ echo $e->getMessage(), \":\"; }}"));
+    clean(&format!("<?php {owner} {}", dynamic(&close)), &format!("{prefix}closed:depth=0\n"));
 }
 
 /// Protects native get-and-pop results while releasing a closure's captured object.

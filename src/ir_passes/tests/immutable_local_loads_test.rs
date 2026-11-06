@@ -1,19 +1,20 @@
 //! Purpose:
-//! Regression tests for conservative immutable integer-local load classification.
+//! Regression tests for conservative immutable integer and float local load classification.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Covers read-only `$argc`, one dominating entry store, multiple writes,
+//! - Covers read-only integer and float parameters, one dominating entry store, multiple writes,
 //!   non-entry stores, by-reference parameters, and alias metadata that reject purity.
+//! - Boolean and every other non-numeric concrete storage shape remain outside the pass.
 //! - Also covers the slot a CALLEE writes through a by-reference argument alias: it has
 //!   exactly one entry store in this function and would otherwise pass the immutability
 //!   proof, after which LICM hoists the loop condition reading it out of the loop.
 
 use crate::ir::{
     validate_function, Builder, DataPool, Function, FunctionParam, Immediate, IrType, LocalKind,
-    Op, Ownership, Terminator,
+    Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator,
 };
 use crate::ir_passes::driver::IrPass;
 use crate::ir_passes::immutable_local_loads::ImmutableLocalLoads;
@@ -48,6 +49,42 @@ fn classifies_main_argc_as_immutable() {
     assert!(function.instructions[0].effects.is_pure());
     assert!(validate_function(&function).is_ok());
     assert!(!classify(&mut function), "effect refinement is idempotent");
+}
+
+/// A read-only float parameter is actionable without any checked-integer operation and becomes
+/// pure, allowing CSE and LICM to keep its value across loop iterations.
+#[test]
+fn classifies_read_only_float_parameter_as_immutable() {
+    let mut function = Function::new("float_param".to_string(), IrType::F64, PhpType::Float);
+    function.params.push(FunctionParam {
+        name: "value".to_string(),
+        ir_type: IrType::F64,
+        php_type: PhpType::Float,
+        by_ref: false,
+        variadic: false,
+    });
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let slot = builder.add_local(
+            Some("value".to_string()),
+            IrType::F64,
+            PhpType::Float,
+            LocalKind::PhpLocal,
+        );
+        let value = builder.emit_load_local(slot, IrType::F64, PhpType::Float);
+        let sum = builder
+            .emit(Op::FAdd, vec![value, value], None, IrType::F64, PhpType::Float, Ownership::NonHeap)
+            .expect("fadd result");
+        builder.terminate(Terminator::Return { value: Some(sum) });
+    }
+
+    assert!(ImmutableLocalLoads.is_applicable(&function));
+    assert!(classify(&mut function));
+    assert!(function.instructions[0].effects.is_pure());
+    assert!(validate_function(&function).is_ok());
 }
 
 /// A by-reference integer parameter may change through its alias and is never read-only.
@@ -104,6 +141,93 @@ fn classifies_single_dominating_entry_store() {
     assert!(classify(&mut function));
     assert!(function.instructions[2].effects.is_pure());
     assert!(validate_function(&function).is_ok());
+}
+
+/// One dominating entry store gives a concrete float local the same immutable-load treatment as
+/// an integer local.
+#[test]
+fn classifies_float_with_single_dominating_entry_store() {
+    let mut function = Function::new("float_store".to_string(), IrType::F64, PhpType::Float);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let slot = builder.add_local(
+            Some("value".to_string()),
+            IrType::F64,
+            PhpType::Float,
+            LocalKind::PhpLocal,
+        );
+        let seed = builder.emit_const_f64(7.5);
+        builder.emit_store_local(slot, seed);
+        let value = builder.emit_load_local(slot, IrType::F64, PhpType::Float);
+        let product = builder
+            .emit(Op::FMul, vec![value, seed], None, IrType::F64, PhpType::Float, Ownership::NonHeap)
+            .expect("fmul result");
+        builder.terminate(Terminator::Return { value: Some(product) });
+    }
+
+    assert!(classify(&mut function));
+    assert!(function.instructions[2].effects.is_pure());
+    assert!(validate_function(&function).is_ok());
+}
+
+/// Without arithmetic that could use them, read-only integer and float parameters keep their
+/// loads unchanged, so identical generic bodies (`id<int>`, `id<float>`, `id<bool>`) stay
+/// identical for shape merging.
+#[test]
+fn leaves_numeric_loads_alone_without_matching_arithmetic() {
+    for (ir_type, php_type) in [(IrType::I64, PhpType::Int), (IrType::F64, PhpType::Float)] {
+        let mut function = Function::new("identity".to_string(), ir_type, php_type.clone());
+        function.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type,
+            php_type: php_type.clone(),
+            by_ref: false,
+            variadic: false,
+        });
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let slot = builder.add_local(
+                Some("value".to_string()),
+                ir_type,
+                php_type.clone(),
+                LocalKind::PhpLocal,
+            );
+            let value = builder.emit_load_local(slot, ir_type, php_type.clone());
+            builder.terminate(Terminator::Return { value: Some(value) });
+        }
+
+        assert!(!ImmutableLocalLoads.is_applicable(&function), "{php_type:?}");
+    }
+}
+
+/// Sharing `I64` storage with integers does not admit a concrete boolean local.
+#[test]
+fn rejects_non_numeric_boolean_local() {
+    let mut function = Function::new("boolean".to_string(), IrType::I64, PhpType::Bool);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let slot = builder.add_local(
+            Some("value".to_string()),
+            IrType::I64,
+            PhpType::Bool,
+            LocalKind::PhpLocal,
+        );
+        let value = builder.emit_load_local(slot, IrType::I64, PhpType::Bool);
+        builder.terminate(Terminator::Return { value: Some(value) });
+    }
+
+    assert!(!ImmutableLocalLoads.is_applicable(&function));
+    assert!(!classify(&mut function));
+    assert_eq!(function.instructions[0].effects, Op::LoadLocal.default_effects());
 }
 
 /// Two stores make the slot mutable even when both occur in the entry block.
@@ -254,4 +378,94 @@ fn rejects_a_slot_written_through_a_by_reference_argument() {
         }
     }
     assert!(validate_function(&function).is_ok());
+}
+
+/// A single entry store makes a concrete string local immutable when a whitelisted
+/// explicit-UTF-string mbstring call consumes its load.
+#[test]
+fn classifies_string_with_single_entry_store_when_mbstring_call_consumes_it() {
+    let mut data = DataPool::default();
+    let encoding = data.intern_string("UTF-8");
+    let mut function = Function::new("string_store".to_string(), IrType::I64, PhpType::Int);
+    let load;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let slot = builder.add_local(
+            Some("text".to_string()),
+            IrType::Str,
+            PhpType::Str,
+            LocalKind::PhpLocal,
+        );
+        let seed = builder.emit_const_str(encoding);
+        builder.emit_store_local(slot, seed);
+        load = builder.emit_load_local(slot, IrType::Str, PhpType::Str);
+        let encoding = builder.emit_const_str(encoding);
+        let length = builder
+            .emit_with_effects(
+                Op::RuntimeCall,
+                vec![load, encoding],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::MbStrlen,
+                ))),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+                RuntimeFnId::MbStrlen.effects(),
+                None,
+            )
+            .expect("mb_strlen runtime call");
+        builder.terminate(Terminator::Return { value: Some(length) });
+    }
+
+    assert!(ImmutableLocalLoads.is_applicable(&function));
+    assert!(ImmutableLocalLoads.run(&mut function, &mut data));
+    assert!(
+        function
+            .instructions
+            .iter()
+            .find(|inst| inst.result == Some(load))
+            .expect("string load")
+            .effects
+            .is_pure()
+    );
+    assert!(validate_function(&function).is_ok());
+}
+
+/// Without a whitelisted mbstring consumer, a string load keeps its effectful
+/// classification so generic string-only bodies are left untouched.
+#[test]
+fn leaves_string_load_alone_without_a_whitelisted_mbstring_call() {
+    let mut function = Function::new("string_identity".to_string(), IrType::Str, PhpType::Str);
+    let load;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let slot = builder.add_local(
+            Some("text".to_string()),
+            IrType::Str,
+            PhpType::Str,
+            LocalKind::PhpLocal,
+        );
+        let seed = builder.emit_const_str(crate::ir::DataId::from_raw(0));
+        builder.emit_store_local(slot, seed);
+        load = builder.emit_load_local(slot, IrType::Str, PhpType::Str);
+        builder.terminate(Terminator::Return { value: Some(load) });
+    }
+
+    assert!(!ImmutableLocalLoads.is_applicable(&function));
+    assert!(!classify(&mut function));
+    assert_eq!(
+        function
+            .instructions
+            .iter()
+            .find(|inst| inst.result == Some(load))
+            .expect("string load")
+            .effects,
+        Op::LoadLocal.default_effects()
+    );
 }

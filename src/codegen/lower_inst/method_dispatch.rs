@@ -9,18 +9,53 @@
 
 use super::*;
 
+/// Reports whether the receiver's static class or interface declares the method, or a class
+/// handles undeclared calls through `__call`.
+///
+/// A narrowed receiver keeps its declared type in EIR, so a method only its narrowed class has
+/// is absent here and must dispatch on the runtime class instead.
+fn static_receiver_declares_method(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method_name);
+    if let Some(interface_info) = ctx.module.interface_infos.get(normalized) {
+        return interface_info.methods.contains_key(&method_key);
+    }
+    match ctx.module.class_infos.get(normalized) {
+        Some(class_info) => {
+            class_info.methods.contains_key(&method_key)
+                || class_info.methods.contains_key(&php_symbol_key("__call"))
+        }
+        None => true,
+    }
+}
+
 /// Lowers a direct instance-method call on a statically known object receiver.
+///
+/// Overridable methods check literal `false` and `null` parameters on the runtime
+/// implementation. Generic final declarations also select the runtime instantiation's
+/// diagnostic name, even though object-only variance preserves literal parameter types.
 pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let method_name = method_name_data(ctx, inst)?.to_string();
     if let Some((class_name, true)) = objects::nullable_object_receiver_class(ctx, object)? {
-        return lower_nullable_receiver_method_call(ctx, inst, object, &class_name, &method_name);
+        if !class_name.is_empty() {
+            if !static_receiver_declares_method(ctx, &class_name, &method_name) {
+                // A narrowed nullable receiver (`if ($this->shape instanceof Square)`): dispatch
+                // on the runtime class, which still reports a call on null.
+                return lower_mixed_method_call(ctx, inst, object, &method_name);
+            }
+            return lower_nullable_receiver_method_call(ctx, inst, object, &class_name, &method_name);
+        }
     }
     let object_ty = ctx.value_php_type(object)?.codegen_repr();
+    if matches!(&object_ty, PhpType::Object(name) if name.is_empty()) {
+        return lower_mixed_method_call(ctx, inst, object, &method_name);
+    }
     if matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
-        if let Some(state) = fiber_state_predicate_method(&method_name) {
-            return lower_mixed_fiber_state_predicate(ctx, inst, object, &method_name, state);
-        }
         return lower_mixed_method_call(ctx, inst, object, &method_name);
     }
     let PhpType::Object(class_name) = object_ty else {
@@ -57,6 +92,12 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     if is_throwable_standard_method_call(ctx, &class_name, &method_name) {
         return lower_throwable_standard_method(ctx, inst, object, &method_name);
     }
+    if !static_receiver_declares_method(ctx, &class_name, &method_name) {
+        // The checker accepted a method the receiver's static type does not declare, so the
+        // receiver was narrowed (`if ($shape instanceof Square)`). Lowering keeps the slot's
+        // declared type, so dispatch on the runtime class, as for an untyped receiver.
+        return lower_mixed_method_call(ctx, inst, object, &method_name);
+    }
     if ctx
         .module
         .interface_infos
@@ -65,6 +106,23 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_interface_method_call(ctx, inst, &class_name, &method_name);
     }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
+    if super::method_resolution::method_requires_runtime_literal_guards(ctx, &class_name, &target) {
+        // An override may widen `false` or `null`. The vtable selects that body, so the
+        // guard has to read the runtime class rather than the static base signature.
+        let receiver_reg = abi::nested_call_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, receiver_reg)?;
+        super::method_intrinsics::emit_hierarchy_literal_parameter_guards(
+            ctx,
+            inst,
+            &class_name,
+            &method_name,
+            receiver_reg,
+        )?;
+    } else {
+        super::method_resolution::emit_method_literal_parameter_guards(
+            ctx, &target, &inst.operands[1..],
+        )?;
+    }
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(PhpType::Object(class_name));
     param_types.extend(target.params.iter().map(|param| param.codegen_repr()));
@@ -144,9 +202,13 @@ pub(super) fn lower_mixed_method_call(
         })
         .collect::<Vec<_>>();
 
-    ctx.load_value_to_result(object)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &non_object_label);
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
+        ctx.load_value_to_reg(object, receiver_reg)?;
+    } else {
+        ctx.load_value_to_result(object)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &non_object_label);
+    }
     emit_mixed_method_class_dispatch(
         ctx,
         receiver_reg,
@@ -192,6 +254,18 @@ pub(super) fn lower_mixed_method_candidate_call(
     if is_throwable_standard_method_call(ctx, &candidate.class_name, method_name) {
         return lower_throwable_standard_method_from_reg(ctx, inst, receiver_reg, method_name);
     }
+    // Fiber's state predicates are runtime intrinsics with placeholder bodies. Only the
+    // matched Fiber branch calls the runtime predicate: other classes declaring a method of
+    // the same name (`isRunning()` on a user interface) keep their own branch.
+    if let Some(state) = fiber_state_predicate(&candidate.class_name, method_name) {
+        emit_fiber_state_predicate_from_reg(ctx, receiver_reg, state);
+        return store_method_call_result(ctx, inst, &candidate.target);
+    }
+    abi::emit_push_reg(ctx.emitter, receiver_reg);
+    super::method_resolution::emit_method_literal_parameter_guards(
+        ctx, &candidate.target, &inst.operands[1..],
+    )?;
+    abi::emit_pop_reg(ctx.emitter, receiver_reg);
     let receiver_ty = PhpType::Object(candidate.class_name.clone());
     let mut param_types = Vec::with_capacity(candidate.target.params.len() + 1);
     param_types.push(receiver_ty.clone());
@@ -225,30 +299,77 @@ pub(super) fn lower_mixed_method_candidate_call(
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
+/// Returns true when `class_name` is `ancestor` or reaches it through `parent`.
+pub(super) fn class_is_same_or_subclass(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    ancestor: &str,
+) -> bool {
+    let ancestor = ancestor.trim_start_matches('\\');
+    let mut current = class_name.trim_start_matches('\\');
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current) {
+        if current == ancestor {
+            return true;
+        }
+        match ctx
+            .module
+            .class_infos
+            .get(current)
+            .and_then(|info| info.parent.as_deref())
+        {
+            Some(parent) => current = parent.trim_start_matches('\\'),
+            None => return false,
+        }
+    }
+    false
+}
+
 /// Collects concrete class-method candidates for a boxed `Mixed` receiver.
 pub(super) fn mixed_method_candidates(
     ctx: &FunctionContext<'_>,
     method_name: &str,
     operand_count: usize,
 ) -> Result<Vec<MixedMethodCandidate>> {
+    method_candidates(ctx, method_name, operand_count, None)
+}
+
+/// Collects class-method candidates, optionally limited to one inheritance tree.
+fn method_candidates(
+    ctx: &FunctionContext<'_>,
+    method_name: &str,
+    operand_count: usize,
+    ancestor: Option<&str>,
+) -> Result<Vec<MixedMethodCandidate>> {
     let method_key = php_symbol_key(method_name);
+    let class_names = ctx.module.class_infos.keys().cloned().collect::<Vec<_>>();
     let mut candidates = Vec::new();
-    for (class_name, class_info) in &ctx.module.class_infos {
-        let Some(signature) = class_info.methods.get(&method_key) else {
-            continue;
+    for class_name in class_names {
+        if let Some(ancestor) = ancestor {
+            if !class_is_same_or_subclass(ctx, &class_name, ancestor) {
+                continue;
+            }
+        }
+        let (class_id, params_len, source_count) = {
+            let Some(class_info) = ctx.module.class_infos.get(&class_name) else {
+                continue;
+            };
+            let Some(signature) = class_info.methods.get(&method_key) else {
+                continue;
+            };
+            let source_count =
+                crate::codegen_support::source_method_adapters::source_visible_signature(signature)
+                    .ok()
+                    .map(|source| source.params.len() + 1);
+            (class_info.class_id, signature.params.len(), source_count)
         };
-        let source_count = crate::codegen_support::source_method_adapters::source_visible_signature(
-            signature,
-        )
-        .ok()
-        .map(|source| source.params.len() + 1);
-        if signature.params.len() + 1 != operand_count && source_count != Some(operand_count) {
+        if params_len + 1 != operand_count && source_count != Some(operand_count) {
             continue;
         }
-        let target = resolve_method_call_target(ctx, class_name, method_name, operand_count)?;
+        let target = resolve_method_call_target(ctx, &class_name, method_name, operand_count)?;
         candidates.push(MixedMethodCandidate {
-            class_id: class_info.class_id,
-            class_name: class_name.clone(),
+            class_id,
+            class_name,
             target,
         });
     }

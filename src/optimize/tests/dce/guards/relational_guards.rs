@@ -17,6 +17,7 @@ fn test_eliminate_dead_code_prunes_nested_if_from_cross_var_strict_eq() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -66,6 +67,7 @@ fn test_eliminate_dead_code_prunes_nested_if_from_relational_exact_substitution(
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -126,6 +128,7 @@ fn test_eliminate_dead_code_couples_strict_substitution_into_full_exact_guards()
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -232,6 +235,7 @@ fn test_eliminate_dead_code_invalidates_relational_guard_on_write() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -300,6 +304,7 @@ fn test_eliminate_dead_code_keeps_relational_inverse_for_mixed_nan_domain() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: vec![
                 ("x".into(), Some(TypeExpr::Int), None, false),
                 ("y".into(), Some(TypeExpr::Float), None, false),
@@ -370,6 +375,7 @@ fn test_eliminate_dead_code_ignores_impure_relational_conditions() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

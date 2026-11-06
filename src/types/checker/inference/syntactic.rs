@@ -9,7 +9,10 @@
 //! - PHP compatibility matters for coercions, operator results, object access, and nullable/union handling.
 
 use crate::parser::ast::{ArrayEntry, BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
-use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType};
+use crate::termination::expr_guarantees_function_exit;
+use crate::types::{
+    is_unboxed_scalar_type, merge_array_key_types, normalized_array_key_type, PhpType,
+};
 
 /// Infer a function's return type by scanning its body for Return statements.
 /// This is a syntactic/heuristic check — no full type inference.
@@ -165,6 +168,16 @@ pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
 /// Containers merge element-wise rather than collapsing to `Mixed` so the pervasive
 /// `$arr ?? []` idiom keeps its element type (an empty literal is `Array(Never)`).
 ///
+/// A `null` default (checker `Void`) keeps a scalar value nullable: `$n ?? null` over `?int $n`
+/// is `int|null`, as `$n ?: null` already is, and `$m[$k] ?? null` over an `array<float>` is
+/// `float|null`, because the read can miss. An unboxed scalar slot has nowhere to put PHP null
+/// (see [`is_unboxed_scalar_type`]), so typing the result as the bare scalar left the null arm
+/// reading back as `9223372036854775806`, `true`, `0.0` or `""` (#1944, #1835). Containers,
+/// objects and pointers keep their own type beside a null default: their pointer word carries
+/// the null, so `$cfg["items"] ?? null` stays `array<int>` and still feeds `array_merge()`. A
+/// default that never yields (`throw`, `exit`) reaches this merge as `Never` and leaves the
+/// value type alone.
+///
 /// This is deliberately a dedicated helper and not a change to [`wider_type_syntactic`]: that
 /// one is shared with closure return widening, match/ternary joins and array-element widening,
 /// where PHP's coercion order is the right answer.
@@ -175,8 +188,15 @@ pub(crate) fn null_coalesce_merge_type(value_ty: &PhpType, default_ty: &PhpType)
     if matches!(value_ty, PhpType::Never | PhpType::Void) {
         return default_ty.clone();
     }
-    if matches!(default_ty, PhpType::Never | PhpType::Void) {
+    if matches!(default_ty, PhpType::Never) {
         return value_ty.clone();
+    }
+    if matches!(default_ty, PhpType::Void) {
+        return if is_unboxed_scalar_type(value_ty) {
+            scalar_with_null_member(value_ty)
+        } else {
+            value_ty.clone()
+        };
     }
     if matches!(
         (value_ty, default_ty),
@@ -197,6 +217,18 @@ pub(crate) fn null_coalesce_merge_type(value_ty: &PhpType, default_ty: &PhpType)
         },
         _ => PhpType::Mixed,
     }
+}
+
+/// Adds the null member to an unboxed scalar type: `int` becomes `int|null` and `int|string`
+/// becomes `int|string|null`. The caller has checked [`is_unboxed_scalar_type`], so the type
+/// never holds null already.
+fn scalar_with_null_member(scalar: &PhpType) -> PhpType {
+    let mut members = match scalar {
+        PhpType::Union(members) => members.clone(),
+        other => vec![other.clone()],
+    };
+    members.push(PhpType::Void);
+    PhpType::Union(members)
 }
 
 /// Computes the union of two array types when one operand is an empty indexed array literal.
@@ -303,6 +335,13 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             target: CastType::Bool,
             ..
         } => PhpType::Bool,
+        // Same classification as the checker. Without this arm the `_ => Int` fallback below
+        // types `(array) "x"` as `int`, and an array literal that contains the cast stores the
+        // array's truthiness instead of the array.
+        ExprKind::Cast {
+            target: CastType::Array,
+            expr,
+        } => crate::types::array_cast_result_type(&infer_expr_type_syntactic(expr)),
         ExprKind::FunctionCall { name, args } => match name.as_str() {
             "eval" => PhpType::Mixed,
             "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim" | "str_repeat"
@@ -341,7 +380,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"
             | "tan" | "asin" | "acos" | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "log"
             | "log2" | "log10" | "exp" | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
-            "ptr" | "ptr_null" => PhpType::Pointer(None),
+            "ptr" | "ptr_null" | "buffer_ptr" => PhpType::Pointer(None),
             "ptr_offset" => {
                 if let Some(first_arg) = args.first() {
                     match infer_expr_type_syntactic(first_arg) {
@@ -352,15 +391,19 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Pointer(None)
                 }
             }
-            "ptr_is_null" | "define" | "json_validate" | "flock" | "symlink" | "link" => {
-                PhpType::Bool
-            }
-            "ptr_sizeof" | "ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
+            "ptr_is_null" | "__elephc_ptr_is_null" | "define" | "json_validate" | "flock" | "symlink"
+            | "link" => PhpType::Bool,
+            "ptr_sizeof" | "ptr_get" | "__elephc_ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
             _ => PhpType::Int,
         },
         ExprKind::NullCoalesce { value, default } => {
             let left_ty = infer_expr_type_syntactic(value);
-            let right_ty = infer_expr_type_syntactic(default);
+            // A default that never yields (`throw`, `exit`) is not a null arm.
+            let right_ty = if expr_guarantees_function_exit(default) {
+                PhpType::Never
+            } else {
+                infer_expr_type_syntactic(default)
+            };
             null_coalesce_merge_type(&left_ty, &right_ty)
         }
         ExprKind::ErrorSuppress(inner) => infer_expr_type_syntactic(inner),
@@ -537,6 +580,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             _ => PhpType::Int,
         },
         ExprKind::InstanceOf { .. } => PhpType::Bool,
+        // `!` always yields a bool, as the checker and `lower_not` type it; the `int` default
+        // made a merge of `!$flag` with an int collapse into an int slot.
+        ExprKind::Not(_) => PhpType::Bool,
         _ => PhpType::Int,
     }
 }
@@ -818,6 +864,59 @@ mod tests {
         );
     }
 
+    /// Builds an `(array)` cast so syntactic inference can be checked without a typed environment.
+    fn array_cast(inner: Expr) -> Expr {
+        Expr::new(
+            ExprKind::Cast {
+                target: CastType::Array,
+                expr: Box::new(inner),
+            },
+            Span::dummy(),
+        )
+    }
+
+    /// An `(array)` cast follows `ArrayCast`: scalars wrap, `null` is an empty array, and an
+    /// array is returned unchanged. A literal that contains the cast must not fall through to `int`.
+    #[test]
+    fn test_syntactic_array_cast_matches_array_cast_classification() {
+        assert_eq!(
+            infer_expr_type_syntactic(&array_cast(Expr::string_lit("x"))),
+            PhpType::Array(Box::new(PhpType::Str))
+        );
+        assert_eq!(
+            infer_expr_type_syntactic(&array_cast(Expr::new(ExprKind::Null, Span::dummy()))),
+            PhpType::Array(Box::new(PhpType::Never))
+        );
+        assert_eq!(
+            infer_expr_type_syntactic(&array_cast(Expr::int_lit(1))),
+            PhpType::Array(Box::new(PhpType::Int))
+        );
+        assert_eq!(
+            infer_expr_type_syntactic(&array_cast(Expr::new(
+                ExprKind::ArrayLiteral(vec![Expr::string_lit("x")]),
+                Span::dummy(),
+            ))),
+            PhpType::Array(Box::new(PhpType::Str))
+        );
+        assert_eq!(
+            infer_expr_type_syntactic(&Expr::new(
+                ExprKind::ArrayLiteral(vec![array_cast(Expr::string_lit("x"))]),
+                Span::dummy(),
+            )),
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Str))))
+        );
+        assert_eq!(
+            infer_expr_type_syntactic(&assoc_literal(vec![(
+                Expr::string_lit("k"),
+                array_cast(Expr::int_lit(1)),
+            )])),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Array(Box::new(PhpType::Int))),
+            }
+        );
+    }
+
     /// Verifies that three-way `Int`/`Str`/`Float` values collapse to `Mixed` instead of the
     /// scalar-coercion widening (`Int`+`Float` → `Float`) that would drop the string member.
     #[test]
@@ -834,6 +933,62 @@ mod tests {
                 key: Box::new(PhpType::Str),
                 value: Box::new(PhpType::Mixed),
             }
+        );
+    }
+
+    /// A null default keeps an unboxed scalar nullable (issue #1944), while containers, objects
+    /// and a `never` default keep the value type alone.
+    #[test]
+    fn test_null_coalesce_null_default_keeps_scalars_nullable() {
+        assert_eq!(
+            null_coalesce_merge_type(&PhpType::Int, &PhpType::Void),
+            PhpType::Union(vec![PhpType::Int, PhpType::Void])
+        );
+        assert_eq!(
+            null_coalesce_merge_type(&PhpType::Str, &PhpType::Void),
+            PhpType::Union(vec![PhpType::Str, PhpType::Void])
+        );
+        assert_eq!(
+            null_coalesce_merge_type(&PhpType::Union(vec![PhpType::Int, PhpType::Str]), &PhpType::Void),
+            PhpType::Union(vec![PhpType::Int, PhpType::Str, PhpType::Void])
+        );
+        assert_eq!(null_coalesce_merge_type(&PhpType::Int, &PhpType::Never), PhpType::Int);
+        assert_eq!(
+            null_coalesce_merge_type(&PhpType::Array(Box::new(PhpType::Int)), &PhpType::Void),
+            PhpType::Array(Box::new(PhpType::Int))
+        );
+        assert_eq!(
+            null_coalesce_merge_type(&PhpType::Object("Item".to_string()), &PhpType::Void),
+            PhpType::Object("Item".to_string())
+        );
+        assert_eq!(null_coalesce_merge_type(&PhpType::Mixed, &PhpType::Void), PhpType::Mixed);
+        assert_eq!(null_coalesce_merge_type(&PhpType::Void, &PhpType::Int), PhpType::Int);
+    }
+
+    /// A `??` default that never yields is not a null arm: the syntactic type keeps the value.
+    #[test]
+    fn test_syntactic_null_coalesce_throw_default_keeps_value_type() {
+        let expr = Expr {
+            kind: ExprKind::NullCoalesce {
+                value: Box::new(Expr::int_lit(1)),
+                default: Box::new(Expr {
+                    kind: ExprKind::Throw(Box::new(Expr::string_lit("none"))),
+                    span: Span::dummy(),
+                }),
+            },
+            span: Span::dummy(),
+        };
+        assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Int);
+        let nulled = Expr {
+            kind: ExprKind::NullCoalesce {
+                value: Box::new(Expr::int_lit(1)),
+                default: Box::new(Expr { kind: ExprKind::Null, span: Span::dummy() }),
+            },
+            span: Span::dummy(),
+        };
+        assert_eq!(
+            infer_expr_type_syntactic(&nulled),
+            PhpType::Union(vec![PhpType::Int, PhpType::Void])
         );
     }
 }

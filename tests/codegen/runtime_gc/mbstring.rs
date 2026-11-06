@@ -344,13 +344,11 @@ eval($source);
     assert_eq!(residual[0], residual[1], "eval mbstring results retained runtime allocations");
 }
 
-/// Verifies mixed scalar results and nullable arguments remain balanced in AOT and eval.
-#[test]
-fn test_mbstring_scalar_result_ownership() {
-    for eval in [false, true] {
-        let mut residual = Vec::new();
-        for count in [1, 24] {
-            let calls = r#"
+/// Checks one backend's original scalar ownership fixture and both repetition counts.
+fn check_mbstring_scalar_result_ownership(eval: bool) {
+    let mut residual = Vec::new();
+    for count in [1, 24] {
+        let calls = r#"
 mb_substr($subject, $start, $length); mb_strcut($subject, $start, $length);
 mb_scrub($subject); mb_trim($subject); mb_ltrim($subject); mb_rtrim($subject);
 mb_str_pad($subject, $width); mb_convert_kana($subject);
@@ -361,23 +359,34 @@ mb_strstr($subject, $needle, $before); mb_stristr($subject, $missing);
 mb_strrchr($subject, $needle); mb_strrichr($subject, $missing);
 mb_internal_encoding(); mb_internal_encoding($encoding); mb_language(); mb_http_output();
 "#.repeat(count);
-            let body = format!(r#"
+        let body = format!(r#"
 $subject = "Straße 東京"; $needle = "東"; $missing = "absent";
 $start = 0; $length = null; $before = true; $width = 15;
 $codepoint = 29483; $encoding = "UTF-8";
 {calls}
 echo "done";
 "#);
-            let source = if eval { format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);") }
-                else { format!("<?php {body}") };
-            let out = compile_and_run_with_gc_stats(&source);
-            assert!(out.success, "{}", out.stderr);
-            assert_eq!(out.stdout, "done");
-            let (allocated, freed) = parse_gc_stats(&out.stderr);
-            residual.push(allocated as i64 - freed as i64);
-        }
-        assert_eq!(residual[0], residual[1], "mbstring scalar results leaked with eval={eval}");
+        let source = if eval { format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);") }
+            else { format!("<?php {body}") };
+        let out = compile_and_run_with_gc_stats(&source);
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, "done");
+        let (allocated, freed) = parse_gc_stats(&out.stderr);
+        residual.push(allocated as i64 - freed as i64);
     }
+    assert_eq!(residual[0], residual[1], "mbstring scalar results leaked with eval={eval}");
+}
+
+/// Native scalar results and nullable arguments retain no additional owners.
+#[test]
+fn test_mbstring_scalar_result_ownership() {
+    check_mbstring_scalar_result_ownership(false);
+}
+
+/// Eval scalar results and nullable arguments retain no additional owners.
+#[test]
+fn test_mbstring_scalar_result_ownership_eval() {
+    check_mbstring_scalar_result_ownership(true);
 }
 
 /// Verifies discarded and overwritten array results release each binary string and boxed owner.
@@ -407,21 +416,30 @@ echo "done";
 /// Verifies copied array arguments are released after successful checks and catchable failures.
 #[test]
 fn test_mbstring_check_array_argument_ownership() {
-    for eval in [false, true] {
-        let mut residual = Vec::new();
-        for count in [1, 24] {
-            let calls = "mb_check_encoding($subject); mb_check_encoding($empty); try { mb_check_encoding($subject, $bad); } catch (ValueError) {}\n".repeat(count);
-            let body = format!("$subject = [\"names\" => [\"Aé猫B\", \"text\"]]; $empty = []; $bad = \"invalid\";\n{calls}\necho \"done\";");
-            let source = if eval { format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);") }
-                else { format!("<?php {body}") };
-            let out = compile_and_run_with_gc_stats(&source);
-            assert!(out.success, "{}", out.stderr);
-            assert_eq!(out.stdout, "done");
-            let (allocated, freed) = parse_gc_stats(&out.stderr);
-            residual.push(allocated as i64 - freed as i64);
-        }
-        assert_eq!(residual[0], residual[1], "mbstring array arguments leaked with eval={eval}");
+    check_mbstring_array_argument_ownership(false);
+}
+
+/// Checks eval array arguments independently of the native fixture's timeout.
+#[test]
+fn test_mbstring_check_array_argument_ownership_eval() {
+    check_mbstring_array_argument_ownership(true);
+}
+
+/// Compares successful and rejected array argument residuals at both repetition counts.
+fn check_mbstring_array_argument_ownership(eval: bool) {
+    let mut residual = Vec::new();
+    for count in [1, 24] {
+        let calls = "mb_check_encoding($subject); mb_check_encoding($empty); try { mb_check_encoding($subject, $bad); } catch (ValueError) {}\n".repeat(count);
+        let body = format!("$subject = [\"names\" => [\"Aé猫B\", \"text\"]]; $empty = []; $bad = \"invalid\";\n{calls}\necho \"done\";");
+        let source = if eval { format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);") }
+            else { format!("<?php {body}") };
+        let out = compile_and_run_with_gc_stats(&source);
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, "done");
+        let (allocated, freed) = parse_gc_stats(&out.stderr);
+        residual.push(allocated as i64 - freed as i64);
     }
+    assert_eq!(residual[0], residual[1], "mbstring array arguments leaked with eval={eval}");
 }
 
 /// Releases mixed setting results and exception messages without retaining scalar argument casts.

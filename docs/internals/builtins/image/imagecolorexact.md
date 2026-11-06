@@ -1,8 +1,6 @@
 ---
 title: "imagecolorexact() - internals"
 description: "Compiler internals for imagecolorexact(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 471
 ---
 
 ## `imagecolorexact()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2375](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2375) (`imagecolorexact`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagecolorexact`)
 - **Function symbol**: `imagecolorexact()`
 
 

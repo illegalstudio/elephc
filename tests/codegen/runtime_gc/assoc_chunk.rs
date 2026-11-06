@@ -89,3 +89,49 @@ echo $t;
     );
     assert_clean(out, "1600");
 }
+
+/// Callable descriptors (runtime tag 10) are retained per chunk and released with it, like a
+/// shallow clone. The source is dropped before the chunked callable is invoked, so a missing
+/// retain calls into freed storage and `--heap-debug` aborts with a bad refcount (issue #1294).
+#[test]
+fn test_assoc_chunk_callable_values_balance() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$t = 0;
+for ($i = 0; $i < 200; $i++) {
+    $make = function () { return 7; };
+    $src = ["a" => $make, "b" => 2, "c" => 3, "d" => 4];
+    $c = array_chunk($src, 2, true);
+    unset($src);
+    $t += ($c[0]["a"])() + count($c);
+    unset($c, $make);
+}
+echo $t;
+"#,
+    );
+    assert_clean(out, "1800");
+}
+
+/// PHP reference cells (runtime tag 11) are cloned into the chunk with singleton separation,
+/// matching `__rt_hash_clone_shallow`. Without the clone the chunked element reads as 0 instead
+/// of the referenced value; the source is dropped first, so the cell must survive in the chunk
+/// (issue #1294).
+#[test]
+fn test_assoc_chunk_reference_values_balance() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$t = 0;
+for ($i = 0; $i < 200; $i++) {
+    $src = ["a" => 1, "b" => 2, "c" => 3, "d" => 4];
+    $alias = &$src["a"];
+    $alias = 50;
+    $c = array_chunk($src, 2, true);
+    unset($src, $alias);
+    $t += $c[0]["a"] + count($c);
+    unset($c);
+}
+echo $t;
+"#,
+    );
+    assert_clean(out, "10400");
+}

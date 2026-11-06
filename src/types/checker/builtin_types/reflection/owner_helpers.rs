@@ -16,6 +16,7 @@ pub(super) fn builtin_reflection_owner_constructor_method(
 ) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__construct".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -51,16 +52,20 @@ pub(super) fn builtin_reflection_owner_constructor_method(
 /// with `$flags = 0`: measured against 8.5.10, `getAttributes("markerone")` finds `#[MarkerOne]`
 /// while `getAttributes("\\MarkerOne")` finds nothing, so the comparison folds ASCII case but
 /// does not resolve a leading separator.
-/// `$flags` is declared so the PHP signature matches, but its only documented value,
-/// `ReflectionAttribute::IS_INSTANCEOF`, would need a subclass test against a class name that is
-/// only known at runtime. `Checker::reject_unsupported_reflection_attribute_filter_flags` refuses
-/// that call at compile time rather than answering with a silent subset, and the body throws for
-/// the spellings the checker cannot see through — a first-class callable
-/// (`$r->getAttributes(...)`) and `call_user_func_array([$r, 'getAttributes'], $args)` both reach
-/// the method without a visible argument list, and both answered with the subset before this
-/// throw existed. A null `$name` filters nothing, so PHP ignores `$flags` there. Both paths
-/// collect into a fresh typed array, giving returned elements independent ownership.
-pub(super) fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
+///
+/// `$flags` is checked first, as php-src does: any value but `0` and
+/// `ReflectionAttribute::IS_INSTANCEOF` (2) raises PHP's `ValueError`, named after
+/// `declaring_owner` (the class PHP declares the method on, such as
+/// `ReflectionFunctionAbstract` for `ReflectionMethod`), whatever `$name` holds. `IS_INSTANCEOF`
+/// itself would need a subclass test against a class name that is only known at runtime, so with
+/// a non-null `$name` the body throws a `ReflectionException` instead of answering with a silent
+/// subset; a null `$name` filters nothing, so PHP ignores the flag there.
+/// `Checker::reject_unsupported_reflection_attribute_filter_flags` still refuses a call it can
+/// prove requests `IS_INSTANCEOF` for a name, and leaves every other spelling (a runtime flag, a
+/// spread, a first-class callable, `call_user_func_array`, a dynamic method name) to these
+/// checks. Both paths collect into a fresh typed array, giving returned elements independent
+/// ownership.
+pub(super) fn builtin_reflection_owner_get_attributes_method(declaring_owner: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     let name = variable_expr("name", dummy_span);
     let attribute = variable_expr("attribute", dummy_span);
@@ -95,12 +100,28 @@ pub(super) fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
         dummy_span,
     );
     let matches_filter = binary_expr(name_is_null, BinOp::Or, matches_name, dummy_span);
+    // `($flags & ~ReflectionAttribute::IS_INSTANCEOF) !== 0`: php-src's validity test.
+    let invalid_flags = binary_expr(
+        binary_expr(
+            variable_expr("flags", dummy_span),
+            BinOp::BitAnd,
+            Expr::new(ExprKind::IntLiteral(!2), dummy_span),
+            dummy_span,
+        ),
+        BinOp::StrictNotEq,
+        Expr::new(ExprKind::IntLiteral(0), dummy_span),
+        dummy_span,
+    );
     let unsupported_flags = binary_expr(
         binary_expr(name.clone(), BinOp::StrictNotEq, Expr::new(ExprKind::Null, dummy_span), dummy_span),
         BinOp::And, flags_requested, dummy_span,
     );
+    let invalid_flags_message = format!(
+        "{declaring_owner}::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag"
+    );
 
     ClassMethod {
+        type_params: Vec::new(),
         name: "getAttributes".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -128,6 +149,24 @@ pub(super) fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
         return_type: Some(array_type()),
         by_ref_return: false,
         body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: invalid_flags,
+                    then_body: vec![Stmt::new(
+                        StmtKind::Throw(Expr::new(
+                            ExprKind::NewObject {
+                                class_name: Name::unqualified("ValueError"),
+                                args: vec![string_lit(&invalid_flags_message, dummy_span)],
+                            },
+                            dummy_span,
+                        )),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
             Stmt::new(
                 StmtKind::If {
                     condition: unsupported_flags,

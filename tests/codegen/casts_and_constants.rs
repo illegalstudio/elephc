@@ -13,6 +13,8 @@ use crate::support::*;
 mod casts;
 #[path = "casts_and_constants/object_cast.rs"]
 mod object_cast;
+#[path = "casts_and_constants/array_cast.rs"]
+mod array_cast;
 #[path = "casts_and_constants/introspection.rs"]
 mod introspection;
 #[path = "casts_and_constants/predicates.rs"]
@@ -21,3 +23,5 @@ mod predicates;
 mod math_builtins;
 #[path = "casts_and_constants/constants.rs"]
 mod constants;
+#[path = "casts_and_constants/core_constants.rs"]
+mod core_constants;

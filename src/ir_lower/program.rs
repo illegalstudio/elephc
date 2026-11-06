@@ -29,6 +29,12 @@ use crate::types::{CheckResult, ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 mod metadata;
 mod runtime_features;
 mod eval_aot;
+mod eval_demand;
+/// Read by `reflection` and `builtin_datetime`: which builtin surfaces the module's bridge-run
+/// eval fragments can name, so those surfaces are lowered in proportion to the fragments.
+pub(in crate::ir_lower) use eval_demand::{eval_demand, instruction_uses_eval};
+#[allow(unused_imports)] // matched by the eval demand tests only
+pub(in crate::ir_lower) use eval_demand::EvalDemand;
 /// Read by `builtin_datetime`, which decides whether a module's eval fragments can reach the
 /// date alias surface — a question only the fragment text can answer.
 /// Read by `builtin_datetime`, which asks whether a module's eval fragments can reach the date
@@ -58,6 +64,8 @@ use spl_lowering::*;
 
 pub(super) use eval_aot::all_lowered_functions;
 pub(super) use runtime_features::include_lowered_runtime_features;
+#[allow(unused_imports)] // used by the binary's pipeline only
+pub(crate) use runtime_features::module_runs_interpreted_code;
 pub(super) use function_declarations::{
     close_function_global_names_over_calls, collect_function_global_names,
 };
@@ -93,6 +101,8 @@ fn lower_on_compiler_stack(
     web: bool,
 ) -> Result<Module, LoweringError> {
     super::diagnostics::begin_collection();
+    let _closure_param_hints =
+        crate::ir_lower::closure_param_hints::install(&check_result.closure_param_hints);
     let mut module = Module::new(target);
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;
@@ -137,6 +147,8 @@ fn lower_on_compiler_stack(
     );
     lower_literal_eval_aot_functions(&mut module, check_result, &constants, &fiber_return_sigs);
     lower_dynamic_constructor_thunks(&mut module, check_result, &constants, &fiber_return_sigs);
+    function::lower_optional_interface_adapters(&mut module);
+    function::lower_object_comparison_dispatch(&mut module);
     include_lowered_runtime_features(&mut module);
     super::reflection::lower_referenced_builtin_methods(
         &mut module,
@@ -160,6 +172,8 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     )?;
+    super::boxed_array_appends::normalize_module(&mut module);
+    super::closure_scopes::specialize_module(&mut module);
     super::effect_refinement::refine_module(&mut module);
     reserve_eval_subclass_property_storage(&mut module);
     // A refused shape is reported before validation: the placeholder EIR those sites emit

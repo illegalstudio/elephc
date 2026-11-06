@@ -10,6 +10,29 @@
 
 use super::*;
 
+/// Retiring a refcounted symbol keeps callback calls aligned on every supported target.
+#[test]
+fn test_refcounted_symbol_replacement_preserves_call_alignment() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for ty in [PhpType::Mixed, PhpType::Object("stdClass".into()), PhpType::Array(Box::new(PhpType::Int))] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_store_result_to_symbol(&mut emitter, "_demo_symbol", &ty, true);
+            let asm = emitter.output();
+            if target.arch == Arch::X86_64 {
+                assert!(!asm.contains("push ") && !asm.contains("pop "), "{name}: {ty:?}");
+                let save = asm.find("sub rsp, 16").unwrap();
+                let call = asm.find("call ").unwrap();
+                let restore = asm.find("add rsp, 16").unwrap();
+                assert!(save < call && call < restore, "{name}: {ty:?}");
+            } else {
+                assert!(asm.contains("str x0, [sp, #-16]!"), "{name}: {ty:?}");
+                assert!(asm.contains("ldr x0, [sp], #16"), "{name}: {ty:?}");
+            }
+        }
+    }
+}
+
 /// Verifies `emit_symbol_address` uses platform-appropriate relocations (ADRP + ADD
 /// with @PAGE/@PAGEOFF) rather than raw immediates on ARM64.
 #[test]

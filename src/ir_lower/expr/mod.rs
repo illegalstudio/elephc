@@ -33,56 +33,95 @@ use crate::types::{
 use std::collections::HashSet;
 
 mod constants;
+mod array_merge_values;
+use array_merge_values::lower_array_value_for_merge;
 mod nullsafe_chain;
 mod ref_place_args;
 mod boxed_user_sort;
 mod scalar_literals;
+mod local_values;
+use local_values::lower_local_value;
 mod numeric_binary;
+mod integer_destinations;
+pub(crate) use integer_destinations::{
+    coerce_integer_arithmetic, narrow_checked_integer_for_int_property,
+};
+use integer_destinations::lower_expr_for_parameter;
+pub(crate) mod object_operators;
 mod string_concat;
 mod comparisons;
 mod unary_logic;
+mod branch_conditions;
 mod lazy_branches;
 mod pipe;
 mod assignments;
+mod string_offset_assign;
+mod assignment_rhs_capture;
+mod weak_map_places;
+mod static_property_updates;
+use static_property_updates::{finish_static_compound_receiver, guard_static_compound_property_read};
 mod function_calls;
 mod eval_barriers;
 mod lazy_isset;
 mod native_isset;
 mod callable_probes;
 mod descriptor_invoke;
-mod call_operand_owners;
+pub(crate) mod call_operand_owners;
+mod pending_owners;
 mod descriptor_args;
 mod descriptor_unpack;
 mod static_array_callbacks;
 mod callable_tracking;
 mod callable_resolution;
 mod unset;
+mod unset_collection;
 mod array_builtin_args;
+mod array_push_spread;
+mod borrowed_string_args;
+mod weak_string_unions;
 mod builtin_special_args;
 mod call_arg_coercion;
 mod positional_spreads;
 mod dynamic_spreads;
+mod dynamic_constructors;
+use dynamic_constructors::*;
 mod named_args;
 mod named_spreads;
 mod variadic_args;
 mod call_return_types;
 mod indexed_array_literals;
+pub(in crate::ir_lower) use indexed_array_literals::box_tagged_scalar_element;
+mod array_cast_source;
 mod assoc_array_literals;
 mod match_expr;
+/// Scoped stored-cell leases for compiler-generated compound append updates.
+mod append_updates;
+pub(crate) use append_updates::store_alias as store_append_update_cell;
 mod array_access;
+mod string_offset_owners;
 mod array_access_types;
 mod ternary_cast;
+mod missing_string;
+pub(crate) use missing_string::loop_region_missing_string_names;
 mod closures;
 mod closure_calls;
 mod descriptor_calls;
 mod object_construction;
 mod property_access;
+mod property_probes;
 mod reference_returns;
 use reference_returns::{
     begin_reference_return_call, finish_reference_return_call, finish_reference_return_value,
 };
 mod property_fetch_for_write;
 mod method_calls;
+mod closure_binding;
+mod member_receivers;
+mod enum_interface_calls;
+mod enum_argument_guards;
+mod enum_method_args;
+mod enum_static_args;
+mod enum_ref_args;
 mod reflection_class_calls;
 mod reflection_method_calls;
 mod reflection_property_calls;
@@ -98,9 +137,13 @@ mod packed_builtin_args;
 mod method_metadata;
 mod static_method_calls;
 mod scoped_values;
+mod buffer_length;
 mod generators;
 mod instanceof_coercions;
 mod merge_temps;
+mod array_splice;
+
+use array_splice::lower_array_splice_args;
 
 use scalar_literals::*;
 use numeric_binary::*;
@@ -110,6 +153,7 @@ use unary_logic::*;
 use lazy_branches::*;
 use pipe::*;
 use assignments::*;
+use string_offset_assign::*;
 use function_calls::*;
 use eval_barriers::*;
 use lazy_isset::*;
@@ -132,6 +176,7 @@ pub(in crate::ir_lower) fn instance_object_class_for_ir(
 }
 use unset::*;
 use array_builtin_args::*;
+use weak_string_unions::*;
 use builtin_special_args::*;
 use call_arg_coercion::*;
 use positional_spreads::*;
@@ -150,7 +195,11 @@ use closure_calls::*;
 use descriptor_calls::*;
 use object_construction::*;
 use property_access::*;
+use property_probes::*;
 use method_calls::*;
+use closure_binding::*;
+use member_receivers::{checked_member_receiver_type, lower_member_receiver, refine_member_receiver};
+pub(crate) use member_receivers::lower_member_receiver_at_span;
 use reflection_class_calls::*;
 use reflection_method_calls::*;
 use reflection_property_calls::*;
@@ -162,6 +211,7 @@ use core_introspection::*;
 use reflection_new_instance::*;
 use nullable_method_calls::*;
 use method_metadata::*;
+pub(in crate::ir_lower) use method_metadata::method_signature;
 use static_method_calls::*;
 use scoped_values::*;
 use generators::*;
@@ -171,9 +221,16 @@ use merge_temps::*;
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
 };
+pub(crate) use pending_owners::lower_with_pending_owners;
+pub(crate) use branch_conditions::lower_condition;
 pub(crate) use call_operand_owners::{
-    pin_in_flight_owners, retire_owned_call_operand, root_owned_call_operand, unpin_in_flight_owners,
+    pin_in_flight_owners, register_owned_call_operand, retire_owned_call_operand,
+    root_owned_call_operand, root_value_for_later_use, unpin_in_flight_owners, unregister_owned_call_operand,
+    PinnedInFlightOwner,
 };
+pub(crate) use property_access::singular_object_class;
+pub(crate) use property_access::packed_receiver_class;
+pub(crate) use property_access::extern_receiver_class;
 pub(crate) use callable_tracking::{
     lower_callable_array_for_assignment, reflection_arg_array_binding_for_expr,
     reflection_class_binding_for_expr, reflection_function_binding_for_expr,
@@ -184,33 +241,47 @@ pub(crate) use callable_tracking::{
 pub(crate) use callable_tracking::LoweredCallableArrayAssignment;
 pub(crate) use closures::{body_contains_eval_call, lower_closure_for_assignment};
 pub(crate) use indexed_array_literals::{
-    array_literal_type_for_ir, lower_array_literal_with_expected_type,
+    array_literal_type_for_ir, is_pointer_array_destination, lower_array_literal_with_expected_type,
+    lower_expr_for_destination,
 };
 pub(crate) use array_access::{
     array_access_element_result_type, index_expr_key_type,
-    lower_array_access_from_lowered_receiver, lower_by_ref_foreach_element_source,
+    lower_array_access_from_lowered_receiver,
+    lower_by_ref_foreach_element_source,
 };
 pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
+pub(crate) use assignments::lower_null_coalesce_update_stmt;
+pub(crate) use assignments::lower_null_coalesce_update_stmt_to;
+pub(crate) use weak_map_places::lower_weak_map_incdec_stmt;
+pub(crate) use weak_map_places::lower_weak_map_append;
+pub(crate) use weak_map_places::lower_weak_map_denied_append;
+use weak_map_places::lower_weak_map_incdec_expression;
 pub(crate) use instanceof_coercions::{
-    coerce_array_key_to_int_at_span, coerce_to_int_at_span,
+    coerce_array_key_to_int_at_span, coerce_to_int_at_span, coerce_to_string_at_span,
 };
 pub(crate) use merge_temps::emit_bool_literal;
+pub(in crate::ir_lower) use merge_temps::{store_value_into_temp, take_owned_temp};
 pub(crate) use property_access::{
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
     lower_ref_assign_property, lower_ref_assign_static_property,
     prepare_scoped_addressable_ref_array_receiver, static_property_result_type,
 };
 pub(crate) use property_fetch_for_write::{
+    is_static_property_write_chain, lower_static_property_write_chain,
+    lower_static_property_write_chain_with_operands,
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
     lower_nested_assignment_property_source,
 };
-pub(crate) use string_concat::string_op_uses_scratch_storage;
+pub(crate) use string_concat::string_value_needs_persistence;
+pub(crate) use string_concat::persist_pending_string;
 pub(super) use assoc_array_literals::{
     array_access_expr_value_type_for_ir, method_call_expr_type_for_ir,
     property_access_expr_type_for_ir,
 };
 pub(super) use call_return_types::call_return_type;
 pub(super) use call_return_types::eir_user_function_return_type;
+pub(super) use method_metadata::closure_return_method_call_type;
+pub(super) use nullsafe_chain::result_storage_type as nullsafe_chain_result_storage_type;
 pub(super) use merge_temps::coerce_container_to_mixed_payload;
 pub(super) use nullable_method_calls::lower_dynamic_method_call_with_receiver;
 pub(super) use static_method_calls::static_method_call_expr_type_for_ir;
@@ -241,7 +312,7 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
         ExprKind::FloatLiteral(value) => lower_float_literal(ctx, *value, expr),
         ExprKind::BoolLiteral(value) => lower_bool_literal(ctx, *value, expr),
         ExprKind::Null => lower_null(ctx, expr),
-        ExprKind::Variable(name) => ctx.load_local(name, Some(expr.span)),
+        ExprKind::Variable(name) => lower_local_value(ctx, name, expr.span),
         ExprKind::BinaryOp { left, op, right } => lower_binary(ctx, left, op, right, expr),
         ExprKind::InstanceOf { value, target } => lower_instanceof(ctx, value, target, expr),
         ExprKind::Negate(inner) => lower_numeric_unary(ctx, inner, Op::INeg, Op::FNeg, expr),
@@ -313,6 +384,11 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
         ExprKind::ClosureCall { var, args } => lower_closure_call(ctx, var, args, expr),
         ExprKind::ExprCall { callee, args } => lower_expr_call(ctx, callee, args, expr),
         ExprKind::ConstRef(name) => constants::lower_const_ref(ctx, name, expr),
+        // `new Box<int>()` is rewritten to a `NewObject` naming the instantiated class long
+        // before lowering; a template has no storage layout to construct.
+        ExprKind::NewGeneric { .. } => unreachable!(
+            "ExprKind::NewGeneric must be instantiated by generics::classes"
+        ),
         ExprKind::NewObject { class_name, args } => lower_new_object(ctx, class_name, args, expr),
         ExprKind::Clone(inner) => lower_clone(ctx, inner, expr),
         ExprKind::NewDynamic { name_expr, args } => {
@@ -592,6 +668,9 @@ fn lower_initialized_static_property_isset(
     property: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, arg.span) {
+        return error;
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder
@@ -699,15 +778,7 @@ fn lower_initialized_property_empty(
 
     ctx.builder.position_at_end(read_block);
     let read_value = lower_property_get_from_value(ctx, object, property, Op::PropGet, arg);
-    let construct_name = ctx.intern_function_name(construct);
-    let empty_value = ctx.emit_value(
-        Op::LanguageConstructCall,
-        vec![read_value.value],
-        Some(Immediate::Data(construct_name)),
-        PhpType::Bool,
-        effects_lookup::language_construct_effects(construct),
-        Some(arg.span),
-    );
+    let empty_value = lazy_isset::lower_empty_of_probed_value(ctx, read_value, construct, arg);
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty_value, arg.span);
     branch_to(ctx, merge);
 
@@ -724,6 +795,9 @@ fn lower_initialized_static_property_empty(
     construct: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, arg.span) {
+        return error;
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder
@@ -759,15 +833,7 @@ fn lower_initialized_static_property_empty(
 
     ctx.builder.position_at_end(read_block);
     let read_value = lower_static_property_get(ctx, receiver, property, arg);
-    let construct_name = ctx.intern_function_name(construct);
-    let empty_value = ctx.emit_value(
-        Op::LanguageConstructCall,
-        vec![read_value.value],
-        Some(Immediate::Data(construct_name)),
-        PhpType::Bool,
-        effects_lookup::language_construct_effects(construct),
-        Some(arg.span),
-    );
+    let empty_value = lazy_isset::lower_empty_of_probed_value(ctx, read_value, construct, arg);
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty_value, arg.span);
     branch_to(ctx, merge);
 
@@ -792,344 +858,11 @@ fn dynamic_property_unset_action(
     UnsetPropertyAction::RemoveDynamic
 }
 
-/// Lowers `array_splice()` operands, promoting a typed receiver whose `$replacement` cannot fit.
-///
-/// PHP has no per-array element type, so `$a = [1, 2, 3]; array_splice($a, 1, 1, ["x"])` simply
-/// leaves `[1, "x", 3]`. elephc types an indexed array at its payload slot, so the promotion has
-/// to reach the receiver LOCAL: `__rt_array_to_mixed` re-boxes every live payload and the slot's
-/// storage type widens to `array<mixed>`, which is the representation the boxed insert helper
-/// writes into. Without it the backend would have to store a string pointer/length pair in an
-/// 8-byte integer slot, which is why the untyped case used to be an explicit `unsupported`
-/// diagnostic instead of a wrong answer.
-fn lower_array_splice_args(
-    ctx: &mut LoweringContext<'_, '_>,
-    sig: Option<&FunctionSig>,
-    args: &[Expr],
-) -> Vec<crate::ir::ValueId> {
-    let mut operands = if crate::types::call_args::has_named_args(args) {
-        lower_args_with_signature(ctx, sig, args)
-    } else {
-        lower_positional_builtin_args_with_signature(ctx, sig, args)
-    };
-    materialize_boxed_array_splice_replacement(ctx, args, &mut operands);
-    snapshot_array_splice_self_replacement(ctx, &mut operands);
-    widen_array_splice_receiver_for_replacement(ctx, sig, args, &mut operands);
-    operands
-}
-
-/// Materializes a BOXED `$replacement` into the fresh `array<mixed>` the splice inserts from.
-///
-/// A declared `array` value is boxed here -- a `public array $items` property, an `array &$r`
-/// parameter, a nested element, a `&$x` binding -- so `array_splice($a, 1, 1, $box->items)`
-/// handed the backend a `Mixed` cell where every insert helper needs an indexed payload, and
-/// the call was refused as an unsupported replacement type. Unpacking the cell into a hash
-/// (`ArrayUnpackToHash` reads a packed or a hash payload alike, boxing each value) and taking
-/// that hash's values yields the `array<mixed>` the `Mixed`-receiver path inserts verbatim.
-///
-/// The copy is also what PHP evaluates: `$replacement` is read into its own array BEFORE the
-/// receiver is touched, so a replacement aliasing the receiver (`array_splice($box->items, 1,
-/// 1, $box->items)`) inserts the pre-splice contents (issue #676) without the storage
-/// comparison `snapshot_array_splice_self_replacement` needs for plain locals, which cannot see
-/// through two reads of one property cell.
-fn materialize_boxed_array_splice_replacement(
-    ctx: &mut LoweringContext<'_, '_>,
-    args: &[Expr],
-    operands: &mut [crate::ir::ValueId],
-) {
-    let Some(&replacement) = operands.get(3) else {
-        return;
-    };
-    // A declared `array` value, or a plain `mixed` one such as a static `array` property (which
-    // is typed `mixed` rather than as the array union). A `mixed` box that turns out to hold a
-    // scalar raises the unpack helper's `Only arrays and Traversables can be unpacked` Error
-    // rather than PHP's `(array)` cast: a loud stop where the backend used to refuse the call
-    // at compile time. Unions (`?array`) keep that refusal, since `null` inserts nothing in PHP.
-    let replacement_ty = ctx.builder.value_php_type(replacement);
-    if !replacement_ty.is_php_array() && replacement_ty != PhpType::Mixed {
-        return;
-    }
-    let span = ctx
-        .builder
-        .value_defining_instruction(replacement)
-        .and_then(|inst| inst.span)
-        .or_else(|| args.first().map(|arg| arg.span))
-        .unwrap_or_else(Span::dummy);
-    let boxed = LoweredValue {
-        value: replacement,
-        ir_type: IrType::Heap(IrHeapKind::Mixed),
-    };
-    let unpacked = indexed_array_literals::lower_boxed_array_spread_source(ctx, boxed, span);
-    let values = function_calls::emit_builtin_call_value(
-        ctx,
-        "array_values",
-        vec![unpacked.value],
-        PhpType::Array(Box::new(PhpType::Mixed)),
-        span,
-        None,
-    );
-    // The hash was only the stepping stone to the indexed copy; the copy itself is an owning
-    // operand the call lowering releases after the splice, like any other temporary argument.
-    crate::ir_lower::ownership::release_if_owned(ctx, unpacked, Some(span));
-    operands[3] = values.value;
-}
-
-/// Copies `$replacement` before the splice runs when it IS the receiver.
-///
-/// PHP evaluates `$replacement` into its own array before touching the receiver, so
-/// `array_splice($a, 1, 1, $a)` inserts what `$a` held on the way in. elephc passed the receiver
-/// pointer twice and the insertion then read slots the removal had already overwritten:
-/// `[1, 2, 3]` came back as `[1, 1, 1, 3]` where PHP gives `[1, 1, 2, 3, 3]` (issue #676).
-///
-/// Decided on the LOWERED OPERANDS, which are already in parameter order, so every spelling is
-/// covered by one test: positional, named in any order, and a named `$replacement` with
-/// `$length` left out. Matching the source arguments instead would have to redo the planner's
-/// parameter mapping, and getting it wrong is silent — the wrong answer simply comes back.
-///
-/// Two loads of the same local slot are the same array, so the comparison is exact and needs no
-/// runtime check; a call that cannot alias pays nothing. It runs before
-/// `widen_array_splice_receiver_for_replacement` so the copy holds the receiver's original
-/// payload rather than a re-boxed version of it, and unlike that pass it accepts every receiver
-/// shape — a by-ref parameter and a `&$x` binding alias just as hard, and neither needs the slot
-/// retyping that forces the other pass to turn them away.
-///
-/// A replacement reaching the same array WITHOUT loading a slot the receiver also loads — out of
-/// a container the receiver is also stored in, say — still aliases. Deciding that needs the
-/// heap pointers, which are not available until the call runs.
-fn snapshot_array_splice_self_replacement(
-    ctx: &mut LoweringContext<'_, '_>,
-    operands: &mut [crate::ir::ValueId],
-) {
-    let Some(&receiver) = operands.first() else {
-        return;
-    };
-    let Some(&replacement) = operands.get(3) else {
-        return;
-    };
-    // Both operands have to BE arrays for a clone to mean anything, and the check has to happen
-    // before the storage comparison rather than after it. A reference rebound to a scalar keeps
-    // its slot (`$b = &$a; $b = &$x;` where `$x` is an int), and the earlier alias instruction
-    // stays in the function, so the alias walk below still reports a possible match; cloning that
-    // integer emitted an `ArrayCloneShallow` the EIR validator rejects outright.
-    if !matches!(
-        ctx.builder.value_php_type(receiver).codegen_repr(),
-        PhpType::Array(_)
-    ) || !matches!(
-        ctx.builder.value_php_type(replacement).codegen_repr(),
-        PhpType::Array(_)
-    ) {
-        return;
-    }
-    let Some(receiver_storage) = loaded_slot(ctx, receiver) else {
-        return;
-    };
-    let Some(replacement_storage) = loaded_slot(ctx, replacement) else {
-        return;
-    };
-    if !storages_may_be_the_same(ctx, receiver_storage, replacement_storage) {
-        return;
-    }
-    let replacement_ty = ctx.builder.value_php_type(replacement);
-    let span = ctx
-        .builder
-        .value_defining_instruction(replacement)
-        .and_then(|inst| inst.span);
-    let snapshot = ctx.emit_value(
-        Op::ArrayCloneShallow,
-        vec![replacement],
-        None,
-        replacement_ty,
-        Op::ArrayCloneShallow.default_effects(),
-        span,
-    );
-    operands[3] = snapshot.value;
-}
-
-/// Reports whether two loaded storages can be the same array.
-///
-/// Identical storage is the common case. Two DIFFERENT ref-cell slots still share one cell when
-/// a `&$x` binding aliased them (`$b = &$a` emits `alias_local_ref_cell slots[b, a]`), so the
-/// function's alias instructions are consulted before giving up, transitively — `$c = &$b` after
-/// `$b = &$a` puts all three on one cell.
-///
-/// Deliberately an OVER-approximation: an alias inside a branch not taken at runtime still counts
-/// here, and so does one the source later rebound away. That is safe in the only direction that
-/// matters, because the sole consequence of a false positive is one extra array copy, while a
-/// false negative is the wrong answer — but it is only safe once the CALLER has established that
-/// both operands are arrays, since a rebound reference can leave a scalar behind the same slot.
-fn storages_may_be_the_same(
-    ctx: &LoweringContext<'_, '_>,
-    left: (Op, LocalSlotId),
-    right: (Op, LocalSlotId),
-) -> bool {
-    if left == right {
-        return true;
-    }
-    let ((left_op, left_slot), (right_op, right_slot)) = (left, right);
-    if left_op != Op::LoadRefCell || right_op != Op::LoadRefCell {
-        return false;
-    }
-    let mut reachable = HashSet::from([left_slot]);
-    // One pass per edge is enough to close the relation: each pass adds at least one slot, or
-    // nothing is left to add.
-    for _ in 0..ctx.builder.function().instructions.len() {
-        let mut grew = false;
-        for inst in &ctx.builder.function().instructions {
-            if inst.op != Op::AliasLocalRefCell {
-                continue;
-            }
-            let Some(Immediate::LocalSlotPair { first, second }) = inst.immediate else {
-                continue;
-            };
-            if reachable.contains(&first) && reachable.insert(second) {
-                grew = true;
-            }
-            if reachable.contains(&second) && reachable.insert(first) {
-                grew = true;
-            }
-        }
-        if !grew {
-            break;
-        }
-    }
-    reachable.contains(&right_slot)
-}
-
-/// Returns the storage a value was loaded from, as the `(load opcode, slot)` pair.
-///
-/// `LoadRefCell` counts beside `LoadLocal` so a by-reference parameter is covered: that is where
-/// the receiver reaches the CALLER's array, and two reads of one cell are as much the same array
-/// as two reads of one local. The opcode is part of the key rather than discarded, so two
-/// different kinds of storage can never compare equal on a shared slot number.
-///
-/// Anything else — a literal, a call result, a converted value — reports `None`, because only a
-/// load identifies storage two operands can share.
-fn loaded_slot(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> Option<(Op, LocalSlotId)> {
-    let inst = ctx.builder.value_defining_instruction(value)?;
-    if !matches!(inst.op, Op::LoadLocal | Op::LoadRefCell) {
-        return None;
-    }
-    match inst.immediate {
-        Some(Immediate::LocalSlot(slot)) => Some((inst.op, slot)),
-        _ => None,
-    }
-}
-
-/// Promotes an `array_splice()` receiver local to `array<mixed>` when `$replacement` retypes it.
-///
-/// Runs after the operands are lowered because the decision needs both the receiver's slot
-/// element type and the replacement's EIR type, and the conversion itself re-reads the receiver
-/// local so it observes any mutation the later arguments performed.
-fn widen_array_splice_receiver_for_replacement(
-    ctx: &mut LoweringContext<'_, '_>,
-    sig: Option<&FunctionSig>,
-    args: &[Expr],
-    operands: &mut [crate::ir::ValueId],
-) {
-    let Some(sig) = sig else {
-        return;
-    };
-    let Some(replacement) = operands.get(3).copied() else {
-        return;
-    };
-    let Some((name, span)) = array_splice_receiver_local(ctx, sig, args) else {
-        return;
-    };
-    let PhpType::Array(elem_ty) = ctx.local_type(&name).codegen_repr() else {
-        return;
-    };
-    let elem_ty = elem_ty.codegen_repr();
-    if elem_ty == PhpType::Mixed {
-        return;
-    }
-    let replacement_ty = ctx.builder.value_php_type(replacement).codegen_repr();
-    if array_splice_replacement_fits_receiver(&elem_ty, &replacement_ty) {
-        return;
-    }
-    let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
-    let local = ctx.load_local(&name, Some(span));
-    let converted = ctx.emit_value(
-        Op::ArrayToMixed,
-        vec![local.value],
-        None,
-        array_ty.clone(),
-        Op::ArrayToMixed.default_effects(),
-        Some(span),
-    );
-    ctx.store_mutated_local(&name, converted, array_ty, Some(span));
-    operands[0] = ctx.load_local(&name, Some(span)).value;
-}
-
-/// Returns the expression `array_splice()`'s by-reference receiver argument was written as.
-///
-/// Positional and named spellings both land on parameter 0, so callers see one shape whichever
-/// way the call was written.
-fn array_splice_receiver_place<'a>(sig: &FunctionSig, args: &'a [Expr]) -> Option<&'a Expr> {
-    args.iter().enumerate().find_map(|(index, arg)| {
-        let (param_index, place) = match &arg.kind {
-            ExprKind::NamedArg { name, value } => (
-                sig.params.iter().position(|(param, _)| param == name)?,
-                value.as_ref(),
-            ),
-            _ => (index, arg),
-        };
-        (param_index == 0).then_some(place)
-    })
-}
-
-/// Returns the plain local variable bound to `array_splice()`'s by-reference receiver.
-///
-/// Two receiver shapes are deliberately excluded even though they name a local. A by-reference
-/// parameter and a `&$x` binding share storage with a caller slot this function cannot retype,
-/// and the hidden `__eir_place` temporary of the property/element rewrite is written back into a
-/// place whose declared element type is equally out of reach. Widening either would publish
-/// boxed `Mixed` cells through a slot still described as `array<int>`, so both keep the
-/// backend's explicit diagnostic instead.
-fn array_splice_receiver_local(
-    ctx: &LoweringContext<'_, '_>,
-    sig: &FunctionSig,
-    args: &[Expr],
-) -> Option<(String, Span)> {
-    let receiver = array_splice_receiver_place(sig, args)?;
-    let ExprKind::Variable(name) = &receiver.kind else {
-        return None;
-    };
-    if !ctx.has_local_slot(name) || ctx.is_ref_bound_local(name) {
-        return None;
-    }
-    if name.starts_with(crate::names::SYNTHETIC_PLACE_LOCAL_STEM) {
-        return None;
-    }
-    Some((name.clone(), receiver.span))
-}
-
-/// Reports whether a `$replacement` can be written into the receiver's existing payload slots.
-///
-/// Mirrors the shapes the backend's `SpliceReplacement` classifier accepts, so a call this
-/// predicate passes never reaches the `unsupported` arm: an omitted/null/empty replacement
-/// inserts nothing, an array of the receiver's own element type is copied verbatim, an array of
-/// boxed `Mixed` cells is read back as plain integers for an `int`/`bool` receiver (the shape
-/// `[$x + 1]` produces), and a bare scalar of the element type becomes a one-element insertion.
-fn array_splice_replacement_fits_receiver(elem_ty: &PhpType, replacement_ty: &PhpType) -> bool {
-    if matches!(replacement_ty, PhpType::Void | PhpType::Never) {
-        return true;
-    }
-    if let PhpType::Array(inner) = replacement_ty {
-        let inner = inner.codegen_repr();
-        if matches!(inner, PhpType::Void | PhpType::Never) {
-            return true;
-        }
-        if &inner == elem_ty {
-            return true;
-        }
-        return inner == PhpType::Mixed && matches!(elem_ty, PhpType::Int | PhpType::Bool);
-    }
-    replacement_ty == elem_ty
-}
 
 /// Replaces arguments whose declared-parameter binding is decided by their literal spelling.
 ///
-/// Runs before any argument is lowered so a callable-name string never materializes as string
-/// storage and a constant bound to `int`/`float` is emitted already coerced. Positional and
+/// Runs before any argument is lowered so a constant bound to `int`/`float` is emitted already
+/// coerced. Callable-name strings are handled at their parameter storage boundary. Positional and
 /// named arguments are both handled; a spread makes the positional mapping unknowable, so the
 /// remaining arguments are left alone.
 ///
@@ -1191,266 +924,6 @@ fn rewrite_literal_param_bindings(sig: &FunctionSig, args: &[Expr]) -> Option<Ve
         };
     }
     rewritten
-}
-
-/// Lowers `new $class(...)` as a class-name dispatch chain when the call shape needs
-/// per-class argument planning.
-///
-/// Returns `None` when the raw operand list is already correct for every class the
-/// runtime dispatch could select, which keeps today's operand ABI for the common
-/// exact-arity positional call. Otherwise the class name is evaluated once into a hidden
-/// temporary, compared case-insensitively against each candidate class, and each matching
-/// branch lowers a fixed-class `new` so named arguments, defaults for omitted optional
-/// parameters, and runtime spreads all go through `plan_call_args`. The final `else`
-/// branch keeps the generic dynamic-new opcode so runtime-registry classes, the eval
-/// bridge, and PHP's class-not-found fatal behave exactly as before.
-fn lower_new_dynamic_planned_dispatch(
-    ctx: &mut LoweringContext<'_, '_>,
-    name_expr: &Expr,
-    args: &[Expr],
-    expr: &Expr,
-) -> Option<LoweredValue> {
-    let candidates = dynamic_new_planned_candidate_classes(ctx, args);
-    if candidates.is_empty() {
-        return None;
-    }
-
-    let name_value = lower_expr(ctx, name_expr);
-    let name_type = match ctx.builder.value_php_type(name_value.value).codegen_repr() {
-        PhpType::Str => PhpType::Str,
-        _ => PhpType::Mixed,
-    };
-    let name_temp = ctx.declare_owned_hidden_temp(name_type.clone());
-    store_value_into_temp(ctx, &name_temp, name_type.clone(), name_value, expr.span);
-    let name_var = Expr::new(ExprKind::Variable(name_temp.clone()), name_expr.span);
-
-    let result_temp = ctx.declare_owned_hidden_temp(PhpType::Mixed);
-    let merge = ctx
-        .builder
-        .create_named_block("new.dynamic.planned.merge", Vec::new());
-
-    for class_name in &candidates {
-        let match_block = ctx
-            .builder
-            .create_named_block("new.dynamic.planned.match", Vec::new());
-        let next_block = ctx
-            .builder
-            .create_named_block("new.dynamic.planned.next", Vec::new());
-        let condition = dynamic_new_class_name_match_expr(
-            &name_var,
-            class_name,
-            name_type == PhpType::Str,
-            name_expr.span,
-        );
-        let condition = lower_expr(ctx, &condition);
-        let condition = coerce_to_int_at_span(ctx, condition, Some(expr.span));
-        ctx.builder.terminate(Terminator::CondBr {
-            cond: condition.value,
-            then_target: match_block,
-            then_args: Vec::new(),
-            else_target: next_block,
-            else_args: Vec::new(),
-        });
-
-        ctx.builder.position_at_end(match_block);
-        let class = Name::unqualified(class_name.clone());
-        let object = lower_new_object(ctx, &class, args, expr);
-        store_value_into_temp(ctx, &result_temp, PhpType::Mixed, object, expr.span);
-        branch_to(ctx, merge);
-
-        ctx.builder.position_at_end(next_block);
-    }
-
-    let name_value = ctx.load_local(&name_temp, Some(expr.span));
-    let fallback = lower_new_dynamic_generic(ctx, name_value, args, expr);
-    store_value_into_temp(ctx, &result_temp, PhpType::Mixed, fallback, expr.span);
-    branch_to(ctx, merge);
-
-    ctx.builder.position_at_end(merge);
-    ctx.clear_owned_hidden_temp(&name_temp, Some(expr.span));
-    Some(take_owned_temp(ctx, &result_temp, expr.span))
-}
-
-/// Builds the case-insensitive class-name test for one dispatch-chain branch.
-///
-/// PHP class names are case-insensitive, so the comparison goes through `strcasecmp`.
-/// A class-name expression that is not statically a string is guarded by `is_string`
-/// first: `new $object()` and other non-string operands must keep falling through to the
-/// generic dynamic-new opcode instead of being stringified here.
-fn dynamic_new_class_name_match_expr(
-    name_var: &Expr,
-    class_name: &str,
-    name_is_string: bool,
-    span: Span,
-) -> Expr {
-    let compare = Expr::new(
-        ExprKind::BinaryOp {
-            left: Box::new(Expr::new(
-                ExprKind::FunctionCall {
-                    name: Name::unqualified("strcasecmp"),
-                    args: vec![
-                        name_var.clone(),
-                        Expr::new(ExprKind::StringLiteral(class_name.to_string()), span),
-                    ],
-                },
-                span,
-            )),
-            op: BinOp::StrictEq,
-            right: Box::new(Expr::new(ExprKind::IntLiteral(0), span)),
-        },
-        span,
-    );
-    if name_is_string {
-        return compare;
-    }
-    Expr::new(
-        ExprKind::BinaryOp {
-            left: Box::new(Expr::new(
-                ExprKind::FunctionCall {
-                    name: Name::unqualified("is_string"),
-                    args: vec![name_var.clone()],
-                },
-                span,
-            )),
-            op: BinOp::And,
-            right: Box::new(compare),
-        },
-        span,
-    )
-}
-
-/// Returns the classes whose constructor would receive different arguments than the raw
-/// dynamic-new operand list, in deterministic order.
-///
-/// Only classes that EIR can construct as a fixed class are considered: compiler-internal
-/// classes, runtime-managed builtin classes, and classes without an emitted constructor body
-/// keep the generic opcode. A class qualifies when the shared call-argument rules accept the
-/// call for its constructor, `lower_args_with_signature` is known to resolve it to exactly one
-/// operand per declared parameter, *and* the result differs from the raw source arguments —
-/// that is exactly the set of classes the generic opcode's exact-arity candidate match would
-/// otherwise silently skip or feed in source order.
-fn dynamic_new_planned_candidate_classes(
-    ctx: &LoweringContext<'_, '_>,
-    args: &[Expr],
-) -> Vec<String> {
-    if args.is_empty() {
-        return Vec::new();
-    }
-    let constructor_key = php_symbol_key("__construct");
-    let mut candidates = ctx
-        .classes
-        .iter()
-        .filter(|(class_name, class_info)| {
-            dynamic_new_class_is_planning_candidate(
-                ctx,
-                class_name,
-                class_info,
-                &constructor_key,
-                args,
-            )
-        })
-        .map(|(class_name, _)| class_name.clone())
-        .collect::<Vec<_>>();
-    candidates.sort();
-    candidates
-}
-
-/// Returns true when a dynamic `new` should construct `class_name` through a fixed-class
-/// branch instead of the generic dynamic-new opcode.
-fn dynamic_new_class_is_planning_candidate(
-    ctx: &LoweringContext<'_, '_>,
-    class_name: &str,
-    class_info: &crate::types::ClassInfo,
-    constructor_key: &str,
-    args: &[Expr],
-) -> bool {
-    if class_info.is_abstract || ctx.enums.contains_key(class_name) {
-        return false;
-    }
-    if php_symbol_key(class_name).starts_with("__elephc") {
-        return false;
-    }
-    if crate::codegen_support::dynamic_new::known_dynamic_new_builtin_class_names()
-        .contains(&class_name)
-    {
-        return false;
-    }
-    // Runtime-registered builtin classes carry no source constructor body, so a fixed-class
-    // `ObjectNew` branch would reference a method symbol EIR never emits.
-    if class_info.declaration_span == Span::dummy() {
-        return false;
-    }
-    if !class_info
-        .method_decls
-        .iter()
-        .any(|method| php_symbol_key(&method.name) == constructor_key && method.has_body)
-    {
-        return false;
-    }
-    let Some(sig) = class_info.methods.get(constructor_key) else {
-        return false;
-    };
-    if sig.variadic.is_some() {
-        return false;
-    }
-    if !dynamic_new_args_need_planning(sig, args) {
-        return false;
-    }
-    dynamic_new_args_lower_to_exact_arity(ctx, sig, args)
-}
-
-/// Returns true when a constructor signature would reshape the source argument list.
-///
-/// The generic dynamic-new opcode forwards operands positionally and only selects a
-/// candidate whose constructor arity matches the operand count exactly, so any named
-/// argument, spread, or omitted optional parameter needs the planned path.
-fn dynamic_new_args_need_planning(sig: &FunctionSig, args: &[Expr]) -> bool {
-    crate::types::call_args::has_named_args(args)
-        || args.iter().any(is_spread_arg)
-        || sig.params.len() != args.len()
-}
-
-/// Returns true when `lower_args_with_signature` resolves this call to exactly one operand
-/// per declared constructor parameter.
-///
-/// The fixed-class `ObjectNew` opcode is arity-exact, and the shared argument lowering falls
-/// back to a raw source-order operand list for call shapes it cannot resolve (dynamic
-/// associative spreads, multiple spreads, spreads that do not feed the parameter tail). Those
-/// shapes must keep the generic dynamic-new opcode rather than produce a mis-arity call.
-fn dynamic_new_args_lower_to_exact_arity(
-    ctx: &LoweringContext<'_, '_>,
-    sig: &FunctionSig,
-    args: &[Expr],
-) -> bool {
-    let regular_param_count = crate::types::call_args::regular_param_count(sig);
-    if crate::types::call_args::has_named_args(args) {
-        let Ok(plan) =
-            crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
-                sig,
-                args,
-                args[0].span,
-                regular_param_count,
-                false,
-                true,
-                &assoc_spread_sources(ctx, args),
-            )
-        else {
-            return false;
-        };
-        return !plan.has_spread_args() && plan.regular_args.len() == sig.params.len();
-    }
-    if args.iter().any(is_spread_arg) {
-        return single_trailing_indexed_spread_arg(ctx, args)
-            .is_some_and(|spread_idx| spread_idx <= regular_param_count);
-    }
-    if args.len() > sig.params.len() {
-        return false;
-    }
-    (args.len()..sig.params.len()).all(|index| {
-        sig.defaults
-            .get(index)
-            .is_some_and(|default| default.is_some())
-    })
 }
 
 /// Lowers one of PHP's six internal-array-pointer builtins as a cursor-slot operation.
@@ -1538,28 +1011,6 @@ fn lower_array_internal_pointer(
         crate::ir_lower::ownership::release_if_owned(ctx, container, Some(expr.span));
     }
     Some(result)
-}
-
-/// Emits the generic runtime class-name dispatch for `new $class(...)`.
-///
-/// The class-name operand is already lowered so both the direct path and the
-/// planned-dispatch fallback branch can share it.
-fn lower_new_dynamic_generic(
-    ctx: &mut LoweringContext<'_, '_>,
-    name_value: LoweredValue,
-    args: &[Expr],
-    expr: &Expr,
-) -> LoweredValue {
-    let mut operands = vec![name_value.value];
-    operands.extend(lower_args(ctx, args));
-    ctx.emit_value(
-        Op::DynamicObjectNewMixed,
-        operands,
-        None,
-        PhpType::Mixed,
-        Op::DynamicObjectNewMixed.default_effects(),
-        Some(expr.span),
-    )
 }
 
 pub(crate) use indexed_array_literals::ir_array_storage_type;

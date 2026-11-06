@@ -356,6 +356,7 @@ mod tests {
     use crate::codegen_support::platform::Target;
 
     #[test]
+    /// Verifies both architecture emitters save and restore coroutine magic-setter guard chains.
     fn switches_magic_set_guard_heads_on_both_emitters() {
         for name in ["macos-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());

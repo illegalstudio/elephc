@@ -40,10 +40,13 @@
 use super::*;
 use crate::codegen::lower_inst::runtime_class_messages;
 use crate::codegen_support::emit::Emitter;
+use crate::types::diagnostic_names::php_type_name;
+#[cfg(test)]
+use crate::types::diagnostic_names::php_union_type_name;
 
 /// Runtime tags `__rt_mixed_unbox` can report, with the PHP type name each carries into a
 /// `TypeError` message. Tag 7 never reaches here: the unbox helper peels nested boxes.
-const RUNTIME_TAGS: [(u8, &str); 10] = [
+pub(in crate::codegen) const RUNTIME_TAGS: [(u8, &str); 10] = [
     (0, "int"),
     (1, "string"),
     (2, "float"),
@@ -61,9 +64,9 @@ const STRING_TAG: u8 = 1;
 /// The runtime tag carrying a PHP float payload.
 const FLOAT_TAG: u8 = 2;
 /// The runtime tag carrying a PHP object payload.
-const OBJECT_TAG: u8 = 6;
+pub(in crate::codegen) const OBJECT_TAG: u8 = 6;
 /// The runtime tag carrying a PHP bool payload.
-const BOOL_TAG: u8 = 3;
+pub(in crate::codegen) const BOOL_TAG: u8 = 3;
 
 /// Stack layout of the string-to-int diagnostic frame.
 const STRING_TO_INT_PTR_OFFSET: usize = 0;
@@ -158,6 +161,69 @@ pub(super) fn property_type_accepts_runtime_shaped_value(
     Ok(plan_tag_actions(ctx, slot)?.is_some())
 }
 
+/// Emits the `false`-slot mixed-source guard: unbox the boxed value, refuse every tag that is
+/// not bool (php names the refused SOURCE type in the `TypeError` — `int`, `string`, `array`,
+/// …), and refuse a `true` payload by value. On success the FALSE payload (0) sits in the
+/// integer-result register, exactly where the ordinary scalar store expects it.
+///
+/// A `false`-declared slot must never take the bool truthiness cast (`__rt_mixed_cast_bool`):
+/// php accepts ONLY the exact `false` bool here, so `0`, `""` and `[]` are `TypeError`s, not
+/// coercions.
+pub(super) fn emit_false_slot_mixed_guard(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    slot: &PropertySlot,
+) -> Result<()> {
+    // The refusal spells the DECLARED type `false` literally. The nullable `?false`
+    // shape is NOT covered: its slot stores a box through the mixed machinery, whose default
+    // and read paths predate this guard and do not round-trip a stored `false` today.
+    let refuse = |ctx: &mut FunctionContext<'_>, given: &str| {
+        super::super::exceptions::emit_type_error(
+            ctx,
+            &format!(
+                "Cannot assign {} to property {}::${} of type false",
+                given, slot.class_name, slot.property
+            ),
+        );
+    };
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let tag_reg = abi::int_result_reg(ctx.emitter);
+    let bool_arm = ctx.next_label("false_slot_bool");
+    let ok_label = ctx.next_label("false_slot_ok");
+    let mut refuse_arms: Vec<(u8, String, String)> = Vec::new();
+    for (tag, name) in RUNTIME_TAGS.iter().filter(|(tag, _)| *tag != BOOL_TAG) {
+        refuse_arms.push((
+            *tag,
+            (*name).to_string(),
+            ctx.next_label(&format!("false_slot_reject_{name}")),
+        ));
+    }
+    for (tag, _, label) in &refuse_arms {
+        super::super::enums::emit_mixed_tag_branch(ctx, tag_reg, i64::from(*tag), label);
+    }
+    super::super::enums::emit_mixed_tag_branch(ctx, tag_reg, i64::from(BOOL_TAG), &bool_arm);
+    // A tag outside the table never reaches the unbox helper (tag 7 is a nested box it peels),
+    // so this fall-through is a defensive refusal rather than a live path.
+    refuse(ctx, "mixed");
+    for (tag, name, label) in refuse_arms {
+        ctx.emitter.label(&label);
+        if tag == OBJECT_TAG {
+            emit_object_property_type_error(ctx, slot);
+        } else {
+            refuse(ctx, &name);
+        }
+    }
+    ctx.emitter.label(&bool_arm);
+    let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, result_reg, payload_reg);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
+    refuse(ctx, "true");
+    ctx.emitter.label(&ok_label);
+    Ok(())
+}
+
 /// Emits the weak-mode type guard for a boxed value assigned to a declared property.
 ///
 /// Returns the label the caller must emit AFTER its own value materialization, when the
@@ -167,8 +233,7 @@ pub(super) fn emit_mixed_property_type_guard(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     slot: &PropertySlot,
-) -> Result<Option<String>> {
-    let Some(actions) = plan_tag_actions(ctx, slot)? else {
+) -> Result<Option<String>> {    let Some(actions) = plan_tag_actions(ctx, slot)? else {
         return Ok(None);
     };
     if actions.iter().all(|action| matches!(action, TagAction::Accept)) {
@@ -209,7 +274,7 @@ pub(super) fn emit_mixed_property_type_guard(
             TagAction::AcceptIntoInt => {
                 let refuse_label =
                     ctx.next_label(&format!("typed_prop_{}_refused_{}", fragment, type_name));
-                emit_int_destination_diagnostics(ctx, slot, *tag, &refuse_label);
+                emit_int_destination_diagnostics(ctx, *tag, &refuse_label);
                 abi::emit_jump(ctx.emitter, &accept_label);
                 ctx.emitter.label(&refuse_label);
                 emit_property_type_error(ctx, slot, type_name);
@@ -246,7 +311,7 @@ pub(super) fn emit_mixed_property_type_guard(
                         ctx.next_label(&format!("typed_prop_{}_refused_{}", fragment, type_name));
                     let coerce_label =
                         ctx.next_label(&format!("typed_prop_{}_coerce_{}", fragment, type_name));
-                    emit_int_destination_diagnostics(ctx, slot, *tag, &refuse_label);
+                    emit_int_destination_diagnostics(ctx, *tag, &refuse_label);
                     abi::emit_jump(ctx.emitter, &coerce_label);
                     ctx.emitter.label(&refuse_label);
                     match fallback {
@@ -410,8 +475,8 @@ fn emit_numeric_string_check(emitter: &mut Emitter, accepted_label: &str) {
             emitter.instruction(&format!("cbnz {}, {}", flag_reg, accepted_label)); // PHP accepts a fully numeric string for this property
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", flag_reg, flag_reg)); // set flags from the numeric-string verdict
-            emitter.instruction(&format!("jne {}", accepted_label)); // PHP accepts a fully numeric string for this property
+            emitter.instruction(&format!("test {}, {}", flag_reg, flag_reg));   // set flags from the numeric-string verdict
+            emitter.instruction(&format!("jne {}", accepted_label));            // PHP accepts a fully numeric string for this property
         }
     }
 }
@@ -470,7 +535,7 @@ fn emit_classify_numeric_string_and_box(emitter: &mut Emitter, refuse_label: &st
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("test {}, {}", status_reg, status_reg)); // set flags from the whole-string numeric status
-            emitter.instruction(&format!("jne {}", refuse_label)); // only a whole-string numeric spelling reaches an int|float member
+            emitter.instruction(&format!("jne {}", refuse_label));              // only a whole-string numeric spelling reaches an int|float member
         }
     }
 
@@ -503,11 +568,11 @@ fn emit_accept_object_classes(emitter: &mut Emitter, class_ids: &[u64], accepted
         match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction(&format!("cmp {}, {}", class_reg, expected_reg)); // compare the runtime class id with an accepted class
-                emitter.instruction(&format!("b.eq {}", accepted_label)); // the object satisfies the declared property class
+                emitter.instruction(&format!("b.eq {}", accepted_label));       // the object satisfies the declared property class
             }
             Arch::X86_64 => {
                 emitter.instruction(&format!("cmp {}, {}", class_reg, expected_reg)); // compare the runtime class id with an accepted class
-                emitter.instruction(&format!("je {}", accepted_label)); // the object satisfies the declared property class
+                emitter.instruction(&format!("je {}", accepted_label));         // the object satisfies the declared property class
             }
         }
     }
@@ -521,13 +586,12 @@ fn emit_accept_object_classes(emitter: &mut Emitter, class_ids: &[u64], accepted
 /// anything outside the int range are a `TypeError` rather than a silently wrapped integer.
 fn emit_int_destination_diagnostics(
     ctx: &mut FunctionContext<'_>,
-    slot: &PropertySlot,
     tag: u8,
     refuse_label: &str,
 ) {
     match tag {
         FLOAT_TAG => emit_float_into_int_diagnostics(ctx, refuse_label),
-        STRING_TAG => emit_string_into_int_diagnostics(ctx, slot, refuse_label),
+        STRING_TAG => emit_string_into_int_diagnostics(ctx, refuse_label),
         _ => {}
     }
 }
@@ -543,12 +607,11 @@ fn emit_float_into_int_diagnostics(ctx: &mut FunctionContext<'_>, refuse_label: 
 ///
 /// The original string bytes have to survive the conversion because PHP quotes them verbatim
 /// in the deprecation, so the pointer/length pair is saved before `__rt_str_to_number` runs.
-fn emit_string_into_int_diagnostics(
+/// On acceptance the converted integer is restored after any diagnostic handler returns.
+pub(in crate::codegen) fn emit_string_into_int_diagnostics(
     ctx: &mut FunctionContext<'_>,
-    slot: &PropertySlot,
     caller_refuse_label: &str,
 ) {
-    let _ = slot;
     let numeric_label = ctx.next_label("typed_prop_string_numeric");
     let refuse_label = ctx.next_label("typed_prop_string_refused");
     let exact_label = ctx.next_label("typed_prop_string_exact");
@@ -592,6 +655,11 @@ fn emit_string_into_int_diagnostics(
     emit_truncation_is_exact_jump(ctx, STRING_TO_INT_VALUE_OFFSET, &exact_label);
     emit_float_string_precision_deprecation(ctx);
     ctx.emitter.label(&exact_label);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        STRING_TO_INT_VALUE_OFFSET,
+    );
     abi::emit_release_temporary_stack(ctx.emitter, STRING_TO_INT_FRAME_BYTES);
     abi::emit_jump(ctx.emitter, &accept_label);
 
@@ -612,16 +680,16 @@ fn emit_truncation_is_exact_jump(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", value_offset);
-            ctx.emitter.instruction("scvtf d1, x9"); // reconstruct the truncated value for an exactness check
-            ctx.emitter.instruction("fcmp d0, d1"); // detect fractional precision loss
+            ctx.emitter.instruction("scvtf d1, x9");                            // reconstruct the truncated value for an exactness check
+            ctx.emitter.instruction("fcmp d0, d1");                             // detect fractional precision loss
             ctx.emitter
                 .instruction(&format!("b.eq {}", exact_label)); // integral values need no deprecation
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", value_offset);
-            ctx.emitter.instruction("cvtsi2sd xmm1, r10"); // reconstruct the truncated value for an exactness check
-            ctx.emitter.instruction("ucomisd xmm0, xmm1"); // detect fractional precision loss
-            ctx.emitter.instruction(&format!("je {}", exact_label)); // integral values need no deprecation
+            ctx.emitter.instruction("cvtsi2sd xmm1, r10");                      // reconstruct the truncated value for an exactness check
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // detect fractional precision loss
+            ctx.emitter.instruction(&format!("je {}", exact_label));            // integral values need no deprecation
         }
     }
 }
@@ -672,16 +740,19 @@ fn emit_coerced_property_value(
         crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
         return emit_release_untransferred_source_box(ctx, value, slot);
     }
-    emit_box_current_value_as_mixed(ctx.emitter, target);
+    if *target == PhpType::Str {
+        emit_box_persisted_string_and_release(ctx);
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, target);
+    }
     emit_release_untransferred_source_box(ctx, value, slot)
 }
 
-/// Releases the source box the ordinary accept path would have handed to the slot.
+/// Releases a source box only when EIR delegated its owner to the physical store.
 ///
-/// `can_store_boxed_value_for_mixed_property()` makes a Mixed-shaped slot ADOPT the source box
-/// outright, so EIR emits no cleanup for a source it expects to be handed over. An arm that
-/// stores a DIFFERENT value instead leaves that box with no owner at all, which leaked one
-/// boxed cell per accepted write until the release was emitted here.
+/// A source with explicit EIR cleanup is retained rather than adopted by an accepting store;
+/// its normal release and unwind pin remain authoritative even when this arm coerces it.
+/// An adoptable source instead needs retirement here when the slot receives a different box.
 fn emit_release_untransferred_source_box(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
@@ -698,13 +769,14 @@ fn emit_release_untransferred_source_box(
 
 /// Throws PHP's catchable typed-property `TypeError` for this source type.
 fn emit_property_type_error(ctx: &mut FunctionContext<'_>, slot: &PropertySlot, source: &str) {
-    let message = format!(
-        "Cannot assign {} to property {}::${} of type {}",
-        source,
-        slot.class_name,
-        slot.property,
-        php_type_name(&slot.php_type)
-    );
+    let message = if let Some(prefix) = &slot.abstract_setter_type_error_prefix {
+        format!("{prefix}{source} given")
+    } else {
+        format!(
+            "Cannot assign {} to property {}::${} of type {}",
+            source, slot.class_name, slot.property, php_type_name(&slot.php_type),
+        )
+    };
     super::super::exceptions::emit_type_error(ctx, &message);
 }
 
@@ -735,95 +807,21 @@ fn emit_object_property_type_error(ctx: &mut FunctionContext<'_>, slot: &Propert
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, result_reg, payload_reg); // the class-name lookup reads the object through the result register
     runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, result_reg, "object");
-    runtime_class_messages::emit_concat_static_prefix(ctx, "Cannot assign ");
+    runtime_class_messages::emit_concat_static_prefix(ctx,
+        slot.abstract_setter_type_error_prefix.as_deref().unwrap_or("Cannot assign "));
     runtime_class_messages::emit_concat_static_suffix(
         ctx,
-        &format!(
-            " to property {}::${} of type {}",
-            slot.class_name,
-            slot.property,
-            php_type_name(&slot.php_type)
-        ),
+        &if slot.abstract_setter_type_error_prefix.is_some() {
+            String::from(" given")
+        } else {
+            format!(" to property {}::${} of type {}",
+                slot.class_name, slot.property, php_type_name(&slot.php_type))
+        },
     );
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     super::super::exceptions::emit_type_error_from_string_result(ctx);
 }
 
-/// Spells a declared property type the way PHP spells it in a `TypeError`.
-fn php_type_name(php_type: &PhpType) -> String {
-    match php_type {
-        PhpType::Int => "int".to_string(),
-        PhpType::Float => "float".to_string(),
-        PhpType::Str => "string".to_string(),
-        PhpType::Bool | PhpType::False => "bool".to_string(),
-        PhpType::Void | PhpType::Never => "null".to_string(),
-        PhpType::Mixed => "mixed".to_string(),
-        PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
-        PhpType::Iterable => "Traversable|array".to_string(),
-        PhpType::Object(class_name) if class_name.is_empty() => "object".to_string(),
-        PhpType::Object(class_name) => class_name.trim_start_matches('\\').to_string(),
-        PhpType::Union(members) => php_union_type_name(members),
-        other => format!("{:?}", other),
-    }
-}
-
-/// The order php-src prints built-in union members in, after the class names.
-///
-/// `zend_type_to_string` walks a fixed type mask, so a union is NEVER printed in declaration
-/// order: `int|string` prints as `string|int` and `null|int|string` as `string|int|null`. A
-/// message built from declaration order disagrees with reference PHP for most unions, which is
-/// why the spelling is normalized here instead of being joined as written.
-const PHP_BUILTIN_TYPE_ORDER: [&str; 8] = [
-    "object", "array", "string", "int", "float", "bool", "false", "true",
-];
-
-/// Spells a union the way PHP does, collapsing a nullable single type to `?T`.
-fn php_union_type_name(members: &[PhpType]) -> String {
-    let is_null = |member: &PhpType| matches!(member, PhpType::Void | PhpType::Never);
-    let has_null = members.iter().any(is_null);
-    let mut classes: Vec<String> = Vec::new();
-    let mut builtins: Vec<String> = Vec::new();
-    for member in members.iter().filter(|member| !is_null(member)) {
-        for name in member_type_names(member) {
-            let bucket = if PHP_BUILTIN_TYPE_ORDER.contains(&name.as_str()) {
-                &mut builtins
-            } else {
-                &mut classes
-            };
-            if !bucket.contains(&name) {
-                bucket.push(name);
-            }
-        }
-    }
-    builtins.sort_by_key(|name| {
-        PHP_BUILTIN_TYPE_ORDER
-            .iter()
-            .position(|known| known == name)
-            .unwrap_or(PHP_BUILTIN_TYPE_ORDER.len())
-    });
-    let mut named = classes;
-    named.extend(builtins);
-    if named.len() == 1 && has_null {
-        return format!("?{}", named[0]);
-    }
-    if has_null {
-        named.push("null".to_string());
-    }
-    named.join("|")
-}
-
-/// The individual names one declared union member contributes to the printed spelling.
-///
-/// `array` reaches codegen as the two-member union of its indexed and hash representations, so
-/// both collapse to one `array`; `iterable` is stored as one member but PHP prints it as the
-/// two types it stands for.
-fn member_type_names(member: &PhpType) -> Vec<String> {
-    match member {
-        PhpType::Iterable => vec!["Traversable".to_string(), "array".to_string()],
-        PhpType::Union(inner) => inner.iter().flat_map(member_type_names).collect(),
-        other => vec![php_type_name(other)],
-    }
-}
 
 /// Decides what the guard does with every runtime tag for this declared property type.
 ///

@@ -11,7 +11,7 @@
 //! - Generator suspension remains an explicit unsupported Phase 04 path.
 
 use crate::codegen::platform::Arch;
-use crate::ir::{BlockId, DataId, IrType, SwitchCase, Terminator, ValueId};
+use crate::ir::{BlockId, CmpPredicate, DataId, IrType, Op, SwitchCase, Terminator, ValueId};
 use crate::types::PhpType;
 
 use crate::codegen::abi;
@@ -22,7 +22,11 @@ use super::return_ownership;
 use super::{CodegenIrError, Result};
 
 /// Lowers one EIR terminator.
-pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator) -> Result<()> {
+pub(super) fn lower_terminator(
+    ctx: &mut FunctionContext<'_>,
+    source: BlockId,
+    term: &Terminator,
+) -> Result<()> {
     match term {
         Terminator::Return { value: None } => {
             if ctx.is_main {
@@ -100,7 +104,7 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             Ok(())
         }
         Terminator::Br { target, args } => {
-            lower_branch(ctx, *target, args, "br")?;
+            lower_branch(ctx, source, *target, args, "br")?;
             Ok(())
         }
         Terminator::CondBr {
@@ -110,15 +114,48 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             else_target,
             else_args,
         } => {
-            ctx.load_value_to_result(*cond)?;
+            let condition = match ctx.machine_layout.fused_compare {
+                Some(compare) => match ctx.function.instruction(compare).map(|inst| inst.op) {
+                    Some(Op::ICmp) => BranchCondition::IntegerFlags(
+                        super::lower_inst::emit_fused_int_compare(ctx, compare)?,
+                    ),
+                    Some(Op::FCmp) => BranchCondition::FloatFlags {
+                        predicate: super::lower_inst::emit_fused_float_compare(ctx, compare)?,
+                        inverted: false,
+                    },
+                    _ => {
+                        return Err(CodegenIrError::invalid_module(
+                            "fused compare must be an integer or float compare",
+                        ));
+                    }
+                },
+                None => {
+                    ctx.load_value_to_result(*cond)?;
+                    BranchCondition::ResultNonzero
+                }
+            };
             validate_block_args(ctx, *then_target, then_args, "cond_br then")?;
             validate_block_args(ctx, *else_target, else_args, "cond_br else")?;
             let then_label = ctx.block_label_for_id(*then_target)?;
             let else_label = ctx.block_label_for_id(*else_target)?;
             let then_edge = edge_label(ctx, then_args, &then_label, "cond_then_args");
             let else_edge = edge_label(ctx, else_args, &else_label, "cond_else_args");
-            abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_edge);
-            abi::emit_jump(ctx.emitter, &else_edge);
+            // Edge-copy stubs are emitted right after the branch, so only a stub-free
+            // `cond_br` can fall through into the block laid out next.
+            let fallthrough = if then_args.is_empty() && else_args.is_empty() {
+                ctx.fallthrough_label()
+            } else {
+                None
+            };
+            if fallthrough.as_deref() == Some(then_label.as_str()) {
+                // The then-block is laid out next: branch away only on the inverted condition.
+                emit_conditional_jump(ctx, condition.inverted(), &else_edge)?;
+            } else {
+                emit_conditional_jump(ctx, condition, &then_edge)?;
+                if fallthrough.as_deref() != Some(else_label.as_str()) {
+                    abi::emit_jump(ctx.emitter, &else_edge);
+                }
+            }
             emit_edge_args(ctx, &then_edge, *then_target, then_args, "cond_br then")?;
             emit_edge_args(ctx, &else_edge, *else_target, else_args, "cond_br else")?;
             Ok(())
@@ -155,6 +192,7 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
             .map(|interface| interface.interface_id)
             .ok_or_else(|| CodegenIrError::unsupported("Throwable interface metadata is unavailable for mixed throw"))?;
         let invalid_label = ctx.next_label("throw_mixed_invalid");
+        let non_throwable_label = ctx.next_label("throw_mixed_non_throwable");
         let done_label = ctx.next_label("throw_mixed_done");
         ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -162,7 +200,7 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
             Arch::AArch64 => {
                 ctx.emitter.comment("-- validate the Mixed throw tag and class --");
                 ctx.emitter.instruction("cmp x0, #6");                          // only Mixed's object tag can be checked for Throwable membership
-                ctx.emitter.instruction(&format!("b.ne {invalid_label}"));      // scalars and other boxed values raise a runtime TypeError
+                ctx.emitter.instruction(&format!("b.ne {invalid_label}"));      // non-object boxes raise PHP Error with the scalar diagnostic
                 ctx.emitter.instruction("ldr x0, [x1]");                        // pass the runtime class id to the interface checker
                 abi::emit_load_int_immediate(ctx.emitter, "x1", throwable_interface_id as i64);
                 abi::emit_load_int_immediate(ctx.emitter, "x2", 1);            // request interface matching for Throwable
@@ -170,7 +208,7 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
             Arch::X86_64 => {
                 ctx.emitter.comment("-- validate the Mixed throw tag and class --");
                 ctx.emitter.instruction("cmp rax, 6");                          // only Mixed's object tag can be checked for Throwable membership
-                ctx.emitter.instruction(&format!("jne {invalid_label}"));       // scalars and other boxed values raise a runtime TypeError
+                ctx.emitter.instruction(&format!("jne {invalid_label}"));       // non-object boxes raise PHP Error with the scalar diagnostic
                 ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");            // pass the runtime class id to the interface checker
                 abi::emit_load_int_immediate(ctx.emitter, "rsi", throwable_interface_id as i64);
                 abi::emit_load_int_immediate(ctx.emitter, "rdx", 1);           // request interface matching for Throwable
@@ -180,12 +218,12 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 ctx.emitter.comment("-- transfer the boxed Throwable to the exception slot --");
-                ctx.emitter.instruction(&format!("cbz x0, {invalid_label}"));   // reject object tags whose runtime class does not implement Throwable
+                ctx.emitter.instruction(&format!("cbz x0, {non_throwable_label}")); // reject ordinary objects with the non-Throwable diagnostic
             }
             Arch::X86_64 => {
                 ctx.emitter.comment("-- transfer the boxed Throwable to the exception slot --");
                 ctx.emitter.instruction("test rax, rax");                       // did the runtime class implement Throwable?
-                ctx.emitter.instruction(&format!("jz {invalid_label}"));        // reject ordinary objects at runtime
+                ctx.emitter.instruction(&format!("jz {non_throwable_label}"));  // reject ordinary objects with the non-Throwable diagnostic
             }
         }
         ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
@@ -194,10 +232,18 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
         abi::emit_call_label(ctx.emitter, "__rt_throw_current");
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&invalid_label);
-        ctx.emitter.comment("-- release an invalid thrown box before raising TypeError --");
+        ctx.emitter.comment("-- release a non-object thrown box before raising Error --");
         ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
         abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-        super::lower_inst::emit_type_error(ctx, "Can only throw objects");
+        super::lower_inst::exceptions::emit_error(ctx, "Can only throw objects");
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&non_throwable_label);
+        ctx.emitter.comment("-- release a non-Throwable object box before raising Error --");
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        super::lower_inst::exceptions::emit_error(
+            ctx, "Cannot throw objects that do not implement Throwable",
+        );
         ctx.emitter.label(&done_label);
         return Ok(());
     }
@@ -206,15 +252,154 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
 }
 
 /// Lowers an unconditional branch and copies any target block parameters.
+///
+/// No jump is emitted when the target block is laid out immediately after this one.
 fn lower_branch(
     ctx: &mut FunctionContext<'_>,
+    source: BlockId,
     target: BlockId,
     args: &[ValueId],
     context: &str,
 ) -> Result<()> {
     materialize_block_args(ctx, target, args, context)?;
+    if try_emit_rotated_loop_branch(ctx, source)? {
+        return Ok(());
+    }
     let label = ctx.block_label_for_id(target)?;
-    abi::emit_jump(ctx.emitter, &label);
+    if ctx.fallthrough_label().as_deref() != Some(label.as_str()) {
+        abi::emit_jump(ctx.emitter, &label);
+    }
+    Ok(())
+}
+
+/// Re-emits an eligible loop header's integer test at a latch and branches to the
+/// header's then/else targets, skipping the header jump on the back edge.
+fn try_emit_rotated_loop_branch(
+    ctx: &mut FunctionContext<'_>,
+    source: BlockId,
+) -> Result<bool> {
+    let Some(plan) = ctx.rotated_loop_branches.get(&source).copied() else {
+        return Ok(false);
+    };
+    let predicate = super::lower_inst::emit_fused_int_compare(ctx, plan.compare)?;
+    let then_label = ctx.block_label_for_id(plan.then_target)?;
+    let else_label = ctx.block_label_for_id(plan.else_target)?;
+    emit_conditional_jump(
+        ctx,
+        BranchCondition::IntegerFlags(predicate),
+        &then_label,
+    )?;
+    abi::emit_jump(ctx.emitter, &else_label);
+    Ok(true)
+}
+
+/// What a lowered `cond_br` tests to select its then-edge.
+#[derive(Clone, Copy)]
+enum BranchCondition {
+    /// The materialized boolean in the integer result register is nonzero.
+    ResultNonzero,
+    /// The materialized boolean in the integer result register is zero.
+    ResultZero,
+    /// The flags of a fused integer compare satisfy the predicate.
+    IntegerFlags(CmpPredicate),
+    /// The flags of a fused float compare satisfy the predicate or its exact logical inverse.
+    FloatFlags {
+        predicate: CmpPredicate,
+        inverted: bool,
+    },
+}
+
+impl BranchCondition {
+    /// Returns the condition that holds exactly when `self` does not.
+    fn inverted(self) -> Self {
+        match self {
+            Self::ResultNonzero => Self::ResultZero,
+            Self::ResultZero => Self::ResultNonzero,
+            Self::IntegerFlags(predicate) => {
+                Self::IntegerFlags(invert_int_predicate(predicate))
+            }
+            Self::FloatFlags { predicate, inverted } => {
+                Self::FloatFlags { predicate, inverted: !inverted }
+            }
+        }
+    }
+}
+
+/// Returns the integer predicate that is true exactly when `predicate` is false.
+///
+/// Only used for fused integer compares, where there is no unordered (NaN) outcome.
+fn invert_int_predicate(predicate: CmpPredicate) -> CmpPredicate {
+    use CmpPredicate::*;
+    match predicate {
+        Eq => Ne,
+        Ne => Eq,
+        Slt => Sge,
+        Sge => Slt,
+        Sle => Sgt,
+        Sgt => Sle,
+        Olt => Oge,
+        Oge => Olt,
+        Ole => Ogt,
+        Ogt => Ole,
+    }
+}
+
+/// Branches to `label` when `condition` holds and falls through otherwise.
+///
+/// AArch64 flag branches use the wide form (an inverted short skip over `b`), keeping the full
+/// unconditional range in very large functions; the machine peephole folds it back into one
+/// `b.cond` once the function is proven small enough.
+fn emit_conditional_jump(
+    ctx: &mut FunctionContext<'_>,
+    condition: BranchCondition,
+    label: &str,
+) -> Result<()> {
+    match condition {
+        BranchCondition::ResultNonzero => abi::emit_branch_if_int_result_nonzero(ctx.emitter, label),
+        BranchCondition::ResultZero => abi::emit_branch_if_int_result_zero(ctx.emitter, label),
+        BranchCondition::IntegerFlags(predicate) => {
+            let arch = ctx.emitter.target.arch;
+            match arch {
+                Arch::AArch64 => {
+                    let skip = super::lower_inst::int_condition_suffix(
+                        arch,
+                        invert_int_predicate(predicate),
+                    )?;
+                    ctx.emitter.instruction(&format!("b.{skip} 1f"));           // skip the far branch when the fused compare fails
+                    ctx.emitter.instruction(&format!("b {label}"));             // take the edge selected by the fused compare
+                    ctx.emitter.label("1");
+                }
+                Arch::X86_64 => {
+                    let taken = super::lower_inst::int_condition_suffix(arch, predicate)?;
+                    ctx.emitter.instruction(&format!("j{taken} {label}"));      // branch on the fused compare flags without a boolean
+                }
+            }
+        }
+        BranchCondition::FloatFlags { predicate, inverted } => {
+            let arch = ctx.emitter.target.arch;
+            ctx.emitter.comment("-- branch on fused float comparison --");
+            match arch {
+                Arch::AArch64 => {
+                    let skip = super::lower_inst::float_branch_condition_suffix(
+                        arch,
+                        predicate,
+                        !inverted,
+                    )?;
+                    ctx.emitter.instruction(&format!("b.{skip} 1f"));           // skip the far branch when the fused float condition fails
+                    ctx.emitter.instruction(&format!("b {label}"));             // take the edge selected by the fused float compare
+                    ctx.emitter.label("1");
+                }
+                Arch::X86_64 => {
+                    let taken = super::lower_inst::float_branch_condition_suffix(
+                        arch,
+                        predicate,
+                        inverted,
+                    )?;
+                    ctx.emitter.instruction(&format!("j{taken} {label}"));      // branch on float flags with unordered-aware polarity
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -345,6 +530,9 @@ fn materialize_block_args(
     if args.is_empty() {
         return Ok(());
     }
+    if super::parallel_moves::try_emit_scalar_block_moves(ctx, &params, args)? {
+        return Ok(());
+    }
     let mut arg_types = Vec::with_capacity(args.len());
     for arg in args {
         let ty = ctx.load_value_to_result(*arg)?;
@@ -416,7 +604,8 @@ fn pop_result_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
         | PhpType::Callable
         | PhpType::Object(_)
         | PhpType::Packed(_)
-        | PhpType::Pointer(_) => {
+        | PhpType::Pointer(_)
+        | PhpType::Narrow(_) => {
             abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         }
         PhpType::Float => {
@@ -472,13 +661,26 @@ mod tests {
         assert!(asm.contains("ud2"), "{asm}");
     }
 
-    /// Verifies unconditional branch arguments are copied into target block parameter slots.
+    /// Verifies unconditional scalar branch arguments reach the allocated parameter register.
     #[test]
     fn br_arguments_are_copied_to_target_params() {
-        let asm = generate_branch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
-
-        assert!(asm.contains("ldur x0, [x29, #-16]"), "{asm}");
-        assert!(asm.contains("stur x0, [x29, #-8]"), "{asm}");
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_branch_arg_asm(target);
+            let constant_into_home = match target.arch {
+                Arch::AArch64 => "mov x12, #7",
+                Arch::X86_64 => "mov rsi, 7",
+            };
+            // Only the destination parameter needs a home; the constant source is
+            // reconstructed directly in it, with no stack round trip for the edge copy.
+            assert_eq!(asm.matches(constant_into_home).count(), 1, "{name}: {asm}");
+        }
     }
 
     /// Verifies conditional branch arguments use per-edge copy stubs: both edges get their own
@@ -489,13 +691,21 @@ mod tests {
     /// shifts rather than when edge lowering regresses.
     #[test]
     fn cond_br_arguments_emit_edge_copy_stubs() {
-        let asm = generate_cond_branch_arg_main_asm(Target::new(Platform::Linux, Arch::X86_64));
-
-        let then_edge = find_numbered_label(&asm, "_eir_main_cond_then_args");
-        let else_edge = find_numbered_label(&asm, "_eir_main_cond_else_args");
-        assert_ne!(then_edge, else_edge, "{asm}");
-        assert!(branches_to(&asm, &then_edge), "{asm}");
-        assert!(branches_to(&asm, &else_edge), "{asm}");
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_cond_branch_arg_main_asm(target);
+            let then_edge = find_numbered_label(&asm, "_eir_main_cond_then_args");
+            let else_edge = find_numbered_label(&asm, "_eir_main_cond_else_args");
+            assert_ne!(then_edge, else_edge, "{name}: {asm}");
+            assert!(branches_to(&asm, &then_edge), "{name}: {asm}");
+            assert!(branches_to(&asm, &else_edge), "{name}: {asm}");
+        }
     }
 
     /// Verifies switch case and default arguments use per-edge copy stubs, with the case compare
@@ -504,13 +714,26 @@ mod tests {
     /// Structural for the same reason as `cond_br_arguments_emit_edge_copy_stubs()`.
     #[test]
     fn switch_arguments_emit_edge_copy_stubs() {
-        let asm = generate_switch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
-
-        let case_edge = find_numbered_label(&asm, "_eir_main_switch_case_args");
-        let default_edge = find_numbered_label(&asm, "_eir_main_switch_default_args");
-        assert_ne!(case_edge, default_edge, "{asm}");
-        assert!(branches_to(&asm, &case_edge), "{asm}");
-        assert!(branches_to(&asm, &default_edge), "{asm}");
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_switch_arg_main_asm(target);
+            let case_edge = find_numbered_label(&asm, "_eir_main_switch_case_args");
+            let default_edge = find_numbered_label(&asm, "_eir_main_switch_default_args");
+            assert_ne!(case_edge, default_edge, "{name}: {asm}");
+            assert!(branches_to(&asm, &case_edge), "{name}: {asm}");
+            // The default stub directly follows the last case compare, so it is entered by
+            // fallthrough once the redundant jump to it is removed.
+            assert!(
+                branches_to(&asm, &default_edge) || asm.contains(&format!("{case_edge}\n{default_edge}:")),
+                "{name}: {asm}"
+            );
+        }
     }
 
     /// Verifies an inliner-shaped Mixed phi promotes only its borrowed incoming edge.
@@ -844,11 +1067,10 @@ mod tests {
             .expect("storage-backed return module should lower")
     }
 
-    /// Builds a minimal `br` fixture with one integer block argument.
-    fn generate_branch_arg_main_asm(target: Target) -> String {
+    /// Builds a `br` fixture whose returned integer block parameter needs a live register home.
+    fn generate_branch_arg_asm(target: Target) -> String {
         let mut module = Module::new(target);
-        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
-        function.flags.is_main = true;
+        let mut function = Function::new("branch_arg_fixture".to_string(), IrType::I64, PhpType::Int);
         {
             let mut builder = Builder::new(&mut function);
             let entry = builder.create_named_block("entry", Vec::new());
@@ -861,9 +1083,21 @@ mod tests {
                 args: vec![value],
             });
             builder.position_at_end(body);
-            builder.terminate(Terminator::Unreachable);
+            let parameter = builder.block_param(body, 0);
+            builder.terminate(Terminator::Return { value: Some(parameter) });
         }
         module.add_function(function);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
 
         generate_user_asm_from_ir(&module, false, false).expect("branch-arg module should lower")
     }

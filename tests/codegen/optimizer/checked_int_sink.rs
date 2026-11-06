@@ -80,9 +80,13 @@ buffer_free($values);
         "three indices plus the loaded-value increment start boxed"
     );
     assert_eq!(optimized.matches("= ichecked_add ").count(), 0);
+    // The `$argc` C-int range seed lets the shared index arithmetic use a plain
+    // `iadd`; the loaded-value increment stays checked. CSE still shares one
+    // index expression, so exactly two scalar adds remain.
+    let scalar_adds = optimized.matches("= iadd ").count()
+        + optimized.matches("= ichecked_add_to_int ").count();
     assert_eq!(
-        optimized.matches("= ichecked_add_to_int ").count(),
-        2,
+        scalar_adds, 2,
         "CSE shares one index expression while the value increment remains distinct"
     );
     assert_eq!(compile_and_run(source), "1");
@@ -114,7 +118,12 @@ buffer_free($values);
 
     assert!(unoptimized.contains("while.body:"));
     assert!(unoptimized.contains("= ichecked_add "));
-    assert!(preheader.contains("= ichecked_add_to_int "));
+    // The `$argc` C-int range seed lets integer range analysis replace the
+    // checked add with a plain `iadd`; the LICM provenance is the invariant.
+    assert!(
+        preheader.contains("= iadd ") || preheader.contains("= ichecked_add_to_int "),
+        "{preheader}"
+    );
     assert!(preheader.contains("origin: licm"));
     // The loop counter's own `$i++` is scalar as well, so an `ichecked_add_to_int` in the
     // body is expected and says nothing about hoisting. What must not be there is the
@@ -173,4 +182,41 @@ buffer_free($values);
         "expected a clean heap, got: {}",
         output.stderr
     );
+}
+
+/// A counter that overflows in a RAW slot stops, instead of printing a number php never produces.
+///
+/// A counter that can exceed the integer range keeps its promoted float on later iterations.
+/// Both IR modes preserve PHP's tags instead of truncating, wrapping or terminating the loop.
+#[test]
+fn test_for_counter_overflow_promotes_to_float() {
+    let source = "<?php for ($i = PHP_INT_MAX - 1, $n = 0; $n < 3; $i++, $n++) { var_dump($i); }";
+    let expected = "int(9223372036854775806)\nint(9223372036854775807)\nfloat(9.223372036854776E+18)\n";
+    let dir = make_cli_test_dir("elephc_counter_float_promotion");
+    let path = dir.join("main.php"); fs::write(&path, source).unwrap();
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        let compiled = elephc_cli_command(&dir).args([mode, "--heap-debug"]).arg(&path).output().unwrap();
+        assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+        let output = run_binary(&path.with_extension(""), &dir);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"));
+        if std::env::var_os("ELEPHC_PHP_CHECK").is_some() {
+            let php = Command::new("php").arg("-n").arg(&path).output().unwrap();
+            assert!(php.status.success()); assert_eq!(php.stdout, output.stdout);
+        }
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// An explicit `(int)` cast keeps php's own conversion, which is the OTHER reason the sink
+/// narrows a value — and the one where wrapping is correct.
+///
+/// `(int) (PHP_INT_MAX + 1)` is `-9223372036854775808` in php-src (with a warning elephc does not
+/// yet emit), so the overflow path must convert here rather than stop. The two justifications are
+/// told apart by what the sink accepted: a cast use, or a store into an int slot.
+#[test]
+fn test_explicit_int_cast_of_an_overflow_still_converts() {
+    let out = compile_and_run("<?php int $one = $argc; echo (int) (PHP_INT_MAX + $one);");
+    assert_eq!(out, "-9223372036854775808");
 }

@@ -1,0 +1,41 @@
+name: Notarize macOS binary
+description: Sign a standalone executable with Developer ID and require Apple notarization before packaging.
+
+inputs:
+  binary:
+    description: Path to the stripped executable to sign and notarize
+    required: true
+  certificate-p12:
+    description: Base64-encoded Developer ID Application certificate and private key
+    required: true
+  certificate-password:
+    description: Password for the PKCS12 certificate
+    required: true
+  signing-identity:
+    description: Developer ID Application signing identity
+    required: true
+  apple-id:
+    description: Apple ID used for notarization
+    required: true
+  team-id:
+    description: Apple Developer team ID
+    required: true
+  app-password:
+    description: App-specific Apple ID password for notarization
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Sign and notarize
+      shell: bash
+      env:
+        NOTARIZE_BINARY: ${{ inputs.binary }}
+        APPLE_CERTIFICATE_P12: ${{ inputs.certificate-p12 }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ inputs.certificate-password }}
+        APPLE_SIGNING_IDENTITY: ${{ inputs.signing-identity }}
+        APPLE_ID: ${{ inputs.apple-id }}
+        APPLE_TEAM_ID: ${{ inputs.team-id }}
+        APPLE_APP_PASSWORD: ${{ inputs.app-password }}
+      # Keep the runner's step PID so cancellation reaches the cleanup traps.
+      run: exec bash "$GITHUB_ACTION_PATH/notarize.sh"

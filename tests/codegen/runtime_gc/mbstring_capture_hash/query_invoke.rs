@@ -7,10 +7,9 @@
 //! Key details:
 //! - A small C embedding host supplies live configuration and optional SAPI filtering.
 //! - Only the fixture entry is replaced; PHP coercion, initialization, parsing, and cleanup stay real.
-//! - These tests do not claim public INI or mb_parse_str lvalue binding support.
+//! - The host fixture isolates shared query execution beneath the public INI and lvalue adapters.
 
 use super::*;
-use std::process::Command;
 
 /// Coerces Stringable input before destructive output initialization and completes writes after throws.
 #[test]
@@ -167,16 +166,9 @@ fn run(source: &str, expected: &str, defines: &[&str], observe: bool) {
     let jump = if target().arch == Arch::AArch64 { "b" } else { "jmp" };
     let mut patched = replace_function(&assembly, "query_test_parse", &format!("{jump} _query_invoke_fixture\n"));
     if observe { patched = replace_function(&patched, "query_test_observe", &format!("{jump} _query_invoke_observe\n")); }
-    let provider = directory.join("provider.c");
-    let provider_asm = directory.join("provider.s");
-    std::fs::write(&provider, include_str!("query_invoke/provider.c")).unwrap();
-    let mut compiler = Command::new("cc");
-    compiler.args(["-S", "-O2", "-Wall", "-Wextra", "-Werror"]);
-    if target().arch == Arch::X86_64 { compiler.arg("-masm=intel"); }
-    let built = compiler.args(defines).arg(&provider).arg("-o").arg(&provider_asm).output().unwrap();
-    assert!(built.status.success(), "{}: {}", directory.display(), String::from_utf8_lossy(&built.stderr));
+    let provider_asm = compile_c_fixture_asm(&directory, "provider", include_str!("query_invoke/provider.c"), defines);
     patched.push_str(&format!("\n.text\n{}\n", status_shim()));
-    append_c_provider_asm(&mut patched, &std::fs::read_to_string(provider_asm).unwrap());
+    append_c_fixture_asm(&mut patched, &provider_asm);
     std::fs::write(directory.join("caller.s"), &patched).unwrap();
     let output = assemble_and_run_capture(&patched, &runtime_obj_for_asm(&runtime), &directory,
         &libraries, &default_link_paths(), &[]);

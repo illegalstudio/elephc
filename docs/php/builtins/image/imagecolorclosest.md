@@ -1,8 +1,6 @@
 ---
 title: "imagecolorclosest()"
 description: "Returns the palette index closest to the requested color."
-sidebar:
-  order: 467
 ---
 
 ## imagecolorclosest()
@@ -23,8 +21,9 @@ Returns the palette index closest to the requested color.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

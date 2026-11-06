@@ -26,7 +26,7 @@ use crate::types::PhpType;
 /// Arguments are pre-inferred by the registry common path before this hook runs.
 pub(crate) fn check_class_like_exists(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if !matches!(cx.args[0].kind, ExprKind::StringLiteral(_)) {
-        return Err(CompileError::new(
+        return Err(CompileError::aot_literal_required(
             cx.span,
             &format!("{}() first argument must be a string literal in AOT mode", cx.name),
         ));
@@ -52,7 +52,7 @@ pub(crate) fn check_class_relation(cx: &mut BuiltinCheckCtx) -> Result<PhpType, 
         && !matches!(cx.args[0].kind, ExprKind::StringLiteral(_))
         && !dynamic_eval_target
     {
-        return Err(CompileError::new(
+        return Err(CompileError::aot_literal_required(
             cx.span,
             &format!("{}() first argument must be an object or string literal in AOT mode", cx.name),
         ));
@@ -63,7 +63,7 @@ pub(crate) fn check_class_relation(cx: &mut BuiltinCheckCtx) -> Result<PhpType, 
             autoload_arg.kind,
             ExprKind::BoolLiteral(_) | ExprKind::IntLiteral(_)
         ) {
-            return Err(CompileError::new(
+            return Err(CompileError::aot_literal_required(
                 cx.span,
                 &format!("{}() autoload argument must be a literal bool or int in AOT mode", cx.name),
             ));

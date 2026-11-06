@@ -1,8 +1,6 @@
 ---
 title: "serialize()"
 description: "Generates a storable representation of a value."
-sidebar:
-  order: 685
 ---
 
 ## serialize()
@@ -20,8 +18,9 @@ Generates a storable representation of a value.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "curl_error()"
 description: "Returns a string describing the last cURL error."
-sidebar:
-  order: 697
 ---
 
 ## curl_error()
@@ -20,8 +18,9 @@ Returns a string describing the last cURL error.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_error.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_error.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

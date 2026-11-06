@@ -296,7 +296,7 @@ echo str_repeat(times: mark_i("T", 2), string: mark_s("S", "ab"));
         (
             "named_extern_reordered",
             r#"<?php
-extern function strcmp(string $left, string $right): int;
+extern function strcmp(string $left, string $right): i32;
 echo strcmp(right: "ab", left: "aa") < 0 ? "lt" : "bad";
 "#,
             "lt",
@@ -1443,7 +1443,7 @@ echo json_validate(123) ? "I" : "B";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("json_validation_builtins", source),
-        "JDFok:T:4:Syntax error:0:C:M:I"
+        "JDFok:T:4:Syntax error near location 1:1:0:C:M:I"
     );
 }
 
@@ -1480,7 +1480,7 @@ echo gettype(json_decode("{}", null, 512, JSON_OBJECT_AS_ARRAY));
 "#;
     assert_eq!(
         compile_and_run_ir_backend("json_decode_builtins", source),
-        "JADFarray|array:Ada:2|object:Ada|42|4:Syntax error near location 1:9|array"
+        "JADFarray|array:Ada:2|object:Ada|42|4:Syntax error near location 1:1|array"
     );
 }
 
@@ -1757,8 +1757,8 @@ echo $map["f"] * 2;
 #[test]
 fn ir_backend_handles_scalar_extern_calls() {
     let source = r#"<?php
-extern function abs(int $n): int;
-extern function getpid(): int;
+extern function abs(i32 $n): i32;
+extern function getpid(): i32;
 echo abs(-42);
 echo ":";
 echo getpid() > 0 ? "pid" : "bad";
@@ -1773,8 +1773,8 @@ echo getpid() > 0 ? "pid" : "bad";
 #[test]
 fn ir_backend_handles_string_extern_calls() {
     let source = r#"<?php
-extern function atoi(string $s): int;
-extern function strcmp(string $left, string $right): int;
+extern function atoi(string $s): i32;
+extern function strcmp(string $left, string $right): i32;
 extern function getenv(string $name): string;
 echo atoi("99");
 echo ":";
@@ -4282,8 +4282,8 @@ fn ir_backend_handles_basic_indexed_arrays() {
         ("array_set_int", "<?php $a = [10, 20]; $a[1] = 99; echo $a[1];", "99"),
         ("array_set_float", "<?php $a = [1.5, 2.5]; $a[0] = 3.5; echo $a[0];", "3.5"),
         ("array_set_string", "<?php $a = [\"a\", \"b\"]; $a[1] = \"z\"; echo $a[1];", "z"),
-        ("array_set_extends_int", "<?php $a = [1]; $a[3] = 9; echo count($a); echo \":\"; echo $a[0];", "4:1"),
-        ("array_set_extends_string", "<?php $a = [\"a\"]; $a[2] = \"z\"; echo count($a); echo \":\"; echo $a[2];", "3:z"),
+        ("array_set_extends_int", "<?php $a = [1]; $a[3] = 9; echo count($a); echo \":\"; echo $a[0];", "2:1"),
+        ("array_set_extends_string", "<?php $a = [\"a\"]; $a[2] = \"z\"; echo count($a); echo \":\"; echo $a[2];", "2:z"),
         ("array_set_empty_sparse_count", "<?php $a = []; $a[2] = 7; echo count($a);", "1"),
         (
             "array_literal_pushes_nullable_int_reads",
@@ -4386,7 +4386,7 @@ emit_fields(["name" => "Ada", "email" => "ada@example.test"]);
     );
 }
 
-/// Verifies indexed writes into Mixed arrays box concrete values before storage.
+/// Verifies Mixed writes box values while sparse integer keys do not materialize null gaps.
 #[test]
 fn ir_backend_handles_mixed_indexed_array_set() {
     let source = r#"<?php
@@ -4408,7 +4408,7 @@ echo is_null($a[5]) ? "N" : "bad";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("mixed_indexed_array_set", source),
-        "6:7:z:ok:G:N"
+        "4:7:z:ok:G:N"
     );
 }
 

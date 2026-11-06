@@ -1,8 +1,6 @@
 ---
 title: "imagecreate()"
 description: "Creates an empty palette image of the given size."
-sidebar:
-  order: 486
 ---
 
 ## imagecreate()
@@ -21,8 +19,9 @@ Creates an empty palette image of the given size.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

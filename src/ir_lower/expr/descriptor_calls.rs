@@ -262,7 +262,7 @@ pub(super) fn lower_first_class_callable_expr_call(
             guard_owned_descriptor_callback(ctx, callable, expr.span);
             let result_type = signature
                 .as_ref()
-                .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+                .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
                 .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
             let callable = root_descriptor_callback(ctx, callable, result_type, expr.span);
             let arg_container =

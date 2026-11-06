@@ -1,8 +1,6 @@
 ---
 title: "curl_version()"
 description: "Gets cURL version information."
-sidebar:
-  order: 727
 ---
 
 ## curl_version()
@@ -19,8 +17,9 @@ Gets cURL version information.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_version.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_version.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

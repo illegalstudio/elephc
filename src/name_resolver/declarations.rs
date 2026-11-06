@@ -7,18 +7,102 @@
 //!
 //! Key details:
 //! - Declaration names become canonical before type checking and codegen symbol collection.
+//! - Generic parameter names remain bare in their declaration and method scopes.
+//! - Generic bounds and defaults still use ordinary namespace/import resolution.
+//! - Extern declarations resolve the class each C `ptr<T>` type names (`resolve_ctype`), so a
+//!   namespaced C struct is found by its field accesses; extern global names stay C symbols.
+
+mod type_params;
 
 use crate::errors::CompileError;
+
+use super::expressions::with_constant_expression;
 use crate::names::{canonical_name_for_decl, php_symbol_key};
 use crate::parser::ast::{
-    Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, Stmt, StmtKind,
-    TraitAdaptation, TraitUse,
+    Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, ExternField, ExternParam,
+    GenericDecl, Stmt, StmtKind, TraitAdaptation, TraitUse, TypeParam,
 };
 
 use super::expressions::resolve_expr;
-use super::names::{resolve_type_expr, resolved_class_name};
+use super::names::{
+    resolve_ctype, resolve_type_expr, resolve_type_expr_with_type_params, resolved_class_name,
+};
 use super::statements::{resolve_params, resolve_stmt_list};
 use super::{resolved_name, Imports, Symbols};
+
+/// Returns the type parameters a class, interface or trait declares, or an empty slice.
+fn declared_type_params(generics: &Option<Box<GenericDecl>>) -> &[TypeParam] {
+    generics
+        .as_ref()
+        .map(|generics| generics.type_params.as_slice())
+        .unwrap_or(&[])
+}
+
+/// Resolves every name inside a declaration's generic half.
+///
+/// A bound (`T : Entity`), a default (`K = Status`) and an inherited type argument
+/// (`implements Repository<User>`) all name classes, and all of them are compared against the
+/// canonical class table later. Leaving any of them unqualified would make
+/// `implements Repository<User>` inside a namespace instantiate a DIFFERENT `Repository` from
+/// the one the file declares.
+///
+/// The type parameter NAMES are carried through untouched: `T` resolves against its own
+/// declaration's list, never against the namespace.
+/// Resolves the names a type parameter list mentions, leaving the list's shape alone.
+///
+/// A bound and a default are NAMES: `<T : Entity>` has to find `Entity` through the same
+/// namespace and imports as any other class mention, or the bound names a class that does not
+/// exist. The variance marker is carried verbatim — resolution says nothing about how two
+/// instantiations relate.
+fn resolve_type_params(
+    type_params: &[TypeParam],
+    namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> Vec<TypeParam> {
+    type_params
+        .iter()
+        .map(|param| TypeParam {
+            name: param.name.clone(),
+            bound: param
+                .bound
+                .as_ref()
+                .map(|ty| resolve_type_expr_with_type_params(ty, namespace, imports, symbols, type_params)),
+            default: param
+                .default
+                .as_ref()
+                .map(|ty| resolve_type_expr_with_type_params(ty, namespace, imports, symbols, type_params)),
+            variance: param.variance,
+        })
+        .collect()
+}
+
+/// Resolves a generic declaration's bounds, defaults and inherited type arguments.
+fn resolve_generic_decl(
+    generics: &Option<Box<GenericDecl>>,
+    namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> Option<Box<GenericDecl>> {
+    let generics = generics.as_ref()?;
+    Some(Box::new(GenericDecl {
+        type_params: resolve_type_params(&generics.type_params, namespace, imports, symbols),
+        extends_args: generics
+            .extends_args
+            .iter()
+            .map(|ty| resolve_type_expr(ty, namespace, imports, symbols))
+            .collect(),
+        interface_args: generics
+            .interface_args
+            .iter()
+            .map(|args| {
+                args.iter()
+                    .map(|ty| resolve_type_expr(ty, namespace, imports, symbols))
+                    .collect()
+            })
+            .collect(),
+    }))
+}
 
 /// Resolves names within top-level declaration statements.
 ///
@@ -39,6 +123,7 @@ pub(super) fn resolve_decl_stmt(
         StmtKind::FunctionDecl {
             by_ref_return,
             name,
+            type_params,
             params,
             param_attributes,
             variadic,
@@ -48,10 +133,12 @@ pub(super) fn resolve_decl_stmt(
             body,
         } => {
             let body = resolve_stmt_list(body, namespace, imports, symbols)?;
-            Ok(Some(Stmt::with_attributes(
+            let resolved = Stmt::with_attributes(
                 StmtKind::FunctionDecl {
                     by_ref_return: *by_ref_return,
                     name: canonical_name_for_decl(namespace, name),
+                    // Preserve parameter names while resolving their bounds and default types.
+                    type_params: resolve_type_params(type_params, namespace, imports, symbols),
                     params: resolve_params(params, namespace, imports, symbols),
                     param_attributes: param_attributes
                         .iter()
@@ -67,9 +154,17 @@ pub(super) fn resolve_decl_stmt(
                 },
                 stmt.span,
                 stmt_attributes,
+            );
+            Ok(Some(type_params::restore(
+                resolved,
+                type_params,
+                namespace,
+                imports,
+                symbols,
             )))
         }
         StmtKind::ClassDecl {
+            generics,
             name,
             extends,
             implements,
@@ -81,13 +176,17 @@ pub(super) fn resolve_decl_stmt(
             methods,
             constants,
         } => {
-            let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
+            let (resolved_properties, resolved_methods) = super::promoted_attributes::split(
+                resolve_properties(properties, namespace, imports, symbols),
+                resolve_methods(methods, namespace, imports, symbols)?,
+            );
             let trait_uses = trait_uses
                 .iter()
                 .map(|trait_use| resolve_trait_use(trait_use, namespace, imports, symbols))
                 .collect::<Result<Vec<_>, CompileError>>()?;
-            Ok(Some(Stmt::with_attributes(
+            let resolved = Stmt::with_attributes(
                 StmtKind::ClassDecl {
+                    generics: resolve_generic_decl(generics, namespace, imports, symbols),
                     name: canonical_name_for_decl(namespace, name),
                     extends: extends.as_ref().map(|name| {
                         resolved_name(resolved_class_name(name, namespace, imports, symbols))
@@ -102,16 +201,24 @@ pub(super) fn resolve_decl_stmt(
                     is_final: *is_final,
                     is_readonly_class: *is_readonly_class,
                     trait_uses,
-                    properties: resolve_properties(properties, namespace, imports, symbols),
+                    properties: resolved_properties,
                     methods: resolved_methods,
                     constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },
                 stmt.span,
                 stmt_attributes,
+            );
+            Ok(Some(type_params::restore(
+                resolved,
+                declared_type_params(generics),
+                namespace,
+                imports,
+                symbols,
             )))
         }
         StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             cases,
             implements,
@@ -130,7 +237,11 @@ pub(super) fn resolve_decl_stmt(
                     value: case
                         .value
                         .as_ref()
-                        .map(|expr| resolve_expr(expr, namespace, imports, symbols)),
+                        .map(|expr| {
+                            with_constant_expression(|| {
+                                resolve_expr(expr, namespace, imports, symbols)
+                            })
+                        }),
                     span: case.span,
                     attributes: resolve_attribute_groups(
                         &case.attributes,
@@ -141,9 +252,13 @@ pub(super) fn resolve_decl_stmt(
                 })
                 .collect();
             let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
-            Ok(Some(Stmt::with_attributes(
+            let resolved = Stmt::with_attributes(
                 StmtKind::EnumDecl {
                     name: canonical_name_for_decl(namespace, name),
+                    // The interface arguments NAME classes, and they resolve through the same
+                    // namespace and imports as the interface itself — `implements Labelled<User>`
+                    // inside a namespace means that namespace's `User`.
+                    generics: resolve_generic_decl(generics, namespace, imports, symbols),
                     backing_type: backing_type.clone(),
                     cases: resolved_cases,
                     implements: implements
@@ -158,7 +273,8 @@ pub(super) fn resolve_decl_stmt(
                 },
                 stmt.span,
                 stmt_attributes,
-            )))
+            );
+            Ok(Some(type_params::restore(resolved, &[], namespace, imports, symbols)))
         }
         StmtKind::PackedClassDecl { name, fields } => {
             let resolved_fields = fields
@@ -179,6 +295,7 @@ pub(super) fn resolve_decl_stmt(
             )))
         }
         StmtKind::InterfaceDecl {
+            generics,
             name,
             extends,
             properties,
@@ -186,8 +303,9 @@ pub(super) fn resolve_decl_stmt(
             constants,
         } => {
             let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
-            Ok(Some(Stmt::with_attributes(
+            let resolved = Stmt::with_attributes(
                 StmtKind::InterfaceDecl {
+                    generics: resolve_generic_decl(generics, namespace, imports, symbols),
                     name: canonical_name_for_decl(namespace, name),
                     extends: extends
                         .iter()
@@ -201,30 +319,49 @@ pub(super) fn resolve_decl_stmt(
                 },
                 stmt.span,
                 stmt_attributes,
+            );
+            Ok(Some(type_params::restore(
+                resolved,
+                declared_type_params(generics),
+                namespace,
+                imports,
+                symbols,
             )))
         }
         StmtKind::TraitDecl {
             name,
+            generics,
             trait_uses,
             properties,
             methods,
             constants,
         } => {
-            let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
+            let (resolved_properties, resolved_methods) = super::promoted_attributes::split(
+                resolve_properties(properties, namespace, imports, symbols),
+                resolve_methods(methods, namespace, imports, symbols)?,
+            );
             let trait_uses = trait_uses
                 .iter()
                 .map(|trait_use| resolve_trait_use(trait_use, namespace, imports, symbols))
                 .collect::<Result<Vec<_>, CompileError>>()?;
-            Ok(Some(Stmt::with_attributes(
+            let resolved = Stmt::with_attributes(
                 StmtKind::TraitDecl {
                     name: canonical_name_for_decl(namespace, name),
+                    generics: resolve_generic_decl(generics, namespace, imports, symbols),
                     trait_uses,
-                    properties: resolve_properties(properties, namespace, imports, symbols),
+                    properties: resolved_properties,
                     methods: resolved_methods,
                     constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },
                 stmt.span,
                 stmt_attributes,
+            );
+            Ok(Some(type_params::restore(
+                resolved,
+                declared_type_params(generics),
+                namespace,
+                imports,
+                symbols,
             )))
         }
         StmtKind::ExternFunctionDecl {
@@ -235,8 +372,14 @@ pub(super) fn resolve_decl_stmt(
         } => Ok(Some(Stmt::with_attributes(
             StmtKind::ExternFunctionDecl {
                 name: canonical_name_for_decl(namespace, name),
-                params: params.clone(),
-                return_type: return_type.clone(),
+                params: params
+                    .iter()
+                    .map(|param| ExternParam {
+                        name: param.name.clone(),
+                        c_type: resolve_ctype(&param.c_type, namespace, imports, symbols),
+                    })
+                    .collect(),
+                return_type: resolve_ctype(return_type, namespace, imports, symbols),
                 library: library.clone(),
             },
             stmt.span,
@@ -253,7 +396,22 @@ pub(super) fn resolve_decl_stmt(
         StmtKind::ExternClassDecl { name, fields } => Ok(Some(Stmt::with_attributes(
             StmtKind::ExternClassDecl {
                 name: canonical_name_for_decl(namespace, name),
-                fields: fields.clone(),
+                fields: fields
+                    .iter()
+                    .map(|field| ExternField {
+                        name: field.name.clone(),
+                        c_type: resolve_ctype(&field.c_type, namespace, imports, symbols),
+                    })
+                    .collect(),
+            },
+            stmt.span,
+            stmt_attributes,
+        ))),
+        // An extern global keeps its C symbol name; only a `ptr<T>` type in it names a class.
+        StmtKind::ExternGlobalDecl { name, c_type } => Ok(Some(Stmt::with_attributes(
+            StmtKind::ExternGlobalDecl {
+                name: name.clone(),
+                c_type: resolve_ctype(c_type, namespace, imports, symbols),
             },
             stmt.span,
             stmt_attributes,
@@ -261,7 +419,9 @@ pub(super) fn resolve_decl_stmt(
         StmtKind::ConstDecl { name, value } => Ok(Some(Stmt::with_attributes(
             StmtKind::ConstDecl {
                 name: canonical_name_for_decl(namespace, name),
-                value: resolve_expr(value, namespace, imports, symbols),
+                value: with_constant_expression(|| {
+                    resolve_expr(value, namespace, imports, symbols)
+                }),
             },
             stmt.span,
             stmt_attributes,
@@ -294,7 +454,11 @@ fn resolve_attribute_groups(
                     args: attr
                         .args
                         .iter()
-                        .map(|arg| resolve_expr(arg, namespace, imports, symbols))
+                        .map(|arg| {
+                            with_constant_expression(|| {
+                                resolve_expr(arg, namespace, imports, symbols)
+                            })
+                        })
                         .collect(),
                     span: attr.span,
                 })
@@ -317,7 +481,15 @@ fn resolve_methods(
         .map(|method| {
             let body = resolve_stmt_list(&method.body, namespace, imports, symbols)?;
             Ok(ClassMethod {
+                // `..method.clone()` below would carry these verbatim, but a bound and a default
+                // are NAMES: `<U : Entity>` has to resolve `Entity` the same way the class-level
+                // type parameters do, or the bound names a class that does not exist.
+                type_params: resolve_type_params(&method.type_params, namespace, imports, symbols),
                 params: resolve_params(&method.params, namespace, imports, symbols),
+                variadic_type: method
+                    .variadic_type
+                    .as_ref()
+                    .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
                 param_attributes: method
                     .param_attributes
                     .iter()
@@ -355,7 +527,9 @@ fn resolve_class_consts(
                 .type_expr
                 .as_ref()
                 .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
-            value: resolve_expr(&constant.value, namespace, imports, symbols),
+            value: with_constant_expression(|| {
+                resolve_expr(&constant.value, namespace, imports, symbols)
+            }),
             attributes: resolve_attribute_groups(&constant.attributes, namespace, imports, symbols),
             ..constant.clone()
         })
@@ -377,10 +551,11 @@ fn resolve_properties(
                 .type_expr
                 .as_ref()
                 .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
-            default: property
-                .default
-                .as_ref()
-                .map(|expr| resolve_expr(expr, namespace, imports, symbols)),
+            default: property.default.as_ref().map(|expr| {
+                with_constant_expression(|| {
+                    resolve_expr(expr, namespace, imports, symbols)
+                })
+            }),
             attributes: resolve_attribute_groups(&property.attributes, namespace, imports, symbols),
             ..property.clone()
         })
@@ -408,6 +583,17 @@ pub(super) fn resolve_trait_use(
                     imports,
                     symbols,
                 ))
+            })
+            .collect(),
+        // The arguments NAME classes (`use Holder<User>;`) and resolve through the same
+        // namespace and imports as the trait itself.
+        type_args: trait_use
+            .type_args
+            .iter()
+            .map(|args| {
+                args.iter()
+                    .map(|ty| resolve_type_expr(ty, current_namespace, imports, symbols))
+                    .collect()
             })
             .collect(),
         adaptations: trait_use

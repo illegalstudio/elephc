@@ -7,8 +7,10 @@
 //! - `crate::codegen_support::runtime::data::fixed` for the `emit_strtotime_data()` lookup tables.
 //!
 //! Key details:
-//! - Public label `__rt_strtotime`: `x1=ptr, x2=len, x0=baseTimestamp, x3=has_base → x0=timestamp`; `i64::MIN` sentinel on parse failure (boxed to `false` by the builtin).
-//!   When `x3 != 0` the relative/keyword/time-only strategies base on `x0` (via the `_strtotime_clock` global) instead of the current time; this is how strtotime's 2nd argument and `DateTime::modify()` work. (x86_64: `rdi=ptr, rsi=len, rdx=base, rcx=has_base → rax`.)
+//! - Public label `__rt_strtotime`: `x1=ptr, x2=len, x0=baseTimestamp, x3=has_base → x0=timestamp, x1=success flag`.
+//!   The flag is `1` on success and `0` on a parse failure, which also leaves the `i64::MIN` sentinel in `x0`. Callers
+//!   decide on the flag, never on the value: `i64::MIN` is itself a timestamp PHP returns (`@-9223372036854775808`).
+//!   When `x3 != 0` the relative/keyword/time-only strategies base on `x0` (via the `_strtotime_clock` global) instead of the current time; this is how strtotime's 2nd argument and `DateTime::modify()` work. (x86_64: `rdi=ptr, rsi=len, rdx=base, rcx=has_base → rax, rdx=success flag`.)
 //! - 128-byte stack frame layout (ARM64; x86_64 mirrors numerically via `[rbp - 128 + N]`):
 //!     `[sp+ 0..47]` struct tm scratch     —   9 ints for libc mktime
 //!     `[sp+48..55]` saved trimmed ptr
@@ -34,6 +36,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
 pub(crate) use data::emit_strtotime_data;
+pub(crate) use iso_date::ISO_PAD_BUF_LEN as STRTOTIME_ISO_PAD_BUF_LEN;
 
 /// Emits the `__rt_strtotime` runtime entry point, dispatcher, and all strategy emitters
 /// (ISO date, time-only, offsets, keywords, weekdays, shared helpers) for the current target.
@@ -147,11 +150,11 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldrb w11, [sp, #65]");                                 // lc16[1] (second char)
     emitter.instruction("cmp w11, #47");                                        // lc16[1] == '/' (M/D/... slash date) ?
     emitter.instruction("b.eq __rt_strtotime_slash_entry");                     // → slash-date strategy
-    emitter.instruction("cmp x2, #10");                                         // ISO date needs ≥ 10 chars
+    emitter.instruction("cmp x2, #8");                                          // ISO date needs ≥ 8 chars (YYYY-M-D)
     emitter.instruction("b.lt __rt_strtotime_textual_entry");                   // too short for ISO → try textual (D Month Y), else offsets
     emitter.instruction("ldrb w11, [sp, #68]");                                 // lc16[4] (offset 4 of date)
     emitter.instruction("cmp w11, #45");                                        // '-' ?
-    emitter.instruction("b.eq __rt_strtotime_iso_entry");                       // YYYY-MM-DD → ISO
+    emitter.instruction("b.eq __rt_strtotime_iso_entry");                       // YYYY-M(M)-D(D) → ISO
     emitter.instruction("b __rt_strtotime_textual_entry");                      // default for digit-starting: try textual (D Month Y), else offsets
 
     emitter.label("__rt_strtotime_classify_alpha");
@@ -286,8 +289,10 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
 
 /// Emits the shared ARM64 epilogue: `__rt_strtotime_fail` and `__rt_strtotime_ret`.
 ///
-/// `__rt_strtotime_fail` sets `x0 = i64::MIN` (the parse-failure sentinel) then falls through to `__rt_strtotime_ret`,
-/// which restores `x29/x30`, deallocates the 128-byte frame, and returns.
+/// `__rt_strtotime_fail` sets `x0 = i64::MIN` (the parse-failure sentinel) and the success flag
+/// `x1 = 0`; `__rt_strtotime_ret` keeps the parsed timestamp in `x0` and sets `x1 = 1`. Both then
+/// restore `x29/x30`, deallocate the 128-byte frame, and return. The flag is what tells a failure
+/// apart from a genuine `i64::MIN` timestamp.
 ///
 /// Strategy emitters branch here instead of emitting their own epilogue.
 fn emit_epilogue_arm64(emitter: &mut Emitter) {
@@ -295,8 +300,12 @@ fn emit_epilogue_arm64(emitter: &mut Emitter) {
     emitter.comment("--- strtotime: shared epilogue ---");
     emitter.label("__rt_strtotime_fail");
     emitter.instruction("movz x0, #0x8000, lsl #48");                           // failure sentinel = i64::MIN (-1 is a valid pre-epoch timestamp)
+    emitter.instruction("mov x1, #0");                                          // success flag = 0: the input did not parse
+    emitter.instruction("b __rt_strtotime_epilogue");                           // share the frame teardown
 
     emitter.label("__rt_strtotime_ret");
+    emitter.instruction("mov x1, #1");                                          // success flag = 1: x0 holds the parsed timestamp
+    emitter.label("__rt_strtotime_epilogue");
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
     emitter.instruction("add sp, sp, #128");                                    // deallocate dispatcher frame
     emitter.instruction("ret");                                                 // return to caller
@@ -372,11 +381,11 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx r8d, BYTE PTR [rbp - 63]");                      // lc16[1]
     emitter.instruction("cmp r8b, 47");                                         // lc16[1] == '/' (M/D/... slash date) ?
     emitter.instruction("je __rt_strtotime_slash_entry_linux_x86_64");          // → slash-date strategy
-    emitter.instruction("cmp rsi, 10");                                         // ISO date needs ≥ 10 chars
+    emitter.instruction("cmp rsi, 8");                                          // ISO date needs ≥ 8 chars (YYYY-M-D)
     emitter.instruction("jl __rt_strtotime_textual_entry_linux_x86_64");        // too short for ISO → try textual (D Month Y), else offsets
     emitter.instruction("movzx r8d, BYTE PTR [rbp - 60]");                      // lc16[4] (offset 4 of date)
     emitter.instruction("cmp r8b, 45");                                         // '-' ?
-    emitter.instruction("je __rt_strtotime_iso_entry_linux_x86_64");            // YYYY-MM-DD → ISO
+    emitter.instruction("je __rt_strtotime_iso_entry_linux_x86_64");            // YYYY-M(M)-D(D) → ISO
     emitter.instruction("jmp __rt_strtotime_textual_entry_linux_x86_64");       // default for digit-starting: try textual (D Month Y), else offsets
 
     emitter.label("__rt_strtotime_classify_alpha_linux_x86_64");
@@ -517,8 +526,9 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
 
 /// Emits the shared x86_64 Linux epilogue: `__rt_strtotime_fail_linux_x86_64` and `__rt_strtotime_ret_linux_x86_64`.
 ///
-/// `__rt_strtotime_fail_linux_x86_64` sets `rax = -1` then falls through to `__rt_strtotime_ret_linux_x86_64`,
-/// which deallocates the 128-byte frame, restores `rbp`, and returns.
+/// `__rt_strtotime_fail_linux_x86_64` sets `rax = i64::MIN` (the parse-failure sentinel) and the
+/// success flag `rdx = 0`; `__rt_strtotime_ret_linux_x86_64` keeps the parsed timestamp in `rax`
+/// and sets `rdx = 1`. Both then deallocate the 128-byte frame, restore `rbp`, and return.
 ///
 /// Strategy emitters branch here instead of emitting their own epilogue.
 fn emit_epilogue_linux_x86_64(emitter: &mut Emitter) {
@@ -526,8 +536,12 @@ fn emit_epilogue_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- strtotime: shared epilogue ---");
     emitter.label("__rt_strtotime_fail_linux_x86_64");
     emitter.instruction("movabs rax, -9223372036854775808");                    // failure sentinel = i64::MIN (-1 is a valid pre-epoch timestamp)
+    emitter.instruction("xor edx, edx");                                        // success flag = 0: the input did not parse
+    emitter.instruction("jmp __rt_strtotime_epilogue_linux_x86_64");            // share the frame teardown
 
     emitter.label("__rt_strtotime_ret_linux_x86_64");
+    emitter.instruction("mov edx, 1");                                          // success flag = 1: rax holds the parsed timestamp
+    emitter.label("__rt_strtotime_epilogue_linux_x86_64");
     emitter.instruction("add rsp, 128");                                        // deallocate dispatcher locals
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller

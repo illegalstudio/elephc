@@ -144,7 +144,18 @@ pub(super) fn lower_reflection_property_set_value(
         &property_ty,
         expr.span,
     );
+    // PHP null or a packed record address bound for a pointer slot becomes the stored word.
+    let value = ctx.retype_packed_address_for_pointer_sink(value, &property_ty, Some(expr.span));
     let slot = reflection_property_physical_ref(ctx, declaring_class, property)?;
+    let retained_abstract_setter = ctx.classes.get(declaring_class.trim_start_matches('\\'))
+        .is_some_and(|info| info.retained_abstract_setter(property).is_some());
+    let value = if retained_abstract_setter
+        && !matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Mixed)
+    {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span))
+    } else {
+        value
+    };
     let pins = pin_in_flight_owners(ctx, &[object.value, value.value], expr.span);
     ctx.emit_void(
         Op::PropSet,
@@ -154,12 +165,16 @@ pub(super) fn lower_reflection_property_set_value(
         Some(expr.span),
     );
     unpin_in_flight_owners(ctx, pins, expr.span);
-    crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
-        ctx,
-        &property_ty,
-        value,
-        expr.span,
-    );
+    if retained_abstract_setter {
+        // The no-op setter validates its argument but adopts no storage owner.
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+        }
+    } else {
+        crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
+            ctx, &property_ty, value, expr.span,
+        );
+    }
     Some(lower_null(ctx, expr))
 }
 
@@ -272,6 +287,7 @@ pub(super) fn lower_reflection_property_set_static_value(
     let (ignored_object, value_arg) = reflection_property_static_set_value_args(args)?;
     lower_ignored_reflection_argument(ctx, &ignored_object);
     let value = lower_expr(ctx, &value_arg);
+    let value = retype_reflection_static_property_value(ctx, declaring_class, property, value, expr.span);
     store_reflection_static_property_by_class_name(
         ctx,
         declaring_class,
@@ -386,7 +402,7 @@ pub(super) fn reflection_property_any_instance_target(
     Some((
         class_name,
         property,
-        normalize_value_php_type(property_ty.codegen_repr()),
+        normalize_value_php_type(crate::types::eir_value_php_type(property_ty)),
     ))
 }
 

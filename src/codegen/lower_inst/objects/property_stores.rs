@@ -61,6 +61,9 @@ pub(super) fn emit_property_store(
             abi::emit_push_reg(ctx.emitter, base_reg);
             load_property_store_value_to_result(ctx, value, slot)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
+            if slot.php_type == PhpType::False {
+                emit_false_slot_payload_guard(ctx, slot);
+            }
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
         }
@@ -262,6 +265,13 @@ pub(super) fn emit_reference_property_write(
     abi::emit_push_reg(ctx.emitter, base_reg);
     load_property_store_value_to_result(ctx, value, slot)?;
     abi::emit_pop_reg(ctx.emitter, base_reg);
+    if slot.php_type == PhpType::False {
+        // The reference path skips the declared-path scalar arm where the payload guard lives,
+        // so a `false`-declared reference slot enforces it here: the loaded value is already in
+        // the integer-result register (bool payload 0/1), and a mixed source was already
+        // refused by the false-slot guard above.
+        emit_false_slot_payload_guard(ctx, slot);
+    }
     let pointer_reg = reference_pointer_reg(ctx, base_reg);
     abi::emit_load_from_address(ctx.emitter, pointer_reg, base_reg, slot.offset);
     publish_reference_cell_result_then_release_previous(
@@ -449,4 +459,23 @@ pub(super) fn restore_property_store_result(ctx: &mut FunctionContext<'_>, resul
             abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         }
     }
+}
+
+/// Rejects a non-false payload at a `false`-declared slot with php's catchable `TypeError`.
+///
+/// `value_php_type()` erases the `False` marker to `Bool` on the way to the store, so the value's
+/// own type cannot carry the false-only constraint — the payload check at the store is what keeps
+/// `true` out of a `false` slot, exactly as php does (`Cannot assign true to property … of type
+/// false`). The value is already materialized in the integer-result register at the call.
+pub(super) fn emit_false_slot_payload_guard(ctx: &mut FunctionContext<'_>, slot: &PropertySlot) {
+    let ok_label = ctx.next_label("false_slot_ok");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
+    super::super::exceptions::emit_type_error(
+        ctx,
+        &format!(
+            "Cannot assign true to property {}::${} of type false",
+            slot.class_name, slot.property
+        ),
+    );
+    ctx.emitter.label(&ok_label);
 }

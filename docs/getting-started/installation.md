@@ -132,7 +132,7 @@ instead, which pins the compiler per project:
 
 ```toml
 [tools]
-"github:illegalstudio/elephc" = "0.27.0"
+"github:illegalstudio/elephc" = "0.27.1"
 ```
 
 mise picks the tarball for the current platform and keeps the bridge static

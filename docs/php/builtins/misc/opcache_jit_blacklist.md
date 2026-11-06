@@ -1,8 +1,6 @@
 ---
 title: "opcache_jit_blacklist()"
 description: "Excludes a function from JIT compilation."
-sidebar:
-  order: 642
 ---
 
 ## opcache_jit_blacklist()
@@ -20,8 +18,9 @@ Excludes a function from JIT compilation.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

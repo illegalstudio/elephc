@@ -152,7 +152,7 @@ mod pg;
 use pg_native as pg;
 mod sqlite;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
@@ -340,9 +340,14 @@ fn open_sqlstate_cell() -> &'static LocalKey<RefCell<CString>> {
     &C
 }
 
-/// Native driver code captured alongside the last failed connection open.
-fn open_native_code_cell() -> &'static AtomicI64 {
-    static CODE: AtomicI64 = AtomicI64::new(0);
+/// Per-thread native driver code captured alongside the last failed connection open.
+///
+/// Thread-local like the message and SQLSTATE cells, so overlapping failed opens on
+/// different threads each report their own code (#1416).
+fn open_native_code_cell() -> &'static LocalKey<Cell<i64>> {
+    thread_local! {
+        static CODE: Cell<i64> = const { Cell::new(0) };
+    }
     &CODE
 }
 
@@ -369,7 +374,11 @@ fn store_open_failure(dsn: &str, message: &str) {
         {
             (String::new(), 0)
         }
-    } else if dsn.starts_with("odbc:") || dsn.starts_with("informix:") || dsn.starts_with("ibm:") {
+    } else if dsn.starts_with("odbc:")
+        || dsn.starts_with("informix:")
+        || dsn.starts_with("ibm:")
+        || dsn.starts_with("sqlsrv:")
+    {
         #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm", feature = "sqlsrv"))]
         {
             odbc::open_diagnostic()
@@ -378,11 +387,25 @@ fn store_open_failure(dsn: &str, message: &str) {
         {
             (String::new(), 0)
         }
+    } else if dsn.starts_with("dblib:") {
+        #[cfg(feature = "dblib")]
+        {
+            dblib::open_diagnostic()
+        }
+        #[cfg(not(feature = "dblib"))]
+        {
+            (String::new(), 0)
+        }
     } else {
         (String::new(), 0)
     };
     store_cstr(open_sqlstate_cell(), &sqlstate);
-    open_native_code_cell().store(native_code, Ordering::Relaxed);
+    set_open_native_code(native_code);
+}
+
+/// Records the native driver code of the calling thread's last failed connection open.
+fn set_open_native_code(code: i64) {
+    open_native_code_cell().with(|cell| cell.set(code));
 }
 
 /// Per-thread buffer for the most recent `elephc_pdo_errmsg` result.
@@ -1212,10 +1235,11 @@ pub extern "C" fn elephc_pdo_last_open_sqlstate() -> *const c_char {
     })
 }
 
-/// Returns the native driver code captured for the most recent failed open.
+/// Returns the native driver code captured for the calling thread's most recent
+/// failed open.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_last_open_native_code() -> i64 {
-    ffi_guard(0, || open_native_code_cell().load(Ordering::Relaxed))
+    ffi_guard(0, || open_native_code_cell().with(Cell::get))
 }
 
 /// Releases one PDO owner of `conn_id`. Non-persistent connections are closed;
@@ -5593,6 +5617,32 @@ mod tests {
         std::slice::from_raw_parts(p as *const u8, len as usize).to_vec()
     }
 
+    /// Each thread reads back the native code of its own last failed connection open
+    /// (#1416).
+    ///
+    /// The message and SQLSTATE of a failed `elephc_pdo_open` were already per-thread,
+    /// but the native code sat in one process-wide atomic, so two overlapping failed
+    /// opens could report each other's driver code next to their own message. Both
+    /// threads store before either reads, which is exactly that overlap.
+    #[test]
+    fn last_open_native_code_is_isolated_between_threads() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles = [1111_i64, 2222].map(|code| {
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                set_open_native_code(code);
+                barrier.wait();
+                let observed = elephc_pdo_last_open_native_code();
+                barrier.wait();
+                assert_eq!(observed, code, "native code was overwritten by the other thread");
+            })
+        });
+
+        for handle in handles {
+            handle.join().expect("native-code worker must not panic");
+        }
+    }
+
     /// Concurrent column-data results retain their own bytes until the caller on
     /// each thread has copied them out of the bridge-owned return buffer.
     #[test]
@@ -5795,6 +5845,7 @@ mod tests {
 
         struct Returned(i64, Option<&'static str>);
         impl Drop for Returned {
+            /// Returns the borrowed statement fixture to its handle table when the guard is dropped.
             fn drop(&mut self) {
                 if let Some(value) = self.1.take() {
                     if let Some(map) = TABLE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
@@ -5857,6 +5908,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies the C-ABI panic guard returns its documented failure sentinel.
     fn ffi_guard_converts_a_panic_into_the_documented_sentinel() {
         let minus_one = ffi_guard(-1_i64, || -> i64 {
             panic!("deliberate panic (F-QUAL-02 test) — expected");

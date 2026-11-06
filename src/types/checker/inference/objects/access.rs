@@ -32,10 +32,21 @@ impl Checker {
         // `branch_guard_narrowing`). Consult it first so a guarded branch sees the narrowed type.
         if let Some(key) = Self::narrowed_property_env_key(object, property) {
             if let Some(narrowed) = env.get(&key) {
+                if let Ok(obj_ty) = self.infer_type(object, env) {
+                    self.record_member_receiver_type(expr.span, &obj_ty);
+                }
                 return Ok(narrowed.clone());
             }
         }
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
+        // A `?ptr<T>` reaches its fields like `ptr<T>`: the value is the bare address, and a
+        // null one faults with the null-pointer dereference fatal a null `ptr<T>` raises.
+        let nullable_pointer = match &obj_ty {
+            PhpType::Union(members) => crate::types::nullable_pointer_union_member(members),
+            _ => None,
+        };
+        let obj_ty = nullable_pointer.unwrap_or(obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
             let inferred = self.infer_property_on_class_type(class_name, property, expr);
             if inferred.is_err()
@@ -85,12 +96,22 @@ impl Checker {
             // No object class at all: surface the strict diagnostic.
             self.nullsafe_object_receiver(&obj_ty, expr, "property access")?;
         }
+        // A nested packed field is an embedded record: reading it yields the record's ADDRESS,
+        // typed exactly like a packed buffer element, so `$b[0]->pos->x` resolves the inner
+        // field from the outer one's compile-time offset.
+        let obj_ty = match obj_ty {
+            PhpType::Packed(class_name) => PhpType::Pointer(Some(class_name)),
+            other => other,
+        };
         if let PhpType::Pointer(Some(class_name)) = &obj_ty {
             if let Some(field_ty) = self.extern_field_type(class_name, property) {
                 return Ok(field_ty);
             }
             if let Some(field_ty) = self.packed_field_type(class_name, property) {
-                return Ok(field_ty);
+                return Ok(match field_ty {
+                    PhpType::Packed(inner) => PhpType::Pointer(Some(inner)),
+                    other => other,
+                });
             }
             if self.extern_classes.contains_key(class_name) {
                 return Err(CompileError::new(
@@ -141,6 +162,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
         }
@@ -172,11 +194,17 @@ impl Checker {
         nullsafe: bool,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
         if nullsafe && matches!(obj_ty, PhpType::Void) {
             return Ok(PhpType::Void);
         }
 
         let property_ty = self.infer_type(property, env)?;
+        // NOT relaxed for `int|float`, deliberately. Accepting it here only moves the refusal:
+        // the lowering has no arm for a boxed runtime property name and answers
+        // `dynamic_prop_set with runtime property name PHP type Mixed`, which is the same gap a
+        // genuinely `mixed` name hits. The checker's message is the better one until the backend
+        // grows that arm.
         if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
             return Err(CompileError::new(
                 property.span,
@@ -280,6 +308,11 @@ impl Checker {
                 expr.span,
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
+        }
+        if self.awaits_generic_instantiation(class_name) {
+            // Resolved by this round, spliced by the next one. `Mixed` keeps the rest of this
+            // round meaningful; the next sees an ordinary class and types the read properly.
+            return Ok(PhpType::Mixed);
         }
         Err(CompileError::new(
             expr.span,
@@ -477,7 +510,16 @@ impl Checker {
         receiver: &StaticReceiver,
         expr: &Expr,
     ) -> Result<String, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(class_name) => Ok(class_name.as_str().to_string()),
             StaticReceiver::Self_ => self.current_class.as_ref().cloned().ok_or_else(|| {
                 CompileError::new(expr.span, "Cannot use self:: outside class method scope")

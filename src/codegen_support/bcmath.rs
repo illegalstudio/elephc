@@ -15,6 +15,21 @@ use crate::codegen_support::platform::Arch;
 /// Publishes every elephc-bcmath entry point into its shared runtime slot.
 pub(crate) fn publish_elephc_bcmath_function_pointers(emitter: &mut Emitter) {
     const ENTRIES: &[(&str, &str)] = &[
+        ("elephc_bcmath_number_add", "_elephc_bcmath_number_add_fn"),
+        ("elephc_bcmath_number_ceil", "_elephc_bcmath_number_ceil_fn"),
+        ("elephc_bcmath_number_comp", "_elephc_bcmath_number_comp_fn"),
+        ("elephc_bcmath_number_create", "_elephc_bcmath_number_create_fn"),
+        ("elephc_bcmath_number_div", "_elephc_bcmath_number_div_fn"),
+        ("elephc_bcmath_number_divmod", "_elephc_bcmath_number_divmod_fn"),
+        ("elephc_bcmath_number_floor", "_elephc_bcmath_number_floor_fn"),
+        ("elephc_bcmath_number_mod", "_elephc_bcmath_number_mod_fn"),
+        ("elephc_bcmath_number_mul", "_elephc_bcmath_number_mul_fn"),
+        ("elephc_bcmath_number_pow", "_elephc_bcmath_number_pow_fn"),
+        ("elephc_bcmath_number_powmod", "_elephc_bcmath_number_powmod_fn"),
+        ("elephc_bcmath_number_round", "_elephc_bcmath_number_round_fn"),
+        ("elephc_bcmath_number_sqrt", "_elephc_bcmath_number_sqrt_fn"),
+        ("elephc_bcmath_number_sub", "_elephc_bcmath_number_sub_fn"),
+
         ("elephc_bcmath_add", "_elephc_bcmath_add_fn"),
         ("elephc_bcmath_sub", "_elephc_bcmath_sub_fn"),
         ("elephc_bcmath_mul", "_elephc_bcmath_mul_fn"),

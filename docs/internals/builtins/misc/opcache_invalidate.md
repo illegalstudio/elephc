@@ -1,8 +1,6 @@
 ---
 title: "opcache_invalidate() - internals"
 description: "Compiler internals for opcache_invalidate(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 639
 ---
 
 ## `opcache_invalidate()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:439](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L439) (`opcache_invalidate`)
+- **Lowering**: [`src/opcache_prelude/build.rs`](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs) (`opcache_invalidate`)
 - **Function symbol**: `opcache_invalidate()`
 
 
@@ -38,7 +36,7 @@ function opcache_invalidate(mixed $filename, mixed $force = false): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
+Calls prefer the program's native OPcache prelude declarations, which carry the configured directives, live cache, and API restrictions. Dedicated interpreter handlers cover programs without those declarations ([`crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs)). This route does not use an `eval_builtin!` binding.
 
 ## Cross-references
 

@@ -1,8 +1,6 @@
 ---
 title: "zend_version() - internals"
 description: "Compiler internals for zend_version(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 693
 ---
 
 ## `zend_version()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/version_prelude.rs`:34](https://github.com/illegalstudio/elephc/blob/main/src/version_prelude.rs#L34) (`zend_version`)
+- **Lowering**: [`src/version_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/version_prelude.rs) (`zend_version`)
 - **Function symbol**: `zend_version()`
 
 

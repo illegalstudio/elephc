@@ -2,7 +2,8 @@
 //! End-to-end tests for PHP reference machinery: aliasing a local to an object
 //! property (`$x = &$obj->prop`) with write-through in both directions, by-reference
 //! function/method returns (`function &f()`, `function &m()`), capturing them with
-//! `$x = &call()`, and the constant-propagation soundness fix for reference-bound locals.
+//! `$x = &call()`, object properties passed to by-reference method/constructor parameters,
+//! and the constant-propagation soundness fix for reference-bound locals.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -451,4 +452,384 @@ echo is_null($a[0]) ? "null" : "wrong", ":", is_null($b) ? "null" : "wrong", "\n
 echo $copy[0], ":", $copy[1], "\n";
 "#);
     assert_eq!(out, "9:9\nupdated:updated\nnull:null\n1:2\n");
+}
+
+/// An object property may be passed to a user method's by-reference parameter.
+///
+/// The call is lowered as a hidden temporary plus a write-back, so the callee's mutation
+/// reaches the property without evaluating the receiver twice.
+#[test]
+fn test_property_argument_binds_to_method_by_reference_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class Value { public function __construct(public int $number) {} }
+class Box { public function __construct(public Value $value) {} }
+class Ops {
+    public function bump(Value &$value): void {
+        $value = new Value($value->number + 1);
+    }
+    public function swap(Value &$left, Value &$right): void {
+        $temp = $left;
+        $left = $right;
+        $right = $temp;
+    }
+}
+$first = new Box(new Value(1));
+$second = new Box(new Value(3));
+$ops = new Ops();
+$ops->bump($first->value);
+$ops->swap($first->value, $second->value);
+echo $first->value->number, ",", $second->value->number, "\n";
+"#,
+    );
+    assert_eq!(out, "3,2\n");
+}
+
+/// A constructor by-reference parameter accepts an object property place too.
+#[test]
+fn test_property_argument_binds_to_constructor_by_reference_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class Value { public function __construct(public int $number) {} }
+class Box { public Value $value; }
+class Reset { public function __construct(Value &$value) { $value = new Value(9); } }
+$box = new Box();
+$box->value = new Value(1);
+new Reset($box->value);
+echo $box->value->number, "\n";
+"#,
+    );
+    assert_eq!(out, "9\n");
+}
+
+/// A union holding the declared class plus `false`/`null` is guarded at the call boundary.
+#[test]
+fn test_object_union_arguments_throw_type_error_for_non_object_alternative() {
+    let out = compile_and_run(
+        r#"<?php
+class Marker {}
+class Provider {
+    public function absent(): Marker|false { return false; }
+    public function nullValue(): ?Marker { return null; }
+    public function present(): Marker|false { return new Marker(); }
+}
+class Sink {
+    public function __construct(Marker $value) {}
+    public function take(Marker $value): string { return "taken"; }
+}
+$sink = new Sink(new Marker());
+$provider = new Provider();
+try {
+    $sink->take($provider->absent());
+} catch (TypeError $error) {
+    $message = $error->getMessage();
+    echo str_starts_with($message, 'Sink::take(): Argument #1 ($value) must be of type Marker, false given, called in ') ? "prefix-ok" : $message;
+    echo str_contains($message, " on line ") ? ":line-ok\n" : ":no-line\n";
+}
+try {
+    $sink->take($provider->nullValue());
+} catch (TypeError $error) {
+    $message = $error->getMessage();
+    echo str_starts_with($message, 'Sink::take(): Argument #1 ($value) must be of type Marker, null given, called in ') ? "prefix-ok" : $message;
+    echo str_contains($message, " on line ") ? ":line-ok\n" : ":no-line\n";
+}
+try {
+    new Sink($provider->absent());
+} catch (TypeError $error) {
+    $message = $error->getMessage();
+    echo str_starts_with($message, 'Sink::__construct(): Argument #1 ($value) must be of type Marker, false given, called in ') ? "prefix-ok" : $message;
+    echo str_contains($message, " on line ") ? ":line-ok\n" : ":no-line\n";
+}
+echo $sink->take($provider->present()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "prefix-ok:line-ok\nprefix-ok:line-ok\nprefix-ok:line-ok\ntaken\n"
+    );
+}
+
+/// Guards a union-typed local even after its storage widened to a boxed Mixed cell.
+///
+/// The checker accepted `Marker|false`, but lowering saw only Mixed and skipped the guard,
+/// then passed `false` as a raw object pointer. The catch block must also stay reachable:
+/// the callee is pure, so the exception analysis has to treat the guard as a throw site.
+#[test]
+fn test_object_union_locals_throw_catchable_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+class Marker {}
+function take(Marker $m): string { return "taken"; }
+$w = $argc > 5 ? new Marker() : false;
+try {
+    take($w);
+} catch (TypeError $error) {
+    $message = $error->getMessage();
+    echo str_starts_with($message, 'take(): Argument #1 ($m) must be of type Marker, false given, called in ') ? "prefix-ok" : $message;
+    echo str_contains($message, " on line ") ? ":line-ok\n" : ":no-line\n";
+}
+$v = (function (): Marker|false { return false; })();
+try {
+    take($v);
+} catch (TypeError $error) {
+    echo str_starts_with($error->getMessage(), 'take(): Argument #1 ($m) must be of type Marker, false given, called in ') ? "prefix-ok\n" : $error->getMessage();
+}
+$ok = $argc < 5 ? new Marker() : false;
+echo take($ok), "\n";
+"#,
+    );
+    assert_eq!(out, "prefix-ok:line-ok
+prefix-ok
+taken
+");
+}
+
+/// A nullsafe method call rewrites object-property by-reference arguments in its call branch.
+#[test]
+fn test_property_argument_binds_through_nullsafe_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Value { public function __construct(public int $number) {} }
+class Box { public function __construct(public Value $value) {} }
+class Ops {
+    public function swap(Value &$left, Value &$right): void {
+        $temp = $left;
+        $left = $right;
+        $right = $temp;
+    }
+}
+$ops = new Ops();
+$first = new Box(new Value(1));
+$second = new Box(new Value(2));
+$ops?->swap($first->value, $second->value);
+echo $first->value->number, ",", $second->value->number, "\n";
+"#,
+    );
+    assert_eq!(out, "2,1\n");
+}
+
+/// Scalar, string, array, and mixed properties bind by reference through a method call.
+#[test]
+fn test_scalar_and_array_property_arguments_bind_by_reference() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public int $number = 1;
+    public string $label = "a";
+    public array $items = [1];
+    public mixed $mixed = 0;
+}
+class Ops {
+    public function bump(int &$number): void { $number++; }
+    public function append(string &$label): void { $label .= "!"; }
+    public function addItem(array &$items): void { $items[] = 9; }
+    public function setMixed(mixed &$mixed): void { $mixed = "x"; }
+}
+$box = new Box();
+$ops = new Ops();
+$ops->bump($box->number);
+$ops->append($box->label);
+$ops->addItem($box->items);
+$ops->setMixed($box->mixed);
+echo $box->number, ",", $box->label, ",", count($box->items), ",", $box->mixed, "\n";
+"#,
+    );
+    assert_eq!(out, "2,a!,2,x\n");
+}
+
+/// Union and nullable properties bind by reference with their runtime type preserved.
+#[test]
+fn test_union_and_nullable_property_arguments_bind_by_reference() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public int|string $value = 1; public ?int $maybe = 1; }
+class Ops {
+    public function setUnion(int|string &$value): void { $value = "x"; }
+    public function setNullable(?int &$value): void { $value = 5; }
+}
+$box = new Box();
+$ops = new Ops();
+$ops->setUnion($box->value);
+$ops->setNullable($box->maybe);
+var_dump($box->value, $box->maybe);
+"#,
+    );
+    assert_eq!(out, "string(1) \"x\"\nint(5)\n");
+}
+
+/// A free function accepts an object property as a by-reference argument.
+#[test]
+fn test_property_argument_binds_to_free_function_by_reference_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public int $number = 1; }
+function bump(int &$number): void { $number++; }
+$box = new Box();
+bump($box->number);
+echo $box->number, "\n";
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+/// A static property binds to a static method's by-reference parameter.
+#[test]
+fn test_static_property_argument_binds_to_static_method_by_reference_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public static int $number = 1; public static array $items = [1]; }
+class Ops {
+    public static function bump(int &$number): void { $number++; }
+    public static function addItem(array &$items): void { $items[] = 9; }
+}
+Ops::bump(Box::$number);
+Ops::addItem(Box::$items);
+echo Box::$number, ",", count(Box::$items), "\n";
+"#,
+    );
+    assert_eq!(out, "2,2\n");
+}
+
+/// By-reference variadics accept scalar, string, mixed, object, static, union, and nullable
+/// property places through the same hidden write-back.
+#[test]
+fn test_variadic_by_ref_property_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class Value { public function __construct(public int $number) {} }
+class Box {
+    public int $integer = 1;
+    public string $label = "a";
+    public mixed $mixed = 0;
+    public Value $value;
+    public int|string $union = 1;
+    public ?int $nullable = 1;
+    public static int $static = 1;
+}
+function collect(&...$refs): void {
+    $refs[0] = 9;
+    $refs[1] = "b";
+    $refs[2] = "x";
+    $refs[3] = new Value(7);
+    $refs[4] = "u";
+    $refs[5] = 5;
+    $refs[6] = 6;
+}
+$box = new Box();
+$box->value = new Value(1);
+collect(
+    $box->integer,
+    $box->label,
+    $box->mixed,
+    $box->value,
+    $box->union,
+    $box->nullable,
+    Box::$static,
+);
+var_dump($box->integer, $box->label, $box->mixed, $box->value->number, $box->union, $box->nullable, Box::$static);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(9)\nstring(1) \"b\"\nstring(1) \"x\"\nint(7)\nstring(1) \"u\"\nint(5)\nint(6)\n"
+    );
+}
+
+/// Rejects a variadic by-reference write that violates the target property's declared type.
+///
+/// The callee receives boxed Mixed ref cells, so the write-back must apply php-src's typed
+/// property check before unboxing; otherwise an int assigned through a `Value` property is
+/// stored as a raw object pointer.
+#[test]
+fn test_by_reference_variadic_property_writeback_rejects_mismatched_types() {
+    let out = compile_and_run(
+        r#"<?php
+class Value { public function __construct(public int $number) {} }
+class Box { public Value $v; public int $n = 0; function __construct() { $this->v = new Value(0); } }
+function setIdx(&...$refs): void { $refs[0] = 7; }
+function setStr(&...$refs): void { $refs[0] = "abc"; }
+function setVal(&...$refs): void { $refs[0] = new Value(5); }
+function setInt(&...$refs): void { $refs[0] = 7; }
+$b = new Box();
+try { setIdx($b->v); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$d = new Box();
+try { setStr($d->n); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+setVal($b->v); echo $b->v->number, "\n";
+setInt($d->n); echo $d->n, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign int to reference held by property Box::$v of type Value\n\
+Cannot assign string to reference held by property Box::$n of type int\n\
+5\n\
+7\n"
+    );
+}
+
+/// Writes back through property receivers nested below another property or an array element.
+#[test]
+fn test_by_reference_nested_property_receivers_write_back() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public int $n = 1; }
+class Outer { public Box $box; function __construct() { $this->box = new Box(); } }
+function inc(int &$x): void { $x++; }
+$o = new Outer(); inc($o->box->n); echo $o->box->n, "\n";
+$arr = [new Box()]; inc($arr[0]->n); echo $arr[0]->n, "\n";
+"#,
+    );
+    assert_eq!(out, "2\n2\n");
+}
+
+/// Verifies property references bind at their source position and honor later property writes.
+#[test]
+fn test_by_reference_property_source_order_and_callee_mutation() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public int $n = 1; }
+$holder = null;
+function noise(): int { global $holder; $holder->n = 50; return 2; }
+function g(int $a, int &$b): void { $b = $b + 1; }
+$box = new Box(); $holder = $box;
+g(noise(), $box->n);
+echo $box->n, "\n";
+
+class Bump { public int $n = 1; public function bump(int &$v): void { $v = 9; $this->n = 7; } }
+$bump = new Bump(); $bump->bump($bump->n);
+echo $bump->n, "\n";
+
+class Grab { public int $v = 5; }
+function &grab(int &$x): int { return $x; }
+$grab = new Grab(); $r = &grab($grab->v); $r = 99;
+echo $grab->v, "\n";
+"#,
+    );
+    assert_eq!(out, "51\n7\n99\n");
+}
+
+/// Verifies a numeric string outside the i64 range is rejected by a typed property reference.
+#[test]
+fn test_by_reference_property_writeback_rejects_out_of_range_numeric_strings() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $n = 0; }
+$payload = null;
+function set(&...$refs): void { global $payload; $refs[0] = $payload; }
+$c = new C();
+foreach (["42", "999999999999999999999999", "9223372036854775807", "-9223372036854775809", 1e30] as $v) {
+    $payload = $v;
+    try { set($c->n); echo "ok ", $c->n, "\n"; }
+    catch (Throwable $e) { echo "err ", $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "ok 42\n\
+err Cannot assign string to reference held by property C::$n of type int\n\
+ok 9223372036854775807\n\
+ok -9223372036854775808\n\
+err Cannot assign float to reference held by property C::$n of type int\n"
+    );
 }

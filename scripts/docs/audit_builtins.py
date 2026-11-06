@@ -8,7 +8,7 @@ Checks:
 3. Every cross-link in a generated page resolves to an actual file.
 4. Per-area indexes only contain builtins that belong to that area.
 5. No stray top-level files (everything should be inside an area folder).
-6. Backend availability and all 443 non-registry contract routes remain coherent.
+6. Backend availability and all 458 non-registry contract routes remain coherent.
 7. User-facing pages contain no runs of multiple blank lines.
 8. No override table in ``registry.py`` declares the same builtin twice.
 
@@ -139,10 +139,11 @@ def _check_backend_contracts(
         "dedicated-syntax": 1,
         # Four hash_*, the 34 PHP-visible curl_* (published only by the canonical
         # `--features curl` documentation configuration, see elephc_builtins/extract.py),
-        # the 54 xml_* / xmlwriter_* functions the xml prelude declares, and the 288
-        # functions the mysqli, PDO, web, image, OPcache, tz, var_export and version
-        # preludes declare, all injected-prelude routes.
-        "prelude": 380,
+        # the 54 xml_* / xmlwriter_* functions the xml prelude declares, the six
+        # procedural random entries, the internal random helper, the six fileinfo functions, and the
+        # functions the mysqli, PDO, web, image, OPcache, tz, var_export, tokenizer and
+        # version preludes declare, all injected-prelude routes.
+        "prelude": 395,
         # Calls rewritten from their enclosing lexical function frame.
         "compiler-transform": 3,
         # The date/calendar procedural families the name resolver rewrites onto the
@@ -188,6 +189,15 @@ def _check_backend_contracts(
             errors.append(f"{name} is incorrectly marked eval-only")
         if (record.get("eval") or {}).get("kind") != "registry":
             errors.append(f"{name} must be eval-supported by a Magician registry binding")
+
+    # OPcache's existing native-prelude/fallback route has no eval_builtin! home.
+    # Generated availability must still reflect that the APIs are callable in eval.
+    for record in by_name.values():
+        if record.get("module") != "zend opcache":
+            continue
+        support = record.get("eval") or {}
+        if not support.get("supported") or support.get("kind") != "opcache-dispatch":
+            errors.append(f"{record['name']} must document its dedicated OPcache eval route")
 
     hash_init = by_name.get("hash_init") or {}
     if (hash_init.get("aot") or {}).get("signature_override_reason") != "prelude-signature-subset":

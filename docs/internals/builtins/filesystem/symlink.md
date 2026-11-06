@@ -1,8 +1,6 @@
 ---
 title: "symlink() - internals"
 description: "Compiler internals for symlink(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 302
 ---
 
 ## `symlink()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/symlink.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/symlink.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

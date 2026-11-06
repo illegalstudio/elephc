@@ -16,8 +16,15 @@ use crate::intrinsics::IntrinsicCall;
 use crate::types::PhpType;
 
 /// Preserves the PHP array constraint while lowering all other bridge metadata to its ABI type.
+///
+/// A `?ptr<T>` keeps its union too: its ABI form is the pointer word either way, and boxing it
+/// needs the null member so address 0 reaches eval as PHP null.
 pub(super) fn bridge_storage_type(ty: &PhpType) -> PhpType {
-    if ty.is_php_array() { ty.clone() } else { ty.codegen_repr() }
+    if ty.is_php_array() || crate::types::is_nullable_pointer_type(ty) {
+        ty.clone()
+    } else {
+        ty.codegen_repr()
+    }
 }
 
 /// Rejects non-array boxed inputs without transferring ownership or converting their storage.

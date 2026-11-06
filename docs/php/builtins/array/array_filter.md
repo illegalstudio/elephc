@@ -1,8 +1,6 @@
 ---
 title: "array_filter()"
 description: "Filters elements of an array using a callback function."
-sidebar:
-  order: 12
 ---
 
 ## array_filter()
@@ -22,8 +20,9 @@ Filters elements of an array using a callback function.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_filter.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_filter.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

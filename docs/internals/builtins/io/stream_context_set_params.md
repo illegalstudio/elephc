@@ -1,8 +1,6 @@
 ---
 title: "stream_context_set_params() - internals"
 description: "Compiler internals for stream_context_set_params(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 366
 ---
 
 ## `stream_context_set_params()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_context_set_params.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_set_params.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -26,7 +24,7 @@ sidebar:
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (16 declared effects)`
+- **Effects**: `static (18 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`

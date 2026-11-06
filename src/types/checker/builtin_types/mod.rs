@@ -61,7 +61,7 @@ pub(crate) use fiber::patch_builtin_fiber_signatures;
 pub(crate) use magic_methods::{patch_magic_method_signatures, validate_magic_method_contracts};
 pub(crate) use reflection::{
     inject_builtin_reflection, patch_builtin_reflection_signatures,
-    program_may_reference_reflection,
+    program_may_reference_reflection, REFLECTION_CLASS_NAMES,
 };
 
 /// Injects the builtin `DateTimeInterface`, `DateTimeZone`, and `DateTimeImmutable` declarations.

@@ -13,9 +13,15 @@ use super::*;
 pub(super) fn lower_concat(ctx: &mut LoweringContext<'_, '_>, left: &Expr, right: &Expr, expr: &Expr) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
     let lhs = coerce_to_string(ctx, lhs, expr);
+    let lhs = crate::ir_lower::ownership::persist_string_byte_view(ctx, lhs, Some(left.span));
     let lhs = persist_concat_lhs_if_rhs_can_reset(ctx, lhs, right, expr.span);
-    let rhs = lower_expr(ctx, right);
-    let rhs = coerce_to_string(ctx, rhs, expr);
+    let mut pending = [lhs];
+    let (rhs, lhs_pins) = lower_with_pending_owners(ctx, &mut pending, left.span, |ctx| {
+        let rhs = lower_expr(ctx, right);
+        coerce_to_string(ctx, rhs, expr)
+    });
+    let lhs = pending[0];
+    unpin_in_flight_owners(ctx, lhs_pins, left.span);
     if lhs.ir_type == IrType::Str && rhs.ir_type == IrType::Str {
         let result = ctx.emit_value(
             Op::StrConcat,
@@ -54,32 +60,22 @@ pub(super) fn persist_concat_lhs_if_rhs_can_reset(
     rhs: &Expr,
     span: Span,
 ) -> LoweredValue {
-    if lhs.ir_type != IrType::Str
-        || ctx.builder.value_ownership(lhs.value) == Ownership::Owned
-    {
+    if !string_value_needs_persistence(ctx, lhs) || !expr_can_reset_concat_storage(rhs) {
         return lhs;
     }
-    let Some(op) = ctx.builder.value_defining_op(lhs.value) else {
-        return lhs;
-    };
-    if !string_op_uses_scratch_storage(op) || !expr_can_reset_concat_storage(rhs) {
-        return lhs;
-    }
-    ctx.emit_value(
-        Op::StrPersist,
-        vec![lhs.value],
-        None,
-        PhpType::Str,
-        Op::StrPersist.default_effects(),
-        Some(span),
-    )
+    persist_pending_string(ctx, lhs, span)
 }
 
-/// Returns whether a string-producing opcode exposes scratch or borrowed string storage.
-pub(crate) fn string_op_uses_scratch_storage(op: Op) -> bool {
+/// Recognizes views that can expose scratch storage, including scalar arms of Mixed casts.
+pub(crate) fn string_value_needs_persistence(ctx: &LoweringContext<'_, '_>, value: LoweredValue) -> bool {
+    if value.ir_type != IrType::Str || ctx.builder.value_ownership(value.value) == Ownership::Owned {
+        return false;
+    }
+    let Some(op) = ctx.builder.value_defining_op(value.value) else { return false; };
     matches!(
         op,
-        Op::IToStr
+        Op::Cast
+            | Op::IToStr
             | Op::FToStr
             | Op::BoolToStr
             | Op::ResourceToStr
@@ -89,6 +85,17 @@ pub(crate) fn string_op_uses_scratch_storage(op: Op) -> bool {
             | Op::StrInterpolate
             | Op::RuntimeCall
     )
+}
+
+/// Copies a pending view and retires any detached string owned by its original producer.
+/// Mixed casts allocate for string inputs but borrow formatter storage for numeric inputs.
+pub(crate) fn persist_pending_string(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> LoweredValue {
+    let persisted = ctx.emit_value(
+        Op::StrPersist, vec![value.value], None, PhpType::Str,
+        Op::StrPersist.default_effects(), Some(span),
+    );
+    release_binary_operand_temporary(ctx, value, span);
+    persisted
 }
 
 /// Returns whether evaluating an expression can reset the caller's concat scratch storage.
@@ -107,6 +114,7 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::NullsafeDynamicMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::NewObject { .. }
+        | ExprKind::NewGeneric { .. }
         | ExprKind::NewDynamic { .. }
         | ExprKind::NewDynamicObject { .. }
         | ExprKind::NewScopedObject { .. }

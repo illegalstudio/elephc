@@ -290,6 +290,12 @@ fn test_error_time_wrong_args() {
     expect_error("<?php time(1);", "time() takes no arguments");
 }
 
+/// Verifies that `getmypid()` with any arguments yields a no-args diagnostic (issue #860).
+#[test]
+fn test_error_getmypid_wrong_args() {
+    expect_error("<?php getmypid(1);", "getmypid() takes no arguments");
+}
+
 /// Verifies that `microtime()` with two arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_microtime_wrong_args() {
@@ -672,8 +678,30 @@ fn test_error_preg_match_four_args() {
 fn test_error_preg_match_all_no_args() {
     expect_error(
         "<?php preg_match_all();",
-        "preg_match_all() takes exactly 2 arguments",
+        "preg_match_all() takes 2 to 4 arguments",
     );
+}
+
+/// Verifies that `preg_match_all()` rejects non-variable output arguments for `$matches`.
+#[test]
+fn test_error_preg_match_all_matches_must_be_variable() {
+    expect_error(
+        r#"<?php preg_match_all("/test/", "test", []);"#,
+        "preg_match_all(): Argument #3 ($matches) could not be passed by reference",
+    );
+}
+
+/// Unsupported non-local output lvalues fail explicitly after named-argument normalization.
+#[test]
+fn test_error_preg_match_all_nonlocal_captures() {
+    for source in [
+        r#"<?php $rows = []; preg_match_all('/a/', 'a', $rows[0]);"#,
+        r#"<?php class Box { public array $matches = []; } $box = new Box(); preg_match_all('/a/', 'a', $box->matches);"#,
+        r#"<?php class Box { public static array $matches = []; } preg_match_all('/a/', 'a', Box::$matches);"#,
+        r#"<?php $rows = []; \PrEg_MaTcH_AlL(matches: $rows[0], subject: 'a', pattern: '/a/');"#,
+    ] {
+        expect_error(source, "preg_match_all(): non-local $matches destinations are not supported");
+    }
 }
 
 /// Verifies that `preg_replace()` with only two arguments yields a wrong-args diagnostic.
@@ -815,6 +843,18 @@ fn test_error_core_parity_builtin_arity_contracts() {
         (
             "<?php gc_mem_caches(1);",
             "gc_mem_caches() takes no arguments",
+        ),
+        (
+            "<?php memory_get_usage(true, true);",
+            "memory_get_usage() takes at most 1 argument",
+        ),
+        (
+            "<?php memory_get_peak_usage(true, true);",
+            "memory_get_peak_usage() takes at most 1 argument",
+        ),
+        (
+            "<?php memory_reset_peak_usage(1);",
+            "memory_reset_peak_usage() takes no arguments",
         ),
         (
             "<?php get_called_class(1);",

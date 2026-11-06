@@ -11,6 +11,9 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+#[cfg(test)]
+mod tests;
+
 /// Emits the scalar indexed-array set helper for the current target.
 pub fn emit_array_set_int(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -24,6 +27,19 @@ pub fn emit_array_set_int(emitter: &mut Emitter) {
 
     emitter.instruction("cmp x1, #0");                                          // reject negative offsets before mutating indexed-array storage
     emitter.instruction("b.lt __rt_array_set_int_return");                      // leave the array unchanged for unsupported negative indexed writes
+    // -- overwrite a unique in-bounds scalar slot without entering the slow path --
+    emitter.comment("-- overwrite a unique in-bounds scalar slot without entering the slow path --");
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load the current array refcount from the uniform heap header
+    emitter.instruction("cmp w9, #1");                                          // can this owner mutate the current payload without a COW split?
+    emitter.instruction("b.hi __rt_array_set_int_slow");                        // shared arrays still need the cloning path below
+    emitter.instruction("ldr x9, [x0]");                                        // load the current logical length for the overwrite bounds check
+    emitter.instruction("cmp x1, x9");                                          // is the requested offset already materialized?
+    emitter.instruction("b.hs __rt_array_set_int_slow");                        // first writes and extensions still need shape or growth handling
+    emitter.instruction("add x9, x0, #24");                                     // compute the base address of the scalar payload region
+    emitter.instruction("str x2, [x9, x1, lsl #3]");                            // overwrite the existing unique scalar slot directly
+    emitter.instruction("ret");                                                 // return the unchanged unique array pointer
+
+    emitter.label("__rt_array_set_int_slow");
     emitter.instruction("sub sp, sp, #48");                                     // reserve spill space for payload, index, array pointer, and saved frame state
     emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish a frame pointer for nested runtime helper calls
@@ -87,6 +103,17 @@ fn emit_array_set_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // default the return value to the incoming indexed-array pointer
     emitter.instruction("cmp rsi, 0");                                          // reject negative offsets before mutating indexed-array storage
     emitter.instruction("jl __rt_array_set_int_return");                        // leave the array unchanged for unsupported negative indexed writes
+    // -- overwrite a unique in-bounds scalar slot without entering the slow path --
+    emitter.comment("-- overwrite a unique in-bounds scalar slot without entering the slow path --");
+    emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // load the current indexed-array refcount from the uniform heap header
+    emitter.instruction("cmp r10d, 1");                                         // can this owner mutate the current payload without a COW split?
+    emitter.instruction("ja __rt_array_set_int_slow");                          // shared arrays still need the cloning path below
+    emitter.instruction("cmp rsi, QWORD PTR [rdi]");                            // is the requested offset already materialized?
+    emitter.instruction("jae __rt_array_set_int_slow");                         // first writes and extensions still need shape or growth handling
+    emitter.instruction("mov QWORD PTR [rdi + 24 + rsi * 8], rdx");             // overwrite the existing unique scalar slot directly
+    emitter.instruction("ret");                                                 // return the unchanged unique indexed-array pointer
+
+    emitter.label("__rt_array_set_int_slow");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving helper spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for array, index, and payload spills
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for array pointer, index, and scalar payload

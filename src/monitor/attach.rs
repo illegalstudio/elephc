@@ -316,22 +316,36 @@ mod tests {
             let symbol = elephc::names::static_method_symbol(class, method);
             assert!(super::super::is_php_symbol(&symbol), "{symbol}");
             assert_eq!(kind_of(&symbol), Kind::Php, "{symbol}");
+            assert_eq!(
+                super::super::render::demangle(&symbol),
+                format!("{class}::{method}"),
+                "{symbol}"
+            );
         }
     }
 
     /// Supplies sorted PHP function, helper and method symbols for stack fixtures.
     fn symbols() -> Vec<FuncSymbol> {
         // Sorted by address, which is what `symbolize` binary-searches, and
-        // spelled the way the compiler actually emits them: `fn_`-prefixed with
-        // `_u_` standing in for an underscore. Reading an attached profile of a
-        // real program is what these names have to survive.
+        // spelled the way the compiler actually emits them, by the compiler's own
+        // symbol builders: an underscore in a name selects the escaped
+        // `_method___My_u_Class___run` join. Reading an attached profile of a real
+        // program is what these names have to survive.
         vec![
-            FuncSymbol { value: 0x1000, size: 0x100, name: "_fn_spin".into() },
-            FuncSymbol { value: 0x2000, size: 0x100, name: "_fn_hot_u_leaf".into() },
+            FuncSymbol { value: 0x1000, size: 0x100, name: elephc::names::function_symbol("spin") },
+            FuncSymbol { value: 0x2000, size: 0x100, name: elephc::names::function_symbol("hot_leaf") },
             FuncSymbol { value: 0x3000, size: 0x100, name: "__rt_mixed_add".into() },
             FuncSymbol { value: 0x4000, size: 0x100, name: "main".into() },
-            FuncSymbol { value: 0x5000, size: 0x100, name: "_method_Engine_step".into() },
-            FuncSymbol { value: 0x6000, size: 0x100, name: "_method_My_u_Class_run".into() },
+            FuncSymbol {
+                value: 0x5000,
+                size: 0x100,
+                name: elephc::names::method_symbol("Engine", "step"),
+            },
+            FuncSymbol {
+                value: 0x6000,
+                size: 0x100,
+                name: elephc::names::method_symbol("My_Class", "run"),
+            },
         ]
     }
 
@@ -468,7 +482,7 @@ mod tests {
         let symbols = vec![FuncSymbol {
             value: 0x1000,
             size: 0x100,
-            name: "_static_My_u_Class_run_u_hot".to_string(),
+            name: elephc::names::static_method_symbol("My_Class", "run_hot"),
         }];
         assert!(super::super::is_php_symbol(&symbols[0].name));
         let named = display_stack(&[0x1010], &symbols, 0);

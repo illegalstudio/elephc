@@ -13,6 +13,7 @@ use super::*;
 pub(super) fn builtin_reflection_parameter_count_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "getNumberOfParameters".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -66,6 +67,7 @@ pub(super) fn builtin_reflection_function_method_is_variadic_method() -> ClassMe
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: "isVariadic".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -301,6 +303,12 @@ pub(super) fn add_reflection_member_flag_methods(
             null_expr(),
         ));
         properties.push(builtin_property(
+            "__default_error",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        properties.push(builtin_property(
             "__modifiers",
             Visibility::Private,
             Some(TypeExpr::Int),
@@ -367,10 +375,7 @@ pub(super) fn add_reflection_member_flag_methods(
             4096,
         ));
         methods.push(builtin_reflection_property_is_default_method());
-        methods.push(builtin_reflection_class_mixed_method(
-            "getDefaultValue",
-            "__default_value",
-        ));
+        methods.push(builtin_reflection_property_get_default_value_method());
         for (property, method) in [("__is_final", "isFinal"), ("__is_abstract", "isAbstract")] {
             properties.push(builtin_property(
                 property,

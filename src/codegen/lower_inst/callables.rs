@@ -30,6 +30,7 @@ use super::{
     emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
     emit_runtime_builtin_wrapper_inline, emit_runtime_builtin_invoker_inline,
     emit_runtime_callable_invoker_inline,
+    emit_runtime_callable_invoker_in_class,
     emit_runtime_callable_invoker_with_string_owner,
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
     emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
@@ -62,6 +63,28 @@ struct RuntimeStringFunctionTarget {
     name: String,
     param_types: Vec<PhpType>,
     return_ty: PhpType,
+    /// Per-parameter argument-`TypeError` message prefix for a `false`-declared parameter
+    /// (`f(): Argument #1 ($v) must be of type false, `), `None` elsewhere — the invocation
+    /// guard needs the identity php names.
+    false_param_prefixes: Vec<Option<String>>,
+}
+
+/// Spells a compile-time argument type the way php names it in an argument `TypeError`.
+fn php_argument_type_name(ty: &PhpType) -> String {
+    match ty {
+        PhpType::Int => "int".to_string(),
+        PhpType::Float => "float".to_string(),
+        PhpType::Str => "string".to_string(),
+        PhpType::Bool => "bool".to_string(),
+        PhpType::Array(_) => "array".to_string(),
+        PhpType::AssocArray { .. } => "array".to_string(),
+        PhpType::Iterable => "iterable".to_string(),
+        PhpType::Callable => "callable".to_string(),
+        PhpType::Object(name) => name.clone(),
+        PhpType::Void | PhpType::Never => "null".to_string(),
+        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar => "mixed".to_string(),
+        other => format!("{other:?}"),
+    }
 }
 
 /// Resolved public instance-method candidate for a runtime callable array.
@@ -188,6 +211,12 @@ pub(super) fn lower_callable_descriptor_invoke(
 /// Unboxes the callback and dispatches every PHP callable runtime shape: string
 /// function names, closure descriptors, invokable objects, and two-element
 /// instance/static method arrays. Any other tag or malformed array is fatal.
+///
+/// Every tag test branches through `abi::emit_branch_if_equal_wide`. The arms are one per
+/// callable target in the program, so on a large one a plain `b.eq` (±1 MiB on AArch64) no
+/// longer reaches them and the ASSEMBLER refuses the whole program with `fixup value out of
+/// range`. MEASURED on a two-class fixture whose only unusual feature is an `eval()`: 1.5M
+/// lines of assembly and that error.
 fn lower_mixed_callable_descriptor_invoke(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -223,16 +252,16 @@ fn lower_mixed_callable_descriptor_invoke(
             ctx.load_value_to_reg(callable, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");              // unbox → x0=tag, x1=payload lo, x2=payload hi
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // is the boxed Mixed payload a string function name?
-            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // dispatch a boxed string-name callable
+            abi::emit_branch_if_equal_wide(ctx.emitter, &string_label);         // dispatch a boxed string-name callable
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // is the boxed Mixed payload a callable descriptor?
-            ctx.emitter.instruction(&format!("b.eq {}", callable_label));       // dispatch a boxed closure/first-class callable descriptor
+            abi::emit_branch_if_equal_wide(ctx.emitter, &callable_label);       // dispatch a boxed closure/first-class callable descriptor
             if let Some(array_label) = &array_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // is the boxed Mixed payload a two-element callable array?
-                ctx.emitter.instruction(&format!("b.eq {}", array_label));      // dispatch a boxed instance/static-method callable array
+                abi::emit_branch_if_equal_wide(ctx.emitter, array_label);       // dispatch a boxed callable array past the string-name case table
             }
             if let Some(object_label) = &object_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_OBJECT)); // is the boxed Mixed payload an invokable object?
-                ctx.emitter.instruction(&format!("b.eq {}", object_label));     // dispatch the object's public __invoke method
+                abi::emit_branch_if_equal_wide(ctx.emitter, object_label);      // dispatch __invoke past the string-name and array dispatch blocks
             }
             abi::emit_jump(ctx.emitter, &fatal_label);
             ctx.emitter.label(&callable_label);
@@ -466,9 +495,9 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             ctx.load_value_to_reg(callable, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // classify an existing callable descriptor
-            ctx.emitter.instruction(&format!("b.eq {}", descriptor_label));     // return the existing descriptor payload
+            abi::emit_branch_if_equal_wide(ctx.emitter, &descriptor_label);     // return the existing descriptor payload
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // classify a runtime callable name
-            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // resolve the callable name through the descriptor table
+            abi::emit_branch_if_equal_wide(ctx.emitter, &string_label);         // resolve the callable name through the descriptor table
             if let Some(array_label) = &array_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // classify a two-element callable array
                 abi::emit_branch_if_equal_wide(ctx.emitter, array_label);       // resolve an instance/static method descriptor across large string dispatch tables
@@ -924,6 +953,19 @@ fn runtime_builtin_descriptor_cases_at_arity(
         {
             continue;
         }
+        // GMP's EIR lowering forwards to prelude helpers. Without the injected prelude
+        // (`--with-gmp`, or a compiled GMP reference) there is no helper to wrap, and a
+        // callable-table entry would only fail codegen on an unrelated eval host.
+        if elephc_builtin_contract::lookup(name)
+            .is_some_and(|contract| contract.module == elephc_builtin_contract::PhpModule::Gmp)
+            && !ctx
+                .module
+                .functions
+                .iter()
+                .any(|function| function.name == "__elephc_gmp_abs")
+        {
+            continue;
+        }
         let Some(sig) = crate::types::first_class_callable_builtin_sig(name) else {
             continue;
         };
@@ -1272,8 +1314,10 @@ fn runtime_instance_method_descriptor_template(
     let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
         ctx.module, impl_class, method_key, false,
     );
-    let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, sig, &captures, owns_string_return, true);
-    let php_name = format!("{}::{}", class_name, method_name);
+    let invoker_label = emit_runtime_callable_invoker_in_class(
+        ctx, sig, &captures, owns_string_return, true, Some(impl_class),
+    );
+    let php_name = format!("{}::{}", impl_class, method_name);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &entry_label,
@@ -1733,11 +1777,14 @@ fn runtime_static_method_descriptor_cases(
         let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
             ctx.module, &impl_class, &method_key, true,
         );
-        let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &wrapper_sig, &[], owns_string_return, true);
+        let invoker_label = emit_runtime_callable_invoker_in_class(
+            ctx, &wrapper_sig, &[], owns_string_return, true, Some(&impl_class),
+        );
+        let declared_name = format!("{}::{}", impl_class, method_name);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &entry_label,
-            Some(&php_name),
+            Some(&declared_name),
             callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
             Some(&wrapper_sig),
             &[],
@@ -2310,13 +2357,18 @@ fn emit_stack_string_compare_branch(
     }
 }
 
-/// Calls one matched runtime instance-method target through the normal EIR ABI.
+/// Checks literal parameters and calls the selected runtime array instance method.
+/// Guard operands before ABI conversion can erase their original Mixed tags.
 fn emit_runtime_array_instance_method_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     args: &[ValueId],
     target: &RuntimeArrayInstanceMethodTarget,
 ) -> Result<()> {
+    super::direct_calls::emit_literal_declared_parameter_guards(
+        ctx, args, &target.sig.params,
+        &format!("{}::{}", target.impl_class, target.method_key),
+    )?;
     let receiver_ty = PhpType::Object(target.class_name.clone());
     let mut param_types = Vec::with_capacity(target.sig.params.len() + 1);
     param_types.push(receiver_ty.clone());
@@ -2718,7 +2770,7 @@ fn emit_owned_descriptor_args_boundary(ctx: &mut FunctionContext<'_>, owns_descr
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 2),
-        ctx.lexical_class_id(),
+        ctx.callable_invocation_profile(),
     );
     abi::emit_call_label(ctx.emitter, entry);
 }
@@ -2991,23 +3043,96 @@ pub(super) fn emit_invoker_arg_mixed(ctx: &mut FunctionContext<'_>, args: &[Valu
     Ok(())
 }
 
+/// Builds `trigger_error`'s handler arguments, replacing the baked file and line with the
+/// caller location when the call was compiled from injected prelude code.
+///
+/// php-src attributes an internal function's user-level notice to the user's call site, not to
+/// the internal implementation. Injected prelude functions are the compiler's internal
+/// functions, so their `trigger_error` must report the location `prepare_call_site` published
+/// for the entering call instead of the prelude's synthetic span.
+pub(super) fn emit_trigger_error_handler_args(
+    ctx: &mut FunctionContext<'_>,
+    level: ValueId,
+    message: ValueId,
+    file: ValueId,
+    line: ValueId,
+    caller_site: bool,
+) -> Result<()> {
+    if !caller_site {
+        return emit_invoker_arg_mixed(ctx, &[level, message, file, line]);
+    }
+    emit_invoker_arg_array_with(ctx, &[level, message], true)?;
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+    Ok(())
+}
+
 /// Creates the indexed array consumed by runtime callable descriptor invokers.
 fn emit_invoker_arg_array(ctx: &mut FunctionContext<'_>, args: &[ValueId]) -> Result<()> {
-    emit_new_invoker_arg_array(ctx, args.len());
-    if args.is_empty() {
+    emit_invoker_arg_array_with(ctx, args, false)
+}
+
+/// Builds the invoker argument array, optionally appending the published caller file and line.
+fn emit_invoker_arg_array_with(
+    ctx: &mut FunctionContext<'_>,
+    args: &[ValueId],
+    caller_site: bool,
+) -> Result<()> {
+    let extra = if caller_site { 2 } else { 0 };
+    emit_new_invoker_arg_array(ctx, args.len() + extra);
+    if args.is_empty() && !caller_site {
         return Ok(());
     }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the in-progress invoker argument array across element boxing
     for arg in args {
         emit_box_invoker_arg(ctx, *arg)?;
-        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed argument while loading the invoker array
-        emit_append_boxed_invoker_arg(ctx);
-        emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &PhpType::Mixed);
-        emit_store_result_to_top_stack_slot(ctx);
+        emit_append_boxed_result_as_invoker_arg(ctx);
+    }
+    if caller_site {
+        emit_append_published_invoker_arg(ctx, PublishedInvokerArg::File);
+        emit_append_published_invoker_arg(ctx, PublishedInvokerArg::Line);
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
+}
+
+/// One component of the caller location `prepare_call_site` published before the call.
+#[derive(Clone, Copy)]
+enum PublishedInvokerArg {
+    /// `_php_diagnostic_file` plus its length.
+    File,
+    /// `_php_diagnostic_line`.
+    Line,
+}
+
+/// Loads one published caller-location component, boxes it, and appends it to the argument array.
+fn emit_append_published_invoker_arg(ctx: &mut FunctionContext<'_>, component: PublishedInvokerArg) {
+    match component {
+        PublishedInvokerArg::File => {
+            let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_load_symbol_to_reg(ctx.emitter, pointer_reg, "_php_diagnostic_file", 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, length_reg, "_php_diagnostic_file_len", 0);
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        }
+        PublishedInvokerArg::Line => {
+            abi::emit_load_symbol_to_reg(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                "_php_diagnostic_line",
+                0,
+            );
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+        }
+    }
+    emit_append_boxed_result_as_invoker_arg(ctx);
+}
+
+/// Appends the boxed cell currently in the result register into the invoker argument array.
+fn emit_append_boxed_result_as_invoker_arg(ctx: &mut FunctionContext<'_>) {
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed argument while loading the invoker array
+    emit_append_boxed_invoker_arg(ctx);
+    emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &PhpType::Mixed);
+    emit_store_result_to_top_stack_slot(ctx);
 }
 
 /// Allocates the raw indexed array used to pass visible arguments to descriptor invokers.
@@ -3028,13 +3153,22 @@ fn emit_new_invoker_arg_array(ctx: &mut FunctionContext<'_>, arg_count: usize) {
 /// Boxes or retains a visible descriptor-invoker argument as an owned Mixed cell.
 fn emit_box_invoker_arg(ctx: &mut FunctionContext<'_>, arg: ValueId) -> Result<()> {
     let arg_ty = ctx.value_php_type(arg)?.codegen_repr();
+    // The declared type, so a `?ptr<T>` argument boxes address 0 as PHP null.
+    let box_ty = ctx.mixed_box_type(arg)?;
     ctx.load_value_to_result(arg)?;
     if matches!(arg_ty, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_incref_if_refcounted(ctx.emitter, &arg_ty);
     } else if ctx.value_can_own_mixed_box_source(arg)? {
-        emit_box_current_owned_value_as_mixed(ctx.emitter, &arg_ty);
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
     } else {
-        emit_box_current_value_as_mixed(ctx.emitter, &arg_ty);
+        let staged = if arg_ty == PhpType::Str {
+            let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+            super::ownership::stage_string_byte_view(ctx, arg, pointer_reg, length_reg)
+        } else {
+            false
+        };
+        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        super::ownership::release_string_byte_stage(ctx, staged);
     }
     Ok(())
 }
@@ -3203,6 +3337,7 @@ fn runtime_string_function_targets(
             ) {
                 return None;
             }
+            let base_name = function.name.split('<').next().unwrap_or(&function.name);
             Some(RuntimeStringFunctionTarget {
                 name: function.name.clone(),
                 param_types: function
@@ -3211,6 +3346,20 @@ fn runtime_string_function_targets(
                     .map(|param| param.php_type.codegen_repr())
                     .collect(),
                 return_ty,
+                false_param_prefixes: function
+                    .params
+                    .iter()
+                    .enumerate()
+                    .map(|(index, param)| {
+                        (param.php_type == PhpType::False).then(|| {
+                            format!(
+                                "{base_name}(): Argument #{} (${}) must be of type false, ",
+                                index + 1,
+                                param.name
+                            )
+                        })
+                    })
+                    .collect(),
             })
         })
         .collect::<Vec<_>>();
@@ -3252,7 +3401,21 @@ fn emit_runtime_callable_name_compare(
             abi::emit_load_int_immediate(ctx.emitter, "x4", candidate_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
             ctx.emitter.instruction("cmp x0, #0");                              // did the runtime string callable name match this user function?
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // dispatch to this user function when names match case-insensitively
+            // THE ONE DISPATCH HERE THAT HOISTS EVERY COMPARE ABOVE EVERY ARM.
+            // `lower_runtime_string_call` emits all name compares first and all call arms
+            // after, so this branch jumps over the remaining compares AND every earlier arm —
+            // a distance that grows with the number of user functions the call could name.
+            // The per-case dispatches in this file interleave compare and arm, so their
+            // conditional branches only ever skip one bounded arm; this one does not.
+            //
+            // DEFENSIVE, AND SAID SO: no ordinary PHP reaches this today. `$f()` on a string
+            // lowers to `callable_descriptor_invoke` and takes the descriptor path, whose
+            // normalizer carries the same fix and is pinned by a test. No fixture could be
+            // built that emits this dispatch, so there is no test here — one was written and
+            // its premise guard refused to pass on a dispatch that was never emitted. The form
+            // costs one instruction on the taken path and removes an assembler failure the day
+            // a lowering change routes string callables back here.
+            abi::emit_branch_if_equal_wide(ctx.emitter, matched_label);         // dispatch to this user function when names match case-insensitively
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
@@ -3273,6 +3436,32 @@ fn emit_runtime_string_function_call(
     args: &[ValueId],
     target: &RuntimeStringFunctionTarget,
 ) -> Result<()> {
+    // A `false`-declared parameter accepts ONLY the exact `false` bool: the runtime-callable
+    // surface cannot be checked statically (the callable's identity is dynamic), so every
+    // argument bound to one is guarded here. A bool source is checked by payload, a boxed
+    // mixed by tag dispatch, and every other compile-time type is refused outright with php's
+    // argument `TypeError` naming it.
+    for (prefix, operand) in target.false_param_prefixes.iter().zip(args) {
+        let Some(prefix) = prefix else { continue };
+        let operand_ty = ctx.value_php_type(*operand)?;
+        match operand_ty.codegen_repr() {
+            PhpType::False => {}
+            PhpType::Bool => {
+                ctx.load_value_to_result(*operand)?;
+                let ok_label = ctx.next_label("false_invoker_ok");
+                abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
+                super::exceptions::emit_type_error(ctx, &format!("{prefix}true given"));
+                ctx.emitter.label(&ok_label);
+            }
+            PhpType::Mixed | PhpType::Union(_) => {
+                super::emit_false_param_mixed_guard(ctx, *operand, prefix)?
+            }
+            other => super::exceptions::emit_type_error(
+                ctx,
+                &format!("{prefix}{} given", php_argument_type_name(&other)),
+            ),
+        }
+    }
     let overflow_bytes = materialize_direct_call_args(ctx, args, &target.param_types)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -3307,7 +3496,8 @@ fn store_runtime_string_call_result(
     if matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
         && return_ty.codegen_repr() != PhpType::Mixed
     {
-        emit_box_current_value_as_mixed(ctx.emitter, &return_ty.codegen_repr());
+        // A `?ptr<T>` return keeps its union, so address 0 is PHP null.
+        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(return_ty));
     }
     ctx.store_result_value(result)
 }

@@ -147,6 +147,7 @@ sidebar:
 | [`str_word_count()`](./string/str_word_count.md) | `(string $string, int $format = 0, ?string $characters = null): array|int` | `array|int` | ✓ | ✓ |
 | [`strcasecmp()`](./string/strcasecmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
 | [`strcmp()`](./string/strcmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
+| [`strip_tags()`](./string/strip_tags.md) | `(string $string, array|string|null $allowed_tags = null): string` | `string` | ✓ | ✓ |
 | [`stripos()`](./string/stripos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`stripslashes()`](./string/stripslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strlen()`](./string/strlen.md) | `(string $string): int` | `int` | ✓ | ✓ |
@@ -163,6 +164,8 @@ sidebar:
 | [`substr()`](./string/substr.md) | `(string $string, int $offset, ?int $length = null): string` | `string` | ✓ | ✓ |
 | [`substr_count()`](./string/substr_count.md) | `(string $haystack, string $needle, int $offset = 0, mixed $length = null): int` | `int` | ✓ | - |
 | [`substr_replace()`](./string/substr_replace.md) | `(string $string, string $replace, int $offset, int $length = null): string` | `string` | ✓ | ✓ |
+| [`token_get_all()`](./string/token_get_all.md) | `(string $code, int $flags = 0): array` | `array` | ✓ | ✓ |
+| [`token_name()`](./string/token_name.md) | `(int $id): string` | `string` | ✓ | ✓ |
 | [`trim()`](./string/trim.md) | `(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string` | `string` | ✓ | ✓ |
 | [`ucfirst()`](./string/ucfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`ucwords()`](./string/ucwords.md) | `(string $string, string $separators = " \t\r\n\x0C\x0B"): string` | `string` | ✓ | ✓ |

@@ -46,10 +46,46 @@ pub(super) fn lower_static_settype(
         return None;
     }
     let (var_arg, type_arg) = static_settype_arg_exprs(ctx, name, args)?;
+    let target_ty = static_settype_target_type(&type_arg)?;
+    if matches!(&var_arg.kind, ExprKind::ArrayAccess { array, .. }
+        if instance_object_class_for_ir(ctx, array)
+            .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap")))
+    {
+        let alias = weak_map_places::begin_entry_update(ctx, &var_arg, expr.span)
+            .expect("resolved WeakMap entry has a managed alias");
+        let result = lower_static_settype(ctx, name, &[alias, type_arg], expr)
+            .expect("settype alias retains the same literal target type");
+        weak_map_places::finish_entry_update(ctx);
+        return Some(result);
+    }
     let ExprKind::Variable(local_name) = &var_arg.kind else {
         return None;
     };
-    let target_ty = static_settype_target_type(&type_arg)?;
+    if ctx.boxed_reference_promotion_is_authorized(local_name, var_arg.span)
+        && !ctx.is_ref_bound_local(local_name)
+        && ctx.local_is_promotable_to_ref_cell(local_name)
+    {
+        ctx.promote_local_mixed_ref_cell(local_name, Some(var_arg.span));
+    }
+    if ctx.is_ref_bound_local(local_name) && ctx.local_type(local_name).codegen_repr() == PhpType::Mixed {
+        let target = match target_ty {
+            PhpType::Int => CastType::Int,
+            PhpType::Float => CastType::Float,
+            PhpType::Str => CastType::String,
+            PhpType::Bool => CastType::Bool,
+            _ => unreachable!("static settype targets are scalar"),
+        };
+        let cast = Expr::new(ExprKind::Cast { target, expr: Box::new(var_arg.clone()) }, expr.span);
+        let assignment = Expr::new(ExprKind::Assignment {
+            target: Box::new(var_arg), value: Box::new(cast), result_target: None,
+            prelude: Vec::new(), conditional_value_temp: None,
+        }, expr.span);
+        let value = lower_expr(ctx, &assignment);
+        if ctx.value_needs_release_after_use(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+        }
+        return Some(emit_bool_literal(ctx, true, Some(expr.span)));
+    }
     let sig = call_signature(ctx, name, source_prefers_extension_builtin(name));
     let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
     let result = emit_builtin_call_value(ctx, name, operands, PhpType::Bool, expr.span, None);
@@ -446,8 +482,8 @@ pub(super) fn lower_date_args(
     vec![format.value, lower_expr(ctx, &args[1]).value]
 }
 
-/// Lowers simple positional `json_decode` operands while stabilizing string sources early.
-pub(super) fn lower_json_decode_args(
+/// Roots JSON sources and owns boxed string conversions on normal and exceptional paths.
+pub(super) fn lower_json_source_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
@@ -456,16 +492,56 @@ pub(super) fn lower_json_decode_args(
         || crate::types::call_args::has_named_args(args)
         || args.iter().any(is_spread_arg)
     {
-        return lower_args_with_signature(ctx, sig, args);
+        let mut operands = lower_args_with_signature(ctx, sig, args);
+        own_json_source_conversion(ctx, &mut operands, args.first().map(|arg| arg.span));
+        return operands;
     }
     let source = lower_expr(ctx, &args[0]);
-    let source = persist_call_arg_if_string(ctx, source, args[0].span);
+    let source = root_evaluated_call_argument(ctx, source, args[0].span);
+    let source = if source.ir_type == IrType::Str {
+        ctx.emit_owned_value(
+            Op::StrPersist,
+            vec![source.value],
+            None,
+            PhpType::Str,
+            Op::StrPersist.default_effects(),
+            Some(args[0].span),
+        )
+    } else {
+        source
+    };
+    let source = root_evaluated_call_argument(ctx, source, args[0].span);
     let mut operands = Vec::with_capacity(args.len());
     operands.push(source.value);
     for arg in &args[1..] {
-        operands.push(lower_expr(ctx, arg).value);
+        let value = lower_expr(ctx, arg);
+        operands.push(root_evaluated_call_argument(ctx, value, arg.span).value);
     }
+    own_json_source_conversion(ctx, &mut operands, Some(args[0].span));
     operands
+}
+
+/// Makes a detached Mixed-to-string buffer visible to ordinary call cleanup and unwinding.
+fn own_json_source_conversion(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: &mut [crate::ir::ValueId],
+    span: Option<crate::span::Span>,
+) {
+    let (Some(source), Some(span)) = (operands.first_mut(), span) else { return; };
+    if !matches!(ctx.builder.value_php_type(*source).codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return;
+    }
+    // Conversion can invoke __toString. All source-order arguments are already evaluated,
+    // and their owners remain published if conversion throws before the JSON call starts.
+    let string = ctx.emit_owned_value(
+        Op::Cast,
+        vec![*source],
+        Some(Immediate::CastTarget(IrType::Str)),
+        PhpType::Str,
+        Op::Cast.default_effects(),
+        Some(span),
+    );
+    *source = root_evaluated_call_argument(ctx, string, span).value;
 }
 
 /// Emits `StrPersist` for already-string call operands before later arguments can reuse string scratch storage.

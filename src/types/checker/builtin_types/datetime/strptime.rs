@@ -151,6 +151,7 @@ return [
 pub(super) fn datetime_strptime() -> ClassMethod {
     let body = super::bodies::strptime();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_strptime".to_string(),
         visibility: Visibility::Public,
         is_static: true,

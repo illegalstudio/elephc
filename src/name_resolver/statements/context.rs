@@ -12,7 +12,7 @@ use crate::errors::CompileError;
 use crate::parser::ast::{CatchClause, Expr, StaticReceiver, Stmt, TypeExpr};
 
 use super::list::resolve_stmt_list;
-use super::super::expressions::resolve_expr;
+use super::super::expressions::{resolve_expr, with_constant_expression};
 use super::super::names::{resolve_special_or_class_name, resolve_type_expr};
 use super::super::{resolved_name, Imports, Symbols};
 
@@ -61,6 +61,12 @@ impl<'a> ResolveContext<'a> {
         catch_clause: &CatchClause,
     ) -> Result<CatchClause, CompileError> {
         Ok(CatchClause {
+            // The type arguments name classes and must canonicalize with everything else.
+            exception_type_args: catch_clause
+                .exception_type_args
+                .iter()
+                .map(|args| args.iter().map(|ty| self.type_expr(ty)).collect())
+                .collect(),
             exception_types: catch_clause
                 .exception_types
                 .iter()
@@ -89,6 +95,13 @@ impl<'a> ResolveContext<'a> {
             StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
                 resolve_special_or_class_name(name, self.namespace, self.imports, self.symbols),
             )),
+            // A generic receiver's type arguments are class names too.
+            StaticReceiver::Generic(class_type) => StaticReceiver::Generic(resolve_type_expr(
+                class_type,
+                self.namespace,
+                self.imports,
+                self.symbols,
+            )),
             _ => receiver.clone(),
         }
     }
@@ -110,7 +123,7 @@ pub(in crate::name_resolver) fn resolve_params(
             (
                 name.clone(),
                 type_ann.as_ref().map(|ty| ctx.type_expr(ty)),
-                default.as_ref().map(|expr| ctx.expr(expr)),
+                default.as_ref().map(|expr| with_constant_expression(|| ctx.expr(expr))),
                 *is_ref,
             )
         })

@@ -10,18 +10,31 @@
 use super::*;
 
 /// Returns the checked signature for an instance method call when metadata is available.
-pub(super) fn method_signature(
+pub(in crate::ir_lower) fn method_signature(
     ctx: &LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
     method: &str,
 ) -> Option<FunctionSig> {
-    let object_ty = ctx.builder.value_php_type(object);
+    method_signature_for_receiver_type(ctx, &ctx.builder.value_php_type(object), method)
+}
+
+/// Returns the checked signature for an instance method call on a receiver of `object_ty`.
+///
+/// The type-level core of `method_signature`, for callers that know the receiver's type but have
+/// no lowered receiver value, such as a closure signature derived before its body is lowered.
+pub(super) fn method_signature_for_receiver_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    method: &str,
+) -> Option<FunctionSig> {
     let key = php_symbol_key(method);
-    if let Some((class_name, _)) = singular_object_class(&object_ty) {
+    if let Some((class_name, _)) = singular_object_class(object_ty) {
         let normalized = class_name.trim_start_matches('\\');
-        return class_method_signature(ctx, normalized, &key).cloned();
+        if !normalized.is_empty() {
+            return class_method_signature(ctx, normalized, &key).cloned();
+        }
     }
-    if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
+    if dynamic_method_receiver_needs_mixed_fallback(object_ty) {
         if ctx.has_eval_barrier() {
             return None;
         }
@@ -92,7 +105,11 @@ pub(super) fn method_return_arg_alias(
     if let Some((class_name, _)) = singular_object_class(&object_ty) {
         let base_class = class_name.trim_start_matches('\\');
         let Some(base_info) = ctx.classes.get(base_class) else {
-            return ReturnArgAlias::Unknown;
+            // An interface has no class entry: any class declaring the method may answer the
+            // call, as for a dynamic receiver. A narrowed interface receiver dispatches a method
+            // the interface does not declare that way, and an `Unknown` summary kept its owned
+            // arguments alive after the call.
+            return declaring_classes_return_arg_alias(ctx, &method_key);
         };
         if base_info.is_final || base_info.final_methods.contains(&method_key) {
             return class_method_return_arg_alias(ctx, base_class, &method_key)
@@ -113,18 +130,26 @@ pub(super) fn method_return_arg_alias(
         return summary.unwrap_or(ReturnArgAlias::Unknown);
     }
     if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
-        if ctx.has_eval_barrier() {
-            return ReturnArgAlias::Unknown;
-        }
-        for candidate in ctx.classes.keys() {
-            let Some(alias) = class_method_return_arg_alias(ctx, candidate, &method_key) else {
-                continue;
-            };
-            summary = Some(match summary {
-                Some(current) => current.merge(&alias),
-                None => alias,
-            });
-        }
+        return declaring_classes_return_arg_alias(ctx, &method_key);
+    }
+    summary.unwrap_or(ReturnArgAlias::Unknown)
+}
+
+/// Merges the return-alias summaries of every class that declares `method_key`, for a receiver
+/// whose runtime class can be any of them. `Unknown` behind an eval barrier or when none does.
+fn declaring_classes_return_arg_alias(ctx: &LoweringContext<'_, '_>, method_key: &str) -> ReturnArgAlias {
+    if ctx.has_eval_barrier() {
+        return ReturnArgAlias::Unknown;
+    }
+    let mut summary: Option<ReturnArgAlias> = None;
+    for candidate in ctx.classes.keys() {
+        let Some(alias) = class_method_return_arg_alias(ctx, candidate, method_key) else {
+            continue;
+        };
+        summary = Some(match summary {
+            Some(current) => current.merge(&alias),
+            None => alias,
+        });
     }
     summary.unwrap_or(ReturnArgAlias::Unknown)
 }
@@ -182,19 +207,45 @@ pub(super) fn method_call_result_type(
     op: Op,
     expr: &Expr,
 ) -> PhpType {
-    let object_ty = ctx.builder.value_php_type(object);
-    let nullable = singular_object_class(&object_ty)
+    method_call_result_type_for_receiver_type(
+        ctx,
+        &ctx.builder.value_php_type(object),
+        method,
+        op,
+        expr,
+    )
+}
+
+/// Returns the checked return type for an instance method call on a receiver of `object_ty`.
+///
+/// The type-level core of `method_call_result_type`: late-static returns are bound to the
+/// receiver class and a nullsafe call on a nullable receiver adds `null`. A closure whose body is
+/// `return $o->m();` derives its signature through this before the body is lowered, so the two
+/// agree on the result the call hands back (issue #1269).
+pub(super) fn method_call_result_type_for_receiver_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    method: &str,
+    op: Op,
+    expr: &Expr,
+) -> PhpType {
+    let nullable = singular_object_class(object_ty)
         .map(|(_, nullable)| nullable)
         .unwrap_or(false);
-    let Some(return_ty) = method_signature(ctx, object, method)
+    let Some(return_ty) = method_signature_for_receiver_type(ctx, object_ty, method)
         .map(|signature| normalize_value_php_type(signature.return_type))
     else {
-        if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
+        // A named receiver lacks the method only when the checker narrowed it to a class that
+        // has it (`if ($animal instanceof Dog)`). Codegen dispatches that call on the runtime
+        // class, which hands back a boxed result, as for an untyped receiver.
+        if dynamic_method_receiver_needs_mixed_fallback(object_ty)
+            || singular_object_class(object_ty).is_some()
+        {
             return PhpType::Mixed;
         }
         return fallback_expr_type(expr);
     };
-    let return_ty = if let Some((receiver_name, _)) = singular_object_class(&object_ty) {
+    let return_ty = if let Some((receiver_name, _)) = singular_object_class(object_ty) {
         instance_method_late_static_return_for_ir(ctx, receiver_name, &php_symbol_key(method))
             .map(|return_type| late_static_return_type_for_ir(ctx, &return_type, receiver_name))
             .unwrap_or(return_ty)
@@ -206,6 +257,32 @@ pub(super) fn method_call_result_type(
     } else {
         return_ty
     }
+}
+
+/// Returns the return type a closure signature records for a directly returned
+/// `$receiver->method(...)` whose receiver has type `object_ty`.
+///
+/// Mirrors `method_call_result_type` wherever the metadata names the method, and answers boxed
+/// `Mixed` wherever the call could dispatch somewhere this metadata cannot see: a receiver that
+/// is not an object type, or a method its class does not declare (a `__call` dispatch, or a
+/// closure later rebound to a class that does). Boxing is always a sound return contract. The
+/// syntactic fallback this replaces answered `Int` for every method call, so a closure returning
+/// `$o->name()` handed a string back through an int slot and printed 0 (issue #1269).
+pub(in crate::ir_lower) fn closure_return_method_call_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    method: &str,
+    expr: &Expr,
+) -> PhpType {
+    if singular_object_class(object_ty).is_none()
+        && !dynamic_method_receiver_needs_mixed_fallback(object_ty)
+    {
+        return PhpType::Mixed;
+    }
+    if method_signature_for_receiver_type(ctx, object_ty, method).is_none() {
+        return PhpType::Mixed;
+    }
+    method_call_result_type_for_receiver_type(ctx, object_ty, method, Op::MethodCall, expr)
 }
 
 /// Returns preserved late-static return syntax for EIR instance dispatch.
@@ -259,6 +336,7 @@ pub(super) fn common_dynamic_method_signature(
 pub(super) fn dynamic_method_receiver_needs_mixed_fallback(php_type: &PhpType) -> bool {
     match php_type {
         PhpType::Mixed => true,
+        PhpType::Object(name) => name.is_empty(),
         PhpType::Union(members) => members
             .iter()
             .any(|member| matches!(member, PhpType::Mixed | PhpType::Object(_))),

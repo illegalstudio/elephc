@@ -223,7 +223,7 @@ fn curl_multi_exec_rejects_a_null_seeded_still_running() {
              $status = curl_multi_exec($mh, $running);
          } while ($running > 0 && $status == CURLM_OK);
          echo $running;",
-        "parameter $still_running expects Int, got Void",
+        "parameter $still_running expects int, got null",
     );
     expect_curl_error(
         "<?php
@@ -364,7 +364,7 @@ fn check_source_for_php_version(
 ) -> Result<(), String> {
     let tokens = tokenize(src).map_err(|e| e.message.clone())?;
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
-    let ast = elephc::autoload::collect_aliases(ast);
+    let ast = elephc::autoload::collect_aliases(ast).map_err(|error| error.message)?;
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used_for_version(

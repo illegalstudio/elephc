@@ -1,8 +1,6 @@
 ---
 title: "mysqli_init()"
 description: "Creates an unconnected mysqli object for mysqli_real_connect()."
-sidebar:
-  order: 137
 ---
 
 ## mysqli_init()
@@ -19,8 +17,9 @@ Creates an unconnected mysqli object for mysqli_real_connect().
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -29,7 +29,7 @@ fn check_image(src: &str) -> Result<(), String> {
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let defines: HashSet<String> = HashSet::new();
     let ast = elephc::conditional::apply(ast, &defines);
-    let ast = elephc::autoload::collect_aliases(ast);
+    let ast = elephc::autoload::collect_aliases(ast).map_err(|error| error.message)?;
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);

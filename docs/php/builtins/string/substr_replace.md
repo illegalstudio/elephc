@@ -1,8 +1,6 @@
 ---
 title: "substr_replace()"
 description: "Replaces text within a portion of a string."
-sidebar:
-  order: 936
 ---
 
 ## substr_replace()
@@ -23,8 +21,9 @@ Replaces text within a portion of a string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/substr_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/substr_replace.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

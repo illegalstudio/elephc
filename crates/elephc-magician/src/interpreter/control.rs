@@ -150,6 +150,8 @@ pub(super) struct EvalSprintfSpec {
 
 /// Eval-visible predefined constant payloads that are not stored in the dynamic context.
 pub(super) enum EvalPredefinedConstant {
+    Null,
+    Bool(bool),
     Int(i64),
     Float(f64),
     String(&'static str),

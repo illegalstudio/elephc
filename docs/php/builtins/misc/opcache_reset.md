@@ -1,8 +1,6 @@
 ---
 title: "opcache_reset()"
 description: "Clears the whole opcode cache."
-sidebar:
-  order: 643
 ---
 
 ## opcache_reset()
@@ -19,8 +17,9 @@ Clears the whole opcode cache.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

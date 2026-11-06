@@ -7,11 +7,12 @@
 //! Called from:
 //! - `crate::web_prelude::inject_if_web`, which prunes what the program cannot reach and wraps
 //!   the result in the catch-all `try`.
+//! - `crate::web_prelude::application::inject_on_compiler_stack` for per-request preparation.
 //!
 //! Key details:
 //! - Each helper below is one declaration of the former `WEB_PRELUDE_SRC`, transcribed from its
-//!   own parse and checked against it node for node before the text was deleted. The order in
-//!   `web_declarations` is the order the source had, which matters for the executable BOOTSTRAP
+//!   own parse and checked against it node for node before the text was deleted. The
+//!   `web_declarations_with_environment` builder preserves source order for executable BOOTSTRAP
 //!   statements interleaved with the declarations (they populate the superglobals and may start
 //!   the session, and they run where they sit).
 //! - THE THREE `__PLACEHOLDER__` SLOTS ARE NOW PARAMETERS. `__ELEPHC_PHP_VERSION_ID__` is an
@@ -4491,22 +4492,20 @@ fn decl_fn_elephc_session_name_valid() -> Stmt {
 }
 
 /// `ini_set` — transcribed from the PHP form.
+///
+/// The `opcache.*` directives elephc's runtime script cache actually reads are handled
+/// FIRST, by the same arms the CLI wrapper uses, and only then does the blanket
+/// `opcache.*` refusal below apply to the rest. Without that order a `--web` binary would
+/// answer `false` for `opcache.revalidate_freq` while the identical CLI binary honoured
+/// it — the two surfaces disagreeing about the same directive.
 fn decl_fn_ini_set() -> Stmt {
-    function("ini_set")
-        .param("option", TypeExpr::Str)
-        .param(
-            "value",
-            t_union(vec![
-                TypeExpr::Str,
-                TypeExpr::Int,
-                TypeExpr::Float,
-                TypeExpr::Bool,
-                TypeExpr::Void,
-            ]),
-        )
-        .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
-        .body(vec![
-            crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_SET),
+    // Core and mbstring directives first, as main routes them; they share no name with the
+    // `opcache.*` arms below, so the order between the two only mirrors main's.
+    let mut body = vec![crate::shared_ini_prelude::directive(
+        elephc_builtin_contract::mbstring_abi::ini::INI_SET,
+    )];
+    body.extend(opcache_prelude::build::opcache_ini_set_arms());
+    body.extend(vec![
             s_assign("old", e_str("")),
             s_if(
                 e_binop(e_call("__elephc_opcache_ini_string", vec![e_var("option")]), BinOp::StrictNotEq, e_bool(false)),
@@ -4903,7 +4902,21 @@ fn decl_fn_ini_set() -> Stmt {
                 None,
             ),
             s_return(e_var("old")),
-        ])
+    ]);
+    function("ini_set")
+        .param("option", TypeExpr::Str)
+        .param(
+            "value",
+            t_union(vec![
+                TypeExpr::Str,
+                TypeExpr::Int,
+                TypeExpr::Float,
+                TypeExpr::Bool,
+                TypeExpr::Void,
+            ]),
+        )
+        .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
+        .body(body)
         .build()
 }
 
@@ -5119,10 +5132,21 @@ fn decl_stmt_bootstrap_44() -> Stmt {
     )
 }
 
-/// Builds the whole `--web` surface, one declaration per helper above, in source order.
+/// Builds the complete web surface for declaration audits and prelude tooling.
+#[cfg(test)]
 pub(crate) fn web_declarations(
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],
+) -> Program {
+    web_declarations_with_environment(php_version, ini_overrides, true)
+}
+
+/// Builds the web surface, copying the environment only when user code can observe it.
+/// The empty array remains available for internal session callback storage in either case.
+pub(crate) fn web_declarations_with_environment(
+    php_version: PhpVersion,
+    ini_overrides: &[(String, String)],
+    populate_environment: bool,
 ) -> Program {
     internal_declarations(|| {
         let mut declarations: Program = vec![
@@ -5267,8 +5291,11 @@ pub(crate) fn web_declarations(
             decl_stmt_bootstrap_31(),
             decl_stmt_bootstrap_32(),
             decl_stmt_bootstrap_33(),
-            decl_stmt_bootstrap_34(),
-            decl_stmt_bootstrap_35(),
+        ];
+        if populate_environment {
+            declarations.extend([decl_stmt_bootstrap_34(), decl_stmt_bootstrap_35()]);
+        }
+        declarations.extend([
             decl_fn_elephc_emit_cookie(),
             decl_fn_setcookie(),
             decl_fn_setrawcookie(),
@@ -5319,7 +5346,7 @@ pub(crate) fn web_declarations(
             decl_fn_elephc_ini_session_keys(),
             decl_fn_elephc_is_session_ini(),
             decl_fn_elephc_ini_get_raw(),
-        ];
+        ]);
 
         // The shared `opcache.*` INI helpers (`__elephc_opcache_ini_string` / `_access` / `_keys`
         // / `_all_details` / `_all_plain`), baked for the compile target so `ini_get`/`ini_set`/

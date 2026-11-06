@@ -48,7 +48,7 @@ macro_rules! impl_fake_numeric_string_ops {
         self.runtime_fmod(left, right)
     }
     /// Adds fake numeric cells for interpreter tests.
-    fn add(
+    fn add_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -56,7 +56,7 @@ macro_rules! impl_fake_numeric_string_ops {
         self.runtime_add(left, right)
     }
     /// Subtracts fake numeric cells for interpreter tests.
-    fn sub(
+    fn sub_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -64,7 +64,7 @@ macro_rules! impl_fake_numeric_string_ops {
         self.runtime_sub(left, right)
     }
     /// Multiplies fake numeric cells for interpreter tests.
-    fn mul(
+    fn mul_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -72,7 +72,7 @@ macro_rules! impl_fake_numeric_string_ops {
         self.runtime_mul(left, right)
     }
     /// Divides fake numeric cells for interpreter tests.
-    fn div(
+    fn div_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -80,7 +80,7 @@ macro_rules! impl_fake_numeric_string_ops {
         self.runtime_div(left, right)
     }
     /// Computes fake integer modulo for interpreter tests.
-    fn modulo(
+    fn modulo_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -88,7 +88,7 @@ macro_rules! impl_fake_numeric_string_ops {
         self.runtime_modulo(left, right)
     }
     /// Raises fake numeric cells for interpreter tests.
-    fn pow(
+    fn pow_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -125,7 +125,7 @@ macro_rules! impl_fake_numeric_string_ops {
         self.runtime_concat(left, right)
     }
     /// Compares fake scalar cells and returns a fake PHP boolean.
-    fn compare(
+    fn compare_raw(
         &mut self,
         op: EvalBinOp,
         left: RuntimeCellHandle,
@@ -134,7 +134,7 @@ macro_rules! impl_fake_numeric_string_ops {
         self.runtime_compare(op, left, right)
     }
     /// Compares fake numeric cells and returns a PHP spaceship integer.
-    fn spaceship(
+    fn spaceship_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -158,7 +158,7 @@ macro_rules! impl_fake_numeric_string_ops {
         self.runtime_string_bytes(value)
     }
     /// Returns PHP-like truthiness for fake runtime cells.
-    fn truthy(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+    fn truthy_raw(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         self.runtime_truthy(value)
     }
     /// Pushes a fake output buffer, mirroring the runtime's 64-level nesting cap.

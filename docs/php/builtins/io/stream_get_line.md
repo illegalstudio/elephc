@@ -1,8 +1,6 @@
 ---
 title: "stream_get_line()"
 description: "Gets line from stream resource up to a given delimiter."
-sidebar:
-  order: 372
 ---
 
 ## stream_get_line()
@@ -22,8 +20,9 @@ Gets line from stream resource up to a given delimiter.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_line.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_line.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

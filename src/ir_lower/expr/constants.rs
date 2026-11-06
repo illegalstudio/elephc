@@ -164,6 +164,16 @@ pub(super) fn lower_const_ref(
     name: &Name,
     expr: &Expr,
 ) -> LoweredValue {
+    if elephc_builtin_contract::canonical_constant_name(name.as_str()) == "PHP_BINARY" {
+        return ctx.emit_value(
+            Op::RuntimeCall,
+            Vec::new(),
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExecutablePath)),
+            PhpType::Str,
+            crate::ir::Effects::READS_PROCESS | crate::ir::Effects::ALLOC_HEAP,
+            Some(expr.span),
+        );
+    }
     if let Some((value, php_type)) = ctx.constant_value(name.as_str()) {
         return lower_constant_value(ctx, value, php_type, expr);
     }

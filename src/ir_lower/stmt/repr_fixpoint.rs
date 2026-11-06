@@ -218,7 +218,7 @@ fn discovered_conversions(
 /// re-reads as a hash. The decision is `array_storage_conversion` — the SAME predicate the checker
 /// applies to the type environment — so the element type a callee is compiled for cannot drift from
 /// the one the caller actually passes.
-fn conversion_op(entry: &PhpType, target: &PhpType) -> Option<Op> {
+pub(in crate::ir_lower) fn conversion_op(entry: &PhpType, target: &PhpType) -> Option<Op> {
     match array_storage_conversion(Some(entry), target)? {
         PhpType::Array(_) => Some(Op::ArrayToMixed),
         PhpType::AssocArray { .. } => Some(Op::ArrayToHash),
@@ -232,7 +232,7 @@ fn conversion_op(entry: &PhpType, target: &PhpType) -> Option<Op> {
 /// retains the payload. Hoisted conversions preserve those ownership rules: consuming helpers
 /// use `store_mutated_local`, and boxing uses normal replacement cleanup without cursor reset.
 ///
-/// Both helpers are idempotent on an already-converted array — `__rt_array_to_mixed` re-stamps a
+/// Both helpers are idempotent on an already-converted array: `__rt_array_to_mixed` re-stamps a
 /// Mixed array without re-boxing it, and `Op::ArrayToHash` reuses a hash payload as-is — so a
 /// canonicalization inside an outer loop stays correct on every iteration.
 fn canonicalize_array_locals(
@@ -261,7 +261,12 @@ fn canonicalize_array_locals(
             op.default_effects(),
             Some(span),
         );
-        ctx.store_mutated_local(name, converted, target.clone(), Some(span));
+        if op == Op::ArrayToHash {
+            // Keep the established raw pointer frame, as the ordinary promotion does.
+            ctx.store_retyped_container_local(name, converted, target.clone(), Some(span));
+        } else {
+            ctx.store_mutated_local(name, converted, target.clone(), Some(span));
+        }
     }
 }
 
@@ -548,7 +553,7 @@ impl<'a> ConversionScan<'a> {
                 // A handler is reachable from every point in the try, including above a conversion.
                 self.hiding();
                 self.block(try_body);
-                for CatchClause { exception_types: _, variable, body } in catches {
+                for CatchClause { exception_type_args: _, exception_types: _, variable, body } in catches {
                     if let Some(variable) = variable {
                         self.name(variable);
                     }
@@ -661,7 +666,8 @@ impl<'a> ConversionScan<'a> {
                 self.expr(value);
                 self.expr(callable);
             }
-            ExprKind::NewObject { class_name: _, args } => {
+            ExprKind::NewObject { class_name: _, args }
+            | ExprKind::NewGeneric { class_type: _, args } => {
                 self.mutation();
                 self.exprs(args);
             }

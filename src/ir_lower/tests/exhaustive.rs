@@ -96,7 +96,9 @@ fn dummy_check_result() -> CheckResult {
         ExternFunctionSig {
             name: "ef".to_string(),
             params: vec![("x".to_string(), PhpType::Int)],
+            abi_params: vec![crate::types::ExternAbiType::INT64],
             return_type: PhpType::Int,
+            abi_return: crate::types::ExternAbiType::INT64,
             library: Some("c".to_string()),
         },
     );
@@ -117,10 +119,16 @@ fn dummy_check_result() -> CheckResult {
     let mut packed_classes = HashMap::new();
     packed_classes.insert(
         "P".to_string(),
-        PackedClassInfo { fields: Vec::new(), total_size: 0 },
+        PackedClassInfo { fields: Vec::new(), total_size: 0, align: 1 },
     );
 
     CheckResult {
+        requested_instantiations: Vec::new(),
+        requested_class_instantiations: Vec::new(),
+        requested_method_instantiations: Vec::new(),
+        generic_method_sites: std::collections::HashMap::new(),
+        generic_new_sites: Default::default(),
+        generic_call_sites: HashMap::new(),
         global_env: HashMap::new(),
         functions,
         function_attribute_names: HashMap::new(),
@@ -129,6 +137,7 @@ fn dummy_check_result() -> CheckResult {
         return_alias_summaries: Default::default(),
         callable_return_sigs: HashMap::new(),
         callable_array_return_sigs: HashMap::new(),
+        closure_param_hints: HashMap::new(),
         interfaces: HashMap::new(),
         classes,
         enums,
@@ -140,6 +149,10 @@ fn dummy_check_result() -> CheckResult {
         warnings: Vec::new(),
         throw_access_sites: HashMap::new(),
         builtin_call_types: HashMap::new(),
+        closure_generator_spans: Default::default(),
+        array_push_property_plans: HashMap::new(),
+        member_receiver_types: HashMap::new(),
+        local_value_read_types: HashMap::new(),
         boxed_reference_promotion_sites: HashMap::new(),
         buffer_read_sites: Default::default(),
         first_class_builtin_call_types: HashMap::new(),
@@ -175,6 +188,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
     ClassInfo {
         class_id: 1,
         declaration_span: crate::span::Span::dummy(),
+        is_internal: false,
         parent: None,
         is_abstract: false,
         is_final: false,
@@ -203,6 +217,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         property_offsets: HashMap::new(),
         property_declaring_classes: HashMap::new(),
         defaults: Vec::new(),
+        deferred_property_default_error: None,
         property_visibilities: HashMap::new(),
         property_set_visibilities: HashMap::new(),
         declared_properties: Default::default(),
@@ -243,6 +258,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         abstract_static_methods: Default::default(),
         static_vtable_methods: Vec::new(),
         static_vtable_slots: HashMap::new(),
+        declared_interfaces: Vec::new(),
         interfaces: Vec::new(),
         constructor_param_to_prop: Vec::new(),
     }
@@ -416,7 +432,12 @@ fn lowers_every_stmt_variant_smoke() {
         span: sp(),
         attributes: Vec::new(),
     };
-    let trait_use = TraitUse { trait_names: vec![name("T")], adaptations: Vec::new(), span: sp() };
+    let trait_use = TraitUse {
+        trait_names: vec![name("T")],
+        type_args: vec![Vec::new()],
+        adaptations: Vec::new(),
+        span: sp(),
+    };
     let object = expr(ExprKind::NewObject { class_name: name("C"), args: Vec::new() });
 
     let program = vec![
@@ -462,7 +483,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::Synthetic(vec![stmt(StmtKind::Echo(str_lit("synthetic")))])),
         stmt(StmtKind::Try {
             try_body: vec![stmt(StmtKind::Echo(str_lit("try")))],
-            catches: vec![CatchClause { exception_types: vec![name("Exception")], variable: Some("e".to_string()), body: vec![stmt(StmtKind::Echo(str_lit("catch")))] }],
+            catches: vec![CatchClause { exception_type_args: Vec::new(), exception_types: vec![name("Exception")], variable: Some("e".to_string()), body: vec![stmt(StmtKind::Echo(str_lit("catch")))] }],
             finally_body: Some(vec![stmt(StmtKind::Echo(str_lit("finally")))]),
         }),
         stmt(StmtKind::ExprStmt(int(0))),
@@ -473,6 +494,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::UseDecl { imports: vec![UseItem { kind: UseKind::Const, name: name("CONST_NAME"), alias: "CONST_NAME".to_string() }] }),
         stmt(StmtKind::FunctionDecl {
             name: "f".to_string(),
+            type_params: Vec::new(),
             params: vec![("x".to_string(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
@@ -490,6 +512,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::Global { vars: vec!["g".to_string()] }),
         stmt(StmtKind::StaticVar { name: "sv".to_string(), init: int(1) }),
         stmt(StmtKind::ClassDecl {
+            generics: None,
             name: "C".to_string(),
             extends: None,
             implements: Vec::new(),
@@ -501,10 +524,10 @@ fn lowers_every_stmt_variant_smoke() {
             methods: vec![method.clone(), static_method.clone()],
             constants: vec![class_const.clone()],
         }),
-        stmt(StmtKind::EnumDecl { name: "E".to_string(), backing_type: Some(TypeExpr::Int), cases: vec![EnumCaseDecl { name: "A".to_string(), value: Some(int(1)), span: sp(), attributes: Vec::new() }], implements: Vec::new(), trait_uses: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
+        stmt(StmtKind::EnumDecl { name: "E".to_string(), generics: None, backing_type: Some(TypeExpr::Int), cases: vec![EnumCaseDecl { name: "A".to_string(), value: Some(int(1)), span: sp(), attributes: Vec::new() }], implements: Vec::new(), trait_uses: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
         stmt(StmtKind::PackedClassDecl { name: "P".to_string(), fields: vec![PackedField { name: "x".to_string(), type_expr: TypeExpr::Int, span: sp() }] }),
-        stmt(StmtKind::InterfaceDecl { name: "I".to_string(), extends: Vec::new(), properties: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
-        stmt(StmtKind::TraitDecl { name: "T".to_string(), trait_uses: Vec::new(), properties: Vec::new(), methods: vec![method], constants: vec![class_const] }),
+        stmt(StmtKind::InterfaceDecl { generics: None, name: "I".to_string(), extends: Vec::new(), properties: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
+        stmt(StmtKind::TraitDecl { name: "T".to_string(), generics: None, trait_uses: Vec::new(), properties: Vec::new(), methods: vec![method], constants: vec![class_const] }),
         stmt(StmtKind::PropertyAssign { object: Box::new(object.clone()), property: "p".to_string(), value: int(1) }),
         stmt(StmtKind::StaticPropertyAssign { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), value: int(1) }),
         stmt(StmtKind::StaticPropertyArrayPush { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), value: int(1) }),
@@ -525,6 +548,7 @@ fn lowers_every_stmt_variant_smoke() {
 /// Constructs a concrete class method declaration for synthetic class-like AST nodes.
 fn class_method(name: &str, is_static: bool) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static,

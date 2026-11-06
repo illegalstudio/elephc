@@ -9,6 +9,7 @@
 //! - Loop exits, empty bodies, and effectful conditions must be handled before removing structural statements.
 
 use super::super::*;
+use super::super::switch::array_read_needs_merge_context;
 use super::statements::prune_stmt;
 
 /// Recursively rewrites an expression tree, pruning constant subexpressions while
@@ -138,21 +139,15 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             captures,
             capture_refs,
             by_ref_return,
-        } => ExprKind::Closure {
-            params,
-            variadic,
-            variadic_by_ref,
-            variadic_type,
-            return_type,
-            body: crate::optimize::generator_bodies::rewrite_preserving_yield(
-                body,
-                prune_block,
-            ),
-            is_arrow,
-            is_static,
-            captures,
-            capture_refs,
-            by_ref_return,
+        } => {
+            let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
+                params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &body);
+            ExprKind::Closure {
+                params, variadic, variadic_by_ref, variadic_type, return_type,
+                body: with_return_boundary_facts(Some(&facts), ||
+                    crate::optimize::generator_bodies::rewrite_preserving_yield(body, prune_block)),
+                is_arrow, is_static, captures, capture_refs, by_ref_return,
+            }
         },
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
             name,
@@ -170,6 +165,10 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::ConstRef(name) => ExprKind::ConstRef(name),
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name,
+            args: args.into_iter().map(prune_expr).collect(),
+        },
+        ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
+            class_type,
             args: args.into_iter().map(prune_expr).collect(),
         },
         ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
@@ -289,6 +288,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
 fn prune_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
     match target {
         InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
+        InstanceOfTarget::Generic(class_type) => InstanceOfTarget::Generic(class_type),
         InstanceOfTarget::Expr(expr) => InstanceOfTarget::Expr(Box::new(prune_expr(*expr))),
     }
 }
@@ -321,8 +321,10 @@ pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
             then_expr,
             else_expr,
         } => match scalar_value(&condition) {
-            Some(value) if value.truthy() && !expr_has_side_effects(&else_expr) => then_expr.kind,
-            Some(value) if !value.truthy() && !expr_has_side_effects(&then_expr) => else_expr.kind,
+            Some(value) if value.truthy() && !expr_has_side_effects(&else_expr)
+                && !array_read_needs_merge_context(&then_expr) => then_expr.kind,
+            Some(value) if !value.truthy() && !expr_has_side_effects(&then_expr)
+                && !array_read_needs_merge_context(&else_expr) => else_expr.kind,
             _ => ExprKind::Ternary {
                 condition,
                 then_expr,
@@ -333,10 +335,14 @@ pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
             Some(value_scalar) if value_scalar.truthy() && !expr_has_side_effects(&default) => {
                 value.kind
             }
-            Some(value_scalar) if !value_scalar.truthy() => default.kind,
+            Some(value_scalar) if !value_scalar.truthy()
+                && !array_read_needs_merge_context(&default) => default.kind,
             _ => ExprKind::ShortTernary { value, default },
         },
         ExprKind::NullCoalesce { value, default } => match scalar_value(&value) {
+            Some(ScalarValue::Null) if array_read_needs_merge_context(&default) => {
+                ExprKind::NullCoalesce { value, default }
+            }
             Some(ScalarValue::Null) => default.kind,
             Some(_) if !expr_has_side_effects(&default) => value.kind,
             _ => ExprKind::NullCoalesce { value, default },

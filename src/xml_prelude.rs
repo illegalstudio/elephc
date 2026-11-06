@@ -44,13 +44,36 @@ pub(crate) fn xml_declarations() -> Program {
     build::xml_declarations()
 }
 
+/// Whether `program` uses this prelude's surface: the same test `inject_if_used` applies.
+///
+/// Also run by `crate::autoload::prelude_probe` over the autoload closure, whose files are only
+/// loaded after this prelude has been decided.
+pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool {
+    detect::program_uses_xml(program)
+}
+
 /// Injects the xml prelude when the program references the `ext/xml` / `ext/xmlwriter`
 /// surface, leaving every other program untouched.
 ///
 /// `force` comes from `--with-xml` (or the codegen harness); otherwise the decision is
 /// `detect::program_uses_xml`. The prelude carries only declarations, so prepending it is
 /// order-independent — PHP hoists them.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used(
+    program: Program,
+    force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, force, inventory)
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
     program: Program,
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,

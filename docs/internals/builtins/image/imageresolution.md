@@ -1,8 +1,6 @@
 ---
 title: "imageresolution() - internals"
 description: "Compiler internals for imageresolution(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 524
 ---
 
 ## `imageresolution()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2312](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2312) (`imageresolution`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imageresolution`)
 - **Function symbol**: `imageresolution()`
 
 

@@ -14,6 +14,7 @@ use super::super::collection_builder::EvalArrayBuilder;
 use super::object_inventory::eval_get_mangled_object_vars;
 use crate::context::{EvalErrorHandlerState, EvalNativeUserConstant};
 
+pub(in crate::interpreter) const E_WARNING: i64 = 2;
 const E_USER_ERROR: i64 = 256;
 const E_USER_WARNING: i64 = 512;
 const E_USER_NOTICE: i64 = 1_024;
@@ -263,14 +264,15 @@ fn eval_get_exception_handler(
 /// Validates one handler callback using the direct call's lexical scope when available.
 fn normalize_handler(
     callback: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: Option<&ElephcEvalScope>,
     values: &mut impl RuntimeValueOps,
-) -> Result<EvaluatedCallable, EvalStatus> {
-    match scope {
+) -> Result<(), EvalStatus> {
+    let callback = match scope {
         Some(scope) => eval_callable_from_scope(callback, context, scope, values),
         None => eval_callable(callback, context, values),
-    }
+    }?;
+    callback.release(context, values)
 }
 
 /// Returns an independent copy of a previous error handler or PHP null.
@@ -333,7 +335,7 @@ pub(in crate::interpreter) fn eval_dispatch_php_error(
 fn format_user_error(message: &str, level: i64, context: &ElephcEvalContext) -> String {
     let category = match level {
         E_USER_ERROR => "Fatal error",
-        E_USER_WARNING => "Warning",
+        E_WARNING | E_USER_WARNING => "Warning",
         E_DEPRECATED | E_USER_DEPRECATED => "Deprecated",
         _ => "Notice",
     };
@@ -390,7 +392,9 @@ fn dispatch_user_error_handler(
     }
     let callback = eval_callable(handler.callback, context, values)?;
     let suspended = context.suspend_error_handler().expect("active handler was just checked");
-    let result = eval_evaluated_callable_with_values(&callback, callback_args, context, values);
+    let result = callback.with_values(context, values, |callback, context, values| {
+        eval_evaluated_callable_with_values(callback, callback_args, context, values)
+    });
     if let Some(discarded) = context.resume_error_handler(suspended) {
         values.release(discarded.callback)?;
     }

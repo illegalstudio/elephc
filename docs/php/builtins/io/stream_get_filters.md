@@ -1,8 +1,6 @@
 ---
 title: "stream_get_filters()"
 description: "Retrieves list of registered filters."
-sidebar:
-  order: 371
 ---
 
 ## stream_get_filters()
@@ -19,8 +17,9 @@ Retrieves list of registered filters.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/stream_get_filters.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stream_get_filters.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "fclose()"
 description: "Closes an open file pointer."
-sidebar:
-  order: 310
 ---
 
 ## fclose()
@@ -20,8 +18,9 @@ Closes an open file pointer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fclose.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fclose.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

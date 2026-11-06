@@ -27,7 +27,7 @@ fn check_mysqli(src: &str) -> Result<(), String> {
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let defines: HashSet<String> = HashSet::new();
     let ast = elephc::conditional::apply(ast, &defines);
-    let ast = elephc::autoload::collect_aliases(ast);
+    let ast = elephc::autoload::collect_aliases(ast).map_err(|error| error.message)?;
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::mysqli_prelude::inject_if_used(
         ast,

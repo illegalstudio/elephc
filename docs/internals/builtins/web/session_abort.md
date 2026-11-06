@@ -1,8 +1,6 @@
 ---
 title: "session_abort() - internals"
 description: "Compiler internals for session_abort(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 978
 ---
 
 ## `session_abort()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3415](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3415) (`session_abort`)
+- **Lowering**: [`src/web_prelude/build.rs`](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs) (`session_abort`)
 - **Function symbol**: `session_abort()`
 
 

@@ -54,7 +54,6 @@ impl EvalClosureObjectTarget {
     }
 }
 
-#[cfg(not(test))]
 impl EvalClosureObjectTarget {
     /// Returns whether this callable depends on metadata retained by another eval context.
     pub(crate) fn contains_foreign_context(&self) -> bool {

@@ -17,6 +17,7 @@ pub(in crate::ffi) fn native_callable_scalar_default(
     default_payload: u64,
 ) -> Option<NativeCallableDefault> {
     match default_kind {
+        elephc_builtin_contract::EXECUTABLE_PATH_DEFAULT_KIND => Some(NativeCallableDefault::ExecutablePath),
         NATIVE_DEFAULT_NULL => Some(NativeCallableDefault::Null),
         NATIVE_DEFAULT_BOOL => Some(NativeCallableDefault::Bool(default_payload != 0)),
         NATIVE_DEFAULT_INT => Some(NativeCallableDefault::Int(default_payload as i64)),
@@ -100,9 +101,13 @@ fn native_callable_array_default_element(
                 bytes, offset,
             )?))
         }
-        NATIVE_ARRAY_DEFAULT_KEY_STRING => Some(NativeCallableArrayDefaultKey::String(
-            native_attribute_take_string(bytes, offset)?,
-        )),
+        NATIVE_ARRAY_DEFAULT_KEY_STRING => {
+            let value = native_callable_take_string_bytes(bytes, offset)?;
+            Some(match String::from_utf8(value) {
+                Ok(value) => NativeCallableArrayDefaultKey::String(value),
+                Err(error) => NativeCallableArrayDefaultKey::Bytes(error.into_bytes()),
+            })
+        }
         _ => return None,
     };
     let value = native_callable_object_default_arg_value(bytes, offset)?;
@@ -146,7 +151,8 @@ fn native_callable_object_default_arg_value_for_tag(
             native_callable_scalar_default(kind, payload)
         }
         NATIVE_OBJECT_DEFAULT_ARG_STRING => {
-            native_attribute_take_string(bytes, offset).map(NativeCallableDefault::String)
+            let value = native_callable_take_string_bytes(bytes, offset)?;
+            Some(NativeCallableDefault::from_php_bytes(value))
         }
         NATIVE_OBJECT_DEFAULT_ARG_OBJECT => native_callable_object_default_from_bytes(bytes, offset),
         NATIVE_OBJECT_DEFAULT_ARG_ARRAY => native_callable_array_default_from_bytes(bytes, offset),
@@ -226,6 +232,8 @@ fn native_callable_type_variant(
         "array" => EvalParameterTypeVariant::Array,
         "bool" => EvalParameterTypeVariant::Bool,
         "callable" => EvalParameterTypeVariant::Callable,
+        "false" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("false")),
+        "true" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("true")),
         "float" => EvalParameterTypeVariant::Float,
         "int" => EvalParameterTypeVariant::Int,
         "iterable" => EvalParameterTypeVariant::Iterable,
@@ -267,4 +275,30 @@ pub(super) fn split_three_part_property_key(
         && !declaring_class_like_name.is_empty()
         && !property_name.is_empty())
     .then_some((class_like_name, declaring_class_like_name, property_name))
+}
+
+/// Reads length-prefixed PHP bytes without applying the UTF-8 rule for symbol names.
+fn native_callable_take_string_bytes(bytes: &[u8], offset: &mut usize) -> Option<Vec<u8>> {
+    let len = usize::try_from(native_attribute_take_u32(bytes, offset)?).ok()?;
+    Some(native_attribute_take_bytes(bytes, offset, len)?.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies the native ABI type grammar keeps `false` as its literal generic atom rather
+    /// than treating it as a class name. This is what makes `GMP|false` return values accept
+    /// `gmp_invert()`'s no-inverse answer.
+    #[test]
+    fn native_return_type_spec_recognizes_false_literal() {
+        let ty = native_callable_type_from_spec("GMP|false", NativeCallableTypePosition::Return)
+            .expect("GMP|false return type");
+        assert_eq!(ty.variants().len(), 2);
+        assert!(matches!(
+            &ty.variants()[1],
+            EvalParameterTypeVariant::Generic(atom)
+                if atom == &elephc_generics::Type::atom("false")
+        ));
+    }
 }

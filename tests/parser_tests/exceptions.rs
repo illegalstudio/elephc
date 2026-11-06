@@ -25,6 +25,7 @@ fn test_parse_try_catch_finally() {
                     elephc::span::Span::dummy(),
                 )],
                 catches: vec![CatchClause {
+                    exception_type_args: Vec::new(),
                     exception_types: vec!["MyException".into()],
                     variable: Some("err".into()),
                     body: vec![Stmt::echo(Expr::int_lit(1))],
@@ -52,6 +53,7 @@ fn test_parse_multi_catch() {
                     elephc::span::Span::dummy(),
                 )],
                 catches: vec![CatchClause {
+                    exception_type_args: Vec::new(),
                     exception_types: vec!["FooException".into(), "BarException".into()],
                     variable: Some("err".into()),
                     body: vec![Stmt::echo(Expr::int_lit(1))],
@@ -77,6 +79,7 @@ fn test_parse_catch_without_variable() {
                     elephc::span::Span::dummy(),
                 )],
                 catches: vec![CatchClause {
+                    exception_type_args: Vec::new(),
                     exception_types: vec!["Exception".into()],
                     variable: None,
                     body: vec![Stmt::echo(Expr::int_lit(1))],

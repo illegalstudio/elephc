@@ -3486,17 +3486,37 @@ mod tests {
     #[test]
     fn a_verified_signature_is_spent_and_cannot_be_replayed() {
         let _guard = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let key = [3u8; handshake::KEY_LEN];
-        let published: Vec<u8> = key.to_vec();
-        let saved_key = KEY_PTR.swap(published.as_ptr() as usize, Ordering::Relaxed);
-        let mut region = vec![0u8; REGION_BYTES];
-        let saved_region = REGION.swap(region.as_mut_ptr() as usize, Ordering::Relaxed);
-
         let now = {
             let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
             unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut ts) };
             ts.tv_sec as i64
         };
+        let requests = [
+            now.to_string(),
+            (now - 30).to_string(),
+            format!("{}.req-1", now - 5),
+            format!("{}.req-2", now - 5),
+        ];
+        // The replay table refuses distinct signatures that share a live slot.
+        // Choose fixtures in separate slots so wall-clock time cannot cause a refusal.
+        let key = (0..=u8::MAX)
+            .map(|seed| [seed; handshake::KEY_LEN])
+            .find(|key| {
+                let slots: std::collections::HashSet<_> = requests
+                    .iter()
+                    .map(|request| {
+                        let mac = handshake::hmac_sha256(key, request.as_bytes());
+                        (fold_query_tag(&mac) as usize) % REPLAY_SLOTS
+                    })
+                    .collect();
+                slots.len() == requests.len()
+            })
+            .expect("the four test requests need distinct replay slots");
+        let published: Vec<u8> = key.to_vec();
+        let saved_key = KEY_PTR.swap(published.as_ptr() as usize, Ordering::Relaxed);
+        let mut region = vec![0u8; REGION_BYTES];
+        let saved_region = REGION.swap(region.as_mut_ptr() as usize, Ordering::Relaxed);
+
         let sign = |stamp: i64| {
             let tag = handshake::hmac_sha256(&key, stamp.to_string().as_bytes());
             let hex: String = tag.iter().map(|b| format!("{b:02x}")).collect();

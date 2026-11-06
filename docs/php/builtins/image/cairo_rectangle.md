@@ -1,8 +1,6 @@
 ---
 title: "cairo_rectangle()"
 description: "Adds a closed rectangular subpath to the current path."
-sidebar:
-  order: 429
 ---
 
 ## cairo_rectangle()
@@ -24,8 +22,9 @@ Adds a closed rectangular subpath to the current path.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

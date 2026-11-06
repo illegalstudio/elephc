@@ -16,7 +16,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::Module;
 use crate::names::{join_php_symbol, php_symbol_key};
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Visibility};
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
@@ -71,32 +71,25 @@ pub(super) fn emit_eval_class_constant_helpers(
     emit_reflection_constant_declaring_class_helper(module, emitter, data, &slots);
 }
 
-/// Returns true when the EIR module contains a function that can call eval.
+/// Returns whether this binary links the eval bridge, and therefore needs these helpers.
+///
+/// THE INVARIANT IS "LINKED", NOT "USES EVAL". `libelephc_magician.a` references the
+/// `__elephc_eval_*` callbacks unconditionally, so any binary that links it must define
+/// them or fail to link — `__elephc_eval_reflection_attribute_new` undefined and a dozen
+/// like it. This used to scan for functions carrying an eval local instead, which is a
+/// different question that happened to give the same answer while the ONLY reason to link
+/// the archive was an `eval()` in the program.
+///
+/// That stopped being the only reason. `opcache_compile_file()` populates the runtime script
+/// cache, which lives in the archive, so a program calling it needs the archive whether or
+/// not it ever evaluates a string. Keeping the narrower scan here made that combination
+/// unlinkable, which is what kept the fold in place and left the function answering `false`
+/// where reference answers `true`.
+///
+/// The call sites are all inside a block already gated on the same flag, so for a program
+/// that does use `eval()` nothing changes.
 fn module_uses_eval(module: &Module) -> bool {
-    all_module_functions(module).any(function_uses_eval)
-}
-
-/// Iterates every EIR function body emitted or inspected by the backend.
-fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
-    module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .chain(module.closures.iter())
-        .chain(module.fiber_wrappers.iter())
-        .chain(module.callback_wrappers.iter())
-        .chain(module.extern_callback_trampolines.iter())
-        .chain(module.runtime_callable_invokers.iter())
-}
-
-/// Returns true when a function has hidden eval state locals.
-fn function_uses_eval(function: &Function) -> bool {
-    function.locals.iter().any(|local| {
-        matches!(
-            local.kind,
-            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
-        )
-    })
+    module.required_runtime_features.eval_bridge
 }
 
 /// Collects class-like constants visible to direct eval reads and Reflection APIs.
@@ -632,7 +625,16 @@ fn static_receiver_name(
     current_info: Option<&ClassInfo>,
     receiver: &StaticReceiver,
 ) -> Option<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static => Some(current_class.to_string()),
         StaticReceiver::Parent => current_info.and_then(|info| info.parent.clone()),

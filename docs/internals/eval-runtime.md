@@ -38,9 +38,14 @@ eval($code)
   -> target-aware assembly and optional bridge linking
 ```
 
-The checker and AST optimizer deliberately stay conservative even for a source
-literal. The more precise AOT decision happens during EIR lowering, after the
-front end has already preserved PHP's dynamic semantics and diagnostics.
+The front end reads a parsable source literal as inline code: reachability,
+prelude pruning and the throwable, SPL and Reflection checker gates keep what
+the fragment names and drop the rest, exactly as for the same statements written
+outside `eval`. Only a runtime-sourced or unparsable `eval`, or a dynamic hazard
+inside the fragment (a computed call or callable, `new $c`, `include`, a
+namespace), keeps the previous whole-surface behaviour. The AOT decision itself
+still happens during EIR lowering, after the front end has preserved PHP's
+dynamic semantics and diagnostics.
 
 ## Execution-path decision
 
@@ -73,8 +78,10 @@ defers the `Throwable` check to runtime. The emitted path validates the boxed
 `Mixed` value against the runtime `Throwable` interface before unwinding. For
 a valid throwable it moves the object owner out of the `Mixed` box into the
 active exception slot and releases the box; for an invalid value it releases
-the box before raising the catchable `TypeError`. This ownership transfer is
-shared by statement-form and expression-form throws. A runnable program is
+the box before raising a catchable `Error`. A non-object raises
+`Can only throw objects`; an object that does not implement `Throwable` raises
+`Cannot throw objects that do not implement Throwable`. This ownership transfer
+is shared by statement-form and expression-form throws. A runnable program is
 `examples/eval-throw/`.
 
 `src/ir_lower/program.rs` repeats the final bridge-requirement check against the
@@ -143,17 +150,88 @@ front-end safety rules.
 When interpreter fallback is required, generated code performs these steps:
 
 1. Coerce the code argument to a PHP string.
-2. Lazily allocate the `EvalContext`, activation `EvalScope`, and, when needed,
-   `EvalGlobalScope`.
-3. Register bridge-compatible AOT functions, methods, constructors, class
-   metadata, parameter names, defaults, and visibility information.
-4. Flush visible locals, by-reference cells, closure captures, and eligible
-   globals into boxed scope cells.
-5. Set call-site file, directory, namespace, class, trait, function, and method
-   metadata used by magic constants.
-6. Call `__elephc_eval_execute` through the target-aware ABI.
-7. Reload dirty, created, or unset scope entries and propagate return/fatal/
+2. Lazily allocate the activation's `EvalContext` handle and attach the module's
+   immutable native catalog on a cache hit. A cache miss leaves the catalog
+   unpublished until a later guard requires it.
+3. Set the strict-PHP/version profile and call-site file, directory, namespace,
+   class, trait, function and method metadata. Ensure the activation `EvalScope`
+   and, when needed, `EvalGlobalScope` handles.
+4. Compute the fragment's conservative caller-scope access mask. Ask
+   `__elephc_eval_context_can_flush_without_native_catalog` whether replacing
+   existing local and global cells is safe and whether the activation still
+   has a numeric-deferral budget. Otherwise, register and publish the complete
+   native catalog before flushing any scope owner.
+5. Flush selected locals and globals or the complete eligible scope into boxed
+   cells, mark global aliases and attach the global scope to the context.
+6. Ask `__elephc_eval_context_can_defer_native_catalog` whether the parsed
+   fragment and current scopes can execute safely without native metadata. If
+   not, register and publish the complete catalog before executing PHP. Both
+   guards share one registration block and an already published catalog is
+   reused. Registration includes AOT functions, methods, constructors, class
+   metadata, constants, parameter names, defaults and visibility information.
+7. Push the caller class scope when required and call
+   `__elephc_eval_execute_with_deferred_catalog` through the target-aware ABI,
+   then restore that class scope.
+8. Reload dirty, created or unset scope entries and propagate return/fatal/
    throwable state through the normal generated runtime paths.
+
+A bounded proof permits the first 512 straight-line numeric scalar evals in
+one activation to execute while the native catalog remains unpublished. The
+next eval uses the existing full-catalog path before flushing scope owners,
+limiting repeated proof work in long loops. The saturating execution counter
+belongs to the activation and is not shared with the immutable catalog.
+Class imports are postponed only while the catalog is unready; an earlier
+metadata-dependent fragment upgrades the same activation immediately. The
+legacy `__elephc_eval_execute` entry retains eager class imports for existing
+bridge consumers.
+
+### Selective dynamic scope synchronization
+
+Before crossing into Magician, generated code asks the parser or parse cache for
+a conservative 64-bit mask of caller-scope names used by the fragment. The
+parser and native code use the same FNV-1a name hash. Each set bit gates both the
+pre-eval flush and post-eval reload for that name. Hash collisions can only
+cause an additional name to be synchronized.
+
+Selective synchronization is restricted to direct numeric scalar arithmetic
+and assignment expressions. Calls, strings, references, variable variables,
+arrays, objects, `$GLOBALS`, includes, handlers, introspection, and every other
+syntax class select the complete scope. Parse failures and fragments larger
+than 64 KiB also select the complete scope. Once a context encounters one of
+those cases, the full-scope requirement remains active for that function
+activation. A later activation creates a fresh context.
+
+A selected `Mixed` or union binding keeps the narrow mask only when its current
+runtime value is an integer, float, or boolean. Other tags promote that call to
+full synchronization. Throwable writeback reloads the selected or complete
+scope before native propagation, using the same mask as normal completion.
+
+Generated modules own a private, aligned, zero-initialized catalog token. The
+bridge assigns it a process-unique generation and retains up to eight catalogs
+per thread, ordered by last use. Reloading an image initializes a new token and
+cannot select callbacks from an older generation. Eviction removes the cache's
+ownership; already attached contexts keep their metadata alive. Registration
+failures disable publication for that context. Valid metadata replacements keep
+the registration ABI's legacy zero result and are distinguished internally from
+rejected inputs. Legacy bridge consumers using
+`__elephc_eval_context_new` continue to register independently.
+
+A cache hit shares Rust-owned descriptions and module-lifetime callback
+addresses without cloning signature maps. The cache contains no runtime cells,
+scopes, dynamic declarations, reference targets, handlers or materialized
+parameter defaults. Those remain activation-local. Native metadata writes and
+appending dynamic declared names use copy-on-write for the affected collection.
+Opaque descriptors never cross threads through this cache. Module callbacks
+and default factories must remain loaded while a context using them is live.
+
+Before native writeback, Magician validates returned values and visible scope
+graphs for restricted foreign PCNTL callables. Each context has a sticky
+capability set when a foreign callable is retained or copied, or a foreign-context
+closure target is registered. Contexts that have never acquired that metadata
+skip the graph walk and scope-cell collection. Once set, the capability stays
+active through handler replacement and pin cleanup. Full validation then covers
+cyclic containers, globals, detached handlers, and scope writes before a throw.
+Ordinary scope synchronization and throwable propagation use the same paths.
 
 Magician has no direct PCRE2 symbols in its base static library. If the final
 EIR module requires the regex runtime, generated eval setup registers the
@@ -223,6 +301,11 @@ when the old and new cell pointers coincide. Class-default collection builders
 also acquire a lease for defaults borrowed from persistent class constants or
 enum cases before inserting and releasing their temporary operands.
 
+By-value `foreach` likewise owns its evaluated receiver until iteration finishes.
+The receiver lease survives body callbacks and replacement of its source local,
+then retires on normal completion, `break`, `return`, or failure. Literal temporary
+arrays do not depend on a scope binding to keep their owner balanced.
+
 Builtin lookup is also shared at the contract boundary. Magician joins its
 implementation hooks to the same `BuiltinId` used by the compiler. For compatible
 boxed-cell operations it dispatches a typed `RuntimeBuiltinId` through
@@ -252,6 +335,93 @@ callable invocation. This mode is separate from the nested-write fetch, which
 COW-normalizes the outer container and detaches the selected zval before
 mutation.
 
+## Runtime generic specialization
+
+`crates/elephc-generics` owns structural type terms, conflict detection, written argument binding,
+dependent defaults, and the specialization depth limit shared by the compiler and Magician.
+Compiler adapters live in `src/generics/shared.rs`; runtime dispatch lives in
+`crates/elephc-magician/src/interpreter/generics/` and its parent module.
+
+The Magician parser retains an `EvalGenericTemplate` containing a declaration prototype, lexer
+tokens, lexical imports/namespace, and the token indexes of actual type-parameter uses. Replay
+substitutes those positions only, preserving unrelated identifiers and literal bytes. Constructor
+slots have separate lexical identities so promotion and shadowing remain correct.
+Class-reference type arguments are consumed only after lookahead parses a complete list;
+ordinary comparisons after `instanceof` or `new` remain expression operators.
+PHPDoc inheritance edits match the complete written parent name within the tag's `extends` or
+`implements` clause, with at most one inserted list per parent and native arguments taking priority.
+
+Runtime dispatch borrows arguments after their single source-order evaluation, completes bindings,
+checks bounds, and replays a concrete ordinary declaration. Functions and classes enter the normal
+context registries; method specializations are cached by declaring class and concrete method name.
+Eval and included-program entry share strict-PHP checks, CLI-global seeding, and direct
+template hoisting through `execute_program_statements`.
+Nested statement lists register and validate templates only when execution reaches their
+declaration, preserving return, throw, break, and continue behavior and redeclaration errors.
+Constructor inference omits null and empty arrays using concrete runtime tags, so zero-property
+native objects still contribute their class types.
+Class relation registration instantiates generic parents, interfaces, and traits before ordinary
+validation. A recursion guard rejects cyclic generic inheritance, and type growth is bounded.
+Signature compatibility projects concrete bindings through class and interface ancestors,
+including specializations that have not yet entered the runtime registry. Variance checks
+run again before specialization or cached class access, using the current dependency registry
+so later trait, class-parent, or interface declarations cannot invalidate an earlier promise.
+They include public and protected trait members and nested trait uses, with method-local slots
+shielded from enclosing template substitutions. Qualified adaptations resolve against the
+complete trait-use list before the effective imported method surface is checked.
+Class identities put class and constructor slots in a single argument list. Constructor slots
+remain part of the registry key; class-shaped inference and variance compare only class slots.
+Written lists extending beyond class slots bind the combined class/constructor parameters, so
+concrete names and parent references resolve independently of specialization cache order.
+Failed initialization releases the allocated receiver on property-default, argument-binding, or
+constructor errors and suppresses its destructor. An escaped `$this` retains class/property
+metadata until its remaining owners release it, matching PHP's failed-construction behavior.
+
+Generated-code context calls and callable dispatch use the same specialization resolver before
+ordinary binding. The public context-call entry points live in `interpreter/context_calls.rs`;
+first-class function callables may retain a template name until arguments determine its slots.
+
+Structural `EvalParameterTypeVariant::Generic` contracts validate boxed arrays and typed callbacks
+at existing argument and return boundaries. Indexed contracts reject associative storage. Typed
+local writes validate before mutation, including nullable and union array arms, normalized keys,
+and the existing contents of a selected union arm. Local reference groups collect every declared
+contract. Persistent wrappers carry those contracts in `context/local_types.rs`, so aliases,
+reference parameters, captures, and returned array references enforce the same constraints.
+The metadata borrows runtime storage and uses allocation retirement tokens to prevent contracts
+from following reused addresses. Rejected typed declarations restore the previous local contract,
+and property writes preserve shared wrappers while validating before mutation.
+Replacing a wrapper's value refreshes its element aliases and cursor metadata from the RHS
+before releasing the previous payload; a replacement without metadata clears the old entries.
+Array-element writeback copies the live receiver's metadata onto its shallow clone before
+replacing shared storage, including nested `Cell` targets. Updating one element preserves
+sibling references and the current or exhausted array cursor.
+Independent value copies retain their ordinary COW semantics.
+Float and bool keys use a temporary integer
+cell for contract validation; that cell is released on success and failure, while storage receives
+the original key so native normalization and diagnostics keep their existing operands. No new
+value representation or target-specific ABI is introduced. PHPDoc token provenance preserves strict
+mode acceptance; `EvalProgram` records native syntax for rejection before execution. The current
+file-cache layout includes retained templates, tokens, imports, structural types, typed locals,
+and the conservative caller-scope access mask, alongside preserved source spelling for direct
+and first-class function calls, native deferred-default error expressions, and retained readonly
+setter contracts.
+`FORMAT_VERSION` in `crates/elephc-magician/src/script_cache/file_store.rs` identifies the complete
+serialized layout; incompatible entries are rejected before decoding. Format changes invalidate
+older generic and ordinary eval entries, including incorrectly rewritten PHPDoc parents and
+member annotations discarded after uppercase or mixed-case native class-like keywords.
+Earlier format changes also invalidated stored parse errors for valid comparisons after class references.
+The format guard covers the combined serialized IR and its corresponding type sources.
+Retained token streams distinguish reserved words used as qualified-name segments, so
+entries written before that token variant was introduced must also be rejected.
+
+Native callable defaults retain array-unpack operands through a private array-element marker.
+Registration validates and normalizes that marker before execution; it is not public PHP syntax.
+The interpreter evaluates each unpack operand once, appends numeric entries, overwrites string
+keys, and releases partial results if evaluation fails. Generated code checks registration results
+before installing a default factory. Native class-initialization errors have a separate catalog
+entry from reflected property defaults: static access checks visibility first, then initialization,
+without invalidating an independently readable `ReflectionProperty` default.
+
 ## Parsing and cache
 
 Dynamic source is parsed into Magician's immutable EvalIR. The process-wide
@@ -264,9 +434,139 @@ source bytes:
 - excluded data: scopes, cells, declarations, context, and call-site magic
   constant values.
 
-The same cache is used by the public eval FFI entry and nested eval/include
+The same cache is used by the public eval FFI entry and nested eval
 execution. Large one-off fragments bypass it instead of occupying global cache
-capacity.
+capacity. Included files have their own memo (`parse_script_cached`), with the
+same cap: a file starts in HTML mode and a fragment in PHP mode, so the same
+bytes parse to different programs and must never share a key.
+
+## Runtime script cache
+
+**Sources:** `crates/elephc-magician/src/script_cache/`, the
+`__elephc_eval_*opcache*` symbols in `crates/elephc-magician/src/ffi/context.rs`,
+and `src/opcache_prelude/`.
+
+A PHP file included at run time — a path only `eval()` can reach — is the one
+part of a binary that is not compiled at link time. The runtime script cache is
+OPcache's cache for those files; what OPcache reports about compiled code is
+emulated from the compile-time manifest instead. Every piece of it is inert
+unless the cache is enabled for the binary (`ScriptCacheConfig::enabled`, the
+same predicate as `opcache_cache_enabled`), so a default CLI binary caches
+nothing and behaves as it did before the cache existed. The user-facing rules
+are in [OPcache](../php/opcache.md); the invariants below are what the
+implementation must keep.
+
+### The unit and the load path
+
+The unit is the FILE, keyed by its canonical path. `segments::parse_script`
+parses a whole file as PHP compiles it: the tags cut it, inline HTML becomes
+`echo` of its exact bytes, and the pieces join into one token stream parsed
+once, so a block may span the tags and a parse error anywhere fails the whole
+file. An entry holds that one program (or the parse error).
+
+`store::load_script` serves a warm entry, or fills one in this order, which is
+php-src's and is pinned by tests:
+
+1. Open the file ONCE and take the bytes, the mtime and the size from that
+   handle, so a rewrite between a read and a `stat` cannot pair new metadata
+   with old bytes.
+2. Consult the on-disk cache first: its refusals decide what may be COMPILED
+   into the cache, not whether a stored entry may be served.
+3. Refuse, in order: the blacklist (`blacklist_misses`, stored nowhere), a
+   timestamp that cannot be recorded or is younger than
+   `opcache.file_update_protection` (`misses`), then `opcache.max_file_size`
+   (`blacklist_misses`). A refused script still RUNS.
+4. Never cache a file that did not parse, in memory or on disk: a fixed file
+   must not keep raising the old error.
+
+With the cache disabled, nothing is stored and the file memo above keeps a
+repeated include off the parser.
+
+### Freshness
+
+A fill records `revalidate_at = request_time + opcache.revalidate_freq`, and
+the file is `stat`ed again only once that has passed; `validate_timestamps=0`
+never re-`stat`s. Validation compares the TIMESTAMP ALONE, as php-src does. A
+failed revalidation marks the entry discarded BEFORE the fill decides on the
+replacement, so a refused replacement never leaves the old version live. The
+request time is fixed per request: `__elephc_eval_configure_opcache` stamps it,
+once in the CLI prologue and once per `--web` request.
+
+### Capacity
+
+The cache NEVER evicts. Once the `opcache.memory_consumption` byte budget (the
+sum of the entries' `memory_footprint`, their source length) or the entry
+ceiling (`opcache.max_accelerated_files` rounded to php-src's prime, less the
+scripts compiled into the binary) is reached, it refuses new entries and
+latches `cache_full`. A forced `opcache_invalidate()` marks an entry
+discarded rather than removing it, as php-src keeps the slot until a restart.
+
+### Restarts and request boundaries
+
+`opcache_reset()` only SCHEDULES a restart: within the request the cache keeps
+answering and every counter stays put. `__elephc_eval_opcache_apply_restart`,
+which generated code emits at the top of each `--web` request, performs it and
+drops the request's `ini_set()` overrides. A CLI program is one request and
+never flushes, which is what reference PHP does with no next request.
+Configuration is installed at startup by generated code
+(`__elephc_eval_configure_opcache`, then `__elephc_eval_opcache_swap_directive`),
+not when the first eval context is built, so every call in the program sees the
+same configuration. The blacklist is loaded once per process.
+
+### The on-disk cache
+
+`file_store` implements `opcache.file_cache`. Invariants:
+
+- An entry lives at
+  `<file_cache>/<crate version>-<FORMAT_VERSION>/<FNV-1a of the path bytes>.bin`.
+  Its header carries a magic, the format version, the canonical path's raw
+  bytes, the mtime, the size and the writer's `revalidate`. A read checks the
+  header on the raw bytes before decoding, bounds the decode by the file size,
+  and treats every failure as a miss.
+- Identity is unconditional (the path bytes must match); freshness is checked
+  only under `validate_timestamps`, and a stale entry is removed by the read
+  that rejects it.
+- A write goes to an `O_EXCL` temporary under a random name, then a rename.
+  `opcache.file_cache_read_only` writes nothing and deletes nothing.
+- **bincode is not self-describing**, so an entry written for another EvalIR
+  shape can decode into plausible garbage. `format_guard` fingerprints the
+  code lines of `eval_ir/*.rs`, serialized lexer tokens and parser import state,
+  the generic type contract, `segments.rs` and `errors.rs`; when it fails,
+  bump `FORMAT_VERSION` and re-record the fingerprint. A change to the stored
+  header (`CacheFile`, in `file_store.rs`) is invisible to the guard and needs
+  a manual bump. Never reuse a version number that has been published.
+
+### The native bridges
+
+The natively compiled `opcache_*` functions reach this cache through the
+internal `__elephc_opcache_rt_*` builtins, backed by the FFI symbols above, so
+native code and `eval()` give the same answers. With no eval bridge linked,
+each call folds to `0` at lowering time; `opcache_compile_file()`, whose job is
+to create an entry, links the interpreter by itself.
+
+Configured binaries supply every OPcache declaration for interpreter-capable eval,
+including literal fragments with runtime-selected callable names. The shared AOT
+planner excludes native and scope-only literals from this broad injection, so those
+fragments do not acquire a dynamic cache or file-cache startup validation.
+
+Free-function registration carries the declaration's compiler-internal origin
+in bit 2 of the existing signature flags word. AST source mode sets the EIR
+function flag, and the target-aware registration preserves it for Magician.
+OPcache internal argument binding applies to generated preludes and fallback
+handlers; functions declared by the user keep their own signatures and reference
+semantics. Legacy registrations without the origin bit keep user semantics.
+
+Cached-script snapshots retain native `PathBuf` values. The borrowed-string FFI
+copies their encoded bytes into its thread-local buffer without a UTF-8
+conversion, so distinct Unix filenames remain distinct status keys and the
+reported paths can be passed back to invalidation.
+
+The integration suites are `tests/opcache_runtime_cache_tests.rs`,
+`opcache_file_cache_tests.rs`, `opcache_blacklist_tests.rs` and
+`opcache_strict_invalidate_tests.rs`; unit tests sit beside each module
+(`store_tests.rs`, `file_store.rs`, `segments.rs`). Each rule above was
+measured against reference PHP, and the comment at each site records the
+measurement.
 
 ## Linking and targets
 

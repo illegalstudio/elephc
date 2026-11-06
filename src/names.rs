@@ -12,6 +12,68 @@
 //!   is ambiguous because mangled fragments contain `_`, which silently merged unrelated PHP
 //!   declarations onto one storage cell.
 
+/// Prefix reserved for pointer targets that are C widths rather than class names.
+pub(crate) const POINTER_WIDTH_PREFIX: &str = "\0elephc-pointer-width:";
+
+/// Encodes a width target without colliding with a PHP class name.
+pub(crate) fn pointer_width_tag(width: &str) -> String {
+    format!("{}{}", POINTER_WIDTH_PREFIX, width)
+}
+
+/// Converts a resolved pointer target spelling to its non-colliding internal tag.
+pub(crate) fn resolved_pointer_target_tag(target: &str) -> String {
+    if let Some(inner) = target.strip_prefix("ptr<").and_then(|s| s.strip_suffix('>')) {
+        return format!("ptr<{}>", resolved_pointer_target_tag(inner));
+    }
+    if let Some(rooted) = target.strip_prefix('\\') {
+        return rooted.to_string();
+    }
+    if crate::parser::ast::is_c_width_type_name(target) {
+        return pointer_width_tag(target);
+    }
+    target.to_string()
+}
+
+/// Renders internal width tags with their source spelling.
+pub(crate) fn display_pointer_target(target: &str) -> String {
+    target.replace(POINTER_WIDTH_PREFIX, "")
+}
+
+/// Returns the innermost target named by a nested pointer type.
+pub(crate) fn pointer_target_leaf(mut target: &str) -> &str {
+    while let Some(inner) = target.strip_prefix("ptr<").and_then(|s| s.strip_suffix('>')) {
+        target = inner;
+    }
+    target
+}
+
+/// Reconstructs the leaf class name stored inside a nested pointer target.
+pub(crate) fn pointer_target_leaf_name(name: &Name) -> Name {
+    let leaf = pointer_target_leaf(name.as_str());
+    if leaf == name.as_str() {
+        return name.clone();
+    }
+    let (kind, bare) = match leaf.strip_prefix('\\') {
+        Some(bare) => (NameKind::FullyQualified, bare),
+        None => (NameKind::Qualified, leaf),
+    };
+    Name::from_parts(kind, bare.split('\\').map(str::to_string).collect())
+}
+
+/// Encodes a canonical class name as PHP literal text without confusing private-use characters.
+pub(crate) fn class_name_literal(name: &str) -> String {
+    let mut literal = String::new();
+    for character in name.trim_start_matches('\\').chars() {
+        elephc_builtin_contract::string_literal::push_literal_char(character, &mut literal);
+    }
+    literal
+}
+
+/// Recovers the UTF-8 spelling of a symbol referenced through a PHP string literal.
+pub(crate) fn literal_symbol_name(value: &str) -> Option<String> {
+    String::from_utf8(elephc_builtin_contract::string_literal::literal_bytes(value)).ok()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Kind of PHP name based on how it was written in source.
 ///
@@ -85,6 +147,48 @@ impl Name {
             parts,
             text: String::new(),
             function_fallback: false,
+        }
+        .with_text()
+    }
+
+    /// Returns this name with type ARGUMENTS appended to its last part: `identity` -> `identity<int>`.
+    ///
+    /// The instantiated name is this compiler's encoding for an instantiation — `Box<int>` is a
+    /// real class name, not a decoration — so a call site that writes its type arguments encodes
+    /// them the same way, and one spelling serves the parser, the checker and every diagnostic.
+    /// The namespace parts are untouched: `App\identity<int>` keeps resolving as `App\identity`
+    /// would.
+    pub fn with_type_arguments(self, args: &[crate::parser::ast::TypeExpr]) -> Self {
+        self.with_rendered_type_arguments(args, crate::generics::describe_type)
+    }
+
+    /// Appends unresolved source arguments, retaining explicit roots until name resolution.
+    pub(crate) fn with_written_type_arguments(self, args: &[crate::parser::ast::TypeExpr]) -> Self {
+        self.with_rendered_type_arguments(args, crate::generics::describe_written_type)
+    }
+
+    /// Appends type arguments with the selected source or canonical spelling policy.
+    fn with_rendered_type_arguments(
+        self, args: &[crate::parser::ast::TypeExpr],
+        render: fn(&crate::parser::ast::TypeExpr) -> String,
+    ) -> Self {
+        if args.is_empty() {
+            return self;
+        }
+        let rendered = args
+            .iter()
+            .map(render)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut parts = self.parts;
+        if let Some(last) = parts.last_mut() {
+            *last = format!("{}<{}>", last, rendered);
+        }
+        Self {
+            kind: self.kind,
+            parts,
+            text: String::new(),
+            function_fallback: self.function_fallback,
         }
         .with_text()
     }
@@ -371,6 +475,93 @@ pub fn join_symbol_fragments(prefix: &str, fragments: &[&str]) -> String {
     symbol
 }
 
+/// Returns the byte length of the `mangle_fqn()` escape at the start of `bytes`, if any.
+///
+/// The escapes are `_u_`, `_N_` and `_xNN_` with two lowercase hex digits; their second byte
+/// is never `_`, which is what separates them from a `join_symbol_fragments()` boundary.
+fn mangled_escape_len(bytes: &[u8]) -> Option<usize> {
+    match bytes {
+        [b'_', b'u' | b'N', b'_', ..] => Some(3),
+        [b'_', b'x', high, low, b'_', ..]
+            if is_lower_hex_digit(*high) && is_lower_hex_digit(*low) =>
+        {
+            Some(5)
+        }
+        _ => None,
+    }
+}
+
+/// Returns `true` for the digits `mangle_fqn()` spells a byte with (`{:02x}`).
+fn is_lower_hex_digit(byte: u8) -> bool {
+    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+}
+
+/// Returns the PHP name a `mangle_fqn()` result spells, or `None` when `mangled` is not one.
+///
+/// The exact inverse of `mangle_fqn()`: `_u_` → `_`, `_N_` → `\`, and each `_xNN_` group
+/// back to the UTF-8 byte it escapes.
+pub fn demangle_fqn(mangled: &str) -> Option<String> {
+    let bytes = mangled.as_bytes();
+    let mut name = Vec::with_capacity(bytes.len());
+    let mut position = 0;
+    while position < bytes.len() {
+        let byte = bytes[position];
+        if byte.is_ascii_alphanumeric() {
+            name.push(byte);
+            position += 1;
+            continue;
+        }
+        let length = mangled_escape_len(&bytes[position..])?;
+        name.push(match bytes[position + 1] {
+            b'u' => b'_',
+            b'N' => b'\\',
+            _ => u8::from_str_radix(&mangled[position + 2..position + 4], 16).ok()?,
+        });
+        position += length;
+    }
+    String::from_utf8(name).ok()
+}
+
+/// Splits the text that follows a symbol prefix back into the fragments
+/// `join_symbol_fragments()` joined, or `None` when `tail` is not such a join.
+///
+/// A tail opening with `___` is the escaped regime: each fragment is read token by token
+/// (alphanumerics and `mangle_fqn()` escapes), and a `_` that cannot open an escape ends the
+/// fragment, where exactly `___` must follow. Otherwise the tail is the compact regime, one
+/// `_` before each alphanumeric fragment.
+pub fn split_symbol_fragments(tail: &str) -> Option<Vec<&str>> {
+    if !tail.starts_with(ESCAPED_FRAGMENT_SEPARATOR) {
+        let fragments: Vec<&str> = tail.strip_prefix(COMPACT_FRAGMENT_SEPARATOR)?.split('_').collect();
+        return fragments.iter().all(|fragment| is_compact_fragment(fragment)).then_some(fragments);
+    }
+    let bytes = tail.as_bytes();
+    let mut fragments = Vec::new();
+    let mut position = ESCAPED_FRAGMENT_SEPARATOR.len();
+    loop {
+        let start = position;
+        while position < bytes.len() {
+            if bytes[position].is_ascii_alphanumeric() {
+                position += 1;
+            } else if let Some(length) = mangled_escape_len(&bytes[position..]) {
+                position += length;
+            } else {
+                break;
+            }
+        }
+        if position == start {
+            return None;
+        }
+        fragments.push(&tail[start..position]);
+        if position == bytes.len() {
+            return Some(fragments);
+        }
+        if !tail[position..].starts_with(ESCAPED_FRAGMENT_SEPARATOR) {
+            return None;
+        }
+        position += ESCAPED_FRAGMENT_SEPARATOR.len();
+    }
+}
+
 /// Mangles each raw PHP name and joins them onto `prefix` with `join_symbol_fragments()`.
 ///
 /// This is the only supported way to build a symbol or label out of more than one PHP name.
@@ -416,6 +607,48 @@ mod mangle_tests {
             mangled.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
             "mangled name must be an assembler-safe label, got {mangled}"
         );
+    }
+
+    /// Verifies `demangle_fqn()` inverts `mangle_fqn()` for every escape kind, and refuses
+    /// text no `mangle_fqn()` call produces.
+    #[test]
+    fn demangle_fqn_inverts_mangle_fqn() {
+        for name in [
+            "", "foo", "foo_bar", "A\\B", "App\\My_Class", "__construct", "_", "___", "价格",
+            "App\\Éngine", "a_\\_b", "_x5f_", "_u_", "12",
+        ] {
+            assert_eq!(demangle_fqn(&mangle_fqn(name)).as_deref(), Some(name), "{name:?}");
+        }
+        for text in ["_", "a_b", "_u", "_x5F_", "_xg0_", "a-b", "__", "_N"] {
+            assert_eq!(demangle_fqn(text), None, "{text:?}");
+        }
+    }
+
+    /// Verifies `split_symbol_fragments()` recovers the joined fragments in both separator
+    /// regimes, over the same adversarial names the injectivity tests use.
+    #[test]
+    fn split_symbol_fragments_inverts_the_joiner() {
+        let names = [
+            "a", "b", "a_", "_a", "a_b", "a__b", "a_u", "u_b", "_", "__", "___", "_S_", "_u_",
+            "_N_", "A\\b", "a\\b", "aéb", "a_é", "é", "x_init", "init", "prop", "local", "1",
+            "12", "价格", "a价", "_x5f_", "\\_",
+        ];
+        for left in names {
+            for right in names {
+                let mangled = [mangle_fqn(left), mangle_fqn(right)];
+                let fragments = [mangled[0].as_str(), mangled[1].as_str()];
+                let symbol = join_symbol_fragments("_k", &fragments);
+                let tail = symbol.strip_prefix("_k").expect("the joiner keeps the prefix");
+                assert_eq!(
+                    split_symbol_fragments(tail),
+                    Some(fragments.to_vec()),
+                    "{symbol:?}"
+                );
+            }
+        }
+        for tail in ["", "_", "__a", "___", "___a__b", "___a____", "_a__b", "_a_", "___a___"] {
+            assert_eq!(split_symbol_fragments(tail), None, "{tail:?}");
+        }
     }
 
     /// Verifies distinct names mangle to distinct labels, so escaping does not collapse
@@ -844,5 +1077,118 @@ mod tests {
         assert_ne!(synthetic_place_local_name(1), synthetic_place_local_name(2));
         // A user variable that merely spells the stem is not a generated temporary.
         assert!(!is_generated_local_name(SYNTHETIC_PLACE_LOCAL_STEM));
+    }
+}
+
+/// Identifies compiler-only aliases to ordinary stored cells during append updates.
+const APPEND_UPDATE_ALIAS_PREFIX: &str = "__elephc_append_update_cell_";
+
+/// Constructs an unforgeable temporary-cell alias and records its write role and storage shape.
+pub(crate) fn generated_append_update_alias(
+    span: crate::span::Span,
+    index: usize,
+    leaf: bool,
+    associative_parent: bool,
+) -> String {
+    let role = if leaf {
+        "leaf"
+    } else if associative_parent {
+        "parent_hash"
+    } else {
+        "parent"
+    };
+    generated_local_name(&format!("{}{}_{}_{}_{}_{}", APPEND_UPDATE_ALIAS_PREFIX, span.source_id(), span.line, span.col, index, role))
+}
+
+/// Returns the compiler cell-alias role; PHP source cannot spell the generated-local suffix.
+pub(crate) fn append_update_alias_kind(name: &str) -> Option<bool> {
+    let stem = name.strip_suffix(GENERATED_LOCAL_MARKER)?;
+    if !stem.starts_with(APPEND_UPDATE_ALIAS_PREFIX) { return None; }
+    if stem.ends_with("_leaf") { Some(true) }
+    else if stem.ends_with("_parent") || stem.ends_with("_parent_hash") { Some(false) }
+    else { None }
+}
+
+/// Returns whether a pending parent must begin in associative storage before callbacks run.
+pub(crate) fn append_update_alias_prefers_hash(name: &str) -> bool {
+    name.strip_suffix(GENERATED_LOCAL_MARKER)
+        .is_some_and(|stem| stem.starts_with(APPEND_UPDATE_ALIAS_PREFIX) && stem.ends_with("_parent_hash"))
+}
+
+/// Distinguishes continuation after an intermediate loss from final-place cancellation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppendLiveGuardRole { ParentPre, ParentPost, FinalPre, FinalPost }
+
+impl AppendLiveGuardRole {
+    /// Encodes the role in the existing unforgeable generated-local protocol.
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::ParentPre => "parent_pre", Self::ParentPost => "parent_post",
+            Self::FinalPre => "final_pre", Self::FinalPost => "final_post",
+        }
+    }
+
+    /// Only loss of the final selected place cancels the PHP expression.
+    pub(crate) fn is_final(self) -> bool { matches!(self, Self::FinalPre | Self::FinalPost) }
+}
+
+/// Constructs an unread marker around conversion or a diagnosed parent read.
+pub(crate) fn generated_append_live_guard(
+    span: crate::span::Span, index: usize, role: AppendLiveGuardRole,
+) -> String {
+    generated_local_name(&format!(
+        "__elephc_append_live_guard_{}_{}_{}_{}_{}",
+        span.source_id(), span.line, span.col, index, role.suffix(),
+    ))
+}
+
+/// Decodes only a compiler-generated marker whose complete role is known.
+pub(crate) fn append_live_guard_role(name: &str) -> Option<AppendLiveGuardRole> {
+    if !is_append_live_guard(name) { return None; }
+    let stem = name.strip_suffix(GENERATED_LOCAL_MARKER)?;
+    [AppendLiveGuardRole::ParentPre, AppendLiveGuardRole::ParentPost,
+        AppendLiveGuardRole::FinalPre, AppendLiveGuardRole::FinalPost]
+        .into_iter().find(|role| stem.ends_with(role.suffix()))
+}
+
+/// Recognizes only compiler-generated guards, never a PHP variable with a similar name.
+pub(crate) fn is_append_live_guard(name: &str) -> bool {
+    name.strip_suffix(GENERATED_LOCAL_MARKER)
+        .is_some_and(|stem| stem.starts_with("__elephc_append_live_guard_"))
+}
+
+/// Constructs the unforgeable result local for a prefix increment of an append target.
+pub(crate) fn generated_append_prefix_increment_result(
+    span: crate::span::Span,
+    index: usize,
+) -> String {
+    generated_local_name(&format!(
+        "__elephc_append_prefix_result_{}_{}_{}_{}",
+        span.source_id(), span.line, span.col, index,
+    ))
+}
+
+/// Recognizes only parser-generated prefix-increment append result locals.
+pub(crate) fn is_append_prefix_increment_result(name: &str) -> bool {
+    name.strip_suffix(GENERATED_LOCAL_MARKER)
+        .is_some_and(|stem| stem.starts_with("__elephc_append_prefix_result_"))
+}
+
+#[cfg(test)]
+mod written_type_argument_tests {
+    use super::{Name, NameKind};
+    use crate::parser::ast::TypeExpr;
+
+    /// Parser-owned roots survive nesting, while resolved specialization identities stay canonical.
+    #[test]
+    fn generic_native_storage_carriers_written_roots_stay_explicit() {
+        let argument = TypeExpr::GenericClass {
+            name: Name::from_parts(NameKind::FullyQualified, vec!["Lib".into(), "Wrapper".into()]),
+            args: vec![TypeExpr::Named(Name::from_parts(NameKind::FullyQualified, vec!["Thing".into()]))],
+        };
+        let base = Name::unqualified("keep");
+        assert_eq!(base.clone().with_written_type_arguments(&[argument.clone()]).as_str(),
+            "keep<\\Lib\\Wrapper<\\Thing>>");
+        assert_eq!(base.with_type_arguments(&[argument]).as_str(), "keep<Lib\\Wrapper<Thing>>");
     }
 }

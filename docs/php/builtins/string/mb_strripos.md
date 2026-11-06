@@ -1,8 +1,6 @@
 ---
 title: "mb_strripos()"
 description: "Finds the last character position using simple case folding, or returns false."
-sidebar:
-  order: 881
 ---
 
 ## mb_strripos()
@@ -23,8 +21,9 @@ Finds the last character position using simple case folding, or returns false.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_strripos.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_strripos.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

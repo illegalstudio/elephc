@@ -1,8 +1,6 @@
 ---
 title: "gethostbyname()"
 description: "Gets the IPv4 address corresponding to the given Internet host name."
-sidebar:
-  order: 334
 ---
 
 ## gethostbyname()
@@ -20,8 +18,9 @@ Gets the IPv4 address corresponding to the given Internet host name.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/gethostbyname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gethostbyname.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

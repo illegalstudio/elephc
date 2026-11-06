@@ -31,7 +31,7 @@ pub(in crate::codegen::lower_inst::builtins) fn box_readline_result(ctx: &mut Fu
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x2, #0");                              // no bytes at all is EOF, tested BEFORE any stripping
-            ctx.emitter.instruction(&format!("b.le {}", false_label));
+            ctx.emitter.instruction(&format!("b.le {}", false_label));          // box false when the read produced no bytes
             ctx.emitter.instruction("sub x9, x2, #1");                          // offset of the last byte read
             ctx.emitter.instruction("ldrb w10, [x1, x9]");                      // load it to see whether it terminates the line
             ctx.emitter.instruction("cmp w10, #10");                            // 10 = '\n'
@@ -40,17 +40,17 @@ pub(in crate::codegen::lower_inst::builtins) fn box_readline_result(ctx: &mut Fu
             ctx.emitter.label(&keep_label);
             ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 = string
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the false path after boxing the line
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("mov x1, #0");                              // false carries no payload
-            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction("mov x2, #0");                              // false has no high payload word
             ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean false
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rdx, 0");                              // no bytes at all is EOF, tested BEFORE any stripping
-            ctx.emitter.instruction(&format!("jle {}", false_label));
+            ctx.emitter.instruction(&format!("jle {}", false_label));           // box false when the read produced no bytes
             ctx.emitter.instruction("lea r10, [rdx - 1]");                      // offset of the last byte read
             ctx.emitter.instruction("mov cl, BYTE PTR [rax + r10]");            // load it to see whether it terminates the line
             ctx.emitter.instruction("cmp cl, 10");                              // 10 = '\n'
@@ -61,10 +61,10 @@ pub(in crate::codegen::lower_inst::builtins) fn box_readline_result(ctx: &mut Fu
             ctx.emitter.instruction("mov rsi, rdx");                            // Mixed high payload = its length
             ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 = string
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the false path after boxing the line
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("xor edi, edi");                            // false carries no payload
-            ctx.emitter.instruction("xor esi, esi");
+            ctx.emitter.instruction("xor esi, esi");                            // false has no high payload word
             ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = boolean false
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);
@@ -72,15 +72,17 @@ pub(in crate::codegen::lower_inst::builtins) fn box_readline_result(ctx: &mut Fu
     }
 }
 
-/// Boxes a raw stream string slice or EOF result into Mixed string-or-false form.
+/// Boxes stream output and retires any independent buffer copied into the Mixed result.
 pub(super) fn box_stream_string_or_false_on_empty_result(
     ctx: &mut FunctionContext<'_>,
     label_prefix: &str,
 ) {
     let false_label = ctx.next_label(&format!("{}_false", label_prefix));
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
+    let adopted_label = ctx.next_label(&format!("{}_adopted", label_prefix));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
             ctx.emitter.instruction("cmp x2, #0");                              // test whether the stream read produced bytes
             ctx.emitter.instruction(&format!("b.le {}", false_label));          // box false when the stream hit EOF or read failure
             ctx.emitter.instruction("mov x0, #1");                              // select runtime tag 1 for the stream string
@@ -92,8 +94,18 @@ pub(super) fn box_stream_string_or_false_on_empty_result(
             ctx.emitter.instruction("mov x0, #3");                              // select runtime tag 3 for boolean false
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("ldr x9, [x0, #8]");                        // recover the persisted string pointer or the false payload
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // recover the stream's original output buffer
+            ctx.emitter.instruction("cmp x0, x9");                              // persistence can adopt a transient buffer without copying
+            ctx.emitter.instruction(&format!("b.eq {}", adopted_label));        // the Mixed cell owns an adopted buffer already
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            ctx.emitter.label(&adopted_label);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("add sp, sp, #16");                         // discard the original pair after retiring copied heap output
         }
         Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             ctx.emitter.instruction("cmp rdx, 0");                              // test whether the stream read produced bytes
             ctx.emitter.instruction(&format!("jle {}", false_label));           // box false when the stream hit EOF or read failure
             ctx.emitter.instruction("mov rdi, rax");                            // pass the stream string pointer as the Mixed low payload word
@@ -107,6 +119,15 @@ pub(super) fn box_stream_string_or_false_on_empty_result(
             ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for boolean false
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax + 8]");             // recover the persisted string pointer or the false payload
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // recover the stream's original output buffer
+            ctx.emitter.instruction("cmp rax, r9");                             // persistence can adopt a transient buffer without copying
+            ctx.emitter.instruction(&format!("je {}", adopted_label));          // the Mixed cell owns an adopted buffer already
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            ctx.emitter.label(&adopted_label);
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("add rsp, 16");                             // discard the original pair after retiring copied heap output
         }
     }
 }

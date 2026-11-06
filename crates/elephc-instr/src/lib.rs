@@ -4137,6 +4137,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies an oversized capture publishes no length beyond the shared buffer capacity.
     fn a_profile_too_large_to_carry_does_not_publish_a_length_it_cannot_back() {
         let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         reset_capture();
@@ -4727,6 +4728,7 @@ mod tests {
         }
     }
 
+    /// Sets a one-nanosecond profiler tick rate while holding the shared test-state lock.
     fn ticks_are_nanoseconds() -> std::sync::MutexGuard<'static, ()> {
         // The guard comes back with it: the rate is one global, every test that
         // switches the profiler on replaces it with the hardware's, and these run

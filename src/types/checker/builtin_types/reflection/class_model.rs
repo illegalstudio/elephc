@@ -20,6 +20,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
         is_final: false,
         is_readonly_class: false,
         properties: vec![
+            builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
             builtin_property(
                 "__name",
                 Visibility::Private,
@@ -201,6 +202,12 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
                 empty_array(),
             ),
             builtin_property(
+                "__default_error",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
                 "__static_properties",
                 Visibility::Private,
                 Some(mixed_type()),
@@ -296,7 +303,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_has_name_method("hasConstant", "__constant_names", false),
             builtin_reflection_class_get_constant_method(),
             builtin_reflection_class_mixed_method("getConstants", "__constants"),
-            builtin_reflection_class_mixed_method("getDefaultProperties", "__default_properties"),
+            builtin_reflection_class_get_default_properties_method(),
             builtin_reflection_class_mixed_method("getStaticProperties", "__static_properties"),
             builtin_reflection_class_get_static_property_value_method(),
             builtin_reflection_class_set_static_property_value_method(),
@@ -340,7 +347,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_new_instance_method(),
             builtin_reflection_class_new_instance_args_method(),
             builtin_reflection_class_new_instance_without_constructor_method(),
-            builtin_reflection_owner_get_attributes_method(),
+            builtin_reflection_owner_get_attributes_method("ReflectionClass"),
         ],
         attributes: Vec::new(),
         constants: reflection_class_constants(),

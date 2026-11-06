@@ -10,8 +10,9 @@
 //! Key details:
 //! - Subject and pattern bytes are passed through the registered provider as C strings.
 //! - Match offsets are byte offsets into the original subject, matching PHP capture arrays.
+//! - A global iterator keeps its C-string allocation alive across native continuation calls.
 
-use std::ffi::{c_int, c_void, CString};
+use std::ffi::{c_int, c_void, CStr, CString};
 use std::marker::PhantomData;
 
 use super::super::super::EvalStatus;
@@ -21,7 +22,10 @@ const REG_ICASE: c_int = 0x0001;
 const REG_NEWLINE: c_int = 0x0002;
 const REG_DOTALL: c_int = 0x0010;
 const REG_STARTEND: c_int = 0x0080;
+const ELEPHC_PCRE2_GLOBAL_NEXT: u32 = 1 << 16;
 const REG_UNGREEDY: c_int = 0x0200;
+/// Private compile flag. The PCRE2 shim compiles with `PCRE2_EXTENDED` and clears this bit.
+const ELEPHC_PCRE2_EXTENDED: c_int = 0x2000;
 const REG_UCP: c_int = 0x0400;
 const REG_UTF: c_int = 0x0040;
 const REG_NOMATCH: c_int = 17;
@@ -34,6 +38,7 @@ pub(in crate::interpreter) struct EvalPregModifiers {
     pub(in crate::interpreter) dot_matches_new_line: bool,
     pub(in crate::interpreter) swap_greed: bool,
     pub(in crate::interpreter) unicode: bool,
+    pub(in crate::interpreter) extended: bool,
 }
 
 /// A compiled regex plus its registered opaque provider.
@@ -101,24 +106,17 @@ impl Regex {
         subject: &'a [u8],
     ) -> std::vec::IntoIter<Captures<'a>> {
         let mut captures = Vec::new();
-        let mut cursor = 0;
-        while cursor <= subject.len() {
-            let Some(next) = self.exec_at(subject, cursor) else {
+        let Ok(subject_c) = CString::new(subject) else { return captures.into_iter(); };
+        let mut continuation = false;
+        loop {
+            let Some(next) = self.exec_subject(subject, &subject_c, 0, continuation) else {
                 break;
             };
-            let Some(full_match) = next.get(0) else {
-                break;
-            };
-            let end = full_match.end();
-            let start = full_match.start();
-            captures.push(next);
-            if end > cursor {
-                cursor = end;
-            } else if start < subject.len() {
-                cursor = start + 1;
-            } else {
+            if next.get(0).is_none() {
                 break;
             }
+            captures.push(next);
+            continuation = true;
         }
         captures.into_iter()
     }
@@ -126,6 +124,13 @@ impl Regex {
     /// Executes this regex from a byte offset, returning capture offsets on match.
     fn exec_at<'a>(&self, subject: &'a [u8], start: usize) -> Option<Captures<'a>> {
         let subject_c = CString::new(subject).ok()?;
+        self.exec_subject(subject, &subject_c, start, false)
+    }
+
+    /// Executes with stable C-string storage while preserving the original Rust subject lifetime.
+    fn exec_subject<'a>(
+        &self, subject: &'a [u8], subject_c: &CStr, start: usize, continuation: bool,
+    ) -> Option<Captures<'a>> {
         let mut offset_pairs = vec![-1_i64; self.captures_len().checked_mul(2)?];
         offset_pairs[0] = i64::try_from(start).ok()?;
         offset_pairs[1] = i64::try_from(subject.len()).ok()?;
@@ -135,7 +140,7 @@ impl Regex {
                 subject_c.as_ptr(),
                 u64::try_from(self.captures_len()).ok()?,
                 offset_pairs.as_mut_ptr(),
-                REG_STARTEND as u32,
+                REG_STARTEND as u32 | if continuation { ELEPHC_PCRE2_GLOBAL_NEXT } else { 0 },
             )
         };
         if status == REG_NOMATCH || status != 0 {
@@ -176,6 +181,9 @@ impl EvalPregModifiers {
         }
         if self.unicode {
             flags |= REG_UTF | REG_UCP;
+        }
+        if self.extended {
+            flags |= ELEPHC_PCRE2_EXTENDED;
         }
         flags
     }

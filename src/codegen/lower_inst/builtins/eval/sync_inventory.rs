@@ -246,7 +246,29 @@ pub(super) fn eval_sync_type_supported(ty: &PhpType) -> bool {
 
 /// Flushes visible native locals into the materialized eval scope before executing eval.
 pub(super) fn flush_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[EvalSyncLocal]) -> Result<()> {
+    flush_eval_scope_locals_with_mask(ctx, locals, None)
+}
+
+/// Flushes only dynamic-eval locals selected by the parsed fragment's access mask.
+pub(super) fn flush_dynamic_eval_scope_locals(
+    ctx: &mut FunctionContext<'_>,
+    locals: &[EvalSyncLocal],
+) -> Result<()> {
+    flush_eval_scope_locals_with_mask(ctx, locals, Some(EVAL_SCOPE_ACCESS_MASK_OFFSET))
+}
+
+/// Flushes visible native locals, optionally guarding each name through a runtime mask.
+fn flush_eval_scope_locals_with_mask(
+    ctx: &mut FunctionContext<'_>,
+    locals: &[EvalSyncLocal],
+    access_mask_offset: Option<usize>,
+) -> Result<()> {
     for local in locals {
+        let skip = access_mask_offset.map(|offset| {
+            let skip = ctx.next_label("eval_scope_flush_unaccessed");
+            emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, offset, &skip);
+            skip
+        });
         let ty = ctx.load_local_to_result(local.slot)?.codegen_repr();
         if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &ty);
@@ -257,19 +279,36 @@ pub(super) fn flush_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[E
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
         emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED);
+        if let Some(skip) = skip {
+            ctx.emitter.label(&skip);
+        }
     }
     Ok(())
 }
 
-/// Flushes supported program globals into the eval global scope before eval.
-pub(super) fn flush_eval_global_scope(
+/// Flushes only dynamic-eval globals selected by the parsed fragment's access mask.
+pub(super) fn flush_dynamic_eval_global_scope(
     ctx: &mut FunctionContext<'_>,
     globals: &[EvalSyncGlobal],
+) -> Result<()> {
+    flush_eval_global_scope_with_mask(ctx, globals, Some(EVAL_SCOPE_ACCESS_MASK_OFFSET))
+}
+
+/// Flushes supported program globals, optionally guarding each name through a runtime mask.
+fn flush_eval_global_scope_with_mask(
+    ctx: &mut FunctionContext<'_>,
+    globals: &[EvalSyncGlobal],
+    access_mask_offset: Option<usize>,
 ) -> Result<()> {
     for global in globals {
         if main_eval_local_supplies_global(ctx, &global.name) {
             continue;
         }
+        let skip = access_mask_offset.map(|offset| {
+            let skip = ctx.next_label("eval_global_flush_unaccessed");
+            emit_branch_if_eval_name_unaccessed(ctx.emitter, &global.name, offset, &skip);
+            skip
+        });
         load_global_to_result(ctx, global);
         if !matches!(global.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &global.ty);
@@ -277,8 +316,46 @@ pub(super) fn flush_eval_global_scope(
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
         emit_eval_global_scope_set(ctx, global, scope_set_flags_for_type(&global.ty));
+        if let Some(skip) = skip {
+            ctx.emitter.label(&skip);
+        }
     }
     Ok(())
+}
+
+/// Branches when the saved conservative access mask does not select one PHP variable name.
+pub(super) fn emit_branch_if_eval_name_unaccessed(
+    emitter: &mut crate::codegen_support::emit::Emitter,
+    name: &str,
+    access_mask_offset: usize,
+    label: &str,
+) {
+    let bit = eval_scope_name_mask(name).trailing_zeros();
+    let scratch = abi::symbol_scratch_reg(emitter);
+    // -- guard eval scope synchronization by the parsed name mask --
+    emitter.comment("-- guard eval scope synchronization by the parsed name mask --");
+    abi::emit_load_temporary_stack_slot(emitter, scratch, access_mask_offset);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            // -- skip an unaccessed AArch64 scope name --
+            emitter.instruction(&format!("tbz {scratch}, #{bit}, {label}"));    // skip a native scope name the parsed dynamic fragment cannot access
+        }
+        Arch::X86_64 => {
+            // -- skip an unaccessed x86_64 scope name --
+            emitter.instruction(&format!("bt {scratch}, {bit}"));               // test the parsed dynamic fragment's conservative name bit
+            emitter.instruction(&format!("jnc {label}"));                       // skip a native scope name the parsed dynamic fragment cannot access
+        }
+    }
+}
+
+/// Maps one case-sensitive PHP variable name onto the bridge's conservative mask bit.
+fn eval_scope_name_mask(name: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in name.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    1_u64 << (hash & 63)
 }
 
 /// Flushes global-backed variables into the local eval scope for scope-read EIR AOT.
@@ -327,7 +404,8 @@ pub(super) fn scope_set_flags_for_type(ty: &PhpType) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::eval_sync_function_locals;
+    use super::{emit_branch_if_eval_name_unaccessed, eval_sync_function_locals};
+    use crate::codegen_support::{emit::Emitter, platform::Target};
     use crate::ir::{Function, IrType, LocalKind};
     use crate::types::PhpType;
 
@@ -379,5 +457,34 @@ mod tests {
         let actual = eval_sync_function_locals(&function).into_iter()
             .map(|local| (local.name, local.slot)).collect::<Vec<_>>();
         assert_eq!(actual, vec![("__elephc_func_arg_value".to_string(), visible)]);
+    }
+
+    /// Every supported target emits the same conservative stack-mask guard before scope I/O.
+    #[test]
+    fn eval_scope_access_guard_covers_all_supported_targets() {
+        for target in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_branch_if_eval_name_unaccessed(
+                &mut emitter,
+                "sum",
+                super::EVAL_SCOPE_ACCESS_MASK_OFFSET,
+                "skip_sum",
+            );
+            let asm = emitter.output();
+            if target == "linux-x86_64" {
+                assert!(asm.contains("mov r11, QWORD PTR [rsp + 192]"), "{target}: {asm}");
+                assert!(asm.contains("bt r11, 40"), "{target}: {asm}");
+                assert!(asm.contains("jnc skip_sum"), "{target}: {asm}");
+            } else {
+                assert!(asm.contains("ldr x9, [sp, #192]"), "{target}: {asm}");
+                assert!(asm.contains("tbz x9, #40, skip_sum"), "{target}: {asm}");
+            }
+        }
     }
 }

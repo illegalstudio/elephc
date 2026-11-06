@@ -80,3 +80,14 @@ try {
 } catch (Exception $err) {
     echo "caught at Exception level: " . $err->getMessage() . "\n";
 }
+
+// PHP 8.6 token coordinates use character columns, including after multibyte text.
+foreach (['{"key": "value', '["é",]'] as $invalid) {
+    json_validate($invalid);
+    echo "validation failed: " . json_last_error_msg() . "\n";
+    try {
+        json_decode($invalid, null, 512, JSON_THROW_ON_ERROR);
+    } catch (JsonException $err) {
+        echo "decode failed: " . $err->getMessage() . "\n";
+    }
+}

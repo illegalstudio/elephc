@@ -63,6 +63,29 @@ fn test_angle_not_equal_operator() {
     );
 }
 
+/// Verifies `array<int>` tokenizes as four separate tokens, which is the contract the type
+/// parser's `array<T>` arm relies on: it reads `Less`, recurses for the element type, then
+/// expects `Greater`.
+///
+/// Pinned because the neighbouring `<>` case does NOT lex this way — `array<>` yields a single
+/// `LessGreater` token (PHP's `!=` alias), so the empty type-argument list has to be rejected
+/// explicitly rather than falling out of the `Less`/`Greater` pair.
+#[test]
+fn test_array_type_argument_tokens() {
+    let t = tokens("<?php array<int> array<>");
+    assert_eq!(
+        t[1..6],
+        [
+            Token::Identifier("array".to_string()),
+            Token::Less,
+            Token::Identifier("int".to_string()),
+            Token::Greater,
+            Token::Identifier("array".to_string()),
+        ]
+    );
+    assert_eq!(t[6], Token::LessGreater);
+}
+
 /// Verifies `&&`, `||`, `and`, `or`, `xor` tokenize as logical operators.
 #[test]
 fn test_logical_operators() {

@@ -1,8 +1,6 @@
 ---
 title: "define()"
 description: "Defines a named constant at runtime."
-sidebar:
-  order: 607
 ---
 
 ## define()
@@ -21,8 +19,9 @@ Defines a named constant at runtime.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/define.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/define.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

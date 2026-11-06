@@ -10,10 +10,8 @@
 
 use crate::support::*;
 
-/// Concrete reads from eval-widened slots retire both the old box and every detached lease.
-#[test]
-fn test_core_array_multisort_post_eval_same_and_distinct_receivers_keep_heap_clean() {
-    let source = r#"<?php
+/// Exercises identical and distinct eval-widened receivers with independent COW snapshots.
+const POST_EVAL_RECEIVERS: &str = r#"<?php
 function multisortWidenedSlots(string $source): void {
     $same = [];
     $left = [];
@@ -35,12 +33,22 @@ $source = 'return null; // ' . $argc;
 for ($i = 0; $i < 3; $i++) { multisortWidenedSlots($source); }
 unset($source);
 "#;
+
+/// Concrete reads from eval-widened slots retire both the old box and every detached lease.
+#[test]
+fn test_core_array_multisort_post_eval_same_and_distinct_receivers_keep_heap_clean() {
     let expected = "1,2,3:3,1,2|1,2,2:2,1,3:2,1,2:3,2,1|".repeat(3);
-    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(POST_EVAL_RECEIVERS);
     assert!(out.success, "stdout={:?}\nstderr={}\n{assembly}", out.stdout, out.stderr);
     assert_eq!(out.stdout, expected, "{}\n{assembly}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
-    assert_eq!(compile_and_run_tagged(source), expected);
+}
+
+/// Tagged-null execution preserves the same eval-widened receiver and snapshot results.
+#[test]
+fn test_core_array_multisort_post_eval_same_and_distinct_receivers_tagged() {
+    let expected = "1,2,3:3,1,2|1,2,2:2,1,3:2,1,2:3,2,1|".repeat(3);
+    assert_eq!(compile_and_run_tagged(POST_EVAL_RECEIVERS), expected);
 }
 
 /// Reference aliases sort once while separate value aliases keep independent COW snapshots.

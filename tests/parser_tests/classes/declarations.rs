@@ -629,3 +629,62 @@ fn test_parse_declarator_list_attributes_reach_every_member() {
         );
     }
 }
+
+/// Returns `(line, col, end_line, end_col)` for a span, for compact span assertions.
+fn span_coordinates(span: elephc::span::Span) -> (u32, u32, u32, u32) {
+    (span.line, span.col, span.end_line, span.end_column())
+}
+
+/// Verifies each member of a PROPERTY declarator list carries the span of its own declarator
+/// (issue #1140).
+///
+/// Every member used to carry the span of the declaration's first token, so a diagnostic about
+/// `$h` pointed at `public`. Each span now runs from the member's name through its initializer,
+/// or covers the bare name when it has none; the end column is exclusive.
+#[test]
+fn test_parse_property_declarator_list_gives_each_member_its_own_span() {
+    let stmts = parse_source("<?php class C {\n    public int $w = 40, $h = 22, $d;\n}");
+    let StmtKind::ClassDecl { properties, .. } = &stmts[0].kind else {
+        panic!("Expected ClassDecl");
+    };
+    let spans: Vec<_> = properties
+        .iter()
+        .map(|property| (property.name.as_str(), span_coordinates(property.span)))
+        .collect();
+    assert_eq!(
+        spans,
+        vec![
+            ("w", (2, 16, 2, 23)),
+            ("h", (2, 25, 2, 32)),
+            ("d", (2, 34, 2, 36)),
+        ]
+    );
+}
+
+/// Verifies each member of a CONSTANT declarator list carries the span of its own declarator, in
+/// a class body and in an interface body alike (issue #1140).
+#[test]
+fn test_parse_constant_declarator_list_gives_each_member_its_own_span() {
+    for source in [
+        "<?php class C {\n    const A = 1, BB = 22;\n}",
+        "<?php interface C {\n    const A = 1, BB = 22;\n}",
+    ] {
+        let stmts = parse_source(source);
+        let constants = match &stmts[0].kind {
+            StmtKind::ClassDecl { constants, .. } | StmtKind::InterfaceDecl { constants, .. } => {
+                constants
+            }
+            other => panic!("Expected a class-like declaration, got {:?}", other),
+        };
+        let spans: Vec<_> = constants
+            .iter()
+            .map(|constant| (constant.name.as_str(), span_coordinates(constant.span)))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![("A", (2, 11, 2, 16)), ("BB", (2, 18, 2, 25))],
+            "{}",
+            source
+        );
+    }
+}

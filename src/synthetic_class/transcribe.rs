@@ -136,6 +136,7 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
     match &stmt.kind {
         StmtKind::FunctionDecl {
             name,
+            type_params,
             params,
             param_attributes,
             variadic,
@@ -146,6 +147,10 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
             body,
         } => {
             assert!(!by_ref_return, "a by-ref return is not modelled: {name}");
+            assert!(
+                type_params.is_empty(),
+                "a synthetic declaration is already monomorphic: {name}"
+            );
             let mut out = format!("{}function({})", pad(depth), lit(name));
             out.push_str(&params_calls(params, param_attributes, depth + 1));
             if let Some(tail) = variadic {
@@ -164,6 +169,7 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
             out
         }
         StmtKind::ClassDecl {
+            generics: _,
             name,
             extends,
             implements,
@@ -176,11 +182,13 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
             is_readonly_class,
         } => {
             assert!(trait_uses.is_empty(), "trait uses are not modelled");
-            assert!(!is_abstract, "abstract classes are not modelled");
             assert!(!is_readonly_class, "readonly classes are not modelled");
             let mut out = format!("{}class({})", pad(depth), lit(name));
             if *is_final {
                 out.push_str(&format!("\n{}.final_()", pad(depth + 1)));
+            }
+            if *is_abstract {
+                out.push_str(&format!("\n{}.abstract_()", pad(depth + 1)));
             }
             if let Some(parent) = extends {
                 out.push_str(&format!(
@@ -390,6 +398,7 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
             out
         }
         StmtKind::InterfaceDecl {
+            generics: _,
             name,
             extends,
             properties,

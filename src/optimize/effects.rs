@@ -22,6 +22,8 @@ pub(super) use calls::{
     function_call_effect,
     instance_property_read_effect,
     instance_method_call_effect,
+    instance_method_result_type,
+    static_method_result_type,
     static_method_call_effect,
 };
 
@@ -49,6 +51,23 @@ fn binary_op_may_throw(op: &BinOp, right: &Expr) -> bool {
     }
 }
 
+/// Excludes literal scalar operands while retaining operations that can dispatch object handlers.
+pub(super) fn internal_arithmetic_candidate(left: &Expr, op: &BinOp, right: &Expr) -> bool {
+    matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow)
+        && (!literal_scalar_operand(left) || !literal_scalar_operand(right))
+}
+
+/// Literal scalars cannot contain an internal object value hidden behind a variable or call.
+pub(super) fn literal_scalar_operand(expr: &Expr) -> bool {
+    matches!(expr.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::Null)
+}
+
+/// Reads the closed-world capability flag installed for callable summaries and DCE.
+fn internal_object_operators_available() -> bool {
+    with_active_instance_dispatch_metadata(|metadata| metadata.is_some_and(|metadata| metadata.has_internal_object_operators))
+}
+
 /// Returns true if any statement in `stmts` may throw, including implicit destruction.
 pub(super) fn block_may_throw(stmts: &[Stmt]) -> bool {
     block_effect(stmts).may_throw
@@ -69,12 +88,18 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::Synthetic(stmts) => block_effect(stmts),
         StmtKind::IncludeOnceMark { .. } => Effect::PURE.with_side_effects(),
         StmtKind::IncludeOnceGuard { body, .. } => block_effect(body).with_side_effects(),
-        StmtKind::Echo(expr) => expr_effect(expr).with_side_effects(),
+        StmtKind::Echo(expr) => output_effect(expr_effect(expr)),
         StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
         | StmtKind::StaticVar { init: expr, .. }
         | StmtKind::ListUnpack { value: expr, .. }
-        | StmtKind::Return(Some(expr)) => expr_effect(expr),
+            => expr_effect(expr),
+        StmtKind::Return(Some(expr)) => {
+            let effect = expr_effect(expr);
+            if super::return_boundaries::active_return_boundary_may_throw(expr) {
+                effect.with_may_throw()
+            } else { effect }
+        }
         StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
@@ -179,6 +204,8 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         } => expr_effect(subject).combine(combine_effects(cases.iter().map(|(patterns, body)| {
             combine_effects(patterns.iter().map(expr_effect)).combine(block_effect(body))
         })))
+        // Case comparison can convert an object and run a PHP warning handler.
+        .with_side_effects().with_may_throw().with_writes_globals()
         .combine(
             default
                 .as_ref()
@@ -253,8 +280,13 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::Null
         | ExprKind::ConstRef(_)
         | ExprKind::This => Effect::PURE,
-        ExprKind::Negate(inner)
-        | ExprKind::Not(inner)
+        ExprKind::Negate(inner) => {
+            let effect = expr_effect(inner);
+            if internal_object_operators_available() && !literal_scalar_operand(inner) {
+                effect.with_may_throw()
+            } else { effect }
+        }
+        ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Cast { expr: inner, .. }
@@ -268,13 +300,19 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 evaluated.with_side_effects().with_may_throw().with_writes_globals()
             }
         }
-        ExprKind::Print(inner) => expr_effect(inner).with_side_effects(),
+        ExprKind::Print(inner) => output_effect(expr_effect(inner)),
         ExprKind::Clone(inner) => expr_effect(inner)
             .with_side_effects()
             .with_may_throw(),
         ExprKind::BinaryOp { left, op, right } => {
             let operands = expr_effect(left).combine(expr_effect(right));
-            if binary_op_may_throw(op, right) {
+            if matches!(op, BinOp::Eq | BinOp::NotEq)
+                && (!literal_scalar_operand(left) || !literal_scalar_operand(right))
+            {
+                // Object-to-number warnings can call a handler that mutates globals or throws.
+                operands.with_side_effects().with_may_throw().with_writes_globals()
+            } else if binary_op_may_throw(op, right)
+                || (internal_object_operators_available() && internal_arithmetic_candidate(left, op, right)) {
                 operands.with_may_throw()
             } else {
                 operands
@@ -331,9 +369,11 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                     .with_may_throw()
                     .with_writes_globals(),
             }),
-        ExprKind::NewObject { args, .. } => combine_effects(args.iter().map(expr_effect))
-            .with_side_effects()
-            .with_may_throw(),
+        ExprKind::NewObject { args, .. } | ExprKind::NewGeneric { args, .. } => {
+            combine_effects(args.iter().map(expr_effect))
+                .with_side_effects()
+                .with_may_throw()
+        }
         ExprKind::NewDynamic { name_expr, args } => expr_effect(name_expr)
             .combine(combine_effects(args.iter().map(expr_effect)))
             .with_side_effects()
@@ -371,7 +411,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 .iter()
                 .flat_map(|entry| entry.exprs())
                 .map(expr_effect),
-        ),
+        ).with_may_throw(),
         ExprKind::Match {
             subject,
             arms,
@@ -493,6 +533,7 @@ pub(super) fn statically_known_array_read(array: &Expr, index: &Expr) -> Option<
 fn instanceof_target_effect(target: &InstanceOfTarget) -> Effect {
     match target {
         InstanceOfTarget::Name(_) => Effect::PURE,
+        InstanceOfTarget::Generic(_) => Effect::PURE,
         InstanceOfTarget::Expr(expr) => expr_effect(expr),
     }
 }
@@ -520,4 +561,10 @@ pub(super) fn combine_effects(effects: impl IntoIterator<Item = Effect>) -> Effe
     effects
         .into_iter()
         .fold(Effect::PURE, |acc, effect| acc.combine(effect))
+}
+
+/// Adds output side effects and only the callbacks available in the current host profile.
+fn output_effect(effect: Effect) -> Effect {
+    let effect = effect.with_side_effects();
+    if output::output_may_throw() { effect.with_may_throw() } else { effect }
 }

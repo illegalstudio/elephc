@@ -1,8 +1,6 @@
 ---
 title: "unset()"
 description: "Unsets the given variables."
-sidebar:
-  order: 690
 ---
 
 ## unset()
@@ -21,8 +19,9 @@ Unsets the given variables.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a dedicated compiler language-construct path.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/unset.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/unset.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

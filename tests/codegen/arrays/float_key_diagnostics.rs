@@ -184,12 +184,25 @@ fn test_float_array_key_pre_decrement_expression_warns_once() {
     assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
 }
 
-/// Null-coalesce assignment shares its float-key diagnosis between lookup and insertion.
+/// Null-coalesce assignment that inserts converts its float key in the probe and the insert.
+///
+/// PHP 8.5 reports the deprecation twice here: the `??` probe and the insert are separate
+/// accesses. Only an element that already holds a value is probed once and never written.
 #[test]
-fn test_float_array_key_null_coalesce_assignment_warns_once() {
+fn test_float_array_key_null_coalesce_assignment_insert_warns_twice() {
     let out = compile_and_run_capture("<?php $a = ['other' => 1]; echo ($a[1.9] ??= 5), ':', $a[1];");
     assert_eq!(out.stdout, "5:5");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.stderr);
+}
+
+/// A statement `??=` on a packed local probes a present element once and never writes it back,
+/// while an inserted float key is converted by both the probe and the insert, as in PHP 8.5.
+#[test]
+fn test_packed_float_array_key_null_coalesce_statement_matches_php() {
+    let out = compile_and_run_capture("<?php $a = [10, 20]; $a[1.9] ??= 7; $a[3.5] ??= 8; echo $a[1], ':', $a[3];");
+    assert_eq!(out.stdout, "20:8");
     assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.stderr.matches("Implicit conversion from float 3.5 to int loses precision").count(), 2, "{}", out.stderr);
 }
 
 /// An error handler may change the source variable, but increment keeps its original key.

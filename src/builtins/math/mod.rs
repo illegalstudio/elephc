@@ -20,6 +20,22 @@ use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
+mod min_max_gmp;
+
+pub mod __elephc_bcnumber_add;
+pub mod __elephc_bcnumber_ceil;
+pub mod __elephc_bcnumber_comp;
+pub mod __elephc_bcnumber_create;
+pub mod __elephc_bcnumber_div;
+pub mod __elephc_bcnumber_divmod;
+pub mod __elephc_bcnumber_floor;
+pub mod __elephc_bcnumber_mod;
+pub mod __elephc_bcnumber_mul;
+pub mod __elephc_bcnumber_pow;
+pub mod __elephc_bcnumber_powmod;
+pub mod __elephc_bcnumber_round;
+pub mod __elephc_bcnumber_sqrt;
+pub mod __elephc_bcnumber_sub;
 pub mod abs;
 pub mod acos;
 pub mod asin;
@@ -89,6 +105,9 @@ pub(crate) fn min_max_array_element_type(
     match ty {
         PhpType::Array(element) => Ok(*element),
         PhpType::AssocArray { value, .. } => Ok(*value),
+        // A bare `array` reaches the runtime as the `array<mixed>` list of its values
+        // (`BuiltinArgumentLowering::BareArrayValues`), so its element type is `mixed`.
+        other if other.is_php_array() => Ok(PhpType::Mixed),
         other => Err(CompileError::new(
             cx.span,
             &format!(

@@ -355,6 +355,8 @@ pub fn emit_ftp(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the ftp:// stream descriptor
 
     emitter.label("__rt_ftp_open_fail");
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_ftp_use_tls", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_stream_error_tls", 0);
     abi::emit_symbol_address(emitter, "x9", "_ftp_use_tls");
     emitter.instruction("str xzr, [x9]");                                       // clear the one-shot AUTH-TLS flag after any open failure
     emitter.instruction("mov x0, #-1");                                         // -1 signals a failed ftp:// open
@@ -676,6 +678,8 @@ fn emit_ftp_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the ftp:// stream descriptor
 
     emitter.label("__rt_ftp_open_fail_x86");
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_ftp_use_tls", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_stream_error_tls", 0);
     abi::emit_store_zero_to_symbol(emitter, "_ftp_use_tls", 0);                 // clear the one-shot AUTH-TLS flag after any open failure
     emitter.instruction("mov rax, -1");                                         // -1 signals a failed ftp:// open
     emitter.instruction("add rsp, 48");                                         // release the frame

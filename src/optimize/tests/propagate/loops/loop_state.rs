@@ -82,6 +82,7 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_try() {
                     StmtKind::Try {
                         try_body: vec![Stmt::echo(Expr::var("i"))],
                         catches: vec![crate::parser::ast::CatchClause {
+                            exception_type_args: Vec::new(),
                             exception_types: vec![Name::from("Exception")],
                             variable: Some("e".to_string()),
                             body: vec![Stmt::echo(Expr::int_lit(9))],

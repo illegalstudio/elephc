@@ -21,27 +21,27 @@ pub(super) unsafe fn register_native_method_inner(
     method_key_len: u64,
     is_static: bool,
     param_count: u64,
-) -> i32 {
+) -> Result<i32, ()> {
     let Some(context) = ctx.as_mut() else {
-        return 0;
+        return Err(());
     };
     if context.abi_version() != ABI_VERSION {
-        return 0;
+        return Err(());
     }
     let Ok(method_key) = abi_name_to_string(method_key_ptr, method_key_len) else {
-        return 0;
+        return Err(());
     };
     let Some((class_name, method_name)) = split_method_key(&method_key) else {
-        return 0;
+        return Err(());
     };
     let Ok(param_count) = usize::try_from(param_count) else {
-        return 0;
+        return Err(());
     };
     let signature = NativeCallableSignature::new(param_count);
     if is_static {
-        i32::from(context.define_native_static_method_signature(class_name, method_name, signature))
+        Ok(i32::from(context.define_native_static_method_signature(class_name, method_name, signature)))
     } else {
-        i32::from(context.define_native_method_signature(class_name, method_name, signature))
+        Ok(i32::from(context.define_native_method_signature(class_name, method_name, signature)))
     }
 }
 
@@ -85,6 +85,7 @@ pub(super) unsafe fn register_native_interface_property_inner(
         return 0;
     };
     let property = EvalInterfaceProperty::new(property_name, requires_get, requires_set)
+        .with_get_returns_by_ref(flags & NATIVE_PROPERTY_GET_BY_REF != 0)
         .with_type(Some(property_type));
     i32::from(context.define_native_interface_property_requirement(
         interface_name,
@@ -133,6 +134,7 @@ pub(super) unsafe fn register_native_abstract_property_inner(
         return 0;
     };
     let property = EvalInterfaceProperty::new(property_name, requires_get, requires_set)
+        .with_get_returns_by_ref(flags & NATIVE_PROPERTY_GET_BY_REF != 0)
         .with_type(Some(property_type));
     i32::from(context.define_native_abstract_property_requirement(
         class_name,
@@ -491,7 +493,7 @@ pub(super) unsafe fn register_native_method_param_default_string_inner(
     default_ptr: *const u8,
     default_len: u64,
 ) -> i32 {
-    let Ok(default) = abi_name_to_string(default_ptr, default_len) else {
+    let Ok(default) = crate::ffi::util::abi_data_bytes(default_ptr, default_len) else {
         return 0;
     };
     register_native_method_param_default_inner(
@@ -500,7 +502,7 @@ pub(super) unsafe fn register_native_method_param_default_string_inner(
         method_key_len,
         is_static,
         param_index,
-        NativeCallableDefault::String(default),
+        NativeCallableDefault::from_php_bytes(default),
     )
 }
 

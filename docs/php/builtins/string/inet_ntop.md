@@ -1,8 +1,6 @@
 ---
 title: "inet_ntop()"
 description: "Renders a packed 4-byte IPv4 or 16-byte IPv6 address as its presentation string, or false for any other length."
-sidebar:
-  order: 821
 ---
 
 ## inet_ntop()
@@ -20,8 +18,9 @@ Renders a packed 4-byte IPv4 or 16-byte IPv6 address as its presentation string,
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/inet_ntop.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/inet_ntop.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

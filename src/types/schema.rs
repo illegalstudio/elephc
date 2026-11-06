@@ -16,7 +16,9 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 
-use super::{FunctionSig, PhpType};
+use super::{ExternAbiType, FunctionSig, PhpType, ScalarWidth};
+
+mod abstract_setters;
 
 /// Compile-time attribute argument value. Captures the subset of PHP
 /// attribute argument expressions that reflection helpers can materialize:
@@ -164,6 +166,9 @@ fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
 /// Folds one supported associative attribute array key.
 fn fold_attr_key(expr: &Expr) -> Option<AttrKey> {
     match &expr.kind {
+        ExprKind::ClassConstant { receiver: StaticReceiver::Named(name) } => {
+            Some(AttrKey::Str(name.as_str().to_string()))
+        }
         ExprKind::IntLiteral(value) => Some(AttrKey::Int(*value)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(n) => Some(AttrKey::Int(n.wrapping_neg())),
@@ -176,7 +181,16 @@ fn fold_attr_key(expr: &Expr) -> Option<AttrKey> {
 
 /// Returns the canonical named receiver for class-constant attribute arguments.
 fn scoped_receiver_type_name(receiver: &StaticReceiver) -> Option<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Some(name.as_str().to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => None,
     }
@@ -257,6 +271,13 @@ pub struct ClassInfo {
     pub class_id: u64,
     /// Source span of the class-like declaration, or `Span::dummy()` for compiler-injected classes.
     pub declaration_span: crate::span::Span,
+    /// `true` when elephc itself declares the class: a runtime-registered builtin, or a class
+    /// from compiler-generated source such as an injected prelude (whose declarations can carry
+    /// real spans, so the dummy span above does not identify them). `false` for a class written
+    /// in the program's own source. Behaviour PHP ties to an internal class must check this, not
+    /// the name alone: a program that does not pull in a prelude may declare its own class with
+    /// that prelude's class name.
+    pub is_internal: bool,
     pub parent: Option<String>,
     pub is_abstract: bool,
     pub is_final: bool,
@@ -334,6 +355,8 @@ pub struct ClassInfo {
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
     pub defaults: Vec<Option<Expr>>,
+    /// A trait's unbound parent default fails only when this class initializes its properties.
+    pub deferred_property_default_error: Option<String>,
     pub property_visibilities: HashMap<String, Visibility>,
     /// PHP 8.4 asymmetric write (`set`) visibility, only for properties whose write visibility
     /// differs from their read visibility (e.g. `public private(set)`). Properties absent here
@@ -411,6 +434,9 @@ pub struct ClassInfo {
     pub abstract_static_methods: HashSet<String>,
     pub static_vtable_methods: Vec<String>,
     pub static_vtable_slots: HashMap<String, usize>,
+    /// Direct interface clauses in source order, including implicit enum contracts.
+    /// Reflection prototype selection needs this before inheritance flattening and deduplication.
+    pub declared_interfaces: Vec<String>,
     pub interfaces: Vec<String>,
     /// Maps constructor param index -> property name (for type propagation from new ClassName(args))
     pub constructor_param_to_prop: Vec<Option<String>>,
@@ -819,12 +845,16 @@ pub struct EnumInfo {
 pub struct ExternFunctionSig {
     pub name: String,
     pub params: Vec<(String, PhpType)>,
+    /// C ABI shape of each parameter, parallel to `params`.
+    pub abi_params: Vec<ExternAbiType>,
     pub return_type: PhpType,
+    /// C ABI shape of the return slot; decides how the return register is normalized.
+    pub abi_return: ExternAbiType,
     pub library: Option<String>,
 }
 
-/// Extern (FFI) class metadata with name, fields, total size, and field offsets
-/// for codegen to emit packed struct layout.
+/// Extern (FFI) class metadata: the C struct's fields in declaration order with their natural
+/// offsets, and `total_size`, the C `sizeof` (padded to the largest field alignment).
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ExternClassInfo {
@@ -833,29 +863,39 @@ pub struct ExternClassInfo {
     pub total_size: usize,
 }
 
-/// Extern (FFI) field metadata with name, PHP type, and offset into the
-/// containing extern class struct for codegen layout.
+/// Extern (FFI) field metadata: name, PHP-visible type, byte offset into the C struct, and the
+/// declared C shape (`abi`) that decides the access width, extension, and float precision.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ExternFieldInfo {
     pub name: String,
     pub php_type: PhpType,
     pub offset: usize,
+    pub abi: ExternAbiType,
 }
 
 /// Packed (non-nullable) class metadata with fields, total size, and per-field
 /// offsets for codegen to emit a packed struct layout.
+///
+/// `total_size` is the record's stride (padded to `align`, the alignment of its widest
+/// field), so an array of records and an embedded record keep every field naturally aligned.
 #[derive(Debug, Clone)]
 pub struct PackedClassInfo {
     pub fields: Vec<PackedFieldInfo>,
     pub total_size: usize,
+    pub align: usize,
 }
 
 /// Packed field metadata with name, PHP type, and offset into the containing
 /// packed class struct for codegen layout.
+///
+/// `php_type` is the type the field reads as and is written from (`int` for every integer
+/// width, `float` for `f32`); `width` is the narrower storage format a field declared with a
+/// C width name keeps in memory, `None` for the 8-byte word types and embedded records.
 #[derive(Debug, Clone)]
 pub struct PackedFieldInfo {
     pub name: String,
     pub php_type: PhpType,
     pub offset: usize,
+    pub width: Option<ScalarWidth>,
 }

@@ -36,6 +36,7 @@ pub(super) fn builtin_class_const(name: &str, value: i64) -> ClassConst {
 pub(super) fn builtin_reflection_class_string_method(method_name: &str, property: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -68,6 +69,7 @@ pub(super) fn builtin_reflection_class_string_method(method_name: &str, property
 pub(super) fn builtin_reflection_class_int_method(method_name: &str, property: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -130,6 +132,7 @@ pub(super) fn builtin_reflection_class_has_name_method(
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -170,6 +173,7 @@ pub(super) fn builtin_reflection_class_get_constant_method() -> ClassMethod {
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: "getConstant".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -241,6 +245,7 @@ pub(super) fn builtin_reflection_class_get_static_property_value_method() -> Cla
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: "getStaticPropertyValue".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -275,6 +280,7 @@ pub(super) fn builtin_reflection_class_get_static_property_value_method() -> Cla
 pub(super) fn builtin_reflection_class_set_static_property_value_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "setStaticPropertyValue".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -316,6 +322,7 @@ pub(super) fn builtin_reflection_class_get_reflection_constant_method() -> Class
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: "getReflectionConstant".to_string(),
         visibility: Visibility::Public,
         is_static: false,

@@ -1,8 +1,6 @@
 ---
 title: "session_register_shutdown() - internals"
 description: "Compiler internals for session_register_shutdown(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 992
 ---
 
 ## `session_register_shutdown()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3739](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3739) (`session_register_shutdown`)
+- **Lowering**: [`src/web_prelude/build.rs`](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs) (`session_register_shutdown`)
 - **Function symbol**: `session_register_shutdown()`
 
 

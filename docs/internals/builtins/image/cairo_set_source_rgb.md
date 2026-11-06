@@ -1,8 +1,6 @@
 ---
 title: "cairo_set_source_rgb() - internals"
 description: "Compiler internals for cairo_set_source_rgb(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 440
 ---
 
 ## `cairo_set_source_rgb()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13387](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13387) (`cairo_set_source_rgb`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`cairo_set_source_rgb`)
 - **Function symbol**: `cairo_set_source_rgb()`
 
 

@@ -736,6 +736,283 @@ var_dump(empty($arr['x']), empty($arr['nope']));
     );
 }
 
+/// `empty()` gates `$this`, instance-property and static-property `ArrayAccess` receivers
+/// through `offsetExists` before `offsetGet`, as it already gated variables (#1448), and a
+/// nullable receiver holding null is empty without either call.
+///
+/// Those receivers have no syntactic type, so they used to lower as a plain `offsetGet` read.
+/// Expectations are PHP 8.5.
+#[test]
+fn test_empty_on_this_and_property_array_access_consults_offset_exists_first() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements ArrayAccess {
+    public static Bag $shared;
+    public Bag $inner;
+    public ?Bag $next = null;
+    public function __construct(private array $data, private string $tag) {}
+    public function offsetExists(mixed $offset): bool { echo "{$this->tag}.exists($offset)\n"; return isset($this->data[$offset]); }
+    public function offsetGet(mixed $offset): mixed { echo "{$this->tag}.get($offset)\n"; return $this->data[$offset] ?? null; }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void {}
+    public function probe(): void {
+        var_dump(empty($this['zero']));
+        var_dump(empty($this['missing']));
+        var_dump(empty($this->inner['full']));
+        var_dump(empty(self::$shared['missing']));
+        var_dump(empty($this->next['full']));
+    }
+}
+function nullable(?Bag $bag): void { var_dump(empty($bag['full'])); }
+$bag = new Bag(['zero' => 0, 'full' => 'x'], 'this');
+$bag->inner = new Bag(['full' => 'y'], 'inner');
+Bag::$shared = new Bag([], 'shared');
+$bag->probe();
+var_dump(empty($bag->inner['full']));
+nullable(null);
+nullable($bag->inner);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "this.exists(zero)\n",
+            "this.get(zero)\n",
+            "bool(true)\n",
+            "this.exists(missing)\n",
+            "bool(true)\n",
+            "inner.exists(full)\n",
+            "inner.get(full)\n",
+            "bool(false)\n",
+            "shared.exists(missing)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "inner.exists(full)\n",
+            "inner.get(full)\n",
+            "bool(false)\n",
+            "bool(true)\n",
+            "inner.exists(full)\n",
+            "inner.get(full)\n",
+            "bool(false)\n",
+        )
+    );
+}
+
+/// `empty()` reads its `ArrayAccess` receiver once, so `offsetGet` runs on the object whose
+/// `offsetExists` answered even when that call replaced the property holding it (#1449).
+///
+/// PHP fetches the container once for the whole `empty()`; naming the receiver again for
+/// `offsetGet` read whatever `offsetExists` had just stored there. Expectations are PHP 8.5.
+#[test]
+fn test_empty_on_array_access_asks_the_object_that_answered_offset_exists() {
+    let out = compile_and_run(
+        r#"<?php
+class Box implements ArrayAccess {
+    public static Box $current;
+    public static ?Holder $holder = null;
+    public function __construct(public string $name) {}
+    public function offsetExists(mixed $offset): bool {
+        echo "exists:{$this->name}\n";
+        self::$current = new Box("next-static");
+        $holder = self::$holder;
+        if ($holder !== null) { $holder->box = new Box("next-property"); }
+        return true;
+    }
+    public function offsetGet(mixed $offset): mixed { echo "get:{$this->name}\n"; return "value"; }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void {}
+}
+class Holder { public Box $box; }
+Box::$current = new Box("static");
+var_dump(empty(Box::$current['k']));
+echo Box::$current->name, "\n";
+$holder = new Holder();
+$holder->box = new Box("property");
+Box::$holder = $holder;
+var_dump(empty($holder->box['k']));
+echo $holder->box->name, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "exists:static\n",
+            "get:static\n",
+            "bool(false)\n",
+            "next-static\n",
+            "exists:property\n",
+            "get:property\n",
+            "bool(false)\n",
+            "next-property\n",
+        )
+    );
+}
+
+/// The receiver `empty()` keeps for its two `ArrayAccess` calls and the value `offsetGet`
+/// returns are released, for `$this`, property, static-property and nullable receivers.
+#[test]
+fn test_empty_on_this_and_property_array_access_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bag implements ArrayAccess {
+    public static Bag $shared;
+    public Bag $inner;
+    public ?Bag $next = null;
+    public function __construct(private array $data) {}
+    public function offsetExists(mixed $o): bool { return isset($this->data[$o]); }
+    public function offsetGet(mixed $o): mixed { return $this->data[$o]; }
+    public function offsetSet(mixed $o, mixed $v): void {}
+    public function offsetUnset(mixed $o): void {}
+    public function count_empty(string $k): int {
+        $n = 0;
+        if (empty($this[$k])) { $n++; }
+        if (empty($this->inner[$k])) { $n++; }
+        if (empty(self::$shared[$k])) { $n++; }
+        if (empty($this->next[$k])) { $n++; }
+        return $n;
+    }
+}
+$bag = new Bag(['a' => str_repeat('x', 3), 'z' => '']);
+$bag->inner = new Bag(['a' => [1, 2], 'z' => []]);
+Bag::$shared = new Bag(['a' => str_repeat('y', 2)]);
+$n = 0;
+for ($i = 0; $i < 30; $i++) {
+    $n += $bag->count_empty($i % 2 ? 'a' : 'z');
+    if ($i === 10) { $bag->next = new Bag(['a' => 'n']); }
+}
+echo $n, "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "65\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// `empty()` on an `ArrayAccess` receiver holds the receiver and a computed offset only for
+/// the expression, so destructors run where PHP runs them.
+///
+/// The receiver (and a computed offset) are kept in hidden temps so `offsetExists` and
+/// `offsetGet` see the same values. Those temps used to live until the enclosing function
+/// returned: after `empty($box['k']); unset($box);` the object survived the `unset()`, and a
+/// call result or an object offset outlived the statement. They are now released as soon as
+/// `empty()` has decided, on the present, absent and null-receiver paths alike. The expected
+/// output is PHP 8.5.10's, and the heap must be clean.
+#[test]
+fn test_empty_on_array_access_releases_its_receiver_and_offset_when_it_decides() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Key {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct key {$this->name}\n"; }
+}
+class Box implements ArrayAccess {
+    public ?Box $inner = null;
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct {$this->name}\n"; }
+    public function offsetExists(mixed $o): bool { return !($o instanceof Key) || $o->name !== "missing"; }
+    public function offsetGet(mixed $o): mixed { return $o === "zero" ? 0 : 1; }
+    public function offsetSet(mixed $o, mixed $v): void {}
+    public function offsetUnset(mixed $o): void {}
+}
+function make(string $name): Box { return new Box($name); }
+function probe(bool $make): void {
+    $box = new Box("local");
+    var_dump(empty($box["k"]));
+    unset($box);
+    echo "after local unset\n";
+    var_dump(empty(make("call")["zero"]));
+    echo "after call\n";
+    $holder = new Box("holder");
+    $holder->inner = new Box("inner");
+    var_dump(empty($holder->inner["k"]));
+    $holder->inner = null;
+    echo "after inner reset\n";
+    var_dump(empty($holder[new Key("present")]));
+    var_dump(empty($holder[new Key("missing")]));
+    echo "after keys\n";
+    unset($holder);
+    $maybe = $make ? new Box("nullable") : null;
+    var_dump(empty($maybe["k"]));
+    $maybe = null;
+    echo "after nullable reset\n";
+}
+probe(true);
+probe(false);
+$main = new Box("main");
+var_dump(empty($main["k"]));
+unset($main);
+echo "end\n";
+"#,
+    );
+    let probe = |nullable: &str| {
+        format!(
+            concat!(
+                "bool(false)\n",
+                "destruct local\n",
+                "after local unset\n",
+                "destruct call\n",
+                "bool(true)\n",
+                "after call\n",
+                "bool(false)\n",
+                "destruct inner\n",
+                "after inner reset\n",
+                "destruct key present\n",
+                "bool(false)\n",
+                "destruct key missing\n",
+                "bool(true)\n",
+                "after keys\n",
+                "destruct holder\n",
+                "{}",
+                "after nullable reset\n",
+            ),
+            nullable
+        )
+    };
+    let expected = format!(
+        "{}{}bool(false)\ndestruct main\nend\n",
+        probe("bool(false)\ndestruct nullable\n"),
+        probe("bool(true)\n"),
+    );
+    assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Eval's `empty()` on an `ArrayAccess` object releases the value `offsetGet` returned once
+/// it is tested, as its `isset()` releases the `offsetExists` answer (#1450).
+///
+/// The source is chosen at run time so the interpreter, not literal AOT lowering, runs it.
+#[test]
+fn test_eval_empty_on_array_access_releases_the_offset_get_value() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$code = $argc > 0 ? 'class Store implements ArrayAccess {
+    public function offsetExists(mixed $offset): bool { return true; }
+    public function offsetGet(mixed $offset): mixed { return [$offset, $offset + 1]; }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void {}
+}
+$store = new Store();
+$hits = 0;
+for ($i = 0; $i < 4; $i++) { if (empty($store[$i])) { $hits++; } }
+echo "hits=", $hits, "\n";' : '';
+eval($code);
+"#,
+    );
+    assert_eq!(out.stdout, "hits=0\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "the offsetGet value leaked: {}",
+        out.stderr
+    );
+}
+
 /// The value `empty()` reads through `offsetGet` is released once tested, for a variable
 /// receiver and for a call result.
 #[test]
@@ -764,6 +1041,38 @@ echo $n, "\n";
 "#,
     );
     assert_eq!(out.stdout, "120\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A computed receiver that is an array or string still needs its evaluated value
+/// kept through the silent read, including when a nullable call returns null.
+/// Repeating the null path exposes ownership leaks in nullable subscript lowering.
+#[test]
+fn test_empty_on_computed_nullable_native_receivers_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe_row(bool $null): ?array {
+    return $null ? null : ['k' => str_repeat('x', 3)];
+}
+function maybe_word(bool $null): ?string {
+    return $null ? null : str_repeat('y', 3);
+}
+function word(): string { return str_repeat('y', 3); }
+$hits = 0;
+for ($i = 0; $i < 40; $i++) {
+    if (empty(maybe_row(true)['k'])) { $hits++; }
+    if (!empty(maybe_row(false)['k'])) { $hits++; }
+    if (empty(maybe_word(true)[0])) { $hits++; }
+    if (!empty(word()[0])) { $hits++; }
+}
+echo $hits, "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "160\n", "stderr: {}", out.stderr);
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected clean heap, got: {}",

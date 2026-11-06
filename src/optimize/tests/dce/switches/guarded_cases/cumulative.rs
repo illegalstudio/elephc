@@ -22,6 +22,7 @@ fn test_eliminate_dead_code_prunes_exhaustive_switch_true_default_from_cumulativ
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -91,6 +92,7 @@ fn test_eliminate_dead_code_uses_cumulative_switch_true_guards_inside_case_body(
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

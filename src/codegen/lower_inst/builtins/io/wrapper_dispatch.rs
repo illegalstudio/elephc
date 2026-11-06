@@ -14,7 +14,8 @@ use super::*;
 /// Read off reference PHP with a wrapper that echoes its `$flags`, not inferred from the two
 /// documented `STREAM_URL_STAT_*` constants: PHP also sets an internal no-cache bit (4) that
 /// userland never sees named. The full observed table is
-/// `stat 4 · lstat 5 · filesize 4 · filemtime 4 · file_exists 6 · is_file 6 · is_dir 6 ·
+/// `stat 4 · lstat 5 · filesize 4 · filemtime 4 · fileatime 4 · filectime 4 · fileperms 4 ·
+/// fileowner 4 · filegroup 4 · fileinode 4 · file_exists 6 · is_file 6 · is_dir 6 ·
 /// is_readable 6 · is_writable 6 · is_writeable 6 · is_executable 6`, i.e. NOCACHE everywhere,
 /// plus LINK for `lstat` and QUIET for the predicates. A wrapper that branches on QUIET to
 /// decide whether to warn therefore sees the same value it would under PHP. Each predicate
@@ -225,16 +226,43 @@ fn emit_path_stat_wrapper_dispatch(
     Ok(())
 }
 
-/// Lowers `filesize()` through userspace `url_stat()['size']` before filesystem stat.
+/// `__rt_user_wrapper_url_stat_field` selector for the `size` key (`filesize()`).
+pub(super) const URL_STAT_FIELD_SIZE: usize = 0;
+/// `__rt_user_wrapper_url_stat_field` selector for the `mode` key (`fileperms()` and the
+/// file-type predicates).
+pub(super) const URL_STAT_FIELD_MODE: usize = 1;
+/// `__rt_user_wrapper_url_stat_field` selector for the `mtime` key (`filemtime()`).
+pub(super) const URL_STAT_FIELD_MTIME: usize = 2;
+/// `__rt_user_wrapper_url_stat_field` selector for the `atime` key (`fileatime()`).
+pub(super) const URL_STAT_FIELD_ATIME: usize = 6;
+/// `__rt_user_wrapper_url_stat_field` selector for the `ctime` key (`filectime()`).
+pub(super) const URL_STAT_FIELD_CTIME: usize = 7;
+/// `__rt_user_wrapper_url_stat_field` selector for the `uid` key (`fileowner()`).
+pub(super) const URL_STAT_FIELD_UID: usize = 8;
+/// `__rt_user_wrapper_url_stat_field` selector for the `gid` key (`filegroup()`).
+pub(super) const URL_STAT_FIELD_GID: usize = 9;
+/// `__rt_user_wrapper_url_stat_field` selector for the `ino` key (`fileinode()`).
+pub(super) const URL_STAT_FIELD_INO: usize = 10;
+
+/// Lowers one integer stat getter through userspace `url_stat()[field]` before filesystem stat.
 ///
-/// Both arms of `emit_url_stat_field_or_fallback` now leave an int|false success flag beside the
-/// payload, so a path that cannot be stat'ed boxes PHP `false` instead of the `0` it used to
-/// report — a legitimate size for an empty file, and therefore indistinguishable from success.
-pub(super) fn lower_filesize_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "filesize", 1)?;
+/// Serves `filesize()`, `filemtime()`, `fileatime()`, `filectime()`, `fileperms()`,
+/// `fileowner()`, `filegroup()` and `fileinode()`: PHP asks a registered wrapper's `url_stat()`
+/// for every one of them (with the no-cache flag) and stats the real filesystem only when no
+/// wrapper owns the scheme. Both arms of `emit_url_stat_field_or_fallback` leave an int|false
+/// success flag beside the payload, so a path that cannot be stat'ed boxes PHP `false` instead
+/// of a `0` that would be indistinguishable from a real field value.
+pub(super) fn lower_stat_int_with_wrapper(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    fallback_runtime: &str,
+    field_selector: usize,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, name, 1)?;
     let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, "filesize")?;
-    emit_url_stat_field_or_fallback(ctx, "__rt_filesize", 0, URL_STAT_FLAGS_NOCACHE);
+    load_string_to_result(ctx, path, name)?;
+    emit_url_stat_field_or_fallback(ctx, fallback_runtime, field_selector, URL_STAT_FLAGS_NOCACHE);
     box_stat_int_or_false_result(ctx);
     store_if_result(ctx, inst)
 }
@@ -250,11 +278,11 @@ pub(super) fn lower_is_file_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &I
 
 /// Emits a wrapper url_stat field lookup with a native filesystem fallback.
 ///
-/// SHARED between `filesize()` (field 0) and `is_file()` (field 1). Both arms leave an int|false
-/// success flag in `x1`/`rdx` next to the payload — `__rt_user_wrapper_url_stat_field` on the
-/// wrapper arm, the runtime helper on the fallback arm. `is_file()` reads the payload register
-/// only, so the flag is inert for it; do not remove it on the assumption that this composer has
-/// one caller.
+/// SHARED between the integer getters (`lower_stat_int_with_wrapper`), the file-type predicates
+/// and the permission predicates. Both arms leave an int|false success flag in `x1`/`rdx` next to
+/// the payload (`__rt_user_wrapper_url_stat_field` on the wrapper arm, the runtime helper on the
+/// fallback arm). The predicates read the payload register only, so the flag is inert for them;
+/// do not remove it on the assumption that only they call this composer.
 pub(super) fn emit_url_stat_field_or_fallback(
     ctx: &mut FunctionContext<'_>,
     fallback_runtime: &str,
@@ -316,19 +344,6 @@ const STAT_FILE_TYPE_MASK: u32 = 0xF000;
 const STAT_TYPE_REGULAR: u32 = 0x8000;
 /// `S_IFDIR`, the file-type bits of a directory.
 const STAT_TYPE_DIRECTORY: u32 = 0x4000;
-
-/// Lowers `filemtime()` through userspace `url_stat()['mtime']` before filesystem stat.
-pub(super) fn lower_filemtime_with_wrapper(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, "filemtime", 1)?;
-    let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, "filemtime")?;
-    emit_url_stat_field_or_fallback(ctx, "__rt_filemtime", 2, URL_STAT_FLAGS_NOCACHE);
-    box_stat_int_or_false_result(ctx);
-    store_if_result(ctx, inst)
-}
 
 /// Lowers `is_dir()` through userspace `url_stat()['mode']` before filesystem stat.
 pub(super) fn lower_is_dir_with_wrapper(
@@ -421,7 +436,7 @@ fn emit_file_type_wrapper_dispatch(
     file_type: u32,
     name: &str,
 ) {
-    emit_url_stat_field_or_fallback(ctx, fallback_runtime, 1, URL_STAT_FLAGS_QUIET);
+    emit_url_stat_field_or_fallback(ctx, fallback_runtime, URL_STAT_FIELD_MODE, URL_STAT_FLAGS_QUIET);
     let no_wrapper = ctx.next_label(&format!("{}_no_wrapper_adjust", name));
     let done = ctx.next_label(&format!("{}_adjust_done", name));
     match ctx.emitter.target.arch {

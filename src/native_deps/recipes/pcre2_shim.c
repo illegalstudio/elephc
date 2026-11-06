@@ -6,6 +6,58 @@
 #include <pcre2.h>
 #include <pcre2posix.h>
 
+/* Private continuation flag; PCRE2 10.47 handles UTF-8, CRLF and empty retries. */
+#define ELEPHC_PCRE2_GLOBAL_NEXT (1u << 16)
+/* Private compile flag. pcre2posix has no PCRE2_EXTENDED bit (REG_EXTENDED is 0). */
+#define ELEPHC_PCRE2_EXTENDED 0x2000
+
+/* Compiles with PCRE2_EXTENDED while filling the same POSIX regex_t pcre2_regcomp uses.
+ * An option group inserted before the pattern would hide (*UTF), (*ANYCRLF), (*CRLF),
+ * and (*LIMIT_...) verbs, which PCRE2 accepts only at the very start. PHP passes /x
+ * as a compile option. */
+static int elephc_pcre2_compile_extended(regex_t *preg, const char *pattern, int cflags)
+{
+    uint32_t options = PCRE2_EXTENDED;
+    uint32_t capture_count = 0;
+    int errorcode = 0;
+    PCRE2_SIZE erroffset = 0;
+    pcre2_code *code;
+
+    if ((cflags & REG_ICASE) != 0) options |= PCRE2_CASELESS;
+    if ((cflags & REG_NEWLINE) != 0) options |= PCRE2_MULTILINE;
+    if ((cflags & REG_DOTALL) != 0) options |= PCRE2_DOTALL;
+    if ((cflags & REG_NOSPEC) != 0) options |= PCRE2_LITERAL;
+    if ((cflags & REG_UTF) != 0) options |= PCRE2_UTF;
+    if ((cflags & REG_UCP) != 0) options |= PCRE2_UCP;
+    if ((cflags & REG_UNGREEDY) != 0) options |= PCRE2_UNGREEDY;
+
+    preg->re_cflags = cflags;
+    preg->re_pcre2_code = NULL;
+    preg->re_match_data = NULL;
+    code = pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED, options,
+        &errorcode, &erroffset, NULL);
+    preg->re_erroffset = erroffset;
+    if (code == NULL) {
+        (void)errorcode;
+        return REG_BADPAT;
+    }
+    if (pcre2_pattern_info(code, PCRE2_INFO_CAPTURECOUNT, &capture_count) != 0
+        || capture_count == UINT32_MAX) {
+        pcre2_code_free(code);
+        return REG_BADPAT;
+    }
+    preg->re_nsub = (size_t)capture_count;
+    preg->re_pcre2_code = code;
+    preg->re_match_data = pcre2_match_data_create(capture_count + 1, NULL);
+    if (preg->re_match_data == NULL) {
+        pcre2_code_free(code);
+        preg->re_pcre2_code = NULL;
+        return REG_ESPACE;
+    }
+    preg->re_erroffset = (size_t)(-1);
+    return 0;
+}
+
 typedef struct elephc_pcre2_v1_handle {
     regex_t regex;
     size_t slot_count;
@@ -34,7 +86,12 @@ int32_t elephc_pcre2_v1_compile(
     if (handle == NULL) {
         return (int32_t)REG_ESPACE;
     }
-    result = pcre2_regcomp(&handle->regex, pattern_z, (int)cflags);
+    if ((cflags & ELEPHC_PCRE2_EXTENDED) != 0) {
+        cflags &= ~(uint32_t)ELEPHC_PCRE2_EXTENDED;
+        result = elephc_pcre2_compile_extended(&handle->regex, pattern_z, (int)cflags);
+    } else {
+        result = pcre2_regcomp(&handle->regex, pattern_z, (int)cflags);
+    }
     if (result != 0) {
         free(handle);
         return (int32_t)result;
@@ -84,6 +141,9 @@ int32_t elephc_pcre2_v1_exec(
     slots = (size_t)requested_slots;
     effective_slots = slots < handle->slot_count ? slots : handle->slot_count;
     use_startend = (eflags & REG_STARTEND) != 0 && effective_slots != 0;
+    if ((eflags & ELEPHC_PCRE2_GLOBAL_NEXT) != 0 && !use_startend) {
+        return (int32_t)REG_INVARG;
+    }
     if (use_startend) {
         start_offset = offset_pairs[0];
         end_offset = offset_pairs[1];
@@ -96,6 +156,57 @@ int32_t elephc_pcre2_v1_exec(
         offset_pairs[index * 2] = -1;
         offset_pairs[index * 2 + 1] = -1;
     }
+    /* PHP's iteration offset must retain the original subject for anchors,
+     * word boundaries and lookbehind. POSIX regexec instead slices at rm_so. */
+    if (use_startend) {
+        uint32_t options = 0;
+        uint32_t next_options = 0;
+        PCRE2_SIZE next_offset = (PCRE2_SIZE)start_offset;
+        PCRE2_SIZE *vector;
+        size_t returned_slots;
+        if ((eflags & REG_NOTBOL) != 0) options |= PCRE2_NOTBOL;
+        if ((eflags & REG_NOTEOL) != 0) options |= PCRE2_NOTEOL;
+        if ((eflags & REG_NOTEMPTY) != 0) options |= PCRE2_NOTEMPTY;
+        if ((eflags & ELEPHC_PCRE2_GLOBAL_NEXT) != 0) {
+#if PCRE2_MAJOR > 10 || (PCRE2_MAJOR == 10 && PCRE2_MINOR >= 47)
+            if (!pcre2_next_match((pcre2_match_data *)handle->regex.re_match_data,
+                    &next_offset, &next_options)) {
+                return REG_NOMATCH;
+            }
+#else
+            /* Host-only test providers can use older PCRE2. Managed production
+             * pins 10.47; no lookaround-BSK extension is enabled in either path. */
+            vector = pcre2_get_ovector_pointer((pcre2_match_data *)handle->regex.re_match_data);
+            next_offset = vector[1];
+            if (vector[0] == vector[1]) {
+                if (next_offset >= (PCRE2_SIZE)end_offset) return REG_NOMATCH;
+                next_options = PCRE2_NOTEMPTY_ATSTART;
+            }
+#endif
+            options |= next_options;
+        }
+        result = pcre2_match((const pcre2_code *)handle->regex.re_pcre2_code,
+            (PCRE2_SPTR)subject_z, (PCRE2_SIZE)end_offset,
+            next_offset, options,
+            (pcre2_match_data *)handle->regex.re_match_data, NULL);
+        if (result < 0) {
+            if (result == PCRE2_ERROR_NOMATCH) return REG_NOMATCH;
+            if (result == PCRE2_ERROR_NOMEMORY || result == PCRE2_ERROR_HEAPLIMIT
+                || result == PCRE2_ERROR_MATCHLIMIT) return REG_ESPACE;
+            return REG_INVARG;
+        }
+        if ((handle->regex.re_cflags & REG_NOSUB) != 0) return 0;
+        vector = pcre2_get_ovector_pointer((pcre2_match_data *)handle->regex.re_match_data);
+        returned_slots = result == 0 ? handle->slot_count : (size_t)result;
+        if (returned_slots > effective_slots) returned_slots = effective_slots;
+        for (index = 0; index < returned_slots; ++index) {
+            offset_pairs[index * 2] = vector[index * 2] == PCRE2_UNSET
+                ? -1 : (int64_t)vector[index * 2];
+            offset_pairs[index * 2 + 1] = vector[index * 2 + 1] == PCRE2_UNSET
+                ? -1 : (int64_t)vector[index * 2 + 1];
+        }
+        return 0;
+    }
     if (effective_slots != 0) {
         matches = (regmatch_t *)malloc(effective_slots * sizeof(*matches));
         if (matches == NULL) {
@@ -104,10 +215,6 @@ int32_t elephc_pcre2_v1_exec(
         for (index = 0; index < effective_slots; ++index) {
             matches[index].rm_so = -1;
             matches[index].rm_eo = -1;
-        }
-        if (use_startend) {
-            matches[0].rm_so = (regoff_t)start_offset;
-            matches[0].rm_eo = (regoff_t)end_offset;
         }
     }
     result = pcre2_regexec(&handle->regex, subject_z, effective_slots, matches, (int)eflags);

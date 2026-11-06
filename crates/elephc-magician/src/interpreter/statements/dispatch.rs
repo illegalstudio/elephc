@@ -9,18 +9,64 @@
 //! Key details:
 //! - The exhaustive match remains centralized so every new `EvalStmt` variant
 //!   must explicitly define its runtime control-flow behavior.
+//! - Only program-level generic templates are hoisted; nested declarations execute in source order.
 
 use super::*;
 
-/// Executes statements in source order and propagates the first eval `return`.
+/// Checks program provenance, seeds CLI globals, and hoists templates before eval/include execution.
+pub(in crate::interpreter) fn execute_program_statements(
+    program: &EvalProgram,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    if program.native_generic_syntax() && crate::strict_php_mode::strict_php_mode() {
+        return Err(EvalStatus::ParseError);
+    }
+    seed_named_cli_superglobals(program, context, scope, values)?;
+    let statements = program.statements();
+    let mut registered: Vec<(String, bool)> = Vec::new();
+    for stmt in statements {
+        if let EvalStmt::GenericDecl(template) = stmt {
+            if !context.define_generic_template(template.as_ref().clone()) {
+                for (name, is_function) in &registered { context.remove_generic_template(name, *is_function); }
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            registered.push((template.name.clone(), matches!(template.prototype.as_ref(), EvalStmt::FunctionDecl { .. })));
+        }
+    }
+    for stmt in statements {
+        if let EvalStmt::GenericDecl(template) = stmt {
+            if let Err(error) = verify_generic_variance(template, context, values) {
+                for (name, is_function) in &registered { context.remove_generic_template(name, *is_function); }
+                return Err(error);
+            }
+        }
+    }
+    execute_statement_sequence(statements, true, context, scope, values)
+}
+
+/// Executes nested statements in source order without registering unreachable declarations.
 pub(in crate::interpreter) fn execute_statements(
     statements: &[EvalStmt],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    execute_statement_sequence(statements, false, context, scope, values)
+}
+
+/// Propagates control flow while skipping only templates already hoisted at program entry.
+fn execute_statement_sequence(
+    statements: &[EvalStmt],
+    templates_registered: bool,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
     for stmt in statements {
         eval_pcntl_maybe_dispatch(context, values)?;
+        if templates_registered && matches!(stmt, EvalStmt::GenericDecl(_)) { continue; }
         match execute_stmt(stmt, context, scope, values)? {
             EvalControl::None => {}
             control => return Ok(control),
@@ -36,7 +82,19 @@ pub(in crate::interpreter) fn execute_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    let specialized = specialize_static_storage_statement(stmt, context, scope, values)?;
+    let stmt = specialized.as_ref().unwrap_or(stmt);
     match stmt {
+        EvalStmt::GenericDecl(template) => {
+            if !context.define_generic_template(template.as_ref().clone()) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            if let Err(error) = verify_generic_variance(template, context, values) {
+                context.remove_generic_template(&template.name, matches!(template.prototype.as_ref(), EvalStmt::FunctionDecl { .. }));
+                return Err(error);
+            }
+            Ok(EvalControl::None)
+        },
         EvalStmt::ArrayAppendVar { name, value } => {
             eval_array_append_var_stmt(name, value, context, scope, values)?;
             Ok(EvalControl::None)
@@ -112,6 +170,9 @@ pub(in crate::interpreter) fn execute_stmt(
             body,
         } => {
             let key = name.to_ascii_lowercase();
+            validate_eval_core_attribute_targets(attributes, 2)?;
+            for attributes in parameter_attributes { validate_eval_core_attribute_targets(attributes, 32)?; }
+            if context.generic_function_template(name).is_some() { return Err(EvalStatus::RuntimeFatal); }
             let mut function = EvalFunction::new(name.clone(), params.clone(), body.clone())
                 .with_attributes(attributes.clone())
                 .with_parameter_attributes(parameter_attributes.clone())
@@ -191,8 +252,56 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_static_var_stmt(name, init, context, scope, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::TypedVar { name, declared, value } => {
+            let value = eval_owned_expr(value, context, scope, values)?;
+            let checked = validate_generic_local(declared, name, value, context, values);
+            if let Err(error) = checked { let _ = eval_release_value(context, values, value); return Err(error); }
+            let previous = scope.local_type(name).cloned();
+            scope.declare_local_type(name.clone(), declared.clone());
+            let replaced = match set_owned_scope_cell(context, scope, name.clone(), value, values) {
+                Ok(replaced) => replaced,
+                Err(status) => {
+                    if let Some(previous) = previous { scope.declare_local_type(name.clone(), previous); }
+                    else { scope.clear_local_type(name); }
+                    return Err(status);
+                }
+            };
+            for replaced in replaced {
+                eval_release_value(context, values, replaced)?;
+            }
+            if let Some(cell) = visible_scope_cell(context, scope, name) {
+                if values.is_reference(cell)? { context.bind_local_reference_types(cell, &[declared.clone()]); }
+            }
+            Ok(EvalControl::None)
+        }
         EvalStmt::StoreVar { name, value } => {
             let value = eval_owned_expr(value, context, scope, values)?;
+            for replaced in set_owned_scope_cell(
+                context,
+                scope,
+                name.clone(),
+                value,
+                values,
+            )? {
+                eval_release_value(context, values, replaced)?;
+            }
+            Ok(EvalControl::None)
+        }
+        EvalStmt::IncDecVar { name, increment } => {
+            let current = eval_owned_expr(
+                &EvalExpr::LoadVar(name.clone()),
+                context,
+                scope,
+                values,
+            )?;
+            let value = match eval_inc_dec_value(current, *increment, values) {
+                Ok(value) => value,
+                Err(status) => {
+                    let _ = eval_release_value(context, values, current);
+                    return Err(status);
+                }
+            };
+            eval_release_value(context, values, current)?;
             for replaced in set_owned_scope_cell(
                 context,
                 scope,
@@ -227,7 +336,7 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::UnsetVar { name } => {
-            if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
+            if let Some(replaced) = unset_scope_cell(context, scope, name.clone()) {
                 eval_release_value(context, values, replaced)?;
             }
             Ok(EvalControl::None)
@@ -249,8 +358,11 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::Expr(expr) => {
-            let result = eval_expr(expr, context, scope, values)?;
-            release_expr_result(result, context, values)?;
+            let result = eval_discarded_core_expr(expr, context, scope, values)?;
+            let warned = warn_eval_discarded_call(expr, context, values);
+            let released = release_expr_result(result, context, values);
+            warned?;
+            released?;
             Ok(EvalControl::None)
         }
     }

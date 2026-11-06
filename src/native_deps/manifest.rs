@@ -6,6 +6,9 @@
 //!
 //! Key details:
 //! - The `[native]` section is strict; unrelated top-level sections remain untouched.
+//! - `[native]` is optional: `elephc.toml` also carries a project's `[ini]` directives
+//!   (`crate::project_ini`), so a manifest holding only those declares no native dependency.
+//!   The first `native add` writes the section.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -34,10 +37,13 @@ impl ManifestDocument {
         Self { document, dependencies: BTreeMap::new() }
     }
 
-    /// Parses and strictly validates the native section of a manifest.
+    /// Parses and strictly validates the native section of a manifest, when it has one.
     pub fn parse(text: &str) -> Result<Self, NativeError> {
         let document = DocumentMut::from_str(text).map_err(|error| NativeError::new(NativeErrorKind::Manifest, format!("invalid TOML: {error}")))?;
-        let native = document.get("native").and_then(Item::as_table).ok_or_else(|| NativeError::new(NativeErrorKind::Manifest, "missing [native] table"))?;
+        let Some(native) = document.get("native") else {
+            return Ok(Self { document, dependencies: BTreeMap::new() });
+        };
+        let native = native.as_table().ok_or_else(|| NativeError::new(NativeErrorKind::Manifest, "[native] must be a table"))?;
         for (key, _) in native.iter() {
             if !matches!(key, "schema" | "dependencies") {
                 return Err(NativeError::new(NativeErrorKind::Manifest, format!("unknown key 'native.{key}'")));
@@ -77,6 +83,11 @@ impl ManifestDocument {
     /// Declares or replaces one exact catalog version while preserving surrounding formatting.
     pub fn set_dependency(&mut self, name: &str, version: &str) -> Result<(), NativeError> {
         catalog::version(name, Some(version))?;
+        if self.document.get("native").is_none() {
+            self.document["native"] = Item::Table(Table::new());
+            self.document["native"]["schema"] = value(1);
+            self.document["native"]["dependencies"] = Item::Table(Table::new());
+        }
         let item = &mut self.document["native"]["dependencies"][name];
         if let Some(current) = item.as_value_mut() {
             let decor = current.decor().clone();
@@ -126,6 +137,20 @@ mod tests {
         assert!(rendered.contains("# project note"));
         assert!(rendered.contains("name = \"demo\" # keep"));
         assert!(rendered.contains("# dependency note"));
+    }
+
+    /// Verifies a manifest without `[native]` declares nothing, and that adding the first
+    /// dependency writes the section while keeping the rest of the file.
+    #[test]
+    fn a_manifest_without_a_native_section_declares_nothing() {
+        let mut manifest = ManifestDocument::parse("[ini]\n\"opcache.enable_cli\" = true # keep\n").unwrap();
+        assert!(manifest.dependencies().is_empty());
+        manifest.set_dependency("pcre2", "10.47").unwrap();
+        let rendered = manifest.render();
+        assert!(rendered.contains("\"opcache.enable_cli\" = true # keep"));
+        let reparsed = ManifestDocument::parse(&rendered).unwrap();
+        assert_eq!(reparsed.dependencies().get("pcre2").map(String::as_str), Some("10.47"));
+        assert!(ManifestDocument::parse("native = 1\n").is_err(), "a non-table [native] is refused");
     }
 
     /// Verifies strict native schema validation fails closed.

@@ -152,6 +152,7 @@ fn expr_contains_call(expr: &Expr) -> bool {
         | ExprKind::NullsafeDynamicMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::NewObject { .. }
+        | ExprKind::NewGeneric { .. }
         | ExprKind::NewScopedObject { .. } => true,
         ExprKind::BinaryOp { left, right, .. } => {
             expr_contains_call(left) || expr_contains_call(right)

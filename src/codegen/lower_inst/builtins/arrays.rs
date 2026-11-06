@@ -36,6 +36,9 @@ mod shift;
 mod unshift;
 pub(in crate::codegen::lower_inst::builtins) mod values;
 mod basic;
+mod keyed_kernels;
+mod type_check;
+mod push;
 mod boxed_map_callback;
 mod boxed_merge;
 mod boxed_membership;
@@ -52,6 +55,7 @@ mod map_dispatch;
 mod map_results;
 mod reduce_sets;
 mod misc_dispatch;
+mod mixed_array_argument_guard;
 mod callback_builtins;
 mod multisort;
 mod sort_dispatch;
@@ -88,12 +92,19 @@ use in_array_cases::*;
 use in_array_coercions::*;
 use in_array_strings::*;
 
+pub(crate) use keyed_kernels::{
+    lower_array_filter_count_mod, lower_array_map_sum_add, lower_array_map_sum_add_int,
+    lower_array_map_sum_add_int_cached, lower_array_map_sum_add_safe,
+    lower_array_map_sum_probe_int,
+};
+pub(crate) use type_check::lower_array_element_type_check;
 pub(crate) use basic::{
-    lower_call_user_func_builtin_escape, lower_array_sum, lower_array_product, lower_array_push,
+    lower_call_user_func_builtin_escape, lower_array_sum, lower_array_product,
     lower_array_chunk, lower_array_pad, lower_array_fill, lower_array_fill_keys,
     lower_array_combine, lower_array_column, lower_array_flip, lower_array_reverse,
     lower_array_unique,
 };
+pub(crate) use push::lower_array_push;
 pub(crate) use filter::{
     lower_array_filter,
 };
@@ -114,7 +125,8 @@ pub(crate) use misc_dispatch::{
     lower_rsort, lower_asort, lower_arsort, lower_ksort,
     lower_krsort, lower_natsort, lower_natcasesort, lower_shuffle,
     lower_usort, lower_uksort, lower_uasort, lower_array_key_exists,
-    lower_array_is_list, lower_array_key_first, lower_array_key_last, lower_array_replace,
+    lower_array_is_list, lower_array_key_first, lower_array_key_last, lower_array_first,
+    lower_array_last, lower_array_replace,
     lower_array_replace_recursive, lower_array_diff_assoc, lower_array_intersect_assoc, lower_array_merge_recursive,
 };
 pub(crate) use callback_builtins::{
@@ -568,6 +580,13 @@ fn lower_hash_link_sort_with_flags(
     let array = expect_operand(inst, 0)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     if !hash_sort_source_is_published_mixed_cell(ctx, array)? {
+        // A miss-read receiver holds the in-band null-container sentinel; PHP raises a TypeError
+        // for it rather than relinking a null table.
+        boxed_mutation::require_non_null_hash_receiver(
+            ctx,
+            array,
+            helper.trim_start_matches("__rt_hash_"),
+        )?;
         receiver.require_writable("hash link sort")?;
         receiver.prepare_consuming_storeback(ctx, array)?;
         ensure_unique_hash_sort_source(ctx, array)?;
@@ -702,10 +721,12 @@ fn slice_like_length_operand(inst: &Instruction) -> Result<Option<ValueId>> {
     Ok(None)
 }
 
-/// Reads the literal `$preserve_keys` flag of a slice-like call.
+/// Reads the literal `$preserve_keys` flag of a slice-like call over concrete array storage.
 ///
-/// The checker rejects a non-literal flag because it decides the result's static shape, so a
-/// non-literal operand here can only mean the checker and the backend disagree about this call.
+/// The checker rejects a non-literal flag there because it decides the result's static shape, so
+/// a non-literal operand here can only mean the checker and the backend disagree about this call.
+/// A boxed `array_slice()` source reads its flag at runtime instead (see
+/// [`stage_slice_preserve_keys_flag`]).
 fn slice_like_preserve_keys(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
@@ -720,6 +741,51 @@ fn slice_like_preserve_keys(
             ))
         }),
     }
+}
+
+/// Reports whether a boxed-source `array_slice()` may keep its keys: an omitted flag or a literal
+/// `false` never does, while a literal `true` or a runtime operand may.
+fn slice_preserve_keys_may_be_set(
+    ctx: &FunctionContext<'_>,
+    flag: Option<ValueId>,
+) -> Result<bool> {
+    match flag {
+        None => Ok(false),
+        Some(flag) => Ok(const_bool_operand(ctx, flag)?.unwrap_or(true)),
+    }
+}
+
+/// Resolves the `$preserve_keys` flag of a boxed-source `array_slice()` and pushes it onto the
+/// temporary stack, where the payload dispatch reads it.
+///
+/// An omitted flag and a literal push an immediate `0` or `1`. A runtime flag only comes from the
+/// callable wrapper's `bool` parameter, which the invoker has already converted with PHP
+/// truthiness, and the consumers test the word against zero. Any other operand type is refused
+/// rather than guessed at.
+fn stage_slice_preserve_keys_flag(
+    ctx: &mut FunctionContext<'_>,
+    flag: Option<ValueId>,
+) -> Result<()> {
+    let reg = abi::int_result_reg(ctx.emitter);
+    match flag {
+        None => abi::emit_load_int_immediate(ctx.emitter, reg, 0),
+        Some(flag) => match const_bool_operand(ctx, flag)? {
+            Some(value) => abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(value)),
+            None => match ctx.value_php_type(flag)?.codegen_repr() {
+                PhpType::Bool | PhpType::False | PhpType::Int => {
+                    ctx.load_value_to_result(flag)?;
+                }
+                other => {
+                    return Err(CodegenIrError::unsupported(format!(
+                        "array_slice preserve_keys operand of PHP type {:?}",
+                        other
+                    )))
+                }
+            },
+        },
+    }
+    abi::emit_push_reg(ctx.emitter, reg);
+    Ok(())
 }
 
 /// Reports whether a mutating array builtin's first operand is a hash-backed array.

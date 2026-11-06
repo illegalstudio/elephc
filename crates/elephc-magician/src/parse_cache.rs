@@ -39,7 +39,7 @@ pub(crate) fn parse_fragment_cached(code: &[u8]) -> CachedParseResult {
 }
 
 /// Returns true when a fragment is small enough to retain in the parse cache.
-fn is_cacheable_fragment(code: &[u8]) -> bool {
+pub(crate) fn is_cacheable_fragment(code: &[u8]) -> bool {
     code.len() <= MAX_CACHEABLE_FRAGMENT_BYTES
 }
 
@@ -50,9 +50,40 @@ fn eval_parse_cache() -> &'static Mutex<EvalParseCache> {
 
 /// Locks the parse cache and recovers the inner cache if a previous panic poisoned it.
 fn lock_eval_parse_cache() -> MutexGuard<'static, EvalParseCache> {
-    eval_parse_cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    lock_cache(eval_parse_cache())
+}
+
+/// Locks one parse cache and recovers the inner cache if a previous panic poisoned it.
+fn lock_cache(cache: &'static Mutex<EvalParseCache>) -> MutexGuard<'static, EvalParseCache> {
+    cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Included files memoized by their bytes, for includes made while the script cache is off.
+///
+/// A SEPARATE CACHE, not more entries in the fragment one: a file starts in HTML mode and a
+/// fragment in PHP mode, so the same bytes parse to different programs, and one key space
+/// would hand an include an eval fragment's parse (or the reverse).
+static SCRIPT_PARSE_CACHE: OnceLock<Mutex<EvalParseCache>> = OnceLock::new();
+const SCRIPT_PARSE_CACHE_CAPACITY: usize = 64;
+
+/// Parses an included file, reusing a memoized program for the exact same bytes.
+///
+/// Files are memoized under the same 64 KiB cap as fragments, so the costs
+/// `docs/php/opcache.md` measures for an include without the script cache still hold: a larger
+/// file is parsed again on every include, which is what the runtime script cache is for.
+pub(crate) fn parse_script_cached(bytes: &[u8]) -> CachedParseResult {
+    let parse = || crate::script_cache::segments::parse_script(bytes).map(Arc::new);
+    if !is_cacheable_fragment(bytes) {
+        return parse();
+    }
+    let cache = SCRIPT_PARSE_CACHE
+        .get_or_init(|| Mutex::new(EvalParseCache::new(SCRIPT_PARSE_CACHE_CAPACITY)));
+    if let Some(result) = lock_cache(cache).lookup(bytes) {
+        return result;
+    }
+    let result = parse();
+    lock_cache(cache).insert(bytes.to_vec(), result.clone());
+    result
 }
 
 /// Bounded FIFO cache for immutable eval parse results.

@@ -1,8 +1,6 @@
 ---
 title: "file_get_contents()"
 description: "Reads an entire file into a string."
-sidebar:
-  order: 318
 ---
 
 ## file_get_contents()
@@ -24,8 +22,9 @@ Reads an entire file into a string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/file_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file_get_contents.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "func_get_arg()"
 description: "Returns one argument from the current function call."
-sidebar:
-  order: 612
 ---
 
 ## func_get_arg()
@@ -20,8 +18,9 @@ Returns one argument from the current function call.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/func_get_arg.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/func_get_arg.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -9,7 +9,20 @@
 
 use super::*;
 
-/// Loads the persistent eval context local into the selected integer argument register.
+/// Where the eval context handle lives while the native inventory is registered.
+///
+/// The handle is needed by every registration call, and each of those calls
+/// clobbers the register the handle arrived in. It is parked in a module-level
+/// symbol: the module-level inventory helper has the fixed 32-byte frame the
+/// shared-helper prologue builds, with no room for a local slot, and a local
+/// addressed relative to the frame pointer would land in the caller's stack.
+#[derive(Clone, Copy)]
+pub(super) enum EvalContextSource {
+    /// The handle is in this module-level symbol.
+    Symbol(&'static str),
+}
+
+/// Loads the persistent eval context handle from the caller's frame slot.
 pub(super) fn load_eval_context_local_to_arg(
     ctx: &mut FunctionContext<'_>,
     context_offset: usize,
@@ -17,6 +30,20 @@ pub(super) fn load_eval_context_local_to_arg(
 ) {
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
     abi::load_at_offset(ctx.emitter, arg_reg, context_offset);
+}
+
+/// Loads the eval context handle from the given source into the first argument register.
+pub(super) fn load_eval_context_source_to_arg(
+    ctx: &mut FunctionContext<'_>,
+    source: EvalContextSource,
+    arg_index: usize,
+) {
+    match source {
+        EvalContextSource::Symbol(symbol) => {
+            let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
+            abi::emit_load_symbol_to_reg(ctx.emitter, arg_reg, symbol, 0);
+        }
+    }
 }
 
 /// Loads the current eval context handle into the selected integer argument register.
@@ -31,6 +58,129 @@ pub(super) fn move_saved_eval_code_to_eval_args(ctx: &mut FunctionContext<'_>) {
     let code_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
     abi::emit_load_temporary_stack_slot(ctx.emitter, code_ptr_arg, EVAL_CODE_PTR_OFFSET);
     abi::emit_load_temporary_stack_slot(ctx.emitter, code_len_arg, EVAL_CODE_LEN_OFFSET);
+}
+
+/// Parses or looks up the fragment and saves a type-safe conservative scope-access mask.
+pub(super) fn prepare_dynamic_eval_scope_access_mask(
+    ctx: &mut FunctionContext<'_>,
+    locals: &[EvalSyncLocal],
+    globals: &[EvalSyncGlobal],
+) -> Result<()> {
+    // -- prepare the dynamic eval scope access mask --
+    ctx.emitter
+        .comment("-- prepare the dynamic eval scope access mask --");
+    load_eval_context_to_arg(ctx, 0);
+    let code_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let code_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, code_ptr_arg, EVAL_CODE_PTR_OFFSET);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, code_len_arg, EVAL_CODE_LEN_OFFSET);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_scope_access_mask");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_SCOPE_ACCESS_MASK_OFFSET);
+    promote_unsafe_eval_scope_access_to_full(ctx, locals, globals)
+}
+
+/// Promotes selected heap, reference-capable, or union bindings to full synchronization.
+fn promote_unsafe_eval_scope_access_to_full(
+    ctx: &mut FunctionContext<'_>,
+    locals: &[EvalSyncLocal],
+    globals: &[EvalSyncGlobal],
+) -> Result<()> {
+    let full = ctx.next_label("eval_scope_access_full");
+    let done = ctx.next_label("eval_scope_access_types_done");
+    for local in locals {
+        if matches!(local.ty.codegen_repr(), PhpType::Int | PhpType::Bool | PhpType::Float) {
+            continue;
+        }
+        let next = ctx.next_label("eval_scope_access_local_type_safe");
+        emit_branch_if_eval_name_unaccessed(
+            ctx.emitter,
+            &local.name,
+            EVAL_SCOPE_ACCESS_MASK_OFFSET,
+            &next,
+        );
+        if matches!(local.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            ctx.load_local_to_result(local.slot)?;
+            emit_branch_if_mixed_numeric_scalar(ctx.emitter, &next);
+        }
+        emit_branch_to_eval_scope_label(ctx, &full);
+        ctx.emitter.label(&next);
+    }
+    for global in globals {
+        if matches!(global.ty.codegen_repr(), PhpType::Int | PhpType::Bool | PhpType::Float) {
+            continue;
+        }
+        let next = ctx.next_label("eval_scope_access_global_type_safe");
+        emit_branch_if_eval_name_unaccessed(
+            ctx.emitter,
+            &global.name,
+            EVAL_SCOPE_ACCESS_MASK_OFFSET,
+            &next,
+        );
+        if matches!(global.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            load_global_to_result(ctx, global);
+            emit_branch_if_mixed_numeric_scalar(ctx.emitter, &next);
+        }
+        emit_branch_to_eval_scope_label(ctx, &full);
+        ctx.emitter.label(&next);
+    }
+    emit_branch_to_eval_scope_label(ctx, &done);
+    ctx.emitter.label(&full);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, -1);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_SCOPE_ACCESS_MASK_OFFSET);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Continues selective synchronization when a boxed binding currently contains a numeric scalar.
+fn emit_branch_if_mixed_numeric_scalar(
+    emitter: &mut crate::codegen_support::emit::Emitter,
+    label: &str,
+) {
+    // -- unbox a selected Mixed binding for its scalar tag --
+    emitter.comment(
+        "-- accept selected Mixed bindings only when they hold numeric scalars --",
+    );
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    let tag = abi::int_result_reg(emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            // -- accept numeric scalar tags on AArch64 --
+            for value in [0, 2, 3] {
+                emitter.instruction(&format!("cmp {tag}, #{value}"));           // accept an integer, float, or boolean payload
+                emitter.instruction(&format!("b.eq {label}"));                  // retain the selective mask for this scalar
+            }
+        }
+        Arch::X86_64 => {
+            // -- accept numeric scalar tags on x86_64 --
+            for value in [0, 2, 3] {
+                emitter.instruction(&format!("cmp {tag}, {value}"));            // accept an integer, float, or boolean payload
+                emitter.instruction(&format!("je {label}"));                    // retain the selective mask for this scalar
+            }
+        }
+    }
+}
+
+/// Branches to one scope-access label without changing the saved runtime mask.
+fn emit_branch_to_eval_scope_label(ctx: &mut FunctionContext<'_>, label: &str) {
+    // -- continue at the shared eval scope access path --
+    ctx.emitter
+        .comment("-- continue at the shared eval scope access path --");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // -- continue at the AArch64 scope-mask path --
+            ctx.emitter.instruction(&format!("b {label}"));                     // continue at the shared scope-mask path
+        }
+        Arch::X86_64 => {
+            // -- continue at the x86_64 scope-mask path --
+            ctx.emitter.instruction(&format!("jmp {label}"));                   // continue at the shared scope-mask path
+        }
+    }
 }
 
 /// Ensures a persistent eval scope exists and stores its handle in the scratch frame.
@@ -299,4 +449,36 @@ pub(super) fn emit_eval_static_string_result(ctx: &mut FunctionContext<'_>, byte
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::emit_branch_if_mixed_numeric_scalar;
+    use crate::codegen_support::{emit::Emitter, platform::Target};
+
+    /// Every supported target accepts only integer, float, and boolean Mixed tags.
+    #[test]
+    fn eval_scope_scalar_proof_covers_all_supported_targets() {
+        for target in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_branch_if_mixed_numeric_scalar(&mut emitter, "scalar_ok");
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_mixed_unbox"), "{target}: {asm}");
+            for tag in [0, 2, 3] {
+                let compare = if target == "linux-x86_64" {
+                    format!("cmp rax, {tag}")
+                } else {
+                    format!("cmp x0, #{tag}")
+                };
+                assert!(asm.contains(&compare), "{target}: {asm}");
+            }
+            assert_eq!(asm.matches("scalar_ok").count(), 3, "{target}: {asm}");
+        }
+    }
 }

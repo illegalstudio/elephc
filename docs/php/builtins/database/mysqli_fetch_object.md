@@ -1,8 +1,6 @@
 ---
 title: "mysqli_fetch_object()"
 description: "Returns the next row as an object."
-sidebar:
-  order: 123
 ---
 
 ## mysqli_fetch_object()
@@ -22,8 +20,9 @@ Returns the next row as an object.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -499,7 +499,7 @@ fn test_example_interfaces_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/interfaces/main.php"));
     // `isset(...) . "\n"`: a bool false stringifies to "" (not "0") in PHP, so the
     // post-unset isset line is empty.
-    assert_eq!(out, "WIDGET\nproduct\nA-42\n1\n\n");
+    assert_eq!(out, "WIDGET\nproduct\nWIDGET\nwidget\ngadget\nunnamed\nA-42\n1\n\n");
 }
 
 /// Verifies an interface with a read-only property (`get;`) can be satisfied by a concrete property.
@@ -779,4 +779,73 @@ echo $k->value->name(), "\n";
             "other\n",
         )
     );
+}
+
+/// `??` whose left operand can never be null keeps that operand's type: `find()` declares
+/// `Implementation|false`, so `find() ?? new Other()` is still `Implementation|false` and may be
+/// returned from a function declaring it, and so are the same calls through an instance and a
+/// static method. The unreachable `Other` default made the result `Implementation|false|Other`,
+/// which the return check refused. Regression for #1462.
+#[test]
+fn test_null_coalesce_drops_an_unreachable_object_default() {
+    let out = compile_and_run(
+        r#"<?php
+interface Contract { public function name(): string; }
+final class Implementation implements Contract { public function name(): string { return "impl"; } }
+final class Other implements Contract { public function name(): string { return "other"; } }
+final class Repo {
+    public function find(bool $ok): Implementation|false { return $ok ? new Implementation() : false; }
+    public static function first(bool $ok): Implementation|false { return $ok ? new Implementation() : false; }
+}
+
+function find(bool $ok): Implementation|false { return $ok ? new Implementation() : false; }
+function lookup(bool $ok): Implementation|false { return find($ok) ?? new Other(); }
+function viaMethod(Repo $repo, bool $ok): Implementation|false { return $repo->find($ok) ?? new Other(); }
+function viaStatic(bool $ok): Implementation|false { return Repo::first($ok) ?? new Other(); }
+function label(bool $ok): string { $found = find($ok) ?? new Other(); return $found === false ? "none" : $found->name(); }
+
+var_dump(lookup(false));
+echo lookup(true)->name(), "\n";
+var_dump(viaMethod(new Repo(), false));
+echo viaMethod(new Repo(), true)->name(), " ", viaStatic(true)->name(), "\n";
+var_dump(viaStatic(false));
+echo label(false), " ", label(true), "\n";
+echo (new Implementation() ?? new Other())->name(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nimpl\nbool(false)\nimpl impl\nbool(false)\nnone impl\nimpl\n"
+    );
+}
+
+/// `??` over an arm that mixes an object with a scalar keeps a union, so narrowing away the
+/// scalars leaves the object type: `?(Contract|int) ?? new Implementation()` is `Contract|int`,
+/// and after `is_int()` it passes as a `Contract`; with a string default the join is
+/// `Contract|int|string`. Both joins were `mixed`, which the `Contract` parameter refused.
+/// Regression for #1463.
+#[test]
+fn test_null_coalesce_keeps_object_and_scalar_arms_as_a_union() {
+    let out = compile_and_run(
+        r#"<?php
+interface Contract { public function name(): string; }
+final class Implementation implements Contract { public function name(): string { return "impl"; } }
+final class Other implements Contract { public function name(): string { return "other"; } }
+function contractOnly(Contract $c): string { return $c->name(); }
+function run(Contract|int|null $v): string {
+    $r = $v ?? new Implementation();
+    if (is_int($r)) { return "int " . $r; }
+    return contractOnly($r);
+}
+function label(Contract|int|null $v): string {
+    $r = $v ?? "none";
+    if (is_string($r)) { return $r; }
+    if (is_int($r)) { return "int " . $r; }
+    return contractOnly($r);
+}
+echo run(null), " ", run(4), " ", run(new Other()), "\n";
+echo label(null), " ", label(5), " ", label(new Other()), "\n";
+"#,
+    );
+    assert_eq!(out, "impl int 4 other\nnone int 5 other\n");
 }

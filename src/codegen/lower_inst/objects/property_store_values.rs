@@ -21,6 +21,16 @@ pub(super) fn load_property_store_value_to_result(
 ) -> Result<()> {
     let slot_ty = &slot.php_type;
     let value_ty = ctx.value_php_type(value)?;
+    // A `false`-declared slot accepts ONLY the exact false bool: route a boxed mixed/union
+    // source through the false-slot guard instead of the bool truthiness cast, which would
+    // coerce `0`, `""` and `[]` into `false` where php throws. The nullable `?false` shape is
+    // a recorded limitation: its slot stores a box through the mixed machinery, and its
+    // default/read paths do not round-trip a stored `false` today.
+    if slot_ty == &PhpType::False
+        && matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    {
+        return emit_false_slot_mixed_guard(ctx, value, slot);
+    }
     let coerced_done_label = if matches!(value_ty.codegen_repr(), PhpType::Mixed) {
         emit_mixed_property_type_guard(ctx, value, slot)?
     } else {
@@ -43,9 +53,22 @@ fn load_accepted_property_store_value_to_result(
     let value_ty = value_ty.clone();
     if can_box_value_for_mixed_property(&value_ty, slot_ty) {
         let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
+        let box_ty = ctx.mixed_box_type(value)?;
+        let staged = if loaded_ty == PhpType::Str {
+            let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+            super::super::ownership::stage_string_byte_view(
+                ctx,
+                value,
+                pointer_reg,
+                length_reg,
+            )
+        } else {
+            false
+        };
         // Property stores do not consume the SSA source; explicit release ops still
         // own temporary cleanup after `prop_set`.
-        emit_box_current_value_as_mixed(ctx.emitter, &loaded_ty);
+        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        super::super::ownership::release_string_byte_stage(ctx, staged);
         return Ok(());
     }
     if can_store_boxed_value_for_mixed_property(&value_ty, slot_ty) {
@@ -117,10 +140,27 @@ fn load_accepted_property_store_value_to_result(
     if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         load_value_to_first_int_arg(ctx, value)?;
         match slot_ty.codegen_repr() {
-            PhpType::Str => emit_mixed_string_for_persistent_store(ctx),
-            PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
-            PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
-            PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
+            PhpType::Str => {
+                emit_mixed_string_for_persistent_store(ctx);
+                // The slot retains the string payload, not the cell that carried it. Keep this
+                // cleanup shared by nullable and mixed receiver dispatch, like scalar narrowing.
+                release_adopted_mixed_source(ctx, value, &PhpType::Str)?;
+            }
+            // A scalar slot stores the payload word the cast extracted, so the box's own
+            // reference has no owner left; retire it once the cast has copied the value out.
+            // A `?ptr<T>` slot stores the address word, cast like an int: PHP null becomes 0.
+            PhpType::Int | PhpType::Pointer(_) => {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+                release_adopted_mixed_source(ctx, value, &PhpType::Int)?;
+            }
+            PhpType::Bool => {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+                release_adopted_mixed_source(ctx, value, &PhpType::Bool)?;
+            }
+            PhpType::Float => {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+                release_adopted_mixed_source(ctx, value, &PhpType::Float)?;
+            }
             // An object slot stores the unboxed object POINTER, retained on its own, so the
             // adopted cell keeps no owner here either. Without this release a declared object
             // property leaked one boxed cell and its payload owner per runtime-shaped write.
@@ -141,7 +181,7 @@ fn load_accepted_property_store_value_to_result(
     }
     let loaded_ty = ctx.load_value_to_result(value)?;
     if matches!(slot_ty.codegen_repr(), PhpType::Str) {
-        abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+        super::super::ownership::persist_loaded_string(ctx, value)?;
         return Ok(());
     }
     if matches!(slot_ty.codegen_repr(), PhpType::Callable) {
@@ -206,17 +246,27 @@ pub(in crate::codegen::lower_inst) fn release_adopted_mixed_source(
 }
 
 /// Emits a compact packed-field store without writing object-property metadata words.
+///
+/// A width-declared field stores only its width: an integer keeps its low bytes like a C
+/// conversion and an `f32` is rounded to single precision.
 pub(super) fn emit_packed_field_store(
     ctx: &mut FunctionContext<'_>,
     value: crate::ir::ValueId,
     slot: &PropertySlot,
     base_reg: &str,
 ) -> Result<()> {
+    if let Some(width) = slot.width {
+        return emit_packed_width_field_store(ctx, value, slot, width, base_reg);
+    }
     match &slot.php_type {
         PhpType::Float => {
             let float_reg = abi::float_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            ctx.load_value_to_reg(value, float_reg)?;
+            if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                load_property_store_value_to_result(ctx, value, slot)?;
+            } else {
+                ctx.load_value_to_reg(value, float_reg)?;
+            }
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, float_reg, base_reg, slot.offset);
         }
@@ -227,11 +277,20 @@ pub(super) fn emit_packed_field_store(
         | PhpType::Never
         | PhpType::Pointer(_)
         | PhpType::Resource(_) => {
+            ensure_packed_word_value_is_unboxed(ctx, value, slot)?;
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
             ctx.load_value_to_reg(value, int_reg)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
+            if slot.php_type == PhpType::False {
+                emit_false_slot_payload_guard(ctx, slot);
+            }
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
+        }
+        PhpType::Packed(record) => {
+            super::super::packed_record_copy::emit_packed_record_copy(
+                ctx, value, record, slot.offset, base_reg,
+            )?;
         }
         _ => {
             return Err(CodegenIrError::unsupported(format!(
@@ -241,6 +300,64 @@ pub(super) fn emit_packed_field_store(
         }
     }
     Ok(())
+}
+
+/// Refuses a boxed value at a packed field stored from the integer result register.
+///
+/// Lowering narrows every boxed value bound for a fixed-layout `int`, `bool` or integer-width
+/// field to its raw payload (`narrow_mixed_value_for_fixed_layout_field` in
+/// `ir_lower::stmt::instance_property_writes`), so a box reaching this store is a lowering bug.
+/// Loading it would write the cell's ADDRESS into the field, which is silent data corruption;
+/// failing the compile reports the bug instead.
+fn ensure_packed_word_value_is_unboxed(
+    ctx: &FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    slot: &PropertySlot,
+) -> Result<()> {
+    if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "packed field {}::${} store of a boxed value that lowering did not narrow",
+            slot.class_name, slot.property
+        )));
+    }
+    Ok(())
+}
+
+/// Stores a value into a packed field declared with a C width name.
+///
+/// The integer payload is loaded into the integer result register (a boxed `Mixed` was already
+/// narrowed to a raw int by lowering), an `f32` payload into the float result register with the
+/// same `Mixed`-to-float conversion a `float` field uses; the receiver address survives the load
+/// on the temporary stack, and the shared width emitter truncates or rounds the payload.
+fn emit_packed_width_field_store(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    slot: &PropertySlot,
+    width: ScalarWidth,
+    base_reg: &str,
+) -> Result<()> {
+    if width != ScalarWidth::F32 {
+        ensure_packed_word_value_is_unboxed(ctx, value, slot)?;
+    }
+    abi::emit_push_reg(ctx.emitter, base_reg);
+    let payload_reg = match width {
+        ScalarWidth::F32 => {
+            let float_reg = abi::float_result_reg(ctx.emitter);
+            if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                load_property_store_value_to_result(ctx, value, slot)?;
+            } else {
+                ctx.load_value_to_reg(value, float_reg)?;
+            }
+            float_reg
+        }
+        _ => {
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            ctx.load_value_to_reg(value, int_reg)?;
+            int_reg
+        }
+    };
+    abi::emit_pop_reg(ctx.emitter, base_reg);
+    super::super::scalar_widths::emit_width_store(ctx, width.abi(), base_reg, slot.offset, payload_reg)
 }
 
 /// Returns true for property values represented as a single pointer-sized word.

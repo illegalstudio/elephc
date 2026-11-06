@@ -46,6 +46,8 @@ pub(super) fn check(
             }
             if let Some(arg) = args.first() {
                 let ty = checker.infer_type(arg, env)?;
+                // Not relaxed for `int|float`: `exit status for PHP type Mixed` is what the
+                // backend answers for any boxed status, so the checker keeps the clearer word.
                 if ty != PhpType::Int {
                     return Err(CompileError::new(span, "exit() argument must be integer"));
                 }
@@ -96,6 +98,7 @@ fn check_isset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
     | ExprKind::NullsafePropertyAccess { object, .. } = &arg.kind
     {
         let object_ty = checker.infer_null_probe_operand(object, env)?;
+        checker.record_member_receiver_type(arg.span, &object_ty);
         if isset_object_receiver_type(checker, &object_ty) {
             return Ok(());
         }
@@ -120,12 +123,19 @@ fn isset_object_receiver_type(checker: &Checker, ty: &PhpType) -> bool {
 /// Like `isset()`, `unset()` accepts a never-declared chain root (PHP's `unset($never)`
 /// is a silent no-op), so the root is bound to `null` for the operand.
 fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    if unset_operand_is_short_circuited(arg) {
+        return Err(CompileError::new(
+            arg.span,
+            "Can't use nullsafe operator in write context",
+        ));
+    }
     let probed = null_probe_env(checker, arg, env);
     let env = probed.as_ref().unwrap_or(env);
     if let ExprKind::PropertyAccess { object, property }
     | ExprKind::NullsafePropertyAccess { object, property } = &arg.kind
     {
         let object_ty = checker.infer_null_probe_operand(object, env)?;
+        checker.record_member_receiver_type(arg.span, &object_ty);
         crate::types::checker::clone_override_storage::record_property_unset_destination(
             checker,
             &object_ty,
@@ -139,6 +149,7 @@ fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
     | ExprKind::NullsafeDynamicPropertyAccess { object, property } = &arg.kind
     {
         let object_ty = checker.infer_null_probe_operand(object, env)?;
+        checker.record_member_receiver_type(arg.span, &object_ty);
         let property_name = match &property.kind {
             ExprKind::StringLiteral(name) => Some(name.as_str()),
             _ => None,
@@ -150,6 +161,27 @@ fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
         );
     }
     checker.infer_null_probe_operand(arg, env).map(|_| ())
+}
+
+/// Returns true when an `unset()` operand's variable chain contains a nullsafe link.
+///
+/// `unset()` is a write context, and PHP refuses any short-circuiting link in the chain it
+/// writes through at compile time (`unset($o?->p)`, `unset($o?->items[$k])`,
+/// `unset($o?->m()->items[$k])`) with "Can't use nullsafe operator in write context". The walk
+/// follows the same links as php-src's `zend_ast_is_short_circuited`: dimensions, properties
+/// and method calls lead to their container, and a nullsafe property or method call answers yes.
+fn unset_operand_is_short_circuited(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::NullsafePropertyAccess { .. }
+        | ExprKind::NullsafeDynamicPropertyAccess { .. }
+        | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. } => true,
+        ExprKind::ArrayAccess { array, .. } => unset_operand_is_short_circuited(array),
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. }
+        | ExprKind::MethodCall { object, .. } => unset_operand_is_short_circuited(object),
+        _ => false,
+    }
 }
 
 /// Returns true when `unset($object->property)` can be checked without reading the property.

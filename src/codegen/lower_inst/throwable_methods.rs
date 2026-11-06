@@ -147,7 +147,7 @@ pub(super) fn lower_throwable_standard_method_loaded(
     let return_ty = match method_key.as_str() {
         "getmessage" => lower_throwable_get_message(ctx, object_reg),
         "getcode" => lower_throwable_get_code(ctx, object_reg),
-        "getfile" => lower_throwable_get_file(ctx),
+        "getfile" => lower_throwable_get_file(ctx, object_reg),
         "gettraceasstring" => lower_throwable_empty_string(ctx),
         "getline" => lower_throwable_get_line(ctx, object_reg),
         "gettrace" => lower_throwable_empty_trace_array(ctx),
@@ -216,11 +216,9 @@ pub(super) fn lower_throwable_empty_string(ctx: &mut FunctionContext<'_>) -> Res
 ///
 /// `__rt_str_persist` gives the caller an owned copy, matching `getMessage()`, so the result can be
 /// released like any other string without freeing the shared constant.
-pub(super) fn lower_throwable_get_file(ctx: &mut FunctionContext<'_>) -> Result<PhpType> {
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, ptr_reg, "_script_source_file");
-    abi::emit_load_symbol_to_reg(ctx.emitter, len_reg, "_script_source_file_len", 0);
-    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+pub(super) fn lower_throwable_get_file(ctx: &mut FunctionContext<'_>, object_reg: &str) -> Result<PhpType> {
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), object_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_get_file");
     Ok(PhpType::Str)
 }
 
@@ -230,13 +228,8 @@ pub(super) fn lower_throwable_get_file(ctx: &mut FunctionContext<'_>) -> Result<
 /// division, say — which is the same value the method returned for everything before the slot
 /// existed.
 pub(super) fn lower_throwable_get_line(ctx: &mut FunctionContext<'_>, object_reg: &str) -> Result<PhpType> {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_from_address(
-        ctx.emitter,
-        result_reg,
-        object_reg,
-        crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET as usize,
-    );
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), object_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_get_line");
     Ok(PhpType::Int)
 }
 

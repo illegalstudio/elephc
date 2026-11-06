@@ -22,6 +22,7 @@ fn parse_program(source: &str) -> Program {
 fn test_program_static_method_effects_recognize_pure_static_methods() {
     let program = vec![Stmt::new(
         StmtKind::ClassDecl {
+            generics: None,
             name: "Util".to_string(),
             extends: None,
             implements: Vec::new(),
@@ -31,6 +32,7 @@ fn test_program_static_method_effects_recognize_pure_static_methods() {
             trait_uses: Vec::new(),
             properties: Vec::new(),
             methods: vec![ClassMethod {
+                type_params: Vec::new(),
                 name: "len3".to_string(),
                 visibility: Visibility::Public,
                 is_static: true,
@@ -76,6 +78,7 @@ fn test_program_static_method_effects_recognize_pure_static_methods() {
 fn test_program_static_method_effects_resolve_self_receiver() {
     let program = vec![Stmt::new(
         StmtKind::ClassDecl {
+            generics: None,
             name: "Util".to_string(),
             extends: None,
             implements: Vec::new(),
@@ -86,6 +89,7 @@ fn test_program_static_method_effects_resolve_self_receiver() {
             properties: Vec::new(),
             methods: vec![
                 ClassMethod {
+                    type_params: Vec::new(),
                     name: "len3".to_string(),
                     visibility: Visibility::Public,
                     is_static: true,
@@ -113,6 +117,7 @@ fn test_program_static_method_effects_resolve_self_receiver() {
                     attributes: Vec::new(),
                 },
                 ClassMethod {
+                    type_params: Vec::new(),
                     name: "relay".to_string(),
                     visibility: Visibility::Public,
                     is_static: true,
@@ -162,6 +167,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
     let program = vec![
         Stmt::new(
             StmtKind::ClassDecl {
+                generics: None,
                 name: "Base".to_string(),
                 extends: None,
                 implements: Vec::new(),
@@ -171,6 +177,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
                 trait_uses: Vec::new(),
                 properties: Vec::new(),
                 methods: vec![ClassMethod {
+                    type_params: Vec::new(),
                     name: "len3".to_string(),
                     visibility: Visibility::Public,
                     is_static: true,
@@ -203,6 +210,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
         ),
         Stmt::new(
             StmtKind::ClassDecl {
+                generics: None,
                 name: "Child".to_string(),
                 extends: Some(Name::from("Base")),
                 implements: Vec::new(),
@@ -212,6 +220,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
                 trait_uses: Vec::new(),
                 properties: Vec::new(),
                 methods: vec![ClassMethod {
+                    type_params: Vec::new(),
                     name: "relay".to_string(),
                     visibility: Visibility::Public,
                     is_static: true,
@@ -258,6 +267,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
 fn test_program_private_instance_method_effects_recognize_private_methods() {
     let program = vec![Stmt::new(
         StmtKind::ClassDecl {
+            generics: None,
             name: "Util".to_string(),
             extends: None,
             implements: Vec::new(),
@@ -267,6 +277,7 @@ fn test_program_private_instance_method_effects_recognize_private_methods() {
             trait_uses: Vec::new(),
             properties: Vec::new(),
             methods: vec![ClassMethod {
+                type_params: Vec::new(),
                 name: "len3".to_string(),
                 visibility: Visibility::Private,
                 is_static: false,

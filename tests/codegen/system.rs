@@ -9,6 +9,9 @@
 
 use crate::support::*;
 
+#[path = "preg_match_all_review.rs"]
+mod preg_match_all_review;
+
 // --- Date/time functions ---
 
 /// Verifies `date("Y", timestamp)` returns the correct 4-digit year for a known UTC timestamp.
@@ -529,6 +532,122 @@ fn test_strtotime_epoch_truncates_fraction() {
 fn test_strtotime_epoch_invalid() {
     let out = compile_and_run("<?php echo strtotime(\"@abc\") === false ? \"F\" : \"x\";");
     assert_eq!(out, "F");
+}
+
+/// Verifies what may follow the digits of an `@<timestamp>` (issue #390).
+///
+/// PHP parses the tail with its full grammar, and because the timestamp already set the zone,
+/// one more timezone token (`(`? letters{1,6} `)`?) is only a warning and the timestamp stands;
+/// separators (` `, `,`, `.`) are skipped. A second token, a digit, 7+ letters, or an empty
+/// parenthesis is an error. Every expected line is PHP 8.5.10's.
+#[test]
+fn test_strtotime_epoch_accepts_one_trailing_timezone_token() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["@123abc", "@1579089600 UTC", "@123.45abc", "@123 456", "@12.9.9", "@123 abc", "@123x",
+    "@123 (UTC)", "@123(UTC", "@123UTC)", "@123 abcdef", "@123.45.", "@123 .", "@123,", "@123 UTC .",
+    "@123 abcdefg", "@123 foo bar", "@123a1", "@123 (", "@123 ()", "@123 UTC(", "@-5abc"] as $s) {
+    echo $s, "=", var_export(strtotime($s), true), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "@123abc=123\n@1579089600 UTC=1579089600\n@123.45abc=123\n@123 456=false\n\
+         @12.9.9=false\n@123 abc=123\n@123x=123\n@123 (UTC)=123\n@123(UTC=123\n\
+         @123UTC)=123\n@123 abcdef=123\n@123.45.=123\n@123 .=123\n@123,=123\n\
+         @123 UTC .=123\n@123 abcdefg=false\n@123 foo bar=false\n@123a1=false\n\
+         @123 (=false\n@123 ()=false\n@123 UTC(=false\n@-5abc=-5\n"
+    );
+}
+
+/// Verifies the number rules of `@<timestamp>` (issue #390): only a `-` sign, a fraction of 1 to
+/// 6 digits, a negative fractional value flooring (`@-5.5` is `-6`), and a magnitude outside the
+/// `i64` range answering `false`. Every expected line is PHP 8.5.10's.
+#[test]
+fn test_strtotime_epoch_sign_fraction_and_range_rules() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["@123.", "@123.123456", "@123.1234567", "@+5", "@ 5", "@-5.5", "@-5.000000", "@-0.5", "@-0",
+    "@9223372036854775807", "@9223372036854775808", "@-9223372036854775809", "@18446744073709551616"] as $s) {
+    echo $s, "=", var_export(strtotime($s), true), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "@123.=false\n@123.123456=123\n@123.1234567=false\n@+5=false\n@ 5=false\n\
+         @-5.5=-6\n@-5.000000=-5\n@-0.5=-1\n@-0=0\n\
+         @9223372036854775807=9223372036854775807\n@9223372036854775808=false\n\
+         @-9223372036854775809=false\n@18446744073709551616=false\n"
+    );
+}
+
+/// Verifies `@<timestamp>` at the edges of the 64-bit range answers exactly what PHP 8.5.10
+/// answers there.
+///
+/// Two of these are easy to get wrong. A genuine `i64::MIN` result (`@-9223372036854775808`,
+/// and `@-9223372036854775807.5` flooring onto it) is a timestamp, not the runtime's failure
+/// sentinel, so it must not turn into `false`. And a fraction below `i64::MIN`
+/// (`@-9223372036854775808.5`) is `9223372036854775807` in PHP: timelib floors it by taking one
+/// more second off `i64::MIN`, which wraps, and this pins that PHP value. The results are echoed
+/// rather than `var_export()`ed because PHP writes `PHP_INT_MIN` there as `-9223372036854775807-1`.
+#[test]
+fn test_strtotime_epoch_range_edges_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["@9223372036854775807", "@9223372036854775807.5", "@9223372036854775807.999999",
+    "@-9223372036854775807", "@-9223372036854775807.5", "@-9223372036854775807.000001",
+    "@-9223372036854775808", "@-9223372036854775808.000000", "@-9223372036854775808.5",
+    "@-9223372036854775808.000001", "@-9223372036854775808.9 UTC"] as $s) {
+    $r = strtotime($s);
+    echo $s, "=", $r === false ? "false" : $r, "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "@9223372036854775807=9223372036854775807\n\
+         @9223372036854775807.5=9223372036854775807\n\
+         @9223372036854775807.999999=9223372036854775807\n\
+         @-9223372036854775807=-9223372036854775807\n\
+         @-9223372036854775807.5=-9223372036854775808\n\
+         @-9223372036854775807.000001=-9223372036854775808\n\
+         @-9223372036854775808=-9223372036854775808\n\
+         @-9223372036854775808.000000=-9223372036854775808\n\
+         @-9223372036854775808.5=9223372036854775807\n\
+         @-9223372036854775808.000001=9223372036854775807\n\
+         @-9223372036854775808.9 UTC=9223372036854775807\n"
+    );
+}
+
+/// Verifies ISO dates with a one-digit month or day (`2020-1-5`, issue #390), alone and with the
+/// time and zone suffixes the padded form accepts, keeping PHP's field bounds and normalization.
+/// Every expected line is PHP 8.5.10's (in UTC).
+#[test]
+fn test_strtotime_accepts_one_digit_month_and_day() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set('UTC');
+foreach (["2020-1-5", "2020-01-5", "2020-1-05", "2020-9-9 23:59:59", "2020-1-5 10:30", "2020-1-5T10:30",
+    "2020-1-5t10:30:15", "2020-1-5 10:30 UTC", "2020-1-5 10:30:15 +02:00", "2020-1-5Z", "2020-0-5",
+    "2020-1-0", "2020-2-30", "2020-13-5", "2020-1-32", "2020-1-5 25:00", "2020-1-", "2020--5", "2020-1-005"] as $s) {
+    $r = strtotime($s);
+    echo $s, "=", $r === false ? "false" : gmdate("Y-m-d H:i:s", $r), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "2020-1-5=2020-01-05 00:00:00\n2020-01-5=2020-01-05 00:00:00\n\
+         2020-1-05=2020-01-05 00:00:00\n2020-9-9 23:59:59=2020-09-09 23:59:59\n\
+         2020-1-5 10:30=2020-01-05 10:30:00\n2020-1-5T10:30=2020-01-05 10:30:00\n\
+         2020-1-5t10:30:15=2020-01-05 10:30:15\n2020-1-5 10:30 UTC=2020-01-05 10:30:00\n\
+         2020-1-5 10:30:15 +02:00=2020-01-05 08:30:15\n2020-1-5Z=2020-01-05 00:00:00\n\
+         2020-0-5=2019-12-05 00:00:00\n2020-1-0=2019-12-31 00:00:00\n\
+         2020-2-30=2020-03-01 00:00:00\n2020-13-5=false\n2020-1-32=false\n\
+         2020-1-5 25:00=false\n2020-1-=false\n2020--5=false\n2020-1-005=false\n"
+    );
 }
 
 /// Verifies the American `MM/DD/YYYY` slash-date form. The result is built with `mktime` and
@@ -1848,6 +1967,34 @@ echo $ok . "|" . count($matches);
     assert_eq!(out, "0|0");
 }
 
+/// Verifies `preg_match()` returns PHP `false` for the removed `/e` modifier and for an
+/// invalid pattern, with and without a capture destination, and that a real match still fills `$matches`.
+///
+/// PHP leaves a supplied destination unchanged on those failures. The ARM64 capture helper
+/// must reject `/e` before compilation; the same sentinel keeps x86_64 behavior aligned.
+#[test]
+fn test_preg_match_e_modifier_preserves_capture_destination() {
+    let out = compile_and_run(
+        r#"<?php
+$matches = ["stale"];
+$result = @preg_match("/a/e", "a", $matches);
+var_dump($result, $matches);
+$none = @preg_match("/a/e", "a");
+var_dump($none);
+$bad = ["stale"];
+$invalid = @preg_match("/[/", "a", $bad);
+var_dump($invalid, $bad);
+$ok = [];
+$hit = preg_match("/(a)/", "a", $ok);
+var_dump($hit, $ok);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\narray(1) {\n  [0]=>\n  string(5) \"stale\"\n}\nbool(false)\nbool(false)\narray(1) {\n  [0]=>\n  string(5) \"stale\"\n}\nint(1)\narray(2) {\n  [0]=>\n  string(1) \"a\"\n  [1]=>\n  string(1) \"a\"\n}\n"
+    );
+}
+
 /// Verifies unmatched optional captures before later captures materialize as empty strings.
 #[test]
 fn test_preg_match_unmatched_interior_capture_is_empty() {
@@ -1937,8 +2084,116 @@ fn test_preg_match_all_no_matches() {
     assert_eq!(out, "0");
 }
 
+/// Verifies `preg_match_all` fills `$matches` in default PATTERN_ORDER with numbered groups.
+#[test]
+fn test_preg_match_all_populates_pattern_order_matches() {
+    let out = compile_and_run(
+        r#"<?php
+$count = preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $all);
+echo $count . ":" . count($all) . ":" . $all[0][1] . ":" . $all[1][0] . ":" . $all[2][1];
+"#,
+    );
+    assert_eq!(out, "2:3:b22:a:22");
+}
+
+/// Verifies Termwind-style newline counting through `$matches[0]`.
+#[test]
+fn test_preg_match_all_termwind_newline_matches() {
+    let out = compile_and_run(
+        r#"<?php
+$content = "one\n\ntwo\nthree";
+preg_match_all("/\n+/", $content, $matches);
+echo count($matches[0]) . ":" . strlen($matches[0][0]);
+"#,
+    );
+    assert_eq!(out, "2:2");
+}
+
+/// Verifies Termwind-style `PREG_OFFSET_CAPTURE` cells as `[string, offset]`.
+#[test]
+fn test_preg_match_all_offset_capture() {
+    let out = compile_and_run(
+        r#"<?php
+preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $offsetAll, PREG_OFFSET_CAPTURE);
+echo $offsetAll[0][1][0] . ":" . $offsetAll[0][1][1] . ":" . $offsetAll[1][0][1] . ":" . $offsetAll[2][1][1];
+"#,
+    );
+    assert_eq!(out, "b22:3:0:4");
+}
+
+/// Verifies a Termwind-like styling walk over `$matches[0]` offset-capture rows.
+#[test]
+fn test_preg_match_all_termwind_styling_offset_capture() {
+    let out = compile_and_run(
+        r#"<?php
+$text = "ab<c>de";
+preg_match_all("/<[^>]+>|[^<]+/", $text, $matches, PREG_OFFSET_CAPTURE);
+$i = 0;
+while ($i < count($matches[0])) {
+    echo $matches[0][$i][0] . "@" . $matches[0][$i][1] . "|";
+    $i = $i + 1;
+}
+"#,
+    );
+    assert_eq!(out, "ab@0|<c>@2|de@5|");
+}
+
+/// Verifies `PREG_SET_ORDER` fills `$matches[match][group]`.
+#[test]
+fn test_preg_match_all_set_order() {
+    let out = compile_and_run(
+        r#"<?php
+$count = preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $set, PREG_SET_ORDER);
+echo $count . ":" . count($set) . ":" . $set[0][0] . ":" . $set[0][1] . ":" . $set[1][2];
+"#,
+    );
+    assert_eq!(out, "2:2:a1:a:22");
+}
+
+/// Verifies `PREG_UNMATCHED_AS_NULL` and zero-match PATTERN_ORDER row counts.
+#[test]
+fn test_preg_match_all_unmatched_null_and_empty_rows() {
+    let out = compile_and_run(
+        r#"<?php
+preg_match_all("/(a)?(b)(c)?/", "b", $nullAll, PREG_UNMATCHED_AS_NULL);
+echo ($nullAll[1][0] === null ? "n" : "bad") . ":" . $nullAll[2][0] . ":" . ($nullAll[3][0] === null ? "n" : "bad") . ":";
+preg_match_all("/(x)(y)/", "abc", $none);
+echo count($none) . ":" . count($none[0]) . ":" . count($none[1]) . ":" . count($none[2]);
+"#,
+    );
+    assert_eq!(out, "n:b:n:3:0:0:0");
+}
+
+/// Verifies named `matches` / `flags` arguments populate the capture matrix.
+#[test]
+fn test_preg_match_all_named_matches_and_flags() {
+    let out = compile_and_run(
+        r#"<?php
+$count = preg_match_all(pattern: "/([a-z])([0-9])/", subject: "a1 b2", matches: $all, flags: PREG_SET_ORDER);
+echo $count . ":" . $all[1][0] . ":" . $all[1][2];
+"#,
+    );
+    assert_eq!(out, "2:b2:2");
+}
+
+/// Verifies an invalid pattern returns PHP false and leaves the caller's matches array untouched.
+#[test]
+fn test_preg_match_all_invalid_pattern_keeps_matches() {
+    let out = compile_and_run(
+        r#"<?php
+$matches = ["stale"];
+echo preg_match_all("/(/", "subject", $matches) . ":" . count($matches);
+"#,
+    );
+    assert_eq!(out, ":1");
+}
+
 /// Verifies every shim-backed regex family handles an invalid pattern without exposing a
 /// partial handle, invoking callbacks, or returning partially initialized capture data.
+///
+/// `preg_match()` returns PHP `false` and leaves the supplied `$matches` array in place.
+/// `preg_replace_callback()` returns real PHP null. Concatenation renders that null
+/// as empty, and `??` selects the default, so the callback sections are `:0` and `null:0`.
 #[test]
 fn test_regex_families_reject_invalid_patterns_safely() {
     let out = compile_and_run(
@@ -1953,10 +2208,152 @@ echo preg_replace_callback("/(/", function($m) use (&$callbackCalls): string {
     $callbackCalls = $callbackCalls + 1;
     return "called";
 }, "subject") . ":" . $callbackCalls . "|";
-echo count(preg_split("/(/", "subject"));
+echo preg_replace_callback("/x/e", function($m) use (&$callbackCalls): string {
+    $callbackCalls = $callbackCalls + 1;
+    return "called";
+}, "x") ?? "null", ":", $callbackCalls, "|";
+var_dump(preg_split("/(/", "subject"));
 "#,
     );
-    assert_eq!(out, "0|0:0|0|subject|subject:0|0");
+    assert_eq!(out, "0|:1|||:0|null:0|bool(false)\n");
+}
+
+/// Verifies `preg_replace_callback()` returns real PHP null for an invalid pattern and `/e`.
+///
+/// The null is distinct from a string: `is_string` is false, `=== null` and `is_null`
+/// are true, and `gettype` reports `NULL`. A valid empty subject stays an empty string,
+/// and a normal replacement still runs. Direct calls and the first-class callable share
+/// that result.
+#[test]
+fn test_preg_replace_callback_invalid_pattern_returns_real_null() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+$callback = function (array $matches) use (&$calls): string {
+    $calls = $calls + 1;
+    return "x";
+};
+$invalid = @preg_replace_callback("/[/", $callback, "a");
+var_dump($invalid, is_string($invalid), $invalid === null, is_null($invalid), gettype($invalid));
+echo $calls, "|";
+$calls = 0;
+$eval = @preg_replace_callback("/a/e", $callback, "a");
+var_dump($eval, is_string($eval), $eval === null, is_null($eval), gettype($eval));
+echo $calls, "|";
+$empty = preg_replace_callback("/x/", $callback, "");
+echo ($empty === "" ? "empty" : "other"), (is_string($empty) ? "s" : "n"), strlen($empty), "|";
+echo preg_replace_callback("/a/", $callback, "a"), "|";
+$cb = preg_replace_callback(...);
+$through = @$cb("/[/", $callback, "a");
+echo (is_null($through) ? "null" : "bad"), (is_string($through) ? "s" : "n"), ($through === null ? "eq" : "ne");
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nbool(false)\nbool(true)\nbool(true)\nstring(4) \"NULL\"\n0|NULL\nbool(false)\nbool(true)\nbool(true)\nstring(4) \"NULL\"\n0|emptys0|x|nullneq"
+    );
+}
+
+/// Verifies a declared string return can return `preg_replace_callback()` directly.
+///
+/// The static type is `mixed`, matching `preg_replace()`. A `string|null` return
+/// would reject this program, which compiled before the null result was modeled.
+#[test]
+fn test_preg_replace_callback_string_function_returns_replacement() {
+    let out = compile_and_run(
+        r#"<?php
+function clean(string $s): string {
+    return preg_replace_callback('/a/', fn($m) => strtoupper($m[0]), $s);
+}
+echo clean("banana");
+"#,
+    );
+    assert_eq!(out, "bAnAnA");
+}
+
+/// Verifies every invalid pattern returns PHP null, and an unmapped valid modifier does not.
+///
+/// `/a/z` is an unknown modifier, `"/abc"` has no ending delimiter, and `/a/e`
+/// is the removed eval modifier. elephc does not emit PHP's preg warning text.
+/// `/a b/x` is extended mode: the pattern is `ab`, so subject `"a b"` is unchanged
+/// and subject `"ab"` is replaced. A space inside a character class still matches.
+#[test]
+fn test_preg_replace_callback_invalid_patterns_return_null() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+$callback = function (array $matches) use (&$calls): string {
+    $calls = $calls + 1;
+    return "X";
+};
+$unknown = @preg_replace_callback("/a/z", $callback, "a");
+$missing = @preg_replace_callback("/abc", $callback, "abc");
+$eval = @preg_replace_callback("/a/e", $callback, "a");
+$bare_e = @preg_replace_callback("/abce", $callback, "a");
+$spaced = preg_replace_callback("/a b/x", $callback, "a b");
+$compact = preg_replace_callback("/a b/x", $callback, "ab");
+$class = preg_replace_callback("/[a b]/x", $callback, " ");
+echo (is_null($unknown) ? "n" : "s"), (is_string($unknown) ? "s" : "n"), "|";
+echo (is_null($missing) ? "n" : "s"), (is_string($missing) ? "s" : "n"), "|";
+echo (is_null($eval) ? "n" : "s"), (is_null($bare_e) ? "n" : "s"), "|";
+echo $spaced, "|", $compact, "|", $class, "|", $calls;
+"#,
+    );
+    assert_eq!(out, "nn|nn|nn|a b|X|X|2");
+}
+
+/// Verifies space, LF, and CR in the modifier suffix are ignored, matching PHP.
+///
+/// A tab is not one of those bytes, so PHP treats it as an unknown modifier and
+/// the call returns null. The callback still runs for the ignored whitespace.
+#[test]
+fn test_preg_replace_callback_modifier_whitespace_is_ignored() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+$callback = function (array $matches) use (&$calls): string {
+    $calls = $calls + 1;
+    return "X";
+};
+$nl = preg_replace_callback("/a/\n", $callback, "a");
+$sp = preg_replace_callback("/a/ i", $callback, "A");
+$cr = preg_replace_callback("/a/\r", $callback, "a");
+$tab = @preg_replace_callback("/a/\t", $callback, "a");
+echo $nl, "|", $sp, "|", $cr, "|";
+echo (is_null($tab) ? "n" : "s"), "|", $calls;
+"#,
+    );
+    assert_eq!(out, "X|X|X|n|3");
+}
+
+/// Verifies `/x` keeps leading PCRE2 verbs at the start of the pattern.
+///
+/// `(*UTF)`, `(*ANYCRLF)`, and similar directives are valid only before any other
+/// pattern item. Prefixing `(?x)` makes `preg_match` return false and the replace
+/// calls return null. PHP 8.2–8.5 returns a match and the replacement.
+#[test]
+fn test_preg_extended_leading_verbs_stay_at_pattern_start() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_match("/(*UTF)a/x", "a"), "|";
+echo preg_replace("/(*ANYCRLF)a/x", "Y", "ab"), "|";
+echo preg_replace_callback("/(*UTF)a/x", function ($m) { return "X"; }, "ab");
+"#,
+    );
+    assert_eq!(out, "1|Yb|Xb");
+}
+
+/// Verifies a small callback replacement allocates its output block with the
+/// right size on x86_64 and that an empty subject returns an empty string.
+#[test]
+fn test_preg_replace_callback_small_output_and_empty_subject() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_replace_callback('/[a-z]/', function ($m) { return strtoupper($m[0]); }, 'ab'), '|';
+echo preg_replace_callback('/x/', function ($m) { return 'y'; }, ''), '|';
+"#,
+    );
+    assert_eq!(out, "AB||");
 }
 
 /// Verifies `preg_replace` substitutes the first matching occurrence of a literal pattern.
@@ -1987,6 +2384,43 @@ fn test_preg_replace_unicode_property_number() {
     assert_eq!(out, "abcXdefX");
 }
 
+/// Verifies an invalid pattern and the removed `/e` modifier produce PHP null,
+/// including null identity and string predicates, instead of leaking the input or
+/// replacement string through the failure path.
+#[test]
+fn test_preg_replace_invalid_pattern_and_e_modifier_return_null() {
+    let out = compile_and_run(
+        r#"<?php
+$bad = @preg_replace("/[/", "x", "abc");
+var_dump($bad, $bad === null, is_string($bad));
+$eval = @preg_replace("/a/e", "phpversion()", "a");
+var_dump($eval, $eval === null);
+"#,
+    );
+    assert_eq!(out, "NULL\nbool(true)\nbool(false)\nNULL\nbool(true)\n");
+}
+
+/// Verifies `preg_match`, `preg_match_all`, and `preg_split` return PHP false for an
+/// invalid pattern and for the removed `/e` modifier, while a valid pattern with no
+/// match still returns integer zero or a real empty result array.
+#[test]
+fn test_regex_failure_paths_return_false() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(preg_match("/[/", "a"));
+var_dump(preg_match("/a/e", "a"));
+var_dump(preg_match("/z/", "a"));
+var_dump(preg_match_all("/[/", "a"));
+var_dump(preg_split("/a/e", "a"));
+var_dump(preg_split("/a/", "a") === false);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nint(0)\nbool(false)\nbool(false)\nbool(false)\n"
+    );
+}
+
 /// Verifies `preg_replace` returns the subject unchanged when the pattern has no matches.
 #[test]
 fn test_preg_replace_no_match() {
@@ -2011,6 +2445,63 @@ echo $result;
 "#,
     );
     assert_eq!(out, "price: [123] and [456]");
+}
+
+/// Verifies a nested regex in the callback cannot free the outer replacement subject.
+///
+/// Heap debugging poisons released blocks, so the output assertion also catches a
+/// cursor that resumes inside the shared `__rt_cstr2` storage after a nested grow.
+#[test]
+fn test_preg_replace_callback_nested_regex_keeps_outer_subject_alive() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$longer = str_repeat("c", 20000);
+$subject = str_repeat("a", 5000) . "X" . str_repeat("b", 5000);
+$result = preg_replace_callback(
+    "/X/",
+    function ($matches) use ($longer) {
+        preg_match("/c/", $longer);
+        return "Y";
+    },
+    $subject
+);
+echo strlen($result), "|", str_contains($result, "aYb") ? "match" : "bad", "|", str_ends_with($result, "bbb") ? "tail" : "bad";
+"#,
+    );
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "10001|match|tail", "{}", output.stderr);
+}
+
+/// Verifies a grown callback replacement survives assignment instead of aliasing freed storage.
+#[test]
+fn test_preg_replace_callback_grown_result_survives_assignment() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$subject = str_repeat("a", 5000) . "X";
+$out = preg_replace_callback('/X/', function ($m) { return str_repeat("b", 10000); }, $subject);
+echo strlen($out), "|", str_contains($out, "bbbb") ? "ok" : "bad", "\n";
+"#,
+    );
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "15000|ok\n", "{}", output.stderr);
+}
+
+/// Verifies `preg_replace_callback` returns a valid empty string for an empty subject, so the
+/// result survives being copied, compared and coalesced.
+#[test]
+fn test_preg_replace_callback_empty_subject_returns_empty_string() {
+    let out = compile_and_run(
+        r#"<?php
+$callback = static fn (array $matches): string => "[" . $matches[0] . "]";
+$empty = preg_replace_callback("/x/", $callback, "");
+$kept = $empty;
+echo "(", $kept, ")", strlen($kept), "|";
+echo "(", preg_replace_callback("/x/", $callback, "") ?? "null", ")|";
+echo $empty === "" ? "empty" : "other", "|";
+echo preg_replace_callback("/x/", $callback, "axb");
+"#,
+    );
+    assert_eq!(out, "()0|()|empty|a[x]b");
 }
 
 /// Verifies `preg_replace_callback` exposes both complete match `$matches[0]` and numbered

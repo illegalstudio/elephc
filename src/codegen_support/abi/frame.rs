@@ -76,8 +76,8 @@ pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
             // x29 == entry_sp - 16, and [x29] is the saved frame footer regardless
             // of any temporary-stack drift in the function body.
             emitter.instruction("mov x9, x29");                                 // preserve the footer address before restoring the caller frame pointer
-            emitter.instruction("add sp, x9, #16");                             // restore the entry stack pointer from the stable frame anchor
             emitter.instruction("ldp x29, x30, [x9]");                          // reload the caller frame pointer and return address
+            emitter.instruction("add sp, x9, #16");                             // release the frame only after reading its still-live footer
         }
         Arch::X86_64 => {
             emitter.instruction("leave");                                       // restore rsp from rbp and pop the caller frame pointer
@@ -141,7 +141,7 @@ pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize)
                     dest,
                     frame_pointer_reg(emitter),
                     offset
-                )); // materialize the local-slot address relative to rbp
+                ));                                                             // materialize the local-slot address relative to rbp
             }
         }
     }
@@ -373,13 +373,13 @@ pub fn emit_store_zero_to_local_slot(emitter: &mut Emitter, offset: usize) {
                 emitter.instruction(&format!(
                     "mov QWORD PTR [{}], 0",
                     frame_pointer_reg(emitter)
-                )); // zero-initialize the frame-base slot directly through rbp
+                ));                                                             // zero-initialize the frame-base slot directly through rbp
             } else {
                 emitter.instruction(&format!(
                     "mov QWORD PTR [{} - {}], 0",
                     frame_pointer_reg(emitter),
                     offset
-                )); // zero-initialize the requested local slot relative to rbp
+                ));                                                             // zero-initialize the requested local slot relative to rbp
             }
         }
     }

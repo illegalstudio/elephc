@@ -16,8 +16,14 @@ pub(in crate::interpreter) fn execute_enum_decl_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    let interfaces = enum_decl.interfaces().iter().map(|name| ensure_generic_class(name, None, "", context, scope, values)).collect::<Result<_, _>>()?;
+    let traits: Vec<String> = enum_decl.traits().iter().map(|name| ensure_generic_class(name, None, "", context, scope, values)).collect::<Result<_, _>>()?;
+    let adaptations = concrete_trait_adaptations(enum_decl.trait_adaptations(), &traits);
+    let concrete = enum_decl.clone().with_relations(interfaces, traits, adaptations);
+    let enum_decl = &concrete;
     let name = enum_decl.name().trim_start_matches('\\');
-    if context.has_enum(name)
+    if context.generic_template(name).is_some()
+        || context.has_enum(name)
         || context.has_class(name)
         || context.has_interface(name)
         || context.has_trait(name)
@@ -138,7 +144,7 @@ pub(super) fn validate_eval_enum_decl(
     validate_declared_class_builtin_interface_members(&enum_class, context)?;
     validate_declared_class_aot_interface_members(&enum_class, context, values)?;
     validate_concrete_class_builtin_interface_requirements(&enum_class, context)?;
-    validate_concrete_class_aot_interface_requirements(&enum_class, context, values)?;
+    validate_concrete_class_aot_interface_requirements(&enum_class, context, values, true)?;
     validate_concrete_class_requirements(&enum_class, context)
 }
 
@@ -177,7 +183,7 @@ pub(super) fn validate_eval_enum_case_declarations(enum_decl: &EvalEnum) -> Resu
         .map(|constant| constant.name().to_string())
         .collect::<std::collections::HashSet<_>>();
     for case in enum_decl.cases() {
-        validate_eval_non_method_attribute_targets(case.attributes())?;
+        validate_eval_core_attribute_targets(case.attributes(), 16)?;
         if !case_names.insert(case.name().to_string()) {
             return Err(EvalStatus::RuntimeFatal);
         }

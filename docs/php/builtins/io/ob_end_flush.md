@@ -1,8 +1,6 @@
 ---
 title: "ob_end_flush()"
 description: "Flushes (sends) the contents of the active output buffer and turns it off."
-sidebar:
-  order: 343
 ---
 
 ## ob_end_flush()
@@ -19,8 +17,9 @@ Flushes (sends) the contents of the active output buffer and turns it off.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/ob_end_flush.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/ob_end_flush.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

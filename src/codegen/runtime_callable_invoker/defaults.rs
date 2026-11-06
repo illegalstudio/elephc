@@ -12,6 +12,10 @@
 //!   invoker materializes can never disagree.
 //! - A default is kept only when it is materializable end to end. Anything else stays `None` and
 //!   the invoker keeps its existing fatal diagnostic; nothing is ever replaced by null.
+//! - Compiler-generated lazy default Errors bypass constant folding and remain catchable throws.
+//! - Nested lazy Errors use native EIR helpers to preserve prefix effects and unwind cleanup.
+//! - An indexed default for a pointer-element slot stores raw pointer words (null = 0) under
+//!   `POINTER_ARRAY_VALUE_TYPE`, never boxed Mixed cells the callee would read as addresses.
 //! - Every refcounted default is FRESHLY allocated per invocation and hands the caller exactly one
 //!   owner, which `InvokerArgumentOwners` adopts and releases on the normal and escape paths alike.
 //! - Object defaults are constructed through the same pair of runtime entry points eval already
@@ -24,12 +28,13 @@
 use crate::codegen::const_default_values::{
     resolve_const_default, ConstDefaultArrayKey, ConstDefaultContext, ConstDefaultObjectArg,
     ConstDefaultValue, CONST_DEFAULT_BOOL, CONST_DEFAULT_EMPTY_ARRAY, CONST_DEFAULT_FLOAT,
-    CONST_DEFAULT_INT, CONST_DEFAULT_NULL,
+    CONST_DEFAULT_INT, CONST_DEFAULT_NULL, CONST_DEFAULT_EXECUTABLE_PATH,
 };
 use crate::codegen::platform::Arch;
 use crate::codegen::runtime_value_tag;
 use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::ir::Module;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
 use super::{abi, DataSection, Emitter, InvokerEmitContext, InvokerParamShape};
@@ -40,6 +45,8 @@ pub(in crate::codegen) type InvokerDefaults = Vec<Option<InvokerDefaultValue>>;
 /// One descriptor-invoker default after nested object calls have been physically normalized.
 #[derive(Clone, PartialEq)]
 pub(in crate::codegen) enum InvokerDefaultValue {
+    DeferredError(String),
+    EirHelper(String),
     Scalar { kind: i64, payload: i64 },
     String(String),
     Array(Vec<InvokerDefaultArrayElement>),
@@ -79,11 +86,31 @@ pub(in crate::codegen) fn resolve_invoker_defaults(
     sig.defaults
         .iter()
         .map(|default| {
-            let value = resolve_const_default(default.as_ref()?, &context)?;
+            let default = default.as_ref()?;
+            if let Some(message) = deferred_error_message(default) {
+                return Some(InvokerDefaultValue::DeferredError(message.to_string()));
+            }
+            if let Some(helper) = module.closures.iter().chain(module.functions.iter()).find(|function|
+                function.callable_default.as_ref().is_some_and(|value|
+                    value == default && value.span == default.span)
+                    && function.lexical_class.as_deref() == current_class) {
+                return Some(InvokerDefaultValue::EirHelper(helper.name.clone()));
+            }
+            let value = resolve_const_default(default, &context)?;
             let value = normalize_invoker_default(module, value)?;
             materializable(module, &value).then_some(value)
         })
         .collect()
+}
+
+/// Extracts the message from a compiler-generated lazy `throw new Error` default.
+fn deferred_error_message(default: &Expr) -> Option<&str> {
+    let ExprKind::Throw(exception) = &default.kind else { return None; };
+    let ExprKind::NewObject { class_name, args } = &exception.kind else { return None; };
+    let [Expr { kind: ExprKind::StringLiteral(message), .. }] = args.as_slice() else {
+        return None;
+    };
+    (class_name.as_str() == "Error").then_some(message.as_str())
 }
 
 /// Recursively converts shared source defaults into descriptor-invoker materialization values.
@@ -92,6 +119,7 @@ fn normalize_invoker_default(
     value: ConstDefaultValue,
 ) -> Option<InvokerDefaultValue> {
     match value {
+        ConstDefaultValue::EnumCase { .. } | ConstDefaultValue::Evaluated { .. } => None,
         ConstDefaultValue::Scalar { kind, payload } => {
             Some(InvokerDefaultValue::Scalar { kind, payload })
         }
@@ -259,6 +287,7 @@ fn normalize_object_args_for_signature(
 /// fatal diagnostic instead of quietly becoming null or a half-built value.
 fn materializable(module: &Module, value: &InvokerDefaultValue) -> bool {
     match value {
+        InvokerDefaultValue::DeferredError(_) | InvokerDefaultValue::EirHelper(_) => true,
         InvokerDefaultValue::Scalar { .. } | InvokerDefaultValue::String(_) => true,
         InvokerDefaultValue::Array(elements) => elements
             .iter()
@@ -299,6 +328,18 @@ pub(super) fn emit_const_default_to_result(
     data: &mut DataSection,
 ) -> PhpType {
     match default {
+        InvokerDefaultValue::EirHelper(name) => {
+            abi::emit_call_label(emitter, &crate::names::function_symbol(name));
+            PhpType::Mixed
+        }
+        InvokerDefaultValue::DeferredError(message) => {
+            super::emit_invoker_throwable(emitter, data, "_spl_error_class_id", message);
+            PhpType::Never
+        }
+        InvokerDefaultValue::Scalar { kind: CONST_DEFAULT_EXECUTABLE_PATH, .. } => {
+            abi::emit_call_label(emitter, "__rt_php_binary");
+            PhpType::Str
+        }
         InvokerDefaultValue::Scalar {
             kind: CONST_DEFAULT_NULL,
             ..
@@ -333,7 +374,8 @@ pub(super) fn emit_const_default_to_result(
             PhpType::Array(Box::new(elem_ty))
         }
         InvokerDefaultValue::String(value) => {
-            let (label, len) = data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (label, len) = data.add_string(&bytes);
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_symbol_address(emitter, ptr_reg, &label);
             abi::emit_load_int_immediate(emitter, len_reg, len as i64);
@@ -352,9 +394,14 @@ pub(super) fn emit_const_default_to_result(
     }
 }
 
-/// Returns the element type of a strictly indexed target slot.
+/// Returns the element type of a strictly indexed target slot. A pointer element (`ptr<T>` or
+/// `?ptr<T>`) comes back as its pointer storage type, so the default holds raw pointer words
+/// under `POINTER_ARRAY_VALUE_TYPE` as the callee's typed reads and writes expect.
 fn target_indexed_elem_ty(target_ty: Option<&PhpType>) -> Option<PhpType> {
     match target_ty?.codegen_repr() {
+        PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Pointer(_)) => {
+            Some(elem.codegen_repr())
+        }
         PhpType::Array(elem) => Some(*elem),
         _ => None,
     }
@@ -449,9 +496,15 @@ fn append_indexed_array_element(
     value_ty: &PhpType,
 ) {
     match elem_ty.codegen_repr() {
-        PhpType::Str => append_indexed_string_element(emitter),
+        PhpType::Str => append_indexed_string_element(
+            emitter,
+            !matches!(default, InvokerDefaultValue::String(_)),
+        ),
         PhpType::Float => append_indexed_float_element(emitter),
-        PhpType::Int | PhpType::Bool => append_indexed_scalar_element(emitter),
+        // A null pointer default is already the 0 word in the result register.
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) => {
+            append_indexed_scalar_element(emitter)
+        }
         _ => {
             box_const_default_for_container(emitter, default, value_ty);
             append_indexed_refcounted_element(emitter);
@@ -465,7 +518,10 @@ fn box_const_default_for_container(
     default: &InvokerDefaultValue,
     value_ty: &PhpType,
 ) {
-    if value_ty.is_refcounted() && !matches!(default, InvokerDefaultValue::String(_)) {
+    if (value_ty.is_refcounted() || matches!(default,
+        InvokerDefaultValue::Scalar { kind: CONST_DEFAULT_EXECUTABLE_PATH, .. }))
+        && !matches!(default, InvokerDefaultValue::String(_))
+    {
         emit_box_current_owned_value_as_mixed(emitter, value_ty);
     } else {
         emit_box_current_value_as_mixed(emitter, &value_ty.codegen_repr());
@@ -509,20 +565,43 @@ fn append_indexed_float_element(emitter: &mut Emitter) {
 }
 
 /// Appends the current string result to the pushed indexed array pointer.
-fn append_indexed_string_element(emitter: &mut Emitter) {
+fn append_indexed_string_element(emitter: &mut Emitter, owned: bool) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_pop_reg(emitter, "x0");
+            abi::emit_pop_reg(emitter, "x9");
+            if owned {
+                abi::emit_push_reg(emitter, "x1");
+            }
+            emitter.instruction("mov x0, x9");                                  // pass the indexed-array pointer while preserving the string result
             abi::emit_call_label(emitter, "__rt_array_push_str");
+            if owned {
+                release_pushed_string_after_array_push(emitter);
+            }
             abi::emit_push_reg(emitter, "x0");
         }
         Arch::X86_64 => {
             emitter.instruction("mov rsi, rax");                                // pass the string default pointer to the indexed-array append helper
             abi::emit_pop_reg(emitter, "rdi");
+            if owned {
+                abi::emit_push_reg(emitter, "rax");
+            }
             abi::emit_call_label(emitter, "__rt_array_push_str");
+            if owned {
+                release_pushed_string_after_array_push(emitter);
+            }
             abi::emit_push_reg(emitter, "rax");
         }
     }
+}
+
+/// Retires a fresh string after the indexed array has persisted its own copy.
+fn release_pushed_string_after_array_push(emitter: &mut Emitter) {
+    let result = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, result);
+    abi::emit_load_temporary_stack_slot(emitter, result, 16);
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    abi::emit_pop_reg(emitter, result);
+    abi::emit_release_temporary_stack(emitter, 16);
 }
 
 /// Appends the current boxed Mixed result and retires the temporary owner after insertion.
@@ -582,7 +661,7 @@ fn emit_hash_array_default(
                 abi::emit_push_reg_pair(emitter, "x1", "x2");
                 let value_ty =
                     emit_const_default_to_result(&element.default, None, emitter, ctx, data);
-                emit_hash_value_aarch64(emitter, &value_ty);
+                emit_hash_value_aarch64(emitter, &value_ty, !matches!(element.default, InvokerDefaultValue::String(_)));
                 abi::emit_pop_reg_pair(emitter, "x1", "x2");
                 abi::emit_pop_reg(emitter, "x0");
                 abi::emit_load_int_immediate(
@@ -596,7 +675,7 @@ fn emit_hash_array_default(
                 abi::emit_push_reg_pair(emitter, "rsi", "rdx");
                 let value_ty =
                     emit_const_default_to_result(&element.default, None, emitter, ctx, data);
-                emit_hash_value_x86_64(emitter, &value_ty);
+                emit_hash_value_x86_64(emitter, &value_ty, !matches!(element.default, InvokerDefaultValue::String(_)));
                 abi::emit_pop_reg_pair(emitter, "rsi", "rdx");
                 abi::emit_pop_reg(emitter, "rdi");
                 abi::emit_load_int_immediate(
@@ -618,7 +697,8 @@ fn emit_hash_key_aarch64(emitter: &mut Emitter, data: &mut DataSection, key: &Co
             abi::emit_load_int_immediate(emitter, "x2", -1);
         }
         ConstDefaultArrayKey::String(value) => {
-            let (label, len) = data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (label, len) = data.add_string(&bytes);
             abi::emit_symbol_address(emitter, "x1", &label);
             abi::emit_load_int_immediate(emitter, "x2", len as i64);
             abi::emit_call_label(emitter, "__rt_hash_normalize_key");
@@ -634,7 +714,8 @@ fn emit_hash_key_x86_64(emitter: &mut Emitter, data: &mut DataSection, key: &Con
             abi::emit_load_int_immediate(emitter, "rdx", -1);
         }
         ConstDefaultArrayKey::String(value) => {
-            let (label, len) = data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (label, len) = data.add_string(&bytes);
             abi::emit_symbol_address(emitter, "rax", &label);
             abi::emit_load_int_immediate(emitter, "rdx", len as i64);
             abi::emit_call_label(emitter, "__rt_hash_normalize_key");
@@ -644,14 +725,16 @@ fn emit_hash_key_x86_64(emitter: &mut Emitter, data: &mut DataSection, key: &Con
 }
 
 /// Materializes the current result as the AArch64 `__rt_hash_set` value payload `x3`/`x4`.
-fn emit_hash_value_aarch64(emitter: &mut Emitter, value_ty: &PhpType) {
+fn emit_hash_value_aarch64(emitter: &mut Emitter, value_ty: &PhpType, owned_string: bool) {
     match value_ty.codegen_repr() {
         PhpType::Float => {
             emitter.instruction("fmov x3, d0");                                 // pass the float default bits as the hash value low word
             emitter.instruction("mov x4, xzr");                                 // float hash values do not use the high payload word
         }
         PhpType::Str => {
-            abi::emit_call_label(emitter, "__rt_str_persist");
+            if !owned_string {
+                abi::emit_call_label(emitter, "__rt_str_persist");
+            }
             emitter.instruction("mov x3, x1");                                  // transfer the persistent string pointer as the hash value low word
             emitter.instruction("mov x4, x2");                                  // pass the string length as the hash value high word
         }
@@ -667,14 +750,16 @@ fn emit_hash_value_aarch64(emitter: &mut Emitter, value_ty: &PhpType) {
 }
 
 /// Materializes the current result as the x86_64 `__rt_hash_set` value payload `rcx`/`r8`.
-fn emit_hash_value_x86_64(emitter: &mut Emitter, value_ty: &PhpType) {
+fn emit_hash_value_x86_64(emitter: &mut Emitter, value_ty: &PhpType, owned_string: bool) {
     match value_ty.codegen_repr() {
         PhpType::Float => {
             emitter.instruction("movq rcx, xmm0");                              // pass the float default bits as the hash value low word
             emitter.instruction("xor r8, r8");                                  // float hash values do not use the high payload word
         }
         PhpType::Str => {
-            abi::emit_call_label(emitter, "__rt_str_persist");
+            if !owned_string {
+                abi::emit_call_label(emitter, "__rt_str_persist");
+            }
             emitter.instruction("mov rcx, rax");                                // transfer the persistent string pointer as the hash value low word
             emitter.instruction("mov r8, rdx");                                 // pass the string length as the hash value high word
         }

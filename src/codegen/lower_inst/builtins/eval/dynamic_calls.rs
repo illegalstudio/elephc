@@ -235,6 +235,11 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_method_call(
         .target
         .extern_symbol("__elephc_eval_method_call");
     abi::emit_call_label(ctx.emitter, &symbol);
+    let mut adapter_boxes = vec![(object, EVAL_TEMP_CELL_OFFSET)];
+    adapter_boxes.extend(inst.operands.iter().skip(1).enumerate().map(|(index, &value)| {
+        (value, args_offset + 8 + index * 8)
+    }));
+    retire_eval_metadata_operand_boxes(ctx, &adapter_boxes)?;
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);

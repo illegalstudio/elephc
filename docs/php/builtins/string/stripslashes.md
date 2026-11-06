@@ -1,8 +1,6 @@
 ---
 title: "stripslashes()"
 description: "Removes backslashes from a string previously escaped by addslashes."
-sidebar:
-  order: 922
 ---
 
 ## stripslashes()
@@ -20,8 +18,9 @@ Removes backslashes from a string previously escaped by addslashes.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/stripslashes.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stripslashes.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

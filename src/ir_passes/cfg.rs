@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 
-use crate::ir::{BlockId, Function, Op, Terminator};
+use crate::ir::{BlockId, Function, Op, Terminator, ValueId};
 
 /// Returns true when the function uses any exception-handling opcode.
 ///
@@ -48,7 +48,7 @@ pub(super) fn has_exception_handlers(func: &Function) -> bool {
 /// elimination came to neutralize stores a catch could still read. A pass that
 /// needs the exceptional path has to account for it itself; `dead_store` is the
 /// worked example.
-pub(super) fn successors(term: &Terminator) -> Vec<BlockId> {
+pub(crate) fn successors(term: &Terminator) -> Vec<BlockId> {
     match term {
         Terminator::Br { target, .. } => vec![*target],
         Terminator::CondBr {
@@ -67,6 +67,31 @@ pub(super) fn successors(term: &Terminator) -> Vec<BlockId> {
         | Terminator::Fatal { .. }
         | Terminator::Unreachable => Vec::new(),
     }
+}
+
+/// Returns true when the CFG has an edge to a block at or before its source in
+/// reverse postorder, the cheap necessary condition for a natural loop.
+pub(crate) fn has_back_edge(func: &Function) -> bool {
+    let order = reverse_postorder(func);
+    let mut position = vec![usize::MAX; func.blocks.len()];
+    for (index, block) in order.iter().enumerate() {
+        if let Some(slot) = position.get_mut(block.as_raw() as usize) {
+            *slot = index;
+        }
+    }
+    func.blocks.iter().any(|block| {
+        let Some(term) = &block.terminator else {
+            return false;
+        };
+        let source = position[block.id.as_raw() as usize];
+        successors(term).iter().any(|successor| {
+            position
+                .get(successor.as_raw() as usize)
+                .copied()
+                .unwrap_or(usize::MAX)
+                <= source
+        })
+    })
 }
 
 /// Builds the predecessor list for every block: `preds[b]` holds each block
@@ -119,4 +144,22 @@ pub(super) fn reverse_postorder(func: &Function) -> Vec<BlockId> {
 
     postorder.reverse();
     postorder
+}
+
+/// Borrows explicit successor targets together with their parallel SSA arguments.
+pub(super) fn successor_edges(term: &mut Terminator) -> Vec<(&mut BlockId, &mut Vec<ValueId>)> {
+    match term {
+        Terminator::Br { target, args } => vec![(target, args)],
+        Terminator::CondBr { then_target, then_args, else_target, else_args, .. } => {
+            vec![(then_target, then_args), (else_target, else_args)]
+        }
+        Terminator::Switch { cases, default, default_args, .. } => {
+            let mut edges: Vec<_> = cases.iter_mut().map(|case| (&mut case.target, &mut case.args)).collect();
+            edges.push((default, default_args));
+            edges
+        }
+        Terminator::GeneratorSuspend { resume, resume_args, .. } => vec![(resume, resume_args)],
+        Terminator::Return { .. } | Terminator::Throw { .. }
+        | Terminator::Fatal { .. } | Terminator::Unreachable => Vec::new(),
+    }
 }

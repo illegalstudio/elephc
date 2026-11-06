@@ -1,8 +1,6 @@
 ---
 title: "bcmod() - internals"
 description: "Compiler internals for bcmod(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 558
 ---
 
 ## `bcmod()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bcmod.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bcmod.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -290,3 +290,226 @@ echo ($a[$hit_i][$miss_j] ?? 'dflt');
     );
     assert!(out.success, "program should exit successfully");
 }
+
+/// A nullable TYPED array flowing through `??` must unbox, not be stored as a cell.
+///
+/// `?array<int>` is a boxed nullable cell, and the `??` merge temp is a raw `array<int>`. The
+/// coercion that fills that temp only ever ran for a `mixed`-payload target, because before
+/// `array<T>` existed a container merge target could not be typed — so a typed one took an early
+/// return and stored the CELL into the raw slot. `g([1, 2, 3])` then printed `0` and dumped four
+/// zeros where php prints `1` and `[1, 2, 3]`.
+///
+/// A ternary was correct, and a bare `?array` was correct: only the typed element type through
+/// `??` was wrong, which is why the suite never caught it. Found by an external review that ran
+/// it.
+#[test]
+fn test_nullable_typed_array_through_null_coalesce_unboxes() {
+    let out = compile_and_run(
+        "<?php \
+         function g(?array<int> $a): string { \
+           $r = $a ?? [4, 5]; \
+           return $r[0] . '/' . count($r); \
+         } \
+         echo g([1, 2, 3]), '|', g(null);",
+    );
+    assert_eq!(out, "1/3|4/2");
+}
+
+/// The same for string elements, and from a CALL RESULT rather than a parameter.
+#[test]
+fn test_nullable_typed_array_from_a_call_through_null_coalesce() {
+    let out = compile_and_run(
+        "<?php \
+         function src(bool $empty): ?array<string> { return $empty ? null : ['a', 'b']; } \
+         function pick(bool $empty): string { $r = src($empty) ?? ['z']; return $r[0]; } \
+         echo pick(false), pick(true);",
+    );
+    assert_eq!(out, "az");
+}
+
+/// The caller's array stays intact and the ledger stays balanced.
+///
+/// The unbox takes its own reference to the payload rather than consuming the cell's, so the
+/// live array a caller still holds must not be rewritten in place — and 200 round trips must
+/// free everything they allocate.
+#[test]
+fn test_nullable_typed_array_merge_preserves_the_caller_array() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php \
+         function g(?array<int> $a): int { $r = $a ?? [9]; return $r[1]; } \
+         $src = [1, 2, 3]; \
+         $t = 0; \
+         for ($i = 0; $i < 200; $i++) { $t = $t + g($src); } \
+         echo $t, '|', $src[1], '|', count($src);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "400|2|3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "the unbox takes its own payload reference, so nothing may be left live: {}",
+        out.stderr
+    );
+}
+
+/// Coalescing a nullable object with `new` (`$o ??= new Box()`, `$o = $o ?? new Box()`) leaves
+/// the object itself in `$o`, not the boxed cell that held `?Box`: every member access after it
+/// read the cell as the object and crashed or answered garbage (#1628). The unbox is taken by a
+/// `?Box` parameter both null and not, a nullable call result and a nullable property (`a`-`d`),
+/// and by a nullable callable coalesced with a closure (`h`). Object (`g`) and callable (`j`)
+/// null defaults preserve both the null input and the original non-null value.
+/// A local merged from a ternary (`e`) and `?:` (`f`) keep a `Mixed` temp and pin the unchanged
+/// neighbouring paths. Runs over a loop under `--heap-debug`.
+#[test]
+fn test_null_coalesce_nullable_object_with_new_keeps_the_object() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box {
+    public array $list = [1, 2, 3];
+    public int $n = 7;
+    public ?Box $next = null;
+    public function items(): array { return $this->list; }
+}
+function find(int $n): ?Box { return $n > 0 ? new Box() : null; }
+function a(?Box $o): int { $o ??= new Box(); return $o->n + count($o->items()); }
+function b(?Box $o): int { $o = $o ?? new Box(); return $o->list[2]; }
+function c(int $n): int { $o = find($n) ?? new Box(); return $o->n; }
+function d(Box $h): int { $x = $h->next ?? new Box(); return $x->n; }
+function e(?Box $o, int $n): int { $x = $n > 0 ? $o : new Box(); $x ??= new Box(); return $x->n; }
+function f(?Box $o): int { $x = $o ?: new Box(); return $x->n; }
+function g(?Box $o): string { $x = $o ?? null; return $x === null ? "null" : (string) $x->n; }
+function h(?callable $cb): string { $cb2 = $cb ?? fn() => "dflt"; return $cb2(); }
+function j(?callable $cb): string { $cb2 = $cb ?? null; return $cb2 === null ? "null" : $cb2(); }
+$total = 0;
+$tail = "";
+for ($i = 0; $i < 20 + ($argc > 5 ? 1 : 0); $i++) {
+    $total += a(null) + a(new Box()) + b(null) + b(new Box()) + c(0) + c(1) + d(new Box()) + e(null, 1) + e(new Box(), 0) + f(null) + f(new Box());
+    $tail = g(null) . g(new Box()) . h(null) . h(fn() => "cb") . j(null) . j(fn() => "kept");
+}
+echo $total, " ", $tail, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1500 null7dfltcbnullkept\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The value of an assignment expression stays a raw PHP null; a null condition is falsy, not
+/// the nonzero null sentinel (#1990). Covers `&&`, `if`, `!`, `?:`, `while`, a mixed-returning
+/// closure and an assignment forwarded through another local.
+#[test]
+fn test_assignment_expression_null_is_falsy_in_conditions() {
+    let out = compile_and_run(
+        r#"<?php
+function f1(mixed $x): string { return ($x = null) && true ? "T" : "F"; }
+function f2(mixed $x): string { if ($x = null) { return "T"; } return "F"; }
+function f3(mixed $x): string { return !($x = null) ? "T" : "F"; }
+function f4(mixed $x): string { return ($x = null) ?: "D"; }
+function f5(mixed $x): string { while ($x = null) { return "T"; } return "F"; }
+function f6(): string { $h = function (): mixed { return null; }; return ($h()) ? "T" : "F"; }
+function f7(mixed $x): string { $y = ($x = null); return $y ? "T" : "F"; }
+echo f1(5), f2(5), f3(5), f4(5), f5(5), f6(), f7(5), "\n";
+"#,
+    );
+    assert_eq!(out, "FFTDFFF\n");
+}
+
+/// A builtin whose result PHP answers as `true` stays truthy: the raw-null exclusion only
+/// applies to values whose PHP type really is null, and the sort family's contract is `bool`
+/// now (#1990 review). `var_dump` and `clearstatcache` answer null, so they stay falsy.
+#[test]
+fn test_sort_family_results_are_truthy_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3, 1];
+echo usort($a, function ($p, $q) { return $p <=> $q; }) ? "T" : "F";
+$b = [3, 1];
+echo sort($b) ? "T" : "F";
+$c = [1, 2];
+echo shuffle($c) ? "T" : "F";
+echo natsort($c) ? "T" : "F";
+$d = [1];
+echo array_walk($d, function (&$v) { $v = $v + 1; }) ? "T" : "F";
+echo var_dump(1) ? "T" : "F";
+echo clearstatcache() ? "T" : "F";
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "TTTTTint(1)\nFF\n");
+}
+
+/// The sort family and `array_walk` return PHP's exact `true`, not merely a truthy integer, so
+/// `=== true` and `(int) ... === 1` both hold (#1990 review).
+#[test]
+fn test_sort_family_returns_exact_boolean_true() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3, 1];
+echo (usort($a, function ($p, $q) { return $p <=> $q; }) === true) ? "1" : "0";
+$b = [3, 1];
+echo (sort($b) === true) ? "1" : "0";
+echo ((int) sort($b) === 1) ? "1" : "0";
+$c = [1, 2];
+echo (natsort($c) === true) ? "1" : "0";
+$d = [1];
+echo (array_walk($d, function (&$v) { $v = $v + 1; }) === true) ? "1" : "0";
+$e = [1, 2, 3];
+echo (array_walk_recursive($e, function (&$v) { $v = $v + 1; }) === true) ? "1" : "0";
+$f = [3, 1];
+echo (rsort($f) === true) ? "1" : "0";
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "1111111\n");
+}
+
+/// Verifies literal typing scans each item once when a literal holds a `null` beside a nested
+/// merge: the pointer probe (`[$p, null]` storage) and the ordinary element merge share the item
+/// types, so a 24-deep `$m ?? [E, null]` or `$flag ? [E, null] : []` nesting compiles well
+/// inside the bound instead of doubling the work per level.
+#[test]
+fn test_nested_null_sibling_literals_type_in_linear_time() {
+    let mut coalesce = String::from("$argc");
+    let mut ternary = String::from("$argc");
+    for _ in 0..24 {
+        coalesce = format!("($maybe ?? [{coalesce}, null])");
+        ternary = format!("($flag ? [{ternary}, null] : [])");
+    }
+    let source = format!(
+        "<?php\n$maybe = $argc > 100 ? null : [];\n$flag = $argc > 0;\n$a = {coalesce};\n$b = {ternary};\necho count($a), \"|\", count($b), \"\\n\";\n"
+    );
+    let started = std::time::Instant::now();
+    let out = compile_and_run(&source);
+    let elapsed = started.elapsed();
+    assert_eq!(out, "0|2\n");
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "null-sibling literal typing took {elapsed:?}"
+    );
+}
+
+/// Verifies the checker types each spread source once when a literal spreads a nested lazy
+/// merge: `[...E, null]` typed `E` in its hash-spread scan and again in the element merge, so a
+/// `$m ?? [...E, null]` or `$flag ? [...E, null] : []` nesting doubled the checker's work at
+/// every level (10.5 s for `--check` alone at 20 levels). A 24-deep nesting of each must compile
+/// well inside the bound. `$maybe` holds `[]` at runtime, so `$a` is that empty array, and `$b`
+/// keeps the innermost `[$argc]` plus one `null` per level: 25 elements.
+#[test]
+fn test_nested_null_sibling_spread_literals_type_in_linear_time() {
+    let mut coalesce = String::from("[$argc]");
+    let mut ternary = String::from("[$argc]");
+    for _ in 0..24 {
+        coalesce = format!("($maybe ?? [...{coalesce}, null])");
+        ternary = format!("($flag ? [...{ternary}, null] : [])");
+    }
+    let source = format!(
+        "<?php\n$maybe = $argc > 100 ? null : [];\n$flag = $argc > 0;\n$a = {coalesce};\n$b = {ternary};\necho count($a), \"|\", count($b), \"\\n\";\n"
+    );
+    let started = std::time::Instant::now();
+    let out = compile_and_run(&source);
+    let elapsed = started.elapsed();
+    assert_eq!(out, "0|25\n");
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "nested spread literal typing took {elapsed:?}"
+    );
+}

@@ -313,6 +313,7 @@ pub(super) fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAcces
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::ExprCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
             if let ExprKind::ExprCall { callee, .. } = &expr.kind {

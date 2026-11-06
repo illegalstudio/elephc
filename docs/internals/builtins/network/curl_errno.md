@@ -1,8 +1,6 @@
 ---
 title: "curl_errno() - internals"
 description: "Compiler internals for curl_errno(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 696
 ---
 
 ## `curl_errno()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1135](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1135) (`curl_errno`)
+- **Lowering**: [`src/curl_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs) (`curl_errno`)
 - **Function symbol**: `curl_errno()`
 
 

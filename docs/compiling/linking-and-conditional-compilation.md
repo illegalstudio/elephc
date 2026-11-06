@@ -127,9 +127,9 @@ dynamic `eval()`), `web` (the `--web` server), and `curl` (the libcurl-backed
 
 By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
-calling a `bc*` function pulls in `bcmath`, calling an `iconv*` function pulls in
+calling a `bc*` function or using `BcMath\Number` pulls in `bcmath`, calling an `iconv*` function pulls in
 `iconv`, calling `mb_strlen()` pulls in `mbstring`, referencing `PDO` pulls in
-`pdo`, and creating an `XMLWriter` or calling an `xml_*` function pulls in `xml`.
+`pdo`, calling `token_get_all()` or using `PhpToken` pulls in `tokenizer`, and creating an `XMLWriter` or calling an `xml_*` function pulls in `xml`.
 An `eval()` call pulls in Magician
 only when it needs runtime parsing: eligible literal fragments can be parsed at
 compile time and lowered to native EIR without the interpreter bridge. Programs
@@ -142,7 +142,7 @@ the lockfile, and Cargo configuration also participate in this freshness check.
 `--with-CRATE` force-enables a bridge regardless of that auto-detection. It
 force-links the staticlib (whole-archived, so it is retained even if no symbol
 references it) and, for crates whose PHP surface comes from an injected prelude
-(`pdo`, `mysqli`, `tz`, `image`, `xml`), force-injects that prelude so the classes/functions are
+(`pdo`, `mysqli`, `tz`, `image`, `xml`, `tokenizer`, `random`), force-injects that prelude so the classes/functions are
 available. This is useful when a program reaches a feature through indirection
 that detection cannot see. The flag is repeatable:
 
@@ -150,6 +150,7 @@ that detection cannot see. The flag is repeatable:
 elephc app.php --with-pdo
 elephc app.php --with-crypto --with-tls
 elephc app.php --with-bcmath
+elephc app.php --with-random
 elephc app.php --with-mbstring
 elephc app.php --with-iconv
 elephc app.php --with-pcntl
@@ -296,12 +297,34 @@ those locations again. `elephc --print-capabilities` lists every archive this
 binary can need.
 ```
 
+When the override directory does hold an entry by that name but it is not a
+usable archive (an empty file, a directory, or a symbolic link, dangling or not),
+the error names that entry in `needs:` and says to replace it rather than to put
+the archive there:
+
+```
+Linker error: required Elephc bridge `elephc_web` could not be found
+  needs: /opt/stage/lib/libelephc_web.a
+  looked in:
+    /opt/stage/lib
+
+ELEPHC_WEB_LIB_DIR is set to /opt/stage/lib, which takes priority over every
+other location, so no other directory was consulted. Replace invalid archive
+/opt/stage/lib/libelephc_web.a with a non-empty regular file, point
+ELEPHC_WEB_LIB_DIR to a directory containing a valid libelephc_web.a, or unset
+ELEPHC_WEB_LIB_DIR to search the other locations again. `elephc
+--print-capabilities` lists every archive this binary can need.
+```
+
 When an exact archive path in the link plan is missing, empty, a directory, or
 a symbolic link, the error names that path in `needs:` and omits `looked in:`.
 The exact-path plan does not run the fallback search.
 An invalid archive found by fallback discovery also names its path, and retains
 the locations reached before it was found. The error tells you to replace the
-invalid file or point the directory override at a valid archive.
+invalid file or point the directory override at a valid archive. Discovery
+checks each candidate without following symbolic links, so a dangling link where
+an archive belongs stops the search and is reported this way instead of being
+skipped.
 
 #### The `eval()` bridge has two archive names
 
@@ -326,15 +349,17 @@ Linker error: required Elephc bridge `elephc_magician` could not be found
 
 [`--print-capabilities`](cli-reference.md) is the
 authoritative list for the binary you are holding — one line per capability with
-the archives it needs — so a packaging script can check a tarball carries
-everything the compiler inside it advertises rather than guessing from this page.
+the archives it needs and the managed native packages (`native:<package>`) its
+link resolves — so a packaging script can check a tarball carries everything the
+compiler inside it advertises rather than guessing from this page.
 It reports the `eval` bridge under the plain `libelephc_magician.a`; the
 curl-aware variant above is the one name it does not print.
 
 ## Heap size
 
-The compiled program uses a fixed-size runtime heap, **8 MB** by default. Programs
-that allocate a lot of arrays, strings, or objects may need more.
+The compiled program uses a fixed-size runtime heap, **128 MB** by default, the same
+as PHP's default `memory_limit`. It is reserved as zero-filled memory, so the pages a
+program never touches cost nothing. Programs that keep more live data need more.
 
 ### `--heap-size`
 
@@ -375,10 +400,13 @@ Dead stripping removes unreachable *code*. Stripping removes the *names* of the
 code that stays. The two are independent: the first changes what runs, the
 second changes only what the file says about itself.
 
-A linked **executable** is stripped of its symbol table. Nothing in a compiled
-program reads those names — `Throwable::getTrace()` and `getTraceAsString()` are
-not implemented, and the uncaught-exception report prints no stack trace — so
-they are dead weight at run time, and they are roughly a quarter of the file:
+A linked **executable** is stripped of its symbol table. Runtime introspection
+uses compiler-emitted descriptors rather than linker symbol names.
+`Throwable::getTrace()` and `getTraceAsString()` currently return an empty array
+and string; the uncaught-exception report walks the live activation chain
+instead of the symbol table, so it prints its stack trace from a stripped binary
+too. The linker names are unnecessary at run time and are roughly a quarter of
+the file:
 
 | program | linked | stripped |
 |---|--:|--:|
@@ -458,3 +486,13 @@ ifdef (DEBUG) {
 
 See [Conditional Compilation](../beyond-php/ifdef.md) for the full `ifdef` syntax
 and semantics.
+
+## Fileinfo
+
+Using `finfo` or a fileinfo function automatically links the optional
+`elephc_fileinfo` bridge. Declare its native dependency with
+`elephc native add libmagic`. The pinned package supplies
+`libelephc_magic_database.a -> libmagic.a`, including its complete compiled magic
+database, without a system-library fallback. `--with-fileinfo` also injects and
+retains the PHP surface for opaque dynamic eval. All supported targets use the
+same extern ABI and native recipe.

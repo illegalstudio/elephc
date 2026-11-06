@@ -127,7 +127,49 @@ echo $s[-1];   // o
 echo "[" . $s[99] . "]";  // []
 ```
 
-Read-only. Negative indices count from end. Out-of-bounds returns empty string.
+Negative indices count from end. An out-of-bounds read warns `Uninitialized string offset N`
+and returns an empty string.
+
+### Writing to a string offset
+
+Assigning to an offset replaces one byte, exactly as in PHP:
+
+```php
+<?php
+$s = "abc";
+$s[1] = "Z";      // aZc
+$s[-1] = "q";     // aZq   (negative offsets count from the end)
+$s[5] = "x";      // aZq  x (writing past the end pads with spaces)
+$s[0] = "hello";  // hZq  x + Warning: Only the first byte will be assigned to the string offset
+$s[0] = 7;        // 7Zq  x (the value converts to a string first)
+
+$copy = $s;
+$copy[0] = "!";   // $s is unchanged: strings are copied on write
+```
+
+- Only the first byte of the value is written; a longer value warns
+  `Only the first byte will be assigned to the string offset`.
+- An empty value (including `null` and `false`) throws `Error: Cannot assign an empty string
+  to a string offset`.
+- An offset still before the start after counting from the end warns
+  `Illegal string offset -N` and writes nothing, even for an empty value. The RHS is not
+  converted to a string on this path, so a Stringable object's `__toString()` is skipped.
+- The offset follows the string read's rules: an integer, a float (truncated, with
+  `String offset cast occurred`), or a numeric string literal such as `"1"`. Other offset
+  expressions are compile errors.
+- The expression `($s[$i] = $v)` evaluates to the one-byte string that was written, or to
+  `null` when an offset before the start wrote nothing. On a `mixed` variable it evaluates to
+  that byte while the variable holds a string, and to `$v` while it holds an array.
+- Compound assignment (`$s[0] .= "x"`), `++`/`--` (`$s[0]++`) and `$s[] = $v` on a
+  concrete string local are compile errors carrying PHP's own `Error` text.
+- The write works on string locals, `mixed` parameters, `global` variables and strings stored
+  in array elements (`$a["k"][0] = "x"`). A string offset used as an array (`$s[0][0] = $v`)
+  raises a catchable `Error`, preserving the existing nested-write behavior.
+- Boxed and nested string writes accept runtime keys through the same offset conversion:
+  numeric strings select an offset, leading-integer strings such as `"1x"` warn, and invalid
+  string or container keys throw `TypeError`. Boolean, null and float keys warn on conversion.
+- Direct writes through a property (`$o->s[0] = "x"`, `C::$s[0] = "x"`) remain unsupported;
+  copy the string into a local, write the offset, and store it back.
 
 ## Incrementing a string
 
@@ -161,11 +203,13 @@ array, including nested keys and repeated `[]` entries. AOT and `eval()` use the
 same encoding detection, substitution settings, and Core INI query limits.
 The example in `examples/mbstring/main.php` parses a product search and tags.
 
-The current AOT output adapter accepts local variables and managed aliases.
-By-reference function parameters, property-backed references, dynamic output
-unpacking, and generic callable wrappers still require additional adapters.
-PHP error-handler routing and shared indexed-array root promotion also remain
-incomplete; the complete mbstring extension is still in development.
+The current AOT output adapter accepts local variables and managed aliases, while
+opaque eval also supports a by-reference function parameter. Raw AOT by-reference
+function parameters, property-backed references, and generic callable wrappers
+still require additional output adapters. PHP error-handler routing and shared
+indexed-array root promotion also remain incomplete. These are documented
+call-shape limitations, not missing symbols: all 65 PHP 8.5.10 mbstring functions
+and all 9 constants are registered for native compilation and `eval()`.
 
 Programs using mbstring retain response MIME metadata when `header()` accepts a
 header, including in CLI builds. Output buffering and `print_r(..., true)` keep
@@ -175,14 +219,14 @@ headers mutable until nonempty bytes reach the final output destination. Startup
 internal/output encodings, MIME selection, and substitution settings. Direct,
 named, unpacked, and callable calls work in AOT and `eval()`. Use
 `ob_start("mb_output_handler")` to convert buffered output automatically, as in
-`examples/mbstring/main.php`. Programs using mbstring or opaque eval require the
-managed `pcre2` package for MIME selection, including with default INI settings.
+`examples/mbstring/main.php`. The contract-owned default MIME expression needs no
+native package. A custom `mbstring.http_output_conv_mimetypes` expression inside
+opaque eval requires the complete `--with-mbstring` capability and managed PCRE2.
 
 Runtime mutation of the Core response settings remains incomplete. Eval handler
-registrations currently retain their callback until the owning eval context is
-destroyed; releasing that registration when its individual buffer closes remains
-part of the output-buffer lifecycle work. PHP error-handler routing and web
-transport verification also remain open.
+registrations release their retained callback when the individual buffer closes,
+with context teardown handling registrations that remain active. PHP error-handler
+routing and web transport verification remain open.
 
 | Function | Signature | Description |
 |---|---|---|
@@ -251,7 +295,7 @@ transport verification also remain open.
 | `ord()` | `ord($char): int` | ASCII value of first character |
 | `chr()` | `chr($code): string` | Character from ASCII code |
 | `explode()` | `explode($separator, $str [, $limit]): array` | Split string into array. An empty `$separator` throws `\ValueError`. |
-| `implode()` | `implode($separator, $array): string`<br>`implode($array): string` | Join array into string; the one-argument form joins with an empty separator |
+| `implode()` | `implode($separator, $array): string`<br>`implode($array): string` | Join array into string; the one-argument form joins with an empty separator. Takes an indexed or associative array (keys are ignored) of any element type, including one reached through a `?array`, `mixed` or union slot whose shape is only known at run time. A value that is not an array throws `\TypeError`. |
 | `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number. A negative `$dec` is not an error: it rounds to that power of ten and formats with no decimals. |
 | `sprintf()` | `sprintf($fmt, ...): string` | Format string (%s, %d, %f, %x, %e, %g, %o, %c, %%) |
 | `printf()` | `printf($fmt, ...): int` | Format and print |
@@ -285,13 +329,14 @@ transport verification also remain open.
 | `hash_update()` | `hash_update($context, $data): bool` | Feed data into an incremental hashing context. |
 | `hash_final()` | `hash_final($context, $binary = false): string` | Finalize a context and return the digest (hex, or raw bytes when `$binary`). |
 | `hash_copy()` | `hash_copy($context): HashContext` | Clone an incremental hashing context so the original and copy can diverge. |
-| `openssl_encrypt()` | `openssl_encrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", &$tag = null, $aad = "", $tag_length = 16): string\|false` | Encrypt data with a supported AES CBC, CTR, ECB, or GCM cipher. |
-| `openssl_decrypt()` | `openssl_decrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", $tag = null, $aad = ""): string\|false` | Decrypt and, for GCM, authenticate data with the supplied tag and AAD. |
+| `openssl_encrypt()` | `openssl_encrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", &$tag = null, $aad = "", $tag_length = 16): string\|false` | Encrypt data with a cipher from the OpenSSL 3.6.4 default-provider catalog. |
+| `openssl_decrypt()` | `openssl_decrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", $tag = null, $aad = ""): string\|false` | Decrypt and authenticate AEAD data with the supplied tag and AAD. |
 | `openssl_cipher_iv_length()` | `openssl_cipher_iv_length($cipher_algo): int\|false` | Return the default IV length for a supported cipher. |
-| `openssl_get_cipher_methods()` | `openssl_get_cipher_methods($aliases = false): array` | Return the exact cipher matrix implemented by elephc. |
+| `openssl_get_cipher_methods()` | `openssl_get_cipher_methods($aliases = false): array` | Return PHP's 135-name OpenSSL 3.6.4 default-provider cipher catalog. |
 | `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` always, `"` under `ENT_COMPAT`, `'` under `ENT_QUOTES`; `ENT_NOQUOTES` leaves both quotes literal. The single quote is `&#039;` under `ENT_HTML401` and `&apos;` under `ENT_HTML5`, `ENT_XHTML` or `ENT_XML1`. The `ENT_*` flag constants are defined with PHP's values; `$encoding` is accepted but not applied |
 | `htmlentities()` | `htmlentities($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Alias for htmlspecialchars |
 | `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
+| `strip_tags()` | `strip_tags(string $string, array\|string\|null $allowed_tags = null): string` | Strip HTML and PHP tags. Comments and PHP tags are always removed. `$allowed_tags` is a string like `"<p><a>"` or an array of tag names (`["p", "a"]`). `<` followed by whitespace is left as literal text (`"1 < 2"`). |
 | `parse_url()` | `parse_url(string $url, int $component = -1): array\|string\|int\|null\|false` | Parse present URL components without decoding them; `PHP_URL_*` selects one component |
 | `urlencode()` | `urlencode($str): string` | URL-encode (spaces as +) |
 | `urldecode()` | `urldecode($str): string` | URL-decode |
@@ -308,6 +353,11 @@ transport verification also remain open.
 | `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
 | `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
 | `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
+
+`trim()`, `ltrim()`, and `rtrim()` expand PHP's `start..end` character ranges
+(for example `"a..z"`) using the same rules as `php_charmask()`: only an
+increasing range is expanded, and an invalid range leaves its bytes literal.
+The invalid-range warnings are not emitted yet.
 
 #### Known divergence: `inet_pton()` caps its argument at 255 bytes
 
@@ -425,19 +475,27 @@ Known divergences:
 
 elephc implements `openssl_encrypt()`, `openssl_decrypt()`,
 `openssl_cipher_iv_length()`, and `openssl_get_cipher_methods()` on both compiled
-and `eval()` paths. They use the pure-Rust `elephc-crypto` bridge and do not link
-the system OpenSSL library. Programs that do not use crypto builtins do not link
-the bridge.
+and `eval()` paths. The compiled AOT path links the managed `openssl-crypto`
+package — a libcrypto-only OpenSSL 3.6.4 build — through the `elephc-openssl`
+bridge and reports PHP's exact 135-name default-provider catalog. It does not use
+a system OpenSSL, and programs that do not use cipher builtins do not link
+libcrypto. Declare the package in the project manifest:
 
-The supported cipher list is intentionally smaller than stock PHP/OpenSSL and is
-exactly what `openssl_get_cipher_methods()` returns:
+```toml
+[native.dependencies]
+openssl-crypto = "3.6.4"
+zlib = "1.3.2"
+```
 
-| Mode | Supported names | Key bytes | IV bytes |
-|---|---|---:|---:|
-| CBC | `aes-128-cbc`, `aes-192-cbc`, `aes-256-cbc` | 16 / 24 / 32 | 16 |
-| CTR | `aes-128-ctr`, `aes-192-ctr`, `aes-256-ctr` | 16 / 24 / 32 | 16 |
-| ECB | `aes-128-ecb`, `aes-192-ecb`, `aes-256-ecb` | 16 / 24 / 32 | 0 |
-| GCM | `aes-128-gcm`, `aes-192-gcm`, `aes-256-gcm` | 16 / 24 / 32 | 12 by default |
+The AOT catalog is exactly what `openssl_get_cipher_methods()` returns: AES,
+ARIA, Camellia, ChaCha20, DES-EDE/EDE3, NULL, and SM4 in CBC, CTS, CFB/CFB1/CFB8,
+CTR, ECB, GCM, CCM, OCB, OFB, SIV, GCM-SIV, wrap, and XTS modes, plus the
+AES-CBC-HMAC composite entries. The legacy provider is deliberately not loaded;
+PHP's default-provider list does not include BF/CAST/DES/IDEA/RC2/RC4/SEED.
+
+The `eval()` interpreter retains its smaller pure-Rust cipher implementation
+(the 12 AES CBC/CTR/ECB/GCM methods) so eval-only programs stay free of the
+libcrypto native package. AOT code has the full 135-method surface.
 
 Cipher names are case-insensitive. Without `OPENSSL_RAW_DATA`, encryption returns
 Base64 and decryption accepts Base64. With the flag, both functions exchange raw

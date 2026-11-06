@@ -9,10 +9,11 @@
 //! - Materializes scalar result rows as text/null and preserves driver-specific LOB/type metadata.
 //! - Keeps statement handles alive across `SQLMoreResults`, cursor-name, and scroll operations.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use odbc_sys::{
     AttrOdbcVersion, CDataType, CompletionType, ConnectionAttribute, Desc, DriverConnectOption,
@@ -217,25 +218,21 @@ impl Default for ErrorState {
     }
 }
 
-/// Holds the diagnostic produced before a CLI connection handle enters the bridge table.
-fn open_error_cell() -> &'static Mutex<ErrorState> {
-    static ERROR: OnceLock<Mutex<ErrorState>> = OnceLock::new();
-    ERROR.get_or_init(|| Mutex::new(ErrorState::default()))
+thread_local! {
+    static OPEN_ERROR: RefCell<ErrorState> = RefCell::new(ErrorState::default());
 }
 
 /// Records one constructor failure for PDO's connection-level `errorInfo` fields.
 fn remember_open_error(error: &ErrorState) {
-    *open_error_cell()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = error.clone();
+    OPEN_ERROR.with(|slot| *slot.borrow_mut() = error.clone());
 }
 
-/// Returns the SQLSTATE and native code captured by the latest failed CLI open.
+/// Returns the SQLSTATE and native code captured by this thread's latest failed CLI open.
 pub(crate) fn open_diagnostic() -> (String, i64) {
-    let error = open_error_cell()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    (error.sqlstate.clone(), error.native_code)
+    OPEN_ERROR.with(|slot| {
+        let error = slot.borrow();
+        (error.sqlstate.clone(), error.native_code)
+    })
 }
 
 /// Reports whether an ODBC return code completed successfully.
@@ -733,8 +730,12 @@ impl OdbcConn {
 
     /// Opens either CLI flavor while retaining its distinct PDO identity.
     fn open(dsn: &str, flavor: CliFlavor) -> Result<Self, String> {
+        // Seed an EMPTY diagnostic, not a placeholder: a failure that never reaches an ODBC call
+        // (an empty access token, a rejected AccessToken/credentials combination, a missing
+        // driver) leaves this in place, and PDO's connection-level `errorInfo` then takes the
+        // prelude's `08006` fallback instead of publishing a synthetic `HY000`.
         remember_open_error(&ErrorState {
-            sqlstate: "HY000".to_string(),
+            sqlstate: String::new(),
             native_code: 0,
             message: "CLI connection initialization failed".to_string(),
         });
@@ -3586,6 +3587,67 @@ impl OdbcStmt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Concurrent constructors retain both their SQLSTATE and native error code.
+    #[test]
+    fn open_diagnostic_is_thread_local() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        remember_open_error(&ErrorState {
+            sqlstate: "42000".into(),
+            native_code: 111,
+            message: "parent failure".into(),
+        });
+        let child_barrier = barrier.clone();
+        let child = std::thread::spawn(move || {
+            let initial = open_diagnostic();
+            remember_open_error(&ErrorState {
+                sqlstate: "HY001".into(),
+                native_code: 222,
+                message: "child failure".into(),
+            });
+            child_barrier.wait();
+            (initial, open_diagnostic())
+        });
+        barrier.wait();
+        let parent = open_diagnostic();
+        let (child_initial, child_final) = child.join().unwrap();
+
+        assert_eq!(parent, ("42000".into(), 111));
+        assert_eq!(child_initial, ("00000".into(), 0));
+        assert_eq!(child_final, ("HY001".into(), 222));
+    }
+
+    /// A `sqlsrv:` constructor failure publishes the ODBC CLI diagnostic captured by
+    /// `remember_open_error` into PDO's last-open cells (issue #1729). Before the fix,
+    /// `store_open_failure` read the CLI diagnostic only for `odbc:` / `informix:` /
+    /// `ibm:` DSNs, so SQLSRV fell back to the empty SQLSTATE and a null native code.
+    #[cfg(feature = "sqlsrv")]
+    #[test]
+    fn sqlsrv_open_failure_publishes_the_cli_diagnostic() {
+        remember_open_error(&ErrorState {
+            sqlstate: "42S22".into(),
+            native_code: 207,
+            message: "Invalid column name".into(),
+        });
+        crate::store_open_failure(
+            "sqlsrv:Server=tcp:example.database.windows.net,1433;Database=app",
+            "SQLSRV connection failed",
+        );
+        let state = unsafe { std::ffi::CStr::from_ptr(crate::elephc_pdo_last_open_sqlstate()) };
+        assert_eq!(state.to_str().unwrap(), "42S22");
+        assert_eq!(crate::elephc_pdo_last_open_native_code(), 207);
+    }
+
+    /// A `sqlsrv:` failure that never reaches an ODBC call (an empty access token is rejected
+    /// while parsing the DSN) leaves the CLI diagnostic EMPTY, so the prelude applies its
+    /// `08006` fallback instead of publishing the old synthetic `HY000`.
+    #[cfg(feature = "sqlsrv")]
+    #[test]
+    fn sqlsrv_open_failure_without_a_cli_diagnostic_leaves_an_empty_sqlstate() {
+        let result = OdbcConn::open_sqlsrv("sqlsrv:Server=localhost;Database=app;AccessToken=");
+        assert!(result.is_err(), "an empty access token must be rejected");
+        assert_eq!(open_diagnostic(), (String::new(), 0));
+    }
 
     /// Appends one driver-format length-prefixed UTF-16 classification field.
     #[cfg(feature = "sqlsrv")]

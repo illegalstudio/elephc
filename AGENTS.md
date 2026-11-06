@@ -60,7 +60,7 @@ Some tests are marked `#[ignore]` because they require external libraries (e.g.,
 
 ### Test strategy during development
 
-The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. CI runs sharded executable codegen tests on `macos-aarch64`, `linux-x86_64`, and `linux-aarch64`, and covers `ios-arm64` and `ios-sim-arm64` through target-specific compile and emitter tests. Local implementation work should optimize for fast, relevant signal:
+The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. CI runs sharded executable codegen tests on `macos-aarch64`, `linux-x86_64`, and `linux-aarch64`, and covers `ios-arm64` and `ios-sim-arm64` through target-specific compile and emitter tests. Pull Requests run the Linux matrix, the core live database suites and the macOS build; the macOS test matrix, the iOS links and the optional-driver live database suites run in the merge queue, or on the PR with the `ci:macos` / `ci:pdo-live` labels (CONTRIBUTING.md § "CI tiers and the merge queue"). Local implementation work should optimize for fast, relevant signal:
 
 1. **While developing a feature**: run only the tests for that feature or regression (`cargo test test_my_feature`).
 2. **Scope to a single test binary**: prefer `cargo test --test codegen_tests <filter>` over a bare `cargo test <filter>`. A bare filter rebuilds and links all six test binaries every cycle (~2.5s of wasted link time); `--test <binary>` links only the one you need. Most codegen work lives in `codegen_tests`.
@@ -70,7 +70,7 @@ The full test suite is slow because each codegen test spawns `as` + `ld` + runs 
 
 ### Pre-commit verification
 
-Before committing code changes, run the smallest useful focused tests and hygiene checks that cover the implementation. Do not run full local suites by default; CI is responsible for the complete sharded matrix after push/PR.
+Before committing code changes, run the smallest useful focused tests and hygiene checks that cover the implementation. Do not run full local suites by default; CI is responsible for the complete sharded matrix: the PR tier on every push, every target in the merge queue.
 
 ```bash
 cargo build                                    # for code changes that should compile warning-free
@@ -78,7 +78,7 @@ cargo test <feature_or_regression_filter>      # or the narrower --test <binary>
 git diff --check
 ```
 
-For docs-only, workflow-only, or configuration-only changes, replace Rust test runs with the relevant syntax/metadata checks. For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. If the change can affect generated assembly, runtime helpers, ABI behavior, linking, ownership/GC, or target-specific libraries, run focused tests for affected supported targets when local evidence is needed; otherwise rely on CI for sharded Linux x86_64/Linux ARM64/macOS ARM64 executable coverage and the target-specific iOS device/Simulator compile and emitter checks.
+For docs-only, workflow-only, or configuration-only changes, replace Rust test runs with the relevant syntax/metadata checks. For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. If the change can affect generated assembly, runtime helpers, ABI behavior, linking, ownership/GC, or target-specific libraries, run focused tests for affected supported targets when local evidence is needed; otherwise rely on CI for sharded Linux x86_64/Linux ARM64/macOS ARM64 executable coverage and the target-specific iOS device/Simulator compile and emitter checks. For target-sensitive Darwin work, add the `ci:macos` label so the macOS tier runs on the PR before it reaches the merge queue.
 
 ### Test structure
 
@@ -111,6 +111,8 @@ fn test_my_feature() {
 ```
 
 Each test runs in an isolated temp directory. Tests run in parallel — the `compile_and_run` helper handles isolation automatically.
+
+A fixture that contains an `eval()` whose source is known only at runtime (the `$argc > 0 ? '...' : ''` pattern, `eval($code)`) lowers the whole builtin catalog and costs tens of seconds per compile; a literal `eval('...')` costs about as much as the same code inline. When several such fixtures only compare stdout, bundle them with `assert_bundle` / `assert_bundle_with` (`tests/codegen/support/bundle.rs`): the cases compile and run as one program, stdout is split per case, and a failure names the case. Cases share one scope and declaration namespace (unique function/class names, no `declare(strict_types=1)`, no `exit`), so keep a fixture on its own when it needs per-program heap or GC statistics, a non-zero exit, or stderr assertions. Name a bundled test `test_<family>_bundle`: `.config/nextest.toml` gives that suffix a longer timeout budget, because one bundle runs every case it replaced.
 
 ## Architecture
 
@@ -206,7 +208,8 @@ at runtime.
 `curl` is the first ordinary bridge crate that ALSO needs a managed native
 package: `--with-curl` (or ordinary detection
 of a `curl_*` call, via `src/curl_prelude/detect.rs`) force-links `elephc_curl`, and `src/pipeline/backend.rs`
-mirrors that into `NativeRequirement::package("curl")` so the final link also
+mirrors that into `NativeRequirement::package("curl")` (from the
+`BRIDGE_NATIVE_PACKAGES` table in `src/linker/native_packages.rs`) so the final link also
 resolves the managed `curl` package's `libcurl.a`, plus the `openssl`/`zlib`
 archives it declares as dependencies, in the fixed order
 `libcurl.a -> libssl.a -> libcrypto.a -> libz.a`. There is no system fallback:
@@ -227,6 +230,12 @@ for libxml2's encoding handlers through the entry's
 `BridgeStaticlib.apple_libraries`; glibc provides iconv from libc. `libxml2`
 has no catalog dependencies, and a missing package fails closed with the
 `elephc native add libxml2` recovery, never a `-lxml2`.
+
+`gmp`, `fileinfo` (`libmagic`) and `openssl` (`openssl-crypto`) follow the same
+shape. Every bridge-to-package pairing lives only in `BRIDGE_NATIVE_PACKAGES`,
+whose order is the final link order; `--print-capabilities` reports each pairing
+as a `native:<package>` field, and the release probe adds exactly those packages,
+so a new pairing needs no edit in `scripts/verify-release-artifact.sh`.
 
 ### Codegen layout
 
@@ -323,7 +332,7 @@ Key invariants:
   callable, reflection, resource, eval-declaration, or strict signature-subset behavior.
 - Before opening a PR that adds, removes, or changes PHP-visible builtins, run the
   `update-builtin-docs` skill or the equivalent CI sequence:
-  `cargo build --example gen_builtins`,
+  `cargo build --example gen_builtins --features curl`,
   `python3 scripts/docs/extract_builtins.py --render --force`,
   `python3 scripts/docs/audit_builtins.py`, and
   `python3 scripts/docs/elephc_builtins/validate_site_compat.py`, plus
@@ -558,7 +567,7 @@ docs/
 
 ### Astro compatibility
 
-All docs files are Markdown with YAML frontmatter compatible with Astro content collections. Every `.md` file **must** have this frontmatter format:
+All docs files are Markdown with YAML frontmatter compatible with Astro content collections. Every `.md` file **must** have `title` and `description`. Handwritten pages and generated area indexes also require `sidebar.order`, following this format:
 
 ```yaml
 ---
@@ -570,7 +579,7 @@ sidebar:
 ```
 
 - `title` replaces the `# Heading` — do **not** add a top-level `# Title` in the body (Astro renders it from frontmatter)
-- `sidebar.order` controls page ordering within its section
+- `sidebar.order` controls page ordering within its section. Generated per-builtin pages omit it and use the site's alphabetical ordering, so adding a builtin does not renumber unrelated pages.
 - No navigation links (`[← Back]`, `Next:`, etc.) — Astro handles navigation
 - Use standard Markdown (CommonMark). No custom shortcodes or Astro components inside docs
 
@@ -588,17 +597,17 @@ sidebar:
 
 ## Roadmap management
 
-`ROADMAP.md` tracks planned and delivered work, organized by version:
+`ROADMAP.md` tracks planned work, organized by version. Per-version delivered work belongs in `CHANGELOG.md`, not the roadmap.
 
 - Add planned work as `[ ]` under the version where it is expected to ship.
-- When an implementation lands, mark its existing item `[x]`. If it was not planned in the roadmap, add a concise `[x]` item under the version that delivers it.
-- During release preparation, reconcile the current version section with the audited release range and add any missing notable delivered work as `[x]`.
+- When an implementation lands, mark its existing item `[x]`.
+- During release preparation, reconcile the current version section with the audited release range by marking planned items that shipped `[x]`. Do not add a roadmap item for work that was not planned; record that delivery in `CHANGELOG.md`.
 - **Never remove completed items** from a version section. Leave them under the version that delivered them so the roadmap preserves that version's scope.
 - When all items in a version are completed, the version is considered done; do not move items elsewhere.
 
 ## Changelog management
 
-`CHANGELOG.md` is a release artifact, not a development log. It records every released version, newest first, in *Keep a Changelog* style.
+`CHANGELOG.md` is a release artifact, not a development log. It records every released version, newest first, in *Keep a Changelog* style. Per-version delivered work belongs here, including work that was not planned on the roadmap.
 
 - **Do not edit `CHANGELOG.md` during ordinary development.** Feature, fix, refactor, documentation, dependency, and maintenance Pull Requests must not add entries under `[Unreleased]` or a numbered release.
 - Keep `[Unreleased]` empty between releases. Do not accumulate one changelog bullet per Pull Request.
@@ -642,10 +651,11 @@ materializes the bridge `libelephc_*.a` staticlibs that `linker.rs` links into
 compiled programs. Standard build/test/run commands are documented above and in
 `CONTRIBUTING.md`; the notes below are only the non-obvious cloud caveats.
 
-- **Rust toolchain is version-pinned.** CI pins the toolchain in
-  `.github/docker/ci.Dockerfile` (currently `1.95.0`) and the "no warnings" gate
-  greps build output, so use that exact toolchain rather than a floating
-  `stable`. The cloud VM has it installed and set as the rustup default.
+- **Rust toolchain is version-pinned.** CI pins Rust `1.98` in
+  `.github/docker/ci.Dockerfile` (`RUST_VERSION`) and workflow `RUST_TOOLCHAIN`.
+  The "no warnings" gate greps build output, so use that pin rather than a
+  floating `stable`. The cloud VM's rustup default may lag that pin until the
+  environment image is rebuilt.
 - **The compiler shells out to the host `as` + `gcc`/`ld`.** These are present.
   On Linux, compiling a program prints benign linker warnings
   (`gethostbyname` in statically linked apps, missing `.note.GNU-stack`,

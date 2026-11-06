@@ -16,6 +16,34 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Repeated indexed literals retire closure array_map results and their Mixed result boxes.
+#[test]
+fn test_indexed_literal_of_closure_array_map_result_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$total = 0;
+for ($i = 0; $i < 40; $i++) {
+    $outer = [array_map(fn(int $value): int => $value + 1, [$i, $i + 1])];
+    $total += $outer[0][0] + $outer[0][1];
+}
+echo $total, "\n";
+"#);
+    assert_clean(out, "1680\n");
+}
+
+/// Hash insertion and local rebinding balance ownership of mapped array boxes as well.
+#[test]
+fn test_assoc_literal_of_closure_array_map_result_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$total = 0;
+for ($i = 0; $i < 40; $i++) {
+    $outer = ['values' => array_map(fn(int $value): int => $value + 1, [$i, $i + 1])];
+    $total += $outer['values'][0] + $outer['values'][1];
+}
+echo $total, "\n";
+"#);
+    assert_clean(out, "1680\n");
+}
+
 /// Asserts the program printed `expected` and left a clean heap under heap debug.
 fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
     assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);

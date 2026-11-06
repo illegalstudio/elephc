@@ -99,6 +99,7 @@ pub(super) fn validate_property_parent_redeclaration(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    validate_eval_property_override(class, property, context, values)?;
     let Some(parent) = class.parent() else {
         return Ok(());
     };
@@ -113,20 +114,26 @@ pub(super) fn validate_property_parent_redeclaration(
         {
             return Err(EvalStatus::RuntimeFatal);
         }
+        let parent_has_setter = !parent_property.is_virtual()
+            || parent_property.has_set_hook() || parent_property.requires_set_hook();
         if parent_property.is_static() != property.is_static()
-            || (parent_property.is_readonly() && !property.is_readonly())
+            || (parent_property.is_readonly() != property.is_readonly() && !parent_property.is_abstract())
             || property_visibility_rank(property.visibility())
                 < property_visibility_rank(parent_property.visibility())
-            || property_visibility_rank(property.write_visibility())
-                < property_visibility_rank(parent_property.write_visibility())
-            || !property_type_signature_matches(
+            || (parent_has_setter && property_visibility_rank(property.write_visibility())
+                < property_visibility_rank(parent_property.write_visibility()))
+            || !(property_type_signature_matches(
                 property.property_type(),
                 class.name(),
                 parent_property.property_type(),
                 &parent_declaring_class,
                 Some(class),
                 context,
-            )
+            ) || abstract_readonly_storage_type_accepts(
+                class, property, parent_property.property_type(), &parent_declaring_class,
+                parent_property.is_abstract() && parent_property.requires_set_hook()
+                    && !parent_property.requires_get_hook(), context,
+            ))
         {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -164,23 +171,37 @@ pub(super) fn validate_property_aot_parent_redeclaration(
     let parent_is_readonly = flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY != 0;
     let parent_declaring_class =
         eval_aot_property_declaring_class(parent, property.name(), values)?;
+    let parent_has_setter = flags & EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL == 0
+        || context.native_abstract_property_requirements(&parent_declaring_class).iter()
+            .any(|(_, contract)| contract.name() == property.name() && contract.requires_set())
+        || values.reflection_method_flags(
+            &parent_declaring_class, &property_hook_set_method(property.name()),
+        )?.is_some_and(|flags| flags & EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK != 0);
+    let parent_abstract = flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT != 0;
     let parent_property_type = context
         .native_property_type(&parent_declaring_class, property.name())
         .or_else(|| context.native_property_type(parent, property.name()));
+    let setter_only_abstract = parent_abstract
+        && context.native_abstract_property_requirements(&parent_declaring_class).iter()
+            .any(|(_, contract)| contract.name() == property.name()
+                && contract.requires_set() && !contract.requires_get());
     if parent_is_static != property.is_static()
-        || (parent_is_readonly && !property.is_readonly())
+        || (parent_is_readonly != property.is_readonly() && !parent_abstract)
         || property_visibility_rank(property.visibility())
             < property_visibility_rank(parent_visibility)
-        || property_visibility_rank(property.write_visibility())
-            < property_visibility_rank(parent_write_visibility)
-        || !property_type_signature_matches(
+        || (parent_has_setter && property_visibility_rank(property.write_visibility())
+            < property_visibility_rank(parent_write_visibility))
+        || !(property_type_signature_matches(
             property.property_type(),
             class.name(),
             parent_property_type.as_ref(),
             &parent_declaring_class,
             Some(class),
             context,
-        )
+        ) || abstract_readonly_storage_type_accepts(
+            class, property, parent_property_type.as_ref(), &parent_declaring_class,
+            setter_only_abstract, context,
+        ))
     {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -227,7 +248,7 @@ pub(super) fn eval_aot_property_declaring_class(
 pub(super) fn validate_eval_declared_constants(constants: &[EvalClassConstant]) -> Result<(), EvalStatus> {
     let mut names = std::collections::HashSet::new();
     for constant in constants {
-        validate_eval_non_method_attribute_targets(constant.attributes())?;
+        validate_eval_core_attribute_targets(constant.attributes(), 16)?;
         if !names.insert(constant.name().to_string()) {
             return Err(EvalStatus::RuntimeFatal);
         }

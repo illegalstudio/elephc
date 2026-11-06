@@ -15,6 +15,65 @@ use crate::parser::ast::{Program, StmtKind};
 use super::usage::scan_program;
 use super::{prune_unreachable_declarations, PreludeInventory, PruneOptions};
 
+/// Folded class-name strings keep runtime static-callable targets without rooting unrelated classes.
+#[test]
+fn prune_keeps_runtime_static_callable_class_after_class_constant_folding() {
+    let program = crate::optimize::fold_constants(parse(r#"<?php
+class Formatter { public static function join(string $value): string { return $value; } }
+class Unrelated { public static function other(): string { return "unused"; } }
+function choose_name(string $value): string { return $value; }
+$class = choose_name(Formatter::class);
+$method = choose_name("join");
+echo call_user_func([$class, $method], "value");
+"#));
+    let mut check = crate::types::check(&program).expect("folded fixture must type check");
+    let inventory = PreludeInventory::new();
+    let roots = HashSet::new();
+    let program = prune_unreachable_declarations(
+        program,
+        &mut check,
+        PruneOptions {
+            inventory: &inventory,
+            forced_groups: &roots,
+            exported_functions: &roots,
+            eval_forced: false,
+        },
+    );
+    assert!(has_class(&program, "Formatter"));
+    assert!(has_method(&program, "Formatter", "join"));
+    assert!(check.classes["Formatter"].static_methods.contains_key("join"));
+    assert!(!has_class(&program, "Unrelated"));
+    assert!(!check.classes.contains_key("Unrelated"));
+}
+
+/// Ordinary Reflection-looking text adds no discovery hazards or unrelated declaration roots.
+#[test]
+fn prune_ordinary_reflection_strings_keeps_unused_declarations_pruned() {
+    for literal in [r#""reflection""#, r#""Reflection failed""#, r#""App\\ReflectionText""#] {
+        let source = format!("<?php function unused(): int {{ return 1; }} class Unused {{ public function hidden(): int {{ return 2; }} }} echo {literal};");
+        let usage = scan_program(&parse(&source));
+        assert!(!usage.hazards.dynamic_function, "{literal}");
+        assert!(!usage.hazards.dynamic_method, "{literal}");
+        assert!(!usage.hazards.dynamic_class, "{literal}");
+        let (program, check) = prune(&source);
+        assert!(!has_function(&program, "unused"), "{literal}");
+        assert!(!has_class(&program, "Unused"), "{literal}");
+        assert!(!check.functions.contains_key("unused"), "{literal}");
+        assert!(!check.classes.contains_key("Unused"), "{literal}");
+    }
+}
+
+/// A folded Reflection-prefixed class name keeps its exact class edge without discovery.
+#[test]
+fn scan_folded_reflection_class_string_records_only_the_class_edge() {
+    let program = crate::optimize::fold_constants(parse("<?php class ReflectionHelper {} echo ReflectionHelper::class;"));
+    let usage = scan_program(&program);
+    assert!(usage.classes.contains(&php_symbol_key("ReflectionHelper")));
+    assert!(!usage.hazards.dynamic_function);
+    assert!(!usage.hazards.dynamic_method);
+    assert!(!usage.hazards.dynamic_class);
+}
+
 /// Parses one PHP fixture without running resolution or optimization passes.
 fn parse(source: &str) -> Program {
     let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
@@ -339,6 +398,22 @@ fn prune_keeps_extern_class_named_by_ptr_sizeof() {
         .any(|name| php_symbol_key(name) == php_symbol_key("Point")));
 }
 
+/// Verifies an extern class named only through `ptr<T>` types keeps its layout metadata, so a
+/// field access through a pointer an extern function returned can still find the struct.
+#[test]
+fn prune_keeps_extern_class_named_only_by_pointer_types() {
+    let (program, check) = prune(
+        "<?php extern class Rect { public i32 $x; } extern function make(): ptr<Rect>; $r = make(); echo $r->x;",
+    );
+    assert!(program.iter().any(|statement| {
+        matches!(&statement.kind, StmtKind::ExternClassDecl { name, .. } if php_symbol_key(name) == php_symbol_key("Rect"))
+    }));
+    assert!(check
+        .extern_classes
+        .keys()
+        .any(|name| php_symbol_key(name) == php_symbol_key("Rect")));
+}
+
 /// Verifies a literal stream protocol registration retains every runtime-dispatched method.
 #[test]
 fn prune_keeps_registered_stream_wrapper_protocol() {
@@ -375,13 +450,133 @@ fn scan_literal_function_exists_is_a_reference_not_a_hazard() {
     assert!(!usage.hazards.dynamic_function);
 }
 
-/// Verifies eval widens declaration reachability because runtime source can name declarations.
+/// Verifies a runtime-sourced eval widens every hazard because its source can name anything.
 #[test]
-fn scan_eval_is_dynamic_function() {
-    let usage = scan_program(&parse("<?php eval('echo 1;');"));
+fn scan_runtime_eval_is_dynamic_function() {
+    let usage = scan_program(&parse("<?php eval($argv[1]);"));
     assert!(usage.hazards.dynamic_function);
     assert!(usage.hazards.dynamic_method);
     assert!(usage.hazards.dynamic_class);
+    assert!(!usage.hazards.literal_eval);
+}
+
+/// Verifies a literal eval is scanned as the inline code it is: its names are recorded and no
+/// dynamic hazard is raised, while the interpreter marker is set.
+#[test]
+fn scan_literal_eval_records_its_names_without_widening() {
+    let usage = scan_program(&parse(
+        "<?php eval('echo strlen(\"x\"); $o = new ArrayObject([]); echo $o->count();');",
+    ));
+    assert!(!usage.hazards.dynamic_function);
+    assert!(!usage.hazards.dynamic_method);
+    assert!(!usage.hazards.dynamic_class);
+    assert!(usage.hazards.literal_eval);
+    assert!(usage.functions.contains(&php_symbol_key("strlen")));
+    assert!(usage.classes.contains(&php_symbol_key("ArrayObject")));
+    assert!(usage.instantiated_classes.contains(&php_symbol_key("ArrayObject")));
+}
+
+/// Verifies the hazards a literal fragment carries itself still widen: a computed call, a
+/// runtime include, a nested runtime eval, and source that does not parse.
+#[test]
+fn scan_literal_eval_keeps_the_fragments_own_hazards() {
+    for source in [
+        "<?php eval('include \"part.php\";');",
+        "<?php eval('eval($argv[1]);');",
+        "<?php eval('this is not php');",
+        "<?php eval(\"echo $argv[1];\");",
+    ] {
+        let usage = scan_program(&parse(source));
+        assert!(usage.hazards.dynamic_function, "{source}");
+        assert!(usage.hazards.dynamic_method, "{source}");
+        assert!(usage.hazards.dynamic_class, "{source}");
+    }
+    // A computed call inside the fragment widens the function and method hazards like inline
+    // code, and the class hazard on top: the interpreter dispatches `"Hidden::ping"()` to a class
+    // the string alone names. Inline, the same call leaves the class hazard untouched.
+    let usage = scan_program(&parse("<?php eval('$f = \"strlen\"; echo $f(\"x\");');"));
+    assert!(usage.hazards.dynamic_function);
+    assert!(usage.hazards.dynamic_method);
+    assert!(usage.hazards.dynamic_class);
+    let usage = scan_program(&parse("<?php $f = \"strlen\"; echo $f(\"x\");"));
+    assert!(usage.hazards.dynamic_function);
+    assert!(!usage.hazards.dynamic_class);
+}
+
+/// Verifies a runtime-shaped callable inside a literal fragment widens the class hazard too:
+/// the interpreter resolves `Hidden::ping` out of the string, so a class nothing else names
+/// must survive pruning. Inline, the same callable keeps the class hazard untouched.
+#[test]
+fn scan_literal_eval_runtime_callable_widens_the_class_hazard() {
+    for source in [
+        "<?php eval('echo call_user_func($argv[1]);');",
+        "<?php eval('$f = $argv[1]; echo $f();');",
+        "<?php eval('echo ($argv[1])();');",
+        "<?php eval('echo call_user_func_array($argv[1], []);');",
+        "<?php eval('echo is_callable($argv[1]) ? \"yes\" : \"no\";');",
+        "<?php eval('$items = [2, 1]; usort($items, $argv[1]);');",
+        "<?php eval('$c = Closure::fromCallable($argv[1]); echo $c();');",
+        "<?php eval('echo array_map($argv[1], [1])[0];');",
+    ] {
+        let usage = scan_program(&parse(source));
+        assert!(usage.hazards.dynamic_function, "{source}");
+        assert!(usage.hazards.dynamic_method, "{source}");
+        assert!(usage.hazards.dynamic_class, "{source}");
+    }
+    let usage = scan_program(&parse("<?php echo call_user_func($argv[1]);"));
+    assert!(usage.hazards.dynamic_function);
+    assert!(usage.hazards.dynamic_method);
+    assert!(!usage.hazards.dynamic_class);
+}
+
+/// Verifies an array callable whose class the fragment does not spell widens the class hazard
+/// too, while a literal pair keeps narrowing to the class it names.
+#[test]
+fn scan_literal_eval_runtime_array_callable_widens_the_class_hazard() {
+    for source in [
+        "<?php eval('echo call_user_func([$argv[1], $argv[2]]);');",
+        "<?php eval('echo call_user_func([$argc > 0 ? $argv[1] : \"Missing\", \"ping\"]);');",
+        "<?php eval('$items = [2, 1]; usort($items, [$argv[1], \"cmp\"]);');",
+        "<?php eval('$c = Closure::fromCallable([$argv[1], $argv[2]]); echo $c();');",
+    ] {
+        let usage = scan_program(&parse(source));
+        assert!(usage.hazards.dynamic_class, "{source}");
+    }
+    let usage = scan_program(&parse(
+        "<?php eval('echo call_user_func([\"Hidden\", \"ping\"]);');",
+    ));
+    assert!(!usage.hazards.dynamic_class);
+    assert!(usage.classes.contains(&php_symbol_key("Hidden")));
+}
+
+/// Verifies a runtime include EXPRESSION inside a fragment widens every hazard like the include
+/// statement does, and that a function the fragment declares keeps a native declaration of the
+/// same name alive so the interpreter can refuse the duplicate.
+#[test]
+fn scan_literal_eval_include_values_and_declared_functions() {
+    let usage = scan_program(&parse("<?php eval('$result = require \"part.php\";');"));
+    assert!(usage.hazards.dynamic_function);
+    assert!(usage.hazards.dynamic_method);
+    assert!(usage.hazards.dynamic_class);
+    let usage = scan_program(&parse(
+        "<?php function hidden(): int { return 1; } eval('function hidden(): int { return 2; }');",
+    ));
+    assert!(!usage.hazards.dynamic_function);
+    assert!(usage.functions.contains(&php_symbol_key("hidden")));
+    // A parameter attribute on a fragment-declared function names its class, as inline.
+    let usage = scan_program(&parse(
+        "<?php #[Attribute] class OnlyOnParam {} eval('function f(#[OnlyOnParam] int $x): int { return $x; }');",
+    ));
+    assert!(!usage.hazards.dynamic_class);
+    assert!(usage.classes.contains(&php_symbol_key("OnlyOnParam")));
+}
+
+/// Verifies a literal eval nested in a literal eval is scanned through as inline code too.
+#[test]
+fn scan_nested_literal_eval_records_names() {
+    let usage = scan_program(&parse("<?php eval('eval(\\'echo hidden();\\');');"));
+    assert!(!usage.hazards.dynamic_function);
+    assert!(usage.functions.contains(&php_symbol_key("hidden")));
 }
 
 /// Verifies a variable callable can dispatch to either a free function or an object method.
@@ -640,13 +835,55 @@ fn prune_drops_unused_class_keeps_used_class() {
     assert!(!has_class(&program, "Drop"));
 }
 
-/// Verifies eval conservatively retains declarations absent from static edges.
+/// Verifies eval retains the declaration its literal source names although no static edge does.
 #[test]
 fn eval_keeps_otherwise_unused_function() {
     let (program, _) = prune(
         "<?php function hidden(): int { return 1; } eval('echo hidden();');",
     );
     assert!(has_function(&program, "hidden"));
+}
+
+/// Verifies a literal eval no longer keeps every declaration: the ones its source does not name
+/// are pruned, the one it names and the one it declares a subclass of survive.
+#[test]
+fn literal_eval_prunes_declarations_its_source_does_not_name() {
+    let (program, check) = prune(
+        "<?php function hidden(): int { return 1; } function unrelated(): int { return 2; } class Base { public function tag(): string { return 'b'; } } class Unused {} eval('class Child extends Base {} echo hidden(), (new Child())->tag();');",
+    );
+    assert!(has_function(&program, "hidden"));
+    assert!(!has_function(&program, "unrelated"));
+    assert!(has_class(&program, "Base"));
+    assert!(has_method(&program, "Base", "tag"));
+    assert!(!has_class(&program, "Unused"));
+    assert!(!check.functions.contains_key("unrelated"));
+}
+
+/// Verifies a class a literal eval fragment names (here: subclasses) stays whole, with every
+/// method of it and of its parent, because the interpreter resolves inherited members, hooks
+/// and abstract/final checks from runtime metadata rather than from member references.
+#[test]
+fn literal_eval_keeps_named_classes_whole() {
+    let (program, check) = prune(
+        "<?php class Root { public function __construct() {} public function __destruct() {} public function __clone(): void {} public function keep(): int { return 1; } public function other(): int { return 2; } public static ?int $slot = null; } class Mid extends Root { protected function tag(): string { return 'm'; } } class Unused { public function gone(): int { return 3; } } eval('class Leaf extends Mid {} $l = new Leaf(); echo $l->keep();');",
+    );
+    for method in ["__construct", "__destruct", "__clone", "keep", "other"] {
+        assert!(has_method(&program, "Root", method), "{method}");
+    }
+    assert!(has_method(&program, "Mid", "tag"));
+    assert!(!has_class(&program, "Unused"));
+    let root = check.classes.get("Root").expect("Root metadata must survive");
+    assert!(root.methods.contains_key("other"));
+}
+
+/// Verifies a runtime-sourced eval still keeps every declaration.
+#[test]
+fn runtime_eval_keeps_every_declaration() {
+    let (program, _) = prune(
+        "<?php function hidden(): int { return 1; } class Unused {} eval($argv[1]);",
+    );
+    assert!(has_function(&program, "hidden"));
+    assert!(has_class(&program, "Unused"));
 }
 
 /// Verifies a live class drops an unreferenced ordinary method while retaining a called one.
@@ -1134,7 +1371,7 @@ fn prune_keeps_dynamic_call_magic_on_live_class() {
 #[test]
 fn curl_prelude_dispatches_only_user_callables() {
     let program = parse("<?php $ch = curl_init('https://example.com'); echo curl_exec($ch);");
-    let program = crate::autoload::collect_aliases(program);
+    let program = crate::autoload::collect_aliases(program).expect("alias collection failed");
     let mut inventory = PreludeInventory::new();
     let program = crate::curl_prelude::inject_if_used(program, true, &mut inventory);
     let program = crate::name_resolver::resolve(program).expect("fixture must resolve");

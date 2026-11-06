@@ -1015,6 +1015,12 @@ echo "done";
     );
 }
 
+/// Retiring the independently owned setter result does not depend on EIR optimization.
+#[test]
+fn test_regression_untyped_static_setter_object_overwrite_stays_bounded_no_ir_opt() {
+    without_ir_opt(test_regression_untyped_static_setter_object_overwrite_stays_bounded);
+}
+
 /// Regression test: array literals with spread build their result through
 /// `__rt_array_push_refcounted` for refcounted elements. The non-spread element
 /// path retained the element via `retain_borrowed_heap_arg` and again inside the
@@ -4592,4 +4598,26 @@ echo $total, "\n";
         "expected scratch string builtins to release their argument temporaries, got: {}",
         out.stderr
     );
+}
+
+/// Regression: `array_intersect_key()` and `array_diff_key()` of two concrete hashes release
+/// their result. Both build a fresh hash, but sat in the default may-alias ownership bucket, so
+/// the result was never released (four blocks per call) (AIC #227).
+#[test]
+fn test_key_set_results_are_released() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$h = ["p" => 1, "q" => 2, "r" => 3];
+$g = ["q" => 0];
+for ($i = 0; $i < 3; $i++) {
+    foreach (array_intersect_key($h, $g) as $k => $v) { echo $k, $v; }
+    foreach (array_diff_key($h, $g) as $k => $v) { echo $k, $v; }
+    echo ",";
+}
+echo "\n";
+"#,
+    );
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "q2p1r3,q2p1r3,q2p1r3,\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }

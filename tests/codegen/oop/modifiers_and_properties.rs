@@ -9,6 +9,480 @@
 
 use super::*;
 
+/// Exercises the retained abstract setter through native, eval and native-parent eval classes.
+fn check_asymmetric_eighth_review_abstract_setter_storage(native_parent: Option<bool>) {
+    let parent = "abstract class Base { abstract public int $x { get; set; } }";
+    let child = r#"abstract class Child extends Base {
+    public public(set) readonly int $x;
+    public function write(): int { echo "R"; $this->x = 4; return 4; }
+    public function invalid(mixed $value): void {
+        try { $this->x = $value; echo "bad"; } catch (TypeError $error) { echo $error->getMessage(); }
+    }
+    public function probe(): void {
+        echo $this->write(), ":", isset($this->x) ? "isset" : "unset", ":";
+        try { echo $this->x; } catch (Error $error) { echo $error->getMessage(); }
+        echo "|", $this->write(), ":", isset($this->x) ? "isset" : "unset";
+    }
+}
+class Grandchild extends Child {}
+(new Grandchild())->probe();
+echo "|";
+(new Grandchild())->invalid("bad");
+foreach ((new ReflectionProperty(Grandchild::class, "x"))->getHooks() as $name => $hook) {
+    echo "|", $name, ":", $hook->isAbstract() ? "A" : "C", ":", $hook->getDeclaringClass()->getName();
+}"#;
+    let source = match native_parent {
+        None => format!("<?php {parent} {child}"),
+        Some(false) => format!("<?php eval('{parent} {child}');"),
+        Some(true) => format!("<?php {parent} echo (new ReflectionClass(Base::class))->isAbstract() ? '' : 'bad'; eval('{child}');"),
+    };
+    assert_eq!(compile_and_run(&source), "R4:unset:Typed property Child::$x must not be accessed before initialization|R4:unset|Base::$x::set(): Argument #1 ($value) must be of type int, string given|set:A:Base");
+}
+
+/// Native storage retains a no-op abstract setter instead of initializing the readonly slot.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_native() {
+    check_asymmetric_eighth_review_abstract_setter_storage(None);
+}
+
+/// Eval storage preserves the original abstract setter and its reflection owner.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_eval() {
+    check_asymmetric_eighth_review_abstract_setter_storage(Some(false));
+}
+
+/// Native parent metadata keeps an abstract setter when an eval child introduces storage.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_native_parent() {
+    check_asymmetric_eighth_review_abstract_setter_storage(Some(true));
+}
+
+/// Native abstract setter dispatch is independent of EIR optimization.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_native_no_ir_opt() {
+    crate::support::without_ir_opt(|| check_asymmetric_eighth_review_abstract_setter_storage(None));
+}
+
+/// Eval abstract setter dispatch is independent of EIR optimization.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_eval_no_ir_opt() {
+    crate::support::without_ir_opt(|| check_asymmetric_eighth_review_abstract_setter_storage(Some(false)));
+}
+
+/// Native-parent eval abstract setters preserve metadata without EIR optimization.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_native_parent_no_ir_opt() {
+    crate::support::without_ir_opt(|| check_asymmetric_eighth_review_abstract_setter_storage(Some(true)));
+}
+
+/// Named and runtime-name boxed receiver writes retire unused string setter arguments.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_argument_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+abstract class Base { abstract public string $x { set; } }
+abstract class Child extends Base { public public(set) readonly string $x; }
+class Grandchild extends Child {}
+function named(mixed $object, mixed $value): void { $object->x = $value; }
+function dynamic(mixed $object, mixed $value, string $name): void { $object->{$name} = $value; }
+for ($i = 0; $i < 16; $i++) {
+    $object = new Grandchild(); $value = str_repeat('x', 2);
+    named($object, $value); dynamic($object, $value, 'x');
+    echo isset($object->x) ? 'bad' : 'U';
+    unset($object, $value);
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "U".repeat(16), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Abstract setter argument retirement is also balanced without IR optimization.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_argument_owners_no_ir_opt() {
+    crate::support::without_ir_opt(test_asymmetric_eighth_review_abstract_setter_argument_owners);
+}
+
+/// A broader storage type neither broadens the setter nor leaks rejected fresh arguments.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_union_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+abstract class Base { abstract public int $x { set; } }
+abstract class Child extends Base {
+    public public(set) readonly int|string $x;
+    public function probe(): void {
+        try { $this->x = str_repeat('b', 2); echo 'bad'; }
+        catch (TypeError $error) { echo $error->getMessage(), '|'; }
+        $this->x = 4;
+        echo isset($this->x) ? 'bad' : 'U';
+    }
+}
+class Grandchild extends Child {}
+for ($i = 0; $i < 8; $i++) { $object = new Grandchild(); $object->probe(); unset($object); }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Base::$x::set(): Argument #1 ($value) must be of type int, string given|U".repeat(8), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Broader readonly storage keeps balanced setter rejection with IR optimization disabled.
+#[test]
+fn test_asymmetric_eighth_review_abstract_setter_union_owners_no_ir_opt() {
+    crate::support::without_ir_opt(test_asymmetric_eighth_review_abstract_setter_union_owners);
+}
+
+/// An abstract child may add readonly storage while its inherited setter stays abstract.
+#[test]
+fn test_asymmetric_latest_review_abstract_set_readonly_storage() {
+    assert_eq!(compile_and_run(r#"<?php
+abstract class Base { abstract public int $x { get; set; } }
+abstract class Child extends Base { public public(set) readonly int $x; }
+class Grandchild extends Child {}
+echo (new ReflectionClass(Child::class))->isAbstract() ? 'Y' : 'bad';
+echo (new ReflectionClass(Grandchild::class))->isAbstract() ? 'bad' : 'N';
+"#), "YN");
+}
+
+/// Checks the readonly exception against eval or generated abstract getter/setter metadata.
+fn check_asymmetric_latest_review_abstract_set_readonly(native_parent: bool) {
+    let parent = "abstract class Base { abstract public int $x { get; set; } }";
+    let child = r#"abstract class Child extends Base { public public(set) readonly int $x; }
+class Grandchild extends Child {}
+echo (new ReflectionClass(Child::class))->isAbstract() ? "Y" : "bad";
+echo (new ReflectionClass(Grandchild::class))->isAbstract() ? "bad" : "N";"#;
+    let source = if native_parent {
+        format!("<?php {parent} echo (new ReflectionClass(Base::class))->isAbstract() ? '' : 'bad'; eval('{child}');")
+    } else {
+        format!("<?php eval('{parent} {child}');")
+    };
+    assert_eq!(compile_and_run(&source), "YN");
+}
+
+/// Eval-defined abstract getter/setter parents permit readonly storage on an abstract child.
+#[test]
+fn test_asymmetric_latest_review_abstract_set_readonly_eval_parent() {
+    check_asymmetric_latest_review_abstract_set_readonly(false);
+}
+
+/// Native abstract getter/setter metadata grants the same readonly exception to eval.
+#[test]
+fn test_asymmetric_latest_review_abstract_set_readonly_native_parent() {
+    check_asymmetric_latest_review_abstract_set_readonly(true);
+}
+
+/// An abstract readonly child cannot narrow the native abstract parent's public setter.
+#[test]
+fn test_asymmetric_latest_review_native_abstract_setter_narrowing() {
+    let out = compile_and_run_capture(r#"<?php
+abstract class Base { abstract public int $x { get; set; } }
+echo (new ReflectionClass(Base::class))->isAbstract() ? 'before' : 'bad';
+eval('abstract class Child extends Base { public readonly int $x; } echo "bad";');
+"#);
+    assert!(!out.success, "{}", out.stdout);
+    assert_eq!(out.stdout, "before", "{}", out.stderr);
+    assert!(out.stderr.contains("Fatal error: eval() runtime failed"), "{}", out.stderr);
+}
+
+/// Exercises one readonly addition with one compilation per independently scheduled case.
+fn check_asymmetric_fifth_review_eval_readonly_addition(parent: &str, child: &str, native_parent: bool) {
+    let parent = format!("class Base {{ {parent} }}");
+    let source = if native_parent {
+        format!("<?php {parent} $base = new Base(); echo 'before'; eval('class Child extends Base {{ {child} }} echo \"bad\";');")
+    } else {
+        format!("<?php echo 'before'; eval('{parent} class Child extends Base {{ {child} }} echo \"bad\";');")
+    };
+    let out = compile_and_run_capture(&source);
+    assert!(!out.success, "accepted readonly addition: {source}");
+    assert_eq!(out.stdout, "before", "{source}");
+    assert!(out.stderr.contains("Fatal error: eval() runtime failed"), "{}", out.stderr);
+}
+
+/// Public readonly additions fail for eval parents.
+#[test]
+fn test_asymmetric_fifth_review_eval_cannot_add_public_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public readonly int $x;", false);
+}
+
+/// Public readonly additions fail for generated parent metadata.
+#[test]
+fn test_asymmetric_fifth_review_native_cannot_add_public_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public readonly int $x;", true);
+}
+
+/// Protected readonly additions cannot bypass the invariant through matching setter access.
+#[test]
+fn test_asymmetric_fifth_review_eval_cannot_add_protected_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("protected int $x;", "protected readonly int $x;", false);
+}
+
+/// Generated protected parents retain the same readonly invariant in eval.
+#[test]
+fn test_asymmetric_fifth_review_native_cannot_add_protected_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("protected int $x;", "protected readonly int $x;", true);
+}
+
+/// Explicit public(set) does not make a readonly addition legal.
+#[test]
+fn test_asymmetric_fifth_review_eval_cannot_add_public_set_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public public(set) readonly int $x;", false);
+}
+
+/// Explicit public(set) cannot change readonly status inherited from a generated parent.
+#[test]
+fn test_asymmetric_fifth_review_native_cannot_add_public_set_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public public(set) readonly int $x;", true);
+}
+
+/// Constructor promotion obeys the same readonly invariant as declared properties.
+#[test]
+fn test_asymmetric_fifth_review_eval_cannot_add_promoted_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public function __construct(public public(set) readonly int $x) {}", false);
+}
+
+/// Constructor promotion cannot change readonly status inherited from a generated parent.
+#[test]
+fn test_asymmetric_fifth_review_native_cannot_add_promoted_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x;", "public function __construct(public public(set) readonly int $x) {}", true);
+}
+
+/// A concrete virtual getter remains a concrete property for readonly invariance in eval.
+#[test]
+fn test_asymmetric_ci_eval_virtual_getter_cannot_add_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x { get => 1; }", "public readonly int $x;", false);
+}
+
+/// Generated virtual getter metadata does not grant the abstract-property exception.
+#[test]
+fn test_asymmetric_ci_native_virtual_getter_cannot_add_readonly() {
+    check_asymmetric_fifth_review_eval_readonly_addition("public int $x { get => 1; }", "public readonly int $x;", true);
+}
+
+/// Checks declared and promoted readonly implementations of one abstract getter contract.
+fn check_asymmetric_ci_abstract_getter_readonly(native_parent: bool) {
+    let parent = "abstract class Base { abstract public int $value { get; } }";
+    let child = r#"class Child extends Base {
+    public readonly int $value;
+    public function __construct(int $value) { $this->value = $value; }
+}
+class Promoted extends Base { public function __construct(public readonly int $value) {} }
+echo (new Child(42))->value, ":", (new Promoted(7))->value;"#;
+    let source = if native_parent {
+        format!("<?php {parent} echo (new ReflectionClass(Base::class))->isAbstract() ? '' : 'bad'; eval('{child}');")
+    } else {
+        format!("<?php eval('{parent} {child}');")
+    };
+    assert_eq!(compile_and_run(&source), "42:7");
+}
+
+/// Eval-defined abstract getter contracts accept readonly backed implementations.
+#[test]
+fn test_asymmetric_ci_abstract_getter_readonly_eval_parent() {
+    check_asymmetric_ci_abstract_getter_readonly(false);
+}
+
+/// Generated abstract getter contracts accept readonly eval implementations.
+#[test]
+fn test_asymmetric_ci_abstract_getter_readonly_native_parent() {
+    check_asymmetric_ci_abstract_getter_readonly(true);
+}
+
+/// Private-set readonly clone refusals omit the readonly word and retain the source value.
+#[test]
+fn test_asymmetric_second_review_private_readonly_clone_message() {
+    for eval in [false, true] {
+        let body = r#"class V {
+    public private(set) readonly int $ro;
+    public function __construct() { $this->ro = 1; }
+}
+$source = new V();
+try { clone($source, ["ro" => 9]); }
+catch (Error $error) { echo $error->getMessage(), "|", $source->ro; }
+unset($source);"#;
+        let source = if eval { format!("<?php eval('{body}');") }
+            else { format!("<?php {body}") };
+        let out = compile_and_run_with_heap_debug(&source);
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, "Cannot modify private(set) property V::$ro from global scope|1");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    }
+}
+
+/// Legal eval child readonly redeclarations keep initialization and empty slots distinct.
+#[test]
+fn test_asymmetric_followup_eval_redeclared_readonly_initialization() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('class ParentBox { public public(set) readonly int $id; }
+class ChildBox extends ParentBox {
+    public public(set) readonly int $id;
+    public function __construct() { $this->id = 7; }
+}
+class UninitializedBox extends ParentBox { public public(set) readonly int $id; }
+$box = new ChildBox();
+$empty = new UninitializedBox();
+echo $box->id, ":", isset($empty->id) ? "bad" : "empty";
+unset($empty, $box);');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "7:empty");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Eval reports initialized readonly modification before its implicit protected setter.
+#[test]
+fn test_asymmetric_followup_eval_readonly_error_precedence() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('class EvalBox {
+    public readonly int $id;
+    public function __construct() { $this->id = 1; }
+}
+$box = new EvalBox();
+try { $box->id = 2; echo "bad"; }
+catch (Error $error) { echo $error->getMessage(), ":", $box->id; }');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Cannot modify readonly property EvalBox::$id:1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A failed global clone override cannot bypass readonly set access or corrupt its source.
+#[test]
+fn test_asymmetric_review_eval_clone_readonly_set_access() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('class EvalCloneRestrictedReadonly {
+    public readonly int $id;
+    public function __construct() { $this->id = 1; }
+}
+$source = new EvalCloneRestrictedReadonly();
+try { clone($source, ["id" => 3]); echo "bad"; }
+catch (Error $error) { echo "blocked:", $source->id; }');
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "blocked:1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Private(set) contributes implicit finality only when it restricts a wider read visibility.
+#[test]
+fn test_asymmetric_review_private_setter_reflection_finality() {
+    let out = compile_and_run(r#"<?php
+class NativePrivateSetter {
+    public private(set) int $public = 1;
+    protected private(set) int $protected = 2;
+    private private(set) int $private = 3;
+    public function __construct(public private(set) int $promoted = 4) {}
+}
+echo (new ReflectionProperty(NativePrivateSetter::class, 'public'))->isFinal() ? '1' : '0';
+echo (new ReflectionProperty(NativePrivateSetter::class, 'protected'))->isFinal() ? '1' : '0';
+echo (new ReflectionProperty(NativePrivateSetter::class, 'private'))->isFinal() ? '1' : '0';
+echo (new ReflectionProperty(NativePrivateSetter::class, 'promoted'))->isFinal() ? '1' : '0';
+eval('class EvalPrivateSetter {
+    public private(set) int $public = 1;
+    protected private(set) int $protected = 2;
+    private private(set) int $private = 3;
+    public function __construct(public private(set) int $promoted = 4) {}
+}
+foreach (["public", "protected", "private", "promoted"] as $name) {
+    $property = new ReflectionProperty("EvalPrivateSetter", $name);
+    echo $property->isFinal() ? "1" : "0";
+}');
+"#);
+    assert_eq!(out, "11011101");
+}
+
+/// An eval child may add a restricted setter to a generated getter-only virtual property.
+#[test]
+fn test_asymmetric_review_eval_child_of_native_virtual_getter() {
+    let out = compile_and_run(r#"<?php
+class NativeGetterOnly { public int $x { get => 1; } }
+$base = new NativeGetterOnly();
+echo $base->x, ':';
+eval('class EvalWritableChild extends NativeGetterOnly {
+    public protected(set) int $x { get => 2; set { } }
+}
+echo (new EvalWritableChild())->x;');
+"#);
+    assert_eq!(out, "1:2");
+}
+
+/// Skipping ordinary accessor-method variance does not bypass the native property's type contract.
+#[test]
+fn test_asymmetric_review_eval_child_rejects_changed_native_virtual_type() {
+    let error = compile_and_run_expect_failure(r#"<?php
+class NativeTypedGetter { public int $x { get => 1; } }
+$base = new NativeTypedGetter();
+echo $base->x;
+eval('class EvalWrongGetter extends NativeTypedGetter {
+    public protected(set) string $x { get => "bad"; set { } }
+}');
+"#);
+    assert!(error.contains("Fatal error: eval() runtime failed"), "{error}");
+}
+
+/// A restricted physical child slot satisfies a virtual abstract getter without a setter contract.
+#[test]
+fn test_asymmetric_review_abstract_getter_normal_storage() {
+    let out = compile_and_run(r#"<?php
+abstract class AbstractGetter { abstract public int $x { get; } }
+class ConcreteStorage extends AbstractGetter { public protected(set) int $x = 2; }
+echo (new ConcreteStorage())->x;
+"#);
+    assert_eq!(out, "2");
+}
+
+/// Explicit public(set) overrides readonly's implicit protected write visibility in reflection.
+#[test]
+fn test_asymmetric_property_readonly_explicit_public_set_reflection() {
+    let out = compile_and_run(r#"<?php
+class NativeSet {
+    public public(set) readonly int $explicit;
+    public readonly int $implicit;
+}
+$explicit = new ReflectionProperty(NativeSet::class, 'explicit');
+$implicit = new ReflectionProperty(NativeSet::class, 'implicit');
+echo $explicit->isProtectedSet() ? 'protected' : 'public', ':', $explicit->getModifiers(), "\n";
+echo $implicit->isProtectedSet() ? 'protected' : 'public', ':', $implicit->getModifiers(), "\n";
+eval('class EvalSet { public public(set) readonly int $explicit; public readonly int $implicit; }
+$explicit = new ReflectionProperty("EvalSet", "explicit");
+$implicit = new ReflectionProperty("EvalSet", "implicit");
+echo $explicit->isProtectedSet() ? "protected" : "public", ":", $explicit->getModifiers(), "\n";
+echo $implicit->isProtectedSet() ? "protected" : "public", ":", $implicit->getModifiers(), "\n";');
+"#);
+    assert_eq!(out, "public:129\nprotected:2177\npublic:129\nprotected:2177\n");
+}
+
+/// Eval reflection of native readonly slots obeys authoritative exported setter flags.
+#[test]
+fn test_asymmetric_review_eval_native_public_set_readonly_metadata() {
+    let out = compile_and_run(r#"<?php
+class NativeSet {
+    public public(set) readonly int $explicit;
+    public readonly int $implicit;
+}
+eval('$explicit = new ReflectionProperty("NativeSet", "explicit");
+$implicit = new ReflectionProperty("NativeSet", "implicit");
+echo $explicit->getModifiers(), ":", ($explicit->isProtectedSet() ? "1" : "0"), ":";
+echo $implicit->getModifiers(), ":", ($implicit->isProtectedSet() ? "1" : "0");');
+"#);
+    assert_eq!(out, "129:0:2177:1");
+}
+
+/// Native property filters distinguish explicit public(set) from implicit readonly setters.
+#[test]
+fn test_asymmetric_review_protected_set_filter_matches_modifiers() {
+    let out = compile_and_run(r#"<?php
+class NativeSet {
+    public public(set) readonly int $explicit;
+    public readonly int $implicit;
+}
+$class = new ReflectionClass(NativeSet::class);
+$properties = $class->getProperties(ReflectionProperty::IS_PROTECTED_SET);
+echo count($properties), ":";
+foreach ($properties as $property) {
+    echo $property->getName(), ":", ($property->getModifiers() & ReflectionProperty::IS_PROTECTED_SET);
+}
+"#);
+    assert_eq!(out, "1:implicit:2048");
+}
+
 /// Verifies that a `readonly` class permits property initialization inside its constructor.
 /// The property is assigned in `__construct` and read back via `$user->id`.
 #[test]

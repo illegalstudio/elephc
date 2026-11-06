@@ -1,8 +1,6 @@
 ---
 title: "xmlwriter_start_pi() - internals"
 description: "Compiler internals for xmlwriter_start_pi(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1053
 ---
 
 ## `xmlwriter_start_pi()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1170](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1170) (`xmlwriter_start_pi`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs) (`xmlwriter_start_pi`)
 - **Function symbol**: `xmlwriter_start_pi()`
 
 

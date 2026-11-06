@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Elephc benchmark history</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui,sans-serif; background:#0b1220; color:#eef3fa }
+  body { max-width:1100px; margin:auto; padding:32px }
+  h1 { margin-bottom:8px } p { color:#a8b7cb; line-height:1.6 }
+  label { display:inline-flex; align-items:center; gap:8px; margin:12px 16px 16px 0 }
+  select { font:inherit; background:#131d2d; color:inherit; border:1px solid #344158; border-radius:6px; padding:8px }
+  article { background:#131d2d; border:1px solid #344158; border-radius:12px; padding:20px; margin:16px 0 }
+  h2 { font-size:18px; margin:0 0 12px } svg { width:100%; height:auto }
+  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums }
+  th,td { text-align:left; border-bottom:1px solid #344158; padding:8px }
+  a { color:#87b9ee } .legend { display:flex; flex-wrap:wrap; gap:16px; font-size:13px; margin:8px 0 }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px }
+</style>
+<h1>Elephc benchmark history</h1>
+<p>Process execution medians from CI. Compilation and linking are excluded. Lower is better.
+  Shared runners have timing noise; legacy environment metadata is unknown. Lines break when the environment or fixture changes.</p>
+<label>Suite <select id="suite"></select></label>
+<label>Window <select id="window"><option value="90">90 days</option><option value="30">30 days</option><option value="0">All history</option></select></label>
+<label>Metric <select id="metric"><option value="time">Execution time (ms)</option><option value="ratio">Relative to baseline</option></select></label>
+<p id="status"></p><main id="charts"></main>
+<script>
+const histories = __DATA__;
+const colors = ['#ff9768','#47c9b9','#bb9df4','#87b9ee'];
+const byId = id => document.getElementById(id);
+const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+for (const suite of Object.keys(histories)) {
+  const option = document.createElement('option'); option.value = option.textContent = suite; byId('suite').append(option);
+}
+function epoch(record, item) {
+  return JSON.stringify([record.environment, item.fixture_sha256]);
+}
+function median(result) {
+  return result?.median_ms ?? result?.reference?.median_ms;
+}
+function value(item, variant, ratio, suite) {
+  const n = median(item.variants[variant]);
+  if (n == null || !ratio) return n;
+  const baseline = suite === 'native' ? 'c' : suite === 'magician' ? 'elephc-native' : 'buffer';
+  const d = median(item.variants[baseline]);
+  return d ? n / d : null;
+}
+function draw() {
+  const suite = byId('suite').value, history = histories[suite], days = +byId('window').value;
+  const ratio = byId('metric').value === 'ratio';
+  if (!history.series.length) {
+    byId('status').textContent = 'No CI samples yet. The next successful main benchmark run will populate this suite.';
+    byId('charts').replaceChildren(); return;
+  }
+  const latest = history.series.at(-1), cutoff = Date.parse(latest.timestamp) - days * 86400000;
+  const records = history.series.filter(r => !days || Date.parse(r.timestamp) >= cutoff);
+  byId('status').textContent = `${history.points} saved samples on ${history.branch}; latest ${latest.date}. Showing ${records.length} samples.`;
+  const names = [...new Set(records.flatMap(r => r.cases.map(c => c.case)))].sort();
+  const lo = Date.parse(records[0].timestamp), hi = Date.parse(records.at(-1).timestamp);
+  byId('charts').innerHTML = names.map(name => {
+    const available = records.filter(r => r.cases.some(c => c.case === name));
+    const lastRecord = available.at(-1), last = lastRecord.cases.find(c => c.case === name);
+    const variants = Object.keys(last.variants);
+    const maximum = Math.max(1, ...available.flatMap(r => {
+      const item = r.cases.find(c => c.case === name);
+      return variants.map(v => value(item, v, ratio, suite) ?? 0);
+    }));
+    const x = r => 65 + (Date.parse(r.timestamp) - lo) / Math.max(hi - lo, 1) * 890;
+    const y = n => 235 - n / maximum * 190;
+    let paths = '';
+    variants.forEach((v,i) => {
+      let previous = null, points = [], estimated = false;
+      const flush = () => {
+        if (points.length) paths += `<polyline points="${points.join(' ')}" fill="none" stroke="${colors[i % colors.length]}" stroke-width="2"${estimated ? ' stroke-dasharray="6 4"' : ''}/>`;
+        points = [];
+      };
+      for (const record of records) {
+        const item = record.cases.find(c => c.case === name), n = item ? value(item,v,ratio,suite) : null;
+        const reference = item?.variants[v]?.reference;
+        const key = item ? epoch(record,item) + (reference ? reference.commit : 'measured') : null;
+        if (n == null || key !== previous) flush();
+        previous = key;
+        estimated = Boolean(reference);
+        if (n != null) {
+          points.push(`${x(record).toFixed(2)},${y(n).toFixed(2)}`);
+          const origin = reference ? `PHP reference ${reference.timestamp} | ${reference.environment.php} | ${reference.environment.runner} | ${reference.commit}` : record.commit;
+          const tooltip = `${record.date} | ${v}: ${n.toFixed(3)}${ratio ? 'x' : ' ms'} | ${origin} | ${record.environment.runner}`;
+          paths += `<circle cx="${x(record)}" cy="${y(n)}" r="3" fill="${colors[i % colors.length]}"><title>${esc(tooltip)}</title></circle>`;
+        }
+      }
+      flush();
+    });
+    const rows = variants.map(v => {
+      const result = last.variants[v], relative = value(last,v,true,suite);
+      const timing = median(result);
+      const display = timing == null ? 'n/a' : (result.reference ? '~ ' : '') + timing.toFixed(3) + ' ms';
+      return `<tr><td>${esc(v)}</td><td>${display}</td><td>${relative == null ? 'Unavailable' : relative.toFixed(2) + 'x'}</td></tr>`;
+    }).join('');
+    const legend = variants.map((v,i) => `<span><span class="dot" style="background:${colors[i % colors.length]}"></span>${esc(v)}</span>`).join('');
+    return `<article><h2>${esc(name)}</h2><div class="legend">${legend}</div>
+      <svg viewBox="0 0 1000 275" role="img" aria-label="${esc(name)} execution trend">
+      <path d="M65 35 V235 H955" fill="none" stroke="#53647a"/>
+      <g fill="#a8b7cb" font-size="12"><text x="8" y="45">${maximum.toFixed(1)}${ratio ? 'x' : ' ms'}</text>
+      <text x="40" y="239">0</text><text x="65" y="260">${records[0].date}</text><text x="875" y="260">${records.at(-1).date}</text></g>${paths}</svg>
+      <table><thead><tr><th>Variant</th><th>Latest median</th><th>Relative to ${suite === 'native' ? 'C' : suite === 'magician' ? 'elephc-native' : 'buffer'}</th></tr></thead><tbody>${rows}</tbody></table>
+      <p>Latest case sample: ${lastRecord.date}, commit ${esc(lastRecord.commit.slice(0,8))}.
+      <a href="https://github.com/illegalstudio/elephc/actions/runs/${lastRecord.run_id}">Source CI run</a></p></article>`;
+  }).join('');
+}
+for (const id of ['suite','window','metric']) byId(id).addEventListener('change', draw);
+draw();
+</script>
+</html>

@@ -174,9 +174,10 @@ cargo test -p elephc-mbstring
 
 - `capture_operations.php` records PHP cases that terminate its oracle worker in
   `operations-excluded.json`. `capture_parse_str_reentry.php` also retains two
-  exclusions in `parse_str_reentry_excluded.json`; on PHP 8.5.10 both workers
-  exhaust memory while serializing the final trace. Neither ledger is a
-  successful compatibility comparison.
+  exclusions in `parse_str_reentry_excluded.json`. Why those two PHP 8.5.10
+  workers failed is not known: one record kept no exit status, and the other
+  exited with status 255 without writing to stdout or stderr. Neither ledger is
+  a successful compatibility comparison.
 - `mb_send_mail` passes the configured transport and extra parameters as direct
   process arguments. Shell quoting and metacharacters in those parameters do not
   have PHP `php_mail` semantics (`crates/elephc-mbstring/src/abi/mail.rs`).

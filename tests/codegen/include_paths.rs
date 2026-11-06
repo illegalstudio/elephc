@@ -474,3 +474,125 @@ fn test_included_line_diagnostic_past_16_bit_columns_reports_the_real_column() {
         "the diagnostic must name column 70006: {stderr}"
     );
 }
+
+/// A checker error inside an included file names that file (issue #1445).
+///
+/// The checker reports only a span, and `error[3:12]` alone read as a position in the entry
+/// file. The span's source identity now resolves to the included file's path.
+#[test]
+fn test_checker_error_in_an_included_file_names_the_file() {
+    let dir = make_cli_test_dir("elephc_included_file_diagnostic");
+    fs::write(
+        dir.join("lib.php"),
+        "<?php\nfunction lib_run(): int {\n    return undefined_lib_fn();\n}\n",
+    )
+    .expect("failed to write the included file");
+    fs::write(dir.join("main.php"), "<?php\nrequire __DIR__ . '/lib.php';\necho lib_run();\n")
+        .expect("failed to write the including file");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--check")
+        .arg("main.php")
+        .output()
+        .expect("failed to run elephc");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let _ = fs::remove_dir_all(&dir);
+    assert!(!output.status.success(), "the undefined call must be refused: {stderr}");
+    assert!(
+        stderr.contains("lib.php:3:12]: Undefined function: undefined_lib_fn"),
+        "the diagnostic must name the included file: {stderr}"
+    );
+}
+
+/// A lowering refusal inside an included file names that file, not the entry file (#1445).
+///
+/// The pipeline tags every lowering refusal with the entry filename, which printed the included
+/// file's line and column as `error[main.php:6:5]`. `--emit-ir` lowers the program without
+/// assembling it, which is enough to reach the refusal.
+#[test]
+fn test_lowering_error_in_an_included_file_names_the_file() {
+    let dir = make_cli_test_dir("elephc_included_file_lowering_diagnostic");
+    fs::write(
+        dir.join("lib.php"),
+        "<?php\nclass ValueOnlyHolder { public array $items = [1]; }\nfunction valueOnlySource(ValueOnlyHolder $holder): array { return $holder->items; }\nfunction bindValueOnly(): void {\n    $holder = new ValueOnlyHolder();\n    $alias = &valueOnlySource($holder);\n    echo count($alias);\n}\n",
+    )
+    .expect("failed to write the included file");
+    fs::write(dir.join("main.php"), "<?php\nrequire __DIR__ . '/lib.php';\nbindValueOnly();\n")
+        .expect("failed to write the including file");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-ir")
+        .arg("main.php")
+        .output()
+        .expect("failed to run elephc");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let _ = fs::remove_dir_all(&dir);
+    assert!(!output.status.success(), "the reference assignment must be refused: {stderr}");
+    assert!(
+        stderr.contains("lib.php:6:5]: Unsupported reference assignment"),
+        "the refusal must name the included file: {stderr}"
+    );
+    assert!(!stderr.contains("main.php:6:5]"), "the refusal must not name the entry file: {stderr}");
+}
+
+/// Verifies an anonymous class declared in an included file. The resolver parses the file once to
+/// discover its declarations and again to inline its body; both parses must give the class one
+/// name, or the `new` in the inlined body refers to a class discovery never declared.
+#[test]
+fn test_anonymous_class_in_included_file() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire __DIR__ . '/lib/sink.php';\n$sink->write('main');\n",
+            ),
+            (
+                "lib/sink.php",
+                "<?php\ninterface Sink { public function write(string $s): void; }\n$sink = new class () implements Sink { public function write(string $s): void { echo '[', $s, ']'; } };\n$sink->write('included');\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "[included][main]");
+}
+
+/// Verifies a file with an anonymous class required twice: each require runs the body and
+/// constructs an object, where the two parses' identical declarations collided as duplicates.
+#[test]
+fn test_anonymous_class_in_file_required_twice() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\n$objects = [];\nrequire __DIR__ . '/lib/make.php';\nrequire __DIR__ . '/lib/make.php';\necho count($objects), ':', $objects[0]->n() + $objects[1]->n();\n",
+            ),
+            (
+                "lib/make.php",
+                "<?php\n$objects[] = new class () { public function n(): int { return 7; } };\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "2:14");
+}
+
+/// Verifies an anonymous class in a file required under two spellings of its path. Discovery
+/// merges the two by canonical path, so both must name the class alike, or the branch that
+/// spells the path differently constructs a class that was never declared.
+#[test]
+fn test_anonymous_class_in_file_required_under_two_path_spellings() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nif ($argc > 1) {\n    require __DIR__ . '/lib/sink.php';\n} else {\n    require __DIR__ . '/lib/../lib/sink.php';\n}\n$sink->write('main');\n",
+            ),
+            (
+                "lib/sink.php",
+                "<?php\n$sink = new class () { public function write(string $s): void { echo '[', $s, ']'; } };\n$sink->write('included');\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "[included][main]");
+}

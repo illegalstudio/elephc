@@ -16,11 +16,12 @@ use crate::codegen_support::platform::Arch;
 ///
 /// Dispatches on the unboxed runtime tag to apply PHP scalar truthiness rules:
 /// integers (zero/nonzero), strings (empty/"0"/non-empty), floats (zero/nonzero),
-/// bools (direct), indexed/associative arrays (empty/non-empty), resources (always true),
-/// and null/unsupported (falsy). Calls `__rt_mixed_unbox` to拆box the input pointer.
+/// bools (direct), indexed/associative arrays (empty/non-empty), and objects,
+/// resources, and closure descriptors (always true). Null/unsupported tags are falsy.
+/// Calls `__rt_mixed_unbox` to unbox the input pointer without changing ownership.
 ///
-/// ABI: ARM64 — input boxed mixed pointer in `x0`, result boolean in `x0`.
-/// ABI: x86_64 — input boxed mixed pointer in `rax`, result boolean in `rax`. The input
+/// ABI: ARM64, input boxed mixed pointer in `x0`, result boolean in `x0`.
+/// ABI: x86_64, input boxed mixed pointer in `rax`, result boolean in `rax`. The input
 /// register is `rax` and not the SysV first argument register because the boxed cell is
 /// forwarded untouched to `__rt_mixed_unbox`, which reads it from `rax`.
 pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
@@ -53,6 +54,8 @@ pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_cast_bool_from_resource");             // objects are always truthy in PHP (reuse the always-true path)
     emitter.instruction("cmp x0, #9");                                          // does the mixed payload hold a resource?
     emitter.instruction("b.eq __rt_mixed_cast_bool_from_resource");             // resources are always truthy
+    emitter.instruction("cmp x0, #10");                                         // does the mixed payload hold a closure descriptor?
+    emitter.instruction("b.eq __rt_mixed_cast_bool_from_resource");             // closures are always truthy PHP objects
     emitter.instruction("mov x0, #0");                                          // null and unsupported payloads are falsy for now
     emitter.instruction("b __rt_mixed_cast_bool_done");                         // return the normalized boolean result
 
@@ -136,6 +139,8 @@ fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_cast_bool_from_resource_linux_x86_64");  // objects are always truthy in PHP (reuse the always-true path)
     emitter.instruction("cmp rax, 9");                                          // does the mixed payload hold a resource?
     emitter.instruction("je __rt_mixed_cast_bool_from_resource_linux_x86_64");  // resources are always truthy
+    emitter.instruction("cmp rax, 10");                                         // does the mixed payload hold a closure descriptor?
+    emitter.instruction("je __rt_mixed_cast_bool_from_resource_linux_x86_64");  // closures are always truthy PHP objects
     emitter.instruction("mov rax, 0");                                          // null and unsupported payloads are falsy for now
     emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the normalized boolean result
 
@@ -197,4 +202,32 @@ fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release the aligned temporary slot reserved for nested helper calls
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return the boolean cast result in rax
+}
+
+#[cfg(test)]
+mod tests {
+    //! Pins callable-tag truthiness dispatch on every supported assembly target.
+
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Boxed closure descriptors share the always-true object/resource branch on all targets.
+    #[test]
+    fn mixed_callable_truthiness_covers_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_mixed_cast_bool(&mut emitter);
+            let asm = emitter.output();
+            let instructions: Vec<_> = asm.lines()
+                .map(|line| line.split("//").next().unwrap().trim())
+                .collect();
+            let dispatch = if target.arch == Arch::X86_64 {
+                ["cmp rax, 10", "je __rt_mixed_cast_bool_from_resource_linux_x86_64"]
+            } else {
+                ["cmp x0, #10", "b.eq __rt_mixed_cast_bool_from_resource"]
+            };
+            assert!(instructions.windows(2).any(|pair| pair == dispatch), "{name}: {asm}");
+        }
+    }
 }

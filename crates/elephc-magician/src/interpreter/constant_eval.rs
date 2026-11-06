@@ -82,6 +82,7 @@ pub(in crate::interpreter) fn eval_native_global_constant(
         EvalNativeGlobalConstant::Int(value) => values.int(*value),
         EvalNativeGlobalConstant::Float(value) => values.float(*value),
         EvalNativeGlobalConstant::String(value) => values.string(value),
+        EvalNativeGlobalConstant::Bytes(value) => values.string_bytes_value(value),
         EvalNativeGlobalConstant::Resource(value) => values.resource(*value),
     }
 }
@@ -117,11 +118,13 @@ fn eval_native_user_constant_element<V: RuntimeValueOps>(
     values: &mut V,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match value {
+        NativeCallableDefault::ExecutablePath => Err(EvalStatus::RuntimeFatal),
         NativeCallableDefault::Null => values.null(),
         NativeCallableDefault::Bool(value) => values.bool_value(*value),
         NativeCallableDefault::Int(value) => values.int(*value),
         NativeCallableDefault::Float(value) => values.float(*value),
         NativeCallableDefault::String(value) => values.string(value),
+        NativeCallableDefault::Bytes(value) => values.string_bytes_value(value),
         NativeCallableDefault::EmptyArray => values.array_new(0),
         NativeCallableDefault::Array(elements) => {
             materialize_native_callable_array_default_elements(
@@ -130,7 +133,8 @@ fn eval_native_user_constant_element<V: RuntimeValueOps>(
                 eval_native_user_constant_element::<V>,
             )
         }
-        NativeCallableDefault::Object { .. } => Err(EvalStatus::RuntimeFatal),
+        NativeCallableDefault::Object { .. } | NativeCallableDefault::DeferredError(_)
+        | NativeCallableDefault::Expression { .. } => Err(EvalStatus::RuntimeFatal),
     }
 }
 
@@ -143,6 +147,8 @@ pub(in crate::interpreter) fn eval_predefined_constant(
         return Ok(None);
     };
     match value {
+        EvalPredefinedConstant::Null => values.null().map(Some),
+        EvalPredefinedConstant::Bool(value) => values.bool_value(value).map(Some),
         EvalPredefinedConstant::Int(value) => values.int(value).map(Some),
         EvalPredefinedConstant::Float(value) => values.float(value).map(Some),
         EvalPredefinedConstant::String(value) => values.string(value).map(Some),
@@ -171,9 +177,10 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         ConstValue::Int(value) => Some(EvalPredefinedConstant::Int(value)),
         ConstValue::Float(value) => Some(EvalPredefinedConstant::Float(value)),
         ConstValue::Str(value) => Some(EvalPredefinedConstant::String(value)),
-        // Booleans, null, and stream resources have no predefined-constant representation
-        // here; the catalog's eval route already reports them unsupported.
-        ConstValue::Bool(_) | ConstValue::Null | ConstValue::StreamResource(_) => None,
+        ConstValue::Bool(value) => Some(EvalPredefinedConstant::Bool(value)),
+        ConstValue::Null => Some(EvalPredefinedConstant::Null),
+        // Standalone eval has no stream-resource provider; native programs register theirs.
+        ConstValue::StreamResource(_) => None,
         // A target-dependent name without an arm above is a catalog/interpreter mismatch,
         // which `every_catalogued_constant_has_its_declared_eval_route` reports.
         ConstValue::TargetDependent(_) => None,
@@ -183,8 +190,22 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
 /// Values the catalog marks `TargetDependent`: Magician computes them for the target it is
 /// linked into and the PHP profile it emulates, under the catalogued name.
 fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> {
-    let is_macos = cfg!(target_os = "macos");
+    let is_macos = cfg!(target_vendor = "apple");
+    if let Some(value) = elephc_builtin_contract::core_environment_constant(name, is_macos) {
+        return Some(match value {
+            ConstValue::Str(value) => EvalPredefinedConstant::String(value),
+            ConstValue::Int(value) => EvalPredefinedConstant::Int(value),
+            ConstValue::Bool(value) => EvalPredefinedConstant::Bool(value),
+            _ => unreachable!("Core environment metadata contains only strings, integers, and booleans"),
+        });
+    }
     Some(match name {
+        "PHP_BINARY" => {
+            static BINARY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+            EvalPredefinedConstant::String(BINARY.get_or_init(|| {
+                std::env::current_exe().map(|path| path.to_string_lossy().into_owned()).unwrap_or_default()
+            }))
+        }
         "ICONV_IMPL" => EvalPredefinedConstant::String(elephc_iconv::implementation_name(is_macos)),
         "ICONV_VERSION" => EvalPredefinedConstant::String(elephc_iconv::ICONV_VERSION),
         "PHP_OS" => EvalPredefinedConstant::String(eval_php_os_name()),
@@ -211,6 +232,7 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
     })
 }
 
+/// Returns the PHP_OS spelling for the host platform running the eval interpreter.
 fn eval_php_os_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "Darwin"
@@ -238,21 +260,21 @@ pub(super) fn eval_magic_const(
         EvalMagicConst::File => values.string(&context.eval_file_magic()),
         EvalMagicConst::Dir => values.string(context.call_dir()),
         EvalMagicConst::Line(line) => values.int(*line),
-        EvalMagicConst::Function => values.string(
+        EvalMagicConst::Function => values.string(&generic_source_symbol(
             context
                 .current_magic_function()
                 .or_else(|| context.current_function())
                 .unwrap_or(""),
-        ),
-        EvalMagicConst::Method => values.string(
+        )),
+        EvalMagicConst::Method => values.string(&generic_source_symbol(
             context
                 .current_magic_method()
                 .or_else(|| context.current_function())
                 .unwrap_or(""),
-        ),
-        EvalMagicConst::Class => values.string(context.current_magic_class().unwrap_or("")),
+        )),
+        EvalMagicConst::Class => values.string(&generic_source_symbol(context.current_magic_class().unwrap_or(""))),
         EvalMagicConst::Namespace => values.string(""),
-        EvalMagicConst::Trait => values.string(context.current_magic_trait().unwrap_or("")),
+        EvalMagicConst::Trait => values.string(&generic_source_symbol(context.current_magic_trait().unwrap_or(""))),
     }
 }
 
@@ -324,4 +346,16 @@ mod curl_constant_fallback_tests {
             Some(EvalPredefinedConstant::Int(i64::MAX))
         ));
     }
+}
+
+/// Removes specialization arguments from PHP magic constants while preserving namespace spelling.
+fn generic_source_symbol(name: &str) -> String {
+    let mut depth = 0usize;
+    name.chars().filter(|ch| {
+        match ch {
+            '<' => { depth += 1; false }
+            '>' if depth > 0 => { depth -= 1; false }
+            _ => depth == 0,
+        }
+    }).collect()
 }

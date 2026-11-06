@@ -1,8 +1,6 @@
 ---
 title: "timezone_identifiers_list()"
 description: "Returns the timezone identifiers this build knows, optionally filtered."
-sidebar:
-  order: 245
 ---
 
 ## timezone_identifiers_list()
@@ -21,8 +19,9 @@ Returns the timezone identifiers this build knows, optionally filtered.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

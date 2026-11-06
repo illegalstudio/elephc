@@ -1,8 +1,6 @@
 ---
 title: "date_add()"
 description: "Adds an interval to a DateTime, modifying it in place."
-sidebar:
-  order: 190
 ---
 
 ## date_add()
@@ -21,8 +19,9 @@ Adds an interval to a DateTime, modifying it in place.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

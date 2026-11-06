@@ -1,8 +1,6 @@
 ---
 title: "mb_http_input()"
 description: "Returns recorded HTTP input encoding identification or the configured input encoding list."
-sidebar:
-  order: 854
 ---
 
 ## mb_http_input()
@@ -20,8 +18,9 @@ Returns recorded HTTP input encoding identification or the configured input enco
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_http_input.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_http_input.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

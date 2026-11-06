@@ -9,12 +9,15 @@
 //!
 //! Key details:
 //! - Functions are built by hand with `crate::ir::Builder`. Invariant operands
-//!   are produced in the preheader/entry by `iadd` of constants (constants
-//!   themselves are not hoistable), giving non-constant SSA values defined
+//!   are produced in the preheader/entry by `iadd` of constants,
+//!   giving non-constant SSA values defined
 //!   outside the loop.
+//! - Branch-local constants stay near varying uses unless their block dominates
+//!   every latch; dependencies of invariant computations still move together.
 
 use crate::ir::{
-    validate_function, Builder, BlockId, DataPool, Function, IrType, Terminator, ValueDef, ValueId,
+    validate_function, Builder, BlockId, DataPool, Effects, Function, Immediate, InstId, IrType,
+    LocalKind, Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator, ValueDef, ValueId,
 };
 use crate::ir_passes::driver::IrPass;
 use crate::ir_passes::licm::Licm;
@@ -140,7 +143,8 @@ fn does_not_hoist_loop_carried_value() {
         b.terminate(Terminator::Return { value: Some(a) });
     }
 
-    assert!(!run_licm(&mut function), "nothing is loop-invariant here");
+    assert!(run_licm(&mut function), "the constant condition leaves the loop");
+    assert!(!run_licm(&mut function), "the varying computation remains");
     assert_eq!(def_block_of(&function, dependent), body, "the dependent add stays in the body");
 }
 
@@ -284,4 +288,371 @@ fn cascades_to_outer_preheader() {
         "cascades past the inner preheader to the outer preheader"
     );
     assert!(validate_function(&function).is_ok());
+}
+
+/// Builds either a diamond with a common latch or two independent back edges,
+/// checking standalone materializations separately from invariant dependencies.
+fn assert_conditional_materializations_stay_local(separate_latches: bool) {
+    let mut function = Function::new("conditional_constants".to_string(), IrType::I64, PhpType::Int);
+    let (entry, left, right, bound, left_constant, right_constant, dependency, immutable_load, invariant);
+    {
+        let mut b = Builder::new(&mut function);
+        entry = b.create_named_block("entry", vec![]);
+        let header = b.create_named_block("header", vec![(IrType::I64, PhpType::Int)]);
+        let body = b.create_named_block("body", vec![]);
+        left = b.create_named_block("left", vec![]);
+        right = b.create_named_block("right", vec![]);
+        let latch = b.create_named_block("latch", vec![(IrType::I64, PhpType::Int)]);
+        let exit = b.create_named_block("exit", vec![]);
+        b.set_entry(entry);
+
+        b.position_at_end(entry);
+        let initial = b.emit_const_i64(0);
+        let slot = b.add_local(Some("seed".to_string()), IrType::I64, PhpType::Int, crate::ir::LocalKind::PhpLocal);
+        b.emit_store_local(slot, initial);
+        b.terminate(Terminator::Br { target: header, args: vec![initial] });
+
+        b.position_at_end(header);
+        let counter = b.block_param(header, 0);
+        bound = b.emit_const_i64(42);
+        let condition = b.emit(
+            crate::ir::Op::ICmp, vec![counter, bound],
+            Some(crate::ir::Immediate::CmpPredicate(crate::ir::CmpPredicate::Slt)),
+            IrType::I64, PhpType::Bool, crate::ir::Ownership::NonHeap,
+        ).unwrap();
+        b.terminate(Terminator::CondBr {
+            cond: condition, then_target: body, then_args: vec![],
+            else_target: exit, else_args: vec![],
+        });
+
+        b.position_at_end(body);
+        b.terminate(Terminator::CondBr {
+            cond: counter, then_target: left, then_args: vec![],
+            else_target: right, else_args: vec![],
+        });
+
+        b.position_at_end(left);
+        left_constant = b.emit_const_i64(101);
+        let left_update = b.emit_iadd(counter, left_constant);
+        dependency = b.emit_const_i64(303);
+        immutable_load = b.emit_load_local(slot, IrType::I64, PhpType::Int);
+        invariant = b.emit_iadd(immutable_load, dependency);
+        b.terminate(Terminator::Br {
+            target: if separate_latches { header } else { latch }, args: vec![left_update],
+        });
+
+        b.position_at_end(right);
+        right_constant = b.emit_const_i64(202);
+        let right_update = b.emit_iadd(counter, right_constant);
+        b.terminate(Terminator::Br {
+            target: if separate_latches { header } else { latch }, args: vec![right_update],
+        });
+
+        b.position_at_end(latch);
+        if separate_latches {
+            b.terminate(Terminator::Unreachable);
+        } else {
+            let update = b.block_param(latch, 0);
+            b.terminate(Terminator::Br { target: header, args: vec![update] });
+        }
+        b.position_at_end(exit);
+        b.terminate(Terminator::Return { value: Some(counter) });
+    }
+
+    assert!(validate_function(&function).is_ok());
+    assert!(crate::ir_passes::immutable_local_loads::ImmutableLocalLoads.run(&mut function, &mut DataPool::default()));
+    assert!(run_licm(&mut function));
+    assert_eq!(def_block_of(&function, left_constant), left, "conditional constant stays local");
+    assert_eq!(def_block_of(&function, right_constant), right, "all latches must be dominated");
+    assert_eq!(def_block_of(&function, bound), entry, "mandatory loop bound still hoists");
+    assert_eq!(def_block_of(&function, dependency), entry, "invariant dependency accompanies its use");
+    assert_eq!(def_block_of(&function, immutable_load), entry, "immutable local loads remain eligible");
+    assert_eq!(def_block_of(&function, invariant), entry, "conditional computation still hoists");
+    assert!(validate_function(&function).is_ok(), "dependency order remains valid");
+    assert!(!run_licm(&mut function), "placement is stable across driver iterations");
+}
+
+/// A constant used by varying work in a conditional arm must not span the loop.
+#[test]
+fn conditional_materializations_stay_local() {
+    assert_conditional_materializations_stay_local(false);
+}
+
+/// Dominating one back edge is insufficient when another back edge bypasses it.
+#[test]
+fn materializations_must_dominate_every_latch() {
+    assert_conditional_materializations_stay_local(true);
+}
+
+/// Builds a loop whose body calls `mb_strlen($text, $encoding)` over a
+/// single-assignment string local. Returns the entry, body, load, and call values.
+fn mb_strlen_loop(
+    function: &mut Function,
+    data: &mut DataPool,
+    encoding: &str,
+    extra_global_writer: bool,
+) -> (BlockId, BlockId, ValueId, ValueId) {
+    let text_id = data.intern_string("abcdef");
+    let encoding_id = data.intern_string(encoding);
+    let (entry, body, load, call);
+    {
+        let mut b = Builder::new(function);
+        entry = b.create_named_block("entry", vec![]);
+        let header = b.create_named_block("header", vec![]);
+        body = b.create_named_block("body", vec![]);
+        let latch = b.create_named_block("latch", vec![]);
+        let exit = b.create_named_block("exit", vec![]);
+        b.set_entry(entry);
+
+        b.position_at_end(entry);
+        let slot = b.add_local(
+            Some("text".to_string()),
+            IrType::Str,
+            PhpType::Str,
+            LocalKind::PhpLocal,
+        );
+        let seed = b.emit_const_str(text_id);
+        b.emit_store_local(slot, seed);
+        let encoding = b.emit_const_str(encoding_id);
+        b.terminate(Terminator::Br { target: header, args: vec![] });
+
+        b.position_at_end(header);
+        cond_br(&mut b, body, exit);
+
+        b.position_at_end(body);
+        load = b.emit_load_local(slot, IrType::Str, PhpType::Str);
+        call = b
+            .emit_with_effects(
+                Op::RuntimeCall,
+                vec![load, encoding],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::MbStrlen,
+                ))),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+                RuntimeFnId::MbStrlen.effects(),
+                None,
+            )
+            .expect("mb_strlen call");
+        if extra_global_writer {
+            let _ = b.emit_with_effects(
+                Op::RuntimeCall,
+                vec![],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::MbSubstituteCharacter,
+                ))),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+                Effects::WRITES_GLOBAL,
+                None,
+            );
+        }
+        b.terminate(Terminator::Br { target: latch, args: vec![] });
+
+        b.position_at_end(latch);
+        b.terminate(Terminator::Br { target: header, args: vec![] });
+
+        b.position_at_end(exit);
+        b.terminate(Terminator::Return { value: Some(call) });
+    }
+    (entry, body, load, call)
+}
+
+/// A whitelisted explicit-UTF-8 `mb_strlen` call and its immutable string load
+/// move into the preheader together.
+#[test]
+fn hoists_mb_strlen_call_and_its_immutable_string_load() {
+    let mut data = DataPool::default();
+    let mut function = Function::new("licm_mb_strlen".to_string(), IrType::I64, PhpType::Int);
+    let (entry, body, load, call) = mb_strlen_loop(&mut function, &mut data, "UTF-8", false);
+
+    assert!(crate::ir_passes::immutable_local_loads::ImmutableLocalLoads.run(
+        &mut function,
+        &mut data,
+    ));
+    assert!(run_licm_with_data(&mut function, &mut data));
+    assert_eq!(def_block_of(&function, load), entry, "string load moved");
+    assert_eq!(def_block_of(&function, call), entry, "mb_strlen call moved");
+    assert!(!block_contains_def(&function, body, load), "no load remains");
+    assert!(!block_contains_def(&function, body, call), "no call remains");
+    assert!(validate_function(&function).is_ok());
+}
+
+/// A non-UTF-8 encoding keeps the call in place even though the string load itself
+/// is immutable and may still move.
+#[test]
+fn does_not_hoist_mb_strlen_with_a_default_or_foreign_encoding() {
+    let mut data = DataPool::default();
+    let mut function = Function::new("licm_mb_strlen_latin1".to_string(), IrType::I64, PhpType::Int);
+    let (_entry, body, _load, call) =
+        mb_strlen_loop(&mut function, &mut data, "ISO-8859-1", false);
+
+    assert!(crate::ir_passes::immutable_local_loads::ImmutableLocalLoads.run(
+        &mut function,
+        &mut data,
+    ));
+    assert!(run_licm_with_data(&mut function, &mut data));
+    assert_eq!(def_block_of(&function, call), body, "the call stays in the loop");
+}
+
+/// Another call that writes process-global mbstring state keeps the admitted call
+/// in the loop, because the loop's later iterations could observe a changed state.
+#[test]
+fn does_not_hoist_mb_strlen_across_a_global_writer() {
+    let mut data = DataPool::default();
+    let mut function = Function::new("licm_mb_strlen_state".to_string(), IrType::I64, PhpType::Int);
+    let (_entry, body, _load, call) =
+        mb_strlen_loop(&mut function, &mut data, "UTF-8", true);
+
+    assert!(crate::ir_passes::immutable_local_loads::ImmutableLocalLoads.run(
+        &mut function,
+        &mut data,
+    ));
+    assert!(run_licm_with_data(&mut function, &mut data));
+    assert_eq!(def_block_of(&function, call), body, "the state-dependent call stays");
+}
+
+/// Runs LICM against the shared literal pool used to build the fixture.
+fn run_licm_with_data(function: &mut Function, data: &mut DataPool) -> bool {
+    Licm.run(function, data)
+}
+
+/// Builds a loop whose body slices a single-assignment string, measures the result,
+/// and releases it. Returns the entry, body, call, length, and release.
+fn mb_substr_loop(
+    function: &mut Function,
+    data: &mut DataPool,
+    extra_observer: bool,
+) -> (BlockId, BlockId, ValueId, ValueId, InstId) {
+    let text_id = data.intern_string("abcdefghij");
+    let encoding_id = data.intern_string("UTF-8");
+    let (entry, body, call, length);
+    {
+        let mut b = Builder::new(function);
+        entry = b.create_named_block("entry", vec![]);
+        let header = b.create_named_block("header", vec![]);
+        body = b.create_named_block("body", vec![]);
+        let latch = b.create_named_block("latch", vec![]);
+        let exit = b.create_named_block("exit", vec![]);
+        b.set_entry(entry);
+
+        b.position_at_end(entry);
+        let slot = b.add_local(
+            Some("text".to_string()),
+            IrType::Str,
+            PhpType::Str,
+            LocalKind::PhpLocal,
+        );
+        let seed = b.emit_const_str(text_id);
+        b.emit_store_local(slot, seed);
+        let encoding = b.emit_const_str(encoding_id);
+        b.terminate(Terminator::Br { target: header, args: vec![] });
+
+        b.position_at_end(header);
+        cond_br(&mut b, body, exit);
+
+        b.position_at_end(body);
+        let subject = b.emit_load_local(slot, IrType::Str, PhpType::Str);
+        let start = b.emit_const_i64(2);
+        let take = b.emit_const_i64(3);
+        call = b
+            .emit_with_effects(
+                Op::RuntimeCall,
+                vec![subject, start, take, encoding],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::MbSubstr,
+                ))),
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Owned,
+                RuntimeFnId::MbSubstr.effects(),
+                None,
+            )
+            .expect("mb_substr call");
+        length = b
+            .emit(
+                Op::StrLen,
+                vec![call],
+                None,
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .expect("substring length");
+        if extra_observer {
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![call],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+        }
+        let _ = b.emit(
+            Op::Release,
+            vec![call],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        b.terminate(Terminator::Br { target: latch, args: vec![] });
+
+        b.position_at_end(latch);
+        b.terminate(Terminator::Br { target: header, args: vec![] });
+
+        b.position_at_end(exit);
+        let zero = b.emit_const_i64(0);
+        b.terminate(Terminator::Return { value: Some(zero) });
+    }
+    let release = function
+        .instructions
+        .iter()
+        .position(|inst| inst.op == Op::Release && inst.operands == [call])
+        .map(|raw| InstId::from_raw(raw as u32))
+        .expect("substring release");
+    (entry, body, call, length, release)
+}
+
+/// A loop-invariant owned substring, its length observer, and its release move as
+/// one preheader group so the loop body uses only the scalar length.
+#[test]
+fn hoists_owned_mb_substr_with_its_length_and_release() {
+    let mut data = DataPool::default();
+    let mut function = Function::new("licm_mb_substr".to_string(), IrType::I64, PhpType::Int);
+    let (entry, body, call, length, release) = mb_substr_loop(&mut function, &mut data, false);
+
+    assert!(crate::ir_passes::immutable_local_loads::ImmutableLocalLoads.run(
+        &mut function,
+        &mut data,
+    ));
+    assert!(run_licm_with_data(&mut function, &mut data));
+    assert_eq!(def_block_of(&function, call), entry, "substring moved");
+    assert_eq!(def_block_of(&function, length), entry, "length moved");
+    assert!(!block_contains_def(&function, body, call), "no substring body call");
+    assert!(!block_contains_def(&function, body, length), "no length body call");
+    assert!(
+        !function.block(body).unwrap().instructions.contains(&release),
+        "release leaves the loop with its value"
+    );
+    assert!(validate_function(&function).is_ok());
+}
+
+/// An extra string observer forbids moving the producer, because the release
+/// cannot leave the loop without freeing storage that observer still reads.
+#[test]
+fn does_not_hoist_owned_mb_substr_with_another_observer() {
+    let mut data = DataPool::default();
+    let mut function = Function::new("licm_mb_substr_observer".to_string(), IrType::I64, PhpType::Int);
+    let (_entry, body, call, _length, _release) = mb_substr_loop(&mut function, &mut data, true);
+
+    assert!(crate::ir_passes::immutable_local_loads::ImmutableLocalLoads.run(
+        &mut function,
+        &mut data,
+    ));
+    assert!(run_licm_with_data(&mut function, &mut data));
+    assert_eq!(def_block_of(&function, call), body, "the observed substring stays");
 }

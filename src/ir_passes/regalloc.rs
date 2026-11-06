@@ -16,99 +16,310 @@
 //! - The spill heuristic is use-weighted: under pressure the rarely-used,
 //!   furthest-reaching interval is evicted first, keeping hot values in
 //!   registers.
-//! - First cut: only single-word `NonHeap` scalars (`I64`, `F64`) are
-//!   register-eligible, and never block parameters or branch arguments, which
-//!   stay in stack slots so the existing block-parameter moves are unchanged.
-//!   Generators fall back to all-spilled; handler functions still allocate
-//!   scalar ranges, with call clobber analysis protecting exception edges.
+//! - Only single-word `NonHeap` scalars (`I64`, `F64`) are register-eligible.
+//!   Edge copies materialize branch arguments into block-parameter homes, so
+//!   promoted loop values can remain in registers across back edges.
+//!   Unused parameters stay spilled because edge copies still write their homes.
+//!   Generators and handler functions use stack homes for nonconstants: implicit
+//!   exception edges are absent from liveness and interval numbering.
+//! - Scalar constants use reconstruction recipes unless their register-only
+//!   uses repay materialization, save/restore, and live-range costs.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::codegen::platform::{Arch, Target};
-use crate::ir::{Function, IrType, Ownership, Terminator, ValueId};
+use crate::ir::{BlockId, Function, IrType, Ownership, Terminator, ValueDef, ValueId};
 use crate::ir_passes::allocation::Allocation;
+use crate::ir_passes::cfg::has_exception_handlers;
+use crate::ir_passes::dominance::compute_dominance;
 use crate::ir_passes::intervals::{build_intervals, LiveInterval};
 use crate::ir_passes::liveness::compute_liveness;
+use crate::ir_passes::rematerialize;
 
 /// Computes a register allocation for `func` on `target`.
 ///
 /// Runs liveness and interval analysis, then a linear scan that assigns
 /// callee-saved registers to eligible intervals and spills the longest-lived
-/// interval when a pool is exhausted. Generators conservatively fall back to
-/// all-spilled, while handlers retain ordinary scalar allocation.
+/// interval when a pool is exhausted. Generators and functions with implicit
+/// exception-handler edges keep nonconstants on the stack and reconstruct constants.
 pub fn allocate_registers(func: &Function, target: Target) -> Allocation {
-    if func.flags.is_generator {
-        return Allocation::all_spilled();
+    let constants = rematerialize::constants(func);
+    if func.flags.is_generator || has_exception_handlers(func) {
+        return Allocation::all_spilled().with_constants(constants);
     }
 
     let liveness = compute_liveness(func);
-    let intervals = build_intervals(func, &liveness);
-    let ineligible = ineligible_values(func);
-
+    let mut intervals = build_intervals(func, &liveness);
+    rematerialize::price_intervals(func, target, &constants, &mut intervals);
+    let groups = coalesce_loop_backedges(func, &mut intervals, &constants);
     let eligible: Vec<LiveInterval> = intervals
         .into_iter()
-        .filter(|iv| is_eligible(func, iv, &ineligible))
+        .filter(|iv| is_eligible(func, iv))
         .collect();
 
-    scan(&eligible, target)
+    let mut allocation = scan(&eligible, target);
+    allocation.coalesce_members(&groups);
+    allocation.with_constants(constants)
 }
 
-/// Collects values that must stay in stack slots regardless of their type:
-/// block parameters and values passed as branch arguments. These feed the
-/// slot-based block-parameter moves, which read them from their slots.
-fn ineligible_values(func: &Function) -> HashSet<ValueId> {
-    let mut ineligible = HashSet::new();
+/// A loop parameter and its one backedge argument form one register group.
+pub(super) struct CoalescedGroup {
+    /// The header parameter whose register names the group.
+    pub(super) root: ValueId,
+    /// Every value that must share the root's register home.
+    pub(super) members: Vec<ValueId>,
+}
+
+/// Coalesces each loop-header parameter with one backedge argument.
+///
+/// A loop header's parameter is live from the header to its last use in the
+/// body; the backedge argument is defined in the body and live to the latch.
+/// Their intervals meet at the backedge, so one register can hold the
+/// loop-carried scalar across both, removing the latch copy on the hot path.
+/// Only one incoming argument per parameter is chosen: alternate predecessors
+/// can hold different values and must keep their own edge copies.
+fn coalesce_loop_backedges(
+    func: &Function,
+    intervals: &mut Vec<LiveInterval>,
+    constants: &HashMap<ValueId, rematerialize::ScalarConstant>,
+) -> Vec<CoalescedGroup> {
+    if intervals.is_empty() {
+        return Vec::new();
+    }
+    let dominance = compute_dominance(func);
+    let mut chosen = HashSet::new();
+    let mut pairs = Vec::new();
     for block in &func.blocks {
-        for param in &block.params {
-            ineligible.insert(*param);
-        }
-        if let Some(term) = &block.terminator {
-            for arg in terminator_branch_args(term) {
-                ineligible.insert(arg);
+        let Some(term) = &block.terminator else {
+            continue;
+        };
+        match term {
+            Terminator::Br { target, args } => {
+                push_backedge_pair(func, &dominance, block.id, *target, args, &mut chosen, &mut pairs);
             }
+            Terminator::CondBr {
+                then_target,
+                then_args,
+                else_target,
+                else_args,
+                ..
+            } => {
+                push_backedge_pair(func, &dominance, block.id, *then_target, then_args, &mut chosen, &mut pairs);
+                push_backedge_pair(func, &dominance, block.id, *else_target, else_args, &mut chosen, &mut pairs);
+            }
+            Terminator::Switch {
+                cases,
+                default,
+                default_args,
+                ..
+            } => {
+                for case in cases {
+                    push_backedge_pair(func, &dominance, block.id, case.target, &case.args, &mut chosen, &mut pairs);
+                }
+                push_backedge_pair(func, &dominance, block.id, *default, default_args, &mut chosen, &mut pairs);
+            }
+            Terminator::Return { .. }
+            | Terminator::Throw { .. }
+            | Terminator::Fatal { .. }
+            | Terminator::GeneratorSuspend { .. }
+            | Terminator::Unreachable => {}
         }
     }
-    ineligible
+    if pairs.is_empty() {
+        return Vec::new();
+    }
+
+    let weights: HashMap<ValueId, u32> = intervals.iter().map(|iv| (iv.value, iv.weight)).collect();
+    let types: HashMap<ValueId, IrType> = intervals.iter().map(|iv| (iv.value, iv.ir_type)).collect();
+    let mut parent: HashMap<ValueId, ValueId> = HashMap::new();
+    let mut members: HashSet<ValueId> = HashSet::new();
+    for (param, arg) in pairs {
+        if weights.get(&param).copied().unwrap_or(0) == 0
+            || !is_coalescable(func, param, constants)
+            || !is_coalescable(func, arg, constants)
+            || types.get(&param) != types.get(&arg)
+            || weights.get(&arg).copied().unwrap_or(0) == 0
+            || !parameter_dead_before_backedge_value(func, &dominance, param, arg)
+        {
+            continue;
+        }
+        union(&mut parent, param, arg);
+        members.insert(param);
+        members.insert(arg);
+    }
+    if members.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ordered_members: Vec<ValueId> = members.into_iter().collect();
+    ordered_members.sort_unstable();
+    let mut groups_by_root: BTreeMap<ValueId, Vec<ValueId>> = BTreeMap::new();
+    for value in ordered_members {
+        let root = find(&mut parent, value);
+        groups_by_root.entry(root).or_default().push(value);
+    }
+
+    let mut remaining: HashMap<ValueId, LiveInterval> = intervals.drain(..).map(|iv| (iv.value, iv)).collect();
+    let mut groups = Vec::new();
+    for (root, group_members) in groups_by_root {
+        let mut merged: Option<LiveInterval> = None;
+        let mut kept_members = Vec::new();
+        for member in group_members {
+            let Some(interval) = remaining.remove(&member) else {
+                continue;
+            };
+            kept_members.push(member);
+            merged = Some(match merged {
+                None => interval,
+                Some(current) => LiveInterval {
+                    value: root,
+                    ir_type: current.ir_type,
+                    start: current.start.min(interval.start),
+                    end: current.end.max(interval.end),
+                    weight: current.weight.saturating_add(interval.weight),
+                    call_free: current.call_free && interval.call_free,
+                },
+            });
+        }
+        if let Some(mut interval) = merged {
+            interval.value = root;
+            intervals.push(interval);
+            groups.push(CoalescedGroup { root, members: kept_members });
+        }
+    }
+    intervals.extend(remaining.into_values());
+    intervals.sort_by_key(|interval| (interval.start, interval.value.as_raw()));
+    groups
 }
 
-/// Returns the values a terminator passes as block-parameter arguments. These
-/// are distinct from condition/scrutinee/return uses, which are ordinary uses.
-fn terminator_branch_args(term: &Terminator) -> Vec<ValueId> {
-    match term {
-        Terminator::Br { args, .. } => args.clone(),
-        Terminator::CondBr {
-            then_args,
-            else_args,
-            ..
-        } => then_args.iter().chain(else_args).copied().collect(),
-        Terminator::Switch {
-            cases,
-            default_args,
-            ..
-        } => cases
-            .iter()
-            .flat_map(|case| case.args.iter().copied())
-            .chain(default_args.iter().copied())
-            .collect(),
-        Terminator::GeneratorSuspend { resume_args, .. } => resume_args.clone(),
-        Terminator::Return { .. }
-        | Terminator::Throw { .. }
-        | Terminator::Fatal { .. }
-        | Terminator::Unreachable => Vec::new(),
+/// Returns whether every use of `param` after `arg` is defined either reads the
+/// old value in the same defining instruction or lies outside the value's
+/// dominated region (the loop exit or a later iteration).
+///
+/// A loop parameter is live out to the exit, so its contiguous interval overlaps
+/// the backedge value even when coalescing is safe. Dominance distinguishes the
+/// exit and next-iteration uses (not dominated by the defining block) from a
+/// same-iteration use that would observe the old value after the new one was
+/// written.
+fn parameter_dead_before_backedge_value(
+    func: &Function,
+    dominance: &crate::ir_passes::dominance::DominanceInfo,
+    param: ValueId,
+    arg: ValueId,
+) -> bool {
+    let Some(arg_value) = func.value(arg) else {
+        return false;
+    };
+    let ValueDef::Instruction { block: def_block, inst: def_inst, .. } = arg_value.def else {
+        return false;
+    };
+    for block in &func.blocks {
+        if !dominance.dominates(def_block, block.id) {
+            continue;
+        }
+        let def_position = if block.id == def_block {
+            block.instructions.iter().position(|inst| *inst == def_inst)
+        } else {
+            None
+        };
+        for (position, &inst_id) in block.instructions.iter().enumerate() {
+            let Some(inst) = func.instruction(inst_id) else {
+                continue;
+            };
+            if !inst.operands.contains(&param) {
+                continue;
+            }
+            if inst_id == def_inst {
+                continue;
+            }
+            if def_position.is_some_and(|def_position| position < def_position) {
+                continue;
+            }
+            return false;
+        }
+        if block
+            .terminator
+            .as_ref()
+            .is_some_and(|term| term.used_values().contains(&param))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Records a backedge parameter/argument pair once, if the edge really is a backedge.
+fn push_backedge_pair(
+    func: &Function,
+    dominance: &crate::ir_passes::dominance::DominanceInfo,
+    source: BlockId,
+    target: BlockId,
+    args: &[ValueId],
+    chosen: &mut HashSet<ValueId>,
+    pairs: &mut Vec<(ValueId, ValueId)>,
+) {
+    if !dominance.dominates(target, source) {
+        return;
+    }
+    let Some(block) = func.block(target) else {
+        return;
+    };
+    for (&param, &arg) in block.params.iter().zip(args) {
+        if chosen.insert(param) {
+            pairs.push((param, arg));
+        }
+    }
+}
+
+/// Returns true for a register-eligible scalar that is not rematerialized.
+fn is_coalescable(
+    func: &Function,
+    value: ValueId,
+    constants: &HashMap<ValueId, rematerialize::ScalarConstant>,
+) -> bool {
+    if constants.contains_key(&value) {
+        return false;
+    }
+    func.value(value).is_some_and(|value| {
+        matches!(value.ir_type, IrType::I64 | IrType::F64)
+            && value.ownership == Ownership::NonHeap
+    })
+}
+
+/// Returns the representative of `value` in the copy-coalescing union-find.
+fn find(parent: &mut HashMap<ValueId, ValueId>, value: ValueId) -> ValueId {
+    let root = match parent.get(&value).copied() {
+        Some(parent_value) if parent_value != value => find(parent, parent_value),
+        _ => value,
+    };
+    parent.insert(value, root);
+    root
+}
+
+/// Unions two values into one register group.
+fn union(parent: &mut HashMap<ValueId, ValueId>, left: ValueId, right: ValueId) {
+    let left_root = find(parent, left);
+    let right_root = find(parent, right);
+    if left_root != right_root {
+        parent.insert(right_root, left_root);
     }
 }
 
 /// Returns true when an interval's value can live in a register: a single-word
-/// non-heap scalar that is not a block parameter or branch argument.
-fn is_eligible(func: &Function, iv: &LiveInterval, ineligible: &HashSet<ValueId>) -> bool {
-    if ineligible.contains(&iv.value) {
-        return false;
-    }
+/// non-heap scalar. Branch edge copies support register and stack homes, but
+/// unused parameters need distinct homes despite their zero-length intervals.
+fn is_eligible(func: &Function, iv: &LiveInterval) -> bool {
     if !matches!(iv.ir_type, IrType::I64 | IrType::F64) {
         return false;
     }
     func.value(iv.value)
-        .map(|value| value.ownership == Ownership::NonHeap)
+        .map(|value| {
+            // Edge copies still write dead parameters. Their interval expires at
+            // entry before a later parameter is allocated, so a shared register
+            // would let the dead destination overwrite the live one.
+            value.ownership == Ownership::NonHeap
+                && !(iv.weight == 0 && matches!(value.def, ValueDef::BlockParam { .. }))
+        })
         .unwrap_or(false)
 }
 

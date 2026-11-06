@@ -1,8 +1,6 @@
 ---
 title: "var_dump()"
 description: "Dumps information about a variable, including its type and value."
-sidebar:
-  order: 692
 ---
 
 ## var_dump()
@@ -21,8 +19,9 @@ Dumps information about a variable, including its type and value.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/var_dump.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/var_dump.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

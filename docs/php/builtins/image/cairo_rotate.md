@@ -1,8 +1,6 @@
 ---
 title: "cairo_rotate()"
 description: "Rotates the context's transformation by the given angle in radians."
-sidebar:
-  order: 431
 ---
 
 ## cairo_rotate()
@@ -21,8 +19,9 @@ Rotates the context's transformation by the given angle in radians.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

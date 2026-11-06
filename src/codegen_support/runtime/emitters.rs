@@ -30,12 +30,18 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // branch into `__rt_php_float_to_int` for PHP's float→int rules.
     numeric::emit_php_float_to_int(emitter);
     numeric::emit_php_float_to_int_cap(emitter);
+    numeric::emit_abs_int(emitter);
+    numeric::emit_sqrt_add_int(emitter);
+    numeric::emit_sqrt_sum_range(emitter);
     round_mode::emit_round_mode(emitter);
 
     // String runtime functions
     strings::emit_concat_scratch(emitter);
+    strings::emit_str_new_owned(emitter);
+    strings::emit_strbuf(emitter);
     strings::emit_itoa(emitter);
     strings::emit_string_offset_warning(emitter);
+    strings::emit_itoa_into(emitter);
     strings::emit_resource_to_string(emitter);
     strings::emit_resource_type_name(emitter);
     strings::emit_resource_write_stdout(emitter);
@@ -43,6 +49,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_ftoa(emitter);
     strings::emit_ftoa_repr(emitter);
     strings::emit_concat(emitter);
+    strings::emit_str_append(emitter, features.mbstring || features.eval_bridge);
     strings::emit_atoi(emitter);
     strings::emit_str_eq(emitter);
     strings::emit_str_to_number(emitter);
@@ -50,9 +57,13 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_looks_like_int_for_coercion(emitter);
     strings::emit_str_to_int(emitter);
     strings::emit_str_to_int_base(emitter);
+    strings::emit_num_run_class(emitter);
+    strings::emit_str_numeric_ex(emitter);
+    strings::emit_str_smart_cmp(emitter);
     strings::emit_str_loose_eq(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
+    strings::emit_str_dup_owned(emitter);
     strings::emit_str_persist(emitter, features.mbstring || features.eval_bridge);
     strings::emit_str_inc_dec(emitter);
     strings::emit_mixed_inc_dec(emitter);
@@ -63,6 +74,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_rtrim(emitter);
     strings::emit_strpos(emitter);
     strings::emit_strrpos(emitter);
+    strings::emit_strstr_len(emitter);
     strings::emit_stripos(emitter);
     strings::emit_strripos(emitter);
     strings::emit_str_repeat(emitter);
@@ -85,20 +97,25 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_ucwords(emitter);
     strings::emit_str_ireplace(emitter);
     strings::emit_substr_replace(emitter);
+    strings::emit_str_offset_set(emitter);
     strings::emit_substr_count(emitter);
     strings::emit_str_pad(emitter);
     strings::emit_str_split(emitter);
+    strings::emit_str_split_count(emitter);
     strings::emit_addslashes(emitter);
     strings::emit_stripslashes(emitter);
     strings::emit_nl2br(emitter);
     strings::emit_chunk_split(emitter);
+    strings::emit_chunk_split_len(emitter);
     strings::emit_quotemeta(emitter);
     strings::emit_quoted_printable_encode(emitter);
     strings::emit_str_word_count(emitter);
     strings::emit_count_chars(emitter);
+    strings::emit_count_chars_distinct(emitter);
     strings::emit_strtr(emitter);
     strings::emit_wordwrap(emitter);
     strings::emit_bin2hex(emitter);
+    strings::emit_bin2hex_len(emitter);
     strings::emit_dec_to_base(emitter);
     strings::emit_base_to_number(emitter);
     strings::emit_base_convert(emitter);
@@ -109,6 +126,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_hex2bin(emitter);
     strings::emit_htmlspecialchars(emitter);
     strings::emit_html_entity_decode(emitter);
+    strings::emit_strip_tags(emitter);
+    strings::emit_strip_tags_count(emitter);
     strings::emit_urlencode(emitter);
     strings::emit_urldecode(emitter);
     strings::emit_rawurlencode(emitter);
@@ -136,6 +155,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_digest_to_string(emitter);
     strings::emit_base64_encode(emitter);
     strings::emit_base64_decode(emitter);
+    strings::emit_base64_decoded_len(emitter);
     strings::emit_sprintf(emitter);
     strings::emit_sprintf_pack_mixed(emitter);
     strings::emit_sprintf_mixed_casts(emitter, features.eval_bridge);
@@ -164,9 +184,12 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_microtime_str(emitter);
     system::emit_microtime_mixed(emitter);
     system::emit_php_uname(emitter);
+    system::emit_php_binary(emitter);
+    super::objects::emit_weak_reference(emitter);
+    super::objects::emit_weak_map(emitter);
     system::emit_getenv(emitter);
     system::emit_getenv_all(emitter);
-    system::emit_shell_exec(emitter);
+    system::emit_shell_exec(emitter, features.web);
     system::emit_date(emitter);
     system::emit_date_default_timezone(emitter);
     system::emit_checkdate(emitter);
@@ -189,6 +212,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_throw_error(emitter);
     system::emit_json_depth_enter(emitter);
     system::emit_json_depth_exit(emitter);
+    system::emit_json_integer_tree(emitter);
     system::emit_json_encode_array_dynamic(emitter);
     system::emit_json_encode_array_int(emitter);
     system::emit_json_encode_array_str(emitter);
@@ -197,6 +221,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_decode_mixed(emitter);
     system::emit_json_last_error_msg(emitter);
     system::emit_json_validate(emitter);
+    system::emit_json_decode_count(emitter);
     system::emit_serialize(emitter);
     system::emit_unserialize(emitter);
     if features.regex {
@@ -217,6 +242,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_class_implements_interface(emitter);
     exceptions::emit_dynamic_instanceof(emitter);
     exceptions::emit_exception_matches(emitter);
+    exceptions::emit_location(emitter);
     exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);

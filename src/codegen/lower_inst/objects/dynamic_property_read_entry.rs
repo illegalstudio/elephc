@@ -155,6 +155,71 @@ pub(super) fn emit_property_warning_fragment(ctx: &mut FunctionContext<'_>, byte
     abi::emit_call_label(ctx.emitter, if complete { "__rt_diag_warning" } else { "__rt_diag_warning_fragment" });
 }
 
+/// Appends PHP's ` in FILE on line N` suffix to the pending diagnostic.
+///
+/// The static message fragment already sits in the warning buffer; these raw writes add the
+/// location PHP's CLI formatter reports for a statement in the main script. The caller finishes
+/// the diagnostic with its newline fragment so one warning is dispatched exactly once.
+pub(super) fn emit_property_warning_location(ctx: &mut FunctionContext<'_>, line: u32) {
+    // Record where the message ends before the location suffix is appended. Warning
+    // dispatch hands PHP error handlers only that prefix, while the default output keeps
+    // the complete buffered line including ` in <file> on line <n>`.
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_pending_len", 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_rt_diag_warning_message_len", 0);
+    emit_property_warning_fragment(ctx, b" in ", false);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", "_script_source_file");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x2", "_script_source_file_len", 0);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_script_source_file");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "rsi", "_script_source_file_len", 0);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    emit_property_warning_fragment(ctx, b" on line ", false);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), i64::from(line));
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the formatted line-number pointer to the warning fragment buffer
+        ctx.emitter.instruction("mov rsi, rdx");                                // pass the formatted line-number length to the warning fragment buffer
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    // Publish the real caller location for a user error handler.
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(line));
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+}
+
+/// Answers an `isset()`/`empty()` probe that found no property.
+///
+/// The checker types the probe with `__get`'s return type, which may be a scalar with no null
+/// spelling; there the only consumer is the emptiness test, so the type's empty value stands in
+/// for null (`0`, `false`, `0.0`, `""`).
+fn emit_absent_probe_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    match inst.result_php_type.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+        PhpType::Float => match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("fmov d0, xzr"),           // an absent property probes as 0.0
+            Arch::X86_64 => ctx.emitter.instruction("xorpd xmm0, xmm0"),        // an absent property probes as 0.0
+        },
+        PhpType::Str => {
+            let (pointer, length) = abi::string_result_regs(ctx.emitter);
+            abi::emit_load_int_immediate(ctx.emitter, pointer, 0);
+            abi::emit_load_int_immediate(ctx.emitter, length, 0);
+        }
+        _ => emit_dynamic_property_miss_result(ctx, inst),
+    }
+}
+
 /// Lowers a dynamic property read when the property expression is a literal string.
 pub(super) fn lower_const_dynamic_prop_get(
     ctx: &mut FunctionContext<'_>,
@@ -171,10 +236,20 @@ pub(super) fn lower_const_dynamic_prop_get(
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_get(ctx, inst, object, property);
     }
+    let mode = property_fetch_mode(inst);
     if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
+        // `isset()`/`empty()` on a class with `__get` but no `__isset` find nothing and never
+        // call `__get`: the probe answers null.
+        let skips_get = mode.skips_get_without_isset()
+            && !ctx.module.class_infos.get(class_name.trim_start_matches('\\')).is_some_and(
+                |info| info.methods.contains_key(&php_symbol_key("__isset")),
+            );
+        if skips_get {
+            emit_absent_probe_result(ctx, inst);
+            return store_if_result(ctx, inst);
+        }
         return lower_magic_get_prop(ctx, inst, object, &class_name, property);
     }
-    let mode = property_fetch_mode(inst);
     // Same runtime-class rule as the `PropGet` sibling: a name php does not answer from a declared
     // slot on the STATIC class is decided per runtime class, kind and all.
     if let Some(plan) = dynamic_property_runtime_plan_for_object(
@@ -216,6 +291,7 @@ pub(super) fn lower_const_dynamic_prop_get(
     let slot = resolve_property_slot(ctx, object, property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
+    emit_typed_pointer_receiver_null_check(ctx, object, base_reg)?;
     let read_done = emit_property_read_state_guard(
         ctx,
         &slot,

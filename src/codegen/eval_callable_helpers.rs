@@ -19,7 +19,7 @@ use crate::codegen::abi;
 use crate::codegen::callable_descriptor::{
     self, CallableDescriptorInvocation, CallableDescriptorShape,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::codegen::callable_dispatch::{
     self, RuntimeCallableCase, RuntimeCallableSelector, RuntimeStaticMethodCallableCase,
@@ -27,10 +27,13 @@ use crate::codegen::callable_dispatch::{
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::runtime_callable_invoker::RuntimeCallableInvoker;
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::Module;
 use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
+
+#[cfg(test)]
+mod tests;
 
 const EVAL_RECEIVER_CAPTURE_PARAM: &str = "__elephc_eval_callable_receiver";
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
@@ -75,16 +78,38 @@ enum EvalInstanceCallableShape {
     ObjectInvoke,
 }
 
+/// Label an eval invoker is emitted under until its text is known to be new.
+const PENDING_INVOKER_LABEL: &str = "__elephc_eval_callable_invoker_pending";
+
 /// Stable label allocator for eval bridge helper bodies emitted outside `FunctionContext`.
 struct EvalCallableEmitState {
     next_id: usize,
     argument_normalizer_needed: bool,
+    /// Emitted invoker bodies, as written under [`PENDING_INVOKER_LABEL`], mapped to the label
+    /// that carries that body.
+    invoker_bodies: HashMap<String, String>,
 }
 
 impl EvalCallableEmitState {
     /// Creates an empty label state for one eval callable-support emission pass.
     fn new() -> Self {
-        Self { next_id: 0, argument_normalizer_needed: false }
+        Self { next_id: 0, argument_normalizer_needed: false, invoker_bodies: HashMap::new() }
+    }
+
+    /// Returns the label carrying `body`, an invoker emitted under [`PENDING_INVOKER_LABEL`],
+    /// naming and recording it the first time that text is seen.
+    ///
+    /// The placeholder names the invoker and prefixes each of its local labels, so two bodies
+    /// share a label exactly when their instructions are the same. `filed` receives the body
+    /// under its real label only when it is new.
+    fn emitted_invoker(&mut self, body: String, filed: impl FnOnce(&str)) -> String {
+        if let Some(existing) = self.invoker_bodies.get(&body) {
+            return existing.clone();
+        }
+        let label = self.next_label("callable_invoker");
+        filed(&body.replace(PENDING_INVOKER_LABEL, &label));
+        self.invoker_bodies.insert(body, label.clone());
+        label
     }
 
     /// Returns a unique global/local label for generated eval callable support.
@@ -130,32 +155,25 @@ pub(super) fn module_needs_eval_callable_descriptor_support(module: &Module) -> 
     module_uses_eval(module)
 }
 
-/// Returns true when the EIR module contains a function that can call eval.
+/// Returns whether this binary links the eval bridge, and therefore needs these helpers.
+///
+/// THE INVARIANT IS "LINKED", NOT "USES EVAL". `libelephc_magician.a` references the
+/// `__elephc_eval_*` callbacks unconditionally, so any binary that links it must define
+/// them or fail to link — `__elephc_eval_reflection_attribute_new` undefined and a dozen
+/// like it. This used to scan for functions carrying an eval local instead, which is a
+/// different question that happened to give the same answer while the ONLY reason to link
+/// the archive was an `eval()` in the program.
+///
+/// That stopped being the only reason. `opcache_compile_file()` populates the runtime script
+/// cache, which lives in the archive, so a program calling it needs the archive whether or
+/// not it ever evaluates a string. Keeping the narrower scan here made that combination
+/// unlinkable, which is what kept the fold in place and left the function answering `false`
+/// where reference answers `true`.
+///
+/// The call sites are all inside a block already gated on the same flag, so for a program
+/// that does use `eval()` nothing changes.
 fn module_uses_eval(module: &Module) -> bool {
-    all_module_functions(module).any(function_uses_eval)
-}
-
-/// Iterates every EIR function body emitted or inspected by the backend.
-fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
-    module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .chain(module.closures.iter())
-        .chain(module.fiber_wrappers.iter())
-        .chain(module.callback_wrappers.iter())
-        .chain(module.extern_callback_trampolines.iter())
-        .chain(module.runtime_callable_invokers.iter())
-}
-
-/// Returns true when a function has hidden eval state locals.
-fn function_uses_eval(function: &Function) -> bool {
-    function.locals.iter().any(|local| {
-        matches!(
-            local.kind,
-            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
-        )
-    })
+    module.required_runtime_features.eval_bridge
 }
 
 /// Emits shared runtime callable wrappers/invokers and returns descriptor cases.
@@ -338,8 +356,8 @@ fn emit_aarch64_eval_dynamic_callable_invoker(
     emit_aarch64_eval_dynamic_callable_fatal(emitter, data);
     emitter.label(throwable_label);
     emitter.instruction("ldr x0, [sp, #32]");                                   // load the boxed Throwable returned by magician
-    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the Throwable object payload
-    abi::emit_store_reg_to_symbol(emitter, "x1", "_exc_value", 0);
+    abi::emit_call_label(emitter, "__rt_throwable_take_boxed");
+    abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
     emitter.instruction("bl __rt_throw_current");                               // enter the native Throwable unwinder
     emitter.label(done_label);
     emitter.instruction("ldr x0, [sp, #24]");                                   // return the boxed Mixed callback result
@@ -388,8 +406,8 @@ fn emit_x86_64_eval_dynamic_callable_invoker(
     emit_x86_64_eval_dynamic_callable_fatal(emitter, data);
     emitter.label(throwable_label);
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the boxed Throwable returned by magician
-    emitter.instruction("call __rt_mixed_unbox");                               // expose the Throwable object payload
-    abi::emit_store_reg_to_symbol(emitter, "rdi", "_exc_value", 0);
+    abi::emit_call_label(emitter, "__rt_throwable_take_boxed");
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
     emitter.instruction("call __rt_throw_current");                             // enter the native Throwable unwinder
     emitter.label(done_label);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the boxed Mixed callback result
@@ -760,7 +778,7 @@ fn receiver_bound_instance_method_case(
     }
 }
 
-/// Emits a descriptor invoker inline and branches around its global entry body.
+/// Emits a descriptor invoker out of line, after the function that first needed it.
 ///
 /// `current_class` is the class that DECLARES the callee, which is the scope `self::`,
 /// `static::` and `parent::` resolve in when the invoker materializes a parameter default.
@@ -777,15 +795,13 @@ fn emit_eval_runtime_callable_invoker_inline(
 ) -> String {
     state.argument_normalizer_needed |=
         super::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
-    let label = state.next_label("callable_invoker");
-    let done_label = state.next_label("callable_invoker_done");
     let defaults = super::runtime_callable_invoker::resolve_invoker_defaults(
         module,
         current_class,
         sig,
     );
     let invoker = RuntimeCallableInvoker {
-        label: &label,
+        label: PENDING_INVOKER_LABEL,
         sig,
         captures,
         mbstring_operation: None,
@@ -794,12 +810,15 @@ fn emit_eval_runtime_callable_invoker_inline(
         php_return_status: true,
         defaults: &defaults,
     };
-    let enclosing = emitter.current_text_section();
-    abi::emit_jump(emitter, &done_label);
+    // See `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = emitter.begin_out_of_line();
     super::runtime_callable_invoker::emit_runtime_callable_invoker(emitter, data, &invoker);
-    emitter.reopen_text_section(enclosing);
-    emitter.label(&done_label);
-    label
+    let body = emitter.end_detached(scope);
+    // Most callees share a few shapes: an `eval()` program emitted 633 of these invokers with
+    // 148 distinct bodies. The invoker emitter keeps no state outside its text, and its data
+    // entries are content-deduplicated strings and floats, so a body whose text matches an
+    // earlier one is dropped for that one's label.
+    state.emitted_invoker(body, |body| emitter.push_out_of_line(body))
 }
 
 /// Returns a hidden receiver parameter name that cannot collide with visible parameters.
@@ -827,8 +846,9 @@ fn emit_eval_instance_method_descriptor_entry_wrapper(
 ) -> String {
     let visible_arg_types = descriptor_visible_arg_types(sig);
     let wrapper_label = state.next_label("callable_instance_method");
-    let done_label = state.next_label("callable_instance_method_done");
-    abi::emit_jump(emitter, &done_label);
+    // Out of line, not spliced into the caller: see `Emitter::begin_out_of_line`. The label is
+    // referenced only from a static descriptor in data, so its position is free.
+    let scope = emitter.begin_out_of_line();
     emitter.label(&wrapper_label);
     emit_eval_instance_method_descriptor_entry_wrapper_body(
         emitter,
@@ -836,7 +856,7 @@ fn emit_eval_instance_method_descriptor_entry_wrapper(
         method_key,
         &visible_arg_types,
     );
-    emitter.label(&done_label);
+    emitter.end_out_of_line(scope);
     wrapper_label
 }
 
@@ -851,8 +871,9 @@ fn emit_eval_static_method_descriptor_entry_wrapper(
 ) -> String {
     let visible_arg_types = descriptor_visible_arg_types(sig);
     let wrapper_label = state.next_label("static_method_descriptor_entry");
-    let done_label = state.next_label("static_method_descriptor_entry_done");
-    abi::emit_jump(emitter, &done_label);
+    // Out of line, not spliced into the caller: see `Emitter::begin_out_of_line`. The label is
+    // referenced only from a static descriptor in data, so its position is free.
+    let scope = emitter.begin_out_of_line();
     emitter.label(&wrapper_label);
     emit_eval_static_method_descriptor_entry_wrapper_body(
         emitter,
@@ -861,7 +882,7 @@ fn emit_eval_static_method_descriptor_entry_wrapper(
         &visible_arg_types,
         called_class_id,
     );
-    emitter.label(&done_label);
+    emitter.end_out_of_line(scope);
     wrapper_label
 }
 
@@ -924,7 +945,10 @@ fn emit_eval_instance_method_descriptor_entry_wrapper_body(
             actual_stack_offsets[idx],
         );
     }
+    let padding = abi::outgoing_call_stack_pad_bytes(emitter.target, actual_overflow_bytes);
+    abi::emit_reserve_temporary_stack(emitter, padding);
     abi::emit_call_label(emitter, &method_symbol(class_name, method_key));
+    abi::emit_release_temporary_stack(emitter, padding);
     if actual_overflow_bytes > 0 {
         abi::emit_release_temporary_stack(emitter, actual_overflow_bytes);
     }
@@ -994,7 +1018,10 @@ fn emit_eval_static_method_descriptor_entry_wrapper_body(
             );
         }
     }
+    let padding = abi::outgoing_call_stack_pad_bytes(emitter.target, actual_overflow_bytes);
+    abi::emit_reserve_temporary_stack(emitter, padding);
     abi::emit_call_label(emitter, &static_method_symbol(impl_class, method_key));
+    abi::emit_release_temporary_stack(emitter, padding);
     if actual_overflow_bytes > 0 {
         abi::emit_release_temporary_stack(emitter, actual_overflow_bytes);
     }
@@ -1262,11 +1289,11 @@ pub(super) fn emit_aarch64_cast_eval_callable_arg(
     emitter.instruction("cmp x0, #1");                                          // runtime tag 1 means a string callable name
     emitter.instruction(&format!("b.eq {}", string_label));                     // resolve string callables through descriptor metadata
     emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means an indexed callable array
-    emitter.instruction(&format!("b.eq {}", array_label));                      // resolve static callable arrays through descriptor metadata
+    abi::emit_branch_if_equal_wide(emitter, &array_label);                      // resolve indexed callable arrays past the string-name lookup table
     emitter.instruction("cmp x0, #5");                                          // runtime tag 5 means an associative callable array
-    emitter.instruction(&format!("b.eq {}", array_label));                      // resolve static callable arrays with numeric keys
+    abi::emit_branch_if_equal_wide(emitter, &array_label);                      // resolve callable arrays with numeric keys past that table
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means an invokable object candidate
-    emitter.instruction(&format!("b.eq {}", object_label));                     // resolve invokable objects through descriptor metadata
+    abi::emit_branch_if_equal_wide(emitter, &object_label);                     // resolve invokable objects past the string and array lookups
     abi::emit_jump(emitter, miss_label);
     emitter.label(&string_label);
     abi::emit_push_reg_pair(emitter, "x1", "x2");

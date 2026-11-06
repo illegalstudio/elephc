@@ -1,8 +1,6 @@
 ---
 title: "cairo_image_surface_create() - internals"
 description: "Compiler internals for cairo_image_surface_create(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 408
 ---
 
 ## `cairo_image_surface_create()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13296](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13296) (`cairo_image_surface_create`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`cairo_image_surface_create`)
 - **Function symbol**: `cairo_image_surface_create()`
 
 

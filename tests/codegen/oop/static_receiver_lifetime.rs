@@ -1,0 +1,856 @@
+//! Purpose:
+//! Regressions for instance writes through an owning static object slot.
+//!
+//! Called from:
+//! - The codegen integration test harness.
+//!
+//! Key details:
+//! - No local alias masks early destruction when RHS evaluation replaces the static owner.
+//! - Nullable array receivers must mutate the declared slot and retire unwind pins.
+
+use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
+
+/// Discarded scoped prefix updates select one getter result for their read and write.
+#[test]
+fn test_static_receiver_prefix_getter_once() {
+    verify(r#"<?php
+class PrefixLeaf {
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+}
+class PrefixRoot {
+    public int $reads = 0;
+    public ?PrefixLeaf $last = null;
+    public PrefixLeaf $child {
+        get { echo 'G'; $this->reads++; $this->last = new PrefixLeaf($this->reads * 10); return $this->last; }
+    }
+}
+class PrefixHolder {
+    public static ?PrefixRoot $root = null;
+    public static function update(): void {
+        ++self::$root->child->v;
+        echo ':', self::$root->last->v, ':', self::$root->reads, ';';
+        --static::$root->child->v;
+        echo ':', self::$root->last->v, ':', self::$root->reads, ';';
+    }
+}
+class PrefixDerived extends PrefixHolder {
+    public static function updateParent(): void {
+        ++parent::$root->child->v;
+        echo ':', parent::$root->last->v, ':', parent::$root->reads;
+    }
+}
+function prefixProperty(): string { echo 'N'; return 'v'; }
+PrefixHolder::$root = new PrefixRoot();
+++PrefixHolder::$root->child->v;
+echo ':', PrefixHolder::$root->last->v, ':', PrefixHolder::$root->reads, ';';
+--PrefixHolder::$root->child->v;
+echo ':', PrefixHolder::$root->last->v, ':', PrefixHolder::$root->reads, ';';
+PrefixHolder::update();
+PrefixDerived::updateParent();
+echo ';';
+++PrefixHolder::$root->child->{prefixProperty()};
+echo ':', PrefixHolder::$root->last->v, ':', PrefixHolder::$root->reads, ';';
+$name = 'v';
+--PrefixHolder::$root->child->$name;
+echo ':', PrefixHolder::$root->last->v, ':', PrefixHolder::$root->reads;
+PrefixHolder::$root = null;
+"#, "G:11:1;G:19:2;G:31:3;G:39:4;G:51:5;NG:61:6;G:69:7");
+}
+
+/// Scoped prefix receiver reuse also holds without EIR optimization.
+#[test]
+fn test_static_receiver_prefix_getter_once_no_ir_opt() {
+    without_ir_opt(test_static_receiver_prefix_getter_once);
+}
+
+/// Checks one array-interleaved static receiver with a fresh child on each legal reference getter.
+fn verify_compound_static_getter(receiver: &str, key: &str, statement: bool, nested: bool, expected: &str) {
+    let target = format!("{receiver}->children[{key}]->v");
+    let write = if statement { format!("{target} += rhs();") }
+        else { format!("$result = ({target} += rhs()); echo ':', $result;") };
+    let child = if nested { "[[new Leaf($this->reads * 10)]]" } else { "[new Leaf($this->reads * 10)]" };
+    let stored = if nested { "[0][0]" } else { "[0]" };
+    verify(&format!(r#"<?php
+class Leaf {{
+    public int $v;
+    public function __construct(int $v) {{ $this->v = $v; }}
+    public function __destruct() {{ echo 'D', $this->v; }}
+}}
+class Root {{
+    public int $reads = 0;
+    public array $last = [];
+    public array $children {{
+        &get {{ echo 'G'; $this->reads++; $this->last = {child}; return $this->last; }}
+    }}
+}}
+class Holder {{ public Root $child; public function __construct() {{ $this->child = new Root(); }} }}
+class C {{ public static ?Root $root = null; public static ?Holder $holder = null; public static array $roots = []; }}
+function pick(): int {{ echo 'K'; return 0; }}
+function rhs(): int {{ echo 'R'; return 5; }}
+C::$root = new Root(); C::$holder = new Holder(); C::$roots = [new Root()];
+{write}
+echo ':', {receiver}->last{stored}->v, ':', {receiver}->reads;
+C::$root = null; C::$holder = null; C::$roots = [];
+"#), expected);
+}
+
+/// Expression compounds read one freshly selected child and write that exact child.
+#[test]
+fn test_static_receiver_eighth_review_getter_expression() {
+    verify_compound_static_getter("C::$root", "0", false, false, "RG:15:15:1D15");
+}
+
+/// Discarded compounds preserve computed-key order and do not replay the getter.
+#[test]
+fn test_static_receiver_eighth_review_getter_statement() {
+    verify_compound_static_getter("C::$root", "pick()", true, false, "KRG:15:1D15");
+}
+
+/// A pure property prefix before the array still selects the indexed child only once.
+#[test]
+fn test_static_receiver_eighth_review_child_getter() {
+    verify_compound_static_getter("C::$holder->child", "pick()", false, false, "KRG:15:15:1D15");
+}
+
+/// Multiple getter-produced dimensions still retain and update one selected child.
+#[test]
+fn test_static_receiver_eighth_review_interleaved_getter() {
+    verify_compound_static_getter("C::$root", "0][pick()", false, true, "KRG:15:15:1D15");
+}
+
+/// Receiver caching and cleanup also hold when IR optimization is disabled.
+#[test]
+fn test_static_receiver_eighth_review_without_ir_opt() {
+    without_ir_opt(|| {
+        test_static_receiver_eighth_review_getter_expression();
+        test_static_receiver_eighth_review_getter_statement();
+        test_static_receiver_eighth_review_child_getter();
+        test_static_receiver_eighth_review_interleaved_getter();
+    });
+}
+
+/// Checks one indexed property target against an RHS hook that replaces its static owner.
+fn verify_indexed_static_property(target: &str, hook: &str, compound: bool, expected: &str) {
+    verify(&format!(r#"<?php
+class Leaf {{ public int $v; public function __construct(int $v) {{ $this->v = $v; }} }}
+class O {{ public array $items; public function __construct(int $v) {{ $this->items = [new Leaf($v)]; }} }}
+class Root {{ public O $child; public function __construct(int $v) {{ $this->child = new O($v); }} }}
+class C {{ public static ?O $o = null; public static ?Root $root = null; public static array $items = []; }}
+class Hook {{
+    public int $object {{ get {{ echo 'H'; C::$o = new O(7); return 9; }} }}
+    public int $child {{ get {{ echo 'H'; C::$root = new Root(7); return 9; }} }}
+    public int $array {{ get {{ echo 'H'; C::$items = [new Leaf(7)]; return 9; }} }}
+}}
+function pick(): int {{ echo 'K'; return 0; }}
+C::$o = new O(1); C::$root = new Root(1); C::$items = [new Leaf(1)];
+$hook = new Hook();
+$result = ({target} {} $hook->{hook});
+echo ':', $result, ':', {};
+C::$o = null; C::$root = null; C::$items = [];
+"#, if compound { "+=" } else { "=" }, target.replace("pick()", "0")), expected);
+}
+
+/// An indexed property after a static object fetch uses the replacement object once.
+#[test]
+fn test_static_receiver_seventh_review_indexed_object_plain() {
+    verify_indexed_static_property("C::$o->items[0]->v", "object", false, "H:9:9");
+}
+
+/// Nested object traversal still delays its array-element property receiver.
+#[test]
+fn test_static_receiver_seventh_review_indexed_child_plain() {
+    verify_indexed_static_property("C::$root->child->items[0]->v", "child", false, "H:9:9");
+}
+
+/// Properties on elements of a static array capture their replayable RHS once.
+#[test]
+fn test_static_receiver_seventh_review_indexed_static_array_plain() {
+    verify_indexed_static_property("C::$items[0]->v", "array", false, "H:9:9");
+}
+
+/// Computed keys precede the hook and the assignment result does not replay it.
+#[test]
+fn test_static_receiver_seventh_review_indexed_object_key() {
+    verify_indexed_static_property("C::$o->items[pick()]->v", "object", false, "KH:9:9");
+}
+
+/// Child array keys are captured before selecting the post-hook static owner.
+#[test]
+fn test_static_receiver_seventh_review_indexed_child_key() {
+    verify_indexed_static_property("C::$root->child->items[pick()]->v", "child", false, "KH:9:9");
+}
+
+/// Static array-element keys are evaluated once before the replayable RHS hook.
+#[test]
+fn test_static_receiver_seventh_review_indexed_static_array_key() {
+    verify_indexed_static_property("C::$items[pick()]->v", "array", false, "KH:9:9");
+}
+
+/// Compound property reads use the new indexed static-object element.
+#[test]
+fn test_static_receiver_seventh_review_indexed_object_compound() {
+    verify_indexed_static_property("C::$o->items[pick()]->v", "object", true, "KH:16:16");
+}
+
+/// Compound child-element writes preserve source key and RHS ordering.
+#[test]
+fn test_static_receiver_seventh_review_indexed_child_compound() {
+    verify_indexed_static_property("C::$root->child->items[pick()]->v", "child", true, "KH:16:16");
+}
+
+/// Compound element properties on static arrays read after the replacing hook.
+#[test]
+fn test_static_receiver_seventh_review_indexed_static_array_compound() {
+    verify_indexed_static_property("C::$items[pick()]->v", "array", true, "KH:16:16");
+}
+
+/// Statement-position local compounds reuse their fractional parent key diagnosis.
+#[test]
+fn test_static_receiver_latest_review_local_statement_float_key() {
+    verify(r#"<?php
+function update(array $items, int $value): void {
+    set_error_handler(function($level, $message) {
+        if ($level === E_DEPRECATED) { echo 'W'; } return true;
+    });
+    $items[1.5][0] += $value;
+    restore_error_handler();
+    echo '|', json_encode($items);
+}
+update([[1, 2], [3, 4]], $argc);
+"#, "W|[[1,2],[4,4]]");
+}
+
+/// Statement-position property compounds emit one float-key warning and retain the owner.
+#[test]
+fn test_static_receiver_latest_review_property_statement_float_key() {
+    verify(r#"<?php
+class O { public array $nested = [[1, 2], [3, 4]]; }
+$obj = new O();
+set_error_handler(function($level, $message) {
+    if ($level === E_DEPRECATED) { echo 'W'; } return true;
+});
+$obj->nested[1.5][0] += 1;
+restore_error_handler();
+echo '|', json_encode($obj->nested);
+"#, "W|[[1,2],[4,4]]");
+}
+
+/// Plain nested assignments still diagnose each fractional key before writing it.
+#[test]
+fn test_static_receiver_latest_review_plain_float_key_controls() {
+    verify(r#"<?php
+class O { public array $nested = [[1, 2], [3, 4]]; }
+$obj = new O();
+function update(array $items): void {
+    $items[1.5][0] = 9; echo '|', json_encode($items), '|';
+}
+set_error_handler(function($level, $message) {
+    if ($level === E_DEPRECATED) { echo 'W'; } return true;
+});
+update([[1, 2], [3, 4]]);
+$obj->nested[1.5][0] = 9;
+restore_error_handler();
+echo '|', json_encode($obj->nested);
+"#, "W|[[1,2],[9,4]]|W|[[1,2],[9,4]]");
+}
+
+/// Bare static compound statements read the slot only after each RHS hook or call.
+#[test]
+fn test_static_receiver_fifth_review_bare_compound_rhs_order() {
+    verify(r#"<?php
+class C { public static int $n = 1; public static string $text = 'old'; }
+class Hook {
+    public int $value { get { echo 'H'; C::$n = 7; return 9; } }
+    public string $text { get { echo 'S'; C::$text = 'next'; return '!'; } }
+}
+function replace(): int { echo 'F'; C::$n = 7; return 9; }
+$hook = new Hook();
+C::$n += $hook->value; echo ':', C::$n, '|';
+C::$n = 1; C::$n += replace(); echo ':', C::$n, '|';
+C::$n = 1; $result = (C::$n += $hook->value); echo ':', C::$n, ':', $result, '|';
+C::$text .= $hook->text; echo ':', C::$text;
+"#, "H:16|F:16|H:16:16|S:next!");
+}
+
+/// A throwing RHS runs before an uninitialized static compound read and retires its owners.
+#[test]
+fn test_static_receiver_fifth_review_bare_compound_throw_order() {
+    verify(r#"<?php
+class C { public static int $n; }
+function fail(): int { echo 'T'; throw new Exception('rhs'); }
+try { C::$n += fail(); } catch (Throwable $error) { echo ':', get_class($error), ':', $error->getMessage(); }
+"#, "T:Exception:rhs");
+}
+
+/// Nested static-object compounds normalize a fractional parent dimension exactly once.
+#[test]
+fn test_static_receiver_fifth_review_nested_compound_fractional_key() {
+    verify(r#"<?php
+class O {
+    public array $nested = [[1, 2], [3, 4]];
+    public function __destruct() { echo 'D'; }
+}
+class C { public static ?O $o = null; }
+class Hook { public int $value { get { echo 'H'; C::$o = new O(); return 9; } } }
+C::$o = new O(); $hook = new Hook();
+set_error_handler(function($level, $message) { if ($level === E_DEPRECATED) { echo 'W'; } return true; });
+C::$o->nested[1.5][0] += $hook->value;
+restore_error_handler();
+echo ':', json_encode(C::$o->nested);
+C::$o = null;
+"#, "HDW:[[1,2],[12,4]]D");
+}
+
+/// Boxed local parent traversal also reuses the read's fractional key conversion.
+#[test]
+fn test_static_receiver_fifth_review_local_nested_fractional_key() {
+    verify(r#"<?php
+function update(array $items, int $value): void {
+    $result = ($items[1.5][0] += $value);
+    echo $result, '|', json_encode($items);
+}
+set_error_handler(function($level, $message) { if ($level === E_DEPRECATED) { echo 'W'; } return true; });
+update([[1, 2], [3, 4]], $argc);
+restore_error_handler();
+"#, "W4|[[1,2],[4,4]]");
+}
+
+/// Compound array reads follow a replayable RHS hook for direct, child and nested dimensions.
+#[test]
+fn test_static_receiver_fourth_review_compound_hook_arrays() {
+    verify(r#"<?php
+class O { public array $items = [1]; public array $nested = [[1]]; }
+class Root { public O $child; public function __construct() { $this->child = new O(); } }
+class C { public static O $o; public static Root $root; }
+class Hook {
+    public int $flat { get { echo 'H'; C::$o->items = [7]; return 9; } }
+    public int $child { get { echo 'H'; C::$root->child->items = [7]; return 9; } }
+    public int $nested { get { echo 'H'; C::$o->nested = [[7]]; return 9; } }
+}
+C::$o = new O(); C::$root = new Root(); $hook = new Hook();
+C::$o->items[0] += $hook->flat; echo json_encode(C::$o->items), '|';
+C::$root->child->items[0] += $hook->child; echo json_encode(C::$root->child->items), '|';
+C::$o->nested[0][0] += $hook->nested; echo json_encode(C::$o->nested);
+"#, "H[16]|H[16]|H[[16]]");
+}
+
+/// Static array assignment results reuse the captured hook once, after computed dimensions.
+#[test]
+fn test_static_receiver_fourth_review_static_array_hook_result() {
+    verify(r#"<?php
+class C { public static array $items = [1]; public static array $nested = [[1]]; }
+class Hook {
+    public int $flat { get { echo 'H'; C::$items = [7]; return 9; } }
+    public int $nested { get { echo 'H'; C::$nested = [[7]]; return 9; } }
+}
+function hookIndex(): int { echo 'K'; return 0; }
+$hook = new Hook();
+$result = (C::$items[0] = $hook->flat); echo ':', json_encode(C::$items), ':', $result, '|';
+$result = (C::$items[hookIndex()] = $hook->flat); echo ':', json_encode(C::$items), ':', $result, '|';
+$result = (C::$nested[0][0] = $hook->nested); echo ':', json_encode(C::$nested), ':', $result;
+"#, "H:[9]:9|KH:[9]:9|H:[[9]]:9");
+}
+
+/// Array and runtime-name writes diagnose the first missing chain property without read warnings.
+#[test]
+fn test_static_receiver_fourth_review_null_chain_writes() {
+    verify(r#"<?php
+class Leaf { public array $items = []; public int $v = 0; }
+class O { public Leaf $child; }
+class C { public static ?O $o = null; }
+$name = 'v';
+try { C::$o->child->items[0] = (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { C::$o->child->items[] = (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { C::$o->child->$name = (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(); }
+"#, "rhs:Attempt to modify property \"child\" on null|rhs:Attempt to modify property \"child\" on null|rhs:Attempt to modify property \"child\" on null");
+}
+
+/// Compound array updates run the RHS before refusing the missing write-context parent.
+#[test]
+fn test_static_receiver_fourth_review_null_compound_arrays() {
+    verify(r#"<?php
+class Leaf { public array $items = []; }
+class O { public Leaf $child; public array $items = []; }
+class C { public static ?O $o = null; }
+try { C::$o->items[0] += (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { C::$o->child->items[0] += (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { C::$o->items[0][0] += (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(); }
+"#, "rhs:Attempt to modify property \"items\" on null|rhs:Attempt to modify property \"child\" on null|rhs:Attempt to modify property \"items\" on null");
+}
+
+/// Owned keys, dynamic names and values unwind when an intermediate static receiver is null.
+#[test]
+fn test_static_receiver_fourth_review_null_chain_owners() {
+    verify(r#"<?php
+class Leaf { public array $items = []; public string $v = ''; }
+class O { public Leaf $child; }
+class C { public static ?O $o = null; }
+for ($i = 0; $i < 8; $i++) {
+    try { C::$o->child->items[str_repeat('k', 8)] = str_repeat('v', 8); } catch (Error $error) { echo 'a'; }
+    try { C::$o->child->items[] = str_repeat('v', 8); } catch (Error $error) { echo 'b'; }
+    try { C::$o->child->{str_repeat('v', 8)} = str_repeat('v', 8); } catch (Error $error) { echo 'c'; }
+}
+"#, "abcabcabcabcabcabcabcabc");
+}
+
+/// A replayable property hook runs once before fetching the replacement static receiver.
+#[test]
+fn test_static_receiver_third_review_plain_hook_once() {
+    verify(r#"<?php
+class O { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class C { public static ?O $o = null; }
+class B { public int $n { get { echo 'H'; C::$o = new O(); return 7; } } }
+C::$o = new O(); $b = new B();
+C::$o->v = $b->n; echo ':', C::$o->v; C::$o = null;
+"#, "HD1:7D7");
+}
+
+/// Indexed plain writes consume the hook value once and mutate its replacement object.
+#[test]
+fn test_static_receiver_third_review_indexed_hook_once() {
+    verify(r#"<?php
+class O { public array $items = [1]; public function __destruct() { echo 'D', json_encode($this->items); } }
+class C { public static ?O $o = null; }
+class B { public int $n { get { echo 'H'; C::$o = new O(); return 9; } } }
+C::$o = new O(); $b = new B();
+C::$o->items[0] = $b->n; echo ':', json_encode(C::$o->items); C::$o = null;
+"#, "HD[1]:[9]D[9]");
+}
+
+/// Runtime property names do not fetch their static owner before a replayable RHS hook.
+#[test]
+fn test_static_receiver_third_review_dynamic_hook_once() {
+    verify(r#"<?php
+class O { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class C { public static ?O $o = null; }
+class B { public int $n { get { echo 'H'; C::$o = new O(); return 7; } } }
+C::$o = new O(); $b = new B(); $name = 'v';
+C::$o->$name = $b->n; echo ':', C::$o->v; C::$o = null;
+"#, "HD1:7D7");
+}
+
+/// Computed dimensions precede a captured hook and the expression result reuses that value.
+#[test]
+fn test_static_receiver_third_review_computed_hook_result() {
+    verify(r#"<?php
+class O { public array $items = [1]; public function __destruct() { echo 'D', json_encode($this->items); } }
+class C { public static ?O $o = null; }
+class B { public int $n { get { echo 'H'; C::$o = new O(); return 9; } } }
+function pickKey(): int { echo 'K'; return 0; }
+C::$o = new O(); $b = new B();
+$result = (C::$o->items[pickKey()] = $b->n); echo ':', $result, ':', json_encode(C::$o->items); C::$o = null;
+"#, "KHD[1]:9:[9]D[9]");
+}
+
+/// Checks output and balanced lifetime state for one static-receiver write fixture.
+fn verify(source: &str, expected: &str) {
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Computed keys run before the RHS, but nested writes fetch its replacement static array.
+#[test]
+fn test_static_receiver_second_review_computed_nested_keys() {
+    verify(r#"<?php
+class C { public static array $items = [[1]]; }
+function pickKey(): int { echo 'K'; return 0; }
+function replace(): int { echo 'R'; C::$items = [[7]]; return 9; }
+C::$items[pickKey()][0] = replace(); echo json_encode(C::$items), '|';
+C::$items[0][pickKey()] = replace(); echo json_encode(C::$items), '|';
+C::$items[0.0][0] = replace(); echo json_encode(C::$items), '|';
+C::$items[strval(0)][0] = replace(); echo json_encode(C::$items);
+"#, "KR[[9]]|KR[[9]]|R[[9]]|R[[9]]");
+}
+
+/// Nested compound writes read the replacement element after the RHS, with keys evaluated once.
+#[test]
+fn test_static_receiver_second_review_nested_compound_order() {
+    verify(r#"<?php
+class C { public static array $items = [[1]]; }
+function pickKey(): int { echo 'K'; return 0; }
+function replace(): int { echo 'R'; C::$items = [[7]]; return 9; }
+C::$items[0][0] += replace(); echo json_encode(C::$items), '|';
+C::$items[pickKey()][0] += replace(); echo json_encode(C::$items), '|';
+C::$items[0][pickKey()] += replace(); echo json_encode(C::$items);
+"#, "R[[16]]|KR[[16]]|KR[[16]]");
+}
+
+/// Fractional static parent keys are diagnosed after the RHS and once per compound access.
+#[test]
+fn test_static_receiver_second_review_nested_float_diagnosis() {
+    verify(r#"<?php
+class C { public static array $items = [[1], [2]]; }
+function rhs(): int { echo 'R'; C::$items = [[7], [8]]; return 9; }
+set_error_handler(function($level, $message) { echo 'W'; return true; });
+C::$items[1.5][0] = rhs(); echo json_encode(C::$items), '|';
+C::$items[1.5][0] += rhs(); echo json_encode(C::$items);
+restore_error_handler();
+"#, "RW[[7],[9]]|RW[[7],[17]]");
+}
+
+/// Null write chains fail at their first missing property without emitting read warnings.
+#[test]
+fn test_static_receiver_second_review_null_property_chain() {
+    verify(r#"<?php
+class Leaf { public int $v = 1; public string $text = ''; }
+class O { public Leaf $child; }
+class C { public static ?O $o = null; }
+try { C::$o->child->v = (print 'rhs'); }
+catch (Error $e) { echo ':', $e->getMessage(), '|'; }
+try { C::$o->child->v += (print 'rhs'); }
+catch (Error $e) { echo ':', $e->getMessage(), '|'; }
+for ($i = 0; $i < 4; $i++) {
+    try { C::$o->child->text = str_repeat('x', 24); }
+    catch (Error $e) { echo 'c'; }
+}
+"#, "rhs:Attempt to modify property \"child\" on null|rhs:Attempt to modify property \"child\" on null|cccc");
+}
+
+/// A present chain retains the child lease and calls its get hook only once for a compound read.
+#[test]
+fn test_static_receiver_second_review_present_property_chain() {
+    verify(r#"<?php
+class Leaf { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class O {
+    public Leaf $storage;
+    public Leaf $child { get { echo 'G'; return $this->storage; } }
+    public function __construct() { $this->storage = new Leaf(); }
+}
+class C { public static ?O $o = null; }
+function rhs(): int { echo 'R'; return 9; }
+C::$o = new O();
+C::$o->child->v += rhs();
+echo ':', C::$o->storage->v;
+"#, "RG:10D10");
+}
+
+/// Nullable children are checked as write-context parents without reading their later property.
+#[test]
+fn test_static_receiver_second_review_nullable_child() {
+    verify(r#"<?php
+class Leaf { public int $v = 1; }
+class O { public ?Leaf $child = null; }
+class C { public static O $o; }
+C::$o = new O();
+try { C::$o->child->v = (print 'rhs'); }
+catch (Error $e) { echo ':', $e->getMessage(); }
+"#, "rhs:Attempt to assign property \"v\" on null");
+}
+
+/// Captured owned String keys are retired when the RHS throws before any static traversal.
+#[test]
+fn test_static_receiver_second_review_throwing_nested_rhs() {
+    verify(r#"<?php
+class C { public static array $items = [[1]]; }
+function fail(): int { throw new Error('rhs'); }
+for ($i = 0; $i < 4; $i++) {
+    try { C::$items[strval(0)][0] = fail(); }
+    catch (Error $e) { echo 'a'; }
+    try { C::$items[strval(0)][0] += fail(); }
+    catch (Error $e) { echo 'b'; }
+}
+echo '|', json_encode(C::$items);
+"#, "abababab|[[1]]");
+}
+
+/// Nullable local array writes evaluate computed keys and values before the null Error.
+#[test]
+fn test_static_receiver_followup_local_null_array_order() {
+    verify(r#"<?php
+class O { public array $items = []; }
+function append(?O $object): void { $object->items[] = (print 'rhs'); }
+function indexed(?O $object): void { $object->items[(print 'i')] = (print 'v'); }
+try { append(null); } catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { indexed(null); } catch (Error $error) { echo ':', $error->getMessage(); }
+"#, "rhs:Attempt to modify property \"items\" on null|iv:Attempt to modify property \"items\" on null");
+}
+
+/// Owned keys and values are retired when a nullable local array write is refused.
+#[test]
+fn test_static_receiver_followup_local_null_array_owners() {
+    verify(r#"<?php
+class O { public array $items = []; }
+function write(?O $object): void { $object->items[str_repeat('k', 8)] = str_repeat('v', 8); }
+for ($i = 0; $i < 8; $i++) {
+    try { write(null); } catch (Error $error) { echo 'c'; }
+}
+"#, "cccccccc");
+}
+
+/// Both static and local runtime-name writes throw after evaluating the RHS.
+#[test]
+fn test_static_receiver_followup_dynamic_null_error() {
+    verify(r#"<?php
+class O { public int $v = 1; }
+class C { public static ?O $o = null; }
+function write(?O $object, string $name): void { $object->$name = (print 'rhs'); echo 'bad'; }
+$name = 'v';
+try { C::$o->$name = (print 'rhs'); echo 'bad'; }
+catch (Error $error) { echo ':', $error->getMessage(), '|'; }
+try { write(null, $name); } catch (Error $error) { echo ':', $error->getMessage(); }
+"#, "rhs:Attempt to assign property \"v\" on null|rhs:Attempt to assign property \"v\" on null");
+}
+
+/// Dynamic-null guards unwind computed property names and fresh string values.
+#[test]
+fn test_static_receiver_followup_dynamic_null_owners() {
+    verify(r#"<?php
+class O { public string $value = ''; }
+class C { public static ?O $o = null; }
+function write(?O $object): void { $object->{str_repeat('v', 8)} = str_repeat('x', 16); }
+for ($i = 0; $i < 8; $i++) {
+    try { C::$o->{str_repeat('v', 8)} = str_repeat('x', 16); } catch (Error $error) { echo 's'; }
+    try { write(null); } catch (Error $error) { echo 'l'; }
+}
+"#, "slslslslslslslsl");
+}
+
+/// A coalescing write releases the independent nullable static receiver acquire.
+#[test]
+fn test_static_receiver_followup_coalesce_nullable_pin() {
+    verify(r#"<?php
+class O { public mixed $v = null; public function __destruct() { echo 'D', $this->v ?? 0; } }
+class C { public static ?O $o = null; }
+function replace(): int { echo 'R'; C::$o = new O(); return 9; }
+C::$o = new O();
+C::$o->v ??= replace();
+echo 'X', C::$o->v;
+echo '|S', C::$o->v, '|END';
+"#, "RD0X9|S9|ENDD9");
+}
+
+/// Tagged scalar property writes preserve the nullable receiver's final destructor as well.
+#[test]
+fn test_static_receiver_followup_coalesce_tagged_scalar_pin() {
+    verify(r#"<?php
+class O { public ?int $v = null; public function __destruct() { echo 'D'; } }
+class C { public static ?O $o = null; }
+function replace(): int { echo 'R'; C::$o = new O(); return 9; }
+C::$o = new O();
+C::$o->v ??= replace();
+echo 'X', C::$o->v, '|END';
+"#, "RDX9|ENDD");
+}
+
+/// A plain static array append fetches the slot only after an RHS replaces it.
+#[test]
+fn test_static_receiver_followup_direct_static_append() {
+    verify(r#"<?php
+class C { public static array $items = [1]; }
+function replace(): int { echo 'R'; C::$items = [7]; return 9; }
+C::$items[] = replace();
+echo json_encode(C::$items);
+"#, "R[7,9]");
+}
+
+/// An indirect array append reads the replacement receiver only after its RHS has run.
+#[test]
+fn test_static_receiver_review_nested_append_replacement() {
+    verify(r#"<?php
+class O { public array $items = [[1]]; public function __destruct() { echo 'D', json_encode($this->items); } }
+class C { public static O $o; }
+function replace(): int { C::$o = new O(); C::$o->items = [[7]]; return 9; }
+C::$o = new O();
+C::$o->items[0][] = replace();
+echo 'S', json_encode(C::$o->items);
+"#, "D[[1]]S[[7,9]]D[[7,9]]");
+}
+
+/// Computed dimensions precede the RHS while the static receiver itself remains delayed.
+#[test]
+fn test_static_receiver_review_nested_append_key_order() {
+    verify(r#"<?php
+class O { public array $items = [[1]]; }
+class C { public static O $o; }
+function pickKey(): int { echo 'key:'; return 0; }
+function replace(): int { echo 'rhs:'; C::$o = new O(); C::$o->items = [[7]]; return 9; }
+C::$o = new O();
+C::$o->items[pickKey()][] = replace();
+echo json_encode(C::$o->items);
+"#, "key:rhs:[[7,9]]");
+}
+
+/// A child-property append traverses the replacement's entire object chain after its RHS.
+#[test]
+fn test_static_receiver_review_child_append_replacement() {
+    verify(r#"<?php
+class Leaf {
+    public array $items = [1];
+    public function __construct(public int $id) {}
+    public function __destruct() { echo 'D', $this->id, json_encode($this->items); }
+}
+class Root {
+    public Leaf $child;
+    public function __construct(public int $id, int $childId) { $this->child = new Leaf($childId); }
+    public function __destruct() { echo 'D', $this->id; }
+}
+class C { public static Root $o; }
+function replace(): int { C::$o = new Root(3, 7); C::$o->child->items = [1, 7]; return 9; }
+C::$o = new Root(1, 2);
+C::$o->child->items[] = replace();
+echo 'S', C::$o->id, ':', json_encode(C::$o->child->items), ':', C::$o->child->id;
+"#, "D1D2[1]S3:[1,7,9]:7D3D7[1,7,9]");
+}
+
+/// A direct write on null throws a catchable Error after evaluating its RHS.
+#[test]
+fn test_static_receiver_review_direct_null_error() {
+    verify(r#"<?php
+class O { public int $v = 1; }
+class C { public static ?O $o = null; }
+function value(): int { echo 'rhs:'; return 9; }
+try { C::$o->v = value(); echo 'bad'; }
+catch (Error $e) { echo $e->getMessage(), '|'; }
+echo 'after';
+"#, "rhs:Attempt to assign property \"v\" on null|after");
+}
+
+/// A rejected null write unwinds its independently owned string RHS without retaining a leak.
+#[test]
+fn test_static_receiver_review_direct_null_string_owner() {
+    verify(r#"<?php
+class O { public string $text = ''; }
+class C { public static ?O $o = null; }
+function value(): string { return str_repeat('x', 24); }
+for ($i = 0; $i < 8; $i++) {
+    try { C::$o->text = value(); } catch (Error $e) { echo 'c'; }
+}
+echo '|after';
+"#, "cccccccc|after");
+}
+
+/// A non-null static receiver is fetched after an RHS that replaces its sole owner, as in PHP.
+#[test]
+fn test_static_receiver_review_non_null_sole_owner() {
+    verify(r#"<?php
+class O { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class C { public static O $o; }
+function replace(): int { C::$o = new O(); C::$o->v = 7; return 9; }
+C::$o = new O();
+C::$o->v = replace();
+echo C::$o->v;
+"#, "D19D9");
+}
+
+/// Indexed writes target the replacement installed by the RHS, without accessing the freed object.
+#[test]
+fn test_static_receiver_review_array_sole_owner() {
+    verify(r#"<?php
+class O { public array $items = [1]; public function __destruct() { echo 'D', $this->items[0]; } }
+class C { public static O $o; }
+function replace(): int { C::$o = new O(); return 9; }
+C::$o = new O();
+C::$o->items[0] = replace();
+echo '[', C::$o->items[0], ']';
+"#, "D1[9]D9");
+}
+
+/// Appends also load the receiver after replacing RHS effects and retain its declared array slot.
+#[test]
+fn test_static_receiver_review_append_replacement() {
+    verify(r#"<?php
+class O { public array $items = [1]; public function __destruct() { echo 'D', $this->items[0]; } }
+class C { public static ?O $o = null; }
+function replace(): int { C::$o = new O(); return 9; }
+C::$o = new O();
+C::$o->items[] = replace();
+foreach (C::$o->items as $item) { echo $item, ','; }
+"#, "D11,9,D1");
+}
+
+/// Compound writes read the replacement slot after the RHS rather than updating a freed object.
+#[test]
+fn test_static_receiver_review_compound_replacement() {
+    verify(r#"<?php
+class O { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class C { public static O $o; }
+function replace(): int { C::$o = new O(); C::$o->v = 7; return 9; }
+C::$o = new O();
+C::$o->v += replace();
+echo C::$o->v;
+"#, "D116D16");
+}
+
+/// A computed receiver is evaluated eagerly and its independent return owner survives the RHS.
+#[test]
+fn test_static_receiver_review_computed_receiver_owner() {
+    verify(r#"<?php
+class O { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class C { public static O $o; }
+function receiver(): O { return C::$o; }
+function replace(): int { C::$o = new O(); C::$o->v = 7; return 9; }
+C::$o = new O();
+receiver()->v = replace();
+echo C::$o->v;
+"#, "D97D7");
+}
+
+/// Runtime-name writes use the same delayed static receiver fetch as literal-name writes.
+#[test]
+fn test_static_receiver_review_dynamic_sole_owner() {
+    verify(r#"<?php
+class O { public int $v = 1; public function __destruct() { echo 'D', $this->v; } }
+class C { public static O $o; }
+function replace(): int { C::$o = new O(); return 9; }
+C::$o = new O();
+$name = 'v';
+C::$o->$name = replace();
+echo C::$o->v;
+"#, "D19D9");
+}
+
+/// A runtime property name can select a consuming Mixed slot or stdClass storage without leaks.
+#[test]
+fn test_static_receiver_review_dynamic_mixed_value_ownership() {
+    verify(r#"<?php
+class O { public mixed $value = null; }
+function write(O $object, string $name): void { $object->$name = str_repeat('x', 8); }
+function dynamic(mixed $object, string $name): void { $object->$name = str_repeat('y', 8); }
+$object = new O(); $dynamic = new stdClass();
+for ($i = 0; $i < 12; $i++) { write($object, 'value'); dynamic($dynamic, 'value'); }
+echo $object->value, ':', $dynamic->value;
+"#, "xxxxxxxx:yyyyyyyy");
+}
+
+/// Boxed nullable receivers resolve their one object class for indexed and append writes.
+#[test]
+fn test_static_receiver_review_nullable_array_writes() {
+    verify(r#"<?php
+class O { public array $items = [1]; }
+class C { public static ?O $o = null; }
+C::$o = new O();
+C::$o->items[0] = 9;
+C::$o->items[] = 3;
+foreach (C::$o->items as $item) { echo $item, ','; }
+"#, "9,3,");
+}
+
+/// Throwing RHS expressions unwind the receiver lease for every write surface.
+#[test]
+fn test_static_receiver_review_throwing_rhs() {
+    verify(r#"<?php
+class O { public int $v = 1; public array $items = [1]; public function __destruct() { echo 'D', $this->v; } }
+class C { public static O $o; }
+function fail(): int { C::$o = new O(); throw new Exception('rhs'); }
+$name = 'v';
+C::$o = new O();
+try { C::$o->v = fail(); } catch (Exception $e) { echo 'a'; }
+try { C::$o->items[0] = fail(); } catch (Exception $e) { echo 'b'; }
+try { C::$o->$name = fail(); } catch (Exception $e) { echo 'c'; }
+"#, "D1aD1bD1cD1");
+}
+
+/// A null nullable receiver raises a catchable error instead of dropping a boxed write.
+#[test]
+fn test_static_receiver_review_nullable_null_errors() {
+    verify(r#"<?php
+class O { public array $items = [1]; }
+class C { public static ?O $o = null; }
+function value(): int { echo 'rhs:'; return 9; }
+try { C::$o->items[0] = value(); } catch (Error $e) { echo $e->getMessage(), '|'; }
+try { C::$o->items[] = value(); } catch (Error $e) { echo $e->getMessage(); }
+"#, "rhs:Attempt to modify property \"items\" on null|rhs:Attempt to modify property \"items\" on null");
+}

@@ -1,8 +1,6 @@
 ---
 title: "mysqli_prepare()"
 description: "Prepares a statement for execution."
-sidebar:
-  order: 146
 ---
 
 ## mysqli_prepare()
@@ -21,8 +19,9 @@ Prepares a statement for execution.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

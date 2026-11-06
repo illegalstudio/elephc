@@ -90,7 +90,7 @@ pub fn emit_getenv_all(emitter: &mut Emitter) {
     emitter.instruction("cmp w9, #61");                                         // 61 = '='
     emitter.instruction("b.eq __rt_getenv_all_split");                          // the name ends here
     emitter.instruction("add x21, x21, #1");                                    // keep scanning
-    emitter.instruction("b __rt_getenv_all_scan");
+    emitter.instruction("b __rt_getenv_all_scan");                              // continue scanning the environment variable name
 
     // -- measure the value, which runs from just past the '=' to the terminator --
     emitter.label("__rt_getenv_all_split");
@@ -101,7 +101,7 @@ pub fn emit_getenv_all(emitter: &mut Emitter) {
     emitter.instruction("ldrb w9, [x10, x11]");                                 // load the next byte of the value
     emitter.instruction("cbz w9, __rt_getenv_all_store");                       // the value ends at the terminator
     emitter.instruction("add x11, x11, #1");                                    // keep measuring
-    emitter.instruction("b __rt_getenv_all_vlen");
+    emitter.instruction("b __rt_getenv_all_vlen");                              // continue measuring the environment value
 
     // -- copy the value out of the environment block before the hash owns it --
     emitter.label("__rt_getenv_all_store");
@@ -119,7 +119,7 @@ pub fn emit_getenv_all(emitter: &mut Emitter) {
 
     emitter.label("__rt_getenv_all_skip");
     emitter.instruction("add x19, x19, #8");                                    // advance to the next entry pointer
-    emitter.instruction("b __rt_getenv_all_next");
+    emitter.instruction("b __rt_getenv_all_next");                              // process the next environment entry
 
     emitter.label("__rt_getenv_all_done");
     emitter.instruction("mov x0, x20");                                         // return the populated hash
@@ -127,7 +127,7 @@ pub fn emit_getenv_all(emitter: &mut Emitter) {
     emitter.instruction("ldp x21, x22, [sp, #16]");                             // restore the length and entry registers
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the frame
-    emitter.instruction("ret");
+    emitter.instruction("ret");                                                 // return the completed environment hash
 }
 
 /// x86_64 Linux variant of [`emit_getenv_all`]. Same walk, SysV registers.
@@ -159,21 +159,21 @@ fn emit_getenv_all_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_getenv_all_next");
     emitter.instruction("test rbx, rbx");                                       // a null vector means no environment at all
-    emitter.instruction("jz __rt_getenv_all_done");
+    emitter.instruction("jz __rt_getenv_all_done");                             // finish when the environment vector is null
     emitter.instruction("mov r13, QWORD PTR [rbx]");                            // r13 = the current "KEY=VALUE" entry
     emitter.instruction("test r13, r13");                                       // the vector ends at a null entry
-    emitter.instruction("jz __rt_getenv_all_done");
+    emitter.instruction("jz __rt_getenv_all_done");                             // finish at the vector's null terminator
 
     // -- find the FIRST '=', which is where the name ends --
     emitter.instruction("xor r14, r14");                                        // r14 = scan cursor and, at the end, the name length
     emitter.label("__rt_getenv_all_scan");
     emitter.instruction("mov cl, BYTE PTR [r13 + r14]");                        // load the next byte of the entry
     emitter.instruction("test cl, cl");                                         // no '=' before the terminator: not a variable
-    emitter.instruction("jz __rt_getenv_all_skip");
+    emitter.instruction("jz __rt_getenv_all_skip");                             // ignore entries without a name-value separator
     emitter.instruction("cmp cl, 61");                                          // 61 = '='
     emitter.instruction("je __rt_getenv_all_split");                            // the name ends here
     emitter.instruction("add r14, 1");                                          // keep scanning
-    emitter.instruction("jmp __rt_getenv_all_scan");
+    emitter.instruction("jmp __rt_getenv_all_scan");                            // continue scanning the environment variable name
 
     // -- measure the value, which runs from just past the '=' to the terminator --
     emitter.label("__rt_getenv_all_split");
@@ -182,9 +182,9 @@ fn emit_getenv_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_getenv_all_vlen");
     emitter.instruction("mov cl, BYTE PTR [r10 + r11]");                        // load the next byte of the value
     emitter.instruction("test cl, cl");                                         // the value ends at the terminator
-    emitter.instruction("jz __rt_getenv_all_store");
+    emitter.instruction("jz __rt_getenv_all_store");                            // persist the value at its terminator
     emitter.instruction("add r11, 1");                                          // keep measuring
-    emitter.instruction("jmp __rt_getenv_all_vlen");
+    emitter.instruction("jmp __rt_getenv_all_vlen");                            // continue measuring the environment value
 
     // -- copy the value out of the environment block before the hash owns it --
     emitter.label("__rt_getenv_all_store");
@@ -205,7 +205,7 @@ fn emit_getenv_all_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_getenv_all_skip");
     emitter.instruction("add rbx, 8");                                          // advance to the next entry pointer
-    emitter.instruction("jmp __rt_getenv_all_next");
+    emitter.instruction("jmp __rt_getenv_all_next");                            // process the next environment entry
 
     emitter.label("__rt_getenv_all_done");
     emitter.instruction("mov rax, r12");                                        // return the populated hash

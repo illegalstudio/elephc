@@ -238,6 +238,13 @@ fn collect_in_stmt(stmt: &Stmt, names: &mut HashSet<String>) {
 /// `collect_in_stmt` is exhaustive on `StmtKind`.
 fn collect_in_expr(expr: &Expr, names: &mut HashSet<String>) {
     match &expr.kind {
+        // `new Box<int>(…)` before instantiation: its arguments are ordinary expressions and the
+        // declarations inside them still count.
+        ExprKind::NewGeneric { args, .. } => {
+            for arg in args {
+                collect_in_expr(arg, names);
+            }
+        }
         ExprKind::Closure { params, body, .. } => {
             for (_, _, default, _) in params {
                 if let Some(default) = default {

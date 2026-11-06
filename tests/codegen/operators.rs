@@ -995,6 +995,28 @@ echo strlen($s), "|", $s[0], "|", $s[100001];
     assert_eq!(out, "100002|A|B");
 }
 
+/// Verifies an int converted while a scratch-backed string fills the 64 KiB concat scratch does
+/// not overwrite it. `__rt_itoa` used to wrap its 21-byte window to offset 0, writing the digits
+/// into bytes 18..20 of the live left operand (`zzz…123zzz…`); it now uses a spill slot. A digest
+/// formatted while the scratch is that full used to run past its end; it now reserves its bytes.
+#[test]
+fn test_large_scratch_operand_survives_int_conversion() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc + 122;
+$a = str_repeat("z", 65520) . $n . $n;
+echo strlen($a), "|", substr_count($a, "z"), "|", substr($a, 0, 22), "|", substr($a, -8);
+$b = str_pad("", 65530, "x") . $n . strrev("yy") . $n;
+echo "|", substr_count($b, "x"), "|", substr($b, -10);
+echo "|", md5(strtoupper(str_repeat("b", 65530)) . "x");
+"#,
+    );
+    assert_eq!(
+        out,
+        "65526|65520|zzzzzzzzzzzzzzzzzzzzzz|zz123123|65530|xx123yy123|32dc44b1be62426973fc0eee6f69a692"
+    );
+}
+
 
 /// Verifies a `.=` accumulation loop that grows well past the 64 KiB concat scratch buffer stays
 /// byte-exact. Every append beyond the scratch capacity takes the heap fallback, and the appended
@@ -1802,5 +1824,331 @@ echo $a, ",", $b, ",", $c, ",", $d, ",", $e, ",", $t, "\n";
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "place increment in expression position leaked: {}",
         out.stderr
+    );
+}
+/// Issue #507: `<`, `<=`, `>`, `>=` between two strings compile and follow PHP's ordering.
+///
+/// These were rejected outright with "Comparison operators require numeric operands", so the
+/// ordinary character-range idiom was a compile error and callers fell back to `ord()`.
+///
+/// The interesting half is that PHP does NOT order two strings by bytes: when BOTH are
+/// numeric strings it compares them numerically, which is why `"10" > "9"` is true while
+/// byte order says the opposite. Lowering therefore routes this through the runtime ordering
+/// helper (`__rt_php_compare`) rather than `StrCmp`'s lexicographic `__rt_strcmp` — the
+/// latter is right for `strcmp()` and wrong here.
+///
+/// Every expectation measured against the host PHP 8.5.10.
+#[test]
+fn test_string_relational_comparison_follows_php_ordering() {
+    let out = compile_and_run(
+        r#"<?php
+$c = "5";
+echo ($c >= '0' && $c <= '9') ? "digit" : "no", "\n";
+var_dump("a" < "b");
+var_dump("abc" < "abd");
+var_dump("abc" > "ab");
+var_dump("" < "a");
+"#,
+    );
+    assert_eq!(
+        out,
+        "digit\nbool(true)\nbool(true)\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// Issue #507, the rule that byte comparison gets wrong: two NUMERIC strings order
+/// numerically, and a numeric/non-numeric pair falls back to bytes.
+///
+/// `"10" > "9"` is the case a lexicographic `strcmp` answers backwards, and `"1e2"` vs
+/// `"100"` pins that exponent notation counts as numeric rather than comparing as text.
+#[test]
+fn test_numeric_strings_order_numerically_not_bytewise() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump("10" > "9");
+var_dump("10" < "9a");
+var_dump("1e2" == "100");
+var_dump("1e2" >= "100");
+var_dump("1.5" <= "1.50");
+var_dump("0x1A" < "26");
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// Issue #507: the comparison works on RUNTIME strings, not just literals the optimizer
+/// could fold. `$argc` keeps both operands opaque to constant folding.
+#[test]
+fn test_runtime_string_relational_comparison() {
+    let out = compile_and_run(
+        r#"<?php
+$a = $argc > 99 ? "zz" : "10";
+$b = $argc > 99 ? "aa" : "9";
+var_dump($a > $b);
+$c = $argc > 99 ? "zz" : "apple";
+$d = $argc > 99 ? "aa" : "banana";
+var_dump($c < $d);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\n");
+}
+
+/// Issue #507, raised in review: two INTEGER strings compare as `zend_long`, exactly.
+///
+/// `"9007199254740993"` and `"9007199254740992"` are the smallest pair that separates the
+/// two implementations — they are adjacent past 2^53, so they round to the SAME double and
+/// any route through `f64` reports them equal. PHP classifies each side with
+/// `is_numeric_string_ex` first and compares two `IS_LONG` sides as integers, which is what
+/// `__rt_str_smart_cmp` now does.
+///
+/// `==` is asserted here on purpose: it shares the same helper, and it was wrong before this
+/// change too. The last three cases pin the `zend_long` boundaries and the leading-zero
+/// rule, where `"0009007199254740993"` is 16 significant digits and still `IS_LONG`.
+///
+/// Every expectation measured against the host PHP 8.5.10.
+#[test]
+fn test_integer_strings_compare_exactly_past_double_precision() {
+    let out = compile_and_run(
+        r#"<?php
+$a = $argc > 99 ? "0" : "9007199254740993";
+$b = $argc > 99 ? "0" : "9007199254740992";
+var_dump($a > $b);
+var_dump($a >= $b);
+var_dump($a < $b);
+var_dump($a == $b);
+var_dump($a != $b);
+$c = $argc > 99 ? "0" : "9223372036854775807";
+$d = $argc > 99 ? "0" : "9223372036854775806";
+var_dump($c > $d);
+$e = $argc > 99 ? "0" : "-9223372036854775808";
+$f = $argc > 99 ? "0" : "-9223372036854775807";
+var_dump($e < $f);
+$g = $argc > 99 ? "0" : "0009007199254740993";
+var_dump($g > $b);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\n\
+         bool(true)\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// Issue #507, raised in review: integer text beyond `zend_long` follows PHP's `oflow` rules.
+///
+/// PHP does not simply compare the doubles once a side overflows. Two values that overflowed
+/// the SAME way and round to the same double fall back to a BYTE comparison, which is why
+/// `"99999999999999999999" > "100000000000000000000"` is true even though it is numerically
+/// false — the byte order wins there. And an in-range integer against an overflowed one is
+/// decided by the overflow's SIGN without either value being read, which is why
+/// `"9223372036854775807" == "9223372036854775808"` is false although both are the same
+/// double.
+///
+/// The last pair is the embedded NUL: PHP measures its numeric run against the string
+/// LENGTH, so `"2\0"` is not numeric and orders by bytes, putting it above `"10"`.
+///
+/// Every expectation measured against the host PHP 8.5.10.
+#[test]
+fn test_integer_strings_beyond_zend_long_follow_phps_overflow_rules() {
+    let out = compile_and_run(
+        r#"<?php
+$a = $argc > 99 ? "0" : "99999999999999999999";
+$b = $argc > 99 ? "0" : "99999999999999999998";
+var_dump($a > $b);
+var_dump($a == $b);
+$c = $argc > 99 ? "0" : "100000000000000000000";
+var_dump($a > $c);
+$d = $argc > 99 ? "0" : "9223372036854775807";
+$e = $argc > 99 ? "0" : "9223372036854775808";
+var_dump($d < $e);
+var_dump($d == $e);
+$f = $argc > 99 ? "0" : "2\0";
+$g = $argc > 99 ? "0" : "10";
+var_dump($f > $g);
+var_dump($f == $g);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\n\
+         bool(true)\nbool(false)\n"
+    );
+}
+
+/// Review regression: a 20-digit integer part overflows even when a `.` or an exponent follows.
+///
+/// PHP stops its integer scan at `MAX_LENGTH_OF_LONG` digits and records `oflow` before it
+/// reaches the fraction or exponent, so two such spellings that round to the same double
+/// compare by bytes, and one of them against an `IS_LONG` is decided by the overflow sign
+/// alone (`"10000000000000000000e-30" > "5"`). Nineteen digits stay a genuine float. The
+/// `$argc` operands keep the runtime path; the two literal rows check the compile-time fold.
+///
+/// Every expectation measured against the host PHP 8.5.12.
+#[test]
+fn test_twenty_digit_float_spellings_keep_phps_integer_overflow() {
+    let out = compile_and_run(
+        r#"<?php
+$a = $argc > 99 ? "0" : "99999999999999999999.0";
+$b = $argc > 99 ? "0" : "100000000000000000000.0";
+var_dump($a > $b);
+var_dump($a <=> $b);
+$c = $argc > 99 ? "0" : "10000000000000000000";
+$d = $argc > 99 ? "0" : "10000000000000000000e0";
+var_dump($c == $d);
+var_dump($c < $d);
+$e = $argc > 99 ? "0" : "-99999999999999999999.0";
+$f = $argc > 99 ? "0" : "-100000000000000000000.0";
+var_dump($e > $f);
+$g = $argc > 99 ? "0" : "10000000000000000000e-30";
+$h = $argc > 99 ? "0" : "5";
+var_dump($g > $h);
+$i = $argc > 99 ? "0" : "9999999999999999999.5";
+$j = $argc > 99 ? "0" : "9999999999999999999.4";
+var_dump($i == $j);
+var_dump("99999999999999999999.0" > "100000000000000000000.0");
+var_dump("10000000000000000000" == "10000000000000000000e0");
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nint(1)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n\
+         bool(true)\nbool(true)\nbool(false)\n"
+    );
+}
+
+/// Review regression: boxed string equality preserves exact numeric and byte-order rules.
+#[test]
+fn test_review_mixed_string_equality_preserves_php_numeric_context() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function row(mixed $a, mixed $b): void {
+    echo (int)($a == $b), ":", (int)($a != $b), "|";
+}
+row("1e309", "1e310");
+row("-99999999999999999999", "-100000000000000000000");
+row("9007199254740993", "9007199254740992");
+row("0", "00");
+row("alpha", "beta");
+row("2\0", "2");
+row("0", null);
+row("", null);
+row("0", false);
+echo "end";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0:1|0:1|0:1|1:0|0:1|0:1|0:1|1:0|1:0|end");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Regression: two boxed operands compare a resource through its display id.
+///
+/// Boxed equality used to cast both sides to `int`; routing it through the full PHP table
+/// must keep a resource equal to its id as an int, a float, or a string with that leading
+/// number, as PHP does. Expectations measured against the host PHP 8.5.12.
+#[test]
+fn test_boxed_resource_equality_compares_its_display_id() {
+    let out = compile_and_run(r#"<?php
+function row(mixed $a, mixed $b): void {
+    echo (int)($a == $b), (int)($b == $a), (int)($a != $b), "|";
+}
+$r = fopen("php://memory", "r");
+$id = (int)$r;
+foreach ([$id, (float)$id, "$id", " $id", "{$id}abc", "abc", "$id.0", $id + 1, "$id.5"] as $v) {
+    row($r, $v);
+}
+fclose($r);
+echo "end";
+"#);
+    assert_eq!(out, "110|110|110|110|110|001|110|001|001|end");
+}
+
+/// Review regression: both typed and boxed numeric tests reject NUL anywhere in PHP bytes.
+#[test]
+fn test_review_is_numeric_rejects_nul_bytes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function typed_numeric(string $s): bool { return is_numeric($s); }
+function boxed_numeric(mixed $s): bool { return is_numeric($s); }
+foreach (["2\0", "\0" . "2", "2\0x", "\0", "", "2", "\t-2.5e2 \n", "1e309"] as $s) {
+    echo (int)typed_numeric($s), ":", (int)boxed_numeric($s), "|";
+}
+echo "end";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0:0|0:0|0:0|0:0|0:0|1:1|1:1|1:1|end");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Issue #507 for `<=>`: the spaceship operator orders two strings by the same rule.
+///
+/// It used to be rejected at compile time unless the optimizer could fold it, so
+/// `"a" <=> "b"` compiled while `$x <=> $y` did not — the repo's own error test said so and
+/// pointed here. `<=>` is that same ordering reported as -1/0/1, so it now accepts the same
+/// two-string pair and reaches the same runtime helper, including the exact-integer path.
+///
+/// Every expectation measured against the host PHP 8.5.10.
+#[test]
+fn test_spaceship_orders_two_strings() {
+    let out = compile_and_run(
+        r#"<?php
+$x = $argc > 99 ? "0" : "a";
+$y = $argc > 99 ? "0" : "b";
+var_dump($x <=> $y);
+var_dump($y <=> $x);
+var_dump($x <=> $x);
+$a = $argc > 99 ? "0" : "10";
+$b = $argc > 99 ? "0" : "9";
+var_dump($a <=> $b);
+$hi = $argc > 99 ? "0" : "9007199254740993";
+$lo = $argc > 99 ? "0" : "9007199254740992";
+var_dump($hi <=> $lo);
+"#,
+    );
+    assert_eq!(out, "int(-1)\nint(1)\nint(0)\nint(1)\nint(1)\n");
+}
+
+/// Issue #507's string ordering beside a `mixed` operand: `<`, `>=` and `<=>` order a string
+/// against a `mixed` value at run time, as they already order a number against one.
+///
+/// A string beside a `mixed` value was a compile error, so a guard that narrowed one operand to
+/// `string` (`is_string($l)` narrows only `$l`) turned a working `$l <=> $r` over two
+/// `mixed` values into "Spaceship operator requires numeric or string operands". The mixed side
+/// takes `__rt_php_compare`'s run-time kind: strings, numeric strings, numbers, null and bool.
+///
+/// Every expectation measured against the host PHP 8.5.10.
+#[test]
+fn test_ordering_a_string_against_a_mixed_value() {
+    let out = compile_and_run(
+        r#"<?php
+function sp(mixed $a, string $b): int { return $b <=> $a; }
+function lt(mixed $a, string $b): string {
+    return var_export($b < $a, true) . "," . var_export($a >= $b, true);
+}
+foreach ([["a", "b"], ["c", "b"], ["b", "b"], ["10", "9"], [10, "9"], [null, ""], [true, "x"]] as [$a, $b]) {
+    echo sp($a, $b), " ", lt($a, $b), "\n";
+}
+function both(mixed $l, mixed $r): int {
+    if (is_string($l) && is_string($r)) {
+        return $l <=> $r;
+    }
+    return 2;
+}
+echo both("x", "y"), both("y", "x"), both(1, "x"), "\n";
+function one(mixed $l, mixed $r): int {
+    if (is_string($l)) {
+        return $l <=> $r;
+    }
+    return 2;
+}
+foreach ([["a", "b"], ["b", "a"], ["10", 9], ["9", 10], ["", null], ["x", true], [1, "x"]] as [$l, $r]) {
+    echo one($l, $r), "|";
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1 false,false\n-1 true,true\n0 false,true\n-1 true,true\n-1 true,true\n0 false,true\n0 false,true\n-112\n-1|1|1|-1|0|0|2|\n"
     );
 }

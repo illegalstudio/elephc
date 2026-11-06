@@ -183,7 +183,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("js __rt_array_reverse_boxed_done");                    // no live source entries remain
     emitter.instruction("mov r11, QWORD PTR [r11 + 40]");                       // locate the separately allocated hash entries
     emitter.instruction("shl r10, 6");                                          // each bucket occupies sixty-four bytes
-    emitter.instruction("add r11, r10");                                       // locate the entry in the separate storage
+    emitter.instruction("add r11, r10");                                        // locate the entry in the separate storage
     emitter.instruction("mov r10, QWORD PTR [r11 + 48]");                       // follow the previous live entry, skipping tombstones
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve traversal across allocations
     emitter.instruction("mov r10, QWORD PTR [r11 + 8]");                        // borrow the key's integer value or string pointer

@@ -1,8 +1,6 @@
 ---
 title: "stream_wrapper_register()"
 description: "Registers a URL wrapper implemented as a PHP class."
-sidebar:
-  order: 395
 ---
 
 ## stream_wrapper_register()
@@ -22,8 +20,9 @@ Registers a URL wrapper implemented as a PHP class.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_register.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_register.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -31,8 +31,14 @@ pub(in crate::interpreter) fn eval_array_rand_declared_values_result(
     _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [array] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
-    eval_array_rand_result(*array, values)
+    match evaluated_args {
+        [array] => eval_array_rand_result(*array, None, values),
+        [array, num] => {
+            let num = eval_int_value(*num, values)?;
+            eval_array_rand_result(*array, Some(num), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Evaluates PHP `array_rand()` over one eval array expression.
@@ -42,24 +48,69 @@ pub(in crate::interpreter) fn eval_builtin_array_rand(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [array] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let array = eval_expr(array, context, scope, values)?;
-    eval_array_rand_result(array, values)
+    match args {
+        [array] => {
+            let array = eval_expr(array, context, scope, values)?;
+            eval_array_rand_result(array, None, values)
+        }
+        [array, num] => {
+            let array = eval_expr(array, context, scope, values)?;
+            let num = eval_expr(num, context, scope, values)?;
+            let num = eval_int_value(num, values)?;
+            eval_array_rand_result(array, Some(num), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Returns a valid random key from a non-empty eval array.
 pub(in crate::interpreter) fn eval_array_rand_result(
     array: RuntimeCellHandle,
+    num: Option<i64>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
     if len == 0 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let position = eval_random_position(len);
-    values.array_iter_key(array, position)
+    match num {
+        None | Some(1) => {
+            let position = eval_random_position(len);
+            values.array_iter_key(array, position)
+        }
+        Some(num) if num > 0 && num <= len as i64 => {
+            let negative = num > (len as i64 >> 1);
+            let sample = if negative { len as i64 - num } else { num } as usize;
+            let mut selected = vec![false; len];
+            let mut remaining = sample;
+            let mut failures = 0usize;
+            while remaining > 0 {
+                let position = eval_random_position(len);
+                if selected[position] {
+                    failures += 1;
+                    if failures > 50 {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                } else {
+                    selected[position] = true;
+                    remaining -= 1;
+                    failures = 0;
+                }
+            }
+            let mut result = values.array_new(num as usize)?;
+            let mut output = 0i64;
+            for position in 0..len {
+                if selected[position] != negative {
+                    let value = values.array_iter_key(array, position)?;
+                    let key = values.int(output)?;
+                    result = values.array_set(result, key, value)?;
+                    output += 1;
+                }
+            }
+            Ok(result)
+        }
+        Some(_) => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Chooses a pseudo-random array position within `[0, len)`.

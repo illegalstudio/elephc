@@ -1,8 +1,6 @@
 ---
 title: "openssl_get_cipher_methods()"
-description: "Returns the supported OpenSSL cipher method names."
-sidebar:
-  order: 898
+description: "Returns PHP's OpenSSL 3.6.4 default-provider cipher method names."
 ---
 
 ## openssl_get_cipher_methods()
@@ -11,7 +9,7 @@ sidebar:
 function openssl_get_cipher_methods(bool $aliases = false): array
 ```
 
-Returns the supported OpenSSL cipher method names.
+Returns PHP's OpenSSL 3.6.4 default-provider cipher method names.
 
 **Parameters**:
 - `$aliases` (`bool`), default `false`, optional
@@ -20,8 +18,9 @@ Returns the supported OpenSSL cipher method names.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/openssl_get_cipher_methods.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/openssl_get_cipher_methods.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

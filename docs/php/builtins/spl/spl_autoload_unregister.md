@@ -1,8 +1,6 @@
 ---
 title: "spl_autoload_unregister()"
 description: "Unregister given function as __autoload() implementation."
-sidebar:
-  order: 773
 ---
 
 ## spl_autoload_unregister()
@@ -20,8 +18,9 @@ Unregister given function as __autoload() implementation.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_unregister.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_unregister.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

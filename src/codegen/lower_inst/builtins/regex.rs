@@ -6,7 +6,11 @@
 //! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
-//! - `preg_match()` captures currently support direct local `$matches` variables.
+//! - `preg_match()` and `preg_match_all()` captures support raw locals and local
+//!   reference cells. `preg_match_all()` also accepts `PREG_PATTERN_ORDER`,
+//!   `PREG_SET_ORDER`, `PREG_OFFSET_CAPTURE`, and `PREG_UNMATCHED_AS_NULL`.
+//! - `preg_match()` returns PHP `int|false`. The runtime uses `-1` for an invalid
+//!   pattern or the removed `/e` modifier; that path leaves `$matches` untouched.
 //! - Every `preg_replace_callback()` callback uses the descriptor ABI adapter, including
 //!   literal names whose PHP array parameter has boxed storage.
 //! - `preg_split()` forces boxed Mixed element slots so dynamic flags cannot mismatch layout.
@@ -22,6 +26,7 @@ use super::super::super::context::FunctionContext;
 use super::super::callables;
 
 const PREG_SPLIT_FORCE_MIXED_RESULT: i64 = 1 << 30;
+const PREG_MATCH_ALL_SUPPORTED_FLAGS: i64 = 1 | 2 | 256 | 512;
 
 /// Lowers `preg_match(pattern, subject)` through the shared regex runtime helper.
 pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -37,24 +42,126 @@ pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction
     load_pattern_and_subject(ctx, pattern, subject)?;
     if let Some(slot) = matches_slot {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_capture");
-        store_matches_array(ctx, slot)?;
+        store_matches_array_on_success(ctx, slot)?;
     } else {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match");
     }
+    box_count_or_false(ctx)?;
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `preg_match_all(pattern, subject)` through the shared regex runtime helper.
+/// Lowers `preg_match_all(pattern, subject, &$matches?, flags?)` through the regex helpers.
 pub(crate) fn lower_preg_match_all(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "preg_match_all", 2)?;
+    super::ensure_arg_count_between(inst, "preg_match_all", 2, 4)?;
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
+    let matches_slot = inst
+        .operands
+        .get(2)
+        .copied()
+        .map(|value| optional_matches_local_slot(ctx, value))
+        .transpose()?
+        .flatten();
+    let flags = inst.operands.get(3).copied();
     load_pattern_and_subject(ctx, pattern, subject)?;
-    abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => load_flags_arg(ctx, flags, "x5")?,
+        Arch::X86_64 => load_flags_arg(ctx, flags, "r8")?,
+    }
+    emit_preg_match_all_flag_guard(ctx);
+    if let Some(slot) = matches_slot {
+        abi::emit_call_label(ctx.emitter, "__rt_preg_match_all_capture");
+        store_matches_array_on_success(ctx, slot)?;
+    } else {
+        lower_preg_match_all_count(ctx);
+    }
+    box_count_or_false(ctx)?;
     super::store_if_result(ctx, inst)
+}
+
+/// Raises PHP's `ValueError` when `preg_match_all()` receives a non-`PREG_*` flag set.
+///
+/// php-src rejects unknown bits and the conflicting `PREG_PATTERN_ORDER | PREG_SET_ORDER`
+/// pair before running the regex. The lowering checks the materialized flags register
+/// in place so both the count-only and capture paths share one rule.
+fn emit_preg_match_all_flag_guard(ctx: &mut FunctionContext<'_>) {
+    let invalid = ctx.next_label("preg_match_all_flags_invalid");
+    let done = ctx.next_label("preg_match_all_flags_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x10", PREG_MATCH_ALL_SUPPORTED_FLAGS);
+            ctx.emitter.instruction("bic x9, x5, x10");                         // isolate bits outside the PREG_* set
+            ctx.emitter.instruction(&format!("cbnz x9, {}", invalid));          // unknown bits are a ValueError
+            ctx.emitter.instruction("and x9, x5, #3");                          // isolate the two order-mode bits
+            ctx.emitter.instruction("cmp x9, #3");                              // both order modes together are invalid
+            ctx.emitter.instruction(&format!("b.eq {}", invalid));              // raise the same ValueError
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r10", PREG_MATCH_ALL_SUPPORTED_FLAGS);
+            ctx.emitter.instruction("not r10");                                 // invert the allowed mask
+            ctx.emitter.instruction("mov r9, r8");                              // copy the flags before masking
+            ctx.emitter.instruction("and r9, r10");                             // isolate bits outside the PREG_* set
+            ctx.emitter.instruction(&format!("jnz {}", invalid));               // unknown bits are a ValueError
+            ctx.emitter.instruction("mov r9, r8");                              // copy the flags before inspecting the order bits
+            ctx.emitter.instruction("and r9, 3");                               // isolate the two order-mode bits
+            ctx.emitter.instruction("cmp r9, 3");                               // both order modes together are invalid
+            ctx.emitter.instruction(&format!("je {}", invalid));                // raise the same ValueError
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&invalid);
+    crate::codegen::lower_inst::exceptions::emit_value_error(
+        ctx,
+        "preg_match_all(): Argument #4 ($flags) must be a PREG_* constant",
+    );
+    ctx.emitter.label(&done);
+}
+
+/// Validates count-only flags without changing the count helper's existing ABI.
+fn lower_preg_match_all_count(ctx: &mut FunctionContext<'_>) {
+    let invalid = ctx.next_label("preg_match_all_count_invalid");
+    let done = ctx.next_label("preg_match_all_count_done");
+    let unsupported = !PREG_MATCH_ALL_SUPPORTED_FLAGS;
+    // -- reject unsupported flags and conflicting order modes --
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x9", PREG_MATCH_ALL_SUPPORTED_FLAGS);
+            ctx.emitter.instruction("bic x9, x5, x9");                          // isolate unsupported bits without changing string arguments
+            ctx.emitter.instruction(&format!("cbnz x9, {}", invalid));          // unsupported bits return zero without executing the regex
+            ctx.emitter.instruction("and x9, x5, #3");                          // isolate the mutually exclusive order modes
+            ctx.emitter.instruction("cmp x9, #3");                              // both order bits together are invalid
+            ctx.emitter.instruction(&format!("b.eq {}", invalid));              // conflicting order modes return zero
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, r8");                              // copy flags without changing string arguments
+            ctx.emitter.instruction(&format!("and r9, {}", unsupported));       // isolate unsupported flag bits
+            ctx.emitter.instruction(&format!("jnz {}", invalid));               // unsupported bits return zero without executing the regex
+            ctx.emitter.instruction("mov r9, r8");                              // copy flags before inspecting their order mode
+            ctx.emitter.instruction("and r9, 3");                               // isolate the mutually exclusive order modes
+            ctx.emitter.instruction("cmp r9, 3");                               // both order bits together are invalid
+            ctx.emitter.instruction(&format!("je {}", invalid));                // conflicting order modes return zero
+        }
+    }
+    // -- count only after validation, otherwise return the shared fail-closed result --
+    abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b {}", done));                    // keep the valid regex count
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // keep the valid regex count
+        }
+    }
+    ctx.emitter.label(&invalid);
+    let result = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x0",
+        Arch::X86_64 => "rax",
+    };
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    ctx.emitter.label(&done);
 }
 
 /// Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper.
@@ -93,21 +200,39 @@ pub(crate) fn lower_preg_replace_callback(
         ctx,
         super::super::instruction_strict_php_profile(inst),
     )?;
+    // `[$obj, 'method']` and a runtime string name allocate a descriptor this
+    // call owns. The helper's setjmp records the cleanup chain as it stands on
+    // entry, so the record has to be published first: the helper's own rethrow
+    // stops at that record, and the caller's handler then releases it.
+    let owned_descriptor = env_bytes != 0 && callback_target.env.releases_descriptor();
+    if owned_descriptor {
+        let owner = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_temporary_stack_address(ctx.emitter, owner, 0);
+        abi::emit_push_call_operand_owner(ctx.emitter, owner, true);
+    }
+    let env_offset = if owned_descriptor {
+        abi::CALL_OPERAND_OWNER_RECORD_BYTES
+    } else {
+        0
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_arg(ctx, pattern, "x1", "x2", "preg_replace_callback pattern")?;
             abi::emit_symbol_address(ctx.emitter, "x3", &callback_target.entry_label);
-            load_static_callback_env_arg(ctx, "x4", env_bytes);
+            load_static_callback_env_arg(ctx, "x4", env_bytes, env_offset);
             load_string_arg(ctx, subject, "x5", "x6", "preg_replace_callback subject")?;
         }
         Arch::X86_64 => {
             load_string_arg(ctx, pattern, "rdi", "rsi", "preg_replace_callback pattern")?;
             abi::emit_symbol_address(ctx.emitter, "rdx", &callback_target.entry_label);
-            load_static_callback_env_arg(ctx, "rcx", env_bytes);
+            load_static_callback_env_arg(ctx, "rcx", env_bytes, env_offset);
             load_string_arg(ctx, subject, "r8", "r9", "preg_replace_callback subject")?;
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_replace_callback");
+    if owned_descriptor {
+        abi::emit_pop_call_operand_owner(ctx.emitter);
+    }
     callback_target.release_env(ctx, env_bytes);
     super::store_if_result(ctx, inst)
 }
@@ -235,9 +360,11 @@ fn preg_replace_callback_target(
 }
 
 /// Emits a descriptor callback wrapper that adapts regex matches to callable descriptors.
+///
+/// The wrapper is emitted out of line, after all other text, so the caller stays contiguous
+/// in its own section instead of continuing inside the wrapper's.
 fn emit_descriptor_callback_wrapper(ctx: &mut FunctionContext<'_>) -> String {
     let wrapper_label = ctx.next_global_label("preg_replace_descriptor_callback_wrapper");
-    let done_label = ctx.next_label("preg_replace_descriptor_callback_after_wrapper");
     let wrapper = DeferredCallbackWrapper {
         label: wrapper_label.clone(),
         visible_arg_types: vec![preg_matches_type()],
@@ -247,9 +374,12 @@ fn emit_descriptor_callback_wrapper(ctx: &mut FunctionContext<'_>) -> String {
         descriptor_return_type: Some(PhpType::Str),
         invocation_scope_class_id: ctx.lexical_class_id(),
     };
-    abi::emit_jump(ctx.emitter, &done_label);
+    // Out of line: spliced here, the wrapper's `label_global` opened its own ELF section in the
+    // middle of the caller, and `--debug-info` then failed to assemble any function using
+    // `preg_replace_callback` on Linux. See `Emitter::begin_out_of_line`.
+    let scope = ctx.emitter.begin_out_of_line();
     crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
-    ctx.emitter.label(&done_label);
+    ctx.emitter.end_out_of_line(scope);
     wrapper_label
 }
 
@@ -295,7 +425,7 @@ fn reserve_runtime_string_descriptor_callback_env(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("str {descriptor_reg}, [sp]")); // store the runtime string descriptor for the regex callback wrapper
+                .instruction(&format!("str {descriptor_reg}, [sp]"));           // store the runtime string descriptor for the regex callback wrapper
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -330,7 +460,7 @@ fn reserve_callable_array_descriptor_callback_env(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("str {descriptor_reg}, [sp]")); // store the callable-array descriptor for the regex callback wrapper
+                .instruction(&format!("str {descriptor_reg}, [sp]"));           // store the callable-array descriptor for the regex callback wrapper
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -341,25 +471,33 @@ fn reserve_callable_array_descriptor_callback_env(
     Ok(16)
 }
 
-/// Releases an owned descriptor env while preserving the regex replacement string result.
+/// Releases an owned descriptor env while preserving the boxed Mixed result.
 fn release_descriptor_callback_env_preserving_result(
     ctx: &mut FunctionContext<'_>,
     env_bytes: usize,
 ) {
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
     callable_descriptor::emit_release_current_descriptor(ctx.emitter);
-    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
     abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
 }
 
-/// Loads the optional callback environment argument expected by the regex runtime.
-fn load_static_callback_env_arg(ctx: &mut FunctionContext<'_>, env_reg: &str, env_bytes: usize) {
+/// Loads the callback environment pointer expected by the regex runtime.
+///
+/// `slot_offset` is the descriptor slot's distance from the stack pointer after
+/// an owner record has been pushed above it. A zero `env_bytes` passes null.
+fn load_static_callback_env_arg(
+    ctx: &mut FunctionContext<'_>,
+    env_reg: &str,
+    env_bytes: usize,
+    slot_offset: usize,
+) {
     if env_bytes == 0 {
         abi::emit_load_int_immediate(ctx.emitter, env_reg, 0);
     } else {
-        abi::emit_temporary_stack_address(ctx.emitter, env_reg, 0);
+        abi::emit_temporary_stack_address(ctx.emitter, env_reg, slot_offset);
     }
 }
 
@@ -396,6 +534,7 @@ pub(crate) fn lower_preg_split(ctx: &mut FunctionContext<'_>, inst: &Instruction
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_split");
+    box_split_or_false(ctx)?;
     super::store_if_result(ctx, inst)
 }
 
@@ -417,6 +556,46 @@ fn load_pattern_and_subject(
     }
 }
 
+/// Returns the local slot represented by a `preg_match_all()` `$matches` operand.
+///
+/// Named-argument lowering may materialize the default empty array when `$matches`
+/// was omitted. Only that empty allocation is count-only; unsupported global,
+/// static or other non-local storage must never silently discard capture output.
+fn optional_matches_local_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<LocalSlotId>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Err(CodegenIrError::unsupported(
+            "preg_match_all(): non-local $matches destinations are not supported",
+        ));
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+        if inst_ref.op == Op::ConstNull
+            || (inst_ref.op == Op::ArrayNew
+                && inst_ref.immediate == Some(Immediate::Capacity(0)))
+        {
+            return Ok(None);
+        }
+        return Err(CodegenIrError::unsupported(
+            "preg_match_all(): non-local $matches destinations are not supported",
+        ));
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+        return Err(CodegenIrError::invalid_module(
+            "preg_match_all matches load missing local slot",
+        ));
+    };
+    Ok(Some(slot))
+}
 /// Returns the local slot represented by a `preg_match()` `$matches` operand.
 fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<LocalSlotId> {
     let value_ref = ctx
@@ -432,7 +611,7 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::LoadLocal {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
         return Err(CodegenIrError::unsupported(
             "preg_match matches argument that is not a local variable",
         ));
@@ -445,17 +624,146 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
     Ok(slot)
 }
 
-/// Stores the runtime-built matches array into a local slot without clobbering the match flag.
-fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
-    let offset = ctx.local_offset(slot)?;
+/// Boxes the count returned by `preg_match`/`preg_match_all` as PHP `int|false`.
+///
+/// The runtime returns `-1` when compilation or flag validation fails, and when
+/// `preg_match()` sees the removed `/e` modifier. Every real count is non-negative.
+/// The EIR result is a union, so its representation is a Mixed cell and the raw
+/// count must be boxed before storage.
+fn box_count_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let false_label = ctx.next_label("preg_count_false");
+    let done_label = ctx.next_label("preg_count_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::store_at_offset(ctx.emitter, "x1", offset);
+            ctx.emitter.instruction("cmn x0, #1");                              // compare the count against the failure sentinel
+            ctx.emitter.instruction(&format!("b.eq {}", false_label));          // -1 boxes PHP false
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the false arm
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean
+            ctx.emitter.instruction("mov x1, #0");                              // bool(false) payload
+            ctx.emitter.instruction("mov x2, #0");                              // bool has no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            abi::store_at_offset(ctx.emitter, "rdx", offset);
+            ctx.emitter.instruction("cmp rax, -1");                             // compare the count against the failure sentinel
+            ctx.emitter.instruction(&format!("je {}", false_label));            // -1 boxes PHP false
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the false arm
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov rax, 3");                              // runtime tag 3 = boolean
+            ctx.emitter.instruction("xor edi, edi");                            // bool(false) payload
+            ctx.emitter.instruction("xor esi, esi");                            // bool has no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
         }
     }
+    Ok(())
+}
+
+/// Boxes the `preg_split` array result as PHP `array|false`.
+///
+/// The runtime returns `-1` when compilation or flag validation fails; a real
+/// array pointer is boxed through the dynamic container path so its indexed or
+/// hash storage keeps the matching Mixed tag.
+fn box_split_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let false_label = ctx.next_label("preg_split_false");
+    let done_label = ctx.next_label("preg_split_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmn x0, #1");                              // compare the array pointer against the failure sentinel
+            ctx.emitter.instruction(&format!("b.eq {}", false_label));          // -1 boxes PHP false
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Array(Box::new(PhpType::Mixed)),
+            );
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the false arm
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean
+            ctx.emitter.instruction("mov x1, #0");                              // bool(false) payload
+            ctx.emitter.instruction("mov x2, #0");                              // bool has no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, -1");                             // compare the array pointer against the failure sentinel
+            ctx.emitter.instruction(&format!("je {}", false_label));            // -1 boxes PHP false
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Array(Box::new(PhpType::Mixed)),
+            );
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the false arm
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov rax, 3");                              // runtime tag 3 = boolean
+            ctx.emitter.instruction("xor edi, edi");                            // bool(false) payload
+            ctx.emitter.instruction("xor esi, esi");                            // bool has no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+    Ok(())
+}
+
+/// Stores the capture array only when the regex call succeeded, releasing the failure array otherwise.
+///
+/// PHP leaves a caller-supplied `$matches` variable untouched when pattern compilation fails
+/// or `preg_match()` sees the removed `/e` modifier. The runtime reports that path with a `-1`
+/// count and a fresh empty array, so the lowering drops the array instead of writing it.
+fn store_matches_array_on_success(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    let failed = ctx.next_label("preg_matches_failed");
+    let done = ctx.next_label("preg_matches_store_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmn x0, #1");                              // did pattern compilation return the -1 failure sentinel?
+            ctx.emitter.instruction(&format!("b.eq {}", failed));               // leave the caller's matches variable untouched
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, -1");                             // did pattern compilation return the -1 failure sentinel?
+            ctx.emitter.instruction(&format!("je {}", failed));                 // leave the caller's matches variable untouched
+        }
+    }
+    store_matches_array(ctx, slot)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&failed);
+    abi::emit_push_reg(ctx.emitter, result);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unused failure array to the release helper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdx");                            // pass the unused failure array to the release helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_pop_reg(ctx.emitter, result);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Stores the runtime-built matches array into a local slot without clobbering the match flag.
+fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    let array = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdx",
+    };
+    // Both return values must survive retirement and optional Mixed boxing.
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_push_reg(ctx.emitter, array);
+    ctx.release_local_before_refcounted_writeback(slot)?;
+    abi::emit_pop_reg(ctx.emitter, result);
+    if matches!(ctx.local_php_type(slot)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        crate::codegen::emit_box_current_owned_value_as_mixed(
+            ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)),
+        );
+    }
+    ctx.store_current_result_to_local(slot)?;
+    abi::emit_pop_reg(ctx.emitter, result);
     Ok(())
 }
 
@@ -498,13 +806,13 @@ fn load_limit_arg(ctx: &mut FunctionContext<'_>, limit: Option<ValueId>, reg: &s
     require_integer_like(ctx.load_value_to_reg(limit, reg)?, "preg_split limit")
 }
 
-/// Loads the optional `preg_split()` flags, using PHP's default `0`.
+/// Loads an optional preg flags integer, using PHP's default `0`.
 fn load_flags_arg(ctx: &mut FunctionContext<'_>, flags: Option<ValueId>, reg: &str) -> Result<()> {
     let Some(flags) = flags else {
         abi::emit_load_int_immediate(ctx.emitter, reg, 0);
         return Ok(());
     };
-    require_integer_like(ctx.load_value_to_reg(flags, reg)?, "preg_split flags")
+    require_integer_like(ctx.load_value_to_reg(flags, reg)?, "preg flags")
 }
 
 /// Verifies that a regex string operand is statically string-shaped.

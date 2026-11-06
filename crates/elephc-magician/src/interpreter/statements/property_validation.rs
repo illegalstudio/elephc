@@ -19,7 +19,7 @@ pub(in crate::interpreter) fn property_hook_set_method(property_name: &str) -> S
     format!("__propset_{property_name}")
 }
 
-/// Rejects writes to readonly eval-declared properties outside their declaring constructor.
+/// Allows authorized first initialization or one permitted clone rewrite of readonly storage.
 pub(super) fn validate_eval_readonly_property_write(
     declaring_class: &str,
     property: &EvalClassProperty,
@@ -29,10 +29,16 @@ pub(super) fn validate_eval_readonly_property_write(
     if !property.is_readonly() {
         return Ok(());
     }
-    if clone_target.is_some_and(|(identity, storage_property)| {
-        context.consume_clone_reinitialization(identity, storage_property)
-    }) {
-        return Ok(());
+    if let Some((identity, storage_property)) = clone_target {
+        if context.clone_initialization_is_active(identity) {
+            // First initialization consumes the same one-shot lease as an overwrite.
+            return context.consume_clone_reinitialization(identity, storage_property)
+                .then_some(())
+                .ok_or(EvalStatus::RuntimeFatal);
+        }
+        if !context.dynamic_property_is_initialized(identity, storage_property) {
+            return Ok(());
+        }
     }
     current_eval_method_is_declaring_constructor(declaring_class, context)
         .then_some(())
@@ -134,6 +140,11 @@ pub(super) fn eval_throw_property_write_access_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
+    if property.is_readonly() && property.write_visibility() == EvalVisibility::Protected {
+        return eval_throw_readonly_initialization_access_error(
+            declaring_class, property.name(), property.write_visibility(), context, values,
+        );
+    }
     if let Some(set_visibility) = property.set_visibility() {
         return eval_throw_error(
             &format!(

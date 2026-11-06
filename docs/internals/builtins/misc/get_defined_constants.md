@@ -1,8 +1,6 @@
 ---
 title: "get_defined_constants() - internals"
 description: "Compiler internals for get_defined_constants(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 621
 ---
 
 ## `get_defined_constants()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/get_defined_constants.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/get_defined_constants.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

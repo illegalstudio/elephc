@@ -1,23 +1,23 @@
 //! Purpose:
-//! Rejects `ReflectionX::getAttributes()` filter arguments the synthesized body cannot honour.
+//! Rejects a `ReflectionX::getAttributes()` call that provably requests the unsupported
+//! `ReflectionAttribute::IS_INSTANCEOF` subclass filter.
 //!
 //! Called from:
 //! - `crate::types::checker::inference::objects::methods` before instance method inference, for
 //!   both a known receiver class and a `mixed` receiver dispatched on the runtime class id.
 //!
 //! Key details:
-//! - Only the `$flags` argument is refused; the `$name` filter is implemented.
-//! - The argument list is read in every spelling PHP allows, because each one that slipped past
-//!   turned a compile error into a silently wrong answer.
-//! - Static associative spreads are expanded through the SHARED expander the call planner uses,
-//!   rather than being treated as opaque. Refusing them here made
-//!   `getAttributes(...['name' => M::class, 'flags' => 0])` a compile error for a list the rest
-//!   of the compiler normalizes into named arguments. A spread that is not a static associative
-//!   literal survives the expansion and still reads as `Hidden`.
+//! - Only a `$flags` that folds to `IS_INSTANCEOF` next to a `$name` that is a string by
+//!   construction is refused. Every other flag reaches the synthesized body, which checks it at
+//!   run time: PHP's `ValueError` for a value other than `0` and `2`, a `ReflectionException` for
+//!   `IS_INSTANCEOF` with a non-null name, and the name filter otherwise.
+//! - The argument list is read in every spelling PHP allows (named, static associative spread,
+//!   literal spread), through the SHARED planner, so the refusal cannot be dodged by respelling
+//!   the certain case. A spread of a runtime array is left to the body.
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::span::Span;
 use crate::types::call_args::plan_call_args;
 use crate::types::checker::Checker;
@@ -48,6 +48,24 @@ enum FilterFlags {
     Hidden,
     /// The shared planner rejected the call; ordinary call validation owns its diagnostic.
     Invalid,
+}
+
+/// `ReflectionAttribute::IS_INSTANCEOF`, the only `$flags` value besides `0` PHP accepts.
+const IS_INSTANCEOF: i64 = 2;
+
+/// Returns whether a `$name` argument is a string by construction (a literal, a `::class`
+/// fetch, or a concatenation), so a flag on it certainly requests the subclass filter.
+fn name_is_known_string(name: &Expr) -> bool {
+    matches!(
+        name.kind,
+        ExprKind::StringLiteral(_)
+            | ExprKind::ClassConstant { .. }
+            | ExprKind::ObjectClassName { .. }
+            | ExprKind::BinaryOp {
+                op: BinOp::Concat,
+                ..
+            }
+    )
 }
 
 /// Returns the `$name` and `$flags` arguments of a `getAttributes()` call.
@@ -106,39 +124,31 @@ fn literal_spread_filter_arguments(spread: &Expr) -> (Option<Expr>, FilterFlags)
 }
 
 impl Checker {
-    /// Rejects a `getAttributes()` call whose `$flags` argument is not a compile-time zero.
+    /// Rejects a `getAttributes()` call that provably requests `ReflectionAttribute::IS_INSTANCEOF`
+    /// for a class name.
     ///
-    /// PHP's only documented flag is `ReflectionAttribute::IS_INSTANCEOF`, which widens the
-    /// `$name` filter to subclasses and implemented interfaces. Deciding that needs a subclass
-    /// test on the ATTRIBUTE's own class name, which the synthesized body only has as a runtime
-    /// string — and every name-keyed hierarchy query refuses one in AOT mode: `is_subclass_of()`
-    /// answers `false` for a string first operand (`static_relation_holds` requires
-    /// `PhpType::Object`), and `class_parents()`, `class_implements()` and `class_exists()` reject
-    /// a non-literal name outright (#1113).
+    /// That flag widens the `$name` filter to subclasses and implemented interfaces. Deciding it
+    /// needs a subclass test on the ATTRIBUTE's own class name, which the synthesized body only
+    /// has as a runtime string, and every name-keyed hierarchy query refuses one in AOT mode:
+    /// `is_subclass_of()` answers `false` for a string first operand (`static_relation_holds`
+    /// requires `PhpType::Object`), and `class_parents()`, `class_implements()` and
+    /// `class_exists()` reject a non-literal name outright (#1113). Honouring it by exact name
+    /// would return a SUBSET of what PHP returns, with no diagnostic, so a call that certainly
+    /// asks for it stays a compile error.
     ///
-    /// Honouring the flag by exact name instead would return a SUBSET of what PHP returns, with
-    /// no diagnostic. Before the `$name` filter existed this call was a compile error anyway
-    /// (`getAttributes` declared no parameters at all), so refusing the flag keeps a loud failure
-    /// loud instead of trading it for a quiet wrong answer.
+    /// Everything this cannot prove is left to the body, which checks the flag at run time and
+    /// is loud about it: PHP 8.5 accepts exactly `0` and `2` and raises `ValueError: Argument #2
+    /// ($flags) must be a valid attribute filter flag` for the rest (measured with `1`, `3`, `4`
+    /// and `-1`, whatever `$name` holds), and `2` with a non-null name throws a
+    /// `ReflectionException`. A runtime `0` (a variable, a spread of a runtime array) therefore
+    /// just filters, and a runtime-null name ignores the flag as PHP does. A literal `null` flag
+    /// is refused: PHP coerces it to `0` with a deprecation notice, which the call does not model.
     ///
     /// `class_name` is `None` when the receiver is `mixed` and the call dispatches on the runtime
     /// class id. A Reflection owner is one of the candidates there, so the flag is refused on the
     /// same terms — but ONLY when every class declaring the method is an owner. A program that
     /// also has its own `getAttributes` may well be calling that one, and refusing it would be a
-    /// compile error on valid PHP; the body's own throw covers the Reflection case at runtime.
-    ///
-    /// Refusing everything that is not `0` costs nothing in fidelity: PHP 8.5 accepts exactly two
-    /// values and raises `ValueError: Argument #2 ($flags) must be a valid attribute filter flag`
-    /// for the rest, measured with `1`, `3` and `4`. So the only valid value elephc turns away is
-    /// `IS_INSTANCEOF` itself.
-    ///
-    /// Three spellings are deliberately allowed through:
-    /// - a literal `null` name, or no name at all, because PHP ignores `$flags` entirely when
-    ///   nothing is filtered and an absent `$name` IS null — `getAttributes(flags: 2)` and
-    ///   `getAttributes(null, 2)` are the same call, and both answer with every attribute;
-    /// - `$flags` that folds to `0`, which is what the body implements;
-    /// - a literal `false`, which PHP coerces to `0` for this `int` parameter (measured: it
-    ///   answers as `0` does, so refusing it would be a compile error on a working program).
+    /// compile error on valid PHP; the body's own checks cover the Reflection case at runtime.
     pub(in crate::types::checker::inference::objects) fn reject_unsupported_reflection_attribute_filter_flags(
         &self,
         class_name: Option<&str>,
@@ -160,53 +170,45 @@ impl Checker {
             return Ok(());
         };
         // Consume the shared plan so named arguments and static associative spreads use exactly
-        // the same parameter mapping as ordinary calls. A dynamic spread remains Hidden because
-        // it can supply either filter at run time.
+        // the same parameter mapping as ordinary calls.
         let (name, flags) = get_attributes_filter_arguments(sig, args, span);
-        let flags = match flags {
-            FilterFlags::Absent => return Ok(()),
-            // A named `flags:` can stand alone, and then `$name` takes its `null` default.
-            FilterFlags::Given(expr) => {
-                if name.is_none() {
-                    return Ok(());
-                }
-                Some(expr)
-            }
-            // A spread hides the name as well, so nothing here can conclude it is null.
-            FilterFlags::Hidden => None,
-            FilterFlags::Invalid => return Ok(()),
-        };
-        // PHP returns every attribute when `$name` is null, whatever `$flags` says, so a null
-        // name needs no subclass test and the flag is inert.
-        if name
-            .as_ref()
-            .is_some_and(|name| matches!(name.kind, ExprKind::Null))
-        {
+        // An absent flag is PHP's `0`, a runtime spread is checked by the body, and an invalid
+        // plan is ordinary call validation's diagnostic.
+        let FilterFlags::Given(flags) = flags else {
             return Ok(());
-        }
-        let folds_to_zero = |expr: &Expr| {
-            matches!(expr.kind, ExprKind::BoolLiteral(false))
-                || self.eval_static_int_expr(expr) == Some(0)
         };
-        if flags.as_ref().is_some_and(folds_to_zero) {
-            return Ok(());
-        }
         let receiver = match class_name {
             Some(_) => format!("{}::getAttributes()", owner),
             None => "getAttributes()".to_string(),
         };
-        let cause = if flags.is_some() {
-            "the $flags argument is not supported yet"
-        } else {
-            "the $flags argument cannot be read through a spread, so it is not accepted; \
-             pass the arguments positionally"
-        };
+        // PHP coerces a null `$flags` to `0` behind a deprecation notice, as it does for any
+        // internal `int` parameter; the synthesized method receives the null itself and would
+        // reject it as an invalid flag, so the literal is refused rather than miscompiled.
+        if matches!(flags.kind, ExprKind::Null) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{}: passing null to the $flags argument is not supported: PHP coerces it to 0 \
+                     with a deprecation notice; pass 0 or omit the argument",
+                    receiver
+                ),
+            ));
+        }
+        if self.eval_static_int_expr(&flags) != Some(IS_INSTANCEOF) {
+            return Ok(());
+        }
+        // A named `flags:` alone leaves `$name` at its `null` default, and PHP ignores the flag
+        // when nothing is filtered; so does a name that is only null at run time.
+        if !name.as_ref().is_some_and(name_is_known_string) {
+            return Ok(());
+        }
         Err(CompileError::new(
             span,
             &format!(
-                "{}: {} — ReflectionAttribute::IS_INSTANCEOF needs a subclass test on a class \
-                 name known only at runtime, and AOT mode has no name-keyed class hierarchy query",
-                receiver, cause
+                "{}: the $flags argument is not supported yet: ReflectionAttribute::IS_INSTANCEOF \
+                 needs a subclass test on a class name known only at runtime, and AOT mode has no \
+                 name-keyed class hierarchy query",
+                receiver
             ),
         ))
     }

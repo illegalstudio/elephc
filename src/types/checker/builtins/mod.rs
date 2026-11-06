@@ -11,6 +11,7 @@
 pub(crate) mod arrays;
 mod callables;
 pub(crate) use callables::callback_dummy_arg_for_type;
+pub(super) use callables::is_callback_argument_placeholder;
 pub(crate) mod catalog;
 pub(crate) mod io;
 mod language_constructs;
@@ -106,9 +107,11 @@ impl Checker {
         // eagerly inferred by argument normalization. Their handlers inspect the
         // raw operands directly.
         let builtin_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
-        if self.has_function_decl_folded(name)
-            && crate::builtins::registry::lookup(name).is_some()
+        // The declaration lookup scans every declared function, so it runs last: almost every
+        // builtin is available on the target, which settles the condition without it.
+        if crate::builtins::registry::lookup(name).is_some()
             && !catalog::builtin_is_available_for_target(name, self.target)
+            && self.has_function_decl_folded(name)
         {
             return Ok(None);
         }
@@ -233,17 +236,42 @@ impl Checker {
                     continue;
                 }
                 // `sort($a)`, `preg_match(..., $m)` and friends reach this local through its
-                // storage, so the local is never kill/retype eligible in this body.
+                // storage, so the local is never kill/retype eligible in this body. Registry
+                // builtins do not retain the cell, so this deliberately leaves the narrower
+                // non-builtin alias set unchanged.
                 //
                 // Recorded BEFORE the spread bail-out below, not after it. `sort(...$args)` hands
                 // the callee the very same by-reference parameter, so `$args` is aliased just as
                 // surely; only the LVALUE-SHAPE diagnostic underneath has nothing to say about a
                 // spread, which is what that bail-out is for.
-                self.record_reference_alias_root(arg);
+                let can_widen_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
+                    || self.boxed_reference_promotion_pending(arg, span);
+                self.record_builtin_reference_alias_root(arg);
                 if matches!(arg.kind, ExprKind::Spread(_)) {
                     continue;
                 }
                 if self.is_builtin_by_ref_argument_lvalue(arg) {
+                    // A mixed reference can replace a guarded value and require a wider cell.
+                    // Publish the same storage transition as an ordinary mixed-reference call.
+                    if def.params.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
+                        && self.guarded_local_storage_type(arg, env)
+                            .is_some_and(|storage| !Self::is_raw_non_null_contract(storage))
+                    {
+                        let actual = self.infer_type(arg, env)?;
+                        let output = if def.spec.semantics.preserves_array_reference(index)
+                            && (actual.is_php_array()
+                                || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. }))
+                        {
+                            PhpType::php_array()
+                        } else {
+                            PhpType::Mixed
+                        };
+                        self.require_boxed_by_ref_storage(
+                            &output, &actual, arg, env, can_widen_local,
+                            &format!("Builtin '{}'", name),
+                        )?;
+                        self.record_boxed_reference_output(arg, &output, &actual, span, env);
+                    }
                     continue;
                 }
                 let param_name = def
@@ -292,6 +320,7 @@ impl Checker {
                 for arg in args {
                     arg_types.push(self.infer_type(arg, env)?);
                 }
+                reject_array_at_string_param(name, &def.params, def.variadic.is_some(), args, &arg_types)?;
                 let semantic_input = crate::builtins::semantics::BuiltinSemanticInput {
                     name: &builtin_key,
                     args,
@@ -366,4 +395,57 @@ impl Checker {
         }
         Ok(None)
     }
+}
+
+/// Refuses a statically-known ARRAY at a builtin parameter declared `string`.
+///
+/// A builtin with no checker hook is validated for arity only, and its arguments then meet their
+/// parameters in the IR, where `string <- mixed` is a runtime cast. A bare `array` declaration is
+/// `array<mixed>|array<mixed, mixed>`, whose codegen form is `mixed`, so it took that cast and
+/// became the string "Array": `str_replace($a, "z", "xyx")` returned `xyx`, searching for "Array",
+/// silently. php throws `TypeError` for an array at a string parameter, and a typed `array<int>` was
+/// already refused further down; this gives the bare declaration the same answer, at compile time,
+/// in php's own words.
+///
+/// Some of these builtins accept `array|string` in php-src (`str_replace`, `substr_replace`,
+/// `preg_replace`) where elephc's contract narrows the parameter to `string`. For those this is the
+/// honest refusal of a form elephc does not implement, instead of a wrong answer.
+fn reject_array_at_string_param(
+    name: &str,
+    params: &[(String, PhpType)],
+    variadic: bool,
+    args: &[Expr],
+    arg_types: &[PhpType],
+) -> Result<(), CompileError> {
+    let fixed = if variadic { params.len().saturating_sub(1) } else { params.len() };
+    for (index, (arg, ty)) in args.iter().zip(arg_types).enumerate() {
+        // A named argument reaches the same parameter by name, and php numbers it by that
+        // parameter's position; a spread's targets are unknown until it is unpacked.
+        let index = match &arg.kind {
+            ExprKind::Spread(_) => return Ok(()),
+            ExprKind::NamedArg { name: written, .. } => {
+                match params[..fixed].iter().position(|(param, _)| param == written) {
+                    Some(position) => position,
+                    None => continue,
+                }
+            }
+            _ if index >= fixed => break,
+            _ => index,
+        };
+        let (param, param_ty) = &params[index];
+        let is_array = ty.is_php_array()
+            || matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. });
+        if *param_ty == PhpType::Str && is_array {
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{}(): Argument #{} (${}) must be of type string, array given",
+                    name,
+                    index + 1,
+                    param
+                ),
+            ));
+        }
+    }
+    Ok(())
 }

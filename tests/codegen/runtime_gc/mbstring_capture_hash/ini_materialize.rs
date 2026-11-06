@@ -10,12 +10,15 @@
 //! - Public INI wrappers and eval invocation are separate integration surfaces.
 
 use super::*;
-use std::process::Command;
 
 /// Preserves scalar/array string identities through boxing, PHP aliases, casts, and final cleanup.
 #[test]
 fn test_mbstring_ini_materialize_native_ownership() {
     let source = r#"<?php
+class IniLeaseCycle {
+    public mixed $self;
+    function __destruct() {}
+}
 function ini_test_result(int $mode): mixed {
     mb_internal_encoding("UTF-8");
     if ($mode == 0) { return "fixture"; }
@@ -40,6 +43,10 @@ function run_ini(int $mode): void {
     $value = ini_test_result($mode);
     $copy = $value;
     unset($value);
+    $cycle = new IniLeaseCycle();
+    $cycle->self = $cycle;
+    unset($cycle);
+    gc_collect_cycles();
     $index = 0;
     echo $mode, ":", ini_check_tree($copy, $index), ":", $index;
     if (is_string($copy)) { echo ":", bin2hex($copy); }
@@ -55,22 +62,18 @@ echo "done\n";
         "3:1:4:1\n", "4:1:8:1\n", "5:1:MB_STRINGS:1\n", "6:1:3:1\n", "7:1:0:1:1\n");
     let directory = make_cli_test_dir("mbstring_ini_materialize");
     let (assembly, runtime, libraries) = compile_source_to_asm_with_options(source, &directory, 8_388_608, true, true);
+    let call = if target().arch == Arch::AArch64 { "bl" } else { "call" };
+    assert!(assembly.contains(&format!("{call} {}", function_symbol(&assembly, "ini_test_retired"))),
+        "the native retirement probe must remain callable instead of inlining its PHP placeholder");
     let jump = if target().arch == Arch::AArch64 { "b" } else { "jmp" };
     let mut patched = assembly;
     for (name, native) in [("ini_test_result", "_ini_fixture_result"), ("ini_test_identity", "_ini_fixture_identity"),
         ("ini_test_retired", "_ini_fixture_retired")] {
         patched = replace_function(&patched, name, &format!("{jump} {native}\n"));
     }
-    let provider = directory.join("provider.c");
-    let provider_asm = directory.join("provider.s");
-    std::fs::write(&provider, include_str!("ini_materialize/provider.c")).unwrap();
-    let mut compiler = Command::new("cc");
-    compiler.args(["-S", "-O2", "-Wall", "-Wextra", "-Werror"]);
-    if target().arch == Arch::X86_64 { compiler.arg("-masm=intel"); }
-    let built = compiler.arg(&provider).arg("-o").arg(&provider_asm).output().unwrap();
-    assert!(built.status.success(), "{}: {}", directory.display(), String::from_utf8_lossy(&built.stderr));
+    let provider_asm = compile_c_fixture_asm(&directory, "provider", include_str!("ini_materialize/provider.c"), &[]);
     patched.push_str(&shims());
-    append_c_provider_asm(&mut patched, &std::fs::read_to_string(provider_asm).unwrap());
+    append_c_fixture_asm(&mut patched, &provider_asm);
     std::fs::write(directory.join("caller.s"), &patched).unwrap();
     let output = assemble_and_run_capture(&patched, &runtime_obj_for_asm(&runtime), &directory,
         &libraries, &default_link_paths(), &[]);

@@ -46,7 +46,8 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x10", "_class_object_payload_sizes");
     emitter.instruction("ldr x12, [x10, x12]");                                 // load the class-declared object payload size
     emitter.instruction("str x12, [sp, #48]");                                  // save payload size for allocation and dyn-prop offsets
-    emitter.instruction("mov x0, x12");                                         // pass the source payload size to the heap allocator
+    abi::emit_symbol_address(emitter, "x10", "_class_object_allocation_sizes");
+    emitter.instruction("ldr x0, [x10, x11, lsl #3]");                          // include ordinary Throwable construction metadata in the allocation
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate a clone object payload with the same byte size
     emitter.instruction("mov x9, #4");                                          // heap kind 4 marks object instances for ownership helpers
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the uniform object heap header
@@ -54,6 +55,14 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #56]");                                  // reload the source class id
     emitter.instruction("str x11, [x0]");                                       // store the class id at the clone payload head
     emitter.instruction("str x0, [sp, #8]");                                    // save the clone object payload pointer
+    abi::emit_symbol_address(emitter, "x10", "_class_throwable_line_offsets");
+    emitter.instruction("ldr x13, [x10, x11, lsl #3]");                         // locate optional ordinary Throwable construction metadata
+    emitter.instruction("cbz x13, __rt_clone_line_copied");                     // skip the metadata copy for non-Throwable classes
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source object independently of its physical layout
+    super::super::exceptions::emit_creation_line_load(emitter, "x9", "x0", "x10", "__rt_clone_source");
+    emitter.instruction("ldr x11, [sp, #8]");                                   // recover the clone pointer after reading the source line
+    emitter.instruction("str x0, [x11, x13]");                                  // copy metadata outside the clone's PHP property region
+    emitter.label("__rt_clone_line_copied");
     emitter.instruction("ldr x12, [sp, #48]");                                  // reload the payload size
     emitter.instruction("sub x12, x12, #8");                                    // remove the leading class id field from the clone layout
     emitter.instruction("ldr x13, [sp, #56]");                                  // reload the source class id for dynamic-property metadata

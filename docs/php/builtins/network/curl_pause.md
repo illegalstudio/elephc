@@ -1,8 +1,6 @@
 ---
 title: "curl_pause()"
 description: "Pauses and unpauses a connection."
-sidebar:
-  order: 714
 ---
 
 ## curl_pause()
@@ -21,8 +19,9 @@ Pauses and unpauses a connection.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_pause.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_pause.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

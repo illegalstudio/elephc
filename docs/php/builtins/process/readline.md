@@ -1,8 +1,6 @@
 ---
 title: "readline()"
 description: "Reads a line from the user's terminal."
-sidebar:
-  order: 754
 ---
 
 ## readline()
@@ -20,8 +18,9 @@ Reads a line from the user's terminal.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/readline.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/readline.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

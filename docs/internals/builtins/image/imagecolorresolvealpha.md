@@ -1,8 +1,6 @@
 ---
 title: "imagecolorresolvealpha() - internals"
 description: "Compiler internals for imagecolorresolvealpha(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 475
 ---
 
 ## `imagecolorresolvealpha()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2461](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2461) (`imagecolorresolvealpha`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagecolorresolvealpha`)
 - **Function symbol**: `imagecolorresolvealpha()`
 
 

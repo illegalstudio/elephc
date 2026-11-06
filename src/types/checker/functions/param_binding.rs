@@ -60,6 +60,12 @@ impl Checker {
         by_ref: bool,
     ) -> Result<(), CompileError> {
         self.require_strict_types_param_binding(expected, actual, arg.span, context)?;
+        // Null-only promoted parameters are checked before constructor ABI materialization.
+        // Keep by-reference storage outside this value-binding exception.
+        if !by_ref && *expected == PhpType::Void && actual.codegen_repr() == PhpType::Mixed {
+            return Ok(());
+        }
+
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             return Ok(());
         }
@@ -100,6 +106,7 @@ impl Checker {
                 self.register_bound_callable_param_sig(owner, sig);
                 Ok(())
             }
+            ParamBinding::ObjectGuard => Ok(()),
             ParamBinding::Deprecated(detail)
             | ParamBinding::TypeError(detail)
             | ParamBinding::NeedsRuntimeCheck(detail) => Err(Self::param_binding_error(
@@ -212,7 +219,7 @@ impl Checker {
         CompileError::new(
             span,
             &format!(
-                "{} expects {:?}, got {:?} — {}",
+                "{} expects {}, got {} — {}",
                 context, expected, actual, detail
             ),
         )

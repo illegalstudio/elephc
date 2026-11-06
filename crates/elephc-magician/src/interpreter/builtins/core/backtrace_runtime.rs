@@ -19,7 +19,7 @@ const DEBUG_BACKTRACE_IGNORE_ARGS: i64 = 2;
 /// Materializes the active call stack as PHP backtrace frame arrays.
 pub(super) fn eval_debug_backtrace(
     args: &[RuntimeCellHandle],
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if args.len() > 2 {
@@ -31,7 +31,7 @@ pub(super) fn eval_debug_backtrace(
     let frame_limit = backtrace_frame_limit(limit, frames.len());
     let mut result = EvalArrayBuilder::indexed(values, frame_limit)?;
     for (position, frame) in frames.into_iter().take(frame_limit).enumerate() {
-        result.index(position, |values| build_backtrace_frame(&frame, options, values))?;
+        result.index(position, |values| build_backtrace_frame(&frame, options, context, values))?;
     }
     let mut native_index = 0;
     while limit >= 0 && (limit == 0 || frame_limit + native_index < limit as usize) {
@@ -144,6 +144,7 @@ fn backtrace_frame_limit(limit: i64, available: usize) -> usize {
 fn build_backtrace_frame(
     frame: &EvalBacktraceFrame,
     options: i64,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut result = EvalArrayBuilder::assoc(values, 7)?;
@@ -162,7 +163,7 @@ fn build_backtrace_frame(
         }
     }
     if options & DEBUG_BACKTRACE_IGNORE_ARGS == 0 && frame.function() != "eval" {
-        result.string("args", |values| build_backtrace_args(frame.arguments(), values))?;
+        result.string("args", |values| build_backtrace_args(frame.arguments(), context, values))?;
     }
     Ok(result.finish())
 }
@@ -170,6 +171,7 @@ fn build_backtrace_frame(
 /// Retains all PHP-visible arguments from one active frame into an indexed array.
 fn build_backtrace_args(
     frame: &EvalFunctionArgsFrame,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut result = EvalArrayBuilder::indexed(values, frame.actual_count())?;
@@ -177,7 +179,20 @@ fn build_backtrace_args(
         return Ok(result.finish());
     };
     for position in 0..frame.actual_count() {
-        result.index(position, |values| eval_current_function_arg(position, frame, scope, values))?;
+        result.index(position, |values| {
+            let value = eval_current_function_arg(position, frame, scope, values)?;
+            if !frame.is_sensitive(position) { return Ok(value); }
+            let object = values.new_object("SensitiveParameterValue")?;
+            let initialized = eval_native_constructor_with_evaluated_args(
+                "SensitiveParameterValue", object,
+                vec![EvaluatedCallArg { name: None, value, ref_target: None }], context, values,
+            );
+            let released = values.release(value);
+            match initialized.and(released) {
+                Ok(()) => Ok(object),
+                Err(status) => { let _ = values.release(object); Err(status) }
+            }
+        })?;
     }
     Ok(result.finish())
 }
@@ -218,6 +233,10 @@ fn append_rendered_arguments(
     for position in 0..frame.actual_count() {
         if position > 0 {
             rendered.push_str(", ");
+        }
+        if frame.is_sensitive(position) {
+            rendered.push_str("Object(SensitiveParameterValue)");
+            continue;
         }
         let value = eval_current_function_arg(position, frame, scope, values)?;
         rendered.push_str(&render_backtrace_argument(value, context, values)?);

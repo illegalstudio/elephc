@@ -10,7 +10,7 @@
 use super::*;
 
 /// Emits allocation, class-id stamping, and declared-property slot initialization.
-pub(super) fn emit_object_allocation(
+pub(in crate::codegen::lower_inst) fn emit_object_allocation(
     ctx: &mut FunctionContext<'_>,
     class_id: u64,
     property_count: usize,
@@ -20,7 +20,10 @@ pub(super) fn emit_object_allocation(
 ) -> Result<()> {
     let dynamic_properties_offset = dynamic_property_hash_offset(property_count);
     let dynamic_properties_bytes = if allow_dynamic_properties { 8 } else { 0 };
-    let payload_size = dynamic_properties_offset + dynamic_properties_bytes;
+    let creation_line_offset = crate::codegen_support::throwable_layout::ordinary_creation_line_offset_by_id(
+        class_id, &ctx.module.class_infos,
+    );
+    let payload_size = dynamic_properties_offset + dynamic_properties_bytes + usize::from(creation_line_offset.is_some()) * 8;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -47,6 +50,9 @@ pub(super) fn emit_object_allocation(
         }
     }
     let object_reg = abi::int_result_reg(ctx.emitter);
+    if let Some(offset) = creation_line_offset {
+        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
+    }
     for index in 0..property_count {
         let offset = 8 + index * 16;
         abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);

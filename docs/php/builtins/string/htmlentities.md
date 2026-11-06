@@ -1,8 +1,6 @@
 ---
 title: "htmlentities()"
 description: "Converts all applicable characters in a string into their HTML entities."
-sidebar:
-  order: 808
 ---
 
 ## htmlentities()
@@ -22,8 +20,9 @@ Converts all applicable characters in a string into their HTML entities.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/htmlentities.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/htmlentities.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

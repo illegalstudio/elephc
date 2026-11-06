@@ -1,8 +1,6 @@
 ---
 title: "imagetruecolortopalette()"
 description: "Converts a truecolor image to a palette image in place."
-sidebar:
-  order: 535
 ---
 
 ## imagetruecolortopalette()
@@ -22,8 +20,9 @@ Converts a truecolor image to a palette image in place.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -298,6 +298,8 @@ pub(in crate::interpreter) use curl_version::*;
 
 use super::super::*;
 use callbacks::*;
+#[cfg(test)]
+pub(in crate::interpreter) use callbacks::eval_curl_with_callback_frame;
 use handle::*;
 use multipart::*;
 

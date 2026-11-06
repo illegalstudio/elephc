@@ -64,8 +64,13 @@ pub(super) fn eval_reflection_aot_member_names(
     } else {
         values.reflection_property_names(runtime_class_name)?
     };
-    let names = eval_reflection_string_array_to_vec(names_array, values)?;
+    let mut names = eval_reflection_string_array_to_vec(names_array, values)?;
     values.release(names_array)?;
+    if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        if let Some(class) = elephc_builtin_contract::lookup_class(runtime_class_name) {
+            names.retain(|name| class.method_is_php_visible(name));
+        }
+    }
     Ok(names)
 }
 
@@ -386,6 +391,9 @@ pub(super) fn eval_reflection_class_is_cloneable(
     if class.is_abstract() || is_enum {
         return false;
     }
+    let mut ancestry = context.class_parent_names(class.name());
+    ancestry.push(class.name().to_string());
+    if ancestry.iter().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|contract| !contract.cloneable)) { return false; }
     context
         .class_method(class.name(), "__clone")
         .map(|(_, method)| method.visibility() == EvalVisibility::Public)
@@ -575,7 +583,7 @@ pub(super) fn eval_reflection_property_modifiers(
     match set_visibility {
         Some(EvalVisibility::Private) => modifiers |= 32 | 4096,
         Some(EvalVisibility::Protected) => modifiers |= 2048,
-        _ if is_readonly && visibility == EvalVisibility::Public => modifiers |= 2048,
+        None if is_readonly && visibility == EvalVisibility::Public => modifiers |= 2048,
         _ => {}
     }
     modifiers

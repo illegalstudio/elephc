@@ -1,8 +1,6 @@
 ---
 title: "preg_replace() - internals"
 description: "Compiler internals for preg_replace(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 762
 ---
 
 ## `preg_replace()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_replace.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,7 +23,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
@@ -39,7 +37,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_replace(string $pattern, string $replacement, string $subject): string
+function preg_replace(string $pattern, string $replacement, string $subject): mixed
 ```
 
 ## What the type checker enforces

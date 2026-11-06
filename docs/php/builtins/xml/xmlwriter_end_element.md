@@ -1,8 +1,6 @@
 ---
 title: "xmlwriter_end_element()"
 description: "Ends the current element, using the short form when it has no content."
-sidebar:
-  order: 1033
 ---
 
 ## xmlwriter_end_element()
@@ -20,8 +18,9 @@ Ends the current element, using the short form when it has no content.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_element.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_element.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

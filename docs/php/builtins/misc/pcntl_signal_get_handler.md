@@ -1,8 +1,6 @@
 ---
 title: "pcntl_signal_get_handler()"
 description: "Returns the callable or integer disposition registered for one signal."
-sidebar:
-  order: 661
 ---
 
 ## pcntl_signal_get_handler()
@@ -20,8 +18,11 @@ Returns the callable or integer disposition registered for one signal.
 
 ## Availability
 
-- **Compiled (AOT)**: supported on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at compile time for iOS library targets.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_signal_get_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_signal_get_handler.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
+
+- Compiled code can call it on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at compile time for iOS library targets.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -134,7 +134,17 @@ pub(crate) fn object_cast_declarations() -> Program {
 ///
 /// Rides on `opcache_prelude::detect`'s single exhaustive walk (see
 /// [`SymbolKind::ObjectCast`]) so no second traversal can drift out of step with the AST.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): the scan walks the whole
+/// program, so an embedder calling it without the CLI driver's wrapper gets the same stack budget.
 pub fn program_uses_object_cast(program: &[crate::parser::ast::Stmt]) -> bool {
+    crate::compiler_stack::with_compiler_stack(|| {
+        program_uses_object_cast_on_compiler_stack(program)
+    })
+}
+
+/// The body of [`program_uses_object_cast`], run on the stack `with_compiler_stack` sized.
+fn program_uses_object_cast_on_compiler_stack(program: &[crate::parser::ast::Stmt]) -> bool {
     detect::first_reference(program, Symbol::syntactic(SymbolKind::ObjectCast)).is_some()
 }
 
@@ -162,7 +172,21 @@ fn declared_helper(program: &[crate::parser::ast::Stmt]) -> Option<(&'static str
 /// user definition would not merely shadow the prelude, it would become the cast's semantics.
 /// Prepending regardless was no better — the checker reported `Duplicate function declaration`
 /// at the user's own line with no hint of why.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Result<Program, CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, inventory)
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Result<Program, CompileError> {

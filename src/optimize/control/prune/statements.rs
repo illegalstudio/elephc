@@ -177,7 +177,8 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             let catches = normalize_catch_clauses(catches
                 .into_iter()
                 .map(|catch| crate::parser::ast::CatchClause {
-                    exception_types: catch.exception_types,
+                    exception_type_args: catch.exception_type_args,
+                exception_types: catch.exception_types,
                     variable: catch.variable,
                     body: prune_block(catch.body),
                 })
@@ -268,6 +269,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         StmtKind::FunctionDecl {
             by_ref_return,
             name,
+            type_params,
             params,
             param_attributes,
             variadic,
@@ -275,23 +277,18 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             variadic_type,
             return_type,
             body,
-        } => vec![Stmt {
-            kind: StmtKind::FunctionDecl {
-                by_ref_return,
-                name,
-                params,
-                param_attributes,
-                variadic,
-                variadic_by_ref,
-                variadic_type,
-                return_type,
-                body: prune_function_body(body, by_ref_return),
-            },
-            span,
-            source_mode,
-            strict_types,
-            attributes: Vec::new(),
-        }],
+        } => {
+            let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
+                params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &body);
+            vec![Stmt {
+                kind: StmtKind::FunctionDecl {
+                    by_ref_return, name, type_params, params, param_attributes,
+                    variadic, variadic_by_ref, variadic_type, return_type,
+                    body: with_return_boundary_facts(Some(&facts), || prune_function_body(body, by_ref_return)),
+                },
+                span, source_mode, strict_types, attributes: Vec::new(),
+            }]
+        },
         StmtKind::Return(expr) => vec![Stmt {
             kind: StmtKind::Return(expr.map(prune_expr)),
             span,
@@ -300,6 +297,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             attributes: Vec::new(),
         }],
         StmtKind::ClassDecl {
+            generics,
             name,
             extends,
             implements,
@@ -318,6 +316,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
                 .collect();
             vec![Stmt {
                 kind: StmtKind::ClassDecl {
+                    generics,
                     name,
                     extends,
                     implements,
@@ -351,6 +350,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         }
         StmtKind::EnumDecl {
             name,
+            generics,
             backing_type,
             cases,
             implements,
@@ -360,11 +360,12 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         } => vec![Stmt {
             kind: StmtKind::EnumDecl {
                 name,
+                generics,
                 backing_type,
                 cases,
                 implements,
                 trait_uses,
-                methods,
+                methods: methods.into_iter().map(prune_method_without_context).collect(),
                 constants,
             },
             span,
@@ -380,6 +381,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             attributes: Vec::new(),
         }],
         StmtKind::InterfaceDecl {
+            generics,
             name,
             extends,
             properties,
@@ -387,6 +389,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         constants,
         } => vec![Stmt {
             kind: StmtKind::InterfaceDecl {
+                generics,
                 name,
                 extends,
                 properties,
@@ -403,6 +406,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         }],
         StmtKind::TraitDecl {
             name,
+            generics,
             trait_uses,
             properties,
             methods,
@@ -410,6 +414,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         } => vec![Stmt {
             kind: StmtKind::TraitDecl {
                 name,
+                generics,
                 trait_uses,
                 properties,
                 methods: methods
@@ -440,9 +445,11 @@ pub(crate) fn prune_method(
         parent_name: parent_name.map(str::to_string),
     };
     let by_ref_return = method.by_ref_return;
+    let return_facts = ReturnBoundaryFacts::new(method.return_type.as_ref(),
+        method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body);
     ClassMethod {
         body: with_class_effect_context(Some(context), || {
-            prune_function_body(method.body, by_ref_return)
+            with_return_boundary_facts(Some(&return_facts), || prune_function_body(method.body, by_ref_return))
         }),
         ..method
     }
@@ -452,8 +459,11 @@ pub(crate) fn prune_method(
 /// where inherited effects cannot be resolved. Sets ClassEffectContext to None.
 pub(crate) fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
     let by_ref_return = method.by_ref_return;
+    let return_facts = ReturnBoundaryFacts::new(method.return_type.as_ref(),
+        method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body);
     ClassMethod {
-        body: with_class_effect_context(None, || prune_function_body(method.body, by_ref_return)),
+        body: with_class_effect_context(None, || with_return_boundary_facts(Some(&return_facts),
+            || prune_function_body(method.body, by_ref_return))),
         ..method
     }
 }

@@ -12,7 +12,19 @@ use super::*;
 /// Parses a literal eval fragment with the builtin visibility of its physical call site.
 pub(crate) fn parse_literal_fragment(fragment: &str, strict_php: bool) -> Option<Program> {
     let source = format!("<?php {}", fragment);
-    let tokens = crate::lexer::tokenize(&source).ok()?;
+    // Each parsed eval fragment carries its own source identity, so a span in the fragment can
+    // never alias the ROOT file's equal coordinates in span-keyed maps such as
+    // `builtin_call_types` and the binding keys (issue #1291). The id comes from a synthetic
+    // counter that `reset_source_ids` does not rewind and that starts above the include range, so
+    // it cannot alias an INCLUDED or autoloaded file's id either: the include counter restarts at
+    // the start of every compile, which is why sharing it left a narrower alias gap.
+    let source_id = crate::span::Span::fresh_synthetic_source_id();
+    let tokens = crate::lexer::tokenize_with_mode_and_source_id(
+        &source,
+        crate::source::SourceMode::Php,
+        source_id,
+    )
+    .ok()?;
     let source_mode = if strict_php {
         crate::source::SourceMode::Php
     } else {
@@ -226,5 +238,44 @@ where
         needs_global_scope,
         fallback_reason: (!is_fully_static_no_bridge && !has_scope_eir)
             .then(|| classify_fallback_reason(&program)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A literal eval fragment is tokenized with its own source identity, so its spans can never
+    /// alias the root file's (or another fragment's) equal coordinates in span-keyed maps such as
+    /// `builtin_call_types` (issue #1291). The coordinates stay identical; only the identity
+    /// differs.
+    #[test]
+    fn literal_fragment_spans_carry_a_distinct_source_id() {
+        let first = parse_literal_fragment("echo strlen('x');", false).expect("first fragment");
+        let second = parse_literal_fragment("echo strlen('x');", false).expect("second fragment");
+        let span_of = |program: &Program| program.first().expect("one statement").span;
+
+        let first_span = span_of(&first);
+        let second_span = span_of(&second);
+        assert_ne!(first_span.source_id(), 0, "a fragment must not reuse the root source id");
+        assert_ne!(
+            first_span.source_id(),
+            second_span.source_id(),
+            "each fragment parse gets its own identity"
+        );
+        assert_eq!(
+            (first_span.line, first_span.col),
+            (second_span.line, second_span.col),
+            "the same fragment keeps its coordinates; only the identity differs"
+        );
+        // An include-resolution reset must not rewind the synthetic counter, or a later fragment
+        // could reuse an included file's identity (issue #1291).
+        crate::span::Span::reset_source_ids();
+        let third = parse_literal_fragment("echo strlen('x');", false).expect("third fragment");
+        assert_ne!(
+            first_span.source_id(),
+            span_of(&third).source_id(),
+            "a fragment after an include reset keeps a fresh identity"
+        );
     }
 }

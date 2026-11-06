@@ -93,6 +93,7 @@ pub fn emit_dynamic_instanceof(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.label_global("__rt_instanceof_invalid_target");
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     abi::emit_symbol_address(emitter, "x1", "_instanceof_target_type_msg");     // load the page containing the dynamic-target TypeError message
     emitter.instruction("mov x2, #59");                                         // pass the dynamic-target TypeError message length to write()
     emitter.instruction("mov x0, #2");                                          // fd = stderr for the dynamic instanceof TypeError
@@ -174,6 +175,7 @@ fn emit_dynamic_instanceof_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.label_global("__rt_instanceof_invalid_target");
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     abi::emit_symbol_address(emitter, "rsi", "_instanceof_target_type_msg");    // point write() at the dynamic-target TypeError message
     emitter.instruction("mov edx, 59");                                         // pass the dynamic-target TypeError message length to write()
     emitter.instruction("mov edi, 2");                                          // fd = stderr for the dynamic instanceof TypeError

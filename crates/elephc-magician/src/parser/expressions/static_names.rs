@@ -55,9 +55,10 @@ impl Parser {
                 self.advance();
                 Ok(EvalExpr::ClassNameFetch { class_name })
             }
-            TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen) => {
+            TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen | TokenKind::Less) => {
                 let method = method.clone();
                 self.advance();
+                let method = self.parse_written_name(method, false)?;
                 if self.consume_first_class_callable_marker() {
                     return Ok(EvalExpr::StaticMethodCallable {
                         class_name,
@@ -151,9 +152,10 @@ impl Parser {
                     class_name: Box::new(class_name),
                 })
             }
-            TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen) => {
+            TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen | TokenKind::Less) => {
                 let method = method.clone();
                 self.advance();
+                let method = self.parse_written_name(method, false)?;
                 if self.consume_first_class_callable_marker() {
                     return Ok(Self::dynamic_static_method_callable_expr(
                         class_name,
@@ -244,22 +246,49 @@ impl Parser {
     }
 
     /// Parses a simple or explicitly qualified PHP name.
+    ///
+    /// A relative name `namespace\foo` (#825) means `foo` in the current namespace, so it is
+    /// returned already resolved and marked absolute: no import alias or further namespace
+    /// prefix applies to it.
     pub(in crate::parser) fn parse_qualified_name(&mut self) -> Result<ParsedQualifiedName, EvalParseError> {
+        if self.at_relative_name() {
+            self.advance();
+            self.advance();
+            let relative = self.parse_qualified_name_segments()?;
+            let name = if self.namespace.is_empty() {
+                relative
+            } else {
+                format!("{}\\{}", self.namespace, relative)
+            };
+            return Ok(ParsedQualifiedName { name, absolute: true });
+        }
         let absolute = self.consume(TokenKind::Backslash);
-        let TokenKind::Ident(first) = self.current() else {
+        let name = self.parse_qualified_name_segments()?;
+        Ok(ParsedQualifiedName { name, absolute })
+    }
+
+    /// Returns whether the cursor is on the relative-name prefix `namespace\`.
+    pub(in crate::parser) fn at_relative_name(&self) -> bool {
+        matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "namespace"))
+            && matches!(self.peek(), TokenKind::Backslash)
+    }
+
+    /// Parses the backslash-separated segments of a name, without any leading separator.
+    fn parse_qualified_name_segments(&mut self) -> Result<String, EvalParseError> {
+        let (TokenKind::Ident(first) | TokenKind::ReservedNameHead(first)) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
         let mut name = first.clone();
         self.advance();
         while self.consume(TokenKind::Backslash) {
-            let TokenKind::Ident(part) = self.current() else {
+            let (TokenKind::Ident(part) | TokenKind::ReservedNameHead(part)) = self.current() else {
                 return Err(EvalParseError::UnexpectedToken);
             };
             name.push('\\');
             name.push_str(part);
             self.advance();
         }
-        Ok(ParsedQualifiedName { name, absolute })
+        Ok(name)
     }
 
     /// Parses a class-like reference name while rejecting PHP-reserved unqualified names.
@@ -267,7 +296,10 @@ impl Parser {
         &mut self,
         allow_relative_keywords: bool,
     ) -> Result<ParsedQualifiedName, EvalParseError> {
-        let name = self.parse_qualified_name()?;
+        let type_index = self.pos;
+        let mut name = self.parse_qualified_name()?;
+        if !name.absolute { self.mark_type_parameter_use(type_index, &name.name); }
+        name.name = self.parse_written_name(name.name, true)?;
         if self.class_reference_name_is_reserved(&name, allow_relative_keywords) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
@@ -305,26 +337,24 @@ impl Parser {
         self.resolve_class_name(name)
     }
 
-    /// Builds a call expression, adding namespace fallback for unqualified names.
+    /// Preserves call spelling for diagnostics and adds namespace fallback for unqualified names.
     pub(in crate::parser) fn call_expr(&self, name: String, args: Vec<EvalCallArg>) -> EvalExpr {
-        if let Some(imported) = self.imports.resolve_function(&name) {
+        let (base, suffix) = name.find('<').map_or((name.as_str(), ""), |index| (&name[..index], &name[index..]));
+        if let Some(imported) = self.imports.resolve_function(base) {
             return EvalExpr::Call {
-                name: imported.to_ascii_lowercase(),
+                name: format!("{imported}{suffix}"),
                 args,
             };
         }
-        let fallback_name = name.to_ascii_lowercase();
         if self.namespace.is_empty() {
             EvalExpr::Call {
-                name: fallback_name,
+                name,
                 args,
             }
         } else {
             EvalExpr::NamespacedCall {
-                name: self
-                    .qualify_name_in_current_namespace(&name)
-                    .to_ascii_lowercase(),
-                fallback_name,
+                name: self.qualify_name_in_current_namespace(&name),
+                fallback_name: name,
                 args,
             }
         }
@@ -356,8 +386,12 @@ impl Parser {
 
     /// Resolves a class name through active imports before namespace qualification.
     pub(in crate::parser) fn resolve_class_name(&self, name: ParsedQualifiedName) -> String {
-        if name.absolute {
+        if name.absolute || self.type_parameters.contains(&name.name) {
             return name.name;
+        }
+        if let Some((base, suffix)) = name.name.split_once('<') {
+            let resolved = self.imports.resolve_class(base).unwrap_or_else(|| self.qualify_name_in_current_namespace(base));
+            return format!("{resolved}<{suffix}");
         }
         if let Some(imported) = self.imports.resolve_class(&name.name) {
             return imported;

@@ -11,7 +11,13 @@
 
 builtin! {
     contract: "vsprintf",
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Vsprintf,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(
+            crate::ir::RuntimeFnId::Vsprintf,
+        ),
+        crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues {
+            arg: 1,
+            sole: false,
+        },
     ),
 }

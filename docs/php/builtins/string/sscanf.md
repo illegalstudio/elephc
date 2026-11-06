@@ -1,8 +1,6 @@
 ---
 title: "sscanf()"
 description: "Parses a string according to a format."
-sidebar:
-  order: 909
 ---
 
 ## sscanf()
@@ -22,8 +20,9 @@ Parses a string according to a format.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/formatting/sscanf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/formatting/sscanf.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -172,6 +172,7 @@ fn test_propagate_constants_invalidates_by_ref_variadic_function_args() {
         Stmt::new(
             StmtKind::FunctionDecl {
                 name: "f".to_string(),
+                type_params: Vec::new(),
                 params: Vec::new(),
                 param_attributes: Vec::new(),
                 variadic: Some("items".to_string()),
@@ -302,6 +303,7 @@ fn test_pure_user_call_keeps_constants() {
         Stmt::new(
             StmtKind::FunctionDecl {
                 name: "pf".to_string(),
+                type_params: Vec::new(),
                 params: vec![("a".to_string(), None, None, false)],
                 param_attributes: Vec::new(),
                 variadic: None,
@@ -352,6 +354,7 @@ fn test_global_writing_user_call_clears_constants_at_top_level() {
         Stmt::new(
             StmtKind::FunctionDecl {
                 name: "gw".to_string(),
+                type_params: Vec::new(),
                 params: Vec::new(),
                 param_attributes: Vec::new(),
                 variadic: None,
@@ -400,6 +403,8 @@ fn test_by_reference_return_preserves_local_place() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            // An ordinary function declares none; the field exists because a template does.
+            type_params: Vec::new(),
             params: vec![("value".to_string(), None, None, true)],
             param_attributes: Vec::new(),
             variadic: None,

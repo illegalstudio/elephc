@@ -1,8 +1,6 @@
 ---
 title: "hash_copy() - internals"
 description: "Compiler internals for hash_copy(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 800
 ---
 
 ## `hash_copy()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/hash_prelude.rs`:160](https://github.com/illegalstudio/elephc/blob/main/src/hash_prelude.rs#L160) (`hash_copy`)
+- **Lowering**: [`src/hash_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/hash_prelude.rs) (`hash_copy`)
 - **Function symbol**: `hash_copy()`
 
 

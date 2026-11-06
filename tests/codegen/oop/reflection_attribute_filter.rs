@@ -9,21 +9,19 @@
 //!   was refused as "expects 0 arguments, got 1" in AOT mode and the eval bridge answered
 //!   with every attribute on the target (issue #983).
 //! - Every expected string here is real `LC_ALL=C php` 8.5 output.
-//! - `$flags` is declared for signature parity but only `0` is honoured; anything else is a
-//!   compile error, because `ReflectionAttribute::IS_INSTANCEOF` would need a subclass test
-//!   on a runtime class name that no AOT builtin answers (#1113).
-//! - The rejection is exercised in every spelling that reaches the flag — positional, named,
-//!   through a spread, and on a `mixed` receiver — because the first cut read `args[1]` on a
-//!   named-class receiver only, and both `getAttributes(...$args)` and a `mixed` receiver
-//!   walked past it into the silent subset the rejection exists to prevent.
-//! - Three spellings hand the method its arguments with no visible list at all: a first-class
-//!   callable, `call_user_func_array`, and a dynamic method name (which the parser desugars to
-//!   `call_user_func`). The compile-time rejection cannot see any of them, so the synthesized body
-//!   throws a `ReflectionException` — measured at 1 where PHP answers 2 before the throw existed.
-//! - The refusals that would be WRONG are tested too. PHP 8.5 accepts exactly `0` and `2` for
-//!   `$flags` and raises `ValueError: Argument #2 ($flags) must be a valid attribute filter flag`
-//!   for anything else (measured with 1, 3 and 4), so the only valid value elephc turns away is
-//!   `IS_INSTANCEOF` itself — every other accepted spelling has to keep working.
+//! - `$flags` is declared for signature parity and `0` is honoured. `ReflectionAttribute::
+//!   IS_INSTANCEOF` would need a subclass test on a runtime class name that no AOT builtin answers
+//!   (#1113), so a call that provably requests it for a name is a compile error, and one that
+//!   only requests it at run time throws a `ReflectionException` from the synthesized body.
+//! - The compile-time refusal is exercised in every spelling that reaches the flag (positional,
+//!   named, through a literal spread, and on a `mixed` receiver), because the first cut read
+//!   `args[1]` on a named-class receiver only.
+//! - Every spelling the checker cannot fold (a runtime flag, a spread of a runtime array, a
+//!   first-class callable, `call_user_func_array`, a dynamic method name, which the parser
+//!   desugars to `call_user_func`) reaches the body's run-time checks: a `0` filters, `2` with a
+//!   non-null name throws, and anything but `0` and `2` raises PHP's
+//!   `ValueError: <Owner>::getAttributes(): Argument #2 ($flags) must be a valid attribute filter
+//!   flag` (measured with 1, 3, 4 and -1, whatever `$name` holds).
 
 use super::*;
 
@@ -326,12 +324,12 @@ echo count($r->getAttributes(flags: ReflectionAttribute::IS_INSTANCEOF, name: Ba
     );
 }
 
-/// A spread is ONE AST argument holding a runtime array, so an arity test cannot tell a flag from
-/// an absent one. Measured before the guard handled it: `getAttributes(...[Base::class, 2])`
-/// answered `1` where PHP answers `2` — the silent subset, with no diagnostic.
+/// A spread is ONE AST argument holding a runtime array, so the checker cannot tell a flag from
+/// an absent one. It compiles, and the body refuses `IS_INSTANCEOF` at run time instead of
+/// answering with the silent subset (`1` where PHP answers `2`, measured before any refusal).
 #[test]
-fn test_get_attributes_rejects_a_spread_argument_list() {
-    let err = compile_expect_type_error(
+fn test_get_attributes_spread_argument_list_refuses_the_flag_at_run_time() {
+    let out = compile_and_run_expect_failure(
         r#"<?php
 #[Attribute] class Base {}
 #[Attribute] class Derived extends Base {}
@@ -346,9 +344,9 @@ echo count($r->getAttributes(...$args)), "\n";
 "#,
     );
     assert!(
-        err.contains("cannot be read through a spread"),
-        "unexpected diagnostic: {}",
-        err
+        out.contains("ReflectionAttribute::IS_INSTANCEOF is not supported yet"),
+        "expected the runtime refusal, got: {}",
+        out
     );
 }
 
@@ -376,10 +374,10 @@ echo count($r->getAttributes(...['name' => Marker::class, 'flags' => 0])), "\n";
 
 /// A runtime array wrapped in a literal (`...[...$args]`) is no more readable than `...$args`:
 /// the literal's element index is no longer the argument index, and the flag it carries is only
-/// known at run time, so it is refused like the bare spread.
+/// known at run time, so the body refuses it like the bare spread.
 #[test]
-fn test_get_attributes_rejects_a_runtime_array_nested_in_a_literal_spread() {
-    let err = compile_expect_type_error(
+fn test_get_attributes_runtime_array_nested_in_a_literal_spread_refuses_at_run_time() {
+    let out = compile_and_run_expect_failure(
         r#"<?php
 #[Attribute] class Base {}
 #[Attribute] class Derived extends Base {}
@@ -389,7 +387,11 @@ $args = [Base::class, ReflectionAttribute::IS_INSTANCEOF];
 echo count($r->getAttributes(...[...$args])), "\n";
 "#,
     );
-    assert!(err.contains("cannot be read through a spread"), "unexpected diagnostic: {}", err);
+    assert!(
+        out.contains("ReflectionAttribute::IS_INSTANCEOF is not supported yet"),
+        "expected the runtime refusal, got: {}",
+        out
+    );
 }
 
 /// A literal spread carrying `IS_INSTANCEOF` is refused at compile time exactly like the written
@@ -687,14 +689,11 @@ echo count($r->getAttributes(...['name' => Marker::class, 'flags' => 0]));
     assert_eq!(out, "21111");
 }
 
-/// Verifies a spread whose contents are a RUNTIME array is still refused.
-///
-/// Expanding the static form must not soften this one: nothing in a runtime array can tell
-/// `$flags` from absent, so accepting it would trade a loud compile error for the silent subset
-/// the guard exists to prevent.
+/// Verifies a spread whose contents are a RUNTIME array reaches the body, which filters by name
+/// when the array carries no flag (#1335). PHP 8.5.10 answers `1`.
 #[test]
-fn test_get_attributes_still_rejects_a_runtime_spread() {
-    let err = compile_expect_type_error(
+fn test_get_attributes_filters_through_a_runtime_spread() {
+    let out = compile_and_run(
         r#"<?php
 #[Attribute] class Marker {}
 
@@ -707,9 +706,290 @@ $args['name'] = Marker::class;
 echo count($r->getAttributes(...$args)), "\n";
 "#,
     );
+    assert_eq!(out, "1\n");
+}
+
+/// A flag the checker cannot fold reaches the body, which implements a run-time zero exactly
+/// like a literal one (#1335): a variable `0`, a runtime-null name next to `IS_INSTANCEOF` (PHP
+/// ignores the flag when nothing is filtered), and runtime spreads carrying a zero flag,
+/// positionally and by name. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_get_attributes_accepts_flags_the_body_checks_at_run_time() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute] class Marker {}
+#[Attribute] class Other {}
+#[Marker, Other]
+class Target {}
+
+$r = new ReflectionClass(Target::class);
+$zero = 0;
+echo count($r->getAttributes(Marker::class, $zero)), "|";
+$n = null;
+echo count($r->getAttributes($n, ReflectionAttribute::IS_INSTANCEOF)), "|";
+$args = [Marker::class, 0];
+echo count($r->getAttributes(...$args)), "|";
+$named = ['flags' => 0, 'name' => Marker::class];
+echo count($r->getAttributes(...$named)), "\n";
+"#,
+    );
+    assert_eq!(out, "1|2|1|1\n");
+}
+
+/// `IS_INSTANCEOF` in a variable next to a real name compiles, and the body refuses it at run
+/// time with the same `ReflectionException` the indirect spellings get.
+#[test]
+fn test_get_attributes_runtime_is_instanceof_flag_is_refused_at_run_time() {
+    let out = compile_and_run_expect_failure(
+        r#"<?php
+#[Attribute] class Base {}
+#[Attribute] class Derived extends Base {}
+#[Derived] #[Base] class Target {}
+$r = new ReflectionClass(Target::class);
+$flag = ReflectionAttribute::IS_INSTANCEOF;
+echo count($r->getAttributes(Base::class, $flag)), "\n";
+"#,
+    );
     assert!(
-        err.contains("cannot be read through a spread"),
+        out.contains("ReflectionAttribute::IS_INSTANCEOF is not supported yet"),
+        "expected the runtime refusal, got: {}",
+        out
+    );
+}
+
+/// A literal `null` flag is refused at compile time: PHP coerces it to `0` behind a deprecation
+/// notice, and the synthesized method would receive the null itself.
+#[test]
+fn test_get_attributes_refuses_a_literal_null_flag() {
+    let err = compile_expect_type_error(
+        r#"<?php
+#[Attribute] class Marker {}
+#[Marker] class Target {}
+echo count((new ReflectionClass(Target::class))->getAttributes(Marker::class, null)), "\n";
+"#,
+    );
+    assert!(
+        err.contains("passing null to the $flags argument is not supported"),
         "unexpected diagnostic: {}",
         err
     );
+}
+
+/// Every value but `0` and `IS_INSTANCEOF` raises PHP's `ValueError`, whatever `$name` holds and
+/// however the call reaches the method (#1336): written directly (a literal flag compiles now and
+/// is checked at run time), with a null name, through a first-class callable,
+/// `call_user_func_array`, and a dynamic method name. The message names the class declaring the
+/// method: `ReflectionFunctionAbstract` for a method. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_get_attributes_invalid_flags_raise_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute] class Marker {}
+#[Marker]
+class Target { #[Marker] public function m() {} }
+
+$r = new ReflectionClass(Target::class);
+try { echo count($r->getAttributes(Marker::class, 3)), "\n"; }
+catch (ValueError $e) { echo "direct: ", $e->getMessage(), "\n"; }
+try { echo count($r->getAttributes(null, 1)), "\n"; }
+catch (ValueError $e) { echo "null-name: ", $e->getMessage(), "\n"; }
+$f = $r->getAttributes(...);
+try { echo count($f(Marker::class, 3)), "\n"; }
+catch (ValueError $e) { echo "first-class: ", $e->getMessage(), "\n"; }
+try { echo count(call_user_func_array([$r, 'getAttributes'], [Marker::class, 1])), "\n"; }
+catch (ValueError $e) { echo "call_user_func_array: ", $e->getMessage(), "\n"; }
+$m = 'getAttributes';
+try { echo count($r->$m(null, 4)), "\n"; }
+catch (ValueError $e) { echo "dynamic: ", $e->getMessage(), "\n"; }
+$method = new ReflectionMethod(Target::class, 'm');
+try { echo count($method->getAttributes(null, -1)), "\n"; }
+catch (ValueError $e) { echo "method: ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "direct: ReflectionClass::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag\n\
+         null-name: ReflectionClass::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag\n\
+         first-class: ReflectionClass::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag\n\
+         call_user_func_array: ReflectionClass::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag\n\
+         dynamic: ReflectionClass::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag\n\
+         method: ReflectionFunctionAbstract::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag\n"
+    );
+}
+
+/// `ReflectionEnum::getAttributes()` returns `ReflectionAttribute` objects like every other owner
+/// (#1337), and an enum's own attributes are reported at all. Expected output measured on PHP
+/// 8.5.10.
+#[test]
+fn test_reflection_enum_get_attributes_returns_reflection_attributes() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute] class Marker { public function __construct(public string $tag = "none") {} }
+#[Attribute] class Other {}
+#[Marker("suit"), Other]
+enum Suit { case Hearts; }
+
+$r = new ReflectionEnum(Suit::class);
+foreach ($r->getAttributes() as $attribute) {
+    echo $attribute->getName(), "|";
+}
+$filtered = $r->getAttributes(Marker::class);
+echo count($filtered), "|", $filtered[0]->newInstance()->tag, "\n";
+"#,
+    );
+    assert_eq!(out, "Marker|Other|1|suit\n");
+}
+
+/// The filter, the element's `getName()`, and `newInstance()` work on every remaining owner
+/// (#1338): object, parameter, class constant, enum (through `ReflectionEnum` and
+/// `ReflectionClass`), and unit and backed enum cases. A parameter attribute used to have no
+/// factory, so its `newInstance()` returned `null`. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_get_attributes_filter_on_remaining_owners() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute(Attribute::TARGET_ALL)]
+class Marker { public function __construct(public string $tag = "none") {} }
+#[Attribute(Attribute::TARGET_ALL)]
+class Other {}
+#[Marker("class"), Other]
+class Target {
+    #[Marker("const"), Other] public const C = 1;
+    public function m(#[Marker("param"), Other] int $x) {}
+}
+#[Marker("enum"), Other]
+enum Suit { #[Marker("case"), Other] case Hearts; }
+enum Level: int { #[Marker("bcase"), Other] case Low = 1; }
+
+function show(string $label, array $all, array $filtered): void {
+    echo $label, ": ", count($all), " ", count($filtered), " ", $filtered[0]->getName(), " ",
+        $filtered[0]->newInstance()->tag, "\n";
+}
+$object = new ReflectionObject(new Target());
+show("object", $object->getAttributes(), $object->getAttributes(Marker::class));
+$parameter = new ReflectionParameter([Target::class, 'm'], 0);
+show("parameter", $parameter->getAttributes(), $parameter->getAttributes(Marker::class));
+$constant = new ReflectionClassConstant(Target::class, 'C');
+show("constant", $constant->getAttributes(), $constant->getAttributes(Marker::class));
+$enum = new ReflectionEnum(Suit::class);
+show("enum", $enum->getAttributes(), $enum->getAttributes(Marker::class));
+$enumClass = new ReflectionClass(Suit::class);
+show("enum-class", $enumClass->getAttributes(), $enumClass->getAttributes(Marker::class));
+$case = new ReflectionEnumUnitCase(Suit::class, 'Hearts');
+show("case", $case->getAttributes(), $case->getAttributes(Marker::class));
+$backed = new ReflectionEnumBackedCase(Level::class, 'Low');
+show("backed-case", $backed->getAttributes(), $backed->getAttributes(Marker::class));
+"#,
+    );
+    assert_eq!(
+        out,
+        "object: 2 1 Marker class\n\
+         parameter: 2 1 Marker param\n\
+         constant: 2 1 Marker const\n\
+         enum: 2 1 Marker enum\n\
+         enum-class: 2 1 Marker enum\n\
+         case: 2 1 Marker case\n\
+         backed-case: 2 1 Marker bcase\n"
+    );
+}
+
+/// An element the filter returns inside eval still answers `getName()` and builds its attribute
+/// through `newInstance()`, for class, object, method, property, and class-constant owners
+/// (#1338); the earlier eval test only counted. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_get_attributes_filtered_eval_elements_answer_name_and_new_instance() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute(Attribute::TARGET_ALL)] class Marker { public function __construct(public string $v = "x") {} }
+#[Attribute(Attribute::TARGET_ALL)] class Other {}
+
+#[Marker("class"), Other]
+class Target {
+    #[Marker("const"), Other] public const C = 1;
+    #[Marker("prop"), Other] public int $p = 0;
+    #[Marker("method"), Other] public function run() {}
+}
+
+eval('foreach ([
+    "class" => new ReflectionClass("Target"),
+    "object" => new ReflectionObject(new Target()),
+    "method" => new ReflectionMethod("Target", "run"),
+    "property" => new ReflectionProperty("Target", "p"),
+    "constant" => new ReflectionClassConstant("Target", "C"),
+] as $label => $owner) {
+    $filtered = $owner->getAttributes("Marker");
+    echo $label, ":", count($owner->getAttributes()), ":", count($filtered), ":",
+        $filtered[0]->getName(), ":", $filtered[0]->newInstance()->v, "\n";
+}');
+"#,
+    );
+    assert_eq!(
+        out,
+        "class:2:1:Marker:class\n\
+         object:2:1:Marker:class\n\
+         method:2:1:Marker:method\n\
+         property:2:1:Marker:prop\n\
+         constant:2:1:Marker:const\n"
+    );
+}
+
+/// A top-level function's parameter attribute answers `newInstance()` with the built attribute,
+/// reached through `ReflectionFunction::getParameters()` and through a directly constructed
+/// `ReflectionParameter`, filtered or not; a parameter without attributes answers empty. Function
+/// parameters feed the attribute factories through their own path, separate from method
+/// parameters. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_function_parameter_attribute_new_instance_builds_the_attribute() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute(Attribute::TARGET_ALL)]
+class Marker { public function __construct(public string $tag = "none") {} }
+#[Attribute(Attribute::TARGET_ALL)]
+class Other {}
+function tagged(#[Marker("fparam"), Other] int $x, int $plain = 0) {}
+
+$params = (new ReflectionFunction('tagged'))->getParameters();
+$first = $params[0]->getAttributes();
+echo count($first), " ", $first[0]->getName(), " ", $first[0]->newInstance()->tag, "\n";
+echo count($params[1]->getAttributes()), "\n";
+$direct = new ReflectionParameter('tagged', 'x');
+$filtered = $direct->getAttributes(Marker::class);
+echo count($filtered), " ", $filtered[0]->newInstance()->tag, "\n";
+"#,
+    );
+    assert_eq!(out, "2 Marker fparam\n0\n1 fparam\n");
+}
+
+/// An enum method's own attributes are reported, filtered, and instantiated, for an instance
+/// method, a static method, and in the class's `getMethods()` listing; a method without
+/// attributes answers empty, and the method still runs. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_enum_method_get_attributes_reports_declared_attributes() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute(Attribute::TARGET_ALL)]
+class Marker { public function __construct(public string $tag = "none") {} }
+#[Attribute(Attribute::TARGET_ALL)]
+class Other {}
+enum Suit {
+    case Hearts;
+    #[Marker("label"), Other] public function label(): string { return "hearts"; }
+    #[Marker("make")] public static function make(): self { return self::Hearts; }
+    public function plain(): string { return "plain"; }
+}
+$label = new ReflectionMethod(Suit::class, 'label');
+$all = $label->getAttributes();
+echo count($all), " ", $all[0]->getName(), " ", $all[1]->getName(), "\n";
+$filtered = $label->getAttributes(Marker::class);
+echo count($filtered), " ", $filtered[0]->newInstance()->tag, "\n";
+$make = new ReflectionMethod(Suit::class, 'make');
+echo count($make->getAttributes()), " ", $make->getAttributes()[0]->newInstance()->tag, "\n";
+echo count((new ReflectionMethod(Suit::class, 'plain'))->getAttributes()), "\n";
+foreach ((new ReflectionClass(Suit::class))->getMethods() as $method) {
+    if ($method->getName() === 'label') { echo "listed ", count($method->getAttributes()), "\n"; }
+}
+echo Suit::Hearts->label(), "\n";
+"#,
+    );
+    assert_eq!(out, "2 Marker Other\n1 label\n1 make\n0\nlisted 2\nhearts\n");
 }

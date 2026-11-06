@@ -1,8 +1,6 @@
 ---
 title: "ltrim()"
 description: "Strips whitespace (or other characters) from the beginning of a string."
-sidebar:
-  order: 827
 ---
 
 ## ltrim()
@@ -21,8 +19,9 @@ Strips whitespace (or other characters) from the beginning of a string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ltrim.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ltrim.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

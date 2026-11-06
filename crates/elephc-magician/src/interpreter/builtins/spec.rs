@@ -13,12 +13,13 @@
 //! - Hook enums keep calls monomorphized over `RuntimeValueOps`.
 
 use elephc_builtin_contract::{
-    eval_execution, eval_signature, lookup_constant, lookup_id, BuiltinId, ConstValue, DefaultSpec,
-    EvalExecution, ParamSpec, RuntimeBuiltinId,
+    eval_execution, eval_signature, lookup_constant, lookup_id, BuiltinId, BuiltinKind, ConstValue,
+    DefaultSpec, EvalExecution, ParamSpec, RuntimeBuiltinId,
 };
 
 pub(in crate::interpreter) use super::hooks::{EvalDirectHook, EvalValuesHook};
 pub(in crate::interpreter) use super::registry::EvalBuiltinDefaultValue;
+use super::registry::EvalBuiltinArity;
 
 /// Broad domain used to group eval builtin home files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +38,8 @@ pub(in crate::interpreter) enum EvalArea {
     Filesystem,
     /// Formatting and display-oriented numeric builtins.
     Formatting,
+    /// `ext/gmp` procedural builtins, forwarded to the compiled GMP prelude helpers.
+    Gmp,
     /// JSON encoding, decoding, validation, and error-state builtins.
     Json,
     /// Numeric and mathematical builtins.
@@ -71,6 +74,7 @@ impl EvalArea {
             EvalArea::Curl => "curl",
             EvalArea::Filesystem => "filesystem",
             EvalArea::Formatting => "formatting",
+            EvalArea::Gmp => "gmp",
             EvalArea::Json => "json",
             EvalArea::Math => "math",
             EvalArea::NetworkEnv => "network_env",
@@ -143,6 +147,10 @@ pub(in crate::interpreter) struct EvalBuiltinSpec {
     pub(in crate::interpreter) execution: EvalExecution,
     /// Whether strict-PHP hides this elephc-only surface.
     extension: bool,
+    /// Whether the contract is a language construct (`isset`, `exit`) rather than a function.
+    language_construct: bool,
+    /// Argument counts PHP accepts, which may be wider than this signature's parameter list.
+    php_arity: EvalBuiltinArity,
 }
 
 impl EvalBuiltinSpec {
@@ -181,6 +189,12 @@ impl EvalBuiltinSpec {
             by_ref_params.extend(signature.variadic);
         }
         let by_ref_params = by_ref_params.into_boxed_slice();
+        let php_arity = EvalBuiltinArity::for_signature(
+            contract.name,
+            signature.required_param_count(),
+            signature.params.len(),
+            signature.variadic.is_some(),
+        );
         let execution = eval_execution(contract).unwrap_or_else(|| {
             panic!(
                 "eval builtin binding for {} from {} must reference an eval-supported shared contract",
@@ -203,6 +217,28 @@ impl EvalBuiltinSpec {
             runtime_builtin: execution.runtime_builtin(),
             execution,
             extension: contract.extension,
+            language_construct: contract.kind == BuiltinKind::LanguageConstruct,
+            php_arity,
+        }
+    }
+
+    /// Returns whether this contract is a language construct rather than a PHP function.
+    pub(in crate::interpreter) fn is_language_construct(&self) -> bool {
+        self.language_construct
+    }
+
+    /// Returns the argument counts PHP accepts for this builtin.
+    pub(in crate::interpreter) fn php_arity(&self) -> EvalBuiltinArity {
+        self.php_arity
+    }
+
+    /// Returns whether the argument at `position` binds caller storage by reference.
+    pub(in crate::interpreter) fn param_is_by_ref(&self, position: usize) -> bool {
+        match self.params.get(position) {
+            Some(param) => param.by_ref,
+            None => self
+                .variadic
+                .is_some_and(|variadic| self.by_ref_params.contains(&variadic)),
         }
     }
 

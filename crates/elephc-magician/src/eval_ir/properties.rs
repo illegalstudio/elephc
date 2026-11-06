@@ -10,7 +10,7 @@
 use super::*;
 
 /// Public property metadata for a runtime eval class.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalClassProperty {
     name: String,
     trait_origin: Option<String>,
@@ -28,6 +28,9 @@ pub struct EvalClassProperty {
     has_set_hook: bool,
     requires_get_hook: bool,
     requires_set_hook: bool,
+    /// Whether an abstract `get` contract is declared `&get`. A concrete `&get` hook carries the
+    /// flag on its generated accessor method instead.
+    get_contract_returns_by_ref: bool,
     is_virtual: bool,
     default: Option<EvalExpr>,
 }
@@ -107,6 +110,7 @@ impl EvalClassProperty {
             has_set_hook: false,
             requires_get_hook: false,
             requires_set_hook: false,
+            get_contract_returns_by_ref: false,
             is_virtual: false,
             default,
         }
@@ -136,6 +140,19 @@ impl EvalClassProperty {
         self.requires_get_hook = requires_get_hook;
         self.requires_set_hook = requires_set_hook;
         self.is_virtual = true;
+        self
+    }
+
+    /// Retains an inherited abstract setter without making its backing property abstract.
+    pub const fn with_inherited_abstract_setter(mut self) -> Self {
+        self.requires_set_hook = true;
+        self
+    }
+
+    /// Returns a copy of this property recording whether its abstract `get` contract is declared
+    /// `&get`, which `ReflectionMethod::returnsReference()` reports for the contract's hook.
+    pub const fn with_get_contract_returns_by_ref(mut self, returns_by_ref: bool) -> Self {
+        self.get_contract_returns_by_ref = returns_by_ref;
         self
     }
 
@@ -214,13 +231,21 @@ impl EvalClassProperty {
 
     /// Returns the PHP asymmetric write visibility, if it differs from read visibility.
     pub const fn set_visibility(&self) -> Option<EvalVisibility> {
-        self.set_visibility
+        match (self.visibility, self.set_visibility) {
+            (EvalVisibility::Private, Some(EvalVisibility::Private))
+            | (EvalVisibility::Protected, Some(EvalVisibility::Protected)) => None,
+            (EvalVisibility::Public, Some(EvalVisibility::Public)) if !self.is_readonly => None,
+            _ => self.set_visibility,
+        }
     }
 
     /// Returns the visibility that applies to writes for this property.
     pub const fn write_visibility(&self) -> EvalVisibility {
         match self.set_visibility {
             Some(visibility) => visibility,
+            None if self.is_readonly && matches!(self.visibility, EvalVisibility::Public) => {
+                EvalVisibility::Protected
+            }
             None => self.visibility,
         }
     }
@@ -230,9 +255,12 @@ impl EvalClassProperty {
         self.is_static
     }
 
-    /// Returns whether this property was declared `final`.
+    /// Returns explicit finality or implicit finality from a restricted private setter.
     pub const fn is_final(&self) -> bool {
-        self.is_final
+        self.is_final || matches!(
+            (self.visibility, self.set_visibility),
+            (EvalVisibility::Public | EvalVisibility::Protected, Some(EvalVisibility::Private))
+        )
     }
 
     /// Returns whether this property was declared `readonly`.
@@ -270,6 +298,11 @@ impl EvalClassProperty {
         self.requires_set_hook
     }
 
+    /// Returns whether this abstract property's `get` contract is declared `&get`.
+    pub const fn get_contract_returns_by_ref(&self) -> bool {
+        self.get_contract_returns_by_ref
+    }
+
     /// Returns whether this property is virtual instead of backed by object storage.
     pub const fn is_virtual(&self) -> bool {
         self.is_virtual
@@ -282,7 +315,7 @@ impl EvalClassProperty {
 }
 
 /// PHP visibility for eval-declared object members.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalVisibility {
     Public,
     Protected,

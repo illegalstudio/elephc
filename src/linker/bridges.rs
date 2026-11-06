@@ -55,6 +55,30 @@ pub(super) struct BridgeStaticlib {
 /// Every Elephc bridge known to discovery and CLI flag validation.
 pub(super) const BRIDGES: &[BridgeStaticlib] = &[
     BridgeStaticlib {
+        lib_name: "elephc_tokenizer",
+        env_var: "ELEPHC_TOKENIZER_LIB_DIR",
+        crate_name: "elephc-tokenizer",
+        flag_name: "tokenizer",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        php_extensions: &["tokenizer"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_fileinfo",
+        env_var: "ELEPHC_FILEINFO_LIB_DIR",
+        crate_name: "elephc-fileinfo",
+        flag_name: "fileinfo",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        php_extensions: &["fileinfo"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_tls",
         env_var: "ELEPHC_TLS_LIB_DIR",
         crate_name: "elephc-tls",
@@ -101,6 +125,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_openssl",
+        env_var: "ELEPHC_OPENSSL_BRIDGE_LIB_DIR",
+        crate_name: "elephc-openssl",
+        flag_name: "openssl",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The cipher bridge implements PHP's OpenSSL cipher catalog and EVP path.
+        php_extensions: &["openssl"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_bcmath",
         env_var: "ELEPHC_BCMATH_LIB_DIR",
         crate_name: "elephc-bcmath",
@@ -111,6 +148,34 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
         // The decimal bridge implements PHP's procedural `bcmath` extension.
         php_extensions: &["bcmath"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_gmp",
+        env_var: "ELEPHC_GMP_LIB_DIR",
+        crate_name: "elephc-gmp",
+        flag_name: "gmp",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The bridge is a thin adapter over libgmp (the managed `gmp` catalog
+        // package, spliced in by `src/pipeline/backend.rs` whenever this bridge is
+        // planned). It owns PHP's `gmp` extension surface.
+        php_extensions: &["gmp"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_random",
+        env_var: "ELEPHC_RANDOM_LIB_DIR",
+        crate_name: "elephc-random",
+        flag_name: "random",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The random bridge implements PHP's always-compiled `random` extension.
+        php_extensions: &["random"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -268,7 +333,13 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "eval",
         whole_archive: false,
         apple_frameworks: &[],
-        apple_libraries: &[],
+        // The interpreter's `mb_strlen` path calls `iconv` directly, so the archive
+        // references `_iconv` whether or not the program uses the iconv EXTENSION. That went
+        // unnoticed while the only way to link this archive was an `eval()` in the program:
+        // the checker then required the library along the eval path anyway. A binary that
+        // links the interpreter for the runtime script cache alone has no such path, and
+        // failed at the linker with `_iconv` undefined.
+        apple_libraries: &["iconv"],
         needs_libdl: true,
         // The eval interpreter is an internal compiler facility, not an extension.
         php_extensions: &[],
@@ -296,7 +367,35 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
             trace_context: TraceContextPolicy::Automatic,
         },
     },
+    BridgeStaticlib {
+        lib_name: "elephc_zend",
+        env_var: "ELEPHC_ZEND_LIB_DIR",
+        crate_name: "elephc-zend",
+        flag_name: "zend",
+        whole_archive: false,
+        apple_frameworks: &[],
+        // `php_iconv_string` uses the system iconv, its own library on Apple targets.
+        apple_libraries: &["iconv"],
+        needs_libdl: true,
+        // The engine hosted PECL/PIE extensions run on; the extensions themselves
+        // report their own names.
+        php_extensions: &[],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
 ];
+
+/// Locates (auto-building in a source checkout) the archive of the bridge
+/// named `lib_name`, for links planned outside the named-library path.
+pub(super) fn locate_archive(lib_name: &str) -> Result<PathBuf, LinkError> {
+    let bridge = bridge_for_library(lib_name).ok_or_else(|| LinkError::MissingBridge {
+        name: lib_name.to_string(),
+        archive: None,
+        env_var: None,
+        searched: Vec::new(),
+        override_dir: None,
+    })?;
+    bridge.archive_path()
+}
 
 /// A typed plan after known bridge names have been resolved as far as possible.
 #[derive(Debug)]
@@ -313,6 +412,19 @@ pub(super) fn bridge_lib_for_flag(flag: &str) -> Option<&'static str> {
         .iter()
         .find(|bridge| bridge.flag_name == flag)
         .map(|bridge| bridge.lib_name)
+}
+
+/// Applies normal source freshness rules to a bridge retained by the REPL executable cache.
+pub(super) fn cached_archive_is_current(name: &str, archive: &Path) -> bool {
+    let Some(bridge) = BRIDGES.iter().find(|bridge| bridge.lib_name == name) else {
+        return false;
+    };
+    let Some(filename) = archive.file_name().and_then(|name| name.to_str()) else { return false; };
+    if let Some(directory) = std::env::var_os(bridge.env_var) {
+        return Path::new(&directory).join(filename) == archive;
+    }
+    if bridge.find_named_archive(filename).as_deref() != Some(archive) { return false; }
+    bridge.find_workspace().is_none_or(|workspace| !bridge.sources_are_newer_than(&workspace, archive))
 }
 
 /// Returns all accepted `--with-<flag>` suffixes in stable table order.
@@ -462,7 +574,14 @@ where
 
     // Apple system libraries first, then frameworks: both trail every archive in the
     // plan (bridge and managed alike) so a static `libxml2.a` member pulled in above
-    // still finds `-liconv` to its right under a single left-to-right scan.
+    // still finds `-liconv` to its right under a single left-to-right scan. A library the
+    // plan already names (the checker requires `iconv` for `mb_*` and for `eval()`) is
+    // dropped from its earlier position rather than named twice, which `ld` warns about;
+    // the trailing position satisfies every archive the earlier one did.
+    ordered.retain(|item| {
+        !matches!(item, LinkItem::NamedLibrary { name, .. }
+            if metadata.seen_apple_libraries.contains(name.as_str()))
+    });
     ordered.extend(metadata.apple_libraries);
     ordered.extend(metadata.frameworks);
     let mut plan = LinkPlan::from_items(ordered);
@@ -546,6 +665,43 @@ fn validate_archive_path(name: &str, archive: PathBuf) -> Result<PathBuf, LinkEr
     }
 }
 
+/// Returns the first `directory/filename` entry present in `directories`, in order.
+///
+/// Presence is the directory entry itself, read without following symbolic links, so a
+/// dangling link stops the search and reaches `validate_archive_path` as the invalid file it
+/// is, instead of being skipped the way `Path::exists()` would (#1420).
+fn first_archive_candidate(
+    directories: impl IntoIterator<Item = PathBuf>,
+    filename: &str,
+) -> Option<PathBuf> {
+    directories
+        .into_iter()
+        .map(|directory| directory.join(filename))
+        .find(|candidate| std::fs::symlink_metadata(candidate).is_ok())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Directories `archive_search_dirs()` answers on the current test thread instead of the
+    /// executable- and environment-derived list, so discovery tests drive the production path
+    /// against directories they own without mutating process-wide state other tests read.
+    /// While it is installed, `override_dir()` also ignores an inherited `ELEPHC_<NAME>_LIB_DIR`.
+    static TEST_ARCHIVE_SEARCH_DIRS: std::cell::RefCell<Option<Vec<PathBuf>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Returns the current test thread's replacement search directories, if a test installed one.
+#[cfg(test)]
+fn test_archive_search_dirs() -> Option<Vec<PathBuf>> {
+    TEST_ARCHIVE_SEARCH_DIRS.with(|directories| directories.borrow().clone())
+}
+
+/// Production builds always search the executable- and environment-derived directories.
+#[cfg(not(test))]
+fn test_archive_search_dirs() -> Option<Vec<PathBuf>> {
+    None
+}
+
 /// Returns bridge metadata for one linker library name.
 fn bridge_for_library(name: &str) -> Option<&'static BridgeStaticlib> {
     let bridge = BRIDGES.iter().find(|bridge| bridge.lib_name == name);
@@ -594,11 +750,7 @@ fn any_file_newer_than(directory: &Path, instant: std::time::SystemTime) -> bool
 /// sibling crate changes every time someone edits it while an ordinary registry dependency is
 /// a fixed download.
 ///
-/// That leaves one hole, and it is real rather than theoretical: the workspace root redirects
-/// `mysql` to `vendor/mysql-28.0.0` through `[patch.crates-io]`, and `elephc-pdo` names it by
-/// VERSION, so nothing here sees the vendored tree. Editing it does not mark
-/// `libelephc_pdo.a` stale. Closing that means resolving patches, not just reading manifests;
-/// until then `cargo build -p elephc-pdo` after such an edit is the manual refresh.
+/// Workspace-root registry patches are not resolved here.
 ///
 /// Manifest sections that cannot be read, parsed, or understood contribute nothing — this
 /// decides whether to SPAWN CARGO, and an unreadable manifest is not evidence of an edit.
@@ -642,11 +794,8 @@ impl BridgeStaticlib {
 
     /// Locates this bridge archive, auto-building it in a source checkout if needed.
     fn archive_path(&self) -> Result<PathBuf, LinkError> {
-        if let Ok(env_dir) = std::env::var(self.env_var) {
-            if !env_dir.is_empty() {
-                return self
-                    .validate_override_archive(&self.archive_filename(), Path::new(&env_dir));
-            }
+        if let Some(env_dir) = self.override_dir() {
+            return self.validate_override_archive(&self.archive_filename(), Path::new(&env_dir));
         }
         if let Some(archive) = self.find_archive() {
             if self.lib_name == "elephc_pdo"
@@ -707,10 +856,8 @@ impl BridgeStaticlib {
         debug_assert_eq!(self.lib_name, "elephc_magician");
         let filename = self.magician_curl_archive_filename();
 
-        if let Ok(env_dir) = std::env::var(self.env_var) {
-            if !env_dir.is_empty() {
-                return self.validate_override_archive(&filename, Path::new(&env_dir));
-            }
+        if let Some(env_dir) = self.override_dir() {
+            return self.validate_override_archive(&filename, Path::new(&env_dir));
         }
 
         if let Some(archive) = self.find_named_archive(&filename) {
@@ -784,10 +931,7 @@ impl BridgeStaticlib {
     /// `find_archive()`'s search, generalized to an arbitrary archive filename so the
     /// curl-aware variant can reuse the same candidate-directory list.
     fn find_named_archive(&self, filename: &str) -> Option<PathBuf> {
-        self.archive_search_dirs()
-            .into_iter()
-            .map(|candidate| candidate.join(filename))
-            .find(|candidate| candidate.exists())
+        first_archive_candidate(self.archive_search_dirs(), filename)
     }
 
     /// Registers a curl-aware-magician rebuild as attempted, separately from
@@ -961,19 +1105,53 @@ impl BridgeStaticlib {
         }
     }
 
+    /// The error for an override directory whose `filename` entry exists but is not a usable
+    /// archive: an empty file, a directory, or a symbolic link, dangling or not.
+    ///
+    /// The entry's full path is the `archive`, which is what the message recognizes as an
+    /// invalid file to replace rather than a missing one to put in place (#1418).
+    fn invalid_override_error(&self, archive: &Path, directory: &Path) -> LinkError {
+        LinkError::MissingBridge {
+            name: self.lib_name.to_string(),
+            archive: Some(archive.display().to_string()),
+            env_var: Some(self.env_var.to_string()),
+            searched: vec![directory.display().to_string()],
+            override_dir: Some(directory.display().to_string()),
+        }
+    }
+
     /// Validates an archive named by the environment override, reporting the override.
     ///
     /// `filename` is passed rather than assumed: the curl-aware magician resolves a DIFFERENT
     /// archive through the same variable, and reporting the plain `libelephc_magician.a` for
-    /// it would send someone looking for a file that is present and fine.
+    /// it would send someone looking for a file that is present and fine. An entry that is
+    /// present but invalid is reported at its path, not as missing.
     fn validate_override_archive(
         &self,
         filename: &str,
         directory: &Path,
     ) -> Result<PathBuf, LinkError> {
         let archive = directory.join(filename);
-        validate_archive_path(self.lib_name, archive)
-            .map_err(|_| self.missing_override_error(filename, directory))
+        let present = std::fs::symlink_metadata(&archive).is_ok();
+        validate_archive_path(self.lib_name, archive.clone()).map_err(|_| {
+            if present {
+                self.invalid_override_error(&archive, directory)
+            } else {
+                self.missing_override_error(filename, directory)
+            }
+        })
+    }
+
+    /// Returns this bridge's non-empty `ELEPHC_<NAME>_LIB_DIR` override directory, if set.
+    ///
+    /// A test that installed its own search directories on this thread gets `None`: it replaces
+    /// the whole environment-derived lookup, so an override inherited from the developer's
+    /// shell cannot short-circuit the discovery it sets up.
+    fn override_dir(&self) -> Option<String> {
+        if test_archive_search_dirs().is_some() {
+            return None;
+        }
+        std::env::var(self.env_var).ok().filter(|directory| !directory.is_empty())
     }
 
     /// The directories an archive is looked for in, in the order they are tried.
@@ -986,6 +1164,9 @@ impl BridgeStaticlib {
     /// `archive_path` before any of these are consulted, and the message names it separately
     /// as the way out rather than as somewhere that was checked.
     fn archive_search_dirs(&self) -> Vec<PathBuf> {
+        if let Some(directories) = test_archive_search_dirs() {
+            return directories;
+        }
         let Some(executable_dir) = std::env::current_exe()
             .ok()
             .and_then(|executable| executable.parent().map(Path::to_path_buf))
@@ -1258,12 +1439,16 @@ mod tests {
     /// therefore called a pre-change `libelephc_magician.a` fresh, linked it, and the compiled
     /// program answered `Fatal error: eval() runtime failed` for a two-argument `ksort()`
     /// inside `eval()`.
+    ///
+    /// The edited source receives an explicit later timestamp because some CI overlay
+    /// filesystems assign the same timestamp to consecutive writes.
     #[test]
     fn staleness_follows_the_bridges_path_dependencies() {
         let bridge = bridge_for_library("elephc_magician").expect("magician bridge");
         let workspace = scratch("staleness_path_deps");
         let bridge_dir = workspace.join("crates").join(bridge.crate_name);
         let shared_dir = workspace.join("crates/elephc-builtin-contract");
+        let shared_source = shared_dir.join("src/lib.rs");
         std::fs::create_dir_all(bridge_dir.join("src")).expect("create bridge crate");
         std::fs::create_dir_all(shared_dir.join("src")).expect("create shared crate");
         std::fs::write(
@@ -1273,18 +1458,30 @@ mod tests {
         )
         .expect("write bridge manifest");
         std::fs::write(bridge_dir.join("src/lib.rs"), "// bridge").expect("write bridge source");
-        std::fs::write(shared_dir.join("src/lib.rs"), "// shared").expect("write shared source");
+        std::fs::write(&shared_source, "// shared").expect("write shared source");
 
         // Written last, so nothing in either crate is newer than the archive yet.
         let archive = workspace.join("libelephc_magician.a");
         std::fs::write(&archive, "archive").expect("write archive");
+        let archive_time = std::fs::metadata(&archive)
+            .and_then(|metadata| metadata.modified())
+            .expect("read archive mtime");
         assert!(
             !bridge.sources_are_newer_than(&workspace, &archive),
             "an archive newer than every source must not be called stale"
         );
 
-        std::fs::write(shared_dir.join("src/lib.rs"), "// shared, edited")
-            .expect("rewrite shared source");
+        std::fs::write(&shared_source, "// shared, edited").expect("rewrite shared source");
+        std::fs::File::options()
+            .write(true)
+            .open(&shared_source)
+            .and_then(|source| {
+                source.set_times(
+                    std::fs::FileTimes::new()
+                        .set_modified(archive_time + std::time::Duration::from_secs(1)),
+                )
+            })
+            .expect("set edited source mtime");
         assert!(
             bridge.sources_are_newer_than(&workspace, &archive),
             "an edit to a path dependency must make the archive stale"
@@ -1481,16 +1678,26 @@ mod tests {
         }
         let script = std::fs::read_to_string(root.join(probe))
             .unwrap_or_else(|_| panic!("cannot read {probe}"));
-        let curl_case = script.find("curl) native_packages=\"curl\" ;;")
-            .unwrap_or_else(|| panic!("{probe} must map curl to its managed native package"));
+        // The packages come from the packaged binary's own `native:` fields
+        // (`crate::linker::native_packages`), never from a list in the script.
+        let native_fields = script.find("native:*) native_packages=")
+            .unwrap_or_else(|| panic!("{probe} must read native packages from --print-capabilities"));
         let native_loop = script.find("for native_package in $native_packages")
-            .unwrap_or_else(|| panic!("{probe} must iterate selected managed native packages"));
+            .unwrap_or_else(|| panic!("{probe} must iterate the reported managed native packages"));
         let native_add = script.find("native add \"$native_package\"")
-            .unwrap_or_else(|| panic!("{probe} must install the selected managed native package"));
+            .unwrap_or_else(|| panic!("{probe} must install each reported managed native package"));
         let bridge_compile = script.find("\"--with-$name\" probe.php")
             .unwrap_or_else(|| panic!("{probe} must compile each packed bridge probe"));
-        assert!(curl_case < native_loop && native_loop < native_add && native_add < bridge_compile,
-            "{probe} must select, install, then compile curl in that order");
+        assert!(native_fields < native_loop && native_loop < native_add && native_add < bridge_compile,
+            "{probe} must read, install, then compile each bridge's packages in that order");
+        for (bridge, package) in [("curl", "curl"), ("xml", "libxml2"), ("openssl", "openssl-crypto")] {
+            assert!(
+                !script.contains(&format!("{bridge}) native_packages="))
+                    && !script.contains(&format!("native add {package}"))
+                    && !script.contains(&format!("[ \"$name\" = \"{bridge}\" ]")),
+                "{probe} hard-codes {bridge}'s native package again; the binary reports it"
+            );
+        }
         assert!(
             !script.contains("missing_native_package")
                 && !script.contains("requires managed native package")
@@ -1500,27 +1707,6 @@ mod tests {
         assert!(
             script.contains("needs no archive from this tarball"),
             "{probe} must keep the empty-archive skip for regex/mysqli"
-        );
-        // xml is the second packed-archive capability that also needs a catalog
-        // package (`libxml2`: the bridge's parser is libxml2 itself, reached through
-        // the package's shim), and gets the identical add-first branch.
-        assert!(
-            script.contains("[ \"$name\" = \"xml\" ]") && script.contains("native add libxml2"),
-            "{probe} must run native add libxml2 before --with-xml; xml is a \
-             packed-archive capability that also needs a catalog package"
-        );
-        assert!(
-            script.contains("adding managed native package libxml2 before --with-xml"),
-            "{probe} must native-add libxml2 first, not after a failed compile"
-        );
-        let after_xml = script
-            .split_once("[ \"$name\" = \"xml\" ]")
-            .map(|(_, rest)| rest)
-            .unwrap_or("");
-        assert!(
-            after_xml.contains("native add libxml2")
-                && !after_xml.contains("needs no archive from this tarball"),
-            "{probe} must not skip xml the way regex is skipped"
         );
     }
 
@@ -1749,6 +1935,35 @@ mod tests {
         assert!(linux.needs_libdl);
     }
 
+    /// A library the plan already names is not named again by a bridge declaring it.
+    ///
+    /// The checker requires `iconv` for every `eval()` program, and the magician bridge
+    /// declares it too, so each such program linked `-liconv` twice and `ld` warned
+    /// "ignoring duplicate libraries". The one kept is the bridge's, after the archives.
+    #[test]
+    fn a_library_the_plan_names_is_not_named_again_by_a_bridge() {
+        let archive = std::env::current_exe().expect("test executable path");
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::named_runtime("iconv"),
+            LinkItem::named_runtime("elephc_magician"),
+        ]);
+        let resolution = resolve_with(&plan, &[], Platform::MacOS, |_| Ok(archive.clone()))
+            .expect("magician bridge must resolve on Apple");
+        let items = resolution.plan.items();
+        let named: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| matches!(item, LinkItem::NamedLibrary { name, .. } if name == "iconv"))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(named.len(), 1, "iconv must be named exactly once: {items:?}");
+        let last_archive = items
+            .iter()
+            .rposition(|item| matches!(item, LinkItem::StaticArchive { .. }))
+            .expect("resolved plan carries the magician archive");
+        assert!(named[0] > last_archive, "-liconv must trail every archive: {items:?}");
+    }
+
     /// Verifies automatic TLS linking stays lazy while `--with-tls` force-loads the archive.
     #[test]
     fn tls_whole_archive_is_reserved_for_explicit_forcing() {
@@ -1787,6 +2002,8 @@ mod tests {
         assert!(php_extensions_for_lib("elephc_pdo").is_empty());
         assert_eq!(php_extensions_for_lib("elephc_crypto"), ["hash"]);
         assert_eq!(php_extensions_for_lib("elephc_bcmath"), ["bcmath"]);
+        assert_eq!(php_extensions_for_lib("elephc_gmp"), ["gmp"]);
+        assert_eq!(php_extensions_for_lib("elephc_random"), ["random"]);
         assert_eq!(php_extensions_for_lib("elephc_phar"), ["Phar"]);
         assert_eq!(php_extensions_for_lib("elephc_image"), ["gd"]);
         assert_eq!(php_extensions_for_lib("elephc_web"), ["session"]);
@@ -1907,6 +2124,17 @@ mod tests {
         assert!(rendered.contains(&format!("needs: {}", archive.display())));
         assert!(rendered.contains(&format!("\n    {}", directories[0].display())));
         assert!(rendered.contains(&format!("\n    {}", directories[1].display())));
+        // The directories after the match were never consulted, so none may be listed
+        // (#1419): the full search list would otherwise pass the checks above.
+        for later in directories[2..].iter().filter(|later| !directories[..=1].contains(later)) {
+            let line = format!("    {}", later.display());
+            assert!(
+                !rendered.lines().any(|rendered_line| rendered_line == line),
+                "a directory after the match must not be listed as searched, found {}:\n{}",
+                later.display(),
+                rendered
+            );
+        }
         assert!(rendered.contains("Replace invalid archive"));
         assert!(rendered.contains("ELEPHC_TLS_LIB_DIR"));
 
@@ -1986,6 +2214,135 @@ mod tests {
                 rendered
             );
         }
+    }
+
+    /// An override entry that exists but is not a usable archive is reported as that
+    /// invalid file, not as a missing one (#1418).
+    ///
+    /// An empty file, a directory, or a symbolic link (dangling or not) at
+    /// `$ELEPHC_WEB_LIB_DIR/libelephc_web.a` rendered the missing-file advice, telling the
+    /// user to put the archive where an entry already was.
+    #[test]
+    fn invalid_override_entry_is_reported_as_the_invalid_file() {
+        let bridge = bridge_for_library("elephc_web").expect("web bridge");
+        let filename = bridge.archive_filename();
+        let base = std::env::temp_dir().join(format!(
+            "elephc-override-invalid-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let target = base.join("real.a");
+        let cases = ["empty", "directory", "dangling-link", "link"];
+        for case in cases {
+            std::fs::create_dir_all(base.join(case)).expect("create override fixture");
+        }
+        std::fs::write(&target, b"!<arch>\n").expect("create link target");
+        std::fs::write(base.join("empty").join(&filename), b"").expect("create empty entry");
+        std::fs::create_dir(base.join("directory").join(&filename)).expect("create directory entry");
+        std::os::unix::fs::symlink(base.join("nowhere.a"), base.join("dangling-link").join(&filename))
+            .expect("create dangling link entry");
+        std::os::unix::fs::symlink(&target, base.join("link").join(&filename))
+            .expect("create link entry");
+
+        for case in cases {
+            let directory = base.join(case);
+            let archive = directory.join(&filename);
+            let error = bridge
+                .validate_override_archive(&filename, &directory)
+                .expect_err("an invalid override entry must fail");
+            let LinkError::MissingBridge { archive: reported, .. } = &error;
+            assert_eq!(reported.as_deref(), Some(archive.display().to_string().as_str()), "{case}");
+            let rendered = error.to_string();
+            assert!(rendered.contains(&format!("needs: {}", archive.display())), "{case}:\n{rendered}");
+            assert!(rendered.contains("Replace invalid archive"), "{case}:\n{rendered}");
+            assert!(rendered.contains("unset ELEPHC_WEB_LIB_DIR"), "{case}:\n{rendered}");
+            assert!(
+                !rendered.contains(&format!("Put {filename} in")),
+                "an existing entry must not be reported as missing, {case}:\n{rendered}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Installs replacement search directories for the current test thread, clearing them on
+    /// drop so a panicking test cannot leak them into the next test run on the same thread.
+    struct TestArchiveSearchDirs;
+
+    impl TestArchiveSearchDirs {
+        /// Makes `archive_search_dirs()` answer `directories` until the guard is dropped.
+        fn install(directories: Vec<PathBuf>) -> Self {
+            TEST_ARCHIVE_SEARCH_DIRS.with(|slot| *slot.borrow_mut() = Some(directories));
+            Self
+        }
+    }
+
+    impl Drop for TestArchiveSearchDirs {
+        /// Restores the executable- and environment-derived search directories.
+        fn drop(&mut self) {
+            TEST_ARCHIVE_SEARCH_DIRS.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    /// A dangling symbolic link where an archive belongs stops production discovery and is
+    /// reported as an invalid file at that path, with the directories reached so far (#1420).
+    ///
+    /// `Path::exists()` follows the link and answers false for a dangling one, so discovery
+    /// skipped it and linked the valid archive a later directory holds, never reaching
+    /// `validate_archive`. This drives `archive_path()` itself, the entry point linking uses,
+    /// so the search, the validation and the `looked in:` context all come from the same
+    /// `archive_search_dirs()` list: the directories up to the match are listed, the one after
+    /// it is not. The installed directories also set aside an inherited `ELEPHC_TLS_LIB_DIR`,
+    /// so the test checks discovery whatever the developer's shell exports.
+    #[test]
+    fn dangling_archive_link_stops_production_discovery_with_its_search_context() {
+        let bridge = bridge_for_library("elephc_tls").expect("tls bridge");
+        let filename = bridge.archive_filename();
+        let base = std::env::temp_dir().join(format!(
+            "elephc-dangling-archive-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let directories: Vec<PathBuf> =
+            ["first", "second", "third"].iter().map(|name| base.join(name)).collect();
+        for directory in &directories {
+            std::fs::create_dir_all(directory).expect("create search directory");
+        }
+        let dangling = directories[1].join(&filename);
+        std::os::unix::fs::symlink(base.join("nowhere.a"), &dangling).expect("create dangling link");
+        std::fs::write(directories[2].join(&filename), b"!<arch>\n").expect("create later archive");
+
+        let error = {
+            let _search = TestArchiveSearchDirs::install(directories.clone());
+            assert_eq!(bridge.find_archive().as_deref(), Some(dangling.as_path()));
+            bridge
+                .archive_path()
+                .expect_err("a dangling link must stop discovery, not fall through to a later archive")
+        };
+        let _ = std::fs::remove_dir_all(&base);
+
+        let LinkError::MissingBridge { archive, searched, override_dir, .. } = &error;
+        assert_eq!(archive.as_deref(), Some(dangling.display().to_string().as_str()));
+        assert_eq!(
+            searched,
+            &directories[..=1]
+                .iter()
+                .map(|directory| directory.display().to_string())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(override_dir, &None);
+        let rendered = error.to_string();
+        assert!(rendered.contains(&format!("needs: {}", dangling.display())), "{rendered}");
+        for reached in &directories[..=1] {
+            let line = format!("    {}", reached.display());
+            assert!(rendered.lines().any(|rendered_line| rendered_line == line), "{rendered}");
+        }
+        let later = format!("    {}", directories[2].display());
+        assert!(
+            !rendered.lines().any(|rendered_line| rendered_line == later),
+            "a directory after the match must not be listed as searched:\n{rendered}"
+        );
+        assert!(rendered.contains("Replace invalid archive"), "{rendered}");
+        assert!(rendered.contains("ELEPHC_TLS_LIB_DIR"), "{rendered}");
     }
 
     /// The override error names the archive that was actually wanted.

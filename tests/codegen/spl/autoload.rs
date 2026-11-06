@@ -1496,6 +1496,57 @@ echo $a->tag();
     assert_eq!(out, "alias-case");
 }
 
+/// Verifies `class_alias()` accepts a `Name::class` constant as the original class (issue #849).
+///
+/// `Original::class` is a compile-time constant string, so PHP accepts it wherever a literal
+/// class name is accepted; it used to be refused as a "runtime" call shape.
+#[test]
+fn test_class_alias_accepts_class_name_constants() {
+    let out = compile_and_run(
+        r#"<?php
+class Original {
+    public function tag(): string { return "orig"; }
+}
+class_alias(Original::class, 'AliasName');
+$a = new AliasName();
+echo $a->tag(), ":", ($a instanceof Original) ? "yes" : "no", ":", ($a instanceof AliasName) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "orig:yes:yes");
+}
+
+/// Verifies `Name::class` arguments of `class_alias()` resolve exactly as PHP compiles them:
+/// through a `use` import, through a namespace alias prefix, against the current namespace, and
+/// fully qualified, with a `__NAMESPACE__ .` concatenation for the alias name.
+///
+/// Also pins that a global alias name declared from a file using the statement form of
+/// `namespace` is created in the global namespace (a string class name is always fully
+/// qualified), where it used to be declared inside the surrounding namespace instead.
+/// Expected output is PHP 8.5.10's.
+#[test]
+fn test_class_alias_class_constants_resolve_namespace_and_imports() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Lib\Log;
+class Logger { public function name(): string { return "logger"; } }
+
+namespace App;
+use Lib\Log\Logger;
+use Lib\Log as L;
+class Local { public function name(): string { return "local"; } }
+class_alias(Logger::class, 'GlobalLogger');
+class_alias(L\Logger::class, 'App\ViaQualified');
+class_alias(Local::class, __NAMESPACE__ . '\LocalAlias');
+class_alias(\Lib\Log\Logger::class, \App\FullyAlias::class);
+echo (new \GlobalLogger())->name(), ":";
+echo (new ViaQualified())->name(), ":";
+echo (new LocalAlias())->name(), ":";
+echo (new FullyAlias())->name();
+"#,
+    );
+    assert_eq!(out, "logger:logger:local:logger");
+}
+
 /// Verifies PSR-4 empty prefix root namespace.
 #[test]
 fn test_psr4_empty_prefix_root_namespace() {

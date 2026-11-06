@@ -38,6 +38,25 @@ function requireQuantity(int|false $value): int
     return $value; // int|false has narrowed to int
 }
 
+function queryQuantity(?string $raw, ?int $default = null): int
+{
+    if ($raw === null && $default !== null) {
+        return $default;
+    }
+    return 0;
+}
+
+/** Keeps the completed fallback value in a snapshot created inside its branch. */
+function quantitySnapshot(?int $requested, bool $useRequested): Closure
+{
+    if ($useRequested) {
+        $quantity = $requested;
+        $quantity ??= 1;
+        return fn(): int => $quantity;
+    }
+    return fn(): int => 1;
+}
+
 class Cart
 {
     public function __construct(public ?Money $discount)
@@ -77,6 +96,9 @@ file_put_contents($dir . "/alpha.meta", "a");
 echo render(7), "\n";
 echo render(new Money(1299)), "\n";
 echo "quantity ", requireQuantity(3), "\n";
+echo "fallback ", queryQuantity(null, 5), "\n";
+$snapshot = quantitySnapshot(null, true);
+echo "snapshot ", $snapshot(), "\n";
 echo "discount ", (new Cart(new Money(250)))->requireDiscount()->format(), "\n";
 
 foreach (metaFiles($dir) as $path) {

@@ -9,6 +9,177 @@
 
 use super::*;
 
+/// A property suffix extends the increment target and lowers the known fresh-null Error.
+#[test]
+fn test_append_followup_prefix_property_target() {
+    let statements = parse_source("<?php ++$items[]->x;");
+    assert!(matches!(&statements[0].kind, StmtKind::ExprStmt(Expr { kind: ExprKind::Throw(_), .. })));
+}
+
+/// Empty dimensions remain write-only targets until the assignment or update is known.
+#[test]
+fn test_append_review_write_contexts_parse() {
+    for source in [
+        "<?php echo ($items[] = 2);",
+        "<?php echo ($items[] += 2);",
+        "<?php $items[]['k'] = 'x';",
+        "<?php $items[][] = 1;",
+        "<?php $items[]++;",
+        "<?php $items[]['k'] .= 'x';",
+        "<?php $box->items[] += 2;",
+        "<?php Box::$items[] += 2;",
+        "<?php ++$items[];",
+        "<?php echo ++$items[]['k'];",
+        "<?php ++$box->items[];",
+        "<?php ++Box::$items[];",
+        "<?php $items[0][] += 5;",
+        "<?php $items[0][]['k'] = 'v';",
+        "<?php $items[]->x = 1;",
+        "<?php $items[]->x++;",
+        "<?php ++$items[]->x->y;",
+        "<?php $items[]->{name()}->y = rhs();",
+    ] {
+        assert_eq!(parse_source(source).len(), 1, "{source}");
+    }
+}
+
+/// The parser records an arrow's append receiver even though its write is in a prelude.
+#[test]
+fn test_append_review_arrow_captures_receiver() {
+    let statements = parse_source("<?php $append = fn() => ($items[] += 2);");
+    let StmtKind::Assign { value, .. } = &statements[0].kind else { panic!("expected assignment") };
+    let ExprKind::Closure { captures, .. } = &value.kind else { panic!("expected arrow") };
+    assert_eq!(captures, &vec!["items".to_string()]);
+}
+
+/// Static object writes capture even replayable RHS reads after computed dimensions.
+#[test]
+fn test_parse_static_receiver_third_review_replayable_rhs_capture() {
+    for receiver in ["Holder", "self", "parent", "static"] {
+        for tail in ["->v", "->$name", "->items[0]", "->items[pickKey()]",
+            "->items[0]->v", "->items[pickKey()]->v", "->child->items[pickKey()]->v",
+            "[0]->v", "[pickKey()]->$name"] {
+            let source = format!("<?php {receiver}::$object{tail} = $box->value;");
+            let statements = parse_source(&source);
+            let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("{source}"); };
+            let ExprKind::Assignment { value, result_target, prelude, .. } = &expression.kind
+                else { panic!("{source}"); };
+            let StmtKind::Assign { name, value: captured } = &prelude.last()
+                .expect("capture the RHS once").kind else { panic!("{source}: {prelude:?}"); };
+            assert!(matches!(&captured.kind, ExprKind::PropertyAccess { property, .. }
+                if property == "value"), "{source}: {prelude:?}");
+            assert!(matches!(&value.kind, ExprKind::Variable(variable) if variable == name));
+            assert_eq!(result_target.as_deref(), Some(value.as_ref()));
+            if tail.contains("pickKey") {
+                assert!(matches!(&prelude[0].kind, StmtKind::Assign { value, .. }
+                    if matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "pickKey")),
+                    "{source}: dimensions must precede the RHS");
+            }
+        }
+    }
+}
+
+/// Runtime-name statements use the captured expression plan rather than replaying their RHS.
+#[test]
+fn test_parse_static_receiver_followup_dynamic_capture() {
+    for source in ["<?php $object->$name = (print 'rhs');", "<?php $object->$name ??= value();"] {
+        let statements = parse_source(source);
+        let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("{source}"); };
+        let ExprKind::Assignment { result_target, prelude, conditional_value_temp, .. } = &expression.kind
+            else { panic!("{source}"); };
+        assert!(result_target.is_some(), "{source}: preserve the expression result plan");
+        if source.contains("??=") {
+            assert!(conditional_value_temp.is_some(), "{source}: lazy RHS");
+        } else {
+            assert!(prelude.iter().any(|statement|
+                matches!(statement.kind, StmtKind::Assign { .. })), "{source}: capture effectful RHS once");
+        }
+    }
+}
+
+/// Appends settle their RHS before traversing a static receiver, including nested buckets.
+#[test]
+fn test_parse_static_receiver_review_append_preludes() {
+    for receiver in ["Holder", "self", "parent", "static"] {
+        for tail in ["->items[0][]", "->child->items[]"] {
+            let source = format!("<?php {receiver}::$object{tail} = replace();");
+            let statements = parse_source(&source);
+            let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("{source}"); };
+            assert!(matches!(&body[0].kind, StmtKind::Assign { value, .. }
+                if matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "replace")),
+                "{source}: the RHS must precede receiver traversal: {body:?}");
+        }
+    }
+}
+
+/// A computed runtime-name append captures only the name before settling the RHS.
+#[test]
+fn test_parse_static_receiver_dynamic_append_prelude_order() {
+    let source = "<?php Holder::$object->{name()}[0][] = replace();";
+    let statements = parse_source(source);
+    let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("{source}"); };
+    assert!(matches!(&body[0].kind, StmtKind::Assign { value, .. }
+        if matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "name")),
+        "{source}: the computed name must precede the RHS: {body:?}");
+    assert!(matches!(&body[1].kind, StmtKind::Assign { value, .. }
+        if matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "replace")),
+        "{source}: the RHS must precede receiver traversal: {body:?}");
+    assert!(matches!(&body[2].kind, StmtKind::Assign { value, .. }
+        if matches!(&value.kind, ExprKind::ArrayAccess { .. })),
+        "{source}: the receiver traversal must follow the RHS: {body:?}");
+}
+
+/// Named and lexical static properties remain receivers after a following object postfix.
+#[test]
+fn test_parse_static_property_object_receiver_assignments() {
+    for receiver in ["Holder", "self", "parent", "static"] {
+        for tail in ["->v = 9;", "->v += 2;", "->method();"] {
+            let source = format!("<?php {receiver}::$object{tail}");
+            assert_eq!(parse_source(&source).len(), 1, "source: {source}");
+        }
+        let source = format!("<?php echo {receiver}::$object->v;");
+        assert_eq!(parse_source(&source).len(), 1, "source: {source}");
+    }
+}
+
+/// Static object indexed writes retain the instance-property target in expression lowering.
+#[test]
+fn test_parse_static_property_object_receiver_indexed_writes() {
+    for receiver in ["Holder", "self", "parent", "static"] {
+        for tail in ["->items[0] = 9;", "->items[1] += 3;"] {
+            let source = format!("<?php {receiver}::$object{tail}");
+            let statements = parse_source(&source);
+            let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("{source}") };
+            let ExprKind::Assignment { target, .. } = &expression.kind else { panic!("{source}") };
+            assert!(matches!(&target.kind, ExprKind::ArrayAccess { array, .. }
+                if matches!(&array.kind, ExprKind::PropertyAccess { property, .. }
+                    if property == "items")), "{source}: {:?}", statements[0]);
+        }
+    }
+}
+
+/// Scoped prefix updates use the expression path that shares one property receiver.
+#[test]
+fn test_parse_static_property_object_receiver_prefix_statements() {
+    for receiver in ["Holder", "self", "parent", "static"] {
+        for operator in ["++", "--"] {
+            for tail in ["->v", "->child->v"] {
+                let source = format!("<?php {operator}{receiver}::$object{tail};");
+                let statements = parse_source(&source);
+                let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("{source}"); };
+                let ExprKind::Assignment { target, value, prelude, .. } = &expression.kind
+                    else { panic!("{source}"); };
+                assert!(matches!(&target.kind, ExprKind::PropertyAccess { property, .. }
+                    if property == "v"), "{source}: {:?}", statements[0]);
+                let ExprKind::Variable(result) = &value.kind else { panic!("{source}"); };
+                assert!(prelude.iter().any(|stmt| matches!(&stmt.kind,
+                    StmtKind::Assign { name, value: Expr { kind: ExprKind::BinaryOp { left, .. }, .. } }
+                        if name == result && left.as_ref() == target.as_ref())), "{source}");
+            }
+        }
+    }
+}
+
 /// Verifies that compound assignment operators `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
 /// parse correctly as `Assign` nodes where the value is a `BinaryOp` on the variable.
 /// Each case checks the operator, lhs variable, and rhs integer literal match the expected AST shape.
@@ -87,7 +258,7 @@ fn test_parse_array_compound_assignment() {
     }
 }
 
-/// Verifies that array-element post-increment lowers to an `ArrayAssign` read-modify-write.
+/// Array-element post-increment reads once and applies PHP incdec, not numeric addition.
 #[test]
 fn test_parse_array_element_post_increment_assignment() {
     let stmts = parse_source("<?php $items[0]++;");
@@ -100,10 +271,17 @@ fn test_parse_array_element_post_increment_assignment() {
             assert_eq!(array, "items");
             assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
             match &value.kind {
-                ExprKind::BinaryOp { left, op, right } => {
-                    assert_eq!(op, &BinOp::Add);
-                    assert!(matches!(right.kind, ExprKind::IntLiteral(1)));
-                    match &left.kind {
+                ExprKind::Assignment { target, value, prelude, .. } => {
+                    let ExprKind::PreIncrement(old_name) = &value.kind else {
+                        panic!("Expected PHP pre-increment, got {:?}", value.kind);
+                    };
+                    assert!(matches!(&target.kind, ExprKind::Variable(name) if name != old_name));
+                    assert_eq!(prelude.len(), 1);
+                    let StmtKind::Assign { name, value } = &prelude[0].kind else {
+                        panic!("Expected captured array element, got {:?}", prelude[0].kind);
+                    };
+                    assert_eq!(name, old_name);
+                    match &value.kind {
                         ExprKind::ArrayAccess { array, index } => {
                             assert!(matches!(array.kind, ExprKind::Variable(ref name) if name == "items"));
                             assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
@@ -111,7 +289,7 @@ fn test_parse_array_element_post_increment_assignment() {
                         other => panic!("Expected ArrayAccess lhs, got {:?}", other),
                     }
                 }
-                other => panic!("Expected BinaryOp value, got {:?}", other),
+                other => panic!("Expected captured incdec value, got {:?}", other),
             }
         }
         other => panic!("Expected ArrayAssign, got {:?}", other),

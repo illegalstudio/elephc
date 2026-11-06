@@ -21,12 +21,14 @@
 //!   `hash_init_context_consumes_no_handle_divergence`, was retired when `hash_init()`
 //!   grew a real `HashContext` object (`elephc::hash_prelude`) and became
 //!   `hash_context_draws_an_object_handle_in_creation_order`, a parity assertion.
-//! - THE ONE DIVERGENCE PIN LEFT IN THIS FILE is
-//!   `computed_debug_info_is_ignored_and_declared_properties_print_instead`. elephc
-//!   honours `__debugInfo()` only when its body is a static property projection (folded
-//!   into `_class_vd_desc_*` at compile time); a body that computes values falls back to
-//!   the declared-property list. That test asserts elephc's ACTUAL output with PHP's
-//!   spelled out beside it, so it can never be mistaken for parity.
+//! - THE DIVERGENCE PINS IN THIS FILE are
+//!   `reflection_subclass_debug_info_projection_drops_backing_slots`: a `__debugInfo()`
+//!   projection that reads a private Reflection backing slot drops the pair instead of
+//!   publishing compiler storage. The test asserts elephc's actual output with PHP's spelled
+//!   out beside it, so it cannot be mistaken for parity. Any other `__debugInfo()` is parity:
+//!   a static property projection is folded into `_class_vd_desc_*` at compile time, and a
+//!   body that computes values is called at run time (see
+//!   `computed_debug_info_prints_the_returned_array`).
 //! - ENUM CASES ARE LAZY NOW, AND THAT CELL IS PARITY. Cases used to be created in
 //!   bulk in `main`'s prologue, which burnt one handle per case of every referenced
 //!   enum before user code ran; `enum_cases_are_eager_so_handles_shift_divergence`
@@ -1531,24 +1533,17 @@ fn debug_info_projection_may_rename_reorder_and_be_empty() {
     );
 }
 
-/// KNOWN DIVERGENCE — a `__debugInfo()` body that is NOT a property projection is
-/// IGNORED, and the declared properties are printed instead.
+/// A `__debugInfo()` body that is NOT a property projection is CALLED at run time, and the
+/// array it returns replaces the declared properties (this used to be a divergence pin: the
+/// compiler could only fold projections, so a computing body fell back to the real properties).
 ///
-/// elephc folds `__debugInfo()` statically, so it can only honour bodies that reduce to
-/// "print these property slots under these names". A body that COMPUTES a value has no
-/// property slot to point at and falls back to the declared-property list — which is
-/// exactly what elephc did for every class before the projection support landed, so the
-/// fallback introduces no new failure and turns no compiling program into an error.
-///
-/// Reference PHP 8.5.6 prints `object(C)#1 (1) { ["n"]=> int(2) }` for this program.
-/// This assertion is elephc's ACTUAL output with PHP's spelled out beside it: it is a
-/// divergence pin, NOT parity, and it must never be read as one. Implementing it
-/// faithfully requires calling the method from `__rt_var_dump_object`, which is
-/// hand-written assembly on every target.
+/// Reference PHP 8.5.6 prints `object(C)#1 (1) { ["n"]=> int(2) }` for this program, and so
+/// does elephc now. The full run-time matrix (print_r, nesting, subclasses, recursion,
+/// non-array results) lives in `tests/codegen/objects/debug_info_dumps.rs`.
 #[test]
-fn computed_debug_info_is_ignored_and_declared_properties_print_instead() {
+fn computed_debug_info_prints_the_returned_array() {
     let out = run_php(
-        "debuginfo_computed_divergence",
+        "debuginfo_computed",
         concat!(
             "<?php\n",
             "class C {\n",
@@ -1558,18 +1553,12 @@ fn computed_debug_info_is_ignored_and_declared_properties_print_instead() {
             "var_dump(new C());\n",
         ),
     );
-    // Reference PHP 8.5.6 prints:  object(C)#1 (1) { ["n"]=> int(2) }
     assert_eq!(
         out,
         concat!(
             "object(C)#1 (1) {\n",
-            "  [\"items\"]=>\n",
-            "  array(2) {\n",
-            "    [0]=>\n",
-            "    int(1)\n",
-            "    [1]=>\n",
-            "    int(2)\n",
-            "  }\n",
+            "  [\"n\"]=>\n",
+            "  int(2)\n",
             "}\n",
         )
     );
@@ -1716,4 +1705,263 @@ fn enum_case_through_a_mixed_local() {
         ),
     );
     assert_eq!(out, "enum(Status::Idle)\n");
+}
+
+/// `var_dump()`, `print_r()` and `var_export()` of a builtin Reflection object render
+/// ONLY its PHP-visible public properties. elephc's Reflection classes keep their state
+/// in private `__*` backing slots (`__name`, `__attrs`, `__position`, ...) that back the
+/// accessor methods; PHP has no such properties, so walking the full declared-property
+/// list leaked compiler storage and could recurse into eagerly-built objects whose
+/// `__toString` vtable entry is null (the SIGSEGV of issue #1251). Expectations are PHP
+/// 8.5.10 byte for byte, `serialize()` refusal included.
+#[test]
+fn reflection_private_backing_slots_are_hidden_from_every_renderer() {
+    let out = run_php(
+        "vd_reflection_backing_slots",
+        concat!(
+            "<?php\n",
+            "function f(int $a = 5) {}\n",
+            "$p = (new ReflectionFunction('f'))->getParameters()[0];\n",
+            "var_dump($p);\n",
+            "print_r($p);\n",
+            "var_export($p);\n",
+            "echo \"\\n--- nested ---\\n\";\n",
+            "var_dump([$p]);\n",
+            "echo \"--- serialize ---\\n\";\n",
+            "try { serialize($p); } catch (Throwable $e) { echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }\n",
+        ),
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(ReflectionParameter)#2 (1) {\n",
+            "  [\"name\"]=>\n",
+            "  string(1) \"a\"\n",
+            "}\n",
+            "ReflectionParameter Object\n",
+            "(\n",
+            "    [name] => a\n",
+            ")\n",
+            "\\ReflectionParameter::__set_state(array(\n",
+            "   'name' => 'a',\n",
+            "))\n",
+            "--- nested ---\n",
+            "array(1) {\n",
+            "  [0]=>\n",
+            "  object(ReflectionParameter)#2 (1) {\n",
+            "    [\"name\"]=>\n",
+            "    string(1) \"a\"\n",
+            "  }\n",
+            "}\n",
+            "--- serialize ---\n",
+            "Exception: Serialization of 'ReflectionParameter' is not allowed\n",
+        )
+    );
+}
+
+/// The same skip for a Reflection object whose backing slots hold eagerly-built
+/// Reflection objects: dumping a `ReflectionParameter` built from a builtin function must
+/// not walk `__type` / `__declaring_function`, the route that reached a null `__toString`
+/// vtable entry in issue #1251.
+#[test]
+fn reflection_parameter_from_builtin_function_hides_backing_objects() {
+    let out = run_php(
+        "vd_reflection_backing_objects",
+        concat!(
+            "<?php\n",
+            "$p = new ReflectionParameter(\"strlen\", \"string\");\n",
+            "var_dump($p);\n",
+        ),
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(ReflectionParameter)#1 (1) {\n",
+            "  [\"name\"]=>\n",
+            "  string(6) \"string\"\n",
+            "}\n",
+        )
+    );
+}
+
+/// A user subclass of a builtin Reflection class still hides the slots it INHERITS: the
+/// skip is keyed on the property's declaring class, not the instance class, so an
+/// instance of `Mine extends ReflectionClass` must not fall back to rendering
+/// `ReflectionClass`'s private `__*` slots (36 of them before the declaring-class gate).
+///
+/// The public `name` mirror remains visible, while no inherited `__*` backing slot appears.
+#[test]
+fn reflection_subclass_hides_inherited_backing_slots() {
+    let out = run_php(
+        "vd_reflection_subclass_backing_slots",
+        concat!(
+            "<?php\n",
+            "class Mine extends ReflectionClass {\n",
+            "    public function __serialize(): array { return ['x' => 1]; }\n",
+            "}\n",
+            "$m = new Mine('Mine');\n",
+            "var_dump($m);\n",
+        ),
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(Mine)#1 (1) {\n",
+            "  [\"name\"]=>\n",
+            "  string(4) \"Mine\"\n",
+            "}\n",
+        )
+    );
+}
+
+/// A `__debugInfo()` projection that reads a compiler backing slot
+/// (`return ['n' => $this->__name, 'i' => $this->__interfaces]`) must not publish those slots
+/// either: PHP's Reflection classes expose no `__name`/`__interfaces`, so each read is an
+/// undefined property (a warning plus a NULL entry). elephc drops the pairs instead of
+/// rendering its private storage, so this fixture pins elephc's ACTUAL output
+/// (`object(Mine)#1 (0) {}`) against PHP's `["n"]=> NULL, ["i"]=> NULL`.
+#[test]
+fn reflection_subclass_debug_info_projection_drops_backing_slots() {
+    let out = run_php(
+        "vd_reflection_subclass_debug_info_backing_slot",
+        concat!(
+            "<?php\n",
+            "class Mine extends ReflectionClass {\n",
+            "    public function __debugInfo(): array { return ['n' => $this->__name, 'i' => $this->__interfaces]; }\n",
+            "}\n",
+            "$m = new Mine('Mine');\n",
+            "var_dump($m);\n",
+        ),
+    );
+    assert_eq!(out, concat!("object(Mine)#1 (0) {\n", "}\n",));
+}
+
+/// Reflection renderers expose PHP's public `name` mirror while hiding private compiler slots.
+#[test]
+fn reflection_owner_classes_render_public_names() {
+    let out = run_php(
+        "vd_reflection_unmodelled_public_name",
+        concat!(
+            "<?php\n",
+            "var_dump(new ReflectionFunction('strlen'));\n",
+        ),
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(ReflectionFunction)#1 (1) {\n",
+            "  [\"name\"]=>\n",
+            "  string(6) \"strlen\"\n",
+            "}\n",
+        )
+    );
+}
+
+/// Guard for the declaring-class gate: a USER class's own private `__`-prefixed property is
+/// not compiler storage, PHP's `var_dump` shows it, and the skip must not fire for it.
+/// Expected output measured on PHP 8.5.10.
+#[test]
+fn user_private_underscore_property_still_renders() {
+    let out = run_php(
+        "vd_user_private_underscore",
+        concat!(
+            "<?php\n",
+            "class U { private string $__secret = \"s\"; public int $ok = 1; }\n",
+            "var_dump(new U());\n",
+        ),
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(U)#1 (2) {\n",
+            "  [\"__secret\":\"U\":private]=>\n",
+            "  string(1) \"s\"\n",
+            "  [\"ok\"]=>\n",
+            "  int(1)\n",
+            "}\n",
+        )
+    );
+}
+
+/// A user private property that shadows a Reflection backing name renders once beside `name`.
+#[test]
+fn reflection_subclass_shadowed_backing_name_renders_once() {
+    let out = run_php(
+        "vd_reflection_subclass_shadowed_backing_name",
+        concat!(
+            "<?php\n",
+            "class Mine extends ReflectionClass { private string $__name = 'user'; }\n",
+            "$m = new Mine('Mine');\n",
+            "var_dump($m); print_r($m); var_export($m); echo \"\\n\";\n",
+        ),
+    );
+    assert_eq!(out, r#"object(Mine)#1 (2) {
+  ["name"]=>
+  string(4) "Mine"
+  ["__name":"Mine":private]=>
+  string(4) "user"
+}
+Mine Object
+(
+    [name] => Mine
+    [__name:Mine:private] => user
+)
+\Mine::__set_state(array(
+   'name' => 'Mine',
+   '__name' => 'user',
+))
+"#);
+}
+
+/// Each private shadow slot keeps its declaring class, physical offset and value tag.
+#[test]
+fn private_shadowed_slots_keep_physical_owners() {
+    let out = run_php(
+        "vd_private_shadowed_slots_keep_physical_owners",
+        r#"<?php
+class Base { private int $p = 7; }
+class Child extends Base { private string $p = 'child'; }
+$c = new Child();
+var_dump($c); print_r($c); var_export($c); echo "\n";
+"#,
+    );
+    assert_eq!(out, r#"object(Child)#1 (2) {
+  ["p":"Base":private]=>
+  int(7)
+  ["p":"Child":private]=>
+  string(5) "child"
+}
+Child Object
+(
+    [p:Base:private] => 7
+    [p:Child:private] => child
+)
+\Child::__set_state(array(
+   'p' => 7,
+   'p' => 'child',
+))
+"#);
+}
+
+/// A debug-info projection selects the visible user slot instead of the hidden backing tuple.
+#[test]
+fn reflection_subclass_debug_info_uses_shadowed_user_property() {
+    let out = run_php(
+        "vd_reflection_subclass_debug_info_uses_shadowed_user_property",
+        r#"<?php
+class Mine extends ReflectionClass {
+    private string $__name = 'user';
+    public function __debugInfo(): array { return ['n' => $this->__name]; }
+}
+$m = new Mine('Mine');
+echo (new ReflectionClass('Mine'))->getName(), "\n";
+var_dump($m);
+"#,
+    );
+    assert_eq!(out, r#"Mine
+object(Mine)#1 (1) {
+  ["n"]=>
+  string(4) "user"
+}
+"#);
 }

@@ -17,6 +17,8 @@ use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+mod local_views;
+
 use super::{
     branch_to, lower_array_access_from_value, lower_boxed_null,
     lower_dynamic_property_fetch_from_value, lower_expr, lower_expr_call_from_value,
@@ -24,6 +26,7 @@ use super::{
     lower_property_probe_from_value, property_can_be_uninitialized,
     property_probe_needs_runtime_name_form_for_type, store_value_into_temp, take_owned_temp,
     value_is_definitely_null, value_is_nullable,
+    refine_member_receiver,
 };
 
 /// Lowers `expr` when it is a postfix chain containing `?->`.
@@ -32,7 +35,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Option<Lo
 }
 
 /// Reports the boxed representation shared by successful and short-circuited postfix chains.
-pub(super) fn result_storage_type(expr: &Expr) -> Option<PhpType> {
+pub(in crate::ir_lower) fn result_storage_type(expr: &Expr) -> Option<PhpType> {
     flatten_nullsafe_postfix_chain(expr).map(|_| PhpType::Mixed)
 }
 
@@ -228,6 +231,7 @@ fn lower_nullsafe_postfix_chain(
     let null_block = ctx.builder.create_named_block("nullsafe.chain.null", Vec::new());
     let done = ctx.builder.create_named_block("nullsafe.chain.done", Vec::new());
     let mut current = Some(lower_expr(ctx, chain.base));
+    let mut local_views = local_views::LocalViews::new(ctx);
 
     for segment in chain.segments {
         let Some(value) = current.take() else {
@@ -236,6 +240,7 @@ fn lower_nullsafe_postfix_chain(
         if ctx.builder.insertion_block_is_terminated() {
             break;
         }
+        local_views.observe(ctx);
         current = lower_nullsafe_postfix_segment(
             ctx,
             value,
@@ -244,6 +249,7 @@ fn lower_nullsafe_postfix_chain(
             warn_on_missing,
         );
     }
+    local_views.observe(ctx);
 
     if let Some(value) = current {
         if !ctx.builder.insertion_block_is_terminated() {
@@ -258,6 +264,7 @@ fn lower_nullsafe_postfix_chain(
     branch_to(ctx, done);
 
     ctx.builder.position_at_end(done);
+    local_views.publish(ctx);
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 
@@ -275,6 +282,7 @@ fn lower_nullsafe_postfix_segment(
             property,
             nullsafe,
         } => {
+            let current = refine_member_receiver(ctx, current, expr);
             if nullsafe && !guard_nullsafe_chain_receiver(ctx, current, null_block, expr) {
                 return None;
             }
@@ -311,6 +319,7 @@ fn lower_nullsafe_postfix_segment(
             property,
             nullsafe,
         } => {
+            let current = refine_member_receiver(ctx, current, expr);
             if nullsafe && !guard_nullsafe_chain_receiver(ctx, current, null_block, expr) {
                 return None;
             }
@@ -428,6 +437,7 @@ fn guard_initialized_chain_property(
     true
 }
 
+/// Branches null receivers to the chain exit and releases an owning temporary on that path.
 fn guard_nullsafe_chain_receiver(
     ctx: &mut LoweringContext<'_, '_>,
     current: LoweredValue,

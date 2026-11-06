@@ -16,15 +16,19 @@ use super::*;
 /// Native AOT function callback metadata visible to runtime eval fragments.
 #[derive(Clone)]
 pub struct NativeFunction {
+    pub(super) name: String,
     pub(super) descriptor: *mut c_void,
     pub(super) invoker: NativeFunctionInvoker,
     pub(super) param_count: usize,
     pub(super) param_names: Vec<String>,
     pub(super) param_types: Vec<Option<EvalParameterType>>,
     pub(super) param_defaults: Vec<Option<NativeCallableDefault>>,
+    pub(super) param_default_constant_names: Vec<Option<String>>,
     pub(super) param_by_ref: Vec<bool>,
     pub(super) variadic_index: Option<usize>,
     pub(super) return_type: Option<EvalParameterType>,
+    pub(super) returns_reference: bool,
+    pub(super) attributes: Vec<EvalAttribute>,
     pub(super) bridge_supported: bool,
     pub(super) shape: Option<NativeCallableShape>,
 }
@@ -37,18 +41,43 @@ impl NativeFunction {
         param_count: usize,
     ) -> Self {
         Self {
+            name: String::new(),
             descriptor,
             invoker,
             param_count,
             param_names: Vec::new(),
             param_types: Vec::new(),
             param_defaults: Vec::new(),
+            param_default_constant_names: Vec::new(),
             param_by_ref: Vec::new(),
             variadic_index: None,
             return_type: None,
+            returns_reference: false,
+            attributes: Vec::new(),
             bridge_supported: true,
             shape: None,
         }
+    }
+
+    /// Returns the lowercase name this callback was registered under, empty until registered.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns declaration attributes retained for native function reflection.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
+    }
+
+    /// Appends one declaration attribute in source order, including repeated attributes.
+    pub fn add_attribute(&mut self, attribute: EvalAttribute) {
+        self.attributes.push(attribute);
+    }
+
+    /// Returns whether the generated registration identifies a compiler-internal declaration.
+    /// Registrations without origin metadata retain user-function semantics.
+    pub fn is_internal(&self) -> bool {
+        self.shape.is_some_and(|shape| shape.is_internal)
     }
 
     /// Returns the visible positional parameter count accepted by this callback.
@@ -112,6 +141,21 @@ impl NativeFunction {
         self.param_defaults.get(index).and_then(Option::as_ref)
     }
 
+    /// Records the source constant name without replacing its lazy executable default.
+    pub fn set_param_default_constant_name(&mut self, index: usize, name: String) -> bool {
+        if index >= self.param_count || self.param_default(index).is_none() || name.is_empty() {
+            return false;
+        }
+        self.param_default_constant_names.resize(self.param_count, None);
+        self.param_default_constant_names[index] = Some(name);
+        true
+    }
+
+    /// Returns the declared constant spelling even when evaluating its default raises Error.
+    pub fn param_default_constant_name(&self, index: usize) -> Option<&str> {
+        self.param_default_constant_names.get(index).and_then(Option::as_deref)
+    }
+
     /// Records whether one positional callback parameter is by-reference.
     pub fn set_param_by_ref(&mut self, index: usize, by_ref: bool) -> bool {
         if index >= self.param_count {
@@ -156,6 +200,17 @@ impl NativeFunction {
     /// Returns the registered declared return type, if any.
     pub fn return_type(&self) -> Option<&EvalParameterType> {
         self.return_type.as_ref()
+    }
+
+    /// Records that the AOT declaration is `function &name()`.
+    pub fn set_returns_reference(&mut self, returns_reference: bool) {
+        self.returns_reference = returns_reference;
+    }
+
+    /// Returns whether the AOT declaration returns by reference, for
+    /// `ReflectionFunction::returnsReference()`.
+    pub const fn returns_reference(&self) -> bool {
+        self.returns_reference
     }
 
     /// Returns whether eval may dispatch this callback through the generated bridge.

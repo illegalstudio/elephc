@@ -1,8 +1,6 @@
 ---
 title: "mb_http_input() - internals"
 description: "Compiler internals for mb_http_input(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 854
 ---
 
 ## `mb_http_input()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_http_input.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_http_input.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

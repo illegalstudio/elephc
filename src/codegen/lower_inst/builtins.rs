@@ -27,8 +27,9 @@ use super::super::context::FunctionContext;
 use super::{
     class_implements_interface, exceptions, expect_data, expect_operand,
     instruction_strict_php_profile, load_value_to_first_int_arg,
-    lower_instance_runtime_intrinsic, lower_runtime_object_method_call, predicates,
-    runtime_backed_instance_intrinsic, store_if_result,
+    lower_instance_runtime_intrinsic, lower_runtime_object_method_call,
+    object_name_satisfies_interface, predicates, runtime_backed_instance_intrinsic,
+    store_if_result,
 };
 use crate::codegen::{CodegenIrError, Result};
 
@@ -42,6 +43,10 @@ pub(crate) mod ctype;
 pub(crate) mod curl;
 pub(crate) mod debug;
 pub(super) mod eval;
+/// Installing the compiled OPcache configuration is a STARTUP concern rather than an eval
+/// one, so `crate::codegen::frame` reaches it from the prologue. Re-exported here because
+/// `frame` sits a level above this module's parent, which `pub(super)` does not reach.
+pub(crate) use eval::configure_eval_opcache;
 mod eval_facade;
 pub(crate) mod iconv;
 pub(crate) mod io;
@@ -55,7 +60,9 @@ mod type_predicates;
 pub(crate) mod is_numeric;
 pub(crate) mod json;
 pub(crate) mod math;
+pub(crate) mod memory;
 pub(crate) mod object_props;
+pub(crate) mod opcache_runtime;
 pub(crate) mod openssl;
 pub(crate) mod output_buffering;
 pub(crate) mod pcntl;
@@ -70,10 +77,15 @@ pub(crate) mod serialize;
 pub(crate) mod spl;
 pub(crate) mod system;
 pub(crate) mod strings;
+pub(crate) mod tokenizer;
 pub(crate) mod types;
 
 pub(crate) use count_empty::*;
 pub(in crate::codegen::lower_inst) use eval_facade::*;
+// The eval inventory helper lives at the `codegen` level, so the facade entry
+// point that reaches the eval registration body has to be visible there too.
+pub(in crate::codegen) use eval_facade::register_eval_inventory;
+pub(in crate::codegen) use eval_facade::emit_eval_status_helper_body;
 pub(crate) use function_queries::*;
 pub(crate) use member_queries::*;
 pub(crate) use scalar_metadata::*;

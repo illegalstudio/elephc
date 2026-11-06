@@ -92,7 +92,7 @@ fn test_error_mbstring_regex_settings_contracts() {
         ("<?php mb_regex_set_options([]);", "mb_regex_set_options() options argument must be string or null"),
         ("<?php declare(strict_types=1); mb_regex_encoding(1);", "mb_regex_encoding() encoding argument must be string or null"),
         ("<?php declare(strict_types=1); mb_regex_set_options(false);", "mb_regex_set_options() options argument must be string or null"),
-        ("<?php function encoding(): string { return mb_regex_encoding(); }", "Function 'encoding' return type expects Str, got Union([Str, Bool])"),
+        ("<?php function encoding(): string { return mb_regex_encoding(); }", "Function 'encoding' return type expects string, got string|bool"),
     ] { expect_error(source, message); }
 }
 
@@ -186,15 +186,15 @@ fn test_error_mbstring_scalar_contracts() {
 fn test_error_mbstring_union_returns_are_precise() {
     for (source, message) in [
         (r#"<?php function pos(): int { return mb_strpos("a", "z"); }"#,
-            "Function 'pos' return type expects Int, got Union([Int, False])"),
+            "Function 'pos' return type expects int, got int|false"),
         (r#"<?php function point(): int { return mb_ord("a"); }"#,
-            "Function 'point' return type expects Int, got Union([Int, False])"),
+            "Function 'point' return type expects int, got int|false"),
         (r#"<?php function character(): string { return mb_chr(-1); }"#,
-            "Function 'character' return type expects Str, got Union([Str, False])"),
+            "Function 'character' return type expects string, got string|false"),
         (r#"<?php function suffix(): string { return mb_strstr("a", "z"); }"#,
-            "Function 'suffix' return type expects Str, got Union([Str, False])"),
+            "Function 'suffix' return type expects string, got string|false"),
         (r#"<?php function encoding(): string { return mb_internal_encoding(); }"#,
-            "Function 'encoding' return type expects Str, got Union([Str, Bool])"),
+            "Function 'encoding' return type expects string, got string|bool"),
     ] { expect_error(source, message); }
 }
 

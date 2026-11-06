@@ -150,17 +150,29 @@ pub(crate) struct CallSpec {
 }
 
 unsafe extern "C" {
+    /// Classifies a curl option by the native setter ABI that can carry its value.
     fn elephc_curl_option_kind(opt: i64) -> i32;
+    /// Allocates and registers an easy handle with write capture and error state; returns zero on failure.
     fn elephc_curl_easy_init() -> i64;
+    /// Sets the URL from NUL-free bytes; returns zero for invalid handles, bytes, or native failure.
     fn elephc_curl_easy_set_url(id: i64, ptr: *const u8, len: usize) -> i32;
+    /// Sets a supported long or off_t option; returns zero when the option or handle is invalid.
     fn elephc_curl_easy_setopt_long(id: i64, opt: i32, value: i64) -> i32;
+    /// Sets a supported string option, using binary-safe storage for POSTFIELDS.
     fn elephc_curl_easy_setopt_str(id: i64, opt: i32, ptr: *const u8, len: usize) -> i32;
+    /// Sets a list option from NUL-terminated items, with an empty blob representing an empty list.
     fn elephc_curl_easy_setopt_slist(id: i64, opt: i32, ptr: *const u8, len: usize) -> i32;
+    /// Runs the transfer after clearing capture and error state; returns zero for native transfer failure.
     fn elephc_curl_easy_perform(id: i64) -> i32;
+    /// Returns the most recent transfer CURLcode, or zero when no transfer error is stored.
     fn elephc_curl_easy_errno(id: i64) -> i32;
+    /// Copies the transfer error message and publishes its required length through out_len.
     fn elephc_curl_easy_error(id: i64, out: *mut u8, out_cap: usize, out_len: *mut usize) -> i32;
+    /// Writes a long info field to out; rejects invalid handles or a mismatched info type.
     fn elephc_curl_easy_getinfo_long(id: i64, info: i32, out: *mut i64) -> i32;
+    /// Writes a double info field to out; rejects invalid handles or a mismatched info type.
     fn elephc_curl_easy_getinfo_double(id: i64, info: i32, out: *mut f64) -> i32;
+    /// Runs a string-producing operation and stores its result in the handle scratch buffer.
     fn elephc_curl_easy_str_op(
         id: i64,
         op: i32,
@@ -168,39 +180,71 @@ unsafe extern "C" {
         len: usize,
         number: i64,
     ) -> i32;
+    /// Returns borrowed scratch bytes valid until the next bridge call that touches the handle.
     fn elephc_curl_easy_take_scratch(id: i64, ptr: *mut *mut u8, len: *mut usize) -> i32;
+    /// Returns borrowed response bytes valid until the next bridge call that touches the handle.
     fn elephc_curl_easy_take_body(id: i64, ptr: *mut *mut u8, len: *mut usize) -> i32;
+    /// Resets native options and PHP-layer state to their defaults.
     fn elephc_curl_easy_reset(id: i64) -> i32;
+    /// Applies a pause bitmask and returns the raw CURLcode.
     fn elephc_curl_easy_pause(id: i64, bitmask: i32) -> i32;
+    /// Runs connection upkeep and returns the raw CURLcode.
     fn elephc_curl_easy_upkeep(id: i64) -> i32;
+    /// Duplicates an easy handle and its bridge state; returns zero on failure.
     fn elephc_curl_easy_duphandle(id: i64) -> i64;
+    /// Copies the native CURLcode message and reports the required output length.
     fn elephc_curl_strerror(code: i32, out: *mut u8, out_cap: usize, out_len: *mut usize) -> i32;
+    /// Removes an easy handle and releases its native resources; ignores unknown handles.
     fn elephc_curl_easy_free(id: i64);
+    /// Writes the native version and feature inventory as JSON with its required output length.
     fn elephc_curl_global_info(out_json: *mut u8, cap: usize, len: *mut usize) -> i32;
+    /// Allocates a multi handle; returns zero on native allocation failure.
     fn elephc_curl_multi_init() -> i64;
+    /// Attaches an easy handle to a multi handle and returns the raw CURLMcode.
     fn elephc_curl_multi_add(multi_id: i64, easy_id: i64) -> i32;
+    /// Detaches an easy handle from a multi handle and returns the raw CURLMcode.
     fn elephc_curl_multi_remove(multi_id: i64, easy_id: i64) -> i32;
+    /// Drives attached transfers and returns the running count in the high word and CURLMcode in the low word.
     fn elephc_curl_multi_perform(multi_id: i64) -> i64;
+    /// Waits for ready transfer descriptors up to timeout_ms; returns minus one for native failure.
     fn elephc_curl_multi_select(multi_id: i64, timeout_ms: i64) -> i32;
+    /// Reads a selected field from the multi handle completion queue.
     fn elephc_curl_multi_info_read(multi_id: i64, field: i64) -> i64;
+    /// Applies a supported integer multi option and returns the bridge option-status code.
     fn elephc_curl_multi_setopt(multi_id: i64, opt: i64, value: i64) -> i32;
+    /// Returns the most recent multi-operation CURLMcode.
     fn elephc_curl_multi_errno(multi_id: i64) -> i32;
+    /// Copies the native CURLMcode message and reports the required output length.
     fn elephc_curl_multi_strerror(code: i32, out: *mut u8, out_cap: usize, out_len: *mut usize)
         -> i32;
+    /// Detaches remaining easy handles and releases the multi handle.
     fn elephc_curl_multi_free(multi_id: i64);
+    /// Allocates a share handle; returns zero on native allocation failure.
     fn elephc_curl_share_init() -> i64;
+    /// Finds or creates a process-lifetime share for the encoded lock-data list; returns zero on failure.
     fn elephc_curl_share_persistent_init(ptr: *const u8, len: usize) -> i64;
+    /// Applies a supported integer share option and returns the bridge option-status code.
     fn elephc_curl_share_setopt(share_id: i64, opt: i64, value: i64) -> i32;
+    /// Returns the most recent share-operation CURLSHcode.
     fn elephc_curl_share_errno(share_id: i64) -> i32;
+    /// Copies the native CURLSHcode message and reports the required output length.
     fn elephc_curl_share_strerror(code: i32, out: *mut u8, out_cap: usize, out_len: *mut usize)
         -> i32;
+    /// Associates an easy handle with a share handle; returns zero on invalid handles or native refusal.
     fn elephc_curl_easy_set_share(easy_id: i64, share_id: i64) -> i32;
+    /// Releases a share when no easy handles retain it; persistent shares remain process-owned.
     fn elephc_curl_share_free(share_id: i64);
+    /// Starts a pending MIME builder while retaining any already attached request body.
     fn elephc_curl_mime_new(id: i64) -> i32;
+    /// Appends an empty part to the pending MIME builder.
     fn elephc_curl_mime_add_part(id: i64) -> i32;
+    /// Sets a pending MIME field, allowing binary bytes only for the data field.
     fn elephc_curl_mime_part_field(id: i64, kind: i32, ptr: *const u8, len: usize) -> i32;
+    /// Attaches the pending MIME builder as the request POST body.
     fn elephc_curl_mime_post(id: i64) -> i32;
+    /// Discards the pending MIME builder without attaching it.
     fn elephc_curl_mime_abort(id: i64) -> i32;
+    /// Installs or clears a native callback slot with the supplied descriptor and adapter.
     fn elephc_curl_easy_set_callback(
         id: i64,
         slot: i32,
@@ -208,6 +252,7 @@ unsafe extern "C" {
         self_obj: *mut std::ffi::c_void,
         adapter: *const std::ffi::c_void,
     ) -> i32;
+    /// Reports and clears the bridge flag recording a PHP callback exception.
     fn elephc_curl_take_callback_threw() -> i32;
 }
 

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - JSON encoders are emitted formatter state machines; escaping, type tags, and buffer growth are observable PHP behavior.
+//! - Nested wrappers and invoker markers borrow caller values without consuming their ownership.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -28,7 +29,9 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 /// - `4` → indexed array payload → `__rt_json_encode_array_dynamic`
 /// - `5` → associative array payload → `__rt_json_encode_assoc`
 /// - `6` → object payload → `__rt_json_encode_object` (or `__rt_json_encode_stdclass` for stdClass)
+/// - `7` → nested Mixed or persistent reference wrapper → borrowed concrete cell
 /// - `8` → explicit null payload → `__rt_json_encode_null`
+/// - `11` → invoker marker → borrowed current caller value
 /// - Unknown tags → falls through to `__rt_json_encode_null` for PHP compatibility
 pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -42,6 +45,10 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
 
     emitter.instruction("cbz x0, __rt_json_encode_mixed_null");                 // null mixed pointers encode as JSON null
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed runtime value_tag
+    emitter.instruction("cmp x9, #7");                                          // nested Mixed wrappers expose their current referenced value
+    emitter.instruction("b.eq __rt_json_encode_mixed_nested");                  // peel the wrapper without changing its ownership
+    emitter.instruction("cmp x9, #11");                                         // descriptor-invoker markers point at caller storage
+    emitter.instruction("b.eq __rt_json_encode_mixed_invoker");                 // encode the current caller value instead of null
     emitter.instruction("cmp x9, #0");                                          // is the boxed value an integer?
     emitter.instruction("b.eq __rt_json_encode_mixed_int");                     // encode integers via itoa
     emitter.instruction("cmp x9, #1");                                          // is the boxed value a string?
@@ -59,6 +66,32 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #8");                                          // is the boxed value null?
     emitter.instruction("b.eq __rt_json_encode_mixed_null");                    // encode null via json_encode_null
     emitter.instruction("b __rt_json_encode_mixed_null");                       // remaining tags (resource, ...) currently encode as null
+
+    emitter.label("__rt_json_encode_mixed_nested");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // borrow the wrapped Mixed cell
+    emitter.instruction("b __rt_json_encode_mixed");                            // redispatch until the value is concrete
+
+    emitter.label("__rt_json_encode_mixed_invoker");
+    emitter.instruction("ldr x9, [x0, #16]");                                   // load the caller storage representation
+    emitter.instruction("ldr x10, [x0, #8]");                                   // load the caller storage address
+    emitter.instruction("ldr x0, [x10]");                                       // borrow its current low payload or Mixed cell
+    emitter.instruction("cmp x9, #7");                                          // a boxed caller already supplies a complete cell
+    emitter.instruction("b.eq __rt_json_encode_mixed");                         // encode the borrowed box directly
+    emitter.instruction("sub sp, sp, #48");                                     // reserve a borrowed stack cell and return-address pair
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and return address across encoding
+    emitter.instruction("str x9, [sp]");                                        // materialize the borrowed runtime tag
+    emitter.instruction("str x0, [sp, #8]");                                    // materialize the borrowed low payload
+    emitter.instruction("mov x11, #0");                                         // ordinary scalar and heap values have no high payload
+    emitter.instruction("cmp x9, #1");                                          // string storage also carries its current length
+    emitter.instruction("b.ne __rt_json_encode_mixed_invoker_ready");           // only strings need a high payload word
+    emitter.instruction("ldr x11, [x10, #8]");                                  // borrow the current caller string length
+    emitter.label("__rt_json_encode_mixed_invoker_ready");
+    emitter.instruction("str x11, [sp, #16]");                                  // complete the borrowed stack cell
+    emitter.instruction("mov x0, sp");                                          // pass the borrowed cell through ordinary JSON dispatch
+    emitter.instruction("bl __rt_json_encode_mixed");                           // encode without retaining or releasing the caller payload
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #48");                                     // discard the non-owning stack cell
+    emitter.instruction("ret");                                                 // preserve the returned JSON pointer and length
 
     emitter.label("__rt_json_encode_mixed_int");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed integer payload
@@ -122,7 +155,9 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
 /// - `4` → indexed array → `__rt_json_encode_array_dynamic`
 /// - `5` → associative array → `__rt_json_encode_assoc`
 /// - `6` → object → `__rt_json_encode_object` or `__rt_json_encode_stdclass`
+/// - `7` → nested Mixed or persistent reference wrapper → borrowed concrete cell
 /// - `8` → explicit null → `__rt_json_encode_null`
+/// - `11` → invoker marker → borrowed current caller value
 /// - Unknown tags → `__rt_json_encode_null`
 fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -132,6 +167,10 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // null mixed boxes encode as the JSON null literal immediately
     emitter.instruction("jz __rt_json_encode_mixed_null");                      // branch to the shared null encoder when no mixed box exists
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the boxed runtime value tag from the mixed cell header
+    emitter.instruction("cmp r10, 7");                                          // nested Mixed wrappers expose their current referenced value
+    emitter.instruction("je __rt_json_encode_mixed_nested");                    // peel the wrapper without changing its ownership
+    emitter.instruction("cmp r10, 11");                                         // descriptor-invoker markers point at caller storage
+    emitter.instruction("je __rt_json_encode_mixed_invoker");                   // encode the current caller value instead of null
     emitter.instruction("cmp r10, 0");                                          // is the boxed payload an integer?
     emitter.instruction("je __rt_json_encode_mixed_int");                       // encode integers through the decimal integer helper
     emitter.instruction("cmp r10, 1");                                          // is the boxed payload a string?
@@ -149,6 +188,30 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 8");                                          // is the boxed payload null?
     emitter.instruction("je __rt_json_encode_mixed_null");                      // encode explicit null payloads through the shared helper
     emitter.instruction("jmp __rt_json_encode_mixed_null");                     // remaining tags (resource, ...) currently encode as null on x86_64 too
+
+    emitter.label("__rt_json_encode_mixed_nested");
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // borrow the wrapped Mixed cell
+    emitter.instruction("jmp __rt_json_encode_mixed");                          // redispatch until the value is concrete
+
+    emitter.label("__rt_json_encode_mixed_invoker");
+    emitter.instruction("mov r10, QWORD PTR [rax + 16]");                       // load the caller storage representation
+    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // load the caller storage address
+    emitter.instruction("mov rax, QWORD PTR [r11]");                            // borrow its current low payload or Mixed cell
+    emitter.instruction("cmp r10, 7");                                          // a boxed caller already supplies a complete cell
+    emitter.instruction("je __rt_json_encode_mixed");                           // encode the borrowed box directly
+    emitter.instruction("sub rsp, 40");                                         // reserve a borrowed stack cell and align the recursive call
+    emitter.instruction("mov QWORD PTR [rsp], r10");                            // materialize the borrowed runtime tag
+    emitter.instruction("mov QWORD PTR [rsp + 8], rax");                        // materialize the borrowed low payload
+    emitter.instruction("xor edx, edx");                                        // ordinary scalar and heap values have no high payload
+    emitter.instruction("cmp r10, 1");                                          // string storage also carries its current length
+    emitter.instruction("jne __rt_json_encode_mixed_invoker_ready");            // only strings need a high payload word
+    emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // borrow the current caller string length
+    emitter.label("__rt_json_encode_mixed_invoker_ready");
+    emitter.instruction("mov QWORD PTR [rsp + 16], rdx");                       // complete the borrowed stack cell
+    emitter.instruction("mov rax, rsp");                                        // pass the borrowed cell through ordinary JSON dispatch
+    emitter.instruction("call __rt_json_encode_mixed");                         // encode without retaining or releasing the caller payload
+    emitter.instruction("add rsp, 40");                                         // discard the non-owning stack cell
+    emitter.instruction("ret");                                                 // preserve the returned JSON pointer and length
 
     emitter.label("__rt_json_encode_mixed_int");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed integer payload into the standard integer result register

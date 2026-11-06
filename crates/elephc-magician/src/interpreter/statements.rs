@@ -13,6 +13,7 @@ mod abstract_requirements;
 mod array_updates;
 mod array_append;
 mod attributes_magic_validation;
+mod core_attributes;
 mod callable_objects;
 mod class_declarations;
 mod class_resolution;
@@ -25,6 +26,7 @@ mod instance_property_access;
 mod interface_contracts;
 mod interface_member_validation;
 mod loop_statements;
+mod local_offset_writes;
 mod method_dispatch;
 mod native_argument_binding;
 mod native_constructor_defaults;
@@ -35,7 +37,10 @@ mod native_static_dispatch;
 mod property_constant_validation;
 mod property_dispatch;
 mod property_validation;
+mod abstract_setter;
+mod readonly_property_writes;
 mod reference_writeback;
+mod scalar_offsets;
 mod reflection_instantiation;
 mod static_method_dispatch;
 mod static_property_access;
@@ -49,7 +54,7 @@ use crate::context::{
 };
 
 use abstract_requirements::*;
-use array_append::eval_array_append_value;
+use array_append::{eval_array_append_owned_value_with_type, eval_array_append_value};
 pub(crate) use array_updates::*;
 // Re-exported under a distinct name so the `class_resolution::*` glob below and the crate-level
 // re-export in `interpreter/mod.rs` cannot import the same name at two visibilities.
@@ -59,6 +64,7 @@ pub(crate) use class_resolution::eval_object_clone_with_properties_result as eva
 #[cfg(not(test))]
 pub(crate) use instance_property_access::eval_property_set_result as eval_property_set_for_ffi;
 use attributes_magic_validation::*;
+use core_attributes::*;
 pub(in crate::interpreter) use callable_objects::*;
 pub(in crate::interpreter) use class_declarations::*;
 pub(in crate::interpreter) use class_resolution::*;
@@ -72,6 +78,7 @@ pub(in crate::interpreter) use instance_property_access::*;
 use interface_contracts::*;
 use interface_member_validation::*;
 pub(in crate::interpreter) use loop_statements::*;
+use local_offset_writes::{eval_array_append_var_stmt, eval_array_set_var_stmt, reject_weak_map_append};
 pub(in crate::interpreter) use method_dispatch::*;
 pub(in crate::interpreter) use native_argument_binding::*;
 pub(in crate::interpreter) use native_constructor_defaults::*;
@@ -82,8 +89,11 @@ pub(in crate::interpreter) use native_static_dispatch::*;
 use property_constant_validation::*;
 use property_dispatch::*;
 pub(in crate::interpreter) use property_validation::*;
+pub(in crate::interpreter) use abstract_setter::*;
+use readonly_property_writes::*;
 pub(in crate::interpreter) use reference_writeback::*;
 pub(in crate::interpreter) use reflection_instantiation::*;
+use scalar_offsets::{eval_array_autovivification, eval_string_offset_write};
 pub(in crate::interpreter) use static_method_dispatch::*;
 pub(in crate::interpreter) use static_property_access::*;
 pub(in crate::interpreter) use trait_declarations::*;

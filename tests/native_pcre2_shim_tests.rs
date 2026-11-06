@@ -172,6 +172,35 @@ static int check_guard_contracts(void) {
     return 0;
 }
 
+/* A search offset does not turn the suffix into a new anchored subject. */
+static int check_iteration_context(void) {
+    void *handle = NULL;
+    uint64_t slots = 0;
+    int64_t pairs[6] = {0, 2, 77, 77, 88, 88};
+    CHECK(elephc_pcre2_v1_compile(&handle, "a|^b", 0, &slots) == 0,
+        "anchor fixture must compile");
+    CHECK(elephc_pcre2_v1_exec(handle, "ab", 3, pairs, 0x0080) == 0,
+        "first anchored alternative matches a");
+    CHECK(pairs[0] == 0 && pairs[1] == 1 && pairs[2] == -1 && pairs[5] == -1,
+        "range execution returns absolute offsets and initializes surplus pairs");
+    pairs[0] = 1;
+    pairs[1] = 2;
+    CHECK(elephc_pcre2_v1_exec(handle, "ab", 3, pairs, 0x0080) != 0,
+        "a suffix b is not a new beginning of the subject");
+    CHECK(pairs[0] == -1 && pairs[5] == -1, "nonmatch initializes every output pair");
+    elephc_pcre2_v1_free(handle);
+    CHECK(elephc_pcre2_v1_compile(&handle, "a|(?<=a)(b)", 0, &slots) == 0,
+        "lookbehind fixture must compile");
+    pairs[0] = 1;
+    pairs[1] = 2;
+    CHECK(elephc_pcre2_v1_exec(handle, "ab", 3, pairs, 0x0080) == 0,
+        "lookbehind sees the original prefix after advancing");
+    CHECK(pairs[0] == 1 && pairs[1] == 2 && pairs[2] == 1 && pairs[3] == 2
+        && pairs[4] == -1 && pairs[5] == -1, "capture offsets remain absolute");
+    elephc_pcre2_v1_free(handle);
+    return 0;
+}
+
 /* Exercises PCRE2 syntax, caseless matching, explicit byte lengths, and diagnostic ownership. */
 static int check_mime_native_contract(void) {
     void *handle = (void *)(uintptr_t)1;
@@ -234,6 +263,10 @@ int main(void) {
         return result;
     }
     result = check_guard_contracts();
+    if (result != 0) {
+        return result;
+    }
+    result = check_iteration_context();
     if (result != 0) {
         return result;
     }

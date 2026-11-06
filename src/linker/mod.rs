@@ -13,6 +13,7 @@
 mod archive_dedup;
 mod bridges;
 mod command;
+mod native_packages;
 mod pdo;
 mod sdk;
 
@@ -86,8 +87,18 @@ impl std::fmt::Display for LinkError {
                 // An override that short-circuited discovery gets the opposite advice: the
                 // fallbacks were never consulted, so telling the user to put the archive next
                 // to the binary would send them somewhere this run will not look.
-                match override_dir {
-                    Some(override_dir) => write!(
+                let invalid_file = invalid_archive_filename(archive);
+                match (override_dir, invalid_file) {
+                    (Some(override_dir), Some(filename)) => write!(
+                        formatter,
+                        "\n\n{env_var} is set to {override_dir}, which takes priority over every \
+                         other location, so no other directory was consulted. Replace invalid \
+                         archive {archive} with a non-empty regular file, point {env_var} to a \
+                         directory containing a valid {filename}, or unset {env_var} to search \
+                         the other locations again. `elephc --print-capabilities` lists every \
+                         archive this binary can need."
+                    ),
+                    (Some(override_dir), None) => write!(
                         formatter,
                         "\n\n{env_var} is set to {override_dir}, which takes priority over every \
                          other location — the elephc binary's own directory, a sibling lib/ and \
@@ -96,31 +107,33 @@ impl std::fmt::Display for LinkError {
                          those locations again. `elephc --print-capabilities` lists every \
                          archive this binary can need."
                     ),
-                    None => {
-                        if let Some(filename) = Path::new(archive)
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .filter(|name| *name != archive.as_str())
-                        {
-                            return write!(
-                                formatter,
-                                "\n\nReplace invalid archive {archive} with a non-empty regular \
-                                 file, or set {env_var} to a directory containing a valid \
-                                 {filename}. `elephc --print-capabilities` lists every archive \
-                                 this binary can need."
-                            );
-                        }
-                        write!(
-                            formatter,
-                            "\n\nSet {env_var} to a directory containing {archive}, or keep the \
-                             bridge archives next to the elephc binary (or in a sibling lib/). \
-                             `elephc --print-capabilities` lists every archive this binary can need."
-                        )
-                    }
+                    (None, Some(filename)) => write!(
+                        formatter,
+                        "\n\nReplace invalid archive {archive} with a non-empty regular \
+                         file, or set {env_var} to a directory containing a valid \
+                         {filename}. `elephc --print-capabilities` lists every archive \
+                         this binary can need."
+                    ),
+                    (None, None) => write!(
+                        formatter,
+                        "\n\nSet {env_var} to a directory containing {archive}, or keep the \
+                         bridge archives next to the elephc binary (or in a sibling lib/). \
+                         `elephc --print-capabilities` lists every archive this binary can need."
+                    ),
                 }
             }
         }
     }
+}
+
+/// Returns the filename of `archive` when it is a full path to an entry that exists but is
+/// not a usable archive, which is how the errors distinguish an invalid file from a missing
+/// one: a missing archive is reported by its bare filename.
+fn invalid_archive_filename(archive: &str) -> Option<&str> {
+    Path::new(archive)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| *name != archive)
 }
 
 impl std::error::Error for LinkError {}
@@ -140,11 +153,23 @@ pub(crate) fn archive_filename_for_flag(flag: &str) -> Option<String> {
     bridges::archive_filename_for_flag(flag)
 }
 
+/// Returns the managed native packages a planned library set needs, in link order.
+pub(crate) fn native_packages_for_libraries(link_libraries: &[String]) -> Vec<&'static str> {
+    native_packages::native_packages_for_libraries(link_libraries)
+}
+
 /// Returns bridge library/flag pairs present in one planned named-library set.
 pub(crate) fn bridges_in(
     link_libraries: &[String],
 ) -> Vec<(&'static str, &'static str)> {
     bridges::bridges_in(link_libraries)
+}
+
+/// The archive of the bridge named `lib_name` (`libelephc_<name>.a`), auto-built in a
+/// source checkout. Hosted PHP extensions link the `elephc_zend` engine through it, after
+/// their own archives.
+pub(crate) fn bridge_archive(lib_name: &str) -> Result<std::path::PathBuf, LinkError> {
+    bridges::locate_archive(lib_name)
 }
 
 /// Maps one bridge library name to the PHP extensions identified by linking that bridge.
@@ -297,7 +322,31 @@ pub(crate) fn link_with_plan(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
 ) -> Result<(), LinkError> {
+    link_with_plan_and_inputs(target, emit, bin_path, obj_path, runtime_object_path,
+        plan, forced_whole_archive).map(|_| ())
+}
+
+/// Links normally and returns exact archive paths plus bridge names for executable caches.
+pub(crate) fn link_with_plan_and_inputs(
+    target: Target,
+    emit: Emit,
+    bin_path: &Path,
+    obj_path: &Path,
+    runtime_object_path: &Path,
+    plan: &LinkPlan,
+    forced_whole_archive: &[String],
+) -> Result<Vec<(PathBuf, Option<String>)>, LinkError> {
     let resolved = bridges::resolve(plan, forced_whole_archive, target.platform)?;
+    let inputs = resolved.plan.items().iter().filter_map(|item| match item {
+        LinkItem::StaticArchive { path, origin, .. } => {
+            let bridge = match origin {
+                crate::link_plan::LinkOrigin::Bridge { name } => Some(name.clone()),
+                _ => None,
+            };
+            Some((path.clone(), bridge))
+        }
+        _ => None,
+    }).collect();
     let prepared = (target.platform == Platform::MacOS)
         .then(|| archive_dedup::prepare(&resolved.plan));
     let render_plan = prepared
@@ -341,5 +390,10 @@ pub(crate) fn link_with_plan(
     if let Some(prepared) = prepared {
         prepared.cleanup();
     }
-    Ok(())
+    Ok(inputs)
+}
+
+/// Rejects a cached host when an auto-built bridge has newer local source inputs.
+pub(crate) fn cached_bridge_is_current(name: &str, archive: &Path) -> bool {
+    bridges::cached_archive_is_current(name, archive)
 }

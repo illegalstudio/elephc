@@ -1,8 +1,6 @@
 ---
 title: "mysqli_rollback()"
 description: "Rolls back the open transaction."
-sidebar:
-  order: 153
 ---
 
 ## mysqli_rollback()
@@ -22,8 +20,9 @@ Rolls back the open transaction.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

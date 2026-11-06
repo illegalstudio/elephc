@@ -1,8 +1,6 @@
 ---
 title: "error_log() - internals"
 description: "Compiler internals for error_log(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 974
 ---
 
 ## `error_log()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:1761](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1761) (`error_log`)
+- **Lowering**: [`src/web_prelude/build.rs`](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs) (`error_log`)
 - **Function symbol**: `error_log()`
 
 

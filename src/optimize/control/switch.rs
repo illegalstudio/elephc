@@ -63,7 +63,16 @@ pub(crate) fn prune_switch_stmt(
         return expr_to_effect_stmt(subject);
     }
 
-    if switch_has_level_sensitive_loop_exit(&cases, &default) {
+    // A `break` nested under an `if` or `try` in a body targets this switch; inlining the bodies
+    // (the single-case `if`, a known subject) would leave it without its target, lowered as
+    // unreachable, and drop the writes before it. `if ($c) { $x = 2; break; } return 5;` did.
+    let has_nested_switch_exit = cases
+        .iter()
+        .map(|(_, body)| body)
+        .chain(default.iter())
+        .flatten()
+        .any(crate::termination::stmt_may_leave_current_switch_from_nested);
+    if has_nested_switch_exit || switch_has_level_sensitive_loop_exit(&cases, &default) {
         return vec![Stmt {
             kind: StmtKind::Switch {
                 subject,
@@ -207,7 +216,8 @@ fn single_case_rewrite_would_clone_a_decision(
 ///
 /// Returns the result expression for the first matching arm, the default expression if
 /// the subject matches no arms, or the original `ExprKind::Match` if any arm classification
-/// is unknown or the subject is non-scalar.
+/// is unknown or the subject is non-scalar. A selected array read retains a single-arm
+/// merge so its possible null survives until EIR result storage is chosen.
 pub(crate) fn try_prune_match_expr(
     subject: Expr,
     arms: Vec<(Vec<Expr>, Expr)>,
@@ -224,7 +234,16 @@ pub(crate) fn try_prune_match_expr(
 
     for (index, (patterns, result)) in arms.iter().enumerate() {
         match classify_case_patterns(&subject_value, patterns, CaseComparison::Strict) {
-            CaseMatch::Matches => return result.kind.clone(),
+            CaseMatch::Matches => {
+                if array_read_needs_merge_context(result) {
+                    return ExprKind::Match {
+                        subject: Box::new(subject),
+                        arms: vec![(patterns.clone(), result.clone())],
+                        default: None,
+                    };
+                }
+                return result.kind.clone();
+            }
             CaseMatch::NoMatch => {}
             CaseMatch::Unknown => {
                 return ExprKind::Match {
@@ -237,6 +256,13 @@ pub(crate) fn try_prune_match_expr(
     }
 
     if let Some(default) = default {
+        if array_read_needs_merge_context(&default) {
+            return ExprKind::Match {
+                subject: Box::new(subject),
+                arms: Vec::new(),
+                default: Some(default),
+            };
+        }
         default.kind
     } else {
         ExprKind::Match {
@@ -244,6 +270,15 @@ pub(crate) fn try_prune_match_expr(
             arms: Vec::new(),
             default: None,
         }
+    }
+}
+
+/// Keeps a selected read's implicit null visible to EIR merge storage selection.
+pub(super) fn array_read_needs_merge_context(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ArrayAccess { .. } => true,
+        ExprKind::ErrorSuppress(inner) => array_read_needs_merge_context(inner),
+        _ => false,
     }
 }
 

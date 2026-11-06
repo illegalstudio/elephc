@@ -27,9 +27,11 @@ mod member_construction;
 mod member_metadata;
 mod owner_materialization;
 mod parameter_construction;
+mod parameter_lazy_defaults;
 mod parameter_metadata;
 mod property_access;
 mod property_helpers;
+mod public_mirror_writes;
 
 use super::*;
 use crate::context::{
@@ -46,6 +48,7 @@ pub(in crate::interpreter) use class_member_api::*;
 use constant_construction::*;
 use flags::*;
 use formatting::*;
+pub(in crate::interpreter) use formatting::eval_parameter_type_error_label;
 use function_construction::*;
 use function_metadata::*;
 use invocation::*;
@@ -54,9 +57,11 @@ pub(in crate::interpreter) use member_construction::*;
 use member_metadata::*;
 use owner_materialization::*;
 use parameter_construction::*;
+use parameter_lazy_defaults::*;
 use parameter_metadata::*;
 use property_access::*;
 use property_helpers::*;
+pub(in crate::interpreter) use public_mirror_writes::validate_reflection_public_mirror_direct_write;
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
@@ -91,6 +96,9 @@ pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_PARAMETER: u64
 const EVAL_REFLECTION_MEMBER_FLAG_PROMOTED: u64 = 512;
 pub(in crate::interpreter) const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024;
 pub(in crate::interpreter) const EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK: u64 = 32768;
+/// Generated AOT method rows set this bit for a `function &m()` declaration (or an `&get` hook);
+/// it is property-only (private(set)) in the member-flag space, so a method row cannot confuse it.
+const EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE: u64 = 4096;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET: u64 = 2048;
 const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET: u64 = 4096;
 const EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC: u64 = 8192;
@@ -156,6 +164,7 @@ struct EvalReflectionMemberMetadata {
 
 /// Eval metadata needed to materialize one `ReflectionParameter` object.
 struct EvalReflectionParameterMetadata {
+    native_default_factory: Option<usize>,
     name: String,
     declaring_class_name: Option<String>,
     declaring_function: Option<EvalReflectionDeclaringFunctionMetadata>,
@@ -267,6 +276,8 @@ enum EvalReflectionFunctionMethodTarget {
         is_static: bool,
         is_closure: bool,
         is_deprecated: bool,
+        /// Whether the reflected declaration returns by reference.
+        returns_reference: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
     Method {
@@ -283,6 +294,8 @@ enum EvalReflectionFunctionMethodTarget {
         is_final: bool,
         is_abstract: bool,
         is_deprecated: bool,
+        /// Whether the reflected declaration returns by reference.
+        returns_reference: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
 }

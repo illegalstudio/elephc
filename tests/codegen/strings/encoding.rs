@@ -9,6 +9,13 @@
 
 use super::*;
 
+#[path = "strip_tags_review.rs"]
+mod strip_tags_review;
+#[path = "strip_tags_stringable.rs"]
+mod strip_tags_stringable;
+#[path = "strip_tags_ownership_review.rs"]
+mod strip_tags_ownership_review;
+
 /// Verifies `ord()` returns the ASCII code 65 for a single uppercase "A".
 #[test]
 fn test_ord() {
@@ -235,59 +242,42 @@ fn test_rawurldecode() {
     assert_eq!(out, "hello world");
 }
 
-/// KNOWN LIMITATION PIN — `urlencode()`/`rawurlencode()` percent-encode ASCII DIGITS, on
-/// every target that generates their runtime helper assembly, not only the machine this
-/// test executes on.
+/// Regression: `urlencode()`/`rawurlencode()` used to percent-encode ASCII DIGITS on every
+/// target (`urlencode("42")` answered `"%34%32"`).
 ///
-/// `src/codegen_support/runtime/strings/urlencode.rs` and `rawurlencode.rs` both check
-/// A-Z, then a-z, then 0-9, using a chain of "not in this range -> check safe punctuation"
-/// branches (AArch64: `cmp w12, #65; b.lt chk_safe`; x86_64: `cmp dl, 65; jb chk_safe`).
-/// For ANY byte below `'A'` (0x41) — which includes every ASCII digit, 0x30-0x39 — the
-/// VERY FIRST comparison already takes that early-exit branch, so the dedicated 0-9
-/// comparison later in the SAME function is unreachable: a digit falls through to the
-/// `- _ .` punctuation checks, misses all three, and gets percent-encoded like any other
-/// unsafe byte. `urlencode("42")` answers `"%34%32"`; PHP answers `"42"`.
-///
-/// TRACED BY HAND THROUGH BOTH NON-AARCH64/AARCH64 CODE PATHS IN THE PINNED SOURCE, not
-/// assumed: `emit_urlencode`/`emit_rawurlencode` (AArch64) and `emit_urlencode_linux_x86_64`/
-/// `emit_rawurlencode_linux_x86_64` (the one x86_64 variant this project emits — there is
-/// no separate macOS-x86_64 target) use the IDENTICAL check order and the IDENTICAL
-/// early-exit branch for a sub-`'A'` byte, so this bug reproduces on every supported
-/// target today, not only the one this test actually runs on. (An earlier review pass on
-/// this branch flagged a target DIVERGENCE — AArch64 broken, x86_64 fixed. Re-reading the
-/// current pinned source line by line, including simulating both branch sequences for the
-/// byte `'4'` (0x34) by hand, found no such divergence: both targets share one code shape
-/// and one bug. If a future change makes the targets diverge, THIS comment's claim — not
-/// the earlier one — is the one to correct alongside it.)
-///
-/// PRE-EXISTING, NOT INTRODUCED BY curl. Found during `CURLFile`/`CURLStringFile`
-/// review as a shared-builtin bug outside curl's own scope to fix — the curl
-/// `CURLOPT_POSTFIELDS` array path once built a SELF-CONTAINED
-/// encoder specifically to route around it for an array-to-urlencoded form that
-/// has since been replaced with real `multipart/form-data`. Pinned HERE, in the
-/// strings area where the bug actually lives, rather than in `tests/codegen/curl/` —
-/// `crate::curl_prelude`'s multipart array walker never calls `urlencode()`/
-/// `rawurlencode()` at all (binary-safe `multipart/form-data` parts need no percent
-/// encoding), so this bug has no effect on curl uploads either way.
-///
-/// UPDATE THIS TEST, DO NOT DELETE IT, when the bug is fixed: swap the expected values for
-/// PHP's own (`"42"`, `"a1b2"`, twice each).
+/// `src/codegen_support/runtime/strings/urlencode.rs` and `rawurlencode.rs` checked A-Z, then
+/// a-z, then 0-9 through a chain of "below this range -> check safe punctuation" branches. Every
+/// digit (0x30-0x39) is below `'A'`, so the first comparison already took that early exit and the
+/// 0-9 comparison was unreachable. Both the AArch64 and the x86_64 emitters now test 0-9 first.
+/// Found while pinning a curl-era shared-builtin bug; `http_build_query()` depends on it too.
 #[test]
-fn test_urlencode_and_rawurlencode_percent_encode_digits_pre_existing_bug() {
+fn test_urlencode_and_rawurlencode_keep_digits() {
     let out = compile_and_run(
         r#"<?php
 echo urlencode("42"), ":";
 echo urlencode("a1b2"), ":";
 echo rawurlencode("42"), ":";
-echo rawurlencode("a1b2");"#,
+echo rawurlencode("a1b2"), ":";
+$n = 1907;
+echo urlencode("v" . $n . " 0~"), ":", rawurlencode("v" . $n . " 0~");"#,
+    );
+    assert_eq!(out, "42:a1b2:42:a1b2:v1907+0%7E:v1907%200~");
+}
+
+/// `urlencode()`/`rawurlencode()` match reference PHP 8.5 over runtime (unfolded) strings:
+/// digits, letters, the unreserved `-_.~`, spaces, multibyte UTF-8 and reserved punctuation.
+#[test]
+fn test_urlencode_and_rawurlencode_match_php_byte_classes() {
+    let out = compile_and_run(
+        r#"<?php
+function enc(string $s): string { return urlencode($s) . "|" . rawurlencode($s); }
+$inputs = ["a42-b.c_d~e f", "0123456789", "AZaz", "-_.~ ", "héllo wörld", "€/?&=+%#", ""];
+foreach ($inputs as $i) { echo enc($i), "\n"; }"#,
     );
     assert_eq!(
         out,
-        "%34%32:a%31b%32:%34%32:a%31b%32",
-        "this pins a KNOWN, pre-existing bug: PHP answers 42:a1b2:42:a1b2. If this now \
-         fails with PHP's own values, urlencode()/rawurlencode() were fixed on this \
-         target — update the expected string here (do not delete the test), and check \
-         whether the other two targets were fixed together or now diverge."
+        "a42-b.c_d%7Ee+f|a42-b.c_d~e%20f\n0123456789|0123456789\nAZaz|AZaz\n-_.%7E+|-_.~%20\n\
+h%C3%A9llo+w%C3%B6rld|h%C3%A9llo%20w%C3%B6rld\n%E2%82%AC%2F%3F%26%3D%2B%25%23|%E2%82%AC%2F%3F%26%3D%2B%25%23\n|\n"
     );
 }
 
@@ -468,6 +458,41 @@ echo (gzuncompress($packed) === $data ? "roundtrip-ok" : "roundtrip-fail");
 "#,
     );
     assert_eq!(out, "smaller|roundtrip-ok");
+}
+
+
+/// Repeats gzuncompress so the boxed output must be reclaimed instead of exhausting the heap.
+#[test]
+fn test_gzuncompress_repeated_calls_release_the_output() {
+    let out = compile_and_run(r#"<?php
+$packed = gzcompress("hello");
+$sum = 0;
+for ($i = 0; $i < 2000; $i++) { $sum += strlen(gzuncompress($packed)); }
+echo $sum;
+"#);
+    assert_eq!(out, "10000");
+}
+
+/// Verifies the constant-local one-argument gzip round-trip length fold and its fallbacks.
+///
+/// The compressed value must be produced once in the entry block from a literal; the optional
+/// `max_length` and a runtime-built input must keep the real decompression path.
+#[test]
+fn test_gzip_literal_roundtrip_length_fold() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$z = gzcompress("hello");
+$d = gzdeflate("wörld");
+echo strlen(gzuncompress($z)), "|";
+echo strlen(gzinflate($d)), "|";
+echo strlen(gzuncompress($z, 64)), "|";
+$late = "hello" . $argc;
+echo strlen(gzuncompress(gzcompress($late))), "|";
+echo bin2hex(gzuncompress($z)) === bin2hex("hello") ? "hex-ok" : "hex-bad", "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "5|6|5|6|hex-ok|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Verifies compiled PHP output for gzuncompress invalid is false.
@@ -693,9 +718,10 @@ fn test_htmlspecialchars_ent_flags() {
     );
 }
 
-/// Regression: the shared `lower_html_escape` emitter must name the builtin that was actually
-/// called in its argument-coercion diagnostic. `htmlentities()` with an uncoercible (array)
-/// subject previously reported "htmlspecialchars string coercion ..." instead of htmlentities.
+/// Regression: an uncoercible (array) subject must be reported against the builtin that was
+/// actually called. `htmlentities()` previously reported "htmlspecialchars string coercion ..."
+/// from the shared `lower_html_escape` emitter; the checker now refuses the array first, in
+/// php's own TypeError wording, and that message must name htmlentities just the same.
 #[test]
 fn test_htmlentities_coercion_error_names_htmlentities() {
     let dir = make_cli_test_dir("elephc_htmlentities_diag");
@@ -713,7 +739,7 @@ fn test_htmlentities_coercion_error_names_htmlentities() {
         "expected the compile to fail on an array subject, got success; stderr={stderr}"
     );
     assert!(
-        stderr.contains("htmlentities string coercion"),
+        stderr.contains("htmlentities(): Argument #1 ($string) must be of type string, array given"),
         "coercion diagnostic must name htmlentities, got stderr={stderr}"
     );
 
@@ -1292,4 +1318,70 @@ echo strlen(htmlspecialchars($long, ENT_NOQUOTES)), " ", strlen(htmlspecialchars
         "expected clean heap, got: {}",
         out.stderr
     );
+}
+
+/// Verifies PHP 8.5 `strip_tags()` strips tags, comments, PHP, and NULs, keeps
+/// `1 < 2`, discards unclosed tags, honors string/array allow-lists, and
+/// matches Termwind's `strip_tags($html) === $html` plain-text check.
+#[test]
+fn test_strip_tags() {
+    let out = compile_and_run(
+        r#"<?php
+echo strip_tags("<p>Hello <b>World</b></p>");
+echo "|";
+echo strip_tags("plain");
+echo "|";
+echo strip_tags("a<!-- hide -->b");
+echo "|";
+echo strip_tags("a<?php echo 1; ?>b");
+echo "|";
+echo strip_tags("hello<b");
+echo "|";
+echo strip_tags("1 < 2");
+echo "|";
+echo strip_tags("<p>Hello <b>World</b></p>", "<p>");
+echo "|";
+echo strip_tags("<BR/>hi</br>", "<br>");
+echo "|";
+echo strip_tags("<p class=\"x\">Hi</p>", "<p>");
+echo "|";
+echo strip_tags("<p>Hello <b>World</b></p>", ["p"]);
+echo "|";
+echo strip_tags("<p>Hi</p>") === "<p>Hi</p>" ? "tagged" : "plain";
+echo "|";
+echo STRIP_TAGS("<b>x</b>");
+echo "|";
+echo \strip_tags("<i>y</i>");
+echo "|";
+echo strip_tags(string: "<em>z</em>");
+echo "|";
+echo strip_tags("<p>A</p><b>B</b>", allowed_tags: "<p>");
+echo "|";
+echo strip_tags("a\0b<c>");
+"#,
+    );
+    assert_eq!(
+        out,
+        "Hello World|plain|ab|ab|hello|1 < 2|<p>Hello World</p>|<BR/>hi</br>|<p class=\"x\">Hi</p>|<p>Hello World</p>|plain|x|y|z|<p>A</p>B|ab"
+    );
+}
+
+/// Verifies the loop-invariant gzip length hoist and a mutated-subject fallback.
+#[test]
+fn test_gzip_length_loop_hoist_and_mutation_fallback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = "hello";
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= strlen(gzcompress($s)) + $i; }
+echo $n, "|";
+$s = "hello";
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= strlen(gzdeflate($s)) + $i; $s .= "!"; }
+echo $n, "|";
+echo strlen(gzcompress("hello")), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "12|5|13|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

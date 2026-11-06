@@ -24,6 +24,7 @@ mod files;
 mod function_variants;
 /// Read by the checker, which must compare a CALL SITE name against a variant declaration.
 mod include_once;
+pub(crate) use include_once::include_once_label;
 mod include_path;
 mod state;
 mod stmt_exprs;
@@ -108,7 +109,28 @@ pub fn resolve_collecting_includes(
 /// descends the whole tree before the early return, so even a program with no includes at all
 /// needs the budget at `MAX_COMPILER_NESTING`. Without it an embedder calling the resolver
 /// from its own worker thread aborted with `has overflowed its stack` (issues #686, #1150).
+///
+/// This is the ROOT resolution of a compile, so it starts the included-file source identities
+/// over (`Span::reset_source_ids`). A file loaded later in the same compile resolves its own
+/// includes through [`resolve_collecting_includes_continuing`] instead.
 pub fn resolve_collecting_includes_with_defines(
+    program: Program,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        Span::reset_source_ids();
+        resolve_collecting_includes_with_defines_inner(program, base_dir, defines)
+    })
+}
+
+/// Resolves the includes of a file loaded INTO an ongoing compile (an autoloaded class file).
+///
+/// Unlike [`resolve_collecting_includes_with_defines`] it keeps the source identities the
+/// compile already handed out, so a file this pulls in never reuses the identity of another
+/// file of the same program. Rewinding here gave an autoloaded file's includes the identities of
+/// the entry's includes, so span-keyed checker results leaked between them (issue #1445).
+pub(crate) fn resolve_collecting_includes_continuing(
     program: Program,
     base_dir: &Path,
     defines: &HashSet<String>,
@@ -119,12 +141,14 @@ pub fn resolve_collecting_includes_with_defines(
 }
 
 /// The resolver body, run on a stack `with_compiler_stack` has already sized.
+///
+/// Leaves the source-identity counter alone: the public entries decide whether this resolution
+/// starts a compile (and rewinds it) or joins one already under way.
 fn resolve_collecting_includes_with_defines_inner(
     program: Program,
     base_dir: &Path,
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
-    Span::reset_source_ids();
     if !has_includes(&program) {
         return Ok((program, Vec::new()));
     }

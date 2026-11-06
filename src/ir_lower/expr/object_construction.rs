@@ -16,6 +16,15 @@ pub(super) fn lower_new_object(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    let object_type = PhpType::Object(class_name.as_str().to_string());
+    if let Some(error) = crate::ir_lower::property_default_errors::for_class_as(
+        ctx,
+        class_name.as_str(),
+        expr.span,
+        object_type,
+    ) {
+        return error;
+    }
     if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionclass" {
         if let Some(operands) = lower_reflection_class_constructor_operands(ctx, args) {
             let php_type = PhpType::Object(class_name.as_str().to_string());
@@ -59,7 +68,17 @@ pub(super) fn lower_new_object(
         expr.span,
     );
     begin_call_argument_evaluation(ctx);
-    let mut operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let previous_description = ctx
+        .call_description
+        .replace(format!("{}::__construct", class_name.as_str()));
+    let ref_place_rewrite = sig.as_ref().and_then(|signature| {
+        super::ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
+    });
+    let call_args = ref_place_rewrite
+        .as_ref()
+        .map_or(args, |rewrite| rewrite.args.as_slice());
+    let mut operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    ctx.call_description = previous_description;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     let roots = root_user_call_operands(
         ctx,
@@ -90,6 +109,9 @@ pub(super) fn lower_new_object(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    if let Some(rewrite) = ref_place_rewrite {
+        super::ref_place_args::finish_ref_place_rewrite(ctx, rewrite, expr.span);
+    }
     take_prepublished_call_result(ctx, result_staging, object, expr.span)
 }
 
@@ -392,10 +414,15 @@ pub(super) fn lower_new_dynamic(
     expr: &Expr,
 ) -> LoweredValue {
     let args = expand_static_call_spread_args(args);
-    if let Some(value) = lower_new_dynamic_planned_dispatch(ctx, name_expr, &args, expr) {
+    let name_value = lower_expr(ctx, name_expr);
+    let owns_name = ctx.value_is_owning_temporary(name_value)
+        && !ctx.value_is_owned_unboxed_local_load(name_value.value);
+    if owns_name { guard_descriptor_container(ctx, name_value, expr.span); }
+    crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name_value, expr.span);
+    if owns_name { ctx.unguard_call_argument(name_value.value, expr.span); }
+    if let Some(value) = lower_new_dynamic_planned_dispatch(ctx, name_value, &args, expr) {
         return value;
     }
-    let name_value = lower_expr(ctx, name_expr);
     lower_new_dynamic_generic(ctx, name_value, &args, expr)
 }
 
@@ -408,7 +435,7 @@ pub(super) fn lower_new_dynamic(
 /// arrive as plain positional arguments. What survives both — a spread whose operand is
 /// only known at runtime, or named arguments the planner could not resolve to a class —
 /// is passed through the runtime argument container rather than dropped on the floor.
-fn lower_new_dynamic_generic(
+pub(super) fn lower_new_dynamic_generic(
     ctx: &mut LoweringContext<'_, '_>,
     name_value: LoweredValue,
     args: &[Expr],
@@ -460,7 +487,14 @@ pub(super) fn lower_new_dynamic_object(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let mut operands = vec![lower_expr(ctx, class_name).value];
+    let class_name = lower_expr(ctx, class_name);
+    crate::ir_lower::property_default_errors::for_dynamic_class(ctx, class_name, expr.span);
+    if let Some(value) = lower_planned_collector_new(
+        ctx, class_name, fallback_class.as_str(), args, expr,
+    ) {
+        return value;
+    }
+    let mut operands = vec![class_name.value];
     operands.extend(lower_args(ctx, args));
     let name = format!("{}|{}", fallback_class.as_str(), required_parent.as_str());
     let data = ctx.intern_class_name(&name);
@@ -472,6 +506,30 @@ pub(super) fn lower_new_dynamic_object(
         Op::DynamicObjectNew.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Reuses fixed-class argument binding for late-bound constructors with hidden collectors.
+pub(super) fn lower_planned_collector_new(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: LoweredValue,
+    fallback: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !args.iter().any(is_spread_arg)
+        || !constructor_signature(ctx, &Name::from(fallback.to_string()))
+            .is_some_and(crate::func_args::sig_collects_surplus_args)
+    {
+        return None;
+    }
+    let candidates = dynamic_new_planned_candidate_classes(ctx, args, true);
+    if candidates.is_empty() { return None; }
+    let mixed = lower_new_dynamic_planned_value(ctx, class_name, &candidates, args, expr);
+    let ty = PhpType::Object(fallback.to_string());
+    let object = ctx.emit_owned_value(Op::MixedUnbox, vec![mixed.value], None, ty.clone(),
+        Op::mixed_unbox_effects(&ty), Some(expr.span));
+    release_coerced_source_if_owned(ctx, mixed, Some(expr.span));
+    Some(object)
 }
 
 /// Returns constructor signature metadata when available for a fixed class.

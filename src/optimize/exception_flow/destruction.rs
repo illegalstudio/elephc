@@ -151,7 +151,7 @@ impl ExceptionFlowAnalysis {
     /// `iterable`, and `callable` positions stay conservative. Array types recurse into their
     /// children because retiring a container retires the children it owns. The scalar arms are
     /// the precision that keeps a scalar-returning callee from resurrecting a catch.
-    fn type_destruction_throws(&self, php_type: &PhpType) -> ThrownTypes {
+    pub(super) fn type_destruction_throws(&self, php_type: &PhpType) -> ThrownTypes {
         match php_type {
             PhpType::Object(_)
             | PhpType::Mixed
@@ -175,6 +175,7 @@ impl ExceptionFlowAnalysis {
             | PhpType::Buffer(_)
             | PhpType::Packed(_)
             | PhpType::Pointer(_)
+            | PhpType::Narrow(_)
             | PhpType::TaggedScalar => ThrownTypes::default(),
         }
     }
@@ -192,6 +193,14 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
         match &expr.kind {
+            ExprKind::FunctionCall { name, .. } if self.checker_retirement_types.is_some()
+                && name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("unset") =>
+                    ThrownTypes::default(),
+            ExprKind::Variable(_) if self.checker_retirement_types.is_some() =>
+                self.local_retirement_throws(expr),
+            ExprKind::Assignment { target, result_target, .. }
+                if self.checker_retirement_types.is_some() =>
+                    self.local_retirement_throws(result_target.as_deref().unwrap_or(target)),
             // Non-heap operands: there is no runtime value here for this site to retire.
             ExprKind::StringLiteral(_)
             | ExprKind::IntLiteral(_)
@@ -246,7 +255,7 @@ impl ExceptionFlowAnalysis {
                 .combined(self.temporary_destruction_throws(right, class_context)),
             ExprKind::FunctionCall { name, .. } => self
                 .function_returns
-                .get(name.as_str())
+                .get(self.canonical_exception_function_name(name.as_str()))
                 .map(|return_type| self.type_destruction_throws(return_type))
                 .unwrap_or_else(|| self.any_destructor_throws()),
             ExprKind::StaticMethodCall {
@@ -378,7 +387,10 @@ pub(super) fn destructor_sources_are_open(
     stmts: &[Stmt],
     summarized: &HashMap<String, ThrownTypes>,
 ) -> bool {
-    if detect::first_reference(stmts, detect::Symbol::function(EVAL_FUNCTION)).is_some() {
+    // Coroutine destruction resumes arbitrary finally code even without a PHP __destruct.
+    if crate::types::checker::builtin_class_gate::program_may_reference_generator(stmts)
+        || crate::types::checker::builtin_class_gate::program_may_reference_fiber(stmts)
+        || detect::first_reference(stmts, detect::Symbol::function(EVAL_FUNCTION)).is_some() {
         return true;
     }
     declared_destructor_is_unsummarized(stmts, summarized)
@@ -611,6 +623,9 @@ fn expr_binds_no_frame_storage(expr: &Expr) -> bool {
             expr_binds_no_frame_storage(value)
                 && match target {
                     InstanceOfTarget::Name(_) => true,
+                    // `$x instanceof Box<int>` names a class the same way a plain name does:
+                    // the target is a type, not a value, so it binds no frame storage either.
+                    InstanceOfTarget::Generic(_) => true,
                     InstanceOfTarget::Expr(target) => expr_binds_no_frame_storage(target),
                 }
         }

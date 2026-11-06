@@ -1,8 +1,6 @@
 ---
 title: "imagecolorat() - internals"
 description: "Compiler internals for imagecolorat(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 466
 ---
 
 ## `imagecolorat()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2335](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2335) (`imagecolorat`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagecolorat`)
 - **Function symbol**: `imagecolorat()`
 
 

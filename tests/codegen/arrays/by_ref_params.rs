@@ -256,3 +256,44 @@ echo implode(",", array_keys($x)), "|", count($x), "
 0,2,3|3
 ");
 }
+
+/// `unset($a["b"])` through an `array &$a` parameter used to depend on the body being specialized
+/// to `AssocArray` by its first caller: a body only ever passed a packed list, or a still-generic
+/// `array`, hit the indexed refusal although the key is a string. Pins that the string-key removal
+/// compiles and runs like PHP whatever the callers pass (a hash, a packed list, a body that only
+/// ever sees a packed list, a runtime key), with a clean heap.
+/// Regression for #1089.
+#[test]
+fn test_issue_1089_string_key_unset_on_by_ref_array_param_ignores_specialization() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function drop(array &$a) { unset($a["b"]); }
+function listOnly(array &$a) { unset($a["b"]); }
+function byName(array &$a, string $k) { unset($a[$k]); }
+$h = ["a" => 1, "b" => 2];
+drop($h);
+$l = [1, 2];
+drop($l);
+$only = [3, 4];
+listOnly($only);
+$s = ["x", "y"];
+byName($s, "b");
+$m = ["k" => "v", "b" => 2.5];
+byName($m, "b");
+echo json_encode($h), "|", json_encode($l), "|", json_encode($only), "|",
+    json_encode($s), "|", json_encode($m), "\n";
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"a\":1}|[1,2]|[3,4]|[\"x\",\"y\"]|{\"k\":\"v\"}\n",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}

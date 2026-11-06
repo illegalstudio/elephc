@@ -21,6 +21,30 @@
 
 use super::*;
 
+/// Leaves Number scalar operands intact for its native internal string-or-integer adapter.
+/// Only this invocation's signature copy changes; reflection keeps the declared union.
+pub(super) fn number_scalar_binding_signature(
+    class_name: &str,
+    signature: Option<NativeCallableSignature>,
+) -> Option<NativeCallableSignature> {
+    let mut signature = signature?;
+    if !class_name.trim_start_matches('\\').eq_ignore_ascii_case("BcMath\\Number") {
+        return Some(signature);
+    }
+    for index in 0..signature.param_count() {
+        let Some(ty) = signature.param_type(index) else { continue; };
+        if ty.is_intersection() { continue; }
+        let mut variants = ty.variants().to_vec();
+        if variants.contains(&EvalParameterTypeVariant::String)
+            && variants.contains(&EvalParameterTypeVariant::Int)
+        {
+            variants.extend([EvalParameterTypeVariant::Float, EvalParameterTypeVariant::Bool]);
+            signature.set_param_type(index, EvalParameterType::new(variants, true));
+        }
+    }
+    Some(signature)
+}
+
 /// Binds native AOT callable args using the selected by-reference degradation mode.
 pub(super) fn bind_native_callable_bound_args_with_mode(
     signature: Option<NativeCallableSignature>,
@@ -163,13 +187,7 @@ fn write_back_native_ref_target(
         return Ok(());
     }
     let retained = values.retain(value)?;
-    let replaced = match set_owned_scope_cell(context, scope, name.clone(), retained, values) {
-        Ok(replaced) => replaced,
-        Err(status) => {
-            let _ = eval_release_value(context, values, retained);
-            return Err(status);
-        }
-    };
+    let replaced = set_owned_scope_cell(context, scope, name.clone(), retained, values)?;
     for cell in replaced { eval_release_value(context, values, cell)?; }
     Ok(())
 }
@@ -279,6 +297,7 @@ pub(super) fn bind_native_signature_args(
                     arg.value,
                     arg.ref_target,
                     by_ref_mode,
+                    context,
                     values,
                 )?;
             } else {
@@ -565,11 +584,12 @@ pub(super) fn bind_native_named_signature_arg(
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
     by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if let Some(param_index) = native_regular_param_index(signature, variadic_index, name) {
         if bound_args[param_index].is_some() {
-            return Err(EvalStatus::RuntimeFatal);
+            return eval_throw_error(&format!("Named parameter ${name} overwrites previous argument"), context, values);
         }
         let ref_target = native_parameter_ref_target(
             signature,
@@ -594,7 +614,7 @@ pub(super) fn bind_native_named_signature_arg(
             native_parameter_ref_target(signature, variadic_index, ref_target, by_ref_mode, values)?;
         return bind_native_variadic_arg(bound_args, variadic_index, key, value, ref_target, values);
     }
-    Err(EvalStatus::RuntimeFatal)
+    eval_throw_error(&format!("Unknown named parameter ${name}"), context, values)
 }
 
 /// Returns the caller writeback target required by a native by-reference parameter.

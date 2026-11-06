@@ -16,7 +16,10 @@ use crate::parser::ast::{ClassMethod, ExprKind, Visibility};
 use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, FunctionSig, PhpType};
 
 use super::super::Checker;
-use super::classes::{collect_attribute_args, collect_attribute_names};
+use super::classes::{
+    collect_attribute_args, collect_attribute_names, resolve_lexical_class_value,
+    validate_method_shape,
+};
 use super::validation::build_method_sig;
 
 /// Propagates concrete return types from overrides to their abstract parent declarations.
@@ -101,8 +104,14 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 /// - `name`: enum identifier
 /// - `backing_type`: optional `TypeExpr` for backed enums
 /// - `cases`: parsed enum case declarations
+/// - `user_methods`: flattened methods and imported trait requirements
+/// - `declared_methods`: raw enum declarations, excluding imported trait requirements
+/// - `user_constants`: flattened constants, including trait imports
+/// - `declared_constants`: constants written directly in the enum, for reflection order
 /// - `span`: source location for error reporting
+/// - `is_internal`: whether compiler-generated source declared the enum (`ClassInfo::is_internal`)
 /// - `used_traits` / `trait_aliases`: flattened direct enum trait-use metadata
+/// - `attributes`: the declaration's own attribute groups, recorded for reflection
 /// - `checker`: type checker state (classes, interfaces, enums, resolve_type_expr)
 /// - `next_class_id`: incrementing class ID counter
 ///
@@ -119,10 +128,14 @@ pub(crate) fn build_enum_info(
     cases: &[crate::parser::ast::EnumCaseDecl],
     implements: &[crate::names::Name],
     user_methods: &[crate::parser::ast::ClassMethod],
+    declared_methods: &[crate::parser::ast::ClassMethod],
     user_constants: &[crate::parser::ast::ClassConst],
+    declared_constants: &[crate::parser::ast::ClassConst],
     used_traits: &[String],
     trait_aliases: &[(String, String)],
+    attributes: &[crate::parser::ast::AttributeGroup],
     span: crate::span::Span,
+    is_internal: bool,
     checker: &mut Checker,
     next_class_id: &mut u64,
 ) -> Result<(), CompileError> {
@@ -146,6 +159,20 @@ pub(crate) fn build_enum_info(
         ));
     }
 
+    for method in user_methods {
+        validate_method_shape(name, method)?;
+    }
+    if let Some(method) = declared_methods.iter().find(|method| method.is_abstract)
+        .or_else(|| user_methods.iter().find(|method| method.is_abstract
+            && !(backing_type.is_some() && method.is_static
+                && matches!(php_symbol_key(&method.name).as_str(), "from" | "tryfrom"))))
+    {
+        return Err(CompileError::new(
+            method.span,
+            &format!("Enum method {}::{} cannot be abstract", name, method.name),
+        ));
+    }
+
     let resolved_backing = match backing_type {
         Some(backing_type) => {
             let resolved = checker.resolve_type_expr(backing_type, span)?;
@@ -163,6 +190,17 @@ pub(crate) fn build_enum_info(
     };
 
     let mut seen_case_names = HashSet::new();
+    for interface in implements {
+        let key = php_symbol_key(interface.as_str());
+        if matches!(key.as_str(), "unitenum" | "backedenum") {
+            return Err(CompileError::new(span, "Enum cannot explicitly implement UnitEnum or BackedEnum"));
+        }
+        if resolved_backing.is_none()
+            && checker.interface_extends_interface(interface.as_str(), "BackedEnum")
+        {
+            return Err(CompileError::new(span, "Pure enum cannot implement BackedEnum"));
+        }
+    }
     let mut seen_int_values = HashSet::new();
     let mut seen_string_values = HashSet::new();
     let mut enum_cases = Vec::new();
@@ -233,6 +271,15 @@ pub(crate) fn build_enum_info(
         });
     }
 
+    for constant in user_constants {
+        if seen_case_names.contains(&constant.name) {
+            return Err(CompileError::new(
+                constant.span,
+                &format!("Enum constant {}::{} conflicts with enum case", name, constant.name),
+            ));
+        }
+    }
+
     insert_enum_metadata(
         name,
         resolved_backing,
@@ -243,6 +290,7 @@ pub(crate) fn build_enum_info(
         used_traits,
         trait_aliases,
         span,
+        is_internal,
         checker,
         next_class_id,
     )?;
@@ -252,11 +300,21 @@ pub(crate) fn build_enum_info(
     let mut declared: Vec<(crate::span::Span, String)> = cases
         .iter()
         .map(|case| (case.span, case.name.clone()))
-        .chain(user_constants.iter().map(|constant| (constant.span, constant.name.clone())))
+        .chain(declared_constants.iter().map(|constant| (constant.span, constant.name.clone())))
         .collect();
     declared.sort_by_key(|(span, _)| (span.line, span.col));
     if let Some(class_info) = checker.classes.get_mut(name) {
         class_info.constant_order = declared.into_iter().map(|(_, name)| name).collect();
+        // Trait constants follow the enum's own declarations, regardless of their original spans.
+        for constant in user_constants {
+            if !class_info.constant_order.contains(&constant.name) {
+                class_info.constant_order.push(constant.name.clone());
+            }
+        }
+        // The declaration's own attributes (`#[A] enum E {}`), which `ReflectionEnum` and
+        // `ReflectionClass` report like a class's.
+        class_info.attribute_names = collect_attribute_names(attributes);
+        class_info.attribute_args = collect_attribute_args(attributes);
     }
     Ok(())
 }
@@ -279,6 +337,7 @@ pub(crate) fn insert_enum_metadata(
     used_traits: &[String],
     trait_aliases: &[(String, String)],
     declaration_span: crate::span::Span,
+    is_internal: bool,
     checker: &mut Checker,
     next_class_id: &mut u64,
 ) -> Result<(), CompileError> {
@@ -397,7 +456,21 @@ pub(crate) fn insert_enum_metadata(
     let mut method_declaring_classes = HashMap::new();
     let mut method_impl_classes = HashMap::new();
     let mut abstract_methods = HashSet::new();
+    let mut final_methods = HashSet::new();
+    let mut final_static_methods = HashSet::new();
+    let mut method_attribute_names = HashMap::new();
+    let mut method_attribute_args = HashMap::new();
     for method in user_methods {
+        // An imported abstract factory is validated against the synthesized implementation
+        // after enum metadata is complete; it must never replace that implementation.
+        if method.is_abstract {
+            continue;
+        }
+        // A generic method is a template with no signature of its own, exactly as on a class
+        // (`schema::classes::methods`): its instantiations are ordinary methods of this enum.
+        if !method.type_params.is_empty() {
+            continue;
+        }
         // Clone + rewrite self/static on this enum method (enums have no parent).
         // Must happen before build_method_sig because bare "self" is rejected later.
         let mut method = method.clone();
@@ -405,12 +478,18 @@ pub(crate) fn insert_enum_metadata(
 
         let sig = build_method_sig(checker, &method, name)?;
         let key = php_symbol_key(&method.name);
+        // Reflection reads a method's attributes by its key, as it does for a class method.
+        method_attribute_names.insert(key.clone(), collect_attribute_names(&method.attributes));
+        method_attribute_args.insert(key.clone(), collect_attribute_args(&method.attributes));
         let late_static_return = method
             .return_type
             .as_ref()
             .filter(|return_type| return_type.contains_late_static())
             .cloned();
         if method.is_static {
+            if method.is_final {
+                final_static_methods.insert(key.clone());
+            }
             static_methods.insert(key.clone(), sig);
             if let Some(return_type) = late_static_return {
                 late_static_static_method_returns.insert(key.clone(), return_type);
@@ -425,6 +504,9 @@ pub(crate) fn insert_enum_metadata(
                 abstract_static_methods.remove(&key);
             }
         } else {
+            if method.is_final {
+                final_methods.insert(key.clone());
+            }
             methods.insert(key.clone(), sig);
             if let Some(return_type) = late_static_return {
                 late_static_method_returns.insert(key.clone(), return_type);
@@ -443,8 +525,8 @@ pub(crate) fn insert_enum_metadata(
         method_decls.push(method);
     }
 
-    // User-declared enum constants. Values are kept as their parsed expressions, matching the
-    // class-constant representation.
+    // Bind lexical receivers in both direct and imported constants before their values
+    // are read outside enum scope, using the same normalization as ordinary classes.
     let mut constants = HashMap::new();
     let mut constant_types = HashMap::new();
     let mut constant_visibilities = HashMap::new();
@@ -452,7 +534,10 @@ pub(crate) fn insert_enum_metadata(
     let mut constant_attribute_names = HashMap::new();
     let mut constant_attribute_args = HashMap::new();
     for constant in user_constants {
-        constants.insert(constant.name.clone(), constant.value.clone());
+        constants.insert(
+            constant.name.clone(),
+            resolve_lexical_class_value(&constant.value, name, None)?,
+        );
         if let Some(type_expr) = &constant.type_expr {
             constant_types.insert(
                 constant.name.clone(),
@@ -477,16 +562,31 @@ pub(crate) fn insert_enum_metadata(
         constant_attribute_args.insert(case.name.clone(), case.attribute_args.clone());
     }
 
-    let interfaces: Vec<String> = implements
+    let declared_interfaces: Vec<String> = implements
         .iter()
         .map(|interface| interface.as_str().to_string())
+        .chain(std::iter::once("UnitEnum".to_string()))
+        .chain(backing_type.as_ref().map(|_| "BackedEnum".to_string()))
         .collect();
+    let mut interfaces = declared_interfaces.clone();
+    let mut index = 0;
+    while index < interfaces.len() {
+        if let Some(interface) = checker.interfaces.get(&interfaces[index]) {
+            for parent in &interface.parents {
+                if !interfaces.contains(parent) {
+                    interfaces.push(parent.clone());
+                }
+            }
+        }
+        index += 1;
+    }
 
     checker.classes.insert(
         name.to_string(),
         ClassInfo {
             class_id: *next_class_id,
             declaration_span,
+            is_internal,
             parent: None,
             is_abstract: false,
             is_final: true,
@@ -511,8 +611,8 @@ pub(crate) fn insert_enum_metadata(
             final_constants,
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
-            method_attribute_names: HashMap::new(),
-            method_attribute_args: HashMap::new(),
+            method_attribute_names,
+            method_attribute_args,
             property_attribute_names: HashMap::new(),
             property_attribute_args: HashMap::new(),
             constant_attribute_names,
@@ -523,6 +623,7 @@ pub(crate) fn insert_enum_metadata(
             property_offsets,
             property_declaring_classes,
             defaults,
+            deferred_property_default_error: None,
             property_visibilities,
             property_set_visibilities: HashMap::new(),
             declared_properties,
@@ -550,19 +651,20 @@ pub(crate) fn insert_enum_metadata(
             callable_method_return_sigs: HashMap::new(),
             callable_array_method_return_sigs: HashMap::new(),
             method_visibilities,
-            final_methods: HashSet::new(),
+            final_methods,
             method_declaring_classes,
             method_impl_classes,
             abstract_methods,
             vtable_methods: Vec::new(),
             vtable_slots: HashMap::new(),
             static_method_visibilities,
-            final_static_methods: HashSet::new(),
+            final_static_methods,
             static_method_declaring_classes,
             static_method_impl_classes,
             abstract_static_methods,
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
+            declared_interfaces,
             interfaces,
             constructor_param_to_prop: Vec::new(),
         },

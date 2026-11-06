@@ -12,8 +12,10 @@
 //!   reached it looking unique and had its element slots rewritten in place, so the caller
 //!   read boxed cells as raw object pointers AFTER the call — on data the callee never
 //!   touched, with no diagnostic.
-//! - Only arrays of OBJECTS are affected; int, string and associative arrays came through
-//!   unchanged. Measured, not assumed.
+//! - For a BORROWED operand only arrays of OBJECTS were affected; int, string and associative
+//!   arrays came through unchanged. Measured, not assumed.
+//! - An OWNED operand that is in fact shared (`acquire` of a local) was broken for every
+//!   element type at an `array<mixed>` parameter: the split freed the caller's array instead.
 
 use crate::support::*;
 
@@ -26,8 +28,7 @@ use crate::support::*;
 ///
 /// The seven cases are the ones that separate the defect from its neighbours: the direct
 /// call and the method call were both broken, the callee handing the array back was broken,
-/// and int/string/associative arrays plus an owned temporary were not. An owned temporary
-/// must keep converting in place — it has no other reader, so cloning it would be pure cost.
+/// and int/string/associative arrays plus an owned temporary were not.
 #[test]
 fn test_borrowed_array_of_objects_survives_a_gradual_array_parameter() {
     let out = compile_and_run(
@@ -93,4 +94,43 @@ echo $pts[0]->x;
         report.contains("leak summary: clean"),
         "widening a borrowed array must not leak the clone it makes:\n{report}"
     );
+}
+
+/// An OWNED operand is widened through the same split, because owned is not unique.
+///
+/// The operand of a call is usually `acquire` of a local: one more reference to the local's own
+/// array, parked in an operand-owner slot and released after the call. Converted unguarded, the
+/// split cloned the shared array and gave up the operand's reference to the original, the clone
+/// reached the callee and was never released, and the slot released the original again — the
+/// caller's `$ints` was freed under it (`count($ints)` printed 0, then garbage). The SPL
+/// `ArrayIterator` constructor takes `array<mixed>` and reached it from any typed local.
+///
+/// Fresh temporaries — a literal, a function result, a property read — go through the same path
+/// in the loop, so a leaked clone shows up as live blocks rather than hiding in one iteration.
+#[test]
+fn test_widening_an_owned_shared_operand_keeps_the_callers_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function g(array<mixed> $a): int { return count($a); }
+function fresh(): array<int> { return [7, 8]; }
+class H { public array<int> $p = [4, 5, 6]; }
+class K { public int $n = 0; public function __construct(array<mixed> $a) { $this->n = count($a); } }
+function go(): void {
+    $ints = [3, 1, 2];
+    $strs = ["a", "b"];
+    $h = new H();
+    $t = 0;
+    for ($i = 0; $i < 200; $i++) {
+        $t += g($ints) + g($strs) + g([1, 2, 3, 4]) + g(fresh()) + g($h->p);
+        $t += (new K($ints))->n + (new K([9]))->n;
+        $t += count(new ArrayIterator($ints));
+    }
+    echo $t, "|", count($ints), "|", implode(",", $ints), "|", count($strs), "|", implode(",", $h->p);
+}
+go();
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "4200|3|3,1,2|2|4,5,6", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

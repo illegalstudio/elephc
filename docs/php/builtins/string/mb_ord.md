@@ -1,8 +1,6 @@
 ---
 title: "mb_ord()"
 description: "Returns the first Unicode codepoint, or false for malformed input."
-sidebar:
-  order: 861
 ---
 
 ## mb_ord()
@@ -21,8 +19,9 @@ Returns the first Unicode codepoint, or false for malformed input.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_ord.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_ord.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

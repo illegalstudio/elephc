@@ -41,6 +41,11 @@ pub(in crate::codegen) fn runtime_class_infos(module: &Module) -> HashMap<String
 /// Returns classes that EIR object allocation or named `instanceof` can reference at runtime.
 pub(in crate::codegen) fn runtime_referenced_class_names(module: &Module) -> HashSet<String> {
     let mut names = HashSet::new();
+    if module.functions.iter().any(|function| function.signature.as_ref().is_some_and(|signature|
+        signature.param_attributes.iter().flatten().flat_map(|group| &group.attributes)
+            .any(|attribute| attribute.name.as_canonical().eq_ignore_ascii_case("SensitiveParameter")))) {
+        names.insert("SensitiveParameterValue".to_string());
+    }
     if module_contains_generator(module) {
         names.insert("Generator".to_string());
     }
@@ -82,6 +87,7 @@ pub(in crate::codegen) fn runtime_referenced_class_names(module: &Module) -> Has
             names.insert(class_name);
         }
     }
+    names.extend(static_default_enum_class_names(module));
     seed_runtime_throwable_class_names(module, &mut names);
     seed_runtime_stdclass_name(module, &mut names);
     seed_builtin_reflection_class_names(module, &mut names);
@@ -106,6 +112,29 @@ pub(in crate::codegen) fn module_uses_unserialize(module: &Module) -> bool {
         .chain(module.runtime_callable_invokers.iter())
         .flat_map(|function| function.instructions.iter())
         .any(|inst| typed_builtin_target(inst) == Some(crate::ir::RuntimeFnId::Unserialize))
+}
+
+/// Returns enums whose singletons static property defaults materialize outside EIR.
+///
+/// `main`'s prologue stores those defaults directly, so no `ScopedConstantGet` names the enum
+/// and the dense class-name table would otherwise drop it: `var_dump()` of the stored case then
+/// printed an anonymous `object()`. Every singleton the default reads is kept, including
+/// reads behind a folded scalar such as `E::A ? 1 : 2`.
+fn static_default_enum_class_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for (class_name, class_info) in &module.class_infos {
+        let context = crate::codegen::const_default_values::ConstDefaultContext::for_class(module, class_name);
+        for default in class_info.static_defaults.iter().flatten() {
+            let reads = crate::codegen::const_default_values::resolve_enum_case_default(default, &context)
+                .map(|value| value.evaluated)
+                .or_else(|| crate::codegen::const_default_values::resolve_enum_read_scalar_default(default, &context)
+                    .map(|(_, reads)| reads))
+                .unwrap_or_default();
+            names.extend(reads.into_iter().map(|(enum_name, _)| enum_name)
+                .filter(|enum_name| module.class_infos.contains_key(enum_name)));
+        }
+    }
+    names
 }
 
 // The eager enum-singleton reachability scan that used to live here is gone.
@@ -155,7 +184,10 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
     // eval constructor bridge emits helpers for the whole family (see
     // `codegen::eval_constructor_helpers::BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES`).
     if module.required_runtime_features.eval_bridge {
-        for class_name in ["AssertionError", "UnhandledMatchError"] {
+        for class_name in [
+            "AssertionError", "UnhandledMatchError", "ClosedGeneratorException",
+            "CompileError", "ParseError", "RequestParseBodyException",
+        ] {
             if module.class_infos.contains_key(class_name) {
                 names.insert(class_name.to_string());
             }

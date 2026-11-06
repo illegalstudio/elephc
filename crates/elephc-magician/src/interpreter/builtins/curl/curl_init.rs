@@ -30,7 +30,8 @@ pub(in crate::interpreter) fn eval_builtin_curl_init(
         [url] => Some(eval_expr(url, context, scope, values)?),
         _ => return Err(EvalStatus::RuntimeFatal),
     };
-    eval_curl_init_result(url, context, values)
+    let result = eval_curl_init_result(url, context, values);
+    crate::interpreter::operands::finish_eval_argument_values(result, url, context, values)
 }
 
 /// Dispatches evaluated `curl_init()` calls through the builtin leaf.
@@ -69,9 +70,17 @@ fn eval_curl_init_result(
     // Nothing here needs the handle to decide whether the argument is acceptable, so the check
     // simply moves ahead of the allocation.
     let url = match url {
-        Some(url) if values.type_tag(url)? != EVAL_TAG_NULL => Some(eval_curl_string_argument(
-            "curl_init", 1, "url", "?string", url, context, values,
-        )?),
+        Some(url) if values.type_tag(url)? != EVAL_TAG_NULL => {
+            let normalized = eval_curl_string_argument(
+                "curl_init", 1, "url", "?string", url, context, values,
+            )?;
+            let bytes = values.string_bytes(normalized);
+            let released = release_expr_result(normalized, context, values);
+            Some(match (bytes, released) {
+                (Err(status), _) | (Ok(_), Err(status)) => return Err(status),
+                (Ok(bytes), Ok(())) => bytes,
+            })
+        },
         _ => None,
     };
     let Some(raw) = ffi::easy_init() else {
@@ -81,8 +90,7 @@ fn eval_curl_init_result(
             values,
         );
     };
-    if let Some(url) = url {
-        let bytes = values.string_bytes(url)?;
+    if let Some(bytes) = url {
         // Ignored, matching `curl_init()`'s own AOT wrapper: a bad URL surfaces
         // later, at `curl_exec()`, not here.
         let _ = ffi::easy_set_url(raw, &bytes);

@@ -440,9 +440,8 @@ function exerciseSpread(string $text): void {
     }
 }
 
-/// Named Mixed string coercions and guarded callable reads retire their distinct owners once.
-#[test]
-fn mixed_named_string_and_callable_coercions_do_not_double_retire_evaluation_owners() {
+/// Checks named Mixed string coercions and callable reads for one target without a composite timeout.
+fn assert_mixed_named_string_and_callable_evaluation_owners(target: &str) {
     use crate::ir::{Immediate, LocalKind, Op, Ownership, ValueDef};
 
     let source = r#"<?php
@@ -462,129 +461,151 @@ function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $co
     }
 }
 "#;
-    for target in [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64",
-    ] {
-        let module = lower_for(source, target);
-        let function = module
-            .functions
-            .iter()
-            .find(|function| function.name == "exerciseMixedNamed")
-            .unwrap();
-        let string_cast = function.instructions.iter().find_map(|inst| {
-            (inst.op == Op::Cast && inst.result_php_type == crate::types::PhpType::Str)
-                .then_some(inst.result?)
-        }).expect("named Mixed string must use an explicit owned cast");
-        let string_evaluation_pins = function
-            .instructions
-            .iter()
-            .filter_map(|inst| {
-                let value = inst.result?;
-                if inst.op != Op::Borrow {
-                    return None;
-                }
-                let stored = *inst.operands.first()?;
-                let ValueDef::Instruction { inst: acquire, .. } = function.value(stored)?.def else {
-                    return None;
-                };
-                let acquire = function.instruction(acquire)?;
-                if acquire.op != Op::Acquire
-                    || acquire.immediate != Some(Immediate::Bool(true))
-                    || acquire.operands != [string_cast]
-                {
-                    return None;
-                }
-                let slot = function.instructions.iter().find_map(|store| {
-                    let Immediate::LocalSlot(slot) = store.immediate.as_ref()? else {
-                        return None;
-                    };
-                    (store.op == Op::StoreLocal
-                        && store.operands == [stored]
-                        && function.locals[(*slot).as_raw() as usize].kind == LocalKind::OwnedTemp)
-                    .then_some(*slot)
-                })?;
-                Some((value, slot))
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(string_evaluation_pins.len(), 1, "{target}");
-        assert_evaluation_owner_retires_once(
-            function,
-            string_evaluation_pins[0].0,
-            string_evaluation_pins[0].1,
-            target,
-        );
-        let forwarding_source = |mut value| loop {
-            let ValueDef::Instruction { inst, .. } = function.value(value).unwrap().def else {
-                break value;
+    let module = lower_for(source, target);
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "exerciseMixedNamed")
+        .unwrap();
+    let string_cast = function.instructions.iter().find_map(|inst| {
+        (inst.op == Op::Cast && inst.result_php_type == crate::types::PhpType::Str)
+            .then_some(inst.result?)
+    }).expect("named Mixed string must use an explicit owned cast");
+    let string_evaluation_pins = function
+        .instructions
+        .iter()
+        .filter_map(|inst| {
+            let value = inst.result?;
+            if inst.op != Op::Borrow {
+                return None;
+            }
+            let stored = *inst.operands.first()?;
+            let ValueDef::Instruction { inst: acquire, .. } = function.value(stored)?.def else {
+                return None;
             };
-            let producer = function.instruction(inst).unwrap();
-            if !matches!(producer.op, Op::Acquire | Op::Borrow | Op::Move) {
-                break value;
+            let acquire = function.instruction(acquire)?;
+            if acquire.op != Op::Acquire
+                || acquire.immediate != Some(Immediate::Bool(true))
+                || acquire.operands != [string_cast]
+            {
+                return None;
             }
-            value = producer.operands[0];
-        };
-        let (call_index, callback_operand) = function.instructions.iter().enumerate()
-            .find_map(|(index, inst)| {
-                let Some(Immediate::Data(callee)) = inst.immediate else {
+            let slot = function.instructions.iter().find_map(|store| {
+                let Immediate::LocalSlot(slot) = store.immediate.as_ref()? else {
                     return None;
                 };
-                let operand = inst.operands.get(1).copied()?;
-                (inst.op == Op::Call
-                    && module.data.function_names[callee.as_raw() as usize]
-                        .eq_ignore_ascii_case("takeNamedCallable"))
-                    .then_some((index, operand))
-            })
-            .unwrap_or_else(|| panic!(
-                "{target}: guarded callable must reach the named call\nfunction names={:?}\n{}",
-                module.data.function_names,
-                crate::ir::print_function(function),
-            ));
-        let callable_source = forwarding_source(callback_operand);
-        let callable_value = function.value(callable_source).unwrap();
-        assert_eq!(callable_value.php_type, crate::types::PhpType::Callable, "{target}");
-        assert_eq!(callable_value.ownership, Ownership::Owned, "{target}");
-        let ValueDef::Instruction { inst: producer, .. } = callable_value.def else {
-            panic!("{target}: the guarded callable must have a storage-read producer");
+                (store.op == Op::StoreLocal
+                    && store.operands == [stored]
+                    && function.locals[(*slot).as_raw() as usize].kind == LocalKind::OwnedTemp)
+                .then_some(*slot)
+            })?;
+            Some((value, slot))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(string_evaluation_pins.len(), 1, "{target}");
+    assert_evaluation_owner_retires_once(
+        function,
+        string_evaluation_pins[0].0,
+        string_evaluation_pins[0].1,
+        target,
+    );
+    let forwarding_source = |mut value| loop {
+        let ValueDef::Instruction { inst, .. } = function.value(value).unwrap().def else {
+            break value;
         };
-        let producer = function.instruction(producer).unwrap();
-        // A guard may expose a typed local read directly, while parameter normalization may
-        // emit an explicit MixedUnbox. Both must detach an owned descriptor from boxed storage.
-        match producer.op {
-            Op::LoadLocal => {
-                let Some(Immediate::LocalSlot(slot)) = producer.immediate else {
-                    panic!("{target}: typed callable read must identify its local storage");
-                };
-                assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(),
-                    crate::types::PhpType::Mixed, "{target}: guard must not erase widened storage");
-            }
-            Op::MixedUnbox => {
-                let source = function.value(producer.operands[0]).unwrap();
-                assert_eq!(source.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
-            }
-            other => panic!("{target}: expected an owned boxed callable extraction, got {other:?}"),
+        let producer = function.instruction(inst).unwrap();
+        if !matches!(producer.op, Op::Acquire | Op::Borrow | Op::Move) {
+            break value;
         }
-        let callable_root = function.instructions[..call_index].iter().find_map(|store| {
-            if store.op != Op::StoreLocal || store.operands != [callback_operand] {
-                return None;
-            }
-            let Some(Immediate::LocalSlot(slot)) = store.immediate else {
+        value = producer.operands[0];
+    };
+    let (call_index, callback_operand) = function.instructions.iter().enumerate()
+        .find_map(|(index, inst)| {
+            let Some(Immediate::Data(callee)) = inst.immediate else {
                 return None;
             };
-            function.instructions[..call_index].iter().any(|publish| {
-                publish.op == Op::PushCallOperandOwner
-                    && publish.immediate == Some(Immediate::LocalSlot(slot))
-            }).then_some(slot)
-        }).expect("callable unbox must have a published final root");
-        assert!(function.instructions[call_index + 1..].iter().any(|inst| {
-            inst.op == Op::ReleaseLocalSlot
-                && inst.immediate == Some(Immediate::LocalSlot(callable_root))
-        }), "{target}: callable final root must retire after the call");
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            let operand = inst.operands.get(1).copied()?;
+            (inst.op == Op::Call
+                && module.data.function_names[callee.as_raw() as usize]
+                    .eq_ignore_ascii_case("takeNamedCallable"))
+                .then_some((index, operand))
+        })
+        .unwrap_or_else(|| panic!(
+            "{target}: guarded callable must reach the named call\nfunction names={:?}\n{}",
+            module.data.function_names,
+            crate::ir::print_function(function),
+        ));
+    let callable_source = forwarding_source(callback_operand);
+    let callable_value = function.value(callable_source).unwrap();
+    assert_eq!(callable_value.php_type, crate::types::PhpType::Callable, "{target}");
+    assert_eq!(callable_value.ownership, Ownership::Owned, "{target}");
+    let ValueDef::Instruction { inst: producer, .. } = callable_value.def else {
+        panic!("{target}: the guarded callable must have a storage-read producer");
+    };
+    let producer = function.instruction(producer).unwrap();
+    // A guard may expose a typed local read directly, while parameter normalization may
+    // emit an explicit MixedUnbox. Both must detach an owned descriptor from boxed storage.
+    match producer.op {
+        Op::LoadLocal => {
+            let Some(Immediate::LocalSlot(slot)) = producer.immediate else {
+                panic!("{target}: typed callable read must identify its local storage");
+            };
+            assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(),
+                crate::types::PhpType::Mixed, "{target}: guard must not erase widened storage");
+        }
+        Op::MixedUnbox => {
+            let source = function.value(producer.operands[0]).unwrap();
+            assert_eq!(source.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+        }
+        other => panic!("{target}: expected an owned boxed callable extraction, got {other:?}"),
     }
+    let callable_root = function.instructions[..call_index].iter().find_map(|store| {
+        if store.op != Op::StoreLocal || store.operands != [callback_operand] {
+            return None;
+        }
+        let Some(Immediate::LocalSlot(slot)) = store.immediate else {
+            return None;
+        };
+        function.instructions[..call_index].iter().any(|publish| {
+            publish.op == Op::PushCallOperandOwner
+                && publish.immediate == Some(Immediate::LocalSlot(slot))
+        }).then_some(slot)
+    }).expect("callable unbox must have a published final root");
+    assert!(function.instructions[call_index + 1..].iter().any(|inst| {
+        inst.op == Op::ReleaseLocalSlot
+            && inst.immediate == Some(Immediate::LocalSlot(callable_root))
+    }), "{target}: callable final root must retire after the call");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+}
+
+/// Named Mixed argument evaluation preserves string and callable owners on macOS ARM64.
+#[test]
+fn mixed_named_string_and_callable_evaluation_owners_macos_arm64() {
+    assert_mixed_named_string_and_callable_evaluation_owners("macos-aarch64");
+}
+
+/// Named Mixed argument evaluation preserves string and callable owners on iOS device ARM64.
+#[test]
+fn mixed_named_string_and_callable_evaluation_owners_ios_device() {
+    assert_mixed_named_string_and_callable_evaluation_owners("ios-arm64");
+}
+
+/// Named Mixed argument evaluation preserves string and callable owners on iOS Simulator ARM64.
+#[test]
+fn mixed_named_string_and_callable_evaluation_owners_ios_simulator() {
+    assert_mixed_named_string_and_callable_evaluation_owners("ios-sim-arm64");
+}
+
+/// Named Mixed argument evaluation preserves string and callable owners on Linux ARM64.
+#[test]
+fn mixed_named_string_and_callable_evaluation_owners_linux_arm64() {
+    assert_mixed_named_string_and_callable_evaluation_owners("linux-aarch64");
+}
+
+/// Named Mixed argument evaluation preserves string and callable owners on Linux x86_64.
+#[test]
+fn mixed_named_string_and_callable_evaluation_owners_linux_x86_64() {
+    assert_mixed_named_string_and_callable_evaluation_owners("linux-x86_64");
 }
 
 /// The runtime-key binder publishes its spread source through later argument evaluation.

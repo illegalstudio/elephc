@@ -46,6 +46,7 @@ pub(super) fn builtin_exception_message_property() -> ClassProperty {
 /// (`?Throwable`, default `null`) — matching PHP's `Exception::__construct` arity.
 pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: "__construct".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -227,7 +228,7 @@ pub(super) fn builtin_exception_get_line_method() -> ClassMethod {
 }
 
 /// Returns a synthetic `ClassMethod` for `Exception::getTrace()`.
-/// Body returns an empty array; the real backtrace is built at runtime by the compiler.
+/// Body returns an empty array; Throwable trace getters currently expose no frames.
 pub(super) fn builtin_exception_get_trace_method() -> ClassMethod {
     concrete_throwable_method(
         "getTrace",
@@ -240,7 +241,7 @@ pub(super) fn builtin_exception_get_trace_method() -> ClassMethod {
 }
 
 /// Returns a synthetic `ClassMethod` for `Exception::getTraceAsString()`.
-/// Body returns a dummy empty string; the real trace string is built at runtime by the compiler.
+/// Body returns an empty string; Throwable trace getters currently expose no frames.
 pub(super) fn builtin_exception_get_trace_as_string_method() -> ClassMethod {
     concrete_throwable_method(
         "getTraceAsString",
@@ -296,6 +297,7 @@ pub(super) fn builtin_throwable_methods() -> Vec<ClassMethod> {
 /// Builds a concrete (body-bearing) throwable method with the given name, return type, and return value expression.
 fn concrete_throwable_method(name: &str, return_type: TypeExpr, value: Expr) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -330,6 +332,7 @@ fn concrete_throwable_method(name: &str, return_type: TypeExpr, value: Expr) -> 
 /// Builds an abstract method declaration for the Throwable interface with the given name and return type.
 fn abstract_throwable_method(name: &str, return_type: TypeExpr) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static: false,

@@ -5,6 +5,9 @@ const MAX_RETRIES = 3;
 const APP_NAME = "elephc";
 const VERSION = 0.7;
 
+// One `const` statement can declare several constants; each may use the ones before it
+const MIN_WIDTH = 40, MIN_HEIGHT = MIN_WIDTH / 2, UNIT = "px";
+
 // Constants with define()
 define("PI", 3.14159);
 define("GREETING", "Hello");
@@ -14,6 +17,7 @@ echo APP_NAME . " v" . VERSION . "\n";
 echo GREETING . " World!\n";
 echo "PI = " . PI . "\n";
 echo "Max retries: " . MAX_RETRIES . "\n";
+echo "Minimum size: " . MIN_WIDTH . UNIT . " x " . MIN_HEIGHT . UNIT . "\n";
 
 // Constants are accessible inside functions
 function show_info() {

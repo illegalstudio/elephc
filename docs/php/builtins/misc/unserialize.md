@@ -1,8 +1,6 @@
 ---
 title: "unserialize()"
 description: "Creates a PHP value from a stored representation."
-sidebar:
-  order: 689
 ---
 
 ## unserialize()
@@ -21,8 +19,9 @@ Creates a PHP value from a stored representation.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

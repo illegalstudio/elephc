@@ -8,8 +8,12 @@
 //! Key details:
 //! - Static locals are backed by `.comm` symbols and an initialization marker,
 //!   so their values persist across function calls without using frame slots.
-//! - Initializers transfer their freshly-created owner into the static slot;
-//!   assignments retain refcounted values before publishing a second owner.
+//! - The initializer expression runs only while the marker is clear: lowering branches
+//!   on `static_local_uninitialized` around it, so a constructor or any other side effect
+//!   in it happens once, as in PHP. `init_static_local` still checks the marker, because
+//!   a recursive call made by the initializer can initialize the slot first; PHP keeps
+//!   that innermost value and the outer one is released. Assignments retain refcounted
+//!   values before publishing a second owner.
 //! - Both symbols come from `crate::names::static_local_symbol()` /
 //!   `static_local_init_symbol()`, which encode the (function, variable) pair injectively.
 //!   Building them by string concatenation merged unrelated statics onto one cell.
@@ -76,12 +80,40 @@ pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Ins
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         loaded_ty = PhpType::Int;
     }
-    if loaded_ty.is_refcounted() {
+    // A persistent Mixed slot needs a box even when this arm has a concrete scalar or object.
+    // The fresh box owns its payload independently of the source SSA value.
+    if matches!(slot.php_type.codegen_repr(), PhpType::Mixed) && loaded_ty != PhpType::Mixed {
+        let box_ty = if matches!(loaded_ty, PhpType::Pointer(_)) { ctx.mixed_box_type(value)? } else { loaded_ty.clone() };
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+    } else if loaded_ty.is_refcounted() {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty);
     }
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, true);
     clear_static_local_high_word_if_needed(ctx, &slot);
     Ok(())
+}
+
+/// Lowers the "initializer has not run yet" test of a static local: 1 while its marker is
+/// clear, 0 once `init_static_local` has set it.
+pub(super) fn lower_static_local_uninitialized(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = resolve_static_local_slot(ctx, inst)?;
+    let result = inst.result.ok_or_else(|| {
+        CodegenIrError::invalid_module("static_local_uninitialized missing result value")
+    })?;
+    let unset_label = ctx.next_label("static_local_unset");
+    let done_label = ctx.next_label("static_local_test_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &slot.init_symbol, 0);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &unset_label);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&unset_label);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 1);
+    ctx.emitter.label(&done_label);
+    ctx.store_result_value(result)
 }
 
 /// Lowers a static-local declaration initializer guarded by the per-slot marker.
@@ -91,6 +123,7 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     ensure_static_local_type_supported(&slot, inst)?;
     ensure_static_local_value_supported(ctx, &slot, value, inst)?;
     let initialized_label = ctx.next_label("static_local_initialized");
+    let done_label = ctx.next_label("static_local_init_done");
     abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &initialized_label);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
@@ -115,16 +148,28 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         loaded_ty = PhpType::Int;
     }
-    // Box Int/Float/Bool/Void as Mixed when the static local slot is Mixed-typed.
+    // Box Int/Float/Bool/Void as Mixed when the static local slot is Mixed-typed. A pointer
+    // word boxes by its declared type, so a null `?ptr<T>` initializer is PHP null.
     if matches!(slot.php_type.codegen_repr(), PhpType::Mixed)
         && !matches!(loaded_ty, PhpType::Mixed)
     {
-        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &loaded_ty);
+        let box_ty = if matches!(loaded_ty, PhpType::Pointer(_)) {
+            ctx.mixed_box_type(value)?
+        } else {
+            loaded_ty.clone()
+        };
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     }
     let store_ty = slot.php_type.codegen_repr();
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &store_ty, false);
     clear_static_local_high_word_if_needed(ctx, &slot);
+    abi::emit_jump(ctx.emitter, &done_label);
+    // Lowering only evaluates the initializer while the marker is clear, but a recursive call
+    // made BY the initializer can set it first. PHP keeps that innermost value, so this one,
+    // owned by nobody else, is released.
     ctx.emitter.label(&initialized_label);
+    super::ownership::release_value_if_owned(ctx, value)?;
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 
@@ -173,8 +218,11 @@ fn local_slot<'a>(
 /// Verifies that this backend slice knows how to represent the static-local type.
 fn ensure_static_local_type_supported(slot: &StaticLocalSlot, inst: &Instruction) -> Result<()> {
     let ty = slot.php_type.codegen_repr();
-    if matches!(ty, PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Void)
-        || ty.is_refcounted()
+    // A `?ptr<T>` static local is one pointer word (null is address 0).
+    if matches!(
+        ty,
+        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Void | PhpType::Pointer(_)
+    ) || ty.is_refcounted()
     {
         return Ok(());
     }
@@ -218,8 +266,15 @@ fn static_local_value_type_matches(value_ty: &PhpType, slot_ty: &PhpType) -> boo
         return true;
     }
     if matches!(slot_ty, PhpType::Mixed)
-        && matches!(value_ty, PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Float)
+        && matches!(
+            value_ty,
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Float | PhpType::Pointer(_) | PhpType::Object(_)
+        )
     {
+        return true;
+    }
+    // Any pointer fits a pointer slot once the checker accepted the assignment.
+    if matches!((value_ty, slot_ty), (PhpType::Pointer(_), PhpType::Pointer(_))) {
         return true;
     }
     matches!(

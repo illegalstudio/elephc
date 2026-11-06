@@ -14377,6 +14377,14 @@ pub(crate) fn image_declarations() -> Program {
     })
 }
 
+/// Whether `program` uses this prelude's surface: the same test `inject_if_used` applies.
+///
+/// Also run by `crate::autoload::prelude_probe` over the autoload closure, whose files are only
+/// loaded after this prelude has been decided.
+pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool {
+    detect::program_uses_image(program)
+}
+
 /// Prepends the image prelude to `program` when it references an image symbol, so
 /// the classes, constants, functions, and `elephc_image` externs compile through
 /// the normal pipeline only for image-using programs. The prelude carries only
@@ -14390,7 +14398,22 @@ pub(crate) fn image_declarations() -> Program {
 /// the usage. When every image-shaped call is owned by a user declaration or a
 /// canonical guarded polyfill, no bridge surface is injected and the absent-
 /// capability branch is activated before name resolution.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used(
+    program: crate::parser::ast::Program,
+    force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> crate::parser::ast::Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, force, inventory)
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
     program: crate::parser::ast::Program,
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,

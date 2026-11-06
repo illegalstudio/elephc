@@ -1,8 +1,6 @@
 ---
 title: "mysqli_real_query() - internals"
 description: "Compiler internals for mysqli_real_query(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 150
 ---
 
 ## `mysqli_real_query()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:815](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L815) (`mysqli_real_query`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_real_query`)
 - **Function symbol**: `mysqli_real_query()`
 
 

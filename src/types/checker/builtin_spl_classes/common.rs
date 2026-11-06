@@ -71,6 +71,7 @@ pub(super) fn class_method_with_body(
     body: Vec<Stmt>,
 ) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static,

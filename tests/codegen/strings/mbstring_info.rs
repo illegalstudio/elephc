@@ -78,25 +78,34 @@ echo mb_get_info("http_input") === null ? "unset\n" : "wrong\n";
     }
 }
 
-/// Releases every snapshot child, boxed null, and coerced temporary across repeated native/eval calls.
+/// Releases every snapshot child, boxed null, and coerced temporary across repeated native calls.
 #[test]
 fn test_mbstring_info_result_ownership() {
-    for eval in [false, true] {
-        let mut residual = Vec::new();
-        for count in [1, 4] {
-            let calls = "mb_get_info(); $read(type: new OwnedInformationSelector()); call_user_func_array($read, [\"type\" => \"detect_order\"]); $read(\"http_input\"); mb_http_input(\"I\");";
-            let body = format!(r#"
+    check_mbstring_info_result_ownership(false);
+}
+
+/// Checks eval information-result ownership independently of the native fixture's timeout.
+#[test]
+fn test_mbstring_info_result_ownership_eval() {
+    check_mbstring_info_result_ownership(true);
+}
+
+/// Compares information-result allocation residuals at both repetition counts in one mode.
+fn check_mbstring_info_result_ownership(eval: bool) {
+    let mut residual = Vec::new();
+    for count in [1, 4] {
+        let calls = "mb_get_info(); $read(type: new OwnedInformationSelector()); call_user_func_array($read, [\"type\" => \"detect_order\"]); $read(\"http_input\"); mb_http_input(\"I\");";
+        let body = format!(r#"
 class OwnedInformationSelector {{ public function __toString(): string {{ return "all"; }} }}
 $read = $argc > 0 ? "mb_get_info" : "mb_language";
 {}
 echo "done";
 "#, calls.repeat(count));
-            let output = compile_and_run_with_gc_stats(&program(&body, eval));
-            assert!(output.success, "eval={eval}: {}", output.stderr);
-            assert_eq!(output.stdout, "done");
-            let (allocated, freed) = parse_gc_stats(&output.stderr);
-            residual.push(allocated as i64 - freed as i64);
-        }
-        assert_eq!(residual[0], residual[1], "eval={eval}");
+        let output = compile_and_run_with_gc_stats(&program(&body, eval));
+        assert!(output.success, "eval={eval}: {}", output.stderr);
+        assert_eq!(output.stdout, "done");
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        residual.push(allocated as i64 - freed as i64);
     }
+    assert_eq!(residual[0], residual[1], "eval={eval}");
 }

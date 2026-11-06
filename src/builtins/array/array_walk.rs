@@ -27,7 +27,7 @@ builtin! {
 ///
 /// Infers the array and checks the callback contextually against its element type, adding the
 /// array's key type as a second parameter when the callback is known to accept it.
-/// Arity (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Void)`.
+/// Arity (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Bool)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     crate::types::checker::builtins::check_array_walk_callback_builtin_call(
@@ -38,5 +38,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.env,
         &format!("{}() callback", cx.name),
     )?;
-    Ok(PhpType::Void)
+    Ok(PhpType::Bool)
 }

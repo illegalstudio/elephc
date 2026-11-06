@@ -12,17 +12,39 @@ use super::*;
 /// Default value for a native AOT callable parameter visible to eval fragments.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NativeCallableDefault {
+    /// The declared default exists but raises this Error when it is materialized.
+    DeferredError(String),
+    /// Compiler-generated default expression data, evaluated with its declaring class scope.
+    Expression {
+        expression: Box<crate::eval_ir::EvalExpr>,
+        lexical_class: String,
+        /// Persistent capture-free descriptor used only by protected native Reflection getters.
+        reflection_factory: Option<usize>,
+    },
     Null,
     Bool(bool),
     Int(i64),
     Float(f64),
     String(String),
+    /// PHP string bytes whose contents are not valid UTF-8.
+    Bytes(Vec<u8>),
+    ExecutablePath,
     EmptyArray,
     Array(Vec<NativeCallableArrayDefaultElement>),
     Object {
         class_name: String,
         args: Vec<NativeCallableObjectDefaultArg>,
     },
+}
+
+impl NativeCallableDefault {
+    /// Retains UTF-8 strings or binary bytes without changing either PHP payload.
+    pub(crate) fn from_php_bytes(value: Vec<u8>) -> Self {
+        match String::from_utf8(value) {
+            Ok(value) => Self::String(value),
+            Err(error) => Self::Bytes(error.into_bytes()),
+        }
+    }
 }
 
 /// One element in an array-valued native AOT callable default.
@@ -52,6 +74,8 @@ impl NativeCallableArrayDefaultElement {
 pub enum NativeCallableArrayDefaultKey {
     Int(i64),
     String(String),
+    /// Binary PHP string key retained without UTF-8 replacement or source markers.
+    Bytes(Vec<u8>),
 }
 
 /// Constructor argument for an object-valued native AOT callable default.
@@ -84,9 +108,10 @@ impl NativeCallableObjectDefaultArg {
 /// registers no default at all, and a shape derived from that absence would report an optional
 /// parameter as required and a frame that carries the actual argument count as one that does not.
 ///
-/// The three fields are emitted by `crate::codegen::lower_inst::builtins::eval` from the AST-level
+/// Signature fields are emitted by `crate::codegen::lower_inst::builtins::eval` from the AST-level
 /// `FunctionSig`, where every declared default is present as an expression regardless of whether
-/// its VALUE can be represented.
+/// its VALUE can be represented. Free functions also carry their compiler-internal declaration
+/// origin, so prelude signatures cannot be confused with user declarations bearing the same name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NativeCallableShape {
     /// PHP-visible non-variadic parameters, which are the leading run of physical slots.
@@ -105,6 +130,8 @@ pub struct NativeCallableShape {
     /// so when a visible regular carries a default the count travels as the collector's first
     /// element. This mirrors `func_args::sig_collects_optional_arg_count` on the compiler side.
     pub(super) collector_carries_count: bool,
+    /// Whether compiler-internal source declared this callable, carried alongside its signature.
+    pub(super) is_internal: bool,
 }
 
 /// Bit set in the registration ABI's shape-flags word when the variadic slot is source-declared.
@@ -117,6 +144,9 @@ pub const NATIVE_SHAPE_FLAG_SOURCE_VARIADIC: u64 = 1 << 0;
 /// Bit set in the shape-flags word when the hidden collector's first element is the actual count.
 pub const NATIVE_SHAPE_FLAG_COLLECTOR_CARRIES_COUNT: u64 = 1 << 1;
 
+/// Bit set in a free function's shape word when compiler-internal source declared it.
+pub const NATIVE_SHAPE_FLAG_INTERNAL: u64 = 1 << 2;
+
 impl NativeCallableShape {
     /// Decodes one registered shape from the three ABI words the generated bridge emits.
     pub fn from_abi(
@@ -126,12 +156,14 @@ impl NativeCallableShape {
     ) -> Option<Self> {
         let visible_regular_param_count = usize::try_from(visible_regular_param_count).ok()?;
         let required_param_count = usize::try_from(required_param_count).ok()?;
-        Some(Self::new(
+        let mut shape = Self::new(
             visible_regular_param_count,
             required_param_count,
             shape_flags & NATIVE_SHAPE_FLAG_SOURCE_VARIADIC != 0,
             shape_flags & NATIVE_SHAPE_FLAG_COLLECTOR_CARRIES_COUNT != 0,
-        ))
+        );
+        shape.is_internal = shape_flags & NATIVE_SHAPE_FLAG_INTERNAL != 0;
+        Some(shape)
     }
 
     /// Creates one registered PHP signature shape, clamping `required` to the visible regulars.
@@ -149,6 +181,7 @@ impl NativeCallableShape {
             required_param_count: required_param_count.min(visible_regular_param_count),
             source_variadic,
             collector_carries_count,
+            is_internal: false,
         }
     }
 }

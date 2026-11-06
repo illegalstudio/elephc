@@ -170,12 +170,22 @@ pub(crate) fn declare_strict_types(enabled: bool) {
 /// PHP file cannot evade the audit.
 pub fn finalize_physical_program(
     program: Program,
+    source: &str,
     path: &Path,
     mode: SourceMode,
     defines: &HashSet<String>,
 ) -> Result<Program, CompileError> {
     let program = crate::magic_constants::substitute_file_and_scope_constants(program, path);
     crate::strict_php::check_file_with_mode(&program, &path.display().to_string(), mode)?;
+    // Generic doc-comment annotations are applied AFTER the strict audit, and that order is the
+    // whole point of the surface: a `@template` file is valid PHP — the annotations are
+    // comments — so `--strict-php` must keep accepting it. Applying them first made the audit
+    // see the injected `<T>` and `array<T>` and reject a file php-src parses happily.
+    //
+    // Per physical file, because the lexer discards comments and they are recovered from the
+    // source text by line: that only means anything while the file is still its own, before
+    // include resolution splices every file into one program without rebasing line numbers.
+    let program = crate::docblock::apply(program, source);
     Ok(crate::conditional::apply(program, defines))
 }
 

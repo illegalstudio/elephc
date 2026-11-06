@@ -130,19 +130,26 @@ show(...[0 => 10, "b" => 20]);
     assert_eq!(out, "10:20");
 }
 
-/// Verifies that in an assoc spread, string keys come first and numeric keys are appended after them;
-/// `show(...["a" => 1, 1 => 2])` outputs "1:2".
+/// Verifies that an integer key after a string key in one unpacked array is refused, as php refuses
+/// it with "Cannot use positional argument after named argument during unpacking".
+///
+/// This test used to pin `1:2`, the planner reordering the numeric key ahead of the named one;
+/// php 8.5 throws for `show(...["a" => 1, 1 => 2])` instead.
 #[test]
-fn test_assoc_spread_literal_reorders_numeric_after_string_key() {
-    let out = compile_and_run(
+fn test_assoc_spread_literal_rejects_numeric_after_string_key() {
+    let error = compile_cli_file_with_flags_expect_failure(
         r#"<?php
 function show($a, $b) {
     echo $a . ":" . $b;
 }
 show(...["a" => 1, 1 => 2]);
 "#,
+        &[],
     );
-    assert_eq!(out, "1:2");
+    assert!(
+        error.contains("cannot use positional argument after named argument during unpacking"),
+        "{error}"
+    );
 }
 
 /// Verifies that duplicate string keys in an assoc spread literal use the last value (PHP behavior);

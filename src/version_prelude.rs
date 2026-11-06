@@ -72,7 +72,22 @@ fn ini_restore_decl() -> Stmt {
 ///
 /// Injection is hoisted function declarations only, so prepending cannot change top-level
 /// execution order.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used(
+    program: Program,
+    php_version: PhpVersion,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, php_version, inventory)
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
     program: Program,
     php_version: PhpVersion,
     inventory: &mut crate::optimize::reachability::PreludeInventory,

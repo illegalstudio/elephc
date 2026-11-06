@@ -12,7 +12,7 @@ use std::fmt::Write;
 
 use crate::support::{
     compile_and_run, compile_and_run_capture_with_regex, compile_and_run_with_regex,
-    elephc_cli_command_with_mbstring_native, fs, make_cli_test_dir, run_binary,
+    elephc_cli_command_with_eval_catalog_native, fs, make_cli_test_dir, run_binary,
 };
 
 /// Compiles and runs an eval fixture with both native regex providers explicitly enabled.
@@ -21,7 +21,7 @@ fn compile_and_run_with_mbstring_and_regex(source: &str) -> String {
     let php = dir.join("main.php");
     fs::write(&php, source).expect("write eval builtin catalog fixture");
 
-    let compiled = elephc_cli_command_with_mbstring_native(&dir)
+    let compiled = elephc_cli_command_with_eval_catalog_native(&dir)
         .args(["--with-mbstring", "--with-regex"])
         .arg(&php)
         .output()
@@ -107,6 +107,11 @@ echo function_exists("StRlEn") ? "M" : "m";');
 /// Verifies eval `function_exists()` sees every compiler builtin available on the host target.
 #[test]
 fn test_eval_function_exists_covers_static_builtin_catalog() {
+    if crate::support::skip_without_gmp_native(
+        "test_eval_function_exists_covers_static_builtin_catalog",
+    ) {
+        return;
+    }
     let mut fragment = String::new();
     let target = elephc::codegen_support::platform::Target::detect_host();
     for name in elephc::builtin_metadata::php_visible_builtin_names_for_target(target) {
@@ -714,4 +719,137 @@ try {
         out,
         "ValueError|iconv_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)"
     );
+}
+
+/// Builds a program that runs `body` natively, prints `|`, then runs the same `body` through a
+/// runtime-selected `eval()` source, so the interpreter bridge (never literal AOT lowering)
+/// executes the second half.
+fn native_then_dynamic_eval(body: &str) -> String {
+    let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+    format!("<?php\n$code = $argc > 1 ? $argv[1] : '{quoted}';\n{body}\necho \"|\";\neval($code);\n")
+}
+
+/// Verifies the eval interpreter honours `in_array()`'s and `array_search()`'s `$strict`.
+///
+/// Both hooks took exactly two arguments, so any third argument failed the whole eval call
+/// (#1472). Numeric strings separate the two comparisons: `"10" == "1e1"` but `"10" !== "1e1"`.
+/// Only the eval half runs here, and it is checked against PHP 8.5 directly, because the
+/// compiled `array_search()` has its own loose-comparison gap for numeric strings.
+#[test]
+fn test_eval_array_search_strict_parity() {
+    let out = compile_and_run(
+        r#"<?php
+$code = $argc > 1 ? $argv[1] : 'echo in_array("10", ["1e1"]) ? "Y" : "N", in_array("10", ["1e1"], true) ? "Y" : "N";
+echo in_array("10", ["1e1", "10"], true) ? "Y" : "N";
+echo ":", array_search("10", ["a" => "1e1", "b" => "10"]), array_search("10", ["a" => "1e1", "b" => "10"], true);
+echo ":", array_search("1e1", ["10"], true) === false ? "false" : "bad", ":", array_search("1e1", ["10"]);
+echo ":", call_user_func("in_array", "10", ["1e1"], true) ? "Y" : "N";
+echo call_user_func_array("array_search", ["10", ["1e1", "10"], true]);
+echo in_array(needle: null, haystack: [0], strict: true) ? "Y" : "N";';
+eval($code);
+"#,
+    );
+
+    assert_eq!(out, "YNY:ab:false:0:N1N");
+}
+
+/// Verifies the eval interpreter renumbers `array_chunk()` string keys unless `$preserve_keys`
+/// is set, and raises the compiled backend's catchable `ValueError` for a zero length.
+///
+/// Eval kept string keys when not preserving and failed the whole eval call for a
+/// non-positive length (#1295). Both halves print PHP 8.5's output.
+#[test]
+fn test_eval_array_chunk_key_and_length_parity() {
+    let body = r#"foreach (array_chunk(["a" => 1, "b" => 2, "c" => 3], 2) as $chunk) { echo json_encode($chunk); }
+foreach (array_chunk([5 => "x", "k" => "y", 9 => "z"], 2, true) as $chunk) { echo json_encode($chunk); }
+try { array_chunk([1], 0); } catch (ValueError $e) { echo ":", $e->getMessage(); }"#;
+    let out = compile_and_run(&native_then_dynamic_eval(body));
+
+    let expected = r#"[1,2][3]{"5":"x","k":"y"}{"9":"z"}:array_chunk(): Argument #2 ($length) must be greater than 0"#;
+    assert_eq!(out, format!("{expected}|{expected}"));
+}
+
+/// Verifies the eval interpreter honours `htmlspecialchars()`'s and `htmlentities()`'s `$flags`
+/// exactly as the compiled helper does.
+///
+/// Eval ignored `$flags` and always escaped both quotes (#1464): `ENT_NOQUOTES` and
+/// `ENT_COMPAT` output differed from the compiled program, and the `&apos;` doctypes rendered
+/// `&#039;`. Both halves print PHP 8.5's output.
+#[test]
+fn test_eval_html_entity_flags_parity() {
+    let body = r#"$s = "<p class=\"q\">It's</p>";
+echo htmlspecialchars($s, ENT_NOQUOTES), ";", htmlspecialchars($s, ENT_COMPAT), ";";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_HTML5), ";", htmlentities($s, ENT_QUOTES | ENT_XML1), ";";
+echo htmlspecialchars($s), ";", htmlentities($s, ENT_NOQUOTES, "UTF-8");"#;
+    let out = compile_and_run(&native_then_dynamic_eval(body));
+
+    let expected = concat!(
+        "&lt;p class=\"q\"&gt;It's&lt;/p&gt;;",
+        "&lt;p class=&quot;q&quot;&gt;It's&lt;/p&gt;;",
+        "&lt;p class=&quot;q&quot;&gt;It&apos;s&lt;/p&gt;;",
+        "&lt;p class=&quot;q&quot;&gt;It&apos;s&lt;/p&gt;;",
+        "&lt;p class=&quot;q&quot;&gt;It&#039;s&lt;/p&gt;;",
+        "&lt;p class=\"q\"&gt;It's&lt;/p&gt;",
+    );
+    assert_eq!(out, format!("{expected}|{expected}"));
+}
+
+/// Verifies the eval interpreter packs and renders IPv6 addresses like the compiled
+/// `inet_pton()`/`inet_ntop()` helpers, and refuses the same invalid shapes.
+///
+/// Eval was IPv4-only, so every IPv6 address packed to `false` (#1157). `01.2.3.4` pins that
+/// the platform parser, not eval's old `ip2long()` scanner, now decides validity, so eval
+/// answers whatever the compiled helper answers on that platform. That answer follows the
+/// platform's `inet_pton(3)`, as PHP's does: glibc refuses the leading-zero octet, while
+/// Apple's BSD parser accepts it as `1.2.3.4`. The two halves must match each other on every
+/// platform, and each prints PHP 8.5's output for the host platform.
+#[test]
+fn test_eval_inet_ipv6_parity() {
+    let body = r#"foreach (["::1", "2001:db8:85a3:0:0:8a2e:370:7334", "::ffff:192.0.2.128", "10.0.0.1", "gggg::1", "01.2.3.4"] as $a) {
+    $p = inet_pton($a);
+    echo $p === false ? "false" : bin2hex($p) . "=" . inet_ntop($p), ";";
+}
+echo inet_ntop("123456789012345") === false ? "F" : "bad";"#;
+    let out = compile_and_run(&native_then_dynamic_eval(body));
+
+    let (native, evaluated) = out.split_once('|').expect("both halves print their results");
+    assert_eq!(evaluated, native, "eval must answer exactly what the compiled helpers answer");
+    let leading_zero_octet = if cfg!(any(target_os = "macos", target_os = "ios")) {
+        "01020304=1.2.3.4;"
+    } else {
+        "false;"
+    };
+    let expected = format!(
+        concat!(
+            "00000000000000000000000000000001=::1;",
+            "20010db885a3000000008a2e03707334=2001:db8:85a3::8a2e:370:7334;",
+            "00000000000000000000ffffc0000280=::ffff:192.0.2.128;",
+            "0a000001=10.0.0.1;false;{}F",
+        ),
+        leading_zero_octet
+    );
+    assert_eq!(native, expected);
+}
+
+/// Verifies eval `putenv()` reports libc's status the way the compiled `putenv()` does.
+///
+/// Eval returned a hard-coded `true` from Rust's environment setters (#911), and those setters
+/// panicked on a NUL byte, killing the program. libc reads the assignment up to that NUL, so
+/// `NAME=value\0tail` stores `value` on both sides, as PHP does. A leading NUL leaves an empty
+/// name that `unsetenv(3)` refuses; the two halves must report the same status for it.
+#[test]
+fn test_eval_putenv_libc_status_parity() {
+    let out = compile_and_run(
+        r#"<?php
+$code = $argc > 1 ? $argv[1] : 'echo putenv("ELEPHC_EVAL_PUTENV_PARITY=eval\0tail") ? "set:" : "bad:", getenv("ELEPHC_EVAL_PUTENV_PARITY");
+return putenv("\0ELEPHC_EVAL_PUTENV_PARITY");';
+echo putenv("ELEPHC_EVAL_PUTENV_PARITY=aot\0tail") ? "set:" : "bad:", getenv("ELEPHC_EVAL_PUTENV_PARITY");
+$native = putenv("\0ELEPHC_EVAL_PUTENV_PARITY");
+echo "|";
+$evaluated = eval($code);
+echo "|", $native === $evaluated ? "same" : "differ";
+"#,
+    );
+
+    assert_eq!(out, "set:aot|set:eval|same");
 }

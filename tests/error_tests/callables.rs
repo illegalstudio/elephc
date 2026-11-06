@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// Verifies first-class builtin calls keep the compile-time literal rule of their contract.
+///
+/// Each argument below decides what the backend emits, so every spelling of the call needs it at
+/// compile time; the direct call's diagnostic is reported instead of a backend failure or a
+/// silently ignored flag (issue #1346).
+#[test]
+fn test_error_first_class_builtin_non_literal_arguments() {
+    expect_error(
+        "<?php $t = $argc > 0; $f = array_reverse(...); $f([1, 2], $t);",
+        "array_reverse() preserve_keys argument must be a literal bool in AOT mode",
+    );
+    expect_error(
+        "<?php $n = $argc > 5 ? 'A' : 'B'; $f = constant(...); $f($n);",
+        "constant() first argument must be a string literal in AOT mode",
+    );
+    expect_error(
+        "<?php $m = $argc > 5 ? 1 : 0; $f = str_word_count(...); $f('a b', $m);",
+        "str_word_count() format argument must be an integer literal in AOT mode",
+    );
+}
+
 /// An unsupported fourth replacement argument stays rejected through callable syntax.
 #[test]
 fn test_error_capped_string_replace_callable_rejects_fourth_argument() {
@@ -48,7 +69,7 @@ $guard = new CallableParameterGuard();
 $guard->accept($guard->callback);
 "#,
     ] {
-        expect_error(source, "parameter $callback expects Callable, got Void");
+        expect_error(source, "parameter $callback expects callable, got null");
     }
 }
 
@@ -283,11 +304,117 @@ fn test_error_get_declared_traits_wrong_args() {
 #[test]
 fn test_error_class_alias_rejects_runtime_call_shape() {
     // Verifies `class_alias()` with a runtime variable as the second argument
-    // produces a diagnostic because only top-level statements with literal
-    // class names are supported in AOT mode.
+    // produces a diagnostic because only top-level statements with
+    // compile-time-constant class names are supported in AOT mode.
     expect_error(
         r#"<?php class Original {} $alias = "Alias"; class_alias("Original", $alias);"#,
-        "class_alias() is only supported as a top-level statement with literal class names",
+        "class_alias() is only supported as a top-level statement with compile-time-constant class names (string literals, Name::class, or a concatenation of them)",
+    );
+}
+
+/// Explicitly disabled alias autoload has a flag diagnostic, not a class-name shape error.
+#[test]
+fn test_error_class_alias_disabled_autoload_diagnostic() {
+    for flag in ["false", "0", "0.0", "''", "'0'", "null"] {
+        expect_error(
+            &format!("<?php class Original {{}} class_alias(Original::class, 'Alias', {flag});"),
+            "class_alias() does not support autoload=false in AOT mode; omit autoload or pass true",
+        );
+    }
+}
+
+/// Named calls retain their unsupported shape even when their autoload flag is false.
+#[test]
+fn test_error_class_alias_named_disabled_autoload_diagnostic() {
+    expect_error(
+        "<?php class Original {} class_alias(autoload: false, alias: 'Alias', class: Original::class);",
+        "class_alias() is only supported as a top-level statement with compile-time-constant class names",
+    );
+}
+
+/// Changing autoload cannot make function-body, conditional, named, or dynamic-name calls valid.
+#[test]
+fn test_error_class_alias_autoload_diagnostic_requires_collectible_shape() {
+    for flag in ["false", "true", "0", "0.0", "''", "'0'", "null"] {
+        for source in [
+            format!("<?php class Original {{}} function make() {{ class_alias(Original::class, 'Alias', {flag}); }} make();"),
+            format!("<?php class Original {{}} $alias = 'Alias'; class_alias(Original::class, $alias, {flag});"),
+            format!("<?php class Original {{}} class_alias(class: Original::class, alias: 'Alias', autoload: {flag});"),
+            format!("<?php class Original {{}} class_alias(Original::class, 'Alias', autoload: {flag});"),
+            format!("<?php class Original {{}} if ($argc > 0) {{ class_alias(Original::class, 'Alias', {flag}); }}"),
+            format!("<?php class Original {{}} $result = class_alias(Original::class, 'Alias', {flag});"),
+        ] {
+            expect_error(&source, "class_alias() is only supported as a top-level statement with compile-time-constant class names");
+        }
+    }
+}
+
+/// Named constants remain unsupported source forms regardless of the autoload flag.
+#[test]
+fn test_error_class_alias_named_constants_keep_source_shape_diagnostic() {
+    for flag in ["false", "true", "0", "0.0", "''", "'0'", "null"] {
+        for declarations in [
+            "const SOURCE = 'Original'; const ALIAS = 'Alias';",
+            "class Names { const SOURCE = 'Original'; const ALIAS = 'Alias'; }",
+        ] {
+            let (source, alias) = if declarations.starts_with("const") {
+                ("SOURCE", "ALIAS")
+            } else {
+                ("Names::SOURCE", "Names::ALIAS")
+            };
+            for names in [format!("{source}, 'Alias'"), format!("Original::class, {alias}"), format!("{source}, {alias}")] {
+                expect_error(
+                    &format!("<?php class Original {{}} {declarations} class_alias({names}, {flag});"),
+                    "class_alias() is only supported as a top-level statement with compile-time-constant class names",
+                );
+            }
+        }
+    }
+}
+
+/// Ternary and cast folding cannot make an originally unsupported alias call collectible.
+#[test]
+fn test_error_class_alias_folded_names_keep_source_shape_diagnostic() {
+    for flag in ["false", "true", "0", "0.0", "''", "'0'", "null"] {
+        for names in [
+            "false ? 'Nope' : 'Original', 'Alias'",
+            "(string)'Original', 'Alias'",
+            "Original::class, false ? 'Nope' : 'Alias'",
+            "Original::class, (string)'Alias'",
+        ] {
+            expect_error(
+                &format!("<?php class Original {{}} class_alias({names}, {flag});"),
+                "class_alias() is only supported as a top-level statement with compile-time-constant class names",
+            );
+        }
+    }
+}
+
+/// Every false literal on otherwise collectible constant-name forms gets the actionable flag error.
+#[test]
+fn test_error_class_alias_autoload_diagnostic_accepts_constant_name_forms() {
+    for flag in ["false", "0", "0.0", "''", "'0'", "null"] {
+        expect_error(
+            &format!("<?php namespace App; class Original {{}} class_alias(Original::class, 'App' . '\\\\Alias', {flag});"),
+            "class_alias() does not support autoload=false in AOT mode; omit autoload or pass true",
+        );
+    }
+    expect_no_error("<?php class Original {} class_alias(Original::class, 'Alias', true);");
+    expect_no_error("<?php class Original {} class_alias(Original::class, 'Alias');");
+}
+
+/// Verifies `class_alias()` still refuses a class name only known at run time even though
+/// `Name::class` constants are accepted (issue #849): `$object::class` names the runtime class
+/// of an object, and a call inside a function body is not a top-level declaration.
+#[test]
+fn test_error_class_alias_rejects_runtime_class_name_shapes() {
+    expect_error(
+        r#"<?php class Original {} $o = new Original(); class_alias($o::class, "Alias");"#,
+        "class_alias() is only supported as a top-level statement with compile-time-constant class names (string literals, Name::class, or a concatenation of them)",
+    );
+    expect_error(
+        r#"<?php class Original {} function make() { class_alias(Original::class, "Alias"); } make();"#,
+        "class_alias() is only supported as a top-level statement with compile-time-constant class names (string literals, Name::class, or a concatenation of them)",
     );
 }
 
@@ -299,6 +426,22 @@ fn test_error_call_non_callable_variable() {
     // Verifies invoking a non-callable variable (integer) produces a "not a callable"
     // diagnostic at runtime.
     expect_error(r#"<?php $x = 5; $x(1);"#, "not a callable");
+}
+
+/// `$this(...)` in a class without `__invoke` is refused even when the class defines `__call`:
+/// PHP never routes an object invocation through `__call`.
+#[test]
+fn test_error_invoke_this_without_invoke_ignores_call() {
+    expect_error(
+        r#"<?php
+class B {
+    public function __call($m, $a) { return $m; }
+    public function run() { return $this(1); }
+}
+echo (new B())->run();
+"#,
+        "not a callable",
+    );
 }
 
 /// Boxed runtime dispatch still rejects unpacking after an explicit named argument.
@@ -401,7 +544,7 @@ fn test_error_closure_return_type_rejects_mismatch() {
     // type produces a diagnostic showing the expected and actual types.
     expect_error(
         "<?php $f = function(): string { return 1; };",
-        "Closure return type expects Str, got Int",
+        "Closure return type expects string, got int",
     );
 }
 
@@ -412,7 +555,7 @@ fn test_error_arrow_return_type_rejects_mismatch() {
     // mismatched type produces a diagnostic showing the expected and actual types.
     expect_error(
         "<?php $f = fn(): int => \"nope\";",
-        "Closure return type expects Int, got Str",
+        "Closure return type expects int, got string",
     );
 }
 
@@ -580,7 +723,7 @@ fn test_error_pipe_closure_literal_typed_parameter_mismatch() {
     // showing the expected vs actual parameter type.
     expect_error(
         r#"<?php $r = "nope" |> (function(int $n): int { $copy = $n; return $copy; });"#,
-        "pipe target parameter $n expects Int, got Str",
+        "pipe target parameter $n expects int, got string",
     );
 }
 
@@ -706,7 +849,7 @@ fn test_callable_parameter_accepts_a_callable_array_local() {
 fn test_error_callable_parameter_rejects_a_plain_array() {
     expect_error(
         "<?php function apply(callable $f): mixed { return $f(); } $values = [1, 2]; echo apply($values);",
-        "expects Callable",
+        "expects callable",
     );
 }
 
@@ -716,7 +859,7 @@ fn test_error_callable_parameter_rejects_a_plain_array() {
 fn test_error_callable_parameter_rejects_an_unresolved_pair() {
     expect_error(
         "<?php function apply(callable $f): mixed { return $f(); } $pair = [1, \"join\"]; echo apply($pair);",
-        "expects Callable",
+        "expects callable",
     );
 }
 
@@ -725,7 +868,7 @@ fn test_error_callable_parameter_rejects_an_unresolved_pair() {
 fn test_error_callable_array_target_is_cleared_when_branches_disagree() {
     expect_error(
         "<?php class BranchCallable { public static function left(): int { return 1; } public static function right(): int { return 2; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { if ($value > 0) { $callback = [BranchCallable::class, 'left']; } else { $callback = [BranchCallable::class, 'right']; } return consume($callback); } echo choose($argc);",
-        "expects Callable",
+        "expects callable",
     );
 }
 
@@ -734,7 +877,7 @@ fn test_error_callable_array_target_is_cleared_when_branches_disagree() {
 fn test_error_elseif_does_not_inherit_callable_target_from_prior_body() {
     expect_error(
         "<?php class ElseifCallable { public static function base(): int { return 0; } public static function changed(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { $callback = [ElseifCallable::class, 'base']; if ($value === 1) { $callback = [ElseifCallable::class, 'changed']; } elseif ($value === 2) { $marker = 2; } else { $marker = 3; } return consume($callback); } echo choose($argc);",
-        "expects Callable",
+        "expects callable",
     );
 }
 
@@ -767,7 +910,7 @@ fn test_branch_copies_of_one_instance_callable_array_can_join() {
 fn test_error_branch_local_instance_callable_arrays_do_not_merge_by_syntax() {
     expect_error(
         "<?php class BranchInstanceCallable { public function hit(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { $receiver = new BranchInstanceCallable(); if ($value > 0) { $receiver = new BranchInstanceCallable(); $callback = [$receiver, 'hit']; } else { $receiver = new BranchInstanceCallable(); $callback = [$receiver, 'hit']; } return consume($callback); } echo choose($argc);",
-        "expects Callable",
+        "expects callable",
     );
 }
 
@@ -795,7 +938,7 @@ fn test_error_direct_mixed_argument_does_not_gain_descriptor_unboxing() {
         "<?php function consume(callable $callback): int { return $callback(); } function forward(mixed $value): int { return consume($value); } echo forward(null);",
         "<?php function consume(callable $callback): int { return $callback(); } function forward(callable $dispatch, mixed $value): int { return $dispatch($value); } echo forward(consume(...), null);",
     ] {
-        expect_error(source, "parameter $callback expects Callable, got Mixed");
+        expect_error(source, "parameter $callback expects callable, got mixed");
     }
 }
 

@@ -56,6 +56,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
             if !evaluated_args.is_empty() {
                 return Err(EvalStatus::RuntimeFatal);
             }
+            if let Some(flags) = elephc_builtin_contract::core_attribute_flags(attribute_metadata.attribute().name()) {
+                let name = attribute_metadata.attribute().name();
+                if (flags as u64) & attribute_metadata.target() == 0 {
+                    return eval_throw_error(&format!("Attribute \"{name}\" cannot target this declaration"), context, values);
+                }
+                if flags & elephc_builtin_contract::CORE_ATTRIBUTE_IS_REPEATABLE == 0 && attribute_metadata.is_repeated() {
+                    return eval_throw_error(&format!("Attribute \"{name}\" must not be repeated"), context, values);
+                }
+            }
             return eval_reflection_attribute_new_instance_result(
                 attribute_metadata.attribute(),
                 context,
@@ -329,6 +338,11 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         evaluated_args.clone(),
         context,
         values,
+    )? {
+        return Ok(result);
+    }
+    if let Some(result) = eval_reflection_property_default_error_result(
+        identity, method_name, evaluated_args.clone(), context, values,
     )? {
         return Ok(result);
     }

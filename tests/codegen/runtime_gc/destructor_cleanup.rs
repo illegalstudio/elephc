@@ -10,6 +10,55 @@
 
 use crate::support::*;
 
+/// Captured assignment values leave independent property owners and retire on function exit.
+#[test]
+fn test_core_dynamic_assignment_captures_retire_after_property_publication() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class CapturedPropertyValue {
+    public static int $released = 0;
+    public function __destruct() { self::$released++; }
+}
+function publishCapturedProperties(stdClass $holder, string $name): void {
+    $holder->named = new CapturedPropertyValue();
+    $holder->{$name} = new CapturedPropertyValue();
+}
+for ($i = 0; $i < 8; $i++) {
+    $holder = new stdClass();
+    publishCapturedProperties($holder, 'runtime');
+    echo CapturedPropertyValue::$released, ':';
+    unset($holder);
+    echo CapturedPropertyValue::$released, '|';
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0:2|2:4|4:6|6:8|8:10|10:12|12:14|14:16|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing runtime-name typed store unwinds the generated RHS capture exactly once.
+#[test]
+fn test_core_dynamic_assignment_captures_retire_on_throw() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RefusedCapturedValue {
+    public static int $released = 0;
+    public function __destruct() { self::$released++; }
+}
+class RefusedCaptureHolder { public int $number = 0; }
+function refuseCapturedProperty(RefusedCaptureHolder $holder, string $name): void {
+    $holder->{$name} = new RefusedCapturedValue();
+}
+$holder = new RefusedCaptureHolder();
+for ($i = 0; $i < 8; $i++) {
+    try { refuseCapturedProperty($holder, 'number'); }
+    catch (TypeError $error) { echo 'c'; }
+}
+echo ':', RefusedCapturedValue::$released, ':', $holder->number;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "cccccccc:8:0", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Repeated dynamic dispatch preserves receiver ownership and independently owns copied selector names.
 #[test]
 fn test_core_dynamic_method_loop_preserves_receiver_owner() {

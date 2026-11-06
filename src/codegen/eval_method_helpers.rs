@@ -25,7 +25,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
-use crate::ir::{Function, LocalKind, Module, Ownership};
+use crate::ir::{Module, Ownership};
 use crate::codegen_support::source_method_adapters::MethodKind;
 use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
@@ -85,6 +85,7 @@ enum EvalMethodResultSource {
 }
 
 const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
+    "ErrorException",
     "Error",
     "TypeError",
     "ArgumentCountError",
@@ -93,6 +94,10 @@ const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
     "DivisionByZeroError",
     "AssertionError",
     "UnhandledMatchError",
+    "ClosedGeneratorException",
+    "CompileError",
+    "ParseError",
+    "RequestParseBodyException",
     "Exception",
     "LogicException",
     "BadFunctionCallException",
@@ -148,32 +153,25 @@ pub(super) fn emit_eval_method_helpers(
     emit_static_method_call_helper(module, emitter, data, &static_slots, callable_support);
 }
 
-/// Returns true when the EIR module contains a function that can call eval.
+/// Returns whether this binary links the eval bridge, and therefore needs these helpers.
+///
+/// THE INVARIANT IS "LINKED", NOT "USES EVAL". `libelephc_magician.a` references the
+/// `__elephc_eval_*` callbacks unconditionally, so any binary that links it must define
+/// them or fail to link — `__elephc_eval_reflection_attribute_new` undefined and a dozen
+/// like it. This used to scan for functions carrying an eval local instead, which is a
+/// different question that happened to give the same answer while the ONLY reason to link
+/// the archive was an `eval()` in the program.
+///
+/// That stopped being the only reason. `opcache_compile_file()` populates the runtime script
+/// cache, which lives in the archive, so a program calling it needs the archive whether or
+/// not it ever evaluates a string. Keeping the narrower scan here made that combination
+/// unlinkable, which is what kept the fold in place and left the function answering `false`
+/// where reference answers `true`.
+///
+/// The call sites are all inside a block already gated on the same flag, so for a program
+/// that does use `eval()` nothing changes.
 fn module_uses_eval(module: &Module) -> bool {
-    all_module_functions(module).any(function_uses_eval)
-}
-
-/// Iterates every EIR function body emitted or inspected by the backend.
-fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
-    module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .chain(module.closures.iter())
-        .chain(module.fiber_wrappers.iter())
-        .chain(module.callback_wrappers.iter())
-        .chain(module.extern_callback_trampolines.iter())
-        .chain(module.runtime_callable_invokers.iter())
-}
-
-/// Returns true when a function has hidden eval state locals.
-fn function_uses_eval(function: &Function) -> bool {
-    function.locals.iter().any(|local| {
-        matches!(
-            local.kind,
-            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
-        )
-    })
+    module.required_runtime_features.eval_bridge
 }
 
 /// Collects bridge-supported instance methods backed by emitted EIR symbols.
@@ -308,7 +306,7 @@ fn collect_class_method_slots(
             allowed_scopes: visibility_scope_names(module, impl_class, visibility),
             params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-            return_ty: sig.return_type.codegen_repr(),
+            return_ty: crate::types::mixed_box_php_type(&sig.return_type),
             return_is_owned: runtime_helper.is_none()
                 && native_method_returns_owned_value(module, impl_class, method, false),
             return_uses_marker: runtime_helper.is_none()
@@ -363,7 +361,7 @@ fn collect_hidden_private_ancestor_method_slots(
                 allowed_scopes: visibility_scope_names(module, impl_class, visibility),
                 params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
                 ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-                return_ty: sig.return_type.codegen_repr(),
+                return_ty: crate::types::mixed_box_php_type(&sig.return_type),
                 return_is_owned: native_method_returns_owned_value(module, impl_class, method, false),
                 return_uses_marker: compiled_method_return_uses_marker(sig),
                 is_hidden_shadow: true,
@@ -429,7 +427,7 @@ fn collect_class_static_method_slots(
             allowed_scopes: visibility_scope_names(module, impl_class, visibility),
             params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-            return_ty: sig.return_type.codegen_repr(),
+            return_ty: crate::types::mixed_box_php_type(&sig.return_type),
             return_is_owned: native_method_returns_owned_value(module, impl_class, method, true),
             return_uses_marker: compiled_method_return_uses_marker(sig),
             entry_symbol: entry_symbol.clone(),
@@ -496,8 +494,10 @@ fn method_signature_supported(sig: &crate::types::FunctionSig) -> bool {
 }
 
 /// Returns true for an eval-supplied method argument type supported by this bridge.
+///
+/// A `?ptr<T>` argument is cast like an int: PHP null becomes address 0.
 fn method_param_supported(ty: &PhpType) -> bool {
-    matches!(
+    crate::types::is_nullable_pointer_type(ty) || matches!(
         ty.codegen_repr(),
         PhpType::Int
             | PhpType::Bool
@@ -514,8 +514,10 @@ fn method_param_supported(ty: &PhpType) -> bool {
 }
 
 /// Returns true for return storage shapes the bridge can box for eval.
+///
+/// A `?ptr<T>` return is boxed by its declared union, address 0 as PHP null.
 fn method_return_supported(ty: &PhpType) -> bool {
-    matches!(
+    crate::types::is_nullable_pointer_type(ty) || matches!(
         ty.codegen_repr(),
         PhpType::Void
             | PhpType::Int
@@ -805,7 +807,7 @@ fn emit_aarch64_method_exception_boundary_push(
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
     ));
-    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native methods
+    emitter.save_exception_handler();                                           // snapshot the bridge stack before entering native methods
     emitter.instruction(&format!("cbnz x0, {}", escape_label));                 // non-zero setjmp result means a method Throwable escaped
 }
 
@@ -847,7 +849,7 @@ fn emit_x86_64_method_exception_boundary_push(
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
     ));
-    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native methods
+    emitter.save_exception_handler();                                           // snapshot the bridge stack before entering native methods
     emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
     emitter.instruction(&format!("jne {}", escape_label));                      // non-zero setjmp result means a method Throwable escaped
 }
@@ -1013,6 +1015,9 @@ fn emit_aarch64_builtin_throwable_method_dispatch(
         emit_aarch64_builtin_throwable_method_name_branch(
             module, emitter, data, "getprevious", BUILTIN_THROWABLE_GET_PREVIOUS_LABEL,
         );
+        for (method, label) in [("getfile", "__elephc_eval_throwable_file"), ("getline", "__elephc_eval_throwable_line")] {
+            emit_aarch64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
+        }
         emitter.label(&next_label);
     }
 }
@@ -1048,6 +1053,9 @@ fn emit_x86_64_builtin_throwable_method_dispatch(
         emit_x86_64_builtin_throwable_method_name_branch(
             module, emitter, data, "getprevious", BUILTIN_THROWABLE_GET_PREVIOUS_LABEL,
         );
+        for (method, label) in [("getfile", "__elephc_eval_throwable_file"), ("getline", "__elephc_eval_throwable_line")] {
+            emit_x86_64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
+        }
         emitter.label(&next_label);
     }
 }
@@ -1316,6 +1324,7 @@ fn emit_aarch64_builtin_throwable_method_bodies(
     emitter.instruction("bl __rt_mixed_from_value");                            // box the Throwable code as a Mixed integer
     emitter.instruction(&format!("b {}", done_label));                          // return the boxed Throwable method result
     emit_builtin_throwable_previous_body(module, emitter, done_label, fail_label);
+    emit_builtin_throwable_location_bodies(module, emitter, done_label, fail_label);
 }
 
 /// Emits x86_64 bodies for compact Throwable methods used by eval.
@@ -1343,6 +1352,36 @@ fn emit_x86_64_builtin_throwable_method_bodies(
     emitter.instruction("call __rt_mixed_from_value");                          // box the Throwable code as a Mixed integer
     emitter.instruction(&format!("jmp {}", done_label));                        // return the boxed Throwable method result
     emit_builtin_throwable_previous_body(module, emitter, done_label, fail_label);
+    emit_builtin_throwable_location_bodies(module, emitter, done_label, fail_label);
+}
+
+/// Materializes runtime-aware Throwable location results for opaque eval method calls.
+fn emit_builtin_throwable_location_bodies(
+    module: &Module,
+    emitter: &mut Emitter,
+    done_label: &str,
+    fail_label: &str,
+) {
+    for file in [true, false] {
+        emitter.label(if file { "__elephc_eval_throwable_file" } else { "__elephc_eval_throwable_line" });
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+                emitter.instruction("ldr x0, [sp, #16]");                       // reload the Throwable receiver for location access
+            }
+            Arch::X86_64 => {
+                emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+                emitter.instruction("mov rax, QWORD PTR [rbp - 24]");           // reload the Throwable receiver for location access
+            }
+        }
+        abi::emit_call_label(emitter, if file { "__rt_throwable_get_file" } else { "__rt_throwable_get_line" });
+        if file {
+            crate::codegen::emit_box_current_owned_value_as_mixed(emitter, &PhpType::Str);
+        } else {
+            crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Int);
+        }
+        abi::emit_jump(emitter, done_label);
+    }
 }
 
 /// Boxes a borrowed previous link independently so retiring the outer exception cannot invalidate it.
@@ -2119,7 +2158,7 @@ fn emit_aarch64_cast_eval_arg(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match param_ty.codegen_repr() {
-        PhpType::Int => {
+        PhpType::Int | PhpType::Pointer(_) => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for integer coercion
             emitter.instruction("bl __rt_mixed_cast_int");                      // coerce the eval argument to a PHP int
         }
@@ -2194,6 +2233,14 @@ fn emit_aarch64_cast_eval_object_arg(
     class_name: &str,
     fail_label: &str,
 ) {
+    if class_name.is_empty() {
+        emitter.instruction("ldr x0, [x29, #-16]");                             // a generic object hint needs only the runtime object tag
+        emitter.instruction("bl __rt_mixed_unbox");                             // expose the borrowed object payload
+        emitter.instruction("cmp x0, #6");                                      // scalars and null do not satisfy object
+        emitter.instruction(&format!("b.ne {}", fail_label));                   // reject a non-object argument
+        emitter.instruction("mov x0, x1");                                      // pass the native object pointer
+        return;
+    }
     let (label, len) = data.add_string(class_name.as_bytes());
     let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for object type validation
@@ -2290,7 +2337,7 @@ fn emit_x86_64_cast_eval_arg(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match param_ty.codegen_repr() {
-        PhpType::Int => {
+        PhpType::Int | PhpType::Pointer(_) => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for integer coercion
             emitter.instruction("call __rt_mixed_cast_int");                    // coerce the eval argument to a PHP int
         }
@@ -2364,6 +2411,14 @@ fn emit_x86_64_cast_eval_object_arg(
     class_name: &str,
     fail_label: &str,
 ) {
+    if class_name.is_empty() {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // a generic object hint needs only the runtime object tag
+        emitter.instruction("call __rt_mixed_unbox");                           // expose the borrowed object payload
+        emitter.instruction("cmp rax, 6");                                      // scalars and null do not satisfy object
+        emitter.instruction(&format!("jne {}", fail_label));                    // reject a non-object argument
+        emitter.instruction("mov rax, rdi");                                    // pass the native object pointer
+        return;
+    }
     let (label, len) = data.add_string(class_name.as_bytes());
     let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for object type validation

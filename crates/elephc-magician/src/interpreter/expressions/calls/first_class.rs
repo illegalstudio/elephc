@@ -10,26 +10,26 @@
 
 use super::*;
 
-/// Resolves a first-class function callable name with PHP namespace fallback rules.
+/// Resolves first-class functions case-insensitively while retaining source names for errors.
 pub(in crate::interpreter) fn eval_function_callable_expr(
     name: &str,
     fallback_name: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if eval_function_probe_exists(context, name) {
+    let lookup_name = call_lookup_name(name.trim_start_matches('\\'));
+    if eval_function_probe_exists(context, &lookup_name) || generic_function_is_callable(&lookup_name, context) {
         return eval_closure_object_expr(
-            EvalClosureObjectTarget::Named(name.trim_start_matches('\\').to_ascii_lowercase()),
+            EvalClosureObjectTarget::Named(lookup_name.into_owned()),
             context,
             values,
         );
     }
     if let Some(fallback_name) = fallback_name {
-        if eval_function_probe_exists(context, fallback_name) {
+        let fallback_lookup_name = call_lookup_name(fallback_name.trim_start_matches('\\'));
+        if eval_function_probe_exists(context, &fallback_lookup_name) || generic_function_is_callable(&fallback_lookup_name, context) {
             return eval_closure_object_expr(
-                EvalClosureObjectTarget::Named(
-                    fallback_name.trim_start_matches('\\').to_ascii_lowercase(),
-                ),
+                EvalClosureObjectTarget::Named(fallback_lookup_name.into_owned()),
                 context,
                 values,
             );

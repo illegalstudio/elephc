@@ -1,8 +1,6 @@
 ---
 title: "array_udiff()"
 description: "Returns entries from the first of exactly two arrays whose values are absent from the second according to an integer-cast callback comparator, preserving keys."
-sidebar:
-  order: 41
 ---
 
 ## array_udiff()
@@ -22,8 +20,9 @@ Returns entries from the first of exactly two arrays whose values are absent fro
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

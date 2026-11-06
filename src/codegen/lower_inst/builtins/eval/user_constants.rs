@@ -221,7 +221,7 @@ mod tests {
                 false,
                 None,
             );
-            register_eval_native_user_constants(&mut ctx, EVAL_CONTEXT_HANDLE_OFFSET);
+            register_eval_native_user_constants(&mut ctx, EvalContextSource::Symbol("_elephc_eval_inventory_context"));
         }
         emitter.output()
     }

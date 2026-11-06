@@ -32,6 +32,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Same release as RUST_VERSION in .github/docker/ci.Dockerfile. Not `stable`:
+  # a newer rustc must not fail the no-warnings gate unannounced.
+  RUST_TOOLCHAIN: "1.98"
 
 jobs:
   gate:
@@ -132,7 +135,7 @@ jobs:
     needs: gate
     if: needs.gate.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       # One broken target should still leave the other two downloadable; the
       # publish job refuses to ship a partial set.
@@ -140,7 +143,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14  # Apple Silicon runner
+            runner: macos-15  # Apple Silicon runner
           # Same glibc 2.35 generation as `release.yml`, so a nightly runs
           # wherever a release does (Ubuntu 22.04, Debian 12, RHEL 9, ...).
           - target: x86_64-unknown-linux-gnu
@@ -154,6 +157,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       # Patched in the runner's working tree and never committed: `main` keeps
       # the version `release.yml` owns, and a nightly binary still identifies
@@ -209,10 +214,35 @@ jobs:
       # list is guarded by `every_bridge_crate_is_in_the_build_lists`; a bridge
       # missing here ships a compiler that refuses the flag it advertises.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-curl
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-openssl -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-curl -p elephc-zend
 
       - name: Strip binary
         run: strip target/release/elephc
+
+      # The selected green compiler commit may predate the signing action.
+      # Load CI tooling from this workflow's immutable revision in a separate
+      # checkout, keeping the compiler sources on the selected candidate SHA.
+      - name: Load macOS notarization action
+        if: runner.os == 'macOS'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .notarization-ci
+          sparse-checkout: .github/actions/notarize-macos
+          persist-credentials: false
+
+      - name: Sign and notarize macOS binary
+        if: runner.os == 'macOS'
+        timeout-minutes: 40
+        uses: ./.notarization-ci/.github/actions/notarize-macos
+        with:
+          binary: target/release/elephc
+          certificate-p12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          signing-identity: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          apple-id: ${{ secrets.APPLE_ID }}
+          team-id: ${{ secrets.APPLE_TEAM_ID }}
+          app-password: ${{ secrets.APPLE_APP_PASSWORD }}
 
       # Packed by glob rather than by name. `release.yml` needs the explicit
       # list because its Homebrew formula installs the archives one by one, and
@@ -224,6 +254,8 @@ jobs:
       # list instead of adding a third.
       - name: Copy mbstring data notices
         run: |
+          mkdir -p target/release/fileinfo-notices
+          cp crates/elephc-fileinfo/NOTICE.md target/release/fileinfo-notices/
           mkdir -p target/release/mbstring-notices
           cp crates/elephc-mbstring/NOTICE.md target/release/mbstring-notices/
           cp crates/elephc-mbstring/src/unicode/data/LICENSE-UNICODE target/release/mbstring-notices/
@@ -233,13 +265,24 @@ jobs:
         run: |
           cd target/release
           TARBALL="elephc-nightly-${{ matrix.target }}.tar.gz"
-          tar czf "$TARBALL" elephc libelephc_*.a mbstring-notices
+          tar czf "$TARBALL" elephc libelephc_*.a mbstring-notices fileinfo-notices
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
           else
             shasum -a 256 "$TARBALL" > "$TARBALL.sha256"
           fi
           tar tzf "$TARBALL"
+
+      - name: Verify packaged macOS signature
+        if: runner.os == 'macOS'
+        env:
+          TARBALL: target/release/elephc-nightly-${{ matrix.target }}.tar.gz
+        run: |
+          VERIFY_DIR="$(mktemp -d "$RUNNER_TEMP/elephc-signature.XXXXXX")"
+          trap 'rm -rf "$VERIFY_DIR"' EXIT
+          tar xzf "$TARBALL" -C "$VERIFY_DIR" elephc
+          cmp target/release/elephc "$VERIFY_DIR/elephc"
+          codesign --verify --strict --verbose=2 "$VERIFY_DIR/elephc"
 
       - name: Upload nightly artifact
         uses: actions/upload-artifact@v7
@@ -273,7 +316,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-15
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
@@ -300,15 +343,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
 
-      # The probe prepares curl, Oniguruma, PCRE2, and libxml2 in its empty
-      # WORKDIR before force-enabling their packed bridges. This cache is the
-      # default root that native add writes (`~/.cache/elephc/native`), so a
-      # warm runner skips the from-source native rebuilds.
-      - name: Cache managed native curl, mbstring, and XML dependencies
+      # The probe adds every managed native package the packaged binary names in
+      # `--print-capabilities` before force-enabling its packed bridge in an empty
+      # WORKDIR. The cache uses native add's default root
+      # (`~/.cache/elephc/native`), keyed on the catalog and every recipe, so warm
+      # runners skip the from-source native rebuilds.
+      - name: Cache managed native dependencies
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/oniguruma.rs', 'src/native_deps/recipes/oniguruma_shim.c', 'src/native_deps/recipes/oniguruma_shim.h', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/**') }}
           restore-keys: |
             verify-native-${{ matrix.target }}-
 

@@ -31,15 +31,27 @@ pub(super) fn eval_native_property_default(
     is_declared: bool,
     is_abstract: bool,
     default_context: &EvalNativeDefaultContext<'_>,
-) -> Option<EvalNativeCallableDefault> {
+) -> Option<EvalNativePropertyDefault> {
     if let Some(default) = default {
+        if let Some(message) = crate::types::deferred_defaults::unconditional_error_message(default) {
+            return Some(EvalNativePropertyDefault::DeferredError(message.to_string()));
+        }
+        if let Some(value) =
+            crate::codegen::const_default_values::resolve_enum_case_default(default,
+                &crate::codegen::const_default_values::ConstDefaultContext {
+                    module: default_context.module, current_class: default_context.current_class,
+                })
+        {
+            return Some(EvalNativePropertyDefault::EnumCase(value));
+        }
         return eval_native_literal_default(default)
-            .or_else(|| eval_native_array_default(default, default_context, 0));
+            .or_else(|| eval_native_array_default(default, default_context, 0))
+            .map(EvalNativePropertyDefault::Value);
     }
     (!is_declared && !is_abstract).then_some(EvalNativeCallableDefault::Scalar {
         kind: NATIVE_DEFAULT_NULL,
         payload: 0,
-    })
+    }).map(EvalNativePropertyDefault::Value)
 }
 
 /// Encodes an object-valued native callable default for libelephc-magician.
@@ -91,7 +103,7 @@ pub(super) fn encode_eval_native_array_default_element(
         }
         Some(EvalNativeCallableArrayDefaultKey::String(value)) => {
             bytes.push(NATIVE_ARRAY_DEFAULT_KEY_STRING);
-            encode_eval_native_default_string(bytes, value);
+            encode_eval_native_literal_default_string(bytes, value);
         }
         None => bytes.push(NATIVE_ARRAY_DEFAULT_KEY_AUTO),
     }
@@ -116,6 +128,9 @@ pub(super) fn encode_eval_native_object_default_arg_value(
     default: &EvalNativeCallableDefault,
 ) {
     match default {
+        EvalNativeCallableDefault::EnumCase { .. } | EvalNativeCallableDefault::Evaluated { .. } => {
+            unreachable!("enum singletons are excluded from compact callable default metadata")
+        }
         EvalNativeCallableDefault::Scalar { kind, payload } => {
             bytes.push(NATIVE_OBJECT_DEFAULT_ARG_SCALAR);
             bytes.extend_from_slice(&(*kind as u64).to_le_bytes());
@@ -123,7 +138,7 @@ pub(super) fn encode_eval_native_object_default_arg_value(
         }
         EvalNativeCallableDefault::String(value) => {
             bytes.push(NATIVE_OBJECT_DEFAULT_ARG_STRING);
-            encode_eval_native_default_string(bytes, value);
+            encode_eval_native_literal_default_string(bytes, value);
         }
         EvalNativeCallableDefault::Object { .. } => {
             bytes.push(NATIVE_OBJECT_DEFAULT_ARG_OBJECT);
@@ -141,4 +156,12 @@ pub(super) fn encode_eval_native_default_string(bytes: &mut Vec<u8>, value: &str
     let len = u32::try_from(value.len()).unwrap_or(u32::MAX);
     bytes.extend_from_slice(&len.to_le_bytes());
     bytes.extend_from_slice(value.as_bytes());
+}
+
+/// Encodes PHP literal bytes while ordinary class and argument names retain their UTF-8 codec.
+fn encode_eval_native_literal_default_string(bytes: &mut Vec<u8>, value: &str) {
+    let value = elephc_builtin_contract::string_literal::literal_bytes(value);
+    let len = u32::try_from(value.len()).unwrap_or(u32::MAX);
+    bytes.extend_from_slice(&len.to_le_bytes());
+    bytes.extend_from_slice(&value);
 }

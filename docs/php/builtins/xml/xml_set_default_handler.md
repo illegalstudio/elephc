@@ -1,8 +1,6 @@
 ---
 title: "xml_set_default_handler()"
 description: "Sets the default handler that receives everything no other handler claims."
-sidebar:
-  order: 1016
 ---
 
 ## xml_set_default_handler()
@@ -21,8 +19,9 @@ Sets the default handler that receives everything no other handler claims.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xml_set_default_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xml_set_default_handler.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

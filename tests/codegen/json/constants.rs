@@ -10,8 +10,7 @@
 
 use super::*;
 
-/// Verifies every JSON_* integer constant exposed by the runtime resolves to the PHP-spec
-/// value. Merges 12 former one-line tests into one compile/link/run cycle.
+/// Verifies JSON option constants resolve to their PHP integer values.
 #[test]
 fn test_json_all_int_constants() {
     let out = compile_and_run(
@@ -21,6 +20,7 @@ echo JSON_UNESCAPED_SLASHES . "\n";
 echo JSON_THROW_ON_ERROR . "\n";
 echo JSON_FORCE_OBJECT . "\n";
 echo JSON_UNESCAPED_UNICODE . "\n";
+echo JSON_UNESCAPED_LINE_TERMINATORS . "\n";
 echo JSON_OBJECT_AS_ARRAY . "\n";
 echo JSON_BIGINT_AS_STRING . "\n";
 echo JSON_INVALID_UTF8_IGNORE . "\n";
@@ -33,7 +33,7 @@ echo JSON_ERROR_NONE;
     );
     assert_eq!(
         out,
-        "128\n64\n4194304\n16\n256\n1\n2\n1048576\n2097152\n512\n1024\n32\n0",
+        "128\n64\n4194304\n16\n256\n2048\n1\n2\n1048576\n2097152\n512\n1024\n32\n0",
     );
 }
 
@@ -47,8 +47,7 @@ fn test_json_hex_family_constants() {
     assert_eq!(out, "1,2,4,8");
 }
 
-/// Verifies all JSON_ERROR_* depth/state/UTF constants resolve to their PHP code values.
-/// Merges 10 former one-line tests into one compile/link/run cycle.
+/// Verifies all nonzero JSON_ERROR_* constants resolve to their PHP error codes.
 #[test]
 fn test_json_error_codes_sequence() {
     let out = compile_and_run(
@@ -62,10 +61,11 @@ echo JSON_ERROR_RECURSION . ",";
 echo JSON_ERROR_INF_OR_NAN . ",";
 echo JSON_ERROR_UNSUPPORTED_TYPE . ",";
 echo JSON_ERROR_INVALID_PROPERTY_NAME . ",";
-echo JSON_ERROR_UTF16;
+echo JSON_ERROR_UTF16 . ",";
+echo JSON_ERROR_NON_BACKED_ENUM;
 "#,
     );
-    assert_eq!(out, "1,2,3,4,5,6,7,8,9,10");
+    assert_eq!(out, "1,2,3,4,5,6,7,8,9,10,11");
 }
 
 /// Verifies JSON constant values combine with bitwise OR to produce the expected sum.
@@ -77,12 +77,9 @@ fn test_json_constants_compose_with_or() {
     assert_eq!(out, "448");
 }
 
-/// Verifies JSON constants resolve to their integer values when used as function call
-/// arguments, even though json_encode currently ignores flags.
+/// Verifies JSON constants resolve when stored in variables and used in arithmetic.
 #[test]
 fn test_json_constants_in_function_call_argument() {
-    // Even though json_encode currently ignores flags, the constant must
-    // resolve to its int value when passed as an argument.
     let out = compile_and_run(
         "<?php $f = JSON_PRETTY_PRINT; echo $f + JSON_UNESCAPED_SLASHES;",
     );

@@ -1228,6 +1228,29 @@ echo $f(), $bound(), $f();
     assert_eq!(out, "7997");
 }
 
+/// Both bind spellings retain the new receiver after its source variable is unset.
+#[test]
+fn test_closure_bind_retains_receiver_after_unset_with_clean_heap() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class BoundOwner {
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+    public function getter() { return function() { return $this->v; }; }
+}
+$original = new BoundOwner(7);
+$getter = $original->getter();
+$receiver = new BoundOwner(99);
+$first = $getter->bindTo($receiver);
+$second = Closure::bind($getter, $receiver);
+unset($receiver);
+echo $first(), "|", $second(), "|", $getter();
+unset($first, $second, $getter, $original);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "99|99|7");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies the static `Closure::bind($closure, $newThis)` form rebinds `$this`.
 #[test]
 fn test_closure_bind_static_form() {
@@ -2376,4 +2399,248 @@ $k(2.5);
             "NULL\nfloat(2.5)\n",
         )
     );
+}
+
+
+/// A temporary passed to a CLOSURE must be released by the call, exactly as one passed to a
+/// named function, a method or a static method already was.
+///
+/// `release_owned_call_arg_temporaries` is called from every other call lowering; the
+/// static-callable closure arm never called it. The argument therefore outlived the call and its
+/// destructor never ran — observable php semantics, not merely a leak:
+///
+/// ```php
+/// $f = fn($a) => 7;
+/// $f(new D());   // php prints the destructor here; elephc printed nothing
+/// ```
+///
+/// The same closure RETURNING its parameter was always correct, because returning hands the
+/// value out as the result for the caller to release — which is what masked this.
+#[test]
+fn test_temporary_passed_to_a_closure_is_destroyed_by_the_call() {
+    let out = compile_and_run(
+        r#"<?php
+class D { public function __destruct() { echo "d"; } }
+$f = fn($a) => 7;
+$g = function ($a) { return 7; };
+$keep = fn($a) => $a;
+echo "[";
+$f(new D());
+echo "|";
+$g(new D());
+echo "|";
+$keep(new D());
+echo "]";
+"#,
+    );
+    assert_eq!(out, "[d|d|d]");
+}
+
+/// The capture operands appended after the arguments belong to the closure, not to the call, so
+/// releasing the arguments must not reach them: a captured object stays alive across calls and is
+/// destroyed once, when the closure itself goes.
+#[test]
+fn test_closure_captures_survive_releasing_the_call_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class D {
+    public $tag;
+    public function __construct($tag) { $this->tag = $tag; }
+    public function __destruct() { echo $this->tag; }
+}
+$held = new D("H");
+$f = function ($a) use ($held) { return 1; };
+echo "[";
+$f(new D("1"));
+$f(new D("2"));
+echo "]";
+"#,
+    );
+    assert_eq!(out, "[12]H");
+}
+
+
+/// A temporary passed to a closure through the DESCRIPTOR INVOKER — which is what a call inside
+/// any loop, and every builtin callback, uses — must be released once the callee returns.
+///
+/// The invoker increfs each by-value argument on the callee's behalf and nothing released it, so
+/// the argument outlived the call and its destructor never ran. Straight-line calls resolve the
+/// callee statically and take a different path, which is why this needs the loop.
+#[test]
+fn test_temporary_passed_through_the_descriptor_invoker_is_destroyed() {
+    let out = compile_and_run(
+        r#"<?php
+class D { public $t; public function __construct($t) { $this->t = $t; } public function __destruct() { echo $this->t; } }
+$f = fn($a) => 7;
+echo "[";
+for ($i = 1; $i <= 3; $i++) { $f(new D($i)); }
+echo "]";
+"#,
+    );
+    assert_eq!(out, "[123]");
+}
+
+/// The one case a blanket release would break: a callee that HANDS THE ARGUMENT BACK.
+///
+/// There the invoker's retained reference is exactly what makes the result owned, so releasing it
+/// would free a live value — measured, removing the retain outright fails this with
+/// `heap debug detected bad refcount`. The release is skipped when the result IS that argument.
+#[test]
+fn test_closure_returning_its_argument_keeps_it_alive_through_the_invoker() {
+    let out = compile_and_run(
+        r#"<?php
+class D { public $t; public function __construct($t) { $this->t = $t; } public function __destruct() { echo $this->t; } }
+$keep = fn($a) => $a;
+echo "[";
+for ($i = 1; $i <= 2; $i++) {
+    $held = $keep(new D($i));
+    echo "-";
+}
+echo "]";
+"#,
+    );
+    assert_eq!(out, "[-1-]2");
+}
+
+/// One reference per callback invocation is what `array_filter`, `array_map` and `usort` were
+/// each losing — three blocks per call on a three-element array, eight per `usort`. At this scale
+/// a single leaked reference per invocation would be unmissable.
+#[test]
+fn test_callback_builtins_do_not_leak_a_reference_per_invocation() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [4, 1, 3, 2];
+$n = 0;
+for ($i = 0; $i < 200; $i++) {
+    $n += count(array_filter($a, fn($x) => $x > 1));
+    $n += count(array_map(fn($x) => $x + 1, $a));
+    $b = [3, 1, 2];
+    usort($b, fn($x, $y) => $x <=> $y);
+    $n += count($b);
+}
+echo $n;
+"#,
+    );
+    assert_eq!(out.stdout, "2000", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+
+/// The invoker's post-call argument releases must not run while the result is still a REGISTER PAIR.
+///
+/// Every release is a call, and a call preserves nothing. Only a counted pointer fits in the
+/// integer result register: a `Str` travels as a pointer/length pair (x1/x2 on aarch64, rax/rdx on
+/// x86_64) and a `Float` in its own register, so whatever half is not saved is left to whatever the
+/// release helper happened to leave behind.
+///
+/// The invoker answers this by ORDER rather than by saving: `emit_boxed_invoker_return` turns the
+/// result into one Mixed cell pointer, and only then does `InvokerArgumentOwners::finish_return`
+/// run the releases — which save that single pointer through a frame slot. So the assertion is the
+/// order: the boxing allocation precedes the first release call. Flip the two and a string result
+/// is back to crossing a call as a pair.
+///
+/// It does not corrupt today only because the reachable release helpers are register-frugal —
+/// `__rt_decref_array` touches x0 and x9..x11 and returns without calling anything while the
+/// refcount stays positive — which is an accident of their bodies, not a contract. The zero-count
+/// path tail-calls `__rt_array_free_deep`, which is not frugal.
+#[test]
+fn test_invoker_preserves_a_string_result_across_retained_argument_releases() {
+    let source = r#"<?php
+$f = function (array $r) { return "n" . count($r); };
+$a = call_user_func_array($f, [[1, 2, 3]]);
+$b = call_user_func_array($f, [[4, 5]]);
+echo $a, "|", $b, "|", strlen($a), strlen($b);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "n3|n2|22");
+
+    let dir = make_cli_test_dir("elephc_invoker_string_result_release");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let invoker = user_asm
+        .split("runtime callable invoker")
+        .nth(1)
+        .unwrap_or("")
+        .to_string();
+    let boxing = invoker
+        .find("__rt_heap_alloc")
+        .unwrap_or_else(|| panic!("the invoker must box its result:\n{}", invoker));
+    let release = invoker
+        .find("__rt_decref_any")
+        .unwrap_or_else(|| panic!("the invoker must release its retained arguments:\n{}", invoker));
+    assert!(
+        boxing < release,
+        "the invoker must box the string result into one Mixed pointer BEFORE the \
+         retained-argument releases run; boxing at {} follows the first release at {}:\n{}",
+        boxing,
+        release,
+        invoker
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// A capture-free arrow closure passed to `array_map()` uses the direct callback entry path,
+/// while a capturing closure and an explicitly typed closure keep the descriptor path. All
+/// three must produce identical elements.
+#[test]
+fn test_array_map_capture_free_and_capturing_callbacks_match() {
+    let out = compile_and_run(
+        r#"<?php
+$a = range(1, 10);
+$k = 5;
+echo implode(",", array_map(fn($x) => $x + 1, $a)), "|",
+     implode(",", array_map(fn($x) => $x + $k, $a)), "|",
+     implode(",", array_map(fn(int $x): int => $x * 2, $a)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2,3,4,5,6,7,8,9,10,11|6,7,8,9,10,11,12,13,14,15|2,4,6,8,10,12,14,16,18,20\n"
+    );
+}
+
+/// Verifies an untyped arrow fn passed to a `callable` parameter accepts a string argument and
+/// feeds it to a string builtin: an untyped parameter is `mixed`, never an `int` placeholder.
+#[test]
+fn test_untyped_arrow_fn_callable_param_string_arg() {
+    let out = compile_and_run(
+        r#"<?php
+function apply_cb(callable $cb, string $key): mixed {
+    return $cb($key);
+}
+echo apply_cb(fn($key) => strlen($key), "abcd"), "\n";
+"#,
+    );
+    assert_eq!(out, "4\n");
+}
+
+/// Verifies an untyped closure stored in a variable can be called with a string and with an int.
+#[test]
+fn test_untyped_closure_variable_string_and_int_args() {
+    let out = compile_and_run(
+        r#"<?php
+function apply_cb(callable $cb, string $key): mixed {
+    return $cb($key);
+}
+$f = function ($k) { return strtoupper($k) . "!"; };
+echo apply_cb($f, "ab"), "\n";
+echo $f(12), "\n";
+"#,
+    );
+    assert_eq!(out, "AB!\n12!\n");
+}
+
+/// Verifies array_map with an untyped arrow fn over strings keeps working with string builtins.
+#[test]
+fn test_untyped_arrow_fn_array_map_over_strings() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", array_map(fn($s) => str_pad($s, 3, "*"), ["a", "bb"])), "\n";
+"#,
+    );
+    assert_eq!(out, "a**,bb*\n");
 }

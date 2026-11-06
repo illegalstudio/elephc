@@ -49,6 +49,15 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let class_name = class_name.to_string();
+        // `new Box(5)` on a generic class, BEFORE the unknown-class check below: a template is
+        // stripped from the program, so the class table has no entry for it and the ordinary
+        // path would report it as undefined. Written arguments never reach here — those were
+        // already rewritten to the instantiated class by `generics::classes`.
+        if let Some(instantiated) =
+            self.infer_generic_construction(&class_name, args, expr, env)?
+        {
+            return Ok(instantiated);
+        }
         if self.enums.contains_key(class_name.as_str()) {
             return Err(CompileError::new(
                 expr.span,
@@ -706,7 +715,8 @@ impl Checker {
             ));
         }
         match &arg.kind {
-            ExprKind::StringLiteral(name) => Ok(ReflectionParameterSelector::Name(name.clone())),
+            ExprKind::StringLiteral(name) => Ok(ReflectionParameterSelector::Name(
+                crate::names::literal_symbol_name(name).unwrap_or_else(|| name.clone()))),
             ExprKind::IntLiteral(position) => Ok(ReflectionParameterSelector::Position(*position)),
             _ => Err(CompileError::new(
                 arg.span,
@@ -779,7 +789,8 @@ impl Checker {
             ));
         }
         let raw_class_name = match &arg.kind {
-            ExprKind::StringLiteral(class_name) => class_name.clone(),
+            ExprKind::StringLiteral(class_name) => crate::names::literal_symbol_name(class_name)
+                .unwrap_or_else(|| class_name.clone()),
             ExprKind::ClassConstant { receiver } => {
                 self.resolve_reflection_class_constant(receiver, arg.span)?
             }
@@ -830,7 +841,8 @@ impl Checker {
             ));
         }
         match &arg.kind {
-            ExprKind::StringLiteral(value) => Ok(value.clone()),
+            ExprKind::StringLiteral(value) => Ok(crate::names::literal_symbol_name(value)
+                .unwrap_or_else(|| value.clone())),
             _ => Err(CompileError::new(
                 arg.span,
                 &format!(
@@ -850,7 +862,16 @@ impl Checker {
         receiver: &StaticReceiver,
         span: crate::span::Span,
     ) -> Result<String, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(name) => Ok(name.as_canonical()),
             StaticReceiver::Self_ | StaticReceiver::Static => {
                 self.current_class.clone().ok_or_else(|| {
@@ -1085,7 +1106,16 @@ impl Checker {
         receiver: &StaticReceiver,
         span: crate::span::Span,
     ) -> Result<String, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(class_name) => self
                 .resolve_fiber_callable_class_name(class_name.as_str())
                 .map(str::to_string)

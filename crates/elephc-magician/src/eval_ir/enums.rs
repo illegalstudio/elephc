@@ -10,7 +10,7 @@
 use super::*;
 
 /// Runtime enum declared by an eval fragment.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalEnum {
     name: String,
     source_location: Option<EvalSourceLocation>,
@@ -102,6 +102,14 @@ impl EvalEnum {
         }
     }
 
+    /// Replaces interface and trait references with their concrete specializations.
+    pub(crate) fn with_relations(mut self, interfaces: Vec<String>, traits: Vec<String>, adaptations: Vec<EvalTraitAdaptation>) -> Self {
+        self.interfaces = interfaces;
+        self.traits = traits;
+        self.trait_adaptations = adaptations;
+        self
+    }
+
     /// Returns a copy of this enum with source-location metadata attached.
     pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
         self.source_location = Some(source_location);
@@ -189,14 +197,14 @@ impl EvalEnum {
 }
 
 /// Scalar backing type for a runtime eval enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalEnumBackingType {
     Int,
     String,
 }
 
 /// One case declared by a runtime eval enum.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalEnumCase {
     name: String,
     attributes: Vec<EvalAttribute>,

@@ -1,8 +1,6 @@
 ---
 title: "is_finite()"
 description: "Checks whether a float is finite."
-sidebar:
-  order: 582
 ---
 
 ## is_finite()
@@ -20,8 +18,9 @@ Checks whether a float is finite.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_finite.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_finite.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

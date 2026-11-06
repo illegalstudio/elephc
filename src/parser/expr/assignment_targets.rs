@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `crate::parser::expr::pratt` when parsing assignment expressions.
+//! - `crate::synthetic_class::e_assign()` when building equivalent internal expressions.
 //!
 //! Key details:
 //! - Target dependencies are tracked so PHP evaluation order is preserved during lowering.
@@ -13,9 +14,87 @@ use std::collections::HashSet;
 use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::stmt::{
     can_replay_assignment_target, lower_postfix_incdec_assignment,
-    update_index_needs_snapshot,
+    update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 use crate::span::Span;
+
+/// Recognizes property and indexed traversal rooted in a delayed static-property load.
+pub(super) fn static_property_receiver_chain(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. } => static_property_receiver_chain(object),
+        ExprKind::ArrayAccess { array, .. } => static_property_receiver_chain(array),
+        _ => false,
+    }
+}
+
+/// Recognizes writes whose static owner must be fetched after the RHS settles.
+pub(super) fn delayed_static_assignment_target(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. } => static_property_receiver_chain(object),
+        ExprKind::ArrayAccess { array, .. } => delayed_static_assignment_target(array),
+        _ => false,
+    }
+}
+
+/// Builds a plain assignment with the same capture and result rules for parsed and built ASTs.
+pub(crate) fn plain_assignment_expression(target: Expr, value: Expr, span: Span) -> Expr {
+    if !is_non_local_assignment_target(&target) {
+        return Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(target),
+                value: Box::new(value),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            span,
+        );
+    }
+    let mut lowerer = AssignmentExpressionLowerer::new(span);
+    let target = lowerer.stabilize_non_local_target(target, &value);
+    // A syntactically replayable property read can still call a hook that replaces the owner.
+    // Capture it after computed dimensions, before either the write or result uses it.
+    let value = if delayed_static_assignment_target(&target) {
+        lowerer.bind_result_value(value)
+    } else {
+        lowerer.bind_value(&target, value)
+    };
+    Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(target),
+            value: Box::new(value.clone()),
+            result_target: Some(Box::new(value)),
+            prelude: lowerer.finish(),
+            conditional_value_temp: None,
+        },
+        span,
+    )
+}
+
+/// Builds a compound expression whose captured dimensions are shared by its read and write.
+pub(crate) fn compound_assignment_expression(target: Expr, op: BinOp, rhs: Expr, span: Span) -> Expr {
+    let mut lowerer = AssignmentExpressionLowerer::new(span);
+    let target = lowerer.stabilize_non_local_target(target, &rhs);
+    let rhs = if delayed_static_assignment_target(&target) {
+        lowerer.bind_result_value(rhs)
+    } else {
+        lowerer.bind_value(&target, rhs)
+    };
+    let target = lowerer.snapshot_update_dimension(target);
+    let value = Expr::new(ExprKind::BinaryOp {
+        left: Box::new(target.clone()), op, right: Box::new(rhs),
+    }, span);
+    let result = lowerer.bind_result_value(value);
+    Expr::new(ExprKind::Assignment {
+        target: Box::new(target), value: Box::new(result.clone()),
+        result_target: Some(Box::new(result)), prelude: lowerer.finish(),
+        conditional_value_temp: None,
+    }, span)
+}
 
 /// Desugars `++$place` / `$place++` into a read-modify-write an expression can carry.
 ///
@@ -55,8 +134,17 @@ pub(super) fn desugar_lvalue_incdec(
         return None;
     }
     let mut prelude = lowerer.finish();
+    // Capture one-dimensional elements once, including the expression result, so neither
+    // prefix nor postfix needs another key diagnosis. Static elements use the PHP local
+    // incdec kernel; local and instance-property numeric lowering stays unchanged below.
     if let ExprKind::ArrayAccess { array, .. } = &target.kind {
-        if matches!(&array.kind, ExprKind::Variable(_)) {
+        if matches!(
+            &array.kind,
+            ExprKind::Variable(_)
+                | ExprKind::PropertyAccess { .. }
+                | ExprKind::DynamicPropertyAccess { .. }
+                | ExprKind::StaticPropertyAccess { .. }
+        ) {
             let old_name = crate::names::generated_local_name(&format!(
                 "__elephc_incdec_old_{}_{}", span.line, span.col
             ));
@@ -67,6 +155,23 @@ pub(super) fn desugar_lvalue_incdec(
                 name: old_name.clone(),
                 value: target.clone(),
             }, span));
+            if matches!(array.kind, ExprKind::StaticPropertyAccess { .. }) {
+                let operation = match (increment, prefix) {
+                    (true, true) => ExprKind::PreIncrement(old_name.clone()),
+                    (true, false) => ExprKind::PostIncrement(old_name.clone()),
+                    (false, true) => ExprKind::PreDecrement(old_name.clone()),
+                    (false, false) => ExprKind::PostDecrement(old_name.clone()),
+                };
+                prelude.push(Stmt::new(StmtKind::Assign {
+                    name: new_name.clone(), value: Expr::new(operation, span),
+                }, span));
+                return Some(Expr::new(ExprKind::Assignment {
+                    target: Box::new(target),
+                    value: Box::new(Expr::new(ExprKind::Variable(old_name), span)),
+                    result_target: Some(Box::new(Expr::new(ExprKind::Variable(new_name), span))),
+                    prelude, conditional_value_temp: None,
+                }, span));
+            }
             let old_value = Expr::new(ExprKind::Variable(old_name.clone()), span);
             let next_value = Expr::new(ExprKind::BinaryOp {
                 left: Box::new(old_value),
@@ -87,11 +192,17 @@ pub(super) fn desugar_lvalue_incdec(
             }, span));
         }
     }
-    let write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
+    let mut write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
     let value = if prefix {
-        // `++$p` evaluates to the NEW value, which re-reading the target after the write gives.
+        // Nested static incdec already captures its new value. Re-reading the place
+        // would diagnose converted keys twice and could observe a handler's replacement.
+        let captured = nested_incdec_result(&mut write, true);
         prelude.push(write);
-        target
+        captured.unwrap_or(target)
+    } else if let Some(captured) = nested_incdec_result(&mut write, false) {
+        // The write-context lookup creates missing parents and diagnoses each key once.
+        prelude.push(write);
+        captured
     } else {
         // `$p++` evaluates to the OLD value, so it has to be captured before the write.
         let temp = crate::names::generated_local_name(&format!(
@@ -122,6 +233,32 @@ pub(super) fn desugar_lvalue_incdec(
         },
         span,
     ))
+}
+
+/// Selects a nested update's capture without re-reading the place or mutating its old result.
+fn nested_incdec_result(write: &mut Stmt, prefix: bool) -> Option<Expr> {
+    let value = match &mut write.kind {
+        StmtKind::NestedArrayAssign { value, .. } => value,
+        StmtKind::Synthetic(statements) => return nested_incdec_result(statements.last_mut()?, prefix),
+        _ => return None,
+    };
+    let ExprKind::Assignment { target, value: operation, prelude, .. } = &mut value.kind else { return None; };
+    if prefix { return Some(target.as_ref().clone()); }
+    let StmtKind::Assign { name, .. } = &prelude.first()?.kind else { return None; };
+    let old = name.clone();
+    let working = crate::names::generated_local_name(&format!(
+        "__elephc_incdec_work_{}_{}", value.span.line, value.span.col));
+    let local = match &mut operation.kind {
+        ExprKind::PreIncrement(local) | ExprKind::PreDecrement(local) if *local == old => local,
+        _ => return None,
+    };
+    // Generic property roots execute this AST prelude, unlike specialized array roots.
+    // Mutating a separate working local preserves the postfix result on both paths.
+    *local = working.clone();
+    prelude.push(Stmt::new(StmtKind::Assign {
+        name: working, value: Expr::new(ExprKind::Variable(old.clone()), value.span),
+    }, value.span));
+    Some(Expr::new(ExprKind::Variable(old), value.span))
 }
 
 /// Returns true if the expression is a non-local assignment target (array-access,
@@ -194,12 +331,15 @@ impl AssignmentExpressionLowerer {
         self.stabilize_assignment_target(target, rhs)
     }
 
-    /// Captures a variable-rooted array index for both halves of an update.
+    /// Captures a mutable index for both halves of an update.
+    ///
+    /// Covers one dimension of a local, property, or static-property array, so the write lands
+    /// on the key its read converted even when a diagnostic handler reassigns the index variable.
     pub(super) fn snapshot_update_dimension(&mut self, target: Expr) -> Expr {
         let span = target.span;
         match target.kind {
             ExprKind::ArrayAccess { array, index }
-                if matches!(&array.kind, ExprKind::Variable(_)) =>
+                if update_dimension_base_is_snapshotted(&array) =>
             {
                 let index = if update_index_needs_snapshot(&index) {
                     self.bind_temp(*index)
@@ -260,6 +400,16 @@ impl AssignmentExpressionLowerer {
                         ExprKind::PropertyAccess {
                             object: Box::new(self.stabilize_receiver(*object, rhs)),
                             property,
+                        },
+                        array_span,
+                    ),
+                    Expr {
+                        kind: ExprKind::DynamicPropertyAccess { object, property },
+                        span: array_span,
+                    } => Expr::new(
+                        ExprKind::DynamicPropertyAccess {
+                            object: Box::new(self.stabilize_receiver(*object, rhs)),
+                            property: Box::new(self.stabilize_dimension_index(*property, rhs)),
                         },
                         array_span,
                     ),
@@ -557,6 +707,7 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::PostDecrement(_)
         | ExprKind::ConstRef(_)
         | ExprKind::NewObject { .. }
+        | ExprKind::NewGeneric { .. }
         | ExprKind::NewDynamic { .. }
         | ExprKind::NewDynamicObject { .. }
         | ExprKind::StaticPropertyAccess { .. }
@@ -705,7 +856,9 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
                         || expr_may_write_dependency(arg, dependencies)
                 })
         }
-        ExprKind::NewObject { args, .. } | ExprKind::NewScopedObject { args, .. } => {
+        ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
+        | ExprKind::NewScopedObject { args, .. } => {
             args.iter().any(|arg| {
                 expr_contains_dependency(arg, dependencies)
                     || expr_may_write_dependency(arg, dependencies)
@@ -800,6 +953,7 @@ fn instanceof_target_may_write_dependency(
 ) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_may_write_dependency(expr, dependencies),
     }
 }
@@ -876,6 +1030,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
             args.iter().any(|arg| expr_contains_equivalent(arg, needle))
         }
@@ -979,6 +1134,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
 fn instanceof_target_contains_equivalent(target: &InstanceOfTarget, needle: &Expr) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_contains_equivalent(expr, needle),
     }
 }

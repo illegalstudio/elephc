@@ -102,24 +102,33 @@ if (is_array($order)) { echo implode(",", $order), "\n"; }
 /// Does not retain one copied entry or temporary cast result per repeated list update.
 #[test]
 fn test_mbstring_detect_order_entry_ownership() {
-    for eval in [false, true] {
-        let mut residual = Vec::new();
-        for count in [1, 24] {
-            let calls = "mb_detect_order($list);\n".repeat(count);
-            let source = program(&format!(r#"
+    check_detection_entry_ownership(false);
+}
+
+/// Verifies eval entry ownership without sharing the native fixture's timeout.
+#[test]
+fn test_mbstring_detect_order_entry_ownership_eval() {
+    check_detection_entry_ownership(true);
+}
+
+/// Compares encoding-list entry residuals at both repetition counts in one mode.
+fn check_detection_entry_ownership(eval: bool) {
+    let mut residual = Vec::new();
+    for count in [1, 24] {
+        let calls = "mb_detect_order($list);\n".repeat(count);
+        let source = program(&format!(r#"
 class DetectionOwned {{ public function __toString(): string {{ return "UTF-8"; }} }}
 $list = ["ASCII", new DetectionOwned()];
 {calls}
 echo "done";
 "#), eval, false);
-            let output = compile_and_run_with_gc_stats(&source);
-            assert!(output.success, "{}", output.stderr);
-            assert_eq!(output.stdout, "done");
-            let (allocated, freed) = parse_gc_stats(&output.stderr);
-            residual.push(allocated as i64 - freed as i64);
-        }
-        assert_eq!(residual[0], residual[1], "encoding-list entry ownership grew; eval={eval}");
+        let output = compile_and_run_with_gc_stats(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, "done");
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        residual.push(allocated as i64 - freed as i64);
     }
+    assert_eq!(residual[0], residual[1], "encoding-list entry ownership grew; eval={eval}");
 }
 
 /// Casts ordinary list entries without scalar-parameter restrictions and preserves resource aliases.

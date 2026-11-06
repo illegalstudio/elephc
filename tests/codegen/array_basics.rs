@@ -1751,3 +1751,150 @@ var_dump(isset($neverIndexed["k"]));
     );
     assert_eq!(out, "bool(false)\n");
 }
+
+
+/// Four string writes into an array that started empty must stay inside its own buffer.
+///
+/// `__rt_array_new` sizes an `array<never>` for EIGHT-byte slots, because the element type is
+/// not known yet. The first string write widens the slot to SIXTEEN bytes in the header and used
+/// to leave `capacity` behind at its old count, so the array claimed twice the buffer it owned
+/// and the grow check did not fire until index 4. Index 3 therefore wrote 16 bytes past the end,
+/// straight into the payload of the string allocated right after the array — slot 0's own value,
+/// which read back as two garbage bytes while `strlen` still answered 2.
+///
+/// `__rt_array_push_str` already restated the capacity in the new unit; `__rt_array_set_str` did
+/// not, which is why `$a[] = …` was correct and `$a[0] = …` was not.
+#[test]
+fn test_four_string_writes_into_an_empty_array_keep_slot_zero() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[0] = "aa"; $a[1] = "bb"; $a[2] = "cc"; $a[3] = "dd";
+echo $a[0], $a[1], $a[2], $a[3], "|", count($a);
+"#,
+    );
+    assert_eq!(out, "aabbccdd|4");
+}
+
+/// The same write pattern across several growths, so the restated capacity is exercised by the
+/// copy in `__rt_array_grow` and not just by the first widening.
+#[test]
+fn test_twenty_string_writes_into_an_empty_array_survive_growth() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 20; $i++) { $a[$i] = "v$i"; }
+echo implode(",", $a), "|", count($a);
+"#,
+    );
+    assert_eq!(
+        out,
+        "v0,v1,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12,v13,v14,v15,v16,v17,v18,v19|20"
+    );
+}
+
+
+/// A declared-array local initialized from ANOTHER local must not rewrite that local's storage.
+///
+/// The storage conversion takes its operand as an owned reference and rewrites the array in place
+/// when it is the only owner — which is what makes it free for a fresh literal. A declaration that
+/// copies a local handed it a borrowed load, so it converted `$source` itself: the elements became
+/// Mixed cells while the slot still read them as ints, and `echo $source[0]` printed a pointer.
+///
+/// All three shapes are pinned together because the fix has to distinguish them: the literal owns
+/// itself and must still convert in place, and the declared-array PROPERTY contract was already
+/// correct and must stay so.
+#[test]
+fn test_declared_array_local_copies_its_source_instead_of_converting_it() {
+    let out = compile_and_run(
+        r#"<?php
+function make(int $n): array { return [$n, 22]; }
+$source = make(11);
+array $copy = $source;
+$copy[0] = 99;
+echo $source[0], ",", $copy[0], "|";
+
+array $literal = [1, 2, 3];
+$literal[0] = 9;
+echo json_encode($literal), "|";
+
+$base = [5, 6];
+array $one = $base;
+array $two = $base;
+$one[0] = 1;
+$two[0] = 2;
+echo $base[0], ",", $one[0], ",", $two[0];
+"#,
+    );
+    assert_eq!(out, "11,99|[9,2,3]|5,1,2");
+}
+
+
+/// A by-reference callback argument must not leak the cell it is marshalled through.
+///
+/// The invoker allocates a 16-byte heap cell per by-reference argument and retains the payload it
+/// stores there. Neither was ever given back: measured as a slope against a matched by-value
+/// control, an `int` parameter leaked one block per call (the cell, which has no heap header for
+/// any typed decref to reclaim) and an `array` parameter two (the cell and the retained payload).
+///
+/// Releasing the stored pointer is correct rather than a guess: the cell is a throwaway —
+/// `call_user_func_array` does not write a by-reference parameter back into the caller's array,
+/// which php warns about and elephc matches — and the callee's write goes through
+/// `store_value_to_ref_cell_as`, which stores raw and never decrefs what it replaces, so the
+/// invoker's reference is still the invoker's to return.
+///
+/// Both payload kinds are measured, because they leak different numbers of blocks.
+#[test]
+fn test_by_reference_callback_argument_leaves_a_clean_heap() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$f = function (array &$r) { return count($r); };
+$t = 0;
+for ($i = 0; $i < 50; $i++) {
+    $args = [[1, 2, 3]];
+    $t += call_user_func_array($f, $args);
+}
+echo $t;
+"#,
+    );
+    assert_eq!(out.stdout, "150");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+
+    let scalar = compile_and_run_with_gc_stats(
+        r#"<?php
+$f = function (int &$x) { return $x; };
+$t = 0;
+for ($i = 0; $i < 50; $i++) {
+    $args = [7];
+    $t += call_user_func_array($f, $args);
+}
+echo $t;
+"#,
+    );
+    assert_eq!(scalar.stdout, "350");
+    let (allocs, frees) = parse_gc_stats(&scalar.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", scalar.stderr);
+}
+
+/// The other by-reference branch, which must keep its hands off the caller's cell.
+///
+/// When the array element ALREADY holds a ref cell, that cell belongs to the array and the
+/// invoker only borrows its address — so it records no slot and frees nothing. Getting this wrong
+/// is not a leak but a free of live storage, which is why the two branches are pinned together.
+#[test]
+fn test_by_reference_callback_argument_does_not_write_back_to_the_caller() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function (array &$r) { $r[] = 9; return count($r); };
+$args = [[1, 2, 3]];
+$n = call_user_func_array($f, $args);
+echo $n, "|", count($args[0]), "|", json_encode($args[0]), "|";
+$g = function (int &$x) { $x = 42; return 1; };
+$sargs = [7];
+call_user_func_array($g, $sargs);
+echo $sargs[0];
+"#,
+    );
+    assert_eq!(out, "4|3|[1,2,3]|7");
+}

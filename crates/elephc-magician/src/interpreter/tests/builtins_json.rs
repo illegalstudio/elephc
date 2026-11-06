@@ -10,6 +10,10 @@
 use super::super::*;
 use super::support::*;
 
+mod depth;
+mod deep;
+mod key_errors;
+
 /// Verifies dynamic builtin calls inside eval dispatch through runtime value hooks.
 #[test]
 fn execute_program_dispatches_simple_builtins() {
@@ -328,4 +332,163 @@ return round(precision: 1, num: 3.14);"#,
 
     assert_eq!(values.output, "4:Y:Y");
     assert_eq!(values.get(result), FakeValue::Float(3.1));
+}
+
+/// Both JSON compatibility constants are available through eval's lookup APIs.
+#[test]
+fn execute_program_json_compatibility_constants() {
+    let program = parse_fragment(br#"
+echo JSON_UNESCAPED_LINE_TERMINATORS . ":" . JSON_ERROR_NON_BACKED_ENUM . ":";
+echo constant("JSON_UNESCAPED_LINE_TERMINATORS") . ":" . constant("JSON_ERROR_NON_BACKED_ENUM") . ":";
+return defined("JSON_UNESCAPED_LINE_TERMINATORS") && defined("JSON_ERROR_NON_BACKED_ENUM");
+"#).expect("parse JSON constants fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute JSON constants");
+    assert_eq!(values.output, "2048:11:2048:11:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Eval preserves separators only when both unescaped flags are enabled, including keys.
+#[test]
+fn execute_program_json_compatibility_line_terminators() {
+    let program = parse_fragment(br#"
+$text = "\u{00e9}\u{2028}\u{2029}\u{1f600}";
+foreach ([0, JSON_UNESCAPED_LINE_TERMINATORS, JSON_UNESCAPED_UNICODE,
+          JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_LINE_TERMINATORS] as $flags) {
+    echo json_encode($text, $flags) . "\n";
+    echo json_encode([$text => [$text]], $flags) . "\n";
+}
+"#).expect("parse JSON Unicode fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute JSON Unicode");
+    let escaped = r#""\u00e9\u2028\u2029\ud83d\ude00""#;
+    let unicode = "\"é\\u2028\\u2029😀\"";
+    let literal = "\"é\u{2028}\u{2029}😀\"";
+    let expected: String = [escaped, escaped, unicode, literal].iter()
+        .map(|text| format!("{text}\n{{{text}:[{text}]}}\n"))
+        .collect();
+    assert_eq!(values.output, expected);
+}
+
+/// Eval reports unit enum errors, including nested partial output and exception codes.
+#[test]
+fn execute_program_json_compatibility_non_backed_enum() {
+    let program = parse_fragment(br#"
+enum EvalJsonUnit { case Ready; }
+echo json_encode(EvalJsonUnit::Ready) === false ? "false:" : "bad:";
+echo json_last_error() . ":" . json_last_error_msg() . "\n";
+echo json_encode([EvalJsonUnit::Ready], JSON_PARTIAL_OUTPUT_ON_ERROR) . ":" . json_last_error() . "\n";
+echo json_encode(["state" => EvalJsonUnit::Ready], JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_THROW_ON_ERROR) . "\n";
+try { json_encode(EvalJsonUnit::Ready, JSON_THROW_ON_ERROR); }
+catch (JsonException $e) { echo $e->getCode() . ":" . $e->getMessage() . "\n"; }
+echo json_encode("ok") . ":" . json_last_error();
+"#).expect("parse JSON enum fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute JSON enum");
+    assert_eq!(values.output, "false:11:Non-backed enums have no default serialization\n[0]:11\n{\"state\":0}\n11:Non-backed enums have no default serialization\n\"ok\":0");
+}
+
+/// Eval encodes int-backed and string-backed enum cases as scalars in all container shapes.
+#[test]
+fn execute_program_json_backed_enum_scalar_values() {
+    let program = parse_fragment(br#"
+enum EvalJsonIntCase: int { case N = 7; case Zero = 0; case Negative = -3; }
+enum EvalJsonStringCase: string { case Hi = "hi"; case Numeric = "12"; case Escaped = "a/b"; }
+echo json_encode(EvalJsonIntCase::N) . ":" . json_encode(EvalJsonIntCase::Zero) . ":" . json_encode(EvalJsonIntCase::Negative) . "\n";
+echo json_encode(EvalJsonStringCase::Hi) . ":" . json_encode(EvalJsonStringCase::Numeric) . "\n";
+echo json_encode([EvalJsonIntCase::N, EvalJsonStringCase::Hi, ["case" => EvalJsonIntCase::Zero]]) . "\n";
+echo json_encode(["case" => EvalJsonStringCase::Escaped], JSON_UNESCAPED_SLASHES) . "\n";
+echo json_encode(EvalJsonStringCase::Numeric, JSON_NUMERIC_CHECK) . ":" . json_last_error() . "\n";
+echo json_encode([EvalJsonIntCase::N, EvalJsonStringCase::Hi], 0, 1) . ":" . json_last_error();
+"#).expect("parse JSON backed enum fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute JSON backed enum");
+    assert_eq!(values.output, "7:0:-3\n\"hi\":\"12\"\n[7,\"hi\",{\"case\":0}]\n{\"case\":\"a/b\"}\n12:0\n[7,\"hi\"]:0");
+}
+
+/// Eval invokes custom enum serializers before the unit/backed default and preserves outer flags.
+#[test]
+fn execute_program_json_enum_custom_serialization() {
+    let program = parse_fragment(br#"
+enum EvalJsonCustomUnit implements JsonSerializable {
+    case Ready;
+    public function jsonSerialize(): mixed { echo "called:"; json_encode(INF); return "ready"; }
+}
+enum EvalJsonCustomInt: int implements JsonSerializable {
+    case N = 7;
+    public function jsonSerialize(): mixed { return ["state" => "a/b"]; }
+}
+echo json_encode(EvalJsonCustomUnit::Ready) . ":" . json_last_error() . "\n";
+echo json_encode(["unit" => EvalJsonCustomUnit::Ready, "backed" => EvalJsonCustomInt::N], JSON_UNESCAPED_SLASHES) . ":" . json_last_error();
+"#).expect("parse JSON custom enum fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute JSON custom enum");
+    assert_eq!(values.output, "called:\"ready\":0\ncalled:{\"unit\":\"ready\",\"backed\":{\"state\":\"a/b\"}}:0");
+}
+
+/// Custom enum callbacks support self returns, reject recursion, and propagate user exceptions.
+#[test]
+fn execute_program_json_enum_serializer_self_recursion_and_throw() {
+    let program = parse_fragment(br#"
+enum EvalJsonSelf implements JsonSerializable {
+    case Ready;
+    public function jsonSerialize(): mixed { return $this; }
+}
+enum EvalJsonRecursive implements JsonSerializable {
+    case Ready;
+    public function jsonSerialize(): mixed { return [$this]; }
+}
+enum EvalJsonThrowing implements JsonSerializable {
+    case Ready;
+    public function jsonSerialize(): mixed { throw new Exception("serializer"); }
+}
+echo json_encode(EvalJsonSelf::Ready) . ":" . json_last_error() . "\n";
+echo json_encode(EvalJsonRecursive::Ready, JSON_PARTIAL_OUTPUT_ON_ERROR) . ":" . json_last_error() . "\n";
+try { json_encode(EvalJsonRecursive::Ready, JSON_THROW_ON_ERROR); }
+catch (JsonException $e) { echo $e->getCode() . ":" . $e->getMessage() . "\n"; }
+try { json_encode(EvalJsonThrowing::Ready, JSON_PARTIAL_OUTPUT_ON_ERROR); }
+catch (Exception $e) { echo "caught:"; }
+echo json_encode(EvalJsonSelf::Ready) . ":" . json_last_error();
+"#).expect("parse enum serializer control flow");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute enum serializer control flow");
+    assert_eq!(values.output, "{\"name\":\"Ready\"}:0\n[null]:6\n6:Recursion detected\ncaught:{\"name\":\"Ready\"}:0");
+}
+
+/// Serializer return owners are retired after successful encoding and a nested depth failure.
+#[test]
+fn execute_program_json_enum_serializer_releases_return_owner() {
+    for (body, fail) in [("[1]", false), ("[[1]]", true)] {
+        let source = format!(r#"
+enum EvalJsonOwned implements JsonSerializable {{
+    case Ready;
+    public function jsonSerialize(): mixed {{ return {body}; }}
+}}
+return json_encode(EvalJsonOwned::Ready, 0, 1);
+"#);
+        let program = parse_fragment(source.as_bytes()).expect("parse owned serializer result");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values)
+            .expect("JSON depth errors must return false rather than abort eval");
+        if fail {
+            assert_eq!(values.get(result), FakeValue::Bool(false));
+        } else {
+            assert_eq!(values.get(result), FakeValue::String("[1]".to_string()));
+        }
+        let returned = values.values.iter().filter_map(|(id, value)| {
+            let FakeValue::Array(children) = value else { return None; };
+            let first = children.first()?;
+            let nested = matches!(values.get(*first), FakeValue::Array(_));
+            (nested == fail).then_some(*id)
+        }).collect::<Vec<_>>();
+        assert_eq!(returned.len(), 1);
+        assert_eq!(values.cell_owners[&returned[0]], 0, "{source}");
+    }
 }

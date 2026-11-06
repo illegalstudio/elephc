@@ -7,11 +7,15 @@
 //! Key details:
 //! - Retains constructor, visibility, eval-barrier, callable, and late-static-binding checks.
 
-use super::{body_must_not_use_this, merge_null_coalesce_result_type, Checker};
+use super::null_coalesce::{
+    coalesce_default_type, null_coalesce_buffer_merge_type, null_coalesce_result_type,
+    operand_is_never_null,
+};
+use super::{body_must_not_use_this, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::pcntl_constants::pcntl_int_constants;
-use crate::types::{packed_type_size, PhpType, TypeEnv};
+use crate::types::{PhpType, TypeEnv};
 
 impl Checker {
     /// Infers types for calls, closures, objects, property access, assignments, and generators.
@@ -56,23 +60,33 @@ impl Checker {
             }
             ExprKind::BufferNew { element_type, len } => {
                 let len_ty = self.infer_type(len, env)?;
-                if len_ty != PhpType::Int {
+                // A length takes what a buffer index takes. Checked int arithmetic such as
+                // `$n + 1` infers `mixed` (PHP promotes an overflowing result to float), so a
+                // `mixed` or `int|float` length is converted at runtime, where a value that is
+                // not a whole number in range fails the allocation's length validation.
+                if !matches!(len_ty, PhpType::Int | PhpType::Mixed)
+                    && !len_ty.is_int_float_union()
+                {
                     return Err(CompileError::new(
                         expr.span,
                         "buffer_new<T>() length must be integer",
                     ));
                 }
-                let elem_ty = self.resolve_type_expr(element_type, expr.span)?;
-                if packed_type_size(&elem_ty, &self.packed_classes).is_none() {
-                    return Err(CompileError::new(
-                        expr.span,
-                        "buffer_new<T>() requires a POD scalar, pointer, or packed class element type",
-                    ));
-                }
+                let elem_ty = self.resolve_buffer_element_type(
+                    element_type,
+                    expr.span,
+                    "buffer_new<T>() requires a POD scalar, pointer, or packed class element type",
+                )?;
                 Ok(PhpType::Buffer(Box::new(elem_ty)))
             }
             ExprKind::BitNot(inner) => {
                 let ty = self.infer_type(inner, env)?;
+                if let Some(class) = crate::types::object_operators::operator_class(&ty) {
+                    return Ok(PhpType::Object(class.name.to_string()));
+                }
+                if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+                    return Ok(PhpType::Mixed);
+                }
                 if !matches!(ty, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) {
                     return Err(CompileError::new(
                         expr.span,
@@ -88,15 +102,22 @@ impl Checker {
                 let probed =
                     crate::types::checker::null_probe::null_probe_env(self, value, env);
                 let probed_env = probed.clone();
-                let vt = self
-                    .infer_null_probe_operand(value, probed_env.as_ref().unwrap_or(env))?;
-                let dt = self.infer_type(default, env)?;
-                let non_null_value = if Self::union_contains_void(&vt) {
-                    self.strip_void_from_union(&vt)
-                } else {
-                    vt
-                };
-                Ok(merge_null_coalesce_result_type(self, non_null_value, dt))
+                let operand_env = probed_env.as_ref().unwrap_or(env);
+                let vt = self.infer_null_probe_operand(value, operand_env)?;
+                let value_is_never_null = operand_is_never_null(self, value, &vt, operand_env);
+                let dt = coalesce_default_type(default, self.infer_type(default, env)?);
+                if let Some(buffer) = null_coalesce_buffer_merge_type(
+                    self,
+                    value,
+                    &vt,
+                    value_is_never_null,
+                    default,
+                    &dt,
+                    expr.span,
+                )? {
+                    return Ok(buffer);
+                }
+                Ok(null_coalesce_result_type(self, value_is_never_null, vt, dt))
             }
             ExprKind::Pipe { value, callable } => {
                 self.infer_pipe_type(value, callable, expr, env)
@@ -109,17 +130,23 @@ impl Checker {
                 ..
             } => {
                 let mut scoped_env = env.clone();
-                self.check_assignment_expression(
+                self.with_preserved_binding_flow(|checker| checker.check_assignment_expression(
                     target,
                     value,
                     result_target.as_deref(),
                     prelude,
                     expr.span,
                     &mut scoped_env,
-                )
+                ))
             }
             ExprKind::ConstRef(name) => {
                 let constant_name = name.as_str().trim_start_matches('\\');
+                if constant_name == "MT_RAND_PHP" {
+                    self.warnings.push(crate::errors::CompileWarning::deprecation(
+                        expr.span,
+                        "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937",
+                    ));
+                }
                 if pcntl_int_constants(self.target)
                     .iter()
                     .any(|(constant, _)| *constant == constant_name)
@@ -185,6 +212,29 @@ impl Checker {
             }
             ExprKind::NewObject { class_name, args } => {
                 self.infer_new_object_type(class_name.as_str(), args, expr, env)
+            }
+            // `generics::classes` rewrites every generic construction to a `NewObject` naming
+            // the instantiated class, so one arriving here means no template answered it — the
+            // named class declares no type parameters. Reported rather than widened: a
+            // template has no representation, and inferring `Plain` for `new Plain<int>()`
+            // would compile a program whose type arguments meant nothing.
+            ExprKind::NewGeneric { class_type, args } => {
+                if let Some(instantiated) =
+                    self.infer_written_generic_construction(class_type, args, expr, env)?
+                {
+                    return Ok(instantiated);
+                }
+                Err(CompileError::new(
+                expr.span,
+                &format!(
+                    "'{}' is written with type arguments but declares no type parameters",
+                    match class_type {
+                        crate::parser::ast::TypeExpr::GenericClass { name, .. } =>
+                            name.as_str().to_string(),
+                        other => crate::generics::describe_type(other),
+                    }
+                ),
+                ))
             }
             ExprKind::Clone(inner) => {
                 let ty = self.infer_type(inner, env)?;
@@ -308,7 +358,16 @@ impl Checker {
                 self.infer_scoped_constant_access(receiver, name, expr)
             }
             ExprKind::NewScopedObject { receiver, args } => {
+                // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+                // it, and this pass can run on a generic function's template body — which is
+                // walked and then stripped, never instantiated.
+                let receiver = &receiver.written_class_receiver();
                 let class_name = match receiver {
+                    // A generic receiver is instantiated into an ordinary named one before type checking;
+                    // a template has no class to reach through.
+                    crate::parser::ast::StaticReceiver::Generic(_) => unreachable!(
+                        "StaticReceiver::Generic must be instantiated by generics::classes"
+                    ),
                     crate::parser::ast::StaticReceiver::Self_ => {
                         self.current_class.clone().ok_or_else(|| {
                             CompileError::new(
@@ -382,7 +441,7 @@ impl Checker {
                     return Err(CompileError::new(
                         inner.span,
                         &format!(
-                            "yield from expects an array literal or Generator, got {:?}",
+                            "yield from expects an array literal or Generator, got {}",
                             inner_ty
                         ),
                     ));
@@ -406,11 +465,42 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.infer_runtime_iterated_call_arg_type(expr, env)
+    }
+
+    /// Infers one argument for a call surface that owns runtime array or Traversable iteration.
+    ///
+    /// Besides descriptor invokers, `array_push` uses this for its associative receiver
+    /// coordinator, which stages every unpacked value before mutating the receiver.
+    pub(crate) fn infer_runtime_iterated_call_arg_type(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        self.infer_runtime_iterated_call_arg_types(expr, env)
+            .map(|(_, element)| element)
+    }
+
+    /// Infers both the source and element types for a runtime-iterated call argument.
+    ///
+    /// The source type lets builtin checks distinguish a concrete typed array from a
+    /// Traversable or boxed array whose element layout remains unknown to native storage.
+    pub(crate) fn infer_runtime_iterated_call_arg_types(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(PhpType, PhpType), CompileError> {
         match &expr.kind {
             ExprKind::Spread(inner) => {
-                self.infer_spread_element_type(inner, expr.span, env, true)
+                let source = self.infer_type(inner, env)?;
+                let element = self.spread_source_element_type(
+                    source.clone(),
+                    expr.span,
+                    true,
+                )?;
+                Ok((source, element))
             }
-            _ => self.infer_type(expr, env),
+            _ => self.infer_type(expr, env).map(|ty| (ty.clone(), ty)),
         }
     }
 
@@ -423,6 +513,20 @@ impl Checker {
         allow_traversable: bool,
     ) -> Result<PhpType, CompileError> {
         let ty = self.infer_type(inner, env)?;
+        self.spread_source_element_type(ty, span, allow_traversable)
+    }
+
+    /// Returns the element type a spread source of the already inferred type `ty` supplies, or
+    /// the "requires an array" diagnostic at `span`, the span of the `...` node itself.
+    ///
+    /// Split from [`Checker::infer_spread_element_type`] so the indexed-literal typing, which
+    /// types its spread sources once in its hash-spread scan, does not type them a second time.
+    pub(super) fn spread_source_element_type(
+        &self,
+        ty: PhpType,
+        span: crate::span::Span,
+        allow_traversable: bool,
+    ) -> Result<PhpType, CompileError> {
         match ty {
             PhpType::Array(elem_ty) => Ok(*elem_ty),
             PhpType::AssocArray { value, .. } => Ok(*value),

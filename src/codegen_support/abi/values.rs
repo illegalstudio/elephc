@@ -27,7 +27,7 @@ use crate::codegen_support::sentinels::tagged_scalar_tag_reg;
 /// incrementing the refcount—the caller owns the result register value.
 pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
-        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) | PhpType::Narrow(_) => {
             store_at_offset(emitter, int_result_reg(emitter), offset); // store scalar integer-like value to stack
         }
         PhpType::Float => {
@@ -176,7 +176,7 @@ fn emit_local_ref_cell_cleanup(emitter: &mut Emitter, cell_reg: &str, value_ty: 
 /// sentinel. For compound types (array, object, callable, pointer, etc.), loads the heap pointer.
 pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
-        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Resource(_) | PhpType::Narrow(_) => {
             load_at_offset(emitter, int_result_reg(emitter), offset); // load scalar integer-like value from stack
         }
         PhpType::Float => {
@@ -264,11 +264,11 @@ pub fn emit_branch_if_equal_wide(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
             emitter.instruction("b.ne 1f");                                     // skip the transfer when the previous compare was unequal
-            emitter.instruction(&format!("b {label}"));                        // take the equal edge with the wider branch range
+            emitter.instruction(&format!("b {label}"));                         // take the equal edge with the wider branch range
             emitter.label("1");                                                // resume after the conditional transfer
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("je {label}"));                       // x86_64 conditional branches already cover the generated function size
+            emitter.instruction(&format!("je {label}"));                        // x86_64 conditional branches already cover the generated function size
         }
     }
 }
@@ -408,7 +408,7 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
         PhpType::Str => {
             emit_write_current_string_stdout(emitter);
         }
-        PhpType::Bool | PhpType::False | PhpType::Int => {
+        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Narrow(_) => {
             emit_call_label(emitter, "__rt_itoa");
             emit_write_current_string_stdout(emitter);
         }
@@ -465,6 +465,121 @@ fn emit_write_current_string_stdout(emitter: &mut Emitter) {
             emitter.instruction(&format!("mov rsi, {}", len_reg));              // stdout_write len arg = current string length
             emitter.instruction(&format!("mov rdi, {}", ptr_reg));              // stdout_write ptr arg = current string pointer
             emit_call_label(emitter, "__rt_stdout_write"); // route the terminal write through the stdout-write indirection
+        }
+    }
+}
+
+/// Widens a C integer return of `bits` width in the integer result register to a PHP `int`.
+///
+/// Both supported ABIs leave the register bits above a narrow return value unspecified, so
+/// the callee's leftovers are replaced by sign or zero extension before the value is stored.
+/// A 64-bit return is already a PHP `int` and passes through.
+pub fn emit_extend_int_result(emitter: &mut Emitter, bits: u8, signed: bool) {
+    match (emitter.target.arch, bits, signed) {
+        (_, 64, _) => {}
+        (Arch::AArch64, 32, true) => {
+            emitter.instruction("sxtw x0, w0");                                 // sign-extend the C int32 return into the 64-bit PHP int
+        }
+        (Arch::AArch64, 32, false) => {
+            emitter.instruction("mov w0, w0");                                  // zero-extend the C uint32 return; writing w0 clears the upper half of x0
+        }
+        (Arch::AArch64, 16, true) => {
+            emitter.instruction("sxth x0, w0");                                 // sign-extend the C int16 return into the 64-bit PHP int
+        }
+        (Arch::AArch64, 16, false) => {
+            emitter.instruction("uxth w0, w0");                                 // zero-extend the C uint16 return; writing w0 clears the upper half of x0
+        }
+        (Arch::AArch64, 8, true) => {
+            emitter.instruction("sxtb x0, w0");                                 // sign-extend the C int8 return into the 64-bit PHP int
+        }
+        (Arch::AArch64, 8, false) => {
+            emitter.instruction("uxtb w0, w0");                                 // zero-extend the C uint8 or bool return; writing w0 clears the upper half of x0
+        }
+        (Arch::X86_64, 32, true) => {
+            emitter.instruction("movsxd rax, eax");                             // sign-extend the C int32 return into the 64-bit PHP int
+        }
+        (Arch::X86_64, 32, false) => {
+            emitter.instruction("mov eax, eax");                                // zero-extend the C uint32 return; writing eax clears the upper half of rax
+        }
+        (Arch::X86_64, 16, true) => {
+            emitter.instruction("movsx rax, ax");                               // sign-extend the C int16 return into the 64-bit PHP int
+        }
+        (Arch::X86_64, 16, false) => {
+            emitter.instruction("movzx eax, ax");                               // zero-extend the C uint16 return; writing eax clears the upper half of rax
+        }
+        (Arch::X86_64, 8, true) => {
+            emitter.instruction("movsx rax, al");                               // sign-extend the C int8 return into the 64-bit PHP int
+        }
+        (Arch::X86_64, 8, false) => {
+            emitter.instruction("movzx eax, al");                               // zero-extend the C uint8 or bool return; writing eax clears the upper half of rax
+        }
+        (_, other, _) => unreachable!("unsupported extern integer width {other}"),
+    }
+}
+
+/// Truncates a narrow C integer argument in the integer result register and extends it to 32 bits.
+///
+/// Apple's arm64 ABI requires the caller to extend arguments narrower than 32 bits, and clang
+/// relies on the same convention on every target, so a PHP `int` outside the C range is
+/// reduced modulo 2^bits here and then sign- or zero-extended. Arguments of 32 bits or more
+/// pass through: the callee reads only the bits it declared.
+pub fn emit_normalize_narrow_int_arg(emitter: &mut Emitter, bits: u8, signed: bool) {
+    match (emitter.target.arch, bits, signed) {
+        (_, 32 | 64, _) => {}
+        (Arch::AArch64, 16, true) => {
+            emitter.instruction("sxth w0, w0");                                 // truncate the argument to int16 and sign-extend it to 32 bits for the callee
+        }
+        (Arch::AArch64, 16, false) => {
+            emitter.instruction("uxth w0, w0");                                 // truncate the argument to uint16 and zero-extend it to 32 bits for the callee
+        }
+        (Arch::AArch64, 8, true) => {
+            emitter.instruction("sxtb w0, w0");                                 // truncate the argument to int8 and sign-extend it to 32 bits for the callee
+        }
+        (Arch::AArch64, 8, false) => {
+            emitter.instruction("uxtb w0, w0");                                 // truncate the argument to uint8 and zero-extend it to 32 bits for the callee
+        }
+        (Arch::X86_64, 16, true) => {
+            emitter.instruction("movsx eax, ax");                               // truncate the argument to int16 and sign-extend it to 32 bits for the callee
+        }
+        (Arch::X86_64, 16, false) => {
+            emitter.instruction("movzx eax, ax");                               // truncate the argument to uint16 and zero-extend it to 32 bits for the callee
+        }
+        (Arch::X86_64, 8, true) => {
+            emitter.instruction("movsx eax, al");                               // truncate the argument to int8 and sign-extend it to 32 bits for the callee
+        }
+        (Arch::X86_64, 8, false) => {
+            emitter.instruction("movzx eax, al");                               // truncate the argument to uint8 and zero-extend it to 32 bits for the callee
+        }
+        (_, other, _) => unreachable!("unsupported extern integer width {other}"),
+    }
+}
+
+/// Widens the IEEE 754 single in the low half of the float result register to the PHP double.
+///
+/// A C `float` return arrives in `s0` / the low 32 bits of `xmm0` with the upper bits unspecified;
+/// the conversion reads only the single.
+pub fn emit_float_result_single_to_double(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("fcvt d0, s0");                                 // widen the C float in s0 to the PHP double in d0
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cvtss2sd xmm0, xmm0");                         // widen the C float in the low half of xmm0 to the PHP double
+        }
+    }
+}
+
+/// Rounds the PHP double in the float result register to an IEEE 754 single in its low half.
+///
+/// A C `float` argument or store reads only the low 32 bits afterwards; rounding is IEEE
+/// round-to-nearest and values outside the single range become infinity, as in C.
+pub fn emit_float_result_double_to_single(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("fcvt s0, d0");                                 // round the PHP double in d0 to the C float in s0
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cvtsd2ss xmm0, xmm0");                         // round the PHP double to the C float in the low half of xmm0
         }
     }
 }

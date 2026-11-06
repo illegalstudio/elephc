@@ -9,6 +9,46 @@
 
 use super::*;
 
+/// Both pseudo-random builtins coerce mixed and union bounds without losing heap owners.
+#[test]
+fn test_mt_rand_and_rand_accept_mixed_and_union_bounds() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function mtSpan(mixed $min, mixed $max): int { return mt_rand($min, $max); }
+function randSpan(mixed $min, mixed $max): int { return rand($min, $max); }
+function mtUnion(int|string $bound): int { return mt_rand($bound, $bound); }
+function randUnion(int|string $bound): int { return rand($bound, $bound); }
+$ok = true;
+for ($i = 0; $i < 100; $i++) {
+    $a = mtSpan("3", 4.0);
+    $b = randSpan("3", 4.0);
+    $c = mtUnion($i % 2 ? 5 : "5");
+    $d = randUnion($i % 2 ? 5 : "5");
+    $ok = $ok && $a >= 3 && $a <= 4 && $b >= 3 && $b <= 4;
+    $ok = $ok && $c === 5 && $d === 5;
+}
+echo $ok ? "ok" : "bad", "|", mtSpan(7, "7"), "|", randSpan("7", 7.0);
+echo "|", mtUnion(5), "|", mtUnion("5"), "|", randUnion(5), "|", randUnion("5");
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "ok|7|7|5|5|5|5");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Non-numeric mixed bounds intentionally coerce to zero, the documented PHP TypeError gap.
+#[test]
+fn test_mt_rand_and_rand_non_numeric_mixed_bounds_coerce_to_zero() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function mtSpan(mixed $min, mixed $max): int { return mt_rand($min, $max); }
+function randSpan(mixed $min, mixed $max): int { return rand($min, $max); }
+$bound = "not-numeric" . $argc;
+echo mtSpan($bound, 0), "|", mtSpan(0, $bound), "|";
+echo randSpan($bound, 0), "|", randSpan(0, $bound);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0|0|0|0");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies the `**` exponentiation operator with integer base 2 and exponent 10: expects `1024`.
 #[test]
 fn test_pow_operator() {

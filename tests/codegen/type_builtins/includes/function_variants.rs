@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Multi-file fixtures exercise include/require resolution, temporary project layout, and native binary output.
+//! - Recursive include-loaded functions pin the group's provisional signature (issue #635): a
+//!   self-call inside a variant names the group, so its placeholder must carry the declared return.
 
 use super::*;
 
@@ -331,7 +333,7 @@ echo selected_once();
 /// Verifies conditional includes with mismatched function signatures (different return types) produce a compile error.
 #[test]
 fn test_conditional_include_function_variants_require_matching_signatures() {
-    assert!(compile_files_fails(
+    let error = compile_files_error_message(
         &[
             (
                 "main.php",
@@ -352,7 +354,31 @@ echo selected_mismatch();
             ),
         ],
         "main.php",
-    ));
+    ).expect("conflicting declared signatures must fail compilation");
+    assert_eq!(error.matches("Function variants for 'selected_mismatch' must have identical signatures").count(), 1, "{error}");
+}
+
+/// Conflicting recursive return hints report the group contract before a borrowed placeholder.
+#[test]
+fn test_conditional_include_recursive_variant_signature_mismatch_diagnostic() {
+    let error = compile_files_error_message(
+        &[
+            (
+                "main.php",
+                "<?php\nif ($argc > 1) { include 'left.php'; } else { include 'right.php'; }\necho selected_recursive(1);",
+            ),
+            (
+                "left.php",
+                "<?php\nfunction selected_recursive(int $n): string { if ($n == 0) { return 'left'; } return selected_recursive($n - 1); }",
+            ),
+            (
+                "right.php",
+                "<?php\nfunction selected_recursive(int $n): int { if ($n == 0) { return 1; } return selected_recursive($n - 1); }",
+            ),
+        ],
+        "main.php",
+    ).expect("conflicting recursive signatures must fail compilation");
+    assert_eq!(error.matches("Function variants for 'selected_recursive' must have identical signatures").count(), 1, "{error}");
 }
 
 /// Verifies two regular includes of the same file in the same branch report a duplicate function error.
@@ -600,5 +626,219 @@ function variant_tail(string $head, ...$rest): string {
     assert_eq!(
         out,
         "right/lead#1;i0=first tail|right/lead#1;salpha=named alpha|right/lead#2;i0=first tail;sbeta=named beta",
+    );
+}
+
+/// A recursive `: string` function declared in two mutually exclusive included files.
+///
+/// Each variant's self-call names the group, so it is typed from the group's provisional
+/// signature. That placeholder hardcoded `Int`, and both variants were rejected with `return type
+/// expects Str, got Int` although the same function compiles when declared in the main file
+/// (issue #635). Reference PHP prints `Rzrr` and `RQRR|4`.
+#[test]
+fn test_conditional_include_recursive_string_variant_keeps_declared_return() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+$pick = time() < 0;
+if ($pick) {
+    include 'left.php';
+} else {
+    include 'right.php';
+}
+echo pad_to("z"), "\n";
+echo strtoupper(pad_to("q")), "|", strlen(pad_to("")), "\n";
+"#,
+            ),
+            (
+                "left.php",
+                r#"<?php
+function pad_to(string $x): string {
+    if (strlen($x) > 2) { return "L" . $x; }
+    return pad_to($x . "l");
+}
+"#,
+            ),
+            (
+                "right.php",
+                r#"<?php
+function pad_to(string $x): string {
+    if (strlen($x) > 2) { return "R" . $x; }
+    return pad_to($x . "r");
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "Rzrr\nRQRR|4\n");
+}
+
+/// Recursive include-loaded functions returning an `array` and an object, read by outside callers.
+///
+/// An included function is a one-variant group, so it hit the same `Int` placeholder: the array
+/// function failed its return check, and the placeholder leaked to the top-level callers as
+/// `count() argument must be array` and `Property access requires an object` (issue #635).
+/// Reference PHP prints `2|3|4` and `30`.
+#[test]
+fn test_include_loaded_recursive_array_and_object_returns_reach_callers() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require 'lib.php';
+$a = count_up(0);
+echo count($a), "|", $a[0], "|", $a[1], "\n";
+$o = boxed(0);
+echo $o->v, "\n";
+"#,
+            ),
+            (
+                "lib.php",
+                r#"<?php
+class Holder { public int $v = 0; }
+function count_up(int $x): array {
+    if ($x > 2) { return [$x, $x + 1]; }
+    $next = count_up($x + 1);
+    return $next;
+}
+function boxed(int $x): Holder {
+    if ($x > 2) { $h = new Holder(); $h->v = $x * 10; return $h; }
+    return boxed($x + 1);
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "2|3|4\n30\n");
+}
+
+/// Mutual recursion between two include-loaded `: string` functions.
+///
+/// Resolving `ping` re-enters the `pong` group, whose body calls back into `ping` while its
+/// provisional signature is still published; before the fix the second leg reported `return type
+/// expects Str, got Int` (issue #635). Reference PHP prints `zioi`.
+#[test]
+fn test_include_loaded_mutual_recursion_keeps_declared_returns() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\necho ping(\"z\"), \"\\n\";\n"),
+            (
+                "lib.php",
+                r#"<?php
+function ping(string $x): string { if (strlen($x) > 3) { return $x; } return pong($x . "i"); }
+function pong(string $x): string { if (strlen($x) > 3) { return $x; } return ping($x . "o"); }
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "zioi\n");
+}
+
+/// Unhinted recursive include-loaded functions still infer their return from the base case.
+///
+/// The unhinted placeholder stays `Int`, exactly as for free functions: the base case's real type
+/// absorbs it in the `wider_type` merge. Pinned so seeding hinted groups cannot disturb inference.
+/// Reference PHP prints `ZAA|3`, `bool(true)` and `NULL`.
+#[test]
+fn test_include_loaded_unhinted_recursion_infers_from_base_case() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require 'lib.php';
+$s = grow("z");
+echo strtoupper($s), "|", strlen($s), "\n";
+var_dump(reach_true(0));
+var_dump(reach_null(0));
+"#,
+            ),
+            (
+                "lib.php",
+                r#"<?php
+function grow(string $x) { if (strlen($x) > 2) { return $x; } return grow($x . "a"); }
+function reach_true(int $x) { if ($x > 2) { return true; } return reach_true($x + 1); }
+function reach_null(int $x) { if ($x > 2) { return null; } return reach_null($x + 1); }
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ZAA|3\nbool(true)\nNULL\n");
+}
+
+/// Recursive include-loaded generators iterate their self-call without a bogus warning.
+///
+/// A body containing `yield` returns a `Generator`, so that is what the group placeholder must
+/// hold. With the old `Int` placeholder the checker warned `foreach() argument must be of type
+/// array|object, int given; the loop body will never run` on each recursive `foreach`, although
+/// the loop does run (issue #635). Reference PHP prints `3,2,1,0,` and `2,1,0,`.
+#[test]
+fn test_include_loaded_recursive_generators_resolve_to_generator() {
+    let files: &[(&str, &str)] = &[
+        (
+            "main.php",
+            r#"<?php
+require 'lib.php';
+foreach (countdown(3) as $v) { echo $v, ","; }
+echo "\n";
+foreach (countdown_unhinted(2) as $v) { echo $v, ","; }
+echo "\n";
+"#,
+        ),
+        (
+            "lib.php",
+            r#"<?php
+function countdown(int $n): Generator {
+    yield $n;
+    if ($n > 0) { foreach (countdown($n - 1) as $v) { yield $v; } }
+}
+function countdown_unhinted(int $n) {
+    yield $n;
+    if ($n > 0) { foreach (countdown_unhinted($n - 1) as $v) { yield $v; } }
+}
+"#,
+        ),
+    ];
+    let warnings = check_files_diagnostics(files, "main.php", false)
+        .expect("recursive include-loaded generators should type-check");
+    assert!(
+        warnings.iter().all(|warning| !warning.contains("foreach()")),
+        "unexpected foreach warning: {warnings:?}"
+    );
+    assert_eq!(compile_and_run_files(files, "main.php"), "3,2,1,0,\n2,1,0,\n");
+}
+
+/// A recursive include-loaded `: string` function whose base case returns an int is still rejected.
+///
+/// The negative control for the group placeholder: trusting the declared hint for the self-call
+/// must not turn into trusting it for the real returns.
+#[test]
+fn test_include_loaded_recursive_wrong_base_case_is_still_rejected() {
+    let error = compile_files_error_message(
+        &[
+            ("main.php", "<?php\nrequire 'lib.php';\necho bad_base(0), \"\\n\";\n"),
+            (
+                "lib.php",
+                r#"<?php
+function bad_base(int $x): string {
+    if ($x > 2) { return $x; }
+    return bad_base($x + 1);
+}
+"#,
+            ),
+        ],
+        "main.php",
+    )
+    .expect("a string function returning an int base case must not type-check");
+    assert!(
+        error.contains("return type expects string, got int"),
+        "unexpected diagnostic: {error}"
     );
 }

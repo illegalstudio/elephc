@@ -74,16 +74,16 @@ pub(super) fn directive_value_expr_honors_the_override_scope() {
             ("opcache.jit", DirectiveValue::Str("disable"), "'disable'"),
             ("opcache.preload", DirectiveValue::Str(""), "''"),
         ] {
-            assert_eq!(rendered_expr(&directive_runtime_value_expr(name, &value)), expected);
+            assert_eq!(rendered_expr(&directive_runtime_value_expr(name, &value, false)), expected);
         }
         // Reporting-only — the literal becomes the call's default argument.
         assert_eq!(
-            rendered_expr(&directive_runtime_value_expr("opcache.save_comments", &DirectiveValue::Bool(true))),
+            rendered_expr(&directive_runtime_value_expr("opcache.save_comments", &DirectiveValue::Bool(true), false)),
             "__elephc_opcache_env_bool('ELEPHC_INI_opcache__save_comments', \
              'ELEPHC_INI_opcache.save_comments', true)"
         );
         assert_eq!(
-            rendered_expr(&directive_runtime_value_expr("opcache.lockfile_path", &DirectiveValue::Str("/tmp"))),
+            rendered_expr(&directive_runtime_value_expr("opcache.lockfile_path", &DirectiveValue::Str("/tmp"), false)),
             "__elephc_opcache_env_str('ELEPHC_INI_opcache__lockfile_path', \
              'ELEPHC_INI_opcache.lockfile_path', '/tmp')"
         );
@@ -302,7 +302,7 @@ pub(super) fn denying_restrict_api_renders_restricted_bodies() {
         let _ = parse(&format!("<?php {status}"));
 
         let config = rendered(build::restricted_get_configuration_decl(
-            configuration_expr(PhpVersion::Php85, &overrides),
+            configuration_expr(PhpVersion::Php85, &overrides, false),
             restrict_api_warning(true).unwrap(),
         ));
         assert!(config.contains("function opcache_get_configuration() {"));

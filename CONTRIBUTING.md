@@ -36,6 +36,8 @@ When reporting a bug, please include as much information as possible:
 
 A minimal reproducible example is always appreciated.
 
+Security vulnerabilities are the exception: do not report them in a public issue. Follow [SECURITY.md](SECURITY.md) instead.
+
 ## Working locally
 
 Do your work on a dedicated branch — one branch per feature or fix — and prefer a
@@ -137,6 +139,8 @@ automation:
   `topic:fibers`, `topic:regex`, `topic:magic-methods`, `topic:control-flow`,
   `topic:numeric-literals`, `topic:json`, and `topic:errors`.
 - `priority:high` is assigned only by maintainers.
+- `ci:macos` and `ci:pdo-live` run CI tiers that Pull Requests skip by default; see
+  [CI tiers and the merge queue](#ci-tiers-and-the-merge-queue).
 
 The repository-wide labels `bug`, `enhancement`, `duplicate`, `good first
 issue`, `help wanted`, `invalid`, `question`, and `wontfix` are reserved for
@@ -164,6 +168,64 @@ untouched — do not push further changes, and do not rebase or merge `main` int
 to keep it aligned. From that point on the maintainers take over the Pull Request
 and will handle reviewing, updating, and integrating it.
 
+### CI tiers and the merge queue
+
+`main` accepts changes through GitHub's merge queue. CI runs in tiers so that Pull Requests
+get fast feedback while every supported target is still tested before anything lands. A
+`plan` job at the start of `ci.yml` and `pdo-live.yml` (`scripts/ci/plan_tiers.sh`) decides
+which tiers a run executes and writes its reason to the run summary.
+
+| What | Pull Request | Merge queue | Push to `main` |
+|---|---|---|---|
+| Build and archive on every platform, doctests, the macOS xml bridge tests, repository checks (docs sync, action pins, audit, ...) | yes | yes | yes |
+| Linux x86_64 and ARM64 test matrix, managed native smoke on all three hosts | yes | yes | only if the queue did not test that commit |
+| macOS test matrix (non-codegen, CLI, web, codegen, eval, PDO, curl) and the iOS compile and link jobs | with `ci:macos`, or when the PR changes CI scheduling | yes | only if the queue did not test that commit |
+| Core live database suites (`pdo-live.yml`: PostgreSQL 16 and MySQL 8.4) | yes | yes | only if the queue did not test that commit |
+| Optional-driver live database suites (`pdo-live.yml`: `sqlsrv-oci`, `cubrid-dblib`, `firebird-odbc`, `informix-ibm`) | when the PR changes PDO or mysqli code or `Cargo.lock`, or with `ci:pdo-live` | yes | only if the queue did not test that commit |
+| Real PHP 8.5 extension SDK matrix (NTS/ZTS on all three hosts, Valgrind and Apple leaks) | when producer, compiler or SDK inputs change | yes, required by `Build & Test` | only if the queue did not test that commit |
+| Benchmark suite | no | no | yes |
+
+The live database suites also run every night. "CI scheduling" means
+`.github/workflows/ci.yml`, `.config/nextest.toml`, `scripts/ci/` or `.github/actions/`:
+those change how every platform's tests are scheduled, so they run the macOS tier on the PR
+itself.
+
+A green `Build & Test` on a Pull Request therefore means the PR tier passed. The macOS tier
+and the optional-driver live database suites run when you add the PR to the queue:
+
+1. When the PR tier is green, use **Merge when ready** (or `gh pr merge <number>`), which
+   adds the PR to the queue. You do not need to update the branch with `main` first.
+2. The queue builds a temporary commit with the latest `main`, the PRs ahead of yours, and
+   your PR, and runs every tier on it. That is exactly the commit `main` will point to.
+3. When the required checks pass, the queue fast-forwards `main` to that commit. The push
+   run that follows on `main` sees the queue's successful run on the same commit and skips
+   the test jobs. The queue can land several PRs at once when the last of them passes, while
+   the runs of the ones ahead are still going; `merge-queue-cleanup.yml` cancels those runs on
+   the same push, since `main` already contains their commits.
+4. If a check fails, the PR leaves the queue and stays open, and the PRs behind it are
+   rebuilt without it. Fix the failure, wait for the PR tier, and add it to the queue again.
+   A rebuild (after a push to `main` or when an entry ahead leaves the queue) starts a new
+   merge-group run for the PR while the run of the replaced group would keep going; the
+   first job of `ci.yml` and `pdo-live.yml` in a merge-group run cancels the earlier runs of
+   the same PR (`scripts/ci/cancel_rebuilt_queue_runs.sh`), so they stop holding runners.
+
+#### Labels that run the skipped tiers on a Pull Request
+
+Add one of these labels when a PR needs the tier before it reaches the queue, for example
+when it changes Darwin-specific code (Mach-O emission, Apple SDK or `ld64` linking, Darwin
+system calls, the iOS targets) or reproduces a failure the queue reported:
+
+| Label | Runs on the Pull Request |
+|---|---|
+| `ci:macos` | The macOS test matrix and the iOS compile and link jobs of `ci.yml`. |
+| `ci:pdo-live` | The optional-driver live database suites of `pdo-live.yml` (the core PostgreSQL and MySQL suites already run on every PR). |
+
+The `plan` job reads the labels when it runs, so adding a label does not start a run by
+itself. After adding it, push a commit or re-run the whole workflow: **Re-run all jobs** in
+the Actions tab, or `gh run rerun <run-id>`. Re-running only the failed jobs does not run
+`plan` again. Adding labels requires triage access to the repository. Remove the label when
+it is no longer needed, so later pushes go back to the PR tier.
+
 ### Third-party GitHub Actions are pinned to commit SHAs
 
 Every action in `.github/workflows` that is **not** owned by GitHub is referenced
@@ -181,6 +243,12 @@ opens the bump PRs so the pins do not freeze.
 The `actions/*` references stay on version tags. They are GitHub-owned — same
 origin as the runner and the workflow token — and their tags are immutable by
 convention, so the threat model is much weaker.
+
+### External application projects
+
+Applications such as [DOOM](https://github.com/getelephc/doom) are maintained in
+their own repositories. Open gameplay, assets, game tests and application CI
+changes there. Compiler and runtime fixes belong in Elephc.
 
 ## Coding Style
 
@@ -786,16 +854,19 @@ If the new bridge's `.a` also needs a catalog package at PHP-program link time
 (curl is the precedent: `NativeRequirement::package("curl")` when `elephc_curl`
 is planned; `elephc native add curl` in the user project), then:
 
-1. Wire the native requirement in `src/pipeline/backend.rs` the same way curl
-   does.
+1. Add the bridge and its package to `BRIDGE_NATIVE_PACKAGES` in
+   `src/linker/native_packages.rs`, at the position the final link needs (the
+   table order is the link order). `src/pipeline/backend.rs` turns it into the
+   native requirement, and `--print-capabilities` reports it as a
+   `native:<package>` field.
 2. Pack `-p elephc-<name>` in nightly and release, like curl.
-3. Teach `scripts/verify-release-artifact.sh` to run
-   `$ELEPHC native add <package>` in the empty probe WORKDIR **before**
-   `--with-<name>`. Never fail-then-retry by grepping the compiler recovery
-   text. Never skip the compile probe.
-4. Cache `~/.cache/elephc/native` on the nightly and release `verify-artifact`
-   jobs (keyed like `curl-codegen-tests`) and give the job a long enough
-   timeout for a cold source build of the C library.
+3. Nothing to edit in `scripts/verify-release-artifact.sh`: it runs
+   `$ELEPHC native add <package>` for every reported `native:` field in the
+   empty probe WORKDIR **before** `--with-<name>`. Never fail-then-retry by
+   grepping the compiler recovery text. Never skip the compile probe.
+4. The nightly and release `verify-artifact` jobs cache `~/.cache/elephc/native`
+   keyed on the catalog and every recipe; give the job a long enough timeout
+   for a cold source build of the C library.
 
 System libraries — phar's zlib/bz2, `libdl`, Apple frameworks — are not
 managed native packages. They do not go through `elephc native add` and are

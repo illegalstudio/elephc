@@ -12,6 +12,8 @@
 mod error;
 mod format;
 mod num;
+pub mod number;
+mod number_abi;
 mod ops;
 mod parse;
 mod pow;
@@ -29,6 +31,7 @@ pub use error::{
 };
 pub use format::format_bcmath_number;
 pub use num::BcNum;
+pub use number_abi::*;
 pub use ops::{bc_add, bc_comp, bc_div, bc_divmod, bc_mod, bc_mul, bc_sub};
 pub use parse::parse_bcmath_number;
 pub use pow::{bc_pow, bc_powmod, bc_sqrt};

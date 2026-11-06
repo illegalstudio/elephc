@@ -141,6 +141,7 @@ impl ScopeEntry {
 /// Materialized activation scope passed opaquely across the eval ABI.
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
+    local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     aot_visible_names: HashSet<String>,
     global_aliases: HashMap<String, String>,
     reference_targets: HashMap<String, EvalReferenceTarget>,
@@ -152,11 +153,40 @@ impl ElephcEvalScope {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            local_types: HashMap::new(),
             aot_visible_names: HashSet::new(),
             global_aliases: HashMap::new(),
             reference_targets: HashMap::new(),
             generation: 0,
         }
+    }
+
+    /// Pins the contract of one explicitly typed local.
+    pub(crate) fn declare_local_type(&mut self, name: String, declared: crate::eval_ir::EvalParameterType) {
+        self.local_types.insert(name, declared);
+    }
+
+    /// Returns the contract of an explicitly typed local.
+    pub(crate) fn local_type(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
+        self.local_types.get(name)
+    }
+
+    /// Removes a tentative declaration whose initializer could not enter shared storage.
+    pub(crate) fn clear_local_type(&mut self, name: &str) {
+        self.local_types.remove(name);
+    }
+
+    /// Collects explicit contracts from every visible name sharing this PHP reference group.
+    pub(crate) fn local_type_contracts(&self, name: &str) -> Vec<crate::eval_ir::EvalParameterType> {
+        let mut types = self.local_type(name).cloned().into_iter().collect::<Vec<_>>();
+        if let Some(entry) = self.entry(name).filter(|entry| entry.flags().is_visible() && entry.flags().by_ref) {
+            for (alias, alias_entry) in &self.entries {
+                if alias_entry.flags().is_visible() && alias_entry.flags().by_ref && alias_entry.cell() == entry.cell() {
+                    if let Some(ty) = self.local_type(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
+                }
+            }
+        }
+        types
     }
 
     /// Returns the current scope generation counter.
@@ -402,6 +432,11 @@ impl ElephcEvalScope {
     /// Returns true when the scope contains a visible value for the named variable.
     pub fn contains_visible(&self, name: &str) -> bool {
         self.visible_cell(name).is_some()
+    }
+
+    /// Borrows scope entries without allocating or changing their ownership and reference flags.
+    pub(crate) fn entries_iter(&self) -> impl Iterator<Item = (&str, ScopeEntry)> {
+        self.entries.iter().map(|(name, entry)| (name.as_str(), *entry))
     }
 
     /// Returns visible scope entries in stable variable-name order.

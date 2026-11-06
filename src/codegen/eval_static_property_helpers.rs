@@ -20,7 +20,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::Module;
 use crate::names::{join_php_symbol, static_property_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
@@ -53,32 +53,25 @@ pub(super) fn emit_eval_static_property_helpers(
     emit_static_property_set_helper(module, emitter, data, &slots);
 }
 
-/// Returns true when the EIR module contains a function that can call eval.
+/// Returns whether this binary links the eval bridge, and therefore needs these helpers.
+///
+/// THE INVARIANT IS "LINKED", NOT "USES EVAL". `libelephc_magician.a` references the
+/// `__elephc_eval_*` callbacks unconditionally, so any binary that links it must define
+/// them or fail to link — `__elephc_eval_reflection_attribute_new` undefined and a dozen
+/// like it. This used to scan for functions carrying an eval local instead, which is a
+/// different question that happened to give the same answer while the ONLY reason to link
+/// the archive was an `eval()` in the program.
+///
+/// That stopped being the only reason. `opcache_compile_file()` populates the runtime script
+/// cache, which lives in the archive, so a program calling it needs the archive whether or
+/// not it ever evaluates a string. Keeping the narrower scan here made that combination
+/// unlinkable, which is what kept the fold in place and left the function answering `false`
+/// where reference answers `true`.
+///
+/// The call sites are all inside a block already gated on the same flag, so for a program
+/// that does use `eval()` nothing changes.
 fn module_uses_eval(module: &Module) -> bool {
-    all_module_functions(module).any(function_uses_eval)
-}
-
-/// Iterates every EIR function body emitted or inspected by the backend.
-fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
-    module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .chain(module.closures.iter())
-        .chain(module.fiber_wrappers.iter())
-        .chain(module.callback_wrappers.iter())
-        .chain(module.extern_callback_trampolines.iter())
-        .chain(module.runtime_callable_invokers.iter())
-}
-
-/// Returns true when a function has hidden eval state locals.
-fn function_uses_eval(function: &Function) -> bool {
-    function.locals.iter().any(|local| {
-        matches!(
-            local.kind,
-            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
-        )
-    })
+    module.required_runtime_features.eval_bridge
 }
 
 /// Collects static properties with storage layouts and visibility rules the bridge can access.
@@ -146,8 +139,10 @@ fn static_property_visibility_supported(visibility: &Visibility) -> bool {
 }
 
 /// Returns true for static-property storage shapes the bridge can box and update.
+///
+/// A `?ptr<T>` is one pointer word: PHP null reads and writes as address 0.
 fn static_property_type_supported(ty: &PhpType) -> bool {
-    matches!(
+    crate::types::is_nullable_pointer_type(ty) || matches!(
         ty.codegen_repr(),
         PhpType::Int
             | PhpType::Bool
@@ -760,7 +755,13 @@ fn emit_x86_64_uninitialized_guard(
 /// Boxes an ARM64 static property symbol payload into a Mixed cell.
 fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
     match slot.ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
+        // A `?ptr<T>` word boxes by the declared union in `slot.ty`, address 0 as PHP null.
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Pointer(_)
+        | PhpType::Object(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. } => {
             abi::emit_load_symbol_to_reg(emitter, "x0", &slot.symbol, 0);
             emit_box_current_value_as_mixed(emitter, &slot.ty);
         }
@@ -810,7 +811,13 @@ fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStati
 /// Boxes an x86_64 static property symbol payload into a Mixed cell.
 fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
     match slot.ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
+        // A `?ptr<T>` word boxes by the declared union in `slot.ty`, address 0 as PHP null.
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Pointer(_)
+        | PhpType::Object(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. } => {
             abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
             emit_box_current_value_as_mixed(emitter, &slot.ty);
         }
@@ -871,7 +878,9 @@ fn emit_aarch64_store_static_property_slot(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match slot.ty.codegen_repr() {
-        PhpType::Int => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0"),
+        PhpType::Int | PhpType::Pointer(_) => {
+            emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0")
+        }
         PhpType::Bool => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "x0"),
         PhpType::Float => {
             emitter.instruction("ldr x0, [sp, #32]");                           // reload the boxed eval value for float coercion
@@ -925,7 +934,9 @@ fn emit_x86_64_store_static_property_slot(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match slot.ty.codegen_repr() {
-        PhpType::Int => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax"),
+        PhpType::Int | PhpType::Pointer(_) => {
+            emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax")
+        }
         PhpType::Bool => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "rax"),
         PhpType::Float => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval value for float coercion
@@ -992,6 +1003,19 @@ fn emit_x86_64_store_cast_scalar(
     clear_uninitialized_marker_after_static_store(emitter, slot);
 }
 
+/// Converts an eval-built array stored into a pointer-array static property into raw pointer
+/// words. `__rt_array_to_pointer_words` consumes the reference just retained for the slot and
+/// returns the owner to publish, splitting first so eval keeps its own boxed array.
+fn emit_static_pointer_array_conversion(emitter: &mut Emitter, slot_ty: &PhpType) {
+    if !crate::types::is_pointer_element_indexed_array(slot_ty) {
+        return;
+    }
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("mov rdi, rax");                                    // pass the retained array to the pointer-word conversion
+    }
+    abi::emit_call_label(emitter, "__rt_array_to_pointer_words");
+}
+
 /// Stores a boxed ARM64 eval heap value into an array-like static property symbol.
 fn emit_aarch64_store_heap_static_property_slot(
     emitter: &mut Emitter,
@@ -1006,6 +1030,7 @@ fn emit_aarch64_store_heap_static_property_slot(
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject heap values with an incompatible ABI shape
     emitter.instruction("mov x0, x1");                                          // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
+    emit_static_pointer_array_conversion(emitter, &slot.ty);
     abi::emit_store_reg_to_symbol(emitter, "x0", &slot.symbol, 0);
     clear_uninitialized_marker_after_static_store(emitter, slot);
 }
@@ -1046,6 +1071,7 @@ fn emit_x86_64_store_heap_static_property_slot(
     emitter.instruction(&format!("jne {}", fail_label));                        // reject heap values with an incompatible ABI shape
     emitter.instruction("mov rax, rdi");                                        // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
+    emit_static_pointer_array_conversion(emitter, &slot.ty);
     abi::emit_store_reg_to_symbol(emitter, "rax", &slot.symbol, 0);
     clear_uninitialized_marker_after_static_store(emitter, slot);
 }

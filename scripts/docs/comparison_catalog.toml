@@ -278,12 +278,12 @@ feature  = "OPcache"
 status   = "partial"
 php      = "https://www.php.net/manual/en/book.opcache.php"
 docs     = "docs/php/opcache.md"
-evidence = "tests/opcache_ini_tests.rs"
-notes    = "Compatibility surface; programs are AOT-compiled, there is no opcode cache"
+evidence = "tests/opcache_runtime_cache_tests.rs"
+notes    = "Compiled-script manifest plus a runtime parsed-script cache for dynamic include/require through eval(), with optional persistent file caching; ordinary code remains AOT-compiled and there is no tracing JIT"
 
 [[limitations]]
 title = "eval() coverage of the prelude-implemented modules"
-notes = "The modules whose eval() column is zero \u2014 gd, exif, mysqli, PDO, session, OPcache \u2014 are all implemented by a PHP prelude the compiler injects, and the interpreter dispatches through the shared builtin registry, where a prelude function has no binding. Closing it is one `eval_builtin!` surface at a time, tracked per module: mysqli #746, PDO #748, session #1211, gd and exif #1212, OPcache #1213, with #906 as the umbrella. Until then, call those functions from compiled code and pass the results into the fragment."
+notes = "The generated eval() counts are zero for gd, exif, mysqli, PDO, and session because their functions use injected PHP preludes without interpreter bindings. OPcache has a separate supported route through native prelude declarations or dedicated interpreter handlers, including the live script cache and API restrictions. The remaining module gaps are tracked by mysqli #746, PDO #748, session #1211, gd and exif #1212, with #906 as the umbrella; call those functions from compiled code and pass the results into the fragment until their eval() surfaces are implemented."
 
 [[limitations]]
 title = "Static subset, AOT only"
@@ -298,5 +298,30 @@ title = "Five native compile targets"
 notes = "Standalone binaries target macOS ARM64, Linux ARM64, and Linux x86_64; macOS also cross-compiles libraries for iOS ARM64 devices and the iOS ARM64 Simulator. PHP itself runs on many more platforms."
 
 [[limitations]]
-title = "A Mixed-sourced object needs explicit narrowing before a typed object parameter"
-notes = "An object pulled out of an array, an array property, or other `mixed`-typed storage is rejected at a class-typed call parameter until an `instanceof` guard narrows it; PHP would defer that check to runtime. Once narrowed, elephc unboxes the object and passes it correctly. The curl multi wrappers accept `mixed` plus a runtime guard because `curl_multi_info_read()` returns its handle inside an array and canonical callers do not add a separate narrowing guard. Pinned by `test_mixed_sourced_object_through_typed_param_is_unboxed`."
+title = "A Mixed-sourced object usually needs explicit narrowing before a typed object parameter"
+notes = "An object pulled out of an array, an array property, or other `mixed`-typed storage is rejected at a class-typed by-value parameter until an `instanceof` guard narrows it; PHP would defer that check to runtime. Once narrowed, elephc unboxes the object and passes it correctly. A variable passed by reference is the exception: when it already uses a shared boxed cell, elephc emits a runtime class guard and preserves the cell so callee writes remain visible to aliases. The curl multi wrappers accept `mixed` plus a runtime guard because `curl_multi_info_read()` returns its handle inside an array and canonical callers do not add a separate narrowing guard. Pinned by `test_mixed_sourced_object_through_typed_param_is_unboxed` and the object-reference entry-guard regressions."
+
+[[extensions]]
+feature  = "File information"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.fileinfo.php"
+docs     = "docs/php/fileinfo.md"
+evidence = "tests/codegen/fileinfo.rs"
+modules  = ["fileinfo"]
+notes    = "Six functions, finfo and eleven constants, backed by pinned static libmagic 5.46 with an embedded database; native and eval use the same declarations. Declare the libmagic native package; --with-fileinfo enables opaque dynamic use."
+
+# How php-src builds each baseline extension, exported as `tier` per module in
+# docs/php/compatibility.json. Read from the PHP_ARG_ENABLE/PHP_ARG_WITH defaults in
+# php-src PHP-8.5 ext/*/config*.m4: `always` has no switch to disable it, `default`
+# is enabled by a plain ./configure (--disable-*/--without-* turns it off). Every
+# other baseline extension is opt-in and exported as "optional". Names must be
+# baseline extensions; revisit both lists when the baseline moves to a new minor.
+[build_tiers]
+always = [
+  "core", "date", "hash", "json", "lexbor", "pcre", "random", "reflection", "spl",
+  "standard", "uri", "zend opcache",
+]
+default = [
+  "ctype", "dom", "fileinfo", "filter", "iconv", "libxml", "pdo", "pdo_sqlite", "phar",
+  "posix", "session", "simplexml", "sqlite3", "tokenizer", "xml", "xmlreader", "xmlwriter",
+]

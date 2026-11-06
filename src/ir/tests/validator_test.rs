@@ -14,6 +14,68 @@ use crate::ir::{
 };
 use crate::types::PhpType;
 
+/// Builds a fetch-for-write function whose runtime key and result contracts can be varied.
+fn array_fetch_for_write_function(key_ty: PhpType, result_ty: PhpType) -> Function {
+    use crate::ir::{Immediate, LocalKind};
+    let key_ty = key_ty.codegen_repr();
+    let mut function = Function::new("fetch_key".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        let array_slot = builder.add_local(
+            Some("array".to_string()), IrType::from_php(&array_ty), array_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        let key_slot = builder.add_local(
+            Some("key".to_string()), IrType::from_php(&key_ty), key_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        let key_owner = Ownership::for_php_type(&key_ty);
+        let array = builder.emit(
+            Op::LoadLocal, Vec::new(), Some(Immediate::LocalSlot(array_slot)),
+            IrType::from_php(&array_ty), array_ty, Ownership::Borrowed,
+        ).unwrap();
+        let key = builder.emit(
+            Op::LoadLocal, Vec::new(), Some(Immediate::LocalSlot(key_slot)),
+            IrType::from_php(&key_ty), key_ty, key_owner,
+        ).unwrap();
+        builder.emit(
+            Op::ArrayGetForWrite, vec![array, key], None,
+            IrType::from_php(&result_ty), result_ty, Ownership::Owned,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    function
+}
+
+/// Mixed writable parents accept only keys understood by the storage-aware runtime reader.
+#[test]
+fn array_fetch_for_write_validates_mixed_key_shapes() {
+    for key in [PhpType::Int, PhpType::Str, PhpType::Mixed,
+        PhpType::Union(vec![PhpType::Int, PhpType::Str])] {
+        assert_eq!(validate_function(&array_fetch_for_write_function(key, PhpType::Mixed)), Ok(()));
+    }
+    for key in [PhpType::Float, PhpType::Array(Box::new(PhpType::Int)),
+        PhpType::Object("stdClass".to_string())] {
+        assert!(matches!(validate_function(&array_fetch_for_write_function(key, PhpType::Mixed)),
+            Err(ValidationError::OperandTypeMismatch { .. })));
+    }
+}
+
+/// Typed COW fetches retain the original integer-only ABI rather than accepting tagged keys.
+#[test]
+fn array_fetch_for_write_keeps_typed_keys_integer_only() {
+    let result = PhpType::Array(Box::new(PhpType::Int));
+    assert_eq!(validate_function(&array_fetch_for_write_function(PhpType::Int, result.clone())), Ok(()));
+    for key in [PhpType::Str, PhpType::Mixed] {
+        assert!(matches!(validate_function(&array_fetch_for_write_function(key, result.clone())),
+            Err(ValidationError::OperandTypeMismatch { .. })));
+    }
+}
+
 /// An empty function has no valid entry block and fails validation.
 #[test]
 fn empty_function_fails_validation() {
@@ -180,10 +242,10 @@ fn entry_value_in_unreachable_block_is_valid() {
     assert_eq!(validate_function(&function), Ok(()));
 }
 
-/// An unreachable block cannot import a value from an unrelated unreachable block.
+/// Cross-block uses in dead continuations have no executable dominance requirement.
 #[test]
-fn sibling_unreachable_value_use_is_invalid() {
-    let mut function = Function::new("dead_siblings".to_string(), IrType::Void, PhpType::Void);
+fn connected_unreachable_value_use_is_valid() {
+    let mut function = Function::new("dead_continuation".to_string(), IrType::Void, PhpType::Void);
     {
         let mut builder = Builder::new(&mut function);
         let entry = builder.create_named_block("entry", vec![]);
@@ -194,7 +256,7 @@ fn sibling_unreachable_value_use_is_invalid() {
         builder.terminate(Terminator::Return { value: None });
         builder.position_at_end(producer);
         let value = builder.emit_const_i64(1);
-        builder.terminate(Terminator::Unreachable);
+        builder.terminate(Terminator::Br { target: consumer, args: vec![] });
         builder.position_at_end(consumer);
         let _ = builder.emit_with_effects(
             Op::EchoValue,
@@ -208,10 +270,7 @@ fn sibling_unreachable_value_use_is_invalid() {
         );
         builder.terminate(Terminator::Unreachable);
     }
-    assert!(matches!(
-        validate_function(&function),
-        Err(ValidationError::UseNotDominated { .. })
-    ));
+    assert_eq!(validate_function(&function), Ok(()));
 }
 
 /// Dead code still cannot use a same-block value before its definition.
@@ -254,4 +313,41 @@ fn unreachable_same_block_use_before_definition_is_invalid() {
         validate_function(&function),
         Err(ValidationError::UseNotDominated { .. })
     ));
+}
+
+
+/// Dominator membership beyond the first word must still reject a bypassed definition.
+#[test]
+fn dominance_membership_across_bitset_words() {
+    for bypass in [false, true] {
+        let mut function = Function::new("wide_dominance".into(), IrType::I64, PhpType::Int);
+        {
+            let mut builder = Builder::new(&mut function);
+            let blocks: Vec<_> = (0..72).map(|index| {
+                builder.create_named_block(&format!("block_{index}"), Vec::new())
+            }).collect();
+            builder.set_entry(blocks[0]);
+            for index in 0..69 {
+                builder.position_at_end(blocks[index]);
+                builder.terminate(Terminator::Br { target: blocks[index + 1], args: Vec::new() });
+            }
+            builder.position_at_end(blocks[69]);
+            let condition = builder.emit_const_bool(true);
+            builder.terminate(Terminator::CondBr { cond: condition,
+                then_target: blocks[70], then_args: Vec::new(),
+                else_target: blocks[if bypass { 71 } else { 70 }], else_args: Vec::new(),
+            });
+            builder.position_at_end(blocks[70]);
+            let value = builder.emit_const_i64(7);
+            builder.terminate(Terminator::Br { target: blocks[71], args: Vec::new() });
+            builder.position_at_end(blocks[71]);
+            builder.terminate(Terminator::Return { value: Some(value) });
+        }
+        let result = validate_function(&function);
+        if bypass {
+            assert!(matches!(result, Err(ValidationError::UseNotDominated { .. })), "{result:?}");
+        } else {
+            result.unwrap();
+        }
+    }
 }

@@ -34,6 +34,10 @@
 
 ---
 
+PHP file information is available through `finfo`, the six fileinfo functions and
+all eleven `FILEINFO_*` constants. Run `elephc native add libmagic` in the project;
+use `--with-fileinfo` for opaque dynamic eval. See [fileinfo](docs/php/fileinfo.md).
+
 ## Support the project
 
 elephc is built and maintained independently. You can support the project by either:
@@ -64,11 +68,28 @@ See [showcases/http-server/](showcases/http-server/) for full source and build i
 
 ## DOOM rendered in PHP
 
-The flagship showcase: a real-time 3D renderer that loads original DOOM WAD files and renders E1M1 — BSP traversal, perspective projection, per-column fog, sector lighting, collision detection, step climbing — entirely in PHP compiled to a native binary.
+An independently maintained showcase: the shareware episode of DOOM played from the original `DOOM1.WAD`, entirely in PHP compiled to a native binary. A BSP column renderer draws DOOM's own 320x200 frame with textured walls, floors and sky, sprites and sector lighting, and the game runs doors, lifts, switches, pickups and the status bar at 35 tics per second.
 
-![DOOM E1M1 rendered in PHP](showcases/doom/demo.gif)
+https://github.com/user-attachments/assets/ddc1e089-2c38-422c-b3e3-6a8d6b7623da
 
-See [showcases/doom/](showcases/doom/) for full source and build instructions.
+[Download the walkthrough (MP4)](https://raw.githubusercontent.com/getelephc/static/main/assets/doom/v0.1.3/doom-walk.mp4).
+
+See [getelephc/doom](https://github.com/getelephc/doom) for full source, tests and build instructions. The game is developed in its own repository.
+
+## Benchmarks
+
+CI measures native execution against equivalent C and PHP fixtures, plus
+Magician eval and buffer/array workloads. The nightly statistics workflow keeps
+the histories and graphs current. Times exclude compilation and linking.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/assets/native-dark.svg">
+  <img src="benchmark/assets/native-light.svg" alt="Native benchmark execution medians and recent trends" width="1000">
+</picture>
+
+See [benchmark/](benchmark/README.md) for every suite, generated reports,
+measurement methodology, and the interactive dashboard. Shared CI runner
+timings are useful for trends.
 
 ## Why
 
@@ -89,6 +110,12 @@ I made the project as modular as possible. Every function has its own codegen fi
 You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, case-insensitive PHP symbol lookup for functions/classes/methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, PHP 8 attributes on declarations, named arguments, first-class callables, typed function and method parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, generator functions and generator closures with `yield` / `yield from`, namespaces, includes, compile-time Composer/SPL autoloading, class/introspection helpers, `PDO` database access (`PDO` / `PDOStatement` / `PDOException`) with SQLite, PostgreSQL, MySQL/MariaDB, and optional DBLIB, Firebird, ODBC, Informix, IBM, SQLSRV, and Oracle drivers, image creation and manipulation (GD raster I/O, drawing, transforms/filters, Exif/IPTC metadata, and the `Imagick`/`Gmagick`/Cairo object APIs) on a pure-Rust codec/raster bridge, and PHP 8.1-style `Fiber` coroutines on the three executable/release hosts: macOS ARM64, Linux ARM64, and Linux x86_64. The iOS compile targets are library-only and do not run Fibers.
 
 Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/), [`examples/eval-globals/`](examples/eval-globals/), [`examples/eval-throw/`](examples/eval-throw/) for throwing a class declared by `eval()`, and the opt-in regex example [`examples/eval_regex/`](examples/eval_regex/).
+
+The standard-library surface also includes immutable [`BcMath\Number`](docs/php/bcmath.md)
+decimal arithmetic and operators, [`WeakReference` and `WeakMap`](docs/php/core-symbols.md)
+for caches that do not retain their keys, and a small
+[DOM HTML fragment walker](docs/php/dom-html.md) for Termwind-style rendering.
+The DOM surface is an HTML-only subset with explicit limits.
 
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
@@ -163,7 +190,7 @@ That tradeoff is intentional:
 - **No hidden external PHP runtime dependency**: the generated binary does not need PHP, the Zend Engine, or a loader extension. A program that needs dynamic `eval()` embeds its optional interpreter bridge directly in the standalone binary.
 - **Native-oriented extensions**: `extern`, `ptr`, `buffer<T>`, and `packed class` let PHP-shaped code cross into systems, FFI, game, and performance-sensitive workloads.
 
-That does not mean elephc has to live outside the existing PHP ecosystem. The current CLI path produces standalone executables, shared libraries (`--emit cdylib`), and static libraries (`--emit staticlib`; `--emit lib` is an alias), while the roadmap includes an experimental PHP extension bridge. That opens a practical middle path: keep a framework such as WordPress, Laravel, or Symfony running on PHP, then compile static, performance-sensitive modules into native libraries or PHP extensions.
+That does not mean elephc has to live outside the existing PHP ecosystem. The CLI produces standalone executables, shared libraries (`--emit cdylib`), static libraries (`--emit staticlib`; `--emit lib` is an alias), and PHP 8.5 extensions (`--emit phpext`). That opens a practical middle path: keep a framework such as WordPress, Laravel, or Symfony running on PHP, then compile static, performance-sensitive modules into native libraries or PHP extensions.
 
 So elephc is not a drop-in replacement for an entire dynamic framework today. The longer-term goal is more useful: make it possible to move the parts of PHP code that are static enough to compile into inspectable native code, while the rest of the application can stay in ordinary PHP.
 
@@ -266,11 +293,20 @@ elephc hello.php
 ./hello
 elephc hello.lfc
 
+# Start an eval-backed interactive session with multiline input and cached startup
+elephc repl
+elephc repl --php-version 8.4 --no-history
+
+# Compile the test suite under tests/ to a native binary and run it
+elephc test
+elephc test tests/Unit --filter CounterTest --strict-php
+elephc test --junit report.xml --timeout 30
+
 # Print the compiler version
 elephc --version
 elephc -V
 
-# Custom heap size (default: 8MB)
+# Custom heap size (default: 128 MB)
 elephc --heap-size=16777216 heavy.php
 
 # Enable runtime heap verification while debugging ownership issues
@@ -322,7 +358,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, iconv, phar, tz, image, pcntl, xml, eval, regex, curl, web)
+# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, gmp, random, mbstring, iconv, phar, tz, image, pcntl, xml, fileinfo, tokenizer, eval, regex, curl, web)
 elephc app.php --with-pdo --with-crypto
 # Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
 elephc app.php --with-mysqli
@@ -331,6 +367,12 @@ elephc app.php --with-eval
 
 # Build a shared library exporting #[Export] functions instead of an executable
 elephc --emit cdylib module.php
+
+# Build a module loaded by real PHP 8.5, using its matching development SDK
+ELEPHC_PHPEXT_PHP_CONFIG=/path/to/php-config elephc --emit phpext --heap-size=1048576 module.php
+php -n -d extension=./module.so app.php
+# Export a global constant too; #[Export] final classes expose their public PHP surface
+elephc --emit phpext --export-constant='Demo\VERSION' module.php
 
 # Pin the PHP compatibility profile and silence non-error output
 elephc --php-version 8.3 --quiet app.php
@@ -356,6 +398,7 @@ elephc --target linux-x86_64 hello.php
 elephc --web app.php                          # fastest; trusted application code
 elephc --web --web-isolation=pool app.php     # crash containment + concurrent handlers
 elephc --web --web-isolation=request app.php  # discard all native state after each request
+elephc --web --web-lifecycle=application bootstrap.php # retain one application per worker
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4
 
@@ -366,6 +409,17 @@ elephc --web --web-isolation=request app.php  # discard all native state after e
 # broker protocol carries to the handler process.
 ./app --listen 0.0.0.0:8080 --max-body-size 1048576 --body-read-timeout 10
 ```
+
+Project INI defaults can live in the nearest `elephc.toml` above the entry file:
+
+```toml
+[ini]
+"opcache.enable_cli" = true
+"opcache.file_update_protection" = 0
+```
+
+Each entry uses the same directive handling as `--ini KEY=VALUE`; command-line
+values override project defaults. See the [INI reference](docs/compiling/cli-reference.md#in-the-project-file).
 
 For the smallest regex first run:
 
@@ -378,7 +432,7 @@ elephc main.php
 
 `elephc native` manages a small, runtime/builtin-oriented catalog of verified C
 sources: PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0, libssh2 1.11.1,
-curl 8.21.0, and libxml2 2.15.3. Adding curl declares and links its complete
+curl 8.21.0, Oniguruma 6.9.10, and libxml2 2.15.3. Adding curl declares and links its complete
 pinned dependency closure. This is intentionally **not** the mechanism used for
 Composer packages, Rust bridge crates, compilers/SDKs, or arbitrary FFI
 libraries:
@@ -408,7 +462,7 @@ cargo run -- hello.php
 | Showcase | Description |
 |---|---|
 | [HTTP server](showcases/http-server/) | Async HTTP/1.1 server with a non-blocking `poll()` event loop, one `Fiber` per connection, POSIX sockets via `extern` FFI, `ptr` buffers, HTTP parser and router |
-| [DOOM E1M1](showcases/doom/) | Real-time 3D WAD renderer with BSP traversal, SDL2 FFI, `packed class` geometry, `buffer<T>` storage, collision detection, HUD |
+| [DOOM](https://github.com/getelephc/doom) | DOOM's shareware episode from the original WAD: BSP column renderer, textures, sprites, lighting, doors and lifts, status bar; SDL2 FFI, `packed class` map records, `buffer<T>` storage |
 | [SDL framebuffer](examples/sdl_framebuffer/) | Pixel-level rendering with SDL2 via FFI |
 | [SDL audio](examples/sdl_audio/) | Audio playback with SDL2 via FFI |
 | [Hot-path buffers](examples/hot-path/) | `packed class` + `buffer<T>` for performance-critical data |
@@ -420,9 +474,9 @@ elephc can call native C functions directly through `extern` declarations.
 
 ```php
 <?php
-extern function atoi(string $s): int;
-extern function signal(int $sig, callable $handler): ptr;
-extern function raise(int $sig): int;
+extern function atoi(string $s): i32;
+extern function signal(i32 $sig, callable $handler): ptr;
+extern function raise(i32 $sig): i32;
 extern global ptr $environ;
 
 function on_signal($sig) {
@@ -440,6 +494,7 @@ Notes:
 - `extern function`, `extern "lib" { ... }`, `extern global`, and `extern class` are supported.
 - `string` arguments are copied to temporary null-terminated C strings for the duration of the native call.
 - `string` return values are copied back into owned elephc strings.
+- `?string` parameters and returns map PHP `null` to a NULL `char*` and back, for C APIs such as `SDL_CreateRenderer(window, NULL)` or `getenv()`.
 - `callable` parameters pass a user-defined elephc function by string name, for example `"on_signal"`.
 - Callback functions must stay C-compatible: use `int`, `float`, `bool`, `ptr`, or `void`-shaped values. String callbacks are not supported yet.
 - Raw C memory patterns are supported through ordinary extern declarations such as `malloc`, `free`, `memcpy`, and `memset`.
@@ -491,6 +546,9 @@ elephc covers PHP's scalar, compound, and special types, plus compiler-specific 
 | `enum` | `enum Color: int { case Red = 1; }`, `Color::Red->value`, `Color::from(1)` |
 | `int\|string` | `int\|string $x = 42;`, `function show(int\|string $x): string { ... }` |
 | `?int` | `?int $x = null;`, `function find(): ?int { ... }` |
+| `array<T>` / `array<K, V>` | `function first(array<int> $xs): int { return $xs[0]; }` (extension) |
+| `Box<T>` | `new Box<int>(42)` (generic class extension) |
+| `callable(T): U` | `function map<T, U>(callable(T): U $f, T $value): U { return $f($value); }` (extension) |
 | `buffer<T>` | `buffer<int> $xs = buffer_new<int>(256)` |
 | `packed class` | `packed class Vec2 { public float $x; public float $y; }` |
 
@@ -516,19 +574,24 @@ The full list of supported constructs, operators, and control structures is in t
 - **Database (PDO)**: `PDO`, `PDOStatement`, `PDOException` with SQLite, PostgreSQL, MySQL/MariaDB, optional FreeTDS PDO_DBLIB, pure-Rust PDO_FIREBIRD, system-driver-manager PDO_ODBC, Client SDK PDO_INFORMIX/PDO_IBM, Microsoft ODBC PDO_SQLSRV, Oracle Instant Client PDO_OCI, and official CCI PDO_CUBRID drivers, positional `?` and named `:name` binds, fetch modes, transactions, and `foreach` over result sets
 - **Database (mysqli)**: a documented `mysqli` / `mysqli_stmt` / `mysqli_result` subset for MySQL/MariaDB over the same pure-Rust client — buffered independent results, prepared statements, `multi_query`, `mysqli_report` error modes, and the full procedural `mysqli_*` alias surface
 - **Process control (PCNTL)**: `pcntl_fork`, wait/status helpers, `pcntl_exec`, signal handlers and async dispatch, masks, priorities, Linux affinity/namespaces, and macOS QoS; see the [PCNTL guide](docs/php/pcntl.md)
-- **XML**: every function, class and constant of `ext/xml` (the `XMLParser` SAX parser, every handler, incremental `xml_parse()`, `xml_parse_into_struct()`, libxml2's error codes) and of `ext/xmlwriter` (`XMLWriter` with memory and URI output) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`, auto-linked or `--with-xml`), natively and inside `eval()`; see the [XML guide](docs/php/xml.md) and its [runtime limits](docs/php/xml.md#runtime-limits) for the per-handler-invocation heap cost
+- **Tokenizer**: `token_get_all`, `token_name`, `PhpToken` and all 154 PHP 8.5 constants, including `TOKEN_PARSE`; see the [Tokenizer guide](docs/php/tokenizer.md).
+- **XML**: the complete function, class and constant inventory of `ext/xml` (the `XMLParser` SAX parser, every handler, incremental `xml_parse()`, `xml_parse_into_struct()`, libxml2's error codes) and `ext/xmlwriter` (`XMLWriter` with memory and URI output) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`, auto-linked or `--with-xml`), natively and inside `eval()`; see the [XML guide](docs/php/xml.md) for documented behavioral differences and [runtime limits](docs/php/xml.md#runtime-limits)
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
 - **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
-- **Native extensions**: complete `iconv` conversion and MIME helpers, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
+- **Random**: PHP's `ext/random` — `mt_srand`/`srand`/`rand`/`mt_rand`/`mt_getrandmax`/`getrandmax`, `random_bytes`, `random_int`, `lcg_value`, `array_rand()`'s multi-key form, the `Random\Engine\Mt19937`, `PcgOneseq128XslRr64`, `Xoshiro256StarStar` and `Secure` engines, `Random\Randomizer` (`nextInt`, `nextFloat`, `getFloat`, `getInt`, `getBytes`, `getBytesFromString`, `shuffleArray`, `shuffleBytes`, `pickArrayKeys`), `Random\IntervalBoundary` and the `Random\*` exception hierarchy, matching php-src 8.5's streams, serialization and deprecations; see the [Random guide](docs/php/random.md)
+- **Native extensions**: complete PHP 8.5.10 `mbstring` function and constant inventory, complete `iconv` conversion and MIME helpers, the full php-src 8.5 [`GMP`](docs/php/gmp.md) surface over a pinned libgmp 6.3.0, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
+- **OPcache**: the API reports the compiled script manifest and a live cache for dynamic `include`/`require` through `eval()`, with optional persistent file caching, revalidation, admission limits, blacklists, and preloading; see the [OPcache guide](docs/php/opcache.md)
 - **Environment**: `getenv()` answers a single variable or the whole environment, `putenv()` sets and removes, and `$_ENV` / `$_SERVER` carry the process environment plus `$_SERVER['argv']` in ordinary CLI programs
 - **Web server (`--web`)**: standalone prefork HTTP server binaries with compile-time `worker` (default), persistent `pool`, or fork-per-`request` isolation; request superglobals and `php://input`; `header()`/`http_response_code()` response control; and PHP-compatible sessions — `$_SESSION`, the complete `session_*()` API, file persistence, custom save handlers, strict mode, cookies and cache limiters, and trans-SID rewriting
-- **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
+- **Generics**: compile-time specialization of functions, classes, interfaces, methods, and traits, with inference, bounds, defaults, variance, typed arrays and callables; native syntax is rejected by `--strict-php`, while supported PHPDoc templates affect compilation in both modes. See [Generics](docs/beyond-php/generics.md).
+- **Testing**: a native test runtime inside the compiler (`Elephc\Testing\TestCase` with a PHPUnit-compatible assertion subset, `Runner`, and a `PHPUnit\Framework\TestCase` alias so plain-PHP suites compile unchanged) and `elephc test`, which discovers the test classes under a path at compile time, builds the suite into a native binary, and runs it. See [Testing](docs/beyond-php/testing.md).
+- **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_ptr()`, `buffer_free()`
 
 </details>
 
-### Built-in functions (974)
+### Built-in functions (1146)
 
-The generated builtin documentation currently exposes 974 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
+The generated builtin documentation currently exposes 1146 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, GMP, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
 
 ### Constants
 
@@ -546,7 +609,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → function-argument introspection desugaring → OPcache manifest bake → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Optimizer (declaration reachability) → EIR lowering + validation → fixed-point EIR optimization → register allocation → EIR codegen → assembly/source-map write → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
+Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → function-argument introspection desugaring → OPcache manifest bake → Optimizer (constant folding) → Type checking + generic specialization → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Optimizer (declaration reachability) → EIR lowering + validation → fixed-point EIR optimization → register allocation → EIR codegen → assembly/source-map write → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -562,7 +625,7 @@ Linked executables are stripped of their symbol table, which is about a quarter 
 elephc --keep-symbols hello.php
 ```
 
-If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sidecar that maps emitted assembly lines back to PHP line/column pairs. If you add `--timings`, the compiler prints per-phase durations such as lexing, parsing, early optimization, type checking, constant propagation, post-check pruning, control-flow normalization, dead-code elimination, declaration reachability, runtime-cache preparation, code generation, assembling, and linking.
+If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sidecar that maps emitted assembly lines back to PHP line/column pairs. If you add `--timings`, the compiler prints per-phase durations such as lexing, parsing, early optimization, type checking, constant propagation, post-check pruning, control-flow normalization, dead-code elimination, declaration reachability, runtime-cache preparation, code generation, assembling, and linking. For a program that uses generics, `--report-generics` instead prints how its monomorphized instantiations are distributed across templates, one line per template.
 
 ### Current optimization passes
 
@@ -578,7 +641,7 @@ elephc already performs a small but useful AST-level optimization pipeline befor
 
 The optimizer is intentionally conservative. It does not yet do full function-level CFG fixed-point propagation, aggressive whole-program optimization, or assembly-level peephole rewriting, but it does compute lightweight effect summaries and local CFG-lite reachability for known call targets and structured control flow so AST rewrites can stay more precise without becoming risky.
 
-At the EIR level, the backend runs a fixed-point **optimization pass driver** (on by default, gated by `--ir-opt`): identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …), local peephole rewrites (box/unbox cancellation, scalar load/store forwarding, paired acquire/release cancellation, string-literal concat folding, and redundant `move` / `borrow` cleanup), per-block constant folding, dominance-aware common-subexpression elimination, loop-invariant code motion, CFG-aware dead instruction elimination for unused pure results, CFG-aware dead store elimination for scalar local writes that are never read before being overwritten, and branch simplification (folding constant-condition `cond_br` / `switch`, threading empty forwarding blocks, and removing unreachable blocks). A cross-function **small-function inliner** also splices small, non-recursive, destructor-free helpers into their callers, and the whole pipeline runs to a module-level fixed point so inlining and the per-function passes feed each other. Use `--no-ir-opt` to turn the passes off for A/B comparison.
+At the EIR level, the backend runs a fixed-point **optimization pass driver** (on by default, gated by `--ir-opt`): identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …), local peephole rewrites (box/unbox cancellation, scalar load/store forwarding, paired acquire/release cancellation, string-literal concat folding, and redundant `move` / `borrow` cleanup), scalar local promotion into SSA values across branches and loops, immutable integer-local load refinement, checked-integer sinking, integer range and induction-variable analysis that removes proven-safe overflow checks, numeric-chain fusion, per-block constant folding, dominance-aware common-subexpression elimination, loop-invariant code motion, CFG-aware dead instruction elimination for unused pure results, CFG-aware dead store elimination for scalar local writes that are never read before being overwritten, and branch simplification (folding constant-condition `cond_br` / `switch`, threading empty forwarding blocks, and removing unreachable blocks). A cross-function **small-function inliner** also splices small, non-recursive, destructor-free helpers into their callers, and the whole pipeline runs to a module-level fixed point so inlining and the per-function passes feed each other. Use `--no-ir-opt` to turn the passes off for A/B comparison.
 
 It then runs a **linear-scan register allocator** (Poletto-Sarkar) with liveness analysis, live intervals, and separate integer/float register pools. Hot scalar values live in callee-saved registers across calls instead of being spilled to the stack on every use, which speeds up compute-heavy code substantially. Use `--regalloc=stack` to fall back to the original spill-everything placement.
 
@@ -610,16 +673,18 @@ A variable's type is set at first assignment. Compatible types (int/float/bool/n
 
 ## Error messages
 
-Errors include line and column numbers, and the compiler tries to recover far enough to report multiple independent syntax / semantic errors in one pass. Successful compilations may also emit non-fatal warnings such as unused variables / parameters or unreachable code:
+Errors name the file, line and column they come from (the entry file as given on the command line, or the included or autoloaded file that holds the statement), and the compiler tries to recover far enough to report multiple independent syntax / semantic errors in one pass. Successful compilations may also emit non-fatal warnings such as unused variables / parameters or unreachable code:
 
 ```
-error[3:1]: Undefined variable: $x
-error[5:7]: Type error: cannot reassign $x from int to string
-error[2:1]: Required file not found: 'missing.php'
-warning[6:1]: $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
-warning[9:5]: Unused variable: $tmp
-warning[14:9]: Unreachable code
+error[main.php:3:1]: Undefined variable: $x
+error[main.php:5:7]: Type error: cannot reassign $x from int to string
+error[main.php:2:1]: Required file not found: 'missing.php'
+warning[main.php:6:1]: $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
+warning[main.php:9:5]: Unused variable: $tmp
+warning[src/Helpers.php:14:9]: Unreachable code
 ```
+
+A diagnostic with no source position (some whole-program checks) prints `error: message`. See [diagnostic locations](docs/compiling/output-and-diagnostics.md#diagnostic-locations).
 
 ## Project structure
 
@@ -641,6 +706,10 @@ src/
 ├── timings.rs           # Phase timing collection/reporting
 ├── span.rs              # Source position tracking (line, col)
 ├── conditional/         # Build-time `ifdef` pass driven by --define
+├── docblock.rs          # Per-file generic PHPDoc annotation application
+├── docblock/            # Declaration binding and generic member annotations
+├── generics.rs          # Type-checking and generic-specialization fixed point
+├── generics/            # Class, method, constructor, trait, and variance support
 ├── magic_constants.rs   # Per-file PHP magic constant lowering
 ├── magic_constants/     # File/scope/trait magic-constant walkers
 ├── autoload/            # Composer/SPL AOT autoload indexing and file insertion
@@ -649,6 +718,7 @@ src/
 ├── runtime_cache.rs     # Preassembled runtime object cache
 ├── source_map.rs        # Assembly/source-map sidecar emission
 ├── monitor/             # Exact, sampled, local, remote, service, and export profiling
+├── repl/                # Interactive eval session: parsing, cached native host, and history
 ├── call_graph.rs        # Profiling call-graph aggregation and DOT/HTML rendering
 ├── pprof_encode.rs      # Profiling export in pprof protobuf form
 ├── probe_key.rs         # Monitoring build-key creation and validation
@@ -731,17 +801,20 @@ src/
 crates/
 ├── elephc-builtin-contract/ # Dependency-neutral builtin catalog and signatures
 ├── elephc-bcmath/       # Exact arbitrary-precision decimal bridge
+├── elephc-gmp/          # php-src GMP surface over pinned libgmp 6.3.0
 ├── elephc-crypto/       # Hashing, HMAC, and OpenSSL-compatible crypto bridge
 ├── elephc-curl/         # Static libcurl easy, multi, share, callback, and multipart bridge
 ├── elephc-iconv/        # Character-set conversion and MIME header bridge
 ├── elephc-image/        # GD/Exif/Imagick/Gmagick/Cairo image bridge
 ├── elephc-instr/        # Exact profiling instrumentation runtime
 ├── elephc-magician/     # Optional EvalIR interpreter staticlib for dynamic eval
+├── elephc-mbstring/     # Shared PHP 8.5.10 mbstring engine and native bridge
 ├── elephc-monitoring-contract/ # Typed monitoring policy shared by the compiler and bridges
 ├── elephc-pcntl/        # Unix process control, wait, exec, and signal bridge
 ├── elephc-pdo/          # Multi-driver PDO bridge
 ├── elephc-phar/         # PHAR/tar/zip bridge
 ├── elephc-probe/        # Sampled profiling and authenticated service endpoint
+├── elephc-random/       # PHP ext/random engines, CSPRNG, and global Mt19937 state bridge
 ├── elephc-tls/          # TLS stream bridge
 ├── elephc-tz/           # IANA timezone bridge
 ├── elephc-xml/          # ext/xml and ext/xmlwriter bridge over the catalog's static libxml2
@@ -776,7 +849,7 @@ the Docker image and build cache remain available for later runs.
 
 The **[docs/](docs/)** directory is a complete wiki covering every aspect of the compiler. Inside you'll find:
 
-- **PHP syntax reference**: types, operators, control structures, functions, classes, namespaces, and all 549 built-in functions with signatures and examples
+- **PHP syntax reference**: types, operators, control structures, functions, classes, namespaces, and the generated built-in function reference with signatures and examples
 - **Compiler extensions** — pointers, `buffer<T>`, `packed class`, FFI with `extern`, and conditional compilation with `ifdef` — the features that take PHP beyond the web
 - **Compiler internals** — a step-by-step walkthrough of the full pipeline, from lexing to Pratt parsing to type checking to code generation and runtime structure
 - **ARM64 primer** — an introduction to ARM64 assembly for people who've never seen it, plus a quick reference of the ARM64 instruction set used by elephc's AArch64 backend
@@ -784,7 +857,7 @@ The **[docs/](docs/)** directory is a complete wiki covering every aspect of the
 
 If you're new to compilers or assembly, start from the top and work your way down. No prior low-level knowledge required.
 
-For runnable language samples, see `examples/`. For the benchmark harness and CI trend artifacts that compare elephc against PHP and equivalent C fixtures, see `benchmarks/README.md`. For a focused perf comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
+For runnable language samples, see `examples/`. For the benchmark harness and CI trend artifacts that compare elephc against PHP and equivalent C fixtures, see `benchmark/README.md`. For the buffer and array storage comparison, see `benchmark/cases/hot-path/buffer-vs-arrays/`.
 
 ## License
 

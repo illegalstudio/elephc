@@ -1,8 +1,6 @@
 ---
 title: "mb_ltrim()"
 description: "Removes Unicode whitespace or the specified characters from the beginning."
-sidebar:
-  order: 860
 ---
 
 ## mb_ltrim()
@@ -22,8 +20,9 @@ Removes Unicode whitespace or the specified characters from the beginning.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_ltrim.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_ltrim.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

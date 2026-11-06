@@ -1,8 +1,6 @@
 ---
 title: "curl_getinfo() - internals"
 description: "Compiler internals for curl_getinfo(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 700
 ---
 
 ## `curl_getinfo()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1177](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1177) (`curl_getinfo`)
+- **Lowering**: [`src/curl_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs) (`curl_getinfo`)
 - **Function symbol**: `curl_getinfo()`
 
 

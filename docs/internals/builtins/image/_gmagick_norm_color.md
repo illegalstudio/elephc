@@ -1,8 +1,6 @@
 ---
 title: "_gmagick_norm_color() - internals"
 description: "Compiler internals for _gmagick_norm_color(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1156
 ---
 
 ## `_gmagick_norm_color()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:10166](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L10166) (`_gmagick_norm_color`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`_gmagick_norm_color`)
 - **Function symbol**: `_gmagick_norm_color()`
 
 

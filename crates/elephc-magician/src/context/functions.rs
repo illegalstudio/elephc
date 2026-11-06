@@ -17,6 +17,8 @@ pub enum EvalNativeGlobalConstant {
     Int(i64),
     Float(f64),
     String(String),
+    /// Binary PHP string constant with a payload that is not valid UTF-8.
+    Bytes(Vec<u8>),
     Resource(i64),
 }
 
@@ -212,6 +214,7 @@ impl ElephcEvalContext {
         identity: u64,
         target: EvalClosureObjectTarget,
     ) {
+        self.may_have_foreign_pcntl_callables |= target.contains_foreign_context();
         self.closure_objects.insert(identity, target);
     }
 
@@ -235,12 +238,13 @@ impl ElephcEvalContext {
     pub fn define_native_function(
         &mut self,
         name: impl Into<String>,
-        function: NativeFunction,
+        mut function: NativeFunction,
     ) -> Result<(), NativeFunction> {
         let name = name.into();
         if self.functions.contains_key(&name) || self.native_functions.contains_key(&name) {
             return Err(function);
         }
+        function.name.clone_from(&name);
         self.native_functions.insert(name, function);
         Ok(())
     }
@@ -311,6 +315,14 @@ impl ElephcEvalContext {
             .is_some_and(|function| function.set_param_default(index, default))
     }
 
+    /// Retains source default names separately from native executable values and Error data.
+    pub fn define_native_function_param_default_constant_name(
+        &mut self, function_name: &str, index: usize, name: String,
+    ) -> bool {
+        self.native_functions.get_mut(function_name)
+            .is_some_and(|function| function.set_param_default_constant_name(index, name))
+    }
+
     /// Records whether one native AOT callback parameter is by-reference.
     pub fn define_native_function_param_by_ref(
         &mut self,
@@ -332,6 +344,25 @@ impl ElephcEvalContext {
         self.native_functions
             .get_mut(function_name)
             .is_some_and(|function| function.set_variadic_index(index))
+    }
+
+    /// Retains one attribute on an already registered native AOT function.
+    pub fn define_native_function_attribute(&mut self, function_name: &str, attribute: EvalAttribute) -> bool {
+        let key = function_name.trim_start_matches('\\').to_ascii_lowercase();
+        self.native_functions.get_mut(&key).is_some_and(|function| {
+            function.add_attribute(attribute);
+            true
+        })
+    }
+
+    /// Records that one native AOT callback is declared `function &name()`.
+    pub fn define_native_function_returns_reference(&mut self, function_name: &str) -> bool {
+        self.native_functions
+            .get_mut(function_name)
+            .is_some_and(|function| {
+                function.set_returns_reference(true);
+                true
+            })
     }
 
     /// Records one native AOT callback return type.

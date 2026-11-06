@@ -57,6 +57,11 @@ pub fn emit_rawurlencode(emitter: &mut Emitter) {
     emitter.instruction("ldrb w12, [x1], #1");                                  // load source byte, advance
     emitter.instruction("sub x11, x11, #1");                                    // decrement remaining
 
+    // -- check 0-9 first: every byte below 'A' would otherwise skip it --
+    emitter.instruction("cmp w12, #48");                                        // >= '0'?
+    emitter.instruction("b.lt __rt_rawurlencode_chk_safe");                     // no -> check safe chars
+    emitter.instruction("cmp w12, #57");                                        // <= '9'?
+    emitter.instruction("b.le __rt_rawurlencode_pass");                         // yes -> pass through
     // -- check alphanumeric: A-Z --
     emitter.instruction("cmp w12, #65");                                        // >= 'A'?
     emitter.instruction("b.lt __rt_rawurlencode_chk_safe");                     // no -> check safe chars
@@ -66,11 +71,6 @@ pub fn emit_rawurlencode(emitter: &mut Emitter) {
     emitter.instruction("cmp w12, #97");                                        // >= 'a'?
     emitter.instruction("b.lt __rt_rawurlencode_chk_safe");                     // no -> check safe chars
     emitter.instruction("cmp w12, #122");                                       // <= 'z'?
-    emitter.instruction("b.le __rt_rawurlencode_pass");                         // yes -> pass through
-    // -- check 0-9 --
-    emitter.instruction("cmp w12, #48");                                        // >= '0'?
-    emitter.instruction("b.lt __rt_rawurlencode_chk_safe");                     // no -> check safe chars
-    emitter.instruction("cmp w12, #57");                                        // <= '9'?
     emitter.instruction("b.le __rt_rawurlencode_pass");                         // yes -> pass through
 
     // -- check safe chars: - (45), _ (95), . (46), ~ (126) --
@@ -160,6 +160,11 @@ fn emit_rawurlencode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov dl, BYTE PTR [rsi]");                              // load one source byte before deciding whether rawurlencode() must encode it
     emitter.instruction("add rsi, 1");                                          // advance the borrowed source string cursor after consuming one byte
     emitter.instruction("sub rcx, 1");                                          // decrement the remaining source length after consuming one byte
+    // -- check 0-9 first: every byte below 'A' would otherwise skip it --
+    emitter.instruction("cmp dl, 48");                                          // is the current source byte at least '0', which could make it a decimal digit safe to pass through?
+    emitter.instruction("jb __rt_rawurlencode_chk_safe_linux_x86_64");          // continue with the punctuation safe-byte checks when the byte falls below '0'
+    emitter.instruction("cmp dl, 57");                                          // is the current source byte at most '9', which keeps it inside the decimal-digit safe range?
+    emitter.instruction("jbe __rt_rawurlencode_passthru_linux_x86_64");         // pass decimal digits straight through without percent-encoding them
     emitter.instruction("cmp dl, 65");                                          // is the current source byte at least 'A', which could make it an uppercase ASCII safe character?
     emitter.instruction("jb __rt_rawurlencode_chk_safe_linux_x86_64");          // continue with the remaining safe-byte checks when the byte falls below 'A'
     emitter.instruction("cmp dl, 90");                                          // is the current source byte at most 'Z', which keeps it inside the uppercase ASCII safe range?
@@ -168,10 +173,6 @@ fn emit_rawurlencode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_rawurlencode_chk_safe_linux_x86_64");          // continue with the remaining safe-byte checks when the byte falls below 'a'
     emitter.instruction("cmp dl, 122");                                         // is the current source byte at most 'z', which keeps it inside the lowercase ASCII safe range?
     emitter.instruction("jbe __rt_rawurlencode_passthru_linux_x86_64");         // pass lowercase ASCII letters straight through without percent-encoding them
-    emitter.instruction("cmp dl, 48");                                          // is the current source byte at least '0', which could make it a decimal digit safe to pass through?
-    emitter.instruction("jb __rt_rawurlencode_chk_safe_linux_x86_64");          // continue with the punctuation safe-byte checks when the byte falls below '0'
-    emitter.instruction("cmp dl, 57");                                          // is the current source byte at most '9', which keeps it inside the decimal-digit safe range?
-    emitter.instruction("jbe __rt_rawurlencode_passthru_linux_x86_64");         // pass decimal digits straight through without percent-encoding them
 
     emitter.label("__rt_rawurlencode_chk_safe_linux_x86_64");
     emitter.instruction("cmp dl, 45");                                          // is the current source byte '-' which rawurlencode() leaves untouched?
@@ -230,4 +231,28 @@ fn emit_rawurlencode_linux_x86_64(emitter: &mut Emitter) {
     // -- impossible result size: report the shared allocation-overflow fatal error --
     emitter.label("__rt_rawurlencode_size_overflow_linux_x86_64");
     emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline reachable from every caller
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Digits are classified before the `'A'` lower bound on every target. Checking A-Z first
+    /// sent every byte below `'A'` (all ASCII digits) straight to the punctuation checks, so
+    /// digits were percent-encoded.
+    #[test]
+    fn digits_are_checked_before_the_uppercase_range_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_rawurlencode(&mut emitter);
+            let asm = emitter.output();
+            let (digit, upper) = if name == "linux-x86_64" {
+                ("cmp dl, 48", "cmp dl, 65")
+            } else {
+                ("cmp w12, #48", "cmp w12, #65")
+            };
+            assert!(asm.find(digit).unwrap() < asm.find(upper).unwrap(), "{name}");
+        }
+    }
 }

@@ -37,6 +37,7 @@ pub fn constants() -> &'static [ConstantContract] {
         .get_or_init(|| {
             let mut constants = Vec::new();
             constants.extend_from_slice(crate::catalog_constants::CONSTANTS);
+            constants.extend_from_slice(crate::catalog_constants_tokenizer::CONSTANTS);
             constants.extend_from_slice(crate::catalog_constants_curl::CURL_CONSTANTS);
             constants.sort_unstable_by_key(|constant| constant.name);
             constants
@@ -50,11 +51,26 @@ pub fn lookup_class(name: &str) -> Option<&'static ClassContract> {
     class_index().get(canonical.as_str()).copied()
 }
 
-/// Finds one global constant contract by exact name (a leading `\` is tolerated).
+/// Finds a global constant, honoring PHP's case-insensitive true, false, and null names.
 pub fn lookup_constant(name: &str) -> Option<&'static ConstantContract> {
-    constant_index().get(name.trim_start_matches('\\')).copied()
+    constant_index().get(canonical_constant_name(name)).copied()
 }
 
+/// Normalizes literal constants and a leading separator without folding ordinary names.
+pub fn canonical_constant_name(name: &str) -> &str {
+    let name = name.trim_start_matches('\\');
+    if name.eq_ignore_ascii_case("true") {
+        "TRUE"
+    } else if name.eq_ignore_ascii_case("false") {
+        "FALSE"
+    } else if name.eq_ignore_ascii_case("null") {
+        "NULL"
+    } else {
+        name
+    }
+}
+
+/// Builds and validates the case-insensitive class index once, rejecting duplicate names or IDs.
 fn class_index() -> &'static HashMap<String, &'static ClassContract> {
     static INDEX: OnceLock<HashMap<String, &'static ClassContract>> = OnceLock::new();
     INDEX.get_or_init(|| {
@@ -98,6 +114,7 @@ fn class_index() -> &'static HashMap<String, &'static ClassContract> {
     })
 }
 
+/// Builds and validates the exact-name constant index once, rejecting duplicate names or IDs.
 fn constant_index() -> &'static HashMap<&'static str, &'static ConstantContract> {
     static INDEX: OnceLock<HashMap<&'static str, &'static ConstantContract>> = OnceLock::new();
     INDEX.get_or_init(|| {
@@ -143,6 +160,24 @@ fn constant_index() -> &'static HashMap<&'static str, &'static ConstantContract>
 
 #[cfg(test)]
 mod tests {
+    /// Every class-like and constant in the pinned Core baseline has a real shared contract.
+    #[test]
+    fn core_catalog_covers_the_complete_php_baseline() {
+        let baseline: serde_json::Value = serde_json::from_str(include_str!("../../../scripts/docs/php_baseline.json")).unwrap();
+        for (name, value) in baseline["classes"].as_object().unwrap() {
+            if value["extension"] != "core" { continue; }
+            let contract = super::lookup_class(name).unwrap_or_else(|| panic!("missing Core class {name}"));
+            assert_eq!(contract.module, crate::PhpModule::Core, "{name}");
+        }
+        for (name, value) in baseline["constants"].as_object().unwrap() {
+            if value["extension"] != "core" { continue; }
+            let contract = super::lookup_constant(name).unwrap_or_else(|| panic!("missing Core constant {name}"));
+            assert_eq!(contract.module, crate::PhpModule::Core, "{name}");
+        }
+        assert_eq!(super::lookup_constant("nUlL").unwrap().value.php_type(), crate::ConstType::Null);
+        assert_eq!(super::lookup_constant("tRuE").unwrap().value, crate::ConstValue::Bool(true));
+        assert!(super::lookup_constant("php_int_size").is_none());
+    }
     use super::*;
 
     /// Verifies the generated `catalog_constants_curl` table is byte-for-byte the frozen curl

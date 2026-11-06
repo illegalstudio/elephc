@@ -1,8 +1,6 @@
 ---
 title: "mb_substr()"
 description: "Selects a substring using character offsets and an optional character length."
-sidebar:
-  order: 888
 ---
 
 ## mb_substr()
@@ -23,8 +21,9 @@ Selects a substring using character offsets and an optional character length.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_substr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_substr.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

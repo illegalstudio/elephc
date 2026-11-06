@@ -1,8 +1,6 @@
 ---
 title: "image_type_to_extension() - internals"
 description: "Compiler internals for image_type_to_extension(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 454
 ---
 
 ## `image_type_to_extension()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3737](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3737) (`image_type_to_extension`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`image_type_to_extension`)
 - **Function symbol**: `image_type_to_extension()`
 
 

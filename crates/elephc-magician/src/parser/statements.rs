@@ -79,6 +79,13 @@ impl Parser {
         if matches!(self.current(), TokenKind::AttributeStart) {
             return self.parse_attributed_stmt();
         }
+        // The empty statement. PHP accepts a lone `;` wherever a statement may stand
+        // (`echo 1;;`, `while (f());`), and a `?>` lexes as one: `echo 1; ?>X` is `echo 1; ;
+        // echo "X";`. It was refused here, so every eval'd close tag after a `;` failed.
+        if matches!(self.current(), TokenKind::Semicolon) {
+            self.advance();
+            return Ok(Vec::new());
+        }
         match self.current() {
             TokenKind::Ident(name) if ident_eq(name, "break") => {
                 self.advance();
@@ -117,7 +124,10 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "interface") => {
                 self.parse_interface_decl_stmt()
             }
-            TokenKind::Ident(name) if ident_eq(name, "namespace") => self.parse_namespace_stmt(),
+            // `namespace\helper();` is a relative name leading an expression statement.
+            TokenKind::Ident(name) if ident_eq(name, "namespace") && !self.at_relative_name() => {
+                self.parse_namespace_stmt()
+            }
             TokenKind::Ident(name) if ident_eq(name, "return") => {
                 self.advance();
                 if self.consume_semicolon() {
@@ -152,12 +162,12 @@ impl Parser {
             TokenKind::Ident(name) if is_unsupported_statement_keyword(name) => {
                 Err(EvalParseError::UnsupportedConstruct)
             }
-            TokenKind::Ident(_) | TokenKind::Backslash
+            TokenKind::Ident(_) | TokenKind::ReservedNameHead(_) | TokenKind::Backslash
                 if self.current_starts_static_property_assignment() =>
             {
                 self.parse_static_property_set_stmt(true)
             }
-            TokenKind::Ident(_) | TokenKind::Backslash
+            TokenKind::Ident(_) | TokenKind::ReservedNameHead(_) | TokenKind::Backslash
                 if self.current_starts_static_property_postfix_inc_dec() =>
             {
                 self.parse_static_property_inc_dec_stmt(false, true)
@@ -205,6 +215,23 @@ impl Parser {
             }
             TokenKind::Eof => Err(EvalParseError::UnexpectedEof),
             _ => {
+                if matches!(self.current(), TokenKind::Ident(_) | TokenKind::Backslash | TokenKind::Question) {
+                    let mut probe = self.clone();
+                    if let Ok(Some(declared)) = probe.parse_type_decl(EvalTypePosition::MethodParameter) {
+                        if let TokenKind::DollarIdent(name) = probe.current() {
+                            if matches!(probe.peek(), TokenKind::Equal) {
+                                let name = name.clone();
+                                *self = probe;
+                                self.native_generic_syntax = true;
+                                self.advance();
+                                self.expect(TokenKind::Equal)?;
+                                let value = self.parse_expr()?;
+                                self.expect_semicolon()?;
+                                return Ok(vec![EvalStmt::TypedVar { name, declared, value }]);
+                            }
+                        }
+                    }
+                }
                 let expr = self.parse_expr()?;
                 self.parse_property_like_stmt_tail(expr, true)
             }
@@ -349,29 +376,13 @@ impl Parser {
     }
 
     /// Returns the token position after `Class::$property` when present at `pos`.
-    fn static_property_tokens_end(&self, mut pos: usize) -> Option<usize> {
-        if matches!(self.tokens.get(pos), Some(TokenKind::Backslash)) {
-            pos += 1;
-        }
-        if !matches!(self.tokens.get(pos), Some(TokenKind::Ident(_))) {
-            return None;
-        }
-        pos += 1;
-        while matches!(self.tokens.get(pos), Some(TokenKind::Backslash)) {
-            pos += 1;
-            if !matches!(self.tokens.get(pos), Some(TokenKind::Ident(_))) {
-                return None;
-            }
-            pos += 1;
-        }
-        if !matches!(self.tokens.get(pos), Some(TokenKind::DoubleColon)) {
-            return None;
-        }
-        pos += 1;
-        if !matches!(self.tokens.get(pos), Some(TokenKind::DollarIdent(_))) {
-            return None;
-        }
-        Some(pos + 1)
+    fn static_property_tokens_end(&self, pos: usize) -> Option<usize> {
+        let mut probe = self.clone();
+        probe.pos = pos;
+        probe.parse_class_reference_name(true).ok()?;
+        probe.expect(TokenKind::DoubleColon).ok()?;
+        if !matches!(probe.current(), TokenKind::DollarIdent(_)) { return None; }
+        Some(probe.pos + 1)
     }
 
     /// Returns true when tokens after a static property form direct or indexed assignment.

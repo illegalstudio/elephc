@@ -95,6 +95,7 @@ pub fn prepare_runtime_object_for_emit(
         Emit::Executable => {
             prepare_runtime_object_with_mode(heap_size, target, features, false, false)
         }
+        Emit::Phpext => Err("PHP extensions build an isolated combined runtime object".to_string()),
         Emit::Cdylib => prepare_runtime_object_with_mode(heap_size, target, features, true, true),
         Emit::Staticlib => {
             prepare_runtime_object_with_mode(heap_size, target, features, false, true)
@@ -227,7 +228,7 @@ fn prepare_runtime_object_with_mode(
 }
 
 /// Returns the platform-specific cache directory path for runtime objects.
-fn runtime_cache_dir() -> PathBuf {
+pub(crate) fn runtime_cache_dir() -> PathBuf {
     if let Some(path) = env::var_os("XDG_CACHE_HOME") {
         PathBuf::from(path).join("elephc")
     } else if let Some(home) = env::var_os("HOME") {

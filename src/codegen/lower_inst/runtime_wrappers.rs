@@ -8,6 +8,7 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 //! - Descriptor invokers bind raw user arguments; the hidden argc/count prefixes are
 //!   synthesized inside the invoker body, never passed by the caller.
+//! - Hidden invocation profiles preserve weak legacy scope ids and encode strict scope as -id-3.
 
 use super::*;
 
@@ -36,11 +37,13 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         }
     });
     let Some(operation) = operation else {
-        return emit_runtime_callable_invoker_inline(ctx, sig, &[]);
+        // A transform that persists its result (`strtoupper`) must not be copied again here.
+        let owns_string_return = sig.return_type.codegen_repr() == PhpType::Str
+            && super::builtin_returns_owned_string(name);
+        return emit_runtime_callable_invoker_with_string_owner(ctx, sig, &[], owns_string_return, false);
     };
     if operation == elephc_builtin_contract::RuntimeBuiltinId::MbConvertVariables {
         let label = ctx.next_global_label("callable_invoker");
-        let done_label = ctx.next_label("callable_invoker_done");
         let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
             ctx.module, None, sig,
         );
@@ -54,17 +57,16 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
             php_return_status: false,
             defaults: &defaults,
         };
-        let enclosing = ctx.emitter.current_text_section();
-        abi::emit_jump(ctx.emitter, &done_label);
+        // Out of line, not spliced into the function that first needed it: see
+        // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+        let scope = ctx.emitter.begin_out_of_line();
         super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
             ctx.emitter, ctx.data, &invoker,
         );
-        ctx.emitter.reopen_text_section(enclosing);
-        ctx.emitter.label(&done_label);
+        ctx.emitter.end_out_of_line(scope);
         return label;
     }
     let label = ctx.next_global_label("callable_invoker");
-    let done_label = ctx.next_label("callable_invoker_done");
     let defaults = crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(
         ctx.module, None, sig,
     );
@@ -78,13 +80,13 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         php_return_status: false,
         defaults: &defaults,
     };
-    let enclosing = ctx.emitter.current_text_section();
-    abi::emit_jump(ctx.emitter, &done_label);
+    // Out of line, not spliced into the function that first needed it: see
+    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = ctx.emitter.begin_out_of_line();
     super::super::runtime_callable_invoker::emit_runtime_callable_invoker(
         ctx.emitter, ctx.data, &invoker,
     );
-    ctx.emitter.reopen_text_section(enclosing);
-    ctx.emitter.label(&done_label);
+    ctx.emitter.end_out_of_line(scope);
     label
 }
 
@@ -125,7 +127,6 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         return label;
     }
     let label = ctx.next_global_label("callable_invoker");
-    let done_label = ctx.next_label("callable_invoker_done");
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
         label: &label,
         sig,
@@ -136,13 +137,11 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         php_return_status,
         defaults: &defaults,
     };
-    // The thunk's global entry opens its own `.text` section on ELF; put the
-    // enclosing function back before continuing it, or its tail lands in there.
-    let enclosing = ctx.emitter.current_text_section();
-    abi::emit_jump(ctx.emitter, &done_label);
+    // Out of line, not spliced into the function that first needed it: see
+    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = ctx.emitter.begin_out_of_line();
     super::super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
-    ctx.emitter.reopen_text_section(enclosing);
-    ctx.emitter.label(&done_label);
+    ctx.emitter.end_out_of_line(scope);
     ctx.shared
         .cache_runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults, &label);
     label
@@ -213,7 +212,6 @@ fn emit_runtime_call_wrapper_inline(
         RuntimeCallWrapperKind::Extern => "callable_extern",
     };
     let label = ctx.next_global_label(label_prefix);
-    let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     // Reserve the label before lowering the synthetic body. A callable-taking builtin
     // can itself require the open runtime callable table while its wrapper is being
     // emitted. Publishing the reservation here makes that recursion reuse this entry
@@ -230,9 +228,10 @@ fn emit_runtime_call_wrapper_inline(
     let mut wrapper_module = ctx.module.clone();
     let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
     ctx.shared.record_generated_runtime_features(&wrapper);
-    let enclosing = ctx.emitter.current_text_section();
-    abi::emit_jump(ctx.emitter, &done_label);
-    super::super::block_emit::emit_synthetic_function_with_label(
+    // Out of line, not spliced into the function that first needed it: see
+    // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
+    let scope = ctx.emitter.begin_out_of_line();
+    let emitted = super::super::block_emit::emit_synthetic_function_with_label(
         &wrapper_module,
         &wrapper,
         &label,
@@ -240,9 +239,11 @@ fn emit_runtime_call_wrapper_inline(
         ctx.data,
         ctx.shared,
         false,
-    )?;
-    ctx.emitter.reopen_text_section(enclosing);
-    ctx.emitter.label(&done_label);
+    );
+    // Closed on the error path too: the scope holds the caller's text, and returning early with
+    // it would drop everything the caller had emitted so far.
+    ctx.emitter.end_out_of_line(scope);
+    emitted?;
     Ok(label)
 }
 
@@ -255,6 +256,31 @@ fn build_runtime_call_wrapper_function(
     kind: RuntimeCallWrapperKind,
 ) -> Result<Function> {
     if let RuntimeCallWrapperKind::Builtin { strict_php } = kind {
+        // GMP's homes lower through the prelude helper graph, which first-class callable
+        // wrappers must reproduce. Other EIR-graph homes already build their own callable
+        // body through the generic wrapper path, so widening this predicate would duplicate
+        // their allocation graph (for example `gc_status`).
+        let prepared_eir_lowering = crate::builtins::registry::lookup(name).is_some_and(|def| {
+            def.spec.semantics.runtime_functions
+                == crate::builtins::semantics::BuiltinRuntimeFunctions::None
+                && matches!(
+                    def.spec.semantics.lowering,
+                    crate::builtins::semantics::BuiltinLowering::Eir(_)
+                )
+                && elephc_builtin_contract::lookup(name)
+                    .is_some_and(|contract| contract.module == elephc_builtin_contract::PhpModule::Gmp)
+        });
+        if prepared_eir_lowering || crate::builtins::registry::lookup(name).is_some_and(|def| matches!(
+            def.spec.semantics.argument_lowering,
+            crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
+        )) {
+            let function = crate::ir_lower::lower_prepared_builtin_callable(
+                module, label, name, sig, strict_php,
+            );
+            crate::ir::validate_function(&function).map_err(|error|
+                CodegenIrError::invalid_module(format!("prepared builtin callable: {error:?}")))?;
+            return Ok(function);
+        }
         let packed_merge = crate::builtins::registry::lookup(name).is_some_and(|def| {
             def.spec.semantics.runtime_functions
                 == crate::builtins::semantics::BuiltinRuntimeFunctions::One(crate::ir::RuntimeFnId::ArrayMerge)
@@ -325,11 +351,12 @@ fn build_runtime_call_wrapper_function(
     builder.position_at_end(entry);
     let mut operands = wrapper_param_operands(&mut builder, sig);
     if carries_invocation_scope {
-        operands.push(builder.emit_load_local(
+        let profile = builder.emit_load_local(
             LocalSlotId::from_raw(sig.params.len() as u32),
             IrType::I64,
             PhpType::Int,
-        ));
+        );
+        operands.push(decode_invocation_scope(&mut builder, profile));
     }
     let result = match kind {
         RuntimeCallWrapperKind::Builtin { strict_php } => {
@@ -384,6 +411,27 @@ fn build_runtime_call_wrapper_function(
     };
     builder.terminate(Terminator::Return { value: result });
     Ok(function)
+}
+
+/// Removes source strictness before the clone wrapper consumes its lexical class id.
+fn decode_invocation_scope(builder: &mut Builder<'_>, profile: ValueId) -> ValueId {
+    let global = builder.emit_const_i64(-1);
+    let strict = builder.emit(Op::ICmp, vec![profile, global],
+        Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Slt)),
+        IrType::I64, PhpType::Bool, Ownership::NonHeap).unwrap();
+    let decode = builder.create_named_block("scope.strict", Vec::new());
+    let merge = builder.create_named_block("scope.decoded", vec![(IrType::I64, PhpType::Int)]);
+    builder.terminate(Terminator::CondBr {
+        cond: strict, then_target: decode, then_args: Vec::new(),
+        else_target: merge, else_args: vec![profile],
+    });
+    builder.position_at_end(decode);
+    let base = builder.emit_const_i64(-3);
+    let decoded = builder.emit(Op::ISub, vec![base, profile], None,
+        IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+    builder.terminate(Terminator::Br { target: merge, args: vec![decoded] });
+    builder.position_at_end(merge);
+    builder.block_param(merge, 0)
 }
 
 /// Maps a builtin's shared ownership contract onto its synthetic wrapper result.

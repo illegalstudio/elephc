@@ -498,7 +498,7 @@ fn non_recursive_return_type_mismatch_is_still_rejected() {
 function f(int $x): string { return $x; }
 echo f(1), "\n";
 "#,
-        "Function 'f' return type expects Str, got Int",
+        "Function 'f' return type expects string, got int",
     );
 }
 
@@ -519,7 +519,7 @@ function r(int $x): string {
 }
 echo r(0), "\n";
 "#,
-        "Function 'r' return type expects Str, got Int",
+        "Function 'r' return type expects string, got int",
     );
 }
 
@@ -535,7 +535,7 @@ function r(int $x): array {
 }
 print_r(r(0));
 "#,
-        "Function 'r' return type expects Union([Array(Mixed), AssocArray { key: Mixed, value: Mixed }]), got Str",
+        "Function 'r' return type expects array, got string",
     );
 }
 
@@ -554,7 +554,7 @@ function r(int $x): int {
 }
 echo r(0), "\n";
 "#,
-        "Function 'r' return type expects Int, got Str",
+        "Function 'r' return type expects int, got string",
     );
 }
 
@@ -571,6 +571,6 @@ function ma(int $x): string { if ($x > 3) { return "a"; } return mb($x + 1); }
 function mb(int $x): string { if ($x > 3) { return 42; } return ma($x + 1); }
 echo ma(0), "\n";
 "#,
-        "Function 'mb' return type expects Str, got Int",
+        "Function 'mb' return type expects string, got int",
     );
 }

@@ -2835,7 +2835,7 @@ echo ($actual === $previous ? "same" : "different") . "|" . $error->getCode();
 fn test_pdo_exception_internal_methods_keep_final_exception_metadata() {
     let tokens = elephc::lexer::tokenize("<?php new PDOException('x');").unwrap();
     let program = elephc::parser::parse(&tokens).unwrap();
-    let program = elephc::autoload::collect_aliases(program);
+    let program = elephc::autoload::collect_aliases(program).expect("alias collection failed");
     let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
     let program = elephc::pdo_prelude::inject_if_used(program, false, &mut inventory);
     let program = elephc::name_resolver::resolve(program).unwrap();
@@ -2850,6 +2850,129 @@ fn test_pdo_exception_internal_methods_keep_final_exception_metadata() {
             "{method}"
         );
     }
+}
+
+/// PDO's widened getCode return must not satisfy a stricter user interface contract.
+#[test]
+fn test_pdo_exception_get_code_rejects_strict_user_interface_contracts() {
+    for declaration in [
+        "interface CodeContract { public function getCode(): int; }",
+        "interface CodeContract extends Throwable { public function getCode(): int; }",
+    ] {
+        let source = format!("<?php {declaration} class BadPdoError extends PDOException implements CodeContract {{}}");
+        let tokens = elephc::lexer::tokenize(&source).unwrap();
+        let program = elephc::parser::parse(&tokens).unwrap();
+        let program = elephc::autoload::collect_aliases(program).expect("alias collection failed");
+        let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
+        let program = elephc::pdo_prelude::inject_if_used(program, false, &mut inventory);
+        let program = elephc::name_resolver::resolve(program).unwrap();
+        let Err(error) = elephc::types::check(&program) else {
+            panic!("PDO's SQLSTATE exemption must not bypass a user-declared int contract");
+        };
+        assert!(error.message.contains("getcode") && error.message.contains("return type"), "{}", error.message);
+    }
+}
+
+/// Inheriting Throwable's unchanged contract preserves PDO's intentional SQLSTATE widening.
+#[test]
+fn test_pdo_exception_get_code_accepts_inherited_throwable_contract() {
+    let source = "<?php interface UserThrowable extends Throwable {} class GoodPdoError extends PDOException implements UserThrowable {}";
+    let tokens = elephc::lexer::tokenize(source).unwrap();
+    let program = elephc::parser::parse(&tokens).unwrap();
+    let program = elephc::autoload::collect_aliases(program).expect("alias collection failed");
+    let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let program = elephc::pdo_prelude::inject_if_used(program, false, &mut inventory);
+    let program = elephc::name_resolver::resolve(program).unwrap();
+    let checked = elephc::types::check(&program).expect("an unchanged inherited Throwable contract remains valid");
+    assert_eq!(
+        checked.interfaces["UserThrowable"].method_declaring_interfaces["getcode"],
+        "Throwable",
+    );
+}
+
+/// A user class extending PDOException compiles and inherits the prelude's final `getCode()`
+/// instead of being re-validated against `Throwable::getCode()`, as PHP allows (issue #1320).
+/// Expected output measured on PHP 8.5.10.
+#[test]
+fn test_pdo_exception_subclass_inherits_final_get_code() {
+    let out = compile_and_run(
+        r#"<?php
+class MyPdoError extends PDOException {}
+$e = new MyPdoError("x", 5);
+echo get_class($e), "|", $e->getCode(), "|", $e->getMessage(), "\n";
+try {
+    throw new MyPdoError("driver failed", 7, new LogicException("root"));
+} catch (PDOException $caught) {
+    echo get_class($caught), "|", $caught->getCode(), "|", $caught->getPrevious()->getMessage(), "\n";
+}
+$method = new ReflectionMethod(MyPdoError::class, 'getCode');
+echo $method->isFinal() ? "final" : "open", "|", $method->getDeclaringClass()->getName(), "\n";
+"#,
+    );
+    assert_eq!(out, "MyPdoError|5|x\nMyPdoError|7|root\nfinal|Exception\n");
+}
+
+/// Executes `PDOException::getCode()` and `getPrevious()` on real driver errors: the code is
+/// the SQLSTATE *string*, a driver error has no previous Throwable, a PDOException chained
+/// under another exception stays reachable through `getPrevious()`, and a PDOException built
+/// with a previous Throwable returns that exact object and its integer code. Expected output
+/// measured on PHP 8.5.10.
+#[test]
+fn test_pdo_exception_get_code_and_previous_run_on_driver_errors() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+try {
+    $db->query("SELECT * FROM missing_table");
+} catch (PDOException $e) {
+    var_dump($e->getCode());
+    var_dump($e->getPrevious());
+}
+try {
+    try {
+        $db->exec("INSERT INTO nowhere VALUES (1)");
+    } catch (PDOException $first) {
+        throw new LogicException("wrapped", 9, $first);
+    }
+} catch (LogicException $wrapper) {
+    $cause = $wrapper->getPrevious();
+    echo get_class($cause), "|", $cause->getMessage(), "\n";
+}
+$inner = new RuntimeException("inner", 7);
+$outer = new PDOException("outer", 3, $inner);
+var_dump($outer->getCode());
+var_dump($outer->getPrevious() === $inner);
+echo $outer->getPrevious()->getMessage(), "|", $outer->getPrevious()->getCode(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(5) \"HY000\"\nNULL\n\
+         PDOException|SQLSTATE[HY000]: General error: 1 no such table: nowhere\n\
+         int(3)\nbool(true)\ninner|7\n"
+    );
+}
+
+/// The prelude's SQLSTATE `getCode()` exemption does not reach a user subclass: overriding the
+/// inherited final method is rejected and names `Exception` as its declaring class (#1302).
+#[test]
+fn test_pdo_exception_subclass_cannot_override_final_get_code() {
+    let source = "<?php class MyPdoError extends PDOException { public function getCode(): string|int { return 'HY000'; } }";
+    let tokens = elephc::lexer::tokenize(source).unwrap();
+    let program = elephc::parser::parse(&tokens).unwrap();
+    let program = elephc::autoload::collect_aliases(program).expect("alias collection failed");
+    let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let program = elephc::pdo_prelude::inject_if_used(program, false, &mut inventory);
+    let program = elephc::name_resolver::resolve(program).unwrap();
+    let Err(error) = elephc::types::check(&program) else {
+        panic!("overriding the inherited final getCode() must not type-check");
+    };
+    assert!(
+        error.message.contains("Cannot override final method Exception::getCode"),
+        "{}",
+        error.message
+    );
 }
 
 /// Pdo\Pgsql::escapeIdentifier is a pure string transform (PQescapeIdentifier

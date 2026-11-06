@@ -1,8 +1,6 @@
 ---
 title: "session_name()"
 description: "Reads or sets the session name, which is also the cookie name."
-sidebar:
-  order: 990
 ---
 
 ## session_name()
@@ -20,8 +18,9 @@ Reads or sets the session name, which is also the cookie name.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

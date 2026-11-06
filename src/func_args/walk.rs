@@ -323,7 +323,9 @@ impl Rewriter {
                 .iter()
                 .find(|(_, _, default, _)| default.is_some())
                 .map(|(name, ..)| name.clone()),
-            source_variadic: variadic.clone(),
+            // Compiler-provided collectors already contain the passed-count metadata.
+            // They must not be snapshotted again as a PHP-declared variadic tail.
+            source_variadic: variadic.clone().filter(|name| name != HIDDEN_ARGS_PARAM),
             used: self.capture_all_frames,
         };
         let outer = self.scope.replace(scope);
@@ -513,6 +515,7 @@ impl Rewriter {
             ExprKind::StaticMethodCall { args, .. }
             | ExprKind::NewScopedObject { args, .. }
             | ExprKind::NewObject { args, .. }
+            | ExprKind::NewGeneric { args, .. }
             | ExprKind::ClosureCall { args, .. } => self.walk_exprs(args),
             ExprKind::NewDynamic { name_expr, args } => {
                 self.walk_expr(name_expr);

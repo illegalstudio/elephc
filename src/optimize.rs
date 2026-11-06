@@ -23,12 +23,14 @@ use std::rc::Rc;
 mod binding_decisions;
 mod control;
 mod effect_analysis;
+mod return_boundaries;
 mod effects;
 mod exception_flow;
-mod fold;
+pub(crate) mod fold;
 /// Keeps a declaration PHP calls a generator recognizable as one through the AST passes.
 mod generator_bodies;
 mod namespace_fallbacks;
+mod output;
 mod propagate;
 mod target_guards;
 pub mod reachability;
@@ -37,6 +39,7 @@ use binding_decisions::{with_local_binding_decision_spans, with_mixed_storage_lo
 use control::*;
 use effect_analysis::{
     collect_instance_dispatch_metadata, compute_program_callable_effects, method_effect_key,
+    FunctionEffectLookup,
 };
 use effects::*;
 use exception_flow::{with_exception_flow_analysis, ExceptionFlowAnalysis};
@@ -44,12 +47,15 @@ use fold::*;
 use propagate::*;
 
 pub use reachability::prune_unreachable_declarations;
+pub(crate) use exception_flow::{CheckerExceptionAnalysis, CheckerThrownTypes};
+pub(crate) use return_boundaries::{ReturnBoundaryFacts, with_return_boundary_facts, active_return_boundary_checks_source};
+pub use output::with_hosted_output;
 
 #[cfg(test)]
 mod tests;
 
 thread_local! {
-    static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<Rc<HashMap<String, Effect>>>> = const { RefCell::new(None) };
+    static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<FunctionEffectLookup>> = const { RefCell::new(None) };
     static ACTIVE_STATIC_METHOD_EFFECTS: RefCell<Option<Rc<HashMap<String, Effect>>>> = const { RefCell::new(None) };
     static ACTIVE_INSTANCE_METHOD_EFFECTS: RefCell<Option<Rc<HashMap<String, Effect>>>> = const { RefCell::new(None) };
     static ACTIVE_INSTANCE_DISPATCH_METADATA: RefCell<Option<Rc<InstanceDispatchMetadata>>> = const { RefCell::new(None) };
@@ -62,9 +68,9 @@ thread_local! {
 
 /// Borrows the active function-effect summary without cloning its whole map.
 pub(in crate::optimize) fn with_active_function_effects<R>(
-    f: impl FnOnce(Option<&HashMap<String, Effect>>) -> R,
+    f: impl FnOnce(Option<&FunctionEffectLookup>) -> R,
 ) -> R {
-    ACTIVE_FUNCTION_EFFECTS.with(|slot| f(slot.borrow().as_deref()))
+    ACTIVE_FUNCTION_EFFECTS.with(|slot| f(slot.borrow().as_ref()))
 }
 
 /// Borrows the active static-method summary without cloning its whole map.
@@ -116,25 +122,27 @@ pub(crate) fn fold_constant_expression(expr: Expr) -> Expr {
 /// This variant is used before type checking so portable `PHP_OS[_FAMILY]` and
 /// `function_exists()` guards can remove branches containing target-unavailable builtins.
 pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
-    let signatures = collect_by_ref_signatures(&program);
-    with_fresh_reference_volatile(|| {
-        with_by_ref_signatures(signatures, || ACTIVE_FOLD_TARGET.with(|slot| {
-            let previous = slot.replace(Some(target));
-            let user_functions = collect_top_level_user_functions(&program);
-            let previous_functions =
-                ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(Some(user_functions)));
-            let folded = fold_constants(program);
-            // A target guard can turn a conditional polyfill declaration into an unconditional
-            // declaration. Refresh the inventory so later probes see the retained function.
-            // Avoid `fold_constants` here, which would seed CLI superglobals twice.
-            let materialized_functions = collect_top_level_user_functions(&folded);
-            ACTIVE_FOLD_USER_FUNCTIONS
-                .with(|functions| functions.replace(Some(materialized_functions)));
-            let folded = namespace_fallbacks::fold_after_pruning(folded);
-            ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(previous_functions));
-            slot.replace(previous);
-            folded
-        }))
+    crate::compiler_stack::with_compiler_stack(|| {
+        let signatures = collect_by_ref_signatures(&program);
+        with_fresh_reference_volatile(|| {
+            with_by_ref_signatures(signatures, || ACTIVE_FOLD_TARGET.with(|slot| {
+                let previous = slot.replace(Some(target));
+                let user_functions = collect_top_level_user_functions(&program);
+                let previous_functions =
+                    ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(Some(user_functions)));
+                let folded = fold_constants(program);
+                // A target guard can turn a conditional polyfill declaration into an unconditional
+                // declaration. Refresh the inventory so later probes see the retained function.
+                // Avoid `fold_constants` here, which would seed CLI superglobals twice.
+                let materialized_functions = collect_top_level_user_functions(&folded);
+                ACTIVE_FOLD_USER_FUNCTIONS
+                    .with(|functions| functions.replace(Some(materialized_functions)));
+                let folded = namespace_fallbacks::fold_after_pruning(folded);
+                ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(previous_functions));
+                slot.replace(previous);
+                folded
+            }))
+        })
     })
 }
 
@@ -343,6 +351,11 @@ impl PostTypecheckOptimizer {
     }
 
     /// Builds callable and exception analyses, optionally using authoritative checker metadata.
+    ///
+    /// Both public constructors funnel through here, and every analysis walks the whole program,
+    /// so it runs under `crate::compiler_stack::with_compiler_stack` like the four phases below:
+    /// an embedder driving the optimizer without the CLI's wrapper gets the same stack budget
+    /// (issue #1149).
     fn new_with_optional_type_metadata(
         program: &Program,
         type_metadata: Option<(
@@ -351,15 +364,17 @@ impl PostTypecheckOptimizer {
             &HashMap<String, crate::types::InterfaceInfo>,
         )>,
     ) -> Self {
-        let callable_effects = CallableEffectAnalysis::from_program(program);
-        let exception_flow = with_callable_effect_analysis(&callable_effects, || {
-            Rc::new(ExceptionFlowAnalysis::from_program(program, type_metadata))
-        });
-        Self {
-            callable_effects,
-            by_ref_signatures: collect_by_ref_signatures(program),
-            exception_flow,
-        }
+        crate::compiler_stack::with_compiler_stack(|| {
+            let callable_effects = CallableEffectAnalysis::from_program(program);
+            let exception_flow = with_callable_effect_analysis(&callable_effects, || {
+                Rc::new(ExceptionFlowAnalysis::from_program(program, type_metadata))
+            });
+            Self {
+                callable_effects,
+                by_ref_signatures: collect_by_ref_signatures(program),
+                exception_flow,
+            }
+        })
     }
 
     /// Propagates constants while using the shared callable-effect summary.
@@ -371,7 +386,23 @@ impl PostTypecheckOptimizer {
     /// compiler PANIC in a checked builtin's fast path rather than as anything a reader would
     /// connect back to this call.
     /// `buffer_read_sites` carries checker proofs that indexing cannot invoke a warning handler.
+    ///
+    /// Runs under `crate::compiler_stack::with_compiler_stack`, as do `prune`, `normalize` and
+    /// `eliminate_dead_code`: the CLI pipeline calls these methods directly, so an embedder doing
+    /// the same must get the budget from the method itself rather than from `main` (issue #1149).
     pub fn propagate(
+        &self,
+        program: Program,
+        mixed_storage_locals: HashSet<String>,
+        buffer_read_sites: HashSet<Span>,
+    ) -> Program {
+        crate::compiler_stack::with_compiler_stack(|| {
+            self.propagate_on_compiler_stack(program, mixed_storage_locals, buffer_read_sites)
+        })
+    }
+
+    /// The body of [`Self::propagate`], run on the stack `with_compiler_stack` sized.
+    fn propagate_on_compiler_stack(
         &self,
         program: Program,
         mixed_storage_locals: HashSet<String>,
@@ -406,9 +437,11 @@ impl PostTypecheckOptimizer {
     /// with its original spans. The spans let that rewrite veto itself; see
     /// `control::switch::single_case_rewrite_would_clone_a_decision`.
     pub fn normalize(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
-        with_local_binding_decision_spans(binding_decision_spans, || {
-            with_callable_effect_analysis(&self.callable_effects, || {
-                with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
+        crate::compiler_stack::with_compiler_stack(|| {
+            with_local_binding_decision_spans(binding_decision_spans, || {
+                with_callable_effect_analysis(&self.callable_effects, || {
+                    with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
+                })
             })
         })
     }
@@ -418,9 +451,11 @@ impl PostTypecheckOptimizer {
     /// Installs `binding_decision_spans` for the same reason `normalize` does — the two phases run
     /// the same `prune_block`, so the cloning switch rewrite is reachable from both.
     pub fn prune(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
-        with_local_binding_decision_spans(binding_decision_spans, || {
-            with_callable_effect_analysis(&self.callable_effects, || {
-                with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
+        crate::compiler_stack::with_compiler_stack(|| {
+            with_local_binding_decision_spans(binding_decision_spans, || {
+                with_callable_effect_analysis(&self.callable_effects, || {
+                    with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
+                })
             })
         })
     }
@@ -439,10 +474,14 @@ impl PostTypecheckOptimizer {
         program: Program,
         binding_decision_spans: HashSet<Span>,
     ) -> Program {
-        with_local_binding_decision_spans(binding_decision_spans, || {
-            with_callable_effect_analysis(&self.callable_effects, || {
-                with_exception_flow_analysis(&self.exception_flow, || {
-                    with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+        crate::compiler_stack::with_compiler_stack(|| {
+            with_local_binding_decision_spans(binding_decision_spans, || {
+                with_callable_effect_analysis(&self.callable_effects, || {
+                    with_exception_flow_analysis(&self.exception_flow, || {
+                        with_by_ref_signatures(self.by_ref_signatures.clone(), || {
+                            dce_block(program)
+                        })
+                    })
                 })
             })
         })
@@ -585,6 +624,8 @@ struct PropertyReadMetadata {
 #[derive(Clone, Debug, Default)]
 struct InstanceDispatchMetadata {
     classes: HashMap<String, InstanceClassMetadata>,
+    /// Internal value classes can allocate or throw when arithmetic receives object operands.
+    has_internal_object_operators: bool,
     /// True when AST-level `eval()` can add subclasses beyond the declared hierarchy.
     has_dynamic_class_barrier: bool,
 }
@@ -594,6 +635,8 @@ struct InstanceDispatchMetadata {
 struct FunctionEffectBody<'a> {
     body: &'a [Stmt],
     declared_never: bool,
+    parameter_guard_may_throw: bool,
+    return_boundary: Rc<ReturnBoundaryFacts>,
 }
 
 /// Holds the body, class context, and never-return metadata for a static method during effect analysis.
@@ -602,12 +645,14 @@ struct StaticMethodBody<'a> {
     context: ClassEffectContext,
     body: &'a [Stmt],
     declared_never: bool,
+    parameter_guard_may_throw: bool,
+    return_boundary: Rc<ReturnBoundaryFacts>,
 }
 
 /// Holds callable summaries and dispatch metadata shared by optimizer passes.
 #[derive(Clone)]
 struct CallableEffectAnalysis {
-    function_effects: Rc<HashMap<String, Effect>>,
+    function_effects: FunctionEffectLookup,
     static_method_effects: Rc<HashMap<String, Effect>>,
     instance_method_effects: Rc<HashMap<String, Effect>>,
     instance_dispatch_metadata: Rc<InstanceDispatchMetadata>,
@@ -619,7 +664,9 @@ impl CallableEffectAnalysis {
         let (function_effects, static_method_effects, instance_method_effects) =
             compute_program_callable_effects(program);
         Self {
-            function_effects,
+            function_effects: FunctionEffectLookup::new(function_effects, Rc::new(
+                return_boundaries::collect_return_boundaries(program).into_iter()
+                    .map(|(name, facts)| (name, facts.declared_result())).collect())),
             static_method_effects,
             instance_method_effects,
             instance_dispatch_metadata: Rc::new(collect_instance_dispatch_metadata(program)),
@@ -638,7 +685,7 @@ fn with_callable_effect_analysis<R>(
             ACTIVE_INSTANCE_METHOD_EFFECTS.with(|instance_slot| {
                 ACTIVE_INSTANCE_DISPATCH_METADATA.with(|metadata_slot| {
                     let previous_functions =
-                        function_slot.replace(Some(Rc::clone(&analysis.function_effects)));
+                        function_slot.replace(Some(analysis.function_effects.clone()));
                     let previous_static_methods =
                         static_slot.replace(Some(Rc::clone(&analysis.static_method_effects)));
                     let previous_instance_methods =
@@ -667,7 +714,7 @@ fn with_callable_effects<R>(
     f: impl FnOnce() -> R,
 ) -> R {
     let analysis = CallableEffectAnalysis {
-        function_effects: Rc::new(function_effects),
+        function_effects: FunctionEffectLookup::new(Rc::new(function_effects), Rc::new(HashMap::new())),
         static_method_effects: Rc::new(static_method_effects),
         instance_method_effects: Rc::new(instance_method_effects),
         instance_dispatch_metadata: Rc::new(instance_dispatch_metadata),

@@ -316,6 +316,13 @@ fn append_simple_offset_key(
 /// The opening `{` has already been consumed; the leading `$` is still pending and is
 /// included in the returned text. Nested braces are balanced, and string literals inside
 /// the expression are copied verbatim so their braces/quotes do not affect the depth.
+///
+/// A COMMENT inside the expression is inert, as it is to PHP's lexer: a quote or a brace in
+/// `/* … */`, or after `//` / `#` up to the end of the line, does not open a string or change the
+/// depth. A line comment also ends at `?>`, which is left for the expression (PHP rejects the
+/// program there); `#[` is an attribute, not a comment. MEASURED on reference PHP 8.5.10:
+/// `"{$a[/* " */ "k"]}"` and `"{$a[ // " }⏎"k"]}"` print `v`. They are copied verbatim too:
+/// the captured text is lexed again as a whole, and that lexer drops them.
 fn capture_braced_expr(
     input: &mut impl EscapeInput,
     span: Span,
@@ -365,10 +372,52 @@ fn capture_braced_expr(
                     }
                 }
             }
+            Some('/') if input.peek_escape() == Some('*') => {
+                input.advance_escape();
+                inner.push_str("/*");
+                loop {
+                    match input.advance_escape() {
+                        None => {
+                            return Err(CompileError::new(
+                                span,
+                                "Unterminated comment in complex interpolation '{$...}'",
+                            ))
+                        }
+                        Some('*') if input.peek_escape() == Some('/') => {
+                            input.advance_escape();
+                            inner.push_str("*/");
+                            break;
+                        }
+                        Some(c) => inner.push(c),
+                    }
+                }
+            }
+            Some(c @ ('/' | '#'))
+                if (c == '/' && input.peek_escape() == Some('/'))
+                    || (c == '#' && input.peek_escape() != Some('[')) =>
+            {
+                inner.push(c);
+                copy_line_comment(input, &mut inner);
+            }
             Some(c) => inner.push(c),
         }
     }
     Ok(inner)
+}
+
+/// Copies the rest of a line comment inside a `{$expr}` capture: up to and including the
+/// newline, or up to — not including — a `?>`, which ends a PHP line comment too.
+fn copy_line_comment(input: &mut impl EscapeInput, inner: &mut String) {
+    while let Some(ch) = input.peek_escape() {
+        if ch == '?' && input.peek_nth(1) == Some('>') {
+            return;
+        }
+        input.advance_escape();
+        inner.push(ch);
+        if ch == '\n' {
+            return;
+        }
+    }
 }
 
 /// Tokenizes the captured `{$expr}` source as a standalone expression by lexing it behind

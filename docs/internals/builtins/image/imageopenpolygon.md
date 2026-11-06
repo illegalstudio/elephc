@@ -1,8 +1,6 @@
 ---
 title: "imageopenpolygon() - internals"
 description: "Compiler internals for imageopenpolygon(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 518
 ---
 
 ## `imageopenpolygon()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2854](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2854) (`imageopenpolygon`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imageopenpolygon`)
 - **Function symbol**: `imageopenpolygon()`
 
 

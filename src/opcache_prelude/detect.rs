@@ -128,6 +128,9 @@ pub(crate) enum ArgFilter<'a> {
     /// question is whether the source it carries mentions a watched name anywhere, not
     /// whether the argument as a whole equals one.
     Substrings(&'a [&'a str]),
+    /// Matches eval fragments that the shared AOT planner cannot keep out of the interpreter.
+    /// Opaque source and unsupported static calls remain conservative matches.
+    EvalBridge,
 }
 
 /// A named PHP symbol to search for, carrying the matching rules its kind implies.
@@ -245,6 +248,12 @@ fn args_select_subject(args: &[Expr], target: Symbol<'_>) -> bool {
                 .iter()
                 .any(|needle| haystack.contains(&needle.to_ascii_lowercase()))
         }
+        ArgFilter::EvalBridge => crate::eval_aot::plan_literal_fragment_with_static_calls(
+            value,
+            crate::strict_php::is_enabled(),
+            |_, _| false,
+        )
+        .requires_runtime_eval_bridge(),
         ArgFilter::Any => true,
     }
 }
@@ -258,6 +267,87 @@ pub(crate) fn program_references(program: &[Stmt], target: &str) -> bool {
     first_reference(program, Symbol::function(target)).is_some()
 }
 
+/// Returns whether an `eval()` argument string mentions `target` as a whole word.
+///
+/// A name that appears ONLY inside an `eval()` fragment is still a reference to it. The
+/// string-literal rule above matches an exact name, which covers `function_exists('f')` and
+/// the callable spellings, but an `eval` argument carries the name embedded in code —
+/// `'return opcache_get_status();'` — so it never matched and no prelude was injected.
+///
+/// The consequence was not a missing function but a CONTRADICTORY one: with no declaration
+/// to fall through to, the interpreter's own fallback answered, and that fallback reports the
+/// compile-time CLI default. One program could be told the cache was disabled by
+/// `opcache_get_status()` and, two lines later, that `opcache_compile_file()` had cached a
+/// file — because its siblings read the live cache and it did not.
+///
+/// Whole-word rather than substring, so `my_opcache_get_status_helper` does not count —
+/// see `mentions_word` for why the `\\` boundary is deliberately asymmetric. The
+/// heuristic errs toward injecting: a false positive costs a declaration the program never
+/// calls, which the reachability pruner then removes, while a false negative is the silent
+/// wrong answer above.
+fn fragment_mentions(name: &Name, args: &[Expr], target: Symbol<'_>) -> bool {
+    if target.kind != SymbolKind::Function || !name.as_str().eq_ignore_ascii_case("eval") {
+        return false;
+    }
+    // A FRAGMENT THE COMPILER CANNOT READ DOES NOT COUNT, and it is worth saying why, since
+    // the rest of this module goes the other way: `args_select_subject` treats an
+    // unresolvable argument as a match, and the module docblock states that rule.
+    //
+    // Answering `true` here was tried and MEASURED, and the cost is not the bounded one that
+    // reasoning assumes. It is not "a declaration the program never reaches": every watched
+    // OPcache name gets its prelude injected, and the injected surface is large enough that
+    // `$c = "echo " . "1;"; eval($c);` — a program with nothing whatever to do with OPcache —
+    // stopped compiling, with `fixup value out of range` from the assembler on an AArch64
+    // conditional branch that no longer reached its target across 1.8M lines of output. Any
+    // `eval()` on a computed string paid that, which is most of them.
+    //
+    // An unreadable fragment is not a reference to any one name. Instead, `injection` supplies
+    // all eight declarations for bridge-capable eval in a configured binary.
+    // Literal fragments need the same protection when they compute their callable names.
+    // CLI-default binaries can keep the interpreter's fallback without extra declarations.
+    args.iter().any(|arg| match &arg.kind {
+        ExprKind::StringLiteral(source) => mentions_word(source, target.name),
+        _ => false,
+    })
+}
+
+/// Returns whether `needle` appears in `haystack` bounded by non-identifier characters.
+fn mentions_word(haystack: &str, needle: &str) -> bool {
+    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let haystack_lower = haystack.to_ascii_lowercase();
+    let needle_lower = needle.to_ascii_lowercase();
+    let bytes = haystack_lower.as_bytes();
+    let mut from = 0;
+    while let Some(offset) = haystack_lower[from..].find(&needle_lower) {
+        let start = from + offset;
+        let end = start + needle_lower.len();
+        // THE TWO SIDES ARE NOT SYMMETRIC, because `\\` is not symmetric in PHP.
+        //
+        // On the LEFT it may be the global-namespace prefix: `\\opcache_get_status()` is a
+        // call to exactly this function, written the way a code generator or a namespaced
+        // file writes it. Treating `\\` as an identifier byte made that spelling a false
+        // negative — no declaration injected, the interpreter's stale fallback answering,
+        // and the self-contradicting status this detector exists to prevent. So a `\\` is
+        // skipped and the test moves to the character before it, which is where
+        // `Other\\opcache_get_status()` — a DIFFERENT function that merely ends in the same
+        // segment — is still correctly rejected.
+        //
+        // On the RIGHT it can only be a namespace separator: `opcache_get_status\\foo` makes
+        // this name a prefix, not the function, so `\\` stays a blocking boundary there.
+        let before_ok = match start {
+            0 => true,
+            _ if bytes[start - 1] == b'\\' => start < 2 || !is_ident(bytes[start - 2]),
+            _ => !is_ident(bytes[start - 1]),
+        };
+        let after_ok = end == bytes.len() || !(is_ident(bytes[end]) || bytes[end] == b'\\');
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
 /// Returns the span of the FIRST reference to `target`, or `None` when the program never
 /// mentions it.
 ///
@@ -266,6 +356,16 @@ pub(crate) fn program_references(program: &[Stmt], target: &str) -> bool {
 /// inside the program, never to reason about ordering between two different targets.
 pub(crate) fn first_reference(program: &[Stmt], target: Symbol<'_>) -> Option<Span> {
     program.iter().find_map(|stmt| stmt_refs(stmt, target))
+}
+
+/// Returns whether eval can reach the interpreter and select an OPcache callable at runtime.
+/// Native or scope-only literal fragments do not require extra declarations, whose cache
+/// operations would otherwise link Magician and activate file-cache startup validation.
+pub(crate) fn program_has_bridge_eval(program: &[Stmt]) -> bool {
+    first_reference(program, Symbol {
+        args: ArgFilter::EvalBridge,
+        ..Symbol::call_site("eval")
+    }).is_some()
 }
 
 /// Returns whether the program already declares its own `target` function (at top level
@@ -440,6 +540,7 @@ fn packed_field_refs(_field: &PackedField, _target: Symbol<'_>) -> Option<Span> 
 fn instanceof_target_refs(target_ref: &InstanceOfTarget, target: Symbol<'_>) -> Option<Span> {
     match target_ref {
         InstanceOfTarget::Name(_) => None,
+        InstanceOfTarget::Generic(_) => None,
         InstanceOfTarget::Expr(expr) => expr_refs(expr, target),
     }
 }
@@ -478,6 +579,7 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         ExprKind::FunctionCall { name, args } => (name_is(name, target)
             && args_select_subject(args, target))
         .then_some(expr.span)
+        .or_else(|| fragment_mentions(name, args, target).then_some(expr.span))
         .or_else(|| args.iter().find_map(|arg| expr_refs(arg, target))),
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => expr_refs(object, target)
@@ -578,7 +680,9 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         ExprKind::NamedArg { value, .. } => expr_refs(value, target),
         ExprKind::ExprCall { callee, args } => expr_refs(callee, target)
             .or_else(|| args.iter().find_map(|arg| expr_refs(arg, target))),
-        ExprKind::NewObject { args, .. } => args.iter().find_map(|arg| expr_refs(arg, target)),
+        ExprKind::NewObject { args, .. } | ExprKind::NewGeneric { args, .. } => {
+            args.iter().find_map(|arg| expr_refs(arg, target))
+        }
         ExprKind::NewDynamic { name_expr, args } => expr_refs(name_expr, target)
             .or_else(|| args.iter().find_map(|arg| expr_refs(arg, target))),
         ExprKind::NewDynamicObject {

@@ -32,7 +32,9 @@ use crate::names::{
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
+use super::block_layout;
 use super::context::FunctionContext;
+use super::machine_peephole;
 use super::fibers;
 use super::frame;
 use super::function_variants;
@@ -48,6 +50,26 @@ use super::lower_inst;
 use super::lower_term;
 use super::shared_state::SharedCodegenState;
 use super::{CodegenIrError, Result};
+
+/// The hosted-extension engine's process-exit routine (RSHUTDOWN, then MSHUTDOWN), called by
+/// every exit sequence of a program that declares it.
+const HOSTED_EXIT_HOOK: &str = "elephc_php_ext_exit_hook";
+/// The hosted-extension engine's request shutdown (RSHUTDOWN), called by the `--web` reset after
+/// the previous request's destructors and before its hosting tables are released.
+pub(super) const HOSTED_REQUEST_SHUTDOWN: &str = "elephc_php_ext_request_shutdown";
+/// The hosted-extension engine's request startup (RINIT), called at the start of every `--web`
+/// request once the reset is done.
+pub(super) const HOSTED_REQUEST_STARTUP: &str = "elephc_php_ext_request_startup";
+
+/// Returns whether the program calls into a hosted PHP extension: reachability keeps an
+/// `elephc_php_ext_*` engine extern only when a call that reaches the engine survives. The
+/// lifecycle routines themselves are never called from PHP, so their own declarations are pruned.
+pub(super) fn module_hosts_php_ext(module: &Module) -> bool {
+    module
+        .extern_decls
+        .iter()
+        .any(|decl| decl.name.trim_start_matches('\\').starts_with("elephc_php_ext_"))
+}
 
 
 /// Emits EIR bodies and the process entry, retaining shared state for deferred helper emission.
@@ -73,6 +95,25 @@ pub(super) fn emit_module(
     web_isolation: WebIsolation,
 ) -> Result<SharedCodegenState> {
     let mut shared = SharedCodegenState::default();
+    // A program hosting PHP extensions declares the engine's shutdown routine; every
+    // process-exit sequence emitted below then runs it (RSHUTDOWN, MSHUTDOWN) after output
+    // is flushed, as php-src does. Executables only: a library never exits the process.
+    if emit == Emit::Executable && module_hosts_php_ext(module) {
+        emitter.exit_hook = Some(emitter.target.extern_symbol(HOSTED_EXIT_HOOK));
+    }
+    // Folding compares isolated emissions built with diagnostics off, so it must only run when
+    // the FINAL emission is diagnostics-off too (captured before `instrument` moves into the
+    // shared state below).
+    let diagnostics_off = !counters
+        && instrument == crate::codegen::Instrumentation::Off
+        && !probe
+        && !heap_debug
+        && !gc_stats
+        // The isolated comparison builds a plain `Emitter::new(target)`; cdylib and staticlib
+        // emissions render PIC operands through a different emitter configuration, so a fold
+        // decided on the plain text would gate an emission it did not measure. Folding is a
+        // size optimization for executables; library builds keep every body.
+        && emit == Emit::Executable;
     shared.counters = counters;
     shared.instrument = instrument;
     if probe {
@@ -115,14 +156,37 @@ pub(super) fn emit_module(
             data.add_comm(crate::names::ir_global_symbol(name), sg_size);
         }
     }
+    // A folded candidate keeps its EIR function — so a caller still resolves its parameter types
+    // and picks its own coercion from the original instantiation — but emits a jump to the
+    // survivor's body. The map is computed from the shape-normalized assembly oracle, so only
+    // bodies that lower to the same machine code are folded.
+    //
+    // Diagnostics modes are excluded: counters and instrumentation embed PER-NAME state into the
+    // final emission that the isolated comparison (which runs with diagnostics off) cannot see,
+    // so a folded victim would attribute its calls to the survivor or lose them entirely. Heap
+    // debug, probes and gc stats are gated the same conservative way — folding is a size
+    // optimization, and those modes exist to observe per-body behavior.
+    let body_aliases = if diagnostics_off {
+        generic_body_aliases(module, regalloc_linear)
+    } else {
+        Default::default()
+    };
     for function in module
         .functions
         .iter()
         .filter(|function| !is_main(function))
     {
+        if let Some(survivor) = body_aliases.get(&function.name) {
+            emit_folded_body(function, survivor, emitter)?;
+            continue;
+        }
         emit_user_function(module, function, emitter, data, &mut shared, regalloc_linear)?;
     }
     for method in &module.class_methods {
+        if let Some(survivor) = body_aliases.get(&method.name) {
+            emit_folded_body(method, survivor, emitter)?;
+            continue;
+        }
         emit_class_method(module, method, emitter, data, &mut shared, regalloc_linear)?;
     }
     for closure in &module.closures {
@@ -158,11 +222,21 @@ pub(super) fn emit_module(
     // handler body is emitted so every function static local (including any in the
     // main body) has been recorded into `data`. The handler prologue's
     // `bl __rt_web_reset` forward-references the label emitted here.
+    if super::frame::module_binds_extern_callbacks(module) {
+        super::frame::emit_extern_callback_release_routine(emitter, data);
+    }
     if web {
         super::web::emit_web_reset(emitter, module, data);
     }
     // The probe symbol table's terminating sentinel resolves to this label,
     // emitted after every function so it bounds the last real function's range.
+    //
+    // Out-of-line thunks (`Emitter::begin_out_of_line`) land AFTER it, so a sample in a descriptor
+    // invoker or wrapper resolves to `<native>`, like any other compiler-generated glue. That is
+    // deliberate: inline, it was charged to whichever function happened to mint the thunk first —
+    // and invokers are cached by signature and shared, so a call from `g` was billed to `f`.
+    // Moving this label past the thunks would be worse still: they would all be charged to the
+    // last user function in the file.
     if probe {
         emitter.raw(&format!("{PROBE_TEXT_END_LABEL}:"));
     }
@@ -227,8 +301,8 @@ fn emit_user_function(
     regalloc_linear: bool,
 ) -> Result<()> {
     let entry_label = user_function_entry_symbol(function);
-    let synthetic = function.flags.is_synthetic || is_property_init_thunk(function);
-    emit_fn_marker(emitter, &function.name, &entry_label, synthetic || function.flags.is_generator);
+    let synthetic = !function.has_source_identity() || is_property_init_thunk(function);
+    emit_fn_marker(emitter, function.display_name(), &entry_label, synthetic || function.flags.is_generator);
     if function.flags.is_generator {
         emit_generator_function(
             module,
@@ -246,7 +320,7 @@ fn emit_user_function(
         emitter.target,
         regalloc_linear,
         true,
-        frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
+        frame::module_uses_backtrace(module) && function.has_source_identity(),
     );
     let epilogue_label = user_function_epilogue_symbol(function);
     let mut ctx = FunctionContext::new(
@@ -264,7 +338,7 @@ fn emit_user_function(
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
-    emit_endfn_marker(ctx.emitter, &function.name);
+    emit_endfn_marker(ctx.emitter, function.display_name());
     frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     Ok(())
 }
@@ -312,9 +386,10 @@ pub(super) fn emit_synthetic_function_with_label(
 const PROBE_TEXT_END_LABEL: &str = "_elephc_probe_text_end";
 
 /// Builds the `--probe` symbol table in the data section: one
-/// `[entry address, name pointer, name length]` triple per non-synthetic PHP
-/// function (main included, named `{main}`), address-sorted at dump time by the
-/// probe, then a final sentinel triple at `PROBE_TEXT_END_LABEL`. Returns the
+/// `[entry address, name pointer, name length]` triple per PHP source entry,
+/// including private variants under their original source identity. Main is named `{main}`.
+/// The probe sorts entries by address at dump time; a final sentinel triple uses
+/// `PROBE_TEXT_END_LABEL`. Returns the
 /// table's data label and its entry count for `elephc_probe_init`.
 fn emit_probe_symbol_table(
     module: &Module,
@@ -330,13 +405,13 @@ fn emit_probe_symbol_table(
         words.push(DataWord::U64(name_len as u64));
     };
     for function in &module.functions {
-        if function.flags.is_synthetic {
+        if !function.has_source_identity() {
             continue;
         }
         if is_main(function) {
             push(data, &mut words, main_symbol.to_string(), "{main}");
         } else {
-            push(data, &mut words, user_function_entry_symbol(function), &function.name);
+            push(data, &mut words, user_function_entry_symbol(function), function.display_name());
         }
         count += 1;
     }
@@ -350,10 +425,10 @@ fn emit_probe_symbol_table(
         }
     }
     for closure in &module.closures {
-        if closure.flags.is_synthetic {
+        if !closure.has_source_identity() {
             continue;
         }
-        push(data, &mut words, user_function_entry_symbol(closure), &closure.name);
+        push(data, &mut words, user_function_entry_symbol(closure), closure.display_name());
         count += 1;
     }
     // Terminating sentinel: bounds the last real function's address range.
@@ -394,7 +469,7 @@ fn emit_class_method(
     regalloc_linear: bool,
 ) -> Result<()> {
     let entry_label = class_method_entry_symbol(function)?;
-    emit_fn_marker(emitter, &function.name, &entry_label, function.flags.is_synthetic || function.flags.is_generator);
+    emit_fn_marker(emitter, function.display_name(), &entry_label, !function.has_source_identity() || function.flags.is_generator);
     if function.flags.is_generator {
         emit_generator_function(
             module,
@@ -412,7 +487,7 @@ fn emit_class_method(
         emitter.target,
         regalloc_linear,
         true,
-        frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
+        frame::module_uses_backtrace(module) && function.has_source_identity(),
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -430,7 +505,7 @@ fn emit_class_method(
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
-    emit_endfn_marker(ctx.emitter, &function.name);
+    emit_endfn_marker(ctx.emitter, function.display_name());
     frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     Ok(())
 }
@@ -718,13 +793,13 @@ fn emit_generator_body(
     regalloc_linear: bool,
 ) -> Result<()> {
     // PHP source locations belong to the body, not to the synthetic coroutine constructor.
-    emit_fn_marker(emitter, &function.name, body_label, function.flags.is_synthetic);
+    emit_fn_marker(emitter, function.display_name(), body_label, !function.has_source_identity());
     let layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
         true,
-        frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
+        frame::module_uses_backtrace(module) && function.has_source_identity(),
     );
     let epilogue_label = format!("{}_epilogue", body_label);
     let mut ctx = FunctionContext::new(
@@ -742,7 +817,7 @@ fn emit_generator_body(
     frame::emit_function_prologue_with_label(&mut ctx, body_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
-    emit_endfn_marker(ctx.emitter, &function.name);
+    emit_endfn_marker(ctx.emitter, function.display_name());
     frame::emit_exception_cleanup_callback(&mut ctx, body_label);
     Ok(())
 }
@@ -958,13 +1033,16 @@ fn emit_main_function(
         emitter.entry_symbol()
     };
     emit_fn_marker(emitter, &function.name, entry_symbol, false);
-    let layout = frame::layout_for_function(
+    let mut layout = frame::layout_for_function(
         function,
         emitter.target,
         regalloc_linear,
         false,
-        false,
+        frame::module_uses_backtrace(module),
     );
+    if web {
+        frame::preserve_host_callee_saved(&mut layout, emitter.target);
+    }
     let mut ctx = FunctionContext::new(
         module, function, emitter, data, shared, layout, true, gc_stats, heap_debug, None,
     );
@@ -998,9 +1076,9 @@ fn emit_main_function(
             frame::emit_main_epilogue(&mut ctx);
         }
     }
-    emit_endfn_marker(ctx.emitter, &function.name);
+    emit_endfn_marker(ctx.emitter, function.display_name());
     if web {
-        frame::emit_web_entry_stub(&mut ctx, web_isolation);
+        frame::emit_web_entry_stub(&mut ctx, web_isolation)?;
     }
     Ok(())
 }
@@ -1011,17 +1089,27 @@ fn is_main(function: &Function) -> bool {
 }
 
 /// Initializes static-property storage before user code runs.
-fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()> {
+pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let mut default_initializers = Vec::new();
     let mut uninitialized_static_properties = Vec::new();
-    let mut class_names = super::runtime_referenced_class_names(ctx.module)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut null_word_static_properties = Vec::new();
+    let mut referenced = super::runtime_referenced_class_names(ctx.module);
+    // The eval bridge's static-property helpers (`eval_static_property_helpers`) cover every
+    // compiled class, so a fragment can read a static property of a class no native code
+    // references; its default and uninitialized sentinel must then exist as well.
+    if ctx.module.required_runtime_features.eval_bridge {
+        referenced.extend(ctx.module.class_infos.keys().cloned());
+    }
+    let mut class_names = referenced.into_iter().collect::<Vec<_>>();
     class_names.sort();
     for class_name in class_names {
         let Some(class_info) = ctx.module.class_infos.get(&class_name) else {
             continue;
         };
+        if class_info.deferred_property_default_error.is_some() {
+            // Initialization raises through EIR before any of this class's storage is observed.
+            continue;
+        }
         for (index, (property, php_type)) in class_info.static_properties.iter().enumerate() {
             let declaring_class = class_info
                 .static_property_declaring_classes
@@ -1031,17 +1119,14 @@ fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()
             if declaring_class != class_name {
                 continue;
             }
-            let default = class_info
-                .static_defaults
-                .get(index)
-                .and_then(Option::as_ref)
-                // A null default whose slot cannot represent null (a scalar slot
-                // rebound by later type refinement) is skipped; the slot is always
-                // written before an observable read on those paths.
-                .filter(|default_expr| {
-                    !matches!(default_expr.kind, crate::parser::ast::ExprKind::Null)
-                        || php_type.null_property_default_required()
-                });
+            let written_default = class_info.static_defaults.get(index).and_then(Option::as_ref);
+            // A null default whose slot cannot represent null (a scalar slot
+            // rebound by later type refinement) is skipped; the slot is always
+            // written before an observable read on those paths.
+            let default = written_default.filter(|default_expr| {
+                !matches!(default_expr.kind, crate::parser::ast::ExprKind::Null)
+                    || php_type.null_property_default_required()
+            });
             if let Some(default_expr) = default {
                 default_initializers.push((
                     class_name.clone(),
@@ -1050,12 +1135,24 @@ fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()
                     default_expr.kind.clone(),
                 ));
             } else if class_info.declared_static_properties.contains(property) {
-                uninitialized_static_properties.push((class_name.clone(), property.clone()));
+                if written_default.is_some()
+                    && matches!(php_type.codegen_repr(), PhpType::Pointer(_))
+                {
+                    // A pointer slot whose null default was skipped above, such as
+                    // `public static ptr $p = null;`, holds null as the zero word: it is
+                    // initialized, not waiting for its first write.
+                    null_word_static_properties.push((class_name.clone(), property.clone()));
+                } else {
+                    uninitialized_static_properties.push((class_name.clone(), property.clone()));
+                }
             }
         }
     }
     for (class_name, property) in uninitialized_static_properties {
         emit_static_property_sentinel(ctx, &class_name, &property);
+    }
+    for (class_name, property) in null_word_static_properties {
+        emit_static_property_null_word(ctx, &class_name, &property);
     }
     for (class_name, property, php_type, expr) in default_initializers {
         emit_static_property_default(ctx, &class_name, &property, &php_type, &expr)?;
@@ -1079,6 +1176,22 @@ fn emit_static_property_sentinel(ctx: &mut FunctionContext<'_>, class_name: &str
     abi::emit_store_reg_to_symbol(ctx.emitter, marker_reg, &symbol, 8);
 }
 
+/// Initializes one typed static property whose null default is the zero word.
+///
+/// A `ptr` slot reads address 0 as its null pointer, so `public static ptr $p = null;` needs
+/// no literal: both storage words are zeroed, the value word to the null address and the
+/// high word to the initialized marker. The store is explicit rather than relying on the
+/// zero-filled symbol so a web request starts from the default again.
+fn emit_static_property_null_word(ctx: &mut FunctionContext<'_>, class_name: &str, property: &str) {
+    ctx.emitter.comment(&format!(
+        "initialize static property {}::${} to the null word",
+        class_name, property
+    ));
+    let symbol = static_property_symbol(class_name, property);
+    abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
+}
+
 /// Writes a supported literal static-property default into its symbol storage.
 fn emit_static_property_default(
     ctx: &mut FunctionContext<'_>,
@@ -1088,16 +1201,32 @@ fn emit_static_property_default(
     expr: &ExprKind,
 ) -> Result<()> {
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
-    let value = literal_default_value(
-        &format!("static property {}::${}", class_name, property),
-        php_type,
-        expr,
-        "static property initializer",
-    )?;
+    let default = crate::parser::ast::Expr::new(expr.clone(), crate::span::Span::synthetic());
+    let context = super::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name);
+    let description = format!("static property {}::${}", class_name, property);
+    // A scalar folded from enum operands (`E::A ? 1 : 2`) still materializes those singletons.
+    let mut enum_reads = Vec::new();
+    let value = if let Some(value) = super::const_default_values::resolve_enum_case_default(&default, &context) {
+        super::literal_defaults::enum_case_default_value(&description, php_type, value, "static property initializer")?
+    } else if let Some((literal, reads)) =
+        super::const_default_values::resolve_enum_read_scalar_default(&default, &context)
+    {
+        enum_reads = reads;
+        literal_default_value(&description, php_type, &literal, "static property initializer")?
+    } else {
+        let resolved = super::const_default_values::resolve_const_default(&default, &context)
+            .and_then(super::const_default_values::resolved_literal_default);
+        literal_default_value(&description, php_type, resolved.as_ref().unwrap_or(expr), "static property initializer")?
+    };
     ctx.emitter.comment(&format!(
         "initialize static property {}::${}",
         class_name, property
     ));
+    for (enum_name, case_name) in &enum_reads {
+        crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+            ctx.emitter, ctx.module, enum_name, case_name,
+        );
+    }
     emit_static_property_default_value(ctx, class_name, property, php_type, &value)?;
     Ok(())
 }
@@ -1152,13 +1281,15 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::Str(value) => {
             emit_string_literal_default_to_result(ctx, value);
         }
-        // `public static Level $l = Level::Low;` — the same singleton the instance-property
-        // path loads, into the result register this function's caller then stores. See
-        // `LiteralDefaultValue::EnumCase` for why the receiver is only settled here.
+        // Module-aware default resolution supplies the same canonical singleton and ordered
+        // case reads as the instance-property path; store the selected result below.
         LiteralDefaultValue::EnumCase {
-            enum_name,
-            case_name,
+            value,
+            boxed,
         } => {
+            let enum_name = &value.enum_name;
+            let case_name = &value.case_name;
+            // Defend against malformed internal metadata despite the earlier resolution.
             let is_case = ctx
                 .module
                 .enum_infos
@@ -1170,21 +1301,22 @@ fn emit_static_property_default_value(
                     enum_name, case_name, class_name, property
                 )));
             }
-            crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
-                ctx.emitter,
-                ctx.module,
-                enum_name,
-                case_name,
-            );
+            for (enum_name, case_name) in &value.evaluated {
+                crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+                    ctx.emitter, ctx.module, enum_name, case_name,
+                );
+            }
             // The static slot becomes a new OWNER, so it retains, exactly as the instance
             // path and an ordinary `Enum::Case` read do (issue #349). Without it,
             // `Config::$shared = Level::High;` releases the global's only reference. There is
             // no object register to preserve here — the caller stores straight from the
             // result register.
-            abi::emit_incref_if_refcounted(
-                ctx.emitter,
-                &crate::types::PhpType::Object(enum_name.clone()),
-            );
+            let case_type = crate::types::PhpType::Object(enum_name.clone());
+            if *boxed {
+                crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &case_type);
+            } else {
+                abi::emit_incref_if_refcounted(ctx.emitter, &case_type);
+            }
         }
         LiteralDefaultValue::Null => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -1270,11 +1402,36 @@ fn emit_static_property_default_value(
     Ok(())
 }
 
-/// Emits every block in table order.
+/// Emits every block in machine layout order, then the function's deferred cold paths.
+///
+/// Hot blocks keep their table order and cold (`unreachable` / `fatal` / `throw`) blocks move
+/// last. Each block knows its layout successor so terminators can fall through instead of
+/// jumping. The finished region then goes through the late machine peepholes.
 fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let region_start = ctx.emitter.text_len();
     let blocks = ctx.function.blocks.clone();
-    for block in blocks {
-        emit_block(ctx, &block)?;
+    let order = block_layout::emission_order(ctx.function);
+    let use_counts = block_layout::value_use_counts(ctx.function);
+    ctx.begin_cold_section();
+    for (position, &index) in order.iter().enumerate() {
+        ctx.machine_layout.next_block = order.get(position + 1).map(|&next| blocks[next].id);
+        ctx.machine_layout.fused_compare =
+            block_layout::fusible_compare(ctx.function, &blocks[index], &use_counts);
+        emit_block(ctx, &blocks[index])?;
+    }
+    ctx.machine_layout.next_block = None;
+    ctx.machine_layout.fused_compare = None;
+    ctx.flush_cold_section();
+    // The text peepholes pay off in loops and in small functions (often called from loops);
+    // large loop-free bodies (generated helpers and dispatch code) skip them, keeping compile
+    // time flat. Block-level layout above still removes their jumps to the next block.
+    let region_bytes = ctx.emitter.text_len() - region_start;
+    if region_bytes <= machine_peephole::SMALL_REGION_BYTES
+        || block_layout::has_retreating_edge(ctx.function)
+    {
+        let target = ctx.emitter.target;
+        ctx.emitter
+            .rewrite_text_from(region_start, |text| machine_peephole::optimize_region(text, target));
     }
     Ok(())
 }
@@ -1294,13 +1451,13 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
     let terminator = block.terminator.as_ref().ok_or_else(|| {
         CodegenIrError::invalid_module(format!("block '{}' has no terminator", block.name))
     })?;
-    lower_term::lower_terminator(ctx, terminator)
+    lower_term::lower_terminator(ctx, block.id, terminator)
 }
 
 /// Emits the source-map marker for an EIR instruction when it carries a real PHP span.
 /// The marker carries the EIR opcode spelling so v2 maps can label mappings at
 /// expression granularity.
-fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
+pub(super) fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
     let Some(inst) = ctx.function.instruction(inst_id) else {
         return Err(CodegenIrError::missing_entry(
             "instruction",
@@ -1340,4 +1497,459 @@ fn emit_fn_marker(emitter: &mut Emitter, name: &str, symbol: &str, synthetic: bo
 /// `emit_fn_marker()`.
 fn emit_endfn_marker(emitter: &mut Emitter, name: &str) {
     emitter.comment(&format!("@endfn name={}", name));
+}
+
+/// Reports which type-argument candidates lower to identical bodies.
+///
+/// The merge refuses a candidate when its EIR could observe a class name the shape erased, but the
+/// EIR cannot see every backend decision: the runtime value tag is baked from the exact `PhpType`
+/// at codegen, so two bodies may compare unequal while emitting the same code (a pass-through
+/// `id<int>` / `id<bool>` pair), or compare equal while emitting different code (a body boxing its
+/// scalar). This oracle lowers each surviving candidate into an isolated emitter and compares the
+/// SHAPE-NORMALIZED ASSEMBLY, which is the actual soundness oracle: it includes the frame layout,
+/// the epilogue cleanup, every baked tag and every future scalar-consulting lowering.
+///
+/// The result is the measured case for widening the merge — nothing here changes the emitted
+/// program; it is reported under `--report-generics` only.
+/// One dispatch slot's fold: the surviving candidate and the bodies folded into it.
+pub(crate) struct BodyShareGroup {
+    /// The slot's readable name, for the report.
+    pub slot: String,
+    /// How many candidates the slot carries in total (folded and kept).
+    pub slot_candidates: usize,
+    /// The candidate kept as the shared implementation.
+    pub survivor: String,
+    /// The candidates folded into the survivor, by EIR function name.
+    pub victims: Vec<String>,
+}
+
+/// Groups the module's type-argument candidates whose lowered bodies are byte-identical.
+///
+/// Within a slot the candidates are lowered in isolation and bucketed by their normalized text;
+/// each bucket keeps its first candidate as the survivor and folds the rest into it. A candidate
+/// whose body did not lower is left alone.
+pub(crate) fn foldable_body_groups(module: &Module, regalloc_linear: bool) -> Vec<BodyShareGroup> {
+    // (slot, candidate bodies, is_method)
+    let mut rows: Vec<(String, Vec<&Function>, bool)> = Vec::new();
+    let mut row_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let emitted_body = |function: &Function| {
+        // A STATIC LOCAL's storage symbol is derived from the function's own name, and a global
+        // alias names a global by symbol: both are state whose identity the shape erasure would
+        // fold into one storage cell for two independent instantiations.
+        let stateful = function.locals.iter().any(|slot| {
+            matches!(
+                slot.kind,
+                crate::ir::LocalKind::StaticLocal | crate::ir::LocalKind::GlobalAlias
+            )
+        });
+        !stateful
+            && !function.flags.is_main
+            && !function.flags.is_generator
+            && !function.flags.is_synthetic
+            && !function.flags.is_closure
+            && !function.flags.is_fiber_wrapper
+            && !function.flags.is_callback_wrapper
+            && !function.flags.is_runtime_callable_invoker
+    };
+    for function in &module.functions {
+        if !function.name.contains('<') || !emitted_body(function) {
+            continue;
+        }
+        let slot = function.name.split('<').next().unwrap_or(&function.name).to_string();
+        match row_of.get(&slot).copied() {
+            Some(index) => rows[index].1.push(function),
+            None => {
+                row_of.insert(slot.clone(), rows.len());
+                rows.push((slot, vec![function], false));
+            }
+        }
+    }
+    for function in &module.class_methods {
+        if !function.name.contains('<') || !emitted_body(function) {
+            continue;
+        }
+        let Some((class, method)) = function.name.rsplit_once("::") else {
+            continue;
+        };
+        let class = class.split('<').next().unwrap_or(class).to_string();
+        // The METHOD side carries type arguments too: a generic method on a non-generic class
+        // instantiates as `Plain::get<int>` / `Plain::get<string>`, and those siblings are
+        // exactly the pair monomorphization duplicates — strip both sides into one slot.
+        let method = method.split('<').next().unwrap_or(method).to_string();
+        let kind = if function.flags.is_static { "static" } else { "instance" };
+        let slot = format!("{class}::{method} [{kind}]");
+        match row_of.get(&slot).copied() {
+            Some(index) => rows[index].1.push(function),
+            None => {
+                row_of.insert(slot.clone(), rows.len());
+                rows.push((slot, vec![function], true));
+            }
+        }
+    }
+    rows.iter()
+        .filter(|(_, candidates, _)| candidates.len() >= 2)
+        .filter_map(|(slot, candidates, is_method)| {
+            // Bucket by the normalized text in one pass; a linear scan against every bucket
+            // would compare full bodies O(k²) per slot, which grows with the instantiation
+            // count the feature monomorphizes.
+            let mut buckets: std::collections::HashMap<String, Vec<&Function>> =
+                std::collections::HashMap::new();
+            let mut order: Vec<(String, &Function)> = Vec::new();
+            for function in candidates {
+                let Some(text) =
+                    normalized_candidate_body(module, function, *is_method, regalloc_linear)
+                else {
+                    continue;
+                };
+                match buckets.get_mut(&text) {
+                    Some(members) => members.push(function),
+                    None => {
+                        buckets.insert(text.clone(), vec![function]);
+                        order.push((text, function));
+                    }
+                }
+            }
+            let mut groups = Vec::new();
+            for (text, _) in order {
+                let members = &buckets[&text];
+                if members.len() >= 2 {
+                    groups.push(BodyShareGroup {
+                        slot: slot.clone(),
+                        slot_candidates: candidates.len(),
+                        survivor: members[0].name.clone(),
+                        victims: members[1..].iter().map(|body| body.name.clone()).collect(),
+                    });
+                }
+            }
+            (!groups.is_empty()).then_some(groups)
+        })
+        .flatten()
+        .collect()
+}
+
+/// The measured fold opportunity, reported under `--report-generics`.
+pub fn generic_body_sharing_oracle(module: &Module, regalloc_linear: bool) -> String {
+    let groups = foldable_body_groups(module, regalloc_linear);
+    if groups.is_empty() {
+        return "shape-oracle: no further foldable bodies".to_string();
+    }
+    // (slot, candidates, folded bodies) — a slot's distinct bodies are its candidates minus its
+    // folded ones.
+    let mut slots: Vec<(String, usize, usize)> = Vec::new();
+    for group in &groups {
+        match slots.iter_mut().find(|(slot, _, _)| *slot == group.slot) {
+            Some((_, _, folded)) => *folded += group.victims.len(),
+            None => slots.push((group.slot.clone(), group.slot_candidates, group.victims.len())),
+        }
+    }
+    let mut measured: Vec<(String, usize, usize)> = slots
+        .into_iter()
+        .map(|(slot, candidates, folded)| (slot, candidates, candidates - folded))
+        .collect();
+    measured.sort_by(|a, b| (b.1 - b.2).cmp(&(a.1 - a.2)).then(a.0.cmp(&b.0)));
+    let total_candidates: usize = measured.iter().map(|(_, candidates, _)| candidates).sum();
+    let total_distinct: usize = measured.iter().map(|(_, _, distinct)| distinct).sum();
+    let removable = total_candidates - total_distinct;
+    let mut lines = vec![format!(
+        "shape-oracle: {} slots lower to identical bodies: {} instantiations → {} distinct bodies ({} removable)",
+        measured.len(),
+        total_candidates,
+        total_distinct,
+        removable
+    )];
+    for (slot, candidates, distinct) in measured {
+        let body_word = if distinct == 1 { "body" } else { "bodies" };
+        lines.push(format!(
+            "  {slot}: {candidates} instantiations → {distinct} {body_word}"
+        ));
+    }
+    lines.join("\n")
+}
+
+/// The folded-candidate map: a victim's EIR function name to its survivor's.
+///
+/// The victim KEEPS its EIR function, so a caller still resolves its parameter types and picks its
+/// own coercion from the original instantiation; only the machine code is shared.
+pub(crate) fn generic_body_aliases(
+    module: &Module,
+    regalloc_linear: bool,
+) -> std::collections::HashMap<String, String> {
+    foldable_body_groups(module, regalloc_linear)
+        .into_iter()
+        .flat_map(|group| {
+            group
+                .victims
+                .into_iter()
+                .map(move |victim| (victim, group.survivor.clone()))
+        })
+        .collect()
+}
+
+/// Emits a folded candidate's entry as a jump to the survivor's body.
+///
+/// The candidate KEEPS its EIR function, so a caller still resolves its parameter types and picks
+/// its own coercion from the original instantiation; only the machine code is shared. No cleanup
+/// symbol is emitted: a cleanup activation is published by the body's own prologue
+/// (`frame::emit_exception_activation_push`), and a folded body has no prologue — the survivor's
+/// body publishes the activation for the frame that actually runs.
+pub(super) fn emit_folded_body(
+    function: &Function,
+    survivor: &str,
+    emitter: &mut Emitter,
+) -> Result<()> {
+    let is_static = function.flags.is_static;
+    let entry = entry_symbol_for_name(&function.name, is_static);
+    let survivor_entry = entry_symbol_for_name(survivor, is_static);
+    // The source map discovers functions through `@fn`/`@endfn` regions; a folded body is a real
+    // function whose range happens to be one jump, so it still needs its record.
+    emit_fn_marker(emitter, &function.name, &entry, false);
+    // `label_global` gives the thunk the same section and `%function` type the full bodies get
+    // on Linux; a bare `.globl` would leave the jump in the PREVIOUS symbol's section and skip
+    // the type annotation, which misdirects `--gc-sections` and debug extents.
+    emitter.label_global(&entry);
+    abi::emit_jump(emitter, &survivor_entry);
+    emit_endfn_marker(emitter, &function.name);
+    Ok(())
+}
+
+/// Returns the entry symbol of an EIR function name, method or free function.
+fn entry_symbol_for_name(name: &str, is_static: bool) -> String {
+    match name.rsplit_once("::") {
+        Some((class, method)) => {
+            let key = php_symbol_key(method);
+            if is_static {
+                static_method_symbol(class, &key)
+            } else {
+                method_symbol(class, &key)
+            }
+        }
+        None => function_symbol(name),
+    }
+}
+
+/// Lowers one candidate body into an isolated emitter and returns its shape-normalized text.
+///
+/// A fresh emitter, literal pool and shared state make the text depend only on the body and the
+/// module's read-only context, so two structurally identical candidates lower to the same text
+/// instead of inheriting whatever label counters and caches the whole-module emission had reached.
+/// `None` means the body did not lower, which the oracle reports as a candidate it cannot compare.
+fn normalized_candidate_body(
+    module: &Module,
+    function: &Function,
+    is_method: bool,
+    regalloc_linear: bool,
+) -> Option<String> {
+    let mut emitter = Emitter::new(module.target);
+    let mut data = DataSection::new();
+    let mut shared = SharedCodegenState::default();
+    let lowered = if is_method {
+        emit_class_method(
+            module,
+            function,
+            &mut emitter,
+            &mut data,
+            &mut shared,
+            regalloc_linear,
+        )
+    } else {
+        emit_user_function(
+            module,
+            function,
+            &mut emitter,
+            &mut data,
+            &mut shared,
+            regalloc_linear,
+        )
+    };
+    lowered.ok()?;
+    // The DATA the body references is part of its meaning: two isolated pools assign the same
+    // label to literals of different contents (a seven-byte "integer" and a seven-byte "boolean"
+    // both intern as the pool's first entry), so comparing the text alone would fold bodies whose
+    // literals disagree. The pool's own emission is the missing half of the comparison.
+    let mut text = emitter.output();
+    let data_output = data.emit(module.target);
+    if !data_output.is_empty() {
+        text.push_str(&data_output);
+    }
+    Some(normalize_body_text(&text, function))
+}
+
+/// Erases every symbol that names the candidate and canonicalizes internal labels, so two
+/// structurally identical bodies compare byte-equal.
+///
+/// The candidate's own mangled name reaches the text as its entry, epilogue and exceptional
+/// cleanup symbols, and reaches internal labels as part of their prefix. The erasure is
+/// operand-aware: a symbol is replaced only where it ENDS at a word boundary, so a sibling
+/// callee whose mangled name merely has the candidate's entry as a prefix (method `foobar`
+/// alongside method `foo`) keeps its own name — a blanket substring replace would fold the two
+/// distinct callees into one and send the folded body to the wrong call target. Each suffix
+/// symbol is erased under its own exact spelling for the same reason. The raw name is what the
+/// source-map `@fn` marker quotes.
+///
+/// The erasure deliberately SKIPS `.ascii` payload lines: a body may embed its own instantiated
+/// name as data, and that data is a real difference between two instantiations — erasing it
+/// would fold bodies whose runtime output differs.
+fn normalize_body_text(text: &str, function: &Function) -> String {
+    let self_symbol = crate::names::mangle_fqn(&function.name);
+    let entry_symbol = entry_symbol_for_name(&function.name, function.flags.is_static);
+    // Order matters: the longer suffix symbols must be erased before the entry symbol, or the
+    // entry erasure would consume their prefix and leave a mangled remainder behind.
+    let own_symbols = [
+        format!("{entry_symbol}__cdylib_exception_cleanup"),
+        format!("{entry_symbol}_epilogue"),
+        entry_symbol.clone(),
+        self_symbol,
+        function.name.clone(),
+    ];
+    // A method's symbols are NOT derived from the mangled full name: `method_symbol(class, key)`
+    // mangles the class and the method separately, so the entry symbol has to be erased on its
+    // own. Replacing it also erases its epilogue and exceptional-cleanup symbols, which are built
+    // as suffixes of it.
+    let erased: String = text
+        .split_inclusive('\n')
+        .map(|line| {
+            if line.trim_start().starts_with(".ascii") {
+                return line.to_string();
+            }
+            let mut erased_line = line.to_string();
+            for symbol in &own_symbols {
+                erased_line = erase_word_bounded(&erased_line, symbol);
+            }
+            erased_line
+        })
+        .collect();
+    let mut mapping: Vec<(String, String)> = Vec::new();
+    for line in erased.split_inclusive('\n') {
+        let trimmed = line.trim_end();
+        let Some(token) = trimmed.strip_suffix(':') else {
+            continue;
+        };
+        if !is_internal_label(token) {
+            continue;
+        }
+        label_map_push(&mut mapping, token);
+    }
+    let mut out = String::with_capacity(erased.len());
+    for line in erased.split_inclusive('\n') {
+        let trimmed = line.trim_end();
+        // A `.ascii` payload is data, not control flow: its bytes may spell a label by
+        // coincidence, and rewriting them would erase a real difference between two bodies.
+        // Label DEFINITIONS never sit on payload lines, so the mapping above is complete.
+        if line.trim_start().starts_with(".ascii") {
+            out.push_str(line);
+            continue;
+        }
+        if let Some(token) = trimmed.strip_suffix(':') {
+            if is_internal_label(token) {
+                out.push_str(&format!("{}:\n", label_of(&mapping, token)));
+                continue;
+            }
+        }
+        let mut rewritten = line.to_string();
+        for (raw, canonical) in &mapping {
+            rewritten = replace_symbol_token(&rewritten, raw, canonical);
+        }
+        out.push_str(&rewritten);
+    }
+    out
+}
+
+/// Whether a label token is one of the body's internal labels, which carry no cross-candidate
+/// meaning. The Linux assembler spells them `.L_eir_…` where Apple spells them `L_eir_…`.
+fn is_internal_label(token: &str) -> bool {
+    token.starts_with("L_") || token.starts_with(".L")
+}
+
+/// Replaces every occurrence of `symbol` that ends AND starts at symbol boundaries.
+///
+/// Both edges matter: the character AFTER the match decides whether the match is the whole of a
+/// longer symbol (method `foobar` alongside method `foo`), and the character BEFORE decides
+/// whether the match is the TAIL of one (callee `xf` alongside candidate `f` — the callee's
+/// mangled symbol contains the candidate's as a suffix). Missing either edge rewrites a
+/// DIFFERENT name's operand and fuses two distinct callees into one.
+fn erase_word_bounded(line: &str, symbol: &str) -> String {
+    if symbol.is_empty() {
+        return line.to_string();
+    }
+    let bytes = line.as_bytes();
+    let is_symbol_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0;
+    while let Some(offset) = line[cursor..].find(symbol) {
+        let start = cursor + offset;
+        let end = start + symbol.len();
+        let before = start == 0 || !is_symbol_byte(bytes[start - 1]);
+        let after = end >= bytes.len() || !is_symbol_byte(bytes[end]);
+        out.push_str(&line[cursor..start]);
+        if before && after {
+            out.push_str("<SELF>");
+        } else {
+            out.push_str(symbol);
+        }
+        cursor = end;
+    }
+    out.push_str(&line[cursor..]);
+    out
+}
+
+/// Maps an internal label token to its canonical name by order of first definition.
+fn label_map_push(mapping: &mut Vec<(String, String)>, token: &str) -> String {
+    if let Some((_, canonical)) = mapping.iter().find(|(raw, _)| raw == token) {
+        return canonical.clone();
+    }
+    let canonical = format!("L{}", mapping.len());
+    mapping.push((token.to_string(), canonical.clone()));
+    canonical
+}
+
+/// Returns the canonical name of an already-mapped label token.
+fn label_of(mapping: &[(String, String)], token: &str) -> String {
+    mapping
+        .iter()
+        .find(|(raw, _)| raw == token)
+        .map(|(_, canonical)| canonical.clone())
+        .unwrap_or_else(|| token.to_string())
+}
+
+/// Replaces whole-token occurrences of `raw` with `canonical`, leaving longer symbols alone.
+fn replace_symbol_token(line: &str, raw: &str, canonical: &str) -> String {
+    let is_symbol_byte =
+        |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0;
+    while let Some(offset) = line[cursor..].find(raw) {
+        let start = cursor + offset;
+        let end = start + raw.len();
+        let before_ok = start == 0 || !is_symbol_byte(line.as_bytes()[start - 1]);
+        let after_ok = end >= line.len() || !is_symbol_byte(line.as_bytes()[end]);
+        if before_ok && after_ok {
+            out.push_str(&line[cursor..start]);
+            out.push_str(canonical);
+        } else {
+            out.push_str(&line[cursor..end]);
+        }
+        cursor = end;
+    }
+    out.push_str(&line[cursor..]);
+    out
+}
+
+/// Regression tests for assembly-body equivalence and literal payload preservation.
+#[cfg(test)]
+mod normalization_tests {
+    use super::*;
+
+    /// Label canonicalization must leave indented string data byte-for-byte intact.
+    #[test]
+    fn indented_ascii_preserves_internal_label_spelling() {
+        let function = Function::new(
+            "payload_fixture".to_string(), crate::ir::IrType::Void, PhpType::Void,
+        );
+        let first = "L_payload_17:\n    b L_payload_17\n    .ascii \"L_payload_17\"\n";
+        let second = "L_payload_18:\n    b L_payload_18\n    .ascii \"L_payload_18\"\n";
+        let normalized = normalize_body_text(first, &function);
+        assert!(normalized.contains("    .ascii \"L_payload_17\""));
+        assert!(!normalized.contains("b L_payload_17"));
+        assert_ne!(normalized, normalize_body_text(second, &function));
+    }
 }

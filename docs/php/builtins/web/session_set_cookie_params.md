@@ -1,8 +1,6 @@
 ---
 title: "session_set_cookie_params()"
 description: "Sets the session cookie's lifetime, path, domain, and flags."
-sidebar:
-  order: 995
 ---
 
 ## session_set_cookie_params()
@@ -20,8 +18,9 @@ Sets the session cookie's lifetime, path, domain, and flags.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,11 +1,14 @@
 //! Purpose:
 //! Eval-interpreter implementation of `opcache_get_configuration()`. Builds the
-//! `['directives' => [...], 'version' => [...], 'blacklist' => []]` array from the
+//! `['directives' => [...], 'version' => [...], 'blacklist' => [...]]` array from the
 //! same version-keyed OPcache directive matrix the native prelude renders, so the
-//! two surfaces never drift.
+//! two surfaces never drift. `blacklist` carries the patterns
+//! `opcache.blacklist_filename` resolved, read straight from the script cache rather
+//! than across the bridge the native surface has to use.
 //!
 //! Called from:
-//! - `crate::interpreter::expressions::calls::eval_call` (direct dispatch).
+//! - `super::opcache_direct` (a direct call: through the by-values dispatch below once its
+//!   arguments are bound, when the binary carries no native declaration).
 //! - `crate::interpreter::builtins::registry::dispatch::eval_builtin_with_values`
 //!   (dynamic-callable / by-values dispatch).
 //! - `crate::interpreter::builtins::symbols::function_exists` (existence probe).
@@ -40,26 +43,16 @@ pub(in crate::interpreter) fn eval_opcache_configuration_function_exists(name: &
     name == "opcache_get_configuration"
 }
 
-/// Evaluates a direct `opcache_get_configuration()` call from an eval fragment.
-pub(in crate::interpreter) fn eval_opcache_get_configuration_call(
-    args: &[EvalCallArg],
-    _context: &mut ElephcEvalContext,
-    _scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !args.is_empty() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    eval_opcache_get_configuration_result(values)
-}
-
 /// Builds the `opcache_get_configuration()` return array as runtime cells.
 pub(in crate::interpreter) fn eval_opcache_get_configuration_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(refused) = super::opcache_file_functions::eval_opcache_api_refusal(values)? {
+        return Ok(refused);
+    }
     let directives = build_directives(values)?;
     let version = build_version(values)?;
-    let blacklist = values.array_new(0)?;
+    let blacklist = build_blacklist(values)?;
 
     let mut configuration = values.assoc_new(3)?;
     let directives_key = values.string("directives")?;
@@ -71,7 +64,30 @@ pub(in crate::interpreter) fn eval_opcache_get_configuration_result(
     Ok(configuration)
 }
 
+/// Builds the `'blacklist'` sub-array from the patterns `opcache.blacklist_filename` resolved.
+///
+/// Unlike the native surface — which has to read them back across the bridge one at a time —
+/// the eval interpreter IS the side that loaded them, so it reads the list directly. Reference
+/// PHP reports the resolved entries keyed `0..n-1`, which is what an append-ordered array is.
+fn build_blacklist(
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let patterns = crate::script_cache::blacklist_patterns();
+    let mut blacklist = values.array_new(patterns.len())?;
+    for (index, pattern) in patterns.iter().enumerate() {
+        let key = values.int(index as i64)?;
+        let value = values.string(pattern)?;
+        blacklist = values.array_set(blacklist, key, value)?;
+    }
+    Ok(blacklist)
+}
+
 /// Builds the `'directives'` sub-array from the shared directive matrix.
+///
+/// The matrix is the CLI default, which is the only configuration this fallback answers for:
+/// a binary with any other OPcache configuration carries the native declaration whenever it can
+/// run an opaque `eval()` (see `opcache_prelude::injection`). What a CLI-default binary can still
+/// change at run time is the three `ini_set()`-able directives, and those are reported as set.
 fn build_directives(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -79,10 +95,30 @@ fn build_directives(
     let mut directives = values.assoc_new(entries.len())?;
     for (name, value) in &entries {
         let key = values.string(name)?;
-        let value = build_directive_value(value, values)?;
+        let value = match ini_set_override(name) {
+            Some(value) => build_directive_value(&value, values)?,
+            None => build_directive_value(value, values)?,
+        };
         directives = values.array_set(directives, key, value)?;
     }
     Ok(directives)
+}
+
+/// The typed value an `ini_set()` installed for directive `name`, if any.
+fn ini_set_override(name: &str) -> Option<DirectiveValue> {
+    use crate::script_cache::{
+        directive_override, DIRECTIVE_FILE_UPDATE_PROTECTION, DIRECTIVE_REVALIDATE_FREQ,
+        DIRECTIVE_VALIDATE_TIMESTAMPS,
+    };
+    match name {
+        "opcache.revalidate_freq" => directive_override(DIRECTIVE_REVALIDATE_FREQ)
+            .map(|value| DirectiveValue::Int(value as i64)),
+        "opcache.validate_timestamps" => directive_override(DIRECTIVE_VALIDATE_TIMESTAMPS)
+            .map(|value| DirectiveValue::Bool(value != 0)),
+        "opcache.file_update_protection" => directive_override(DIRECTIVE_FILE_UPDATE_PROTECTION)
+            .map(|value| DirectiveValue::Int(value as i64)),
+        _ => None,
+    }
 }
 
 /// Materializes one typed directive value as a runtime cell.

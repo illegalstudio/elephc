@@ -1,5 +1,6 @@
 //! Purpose:
-//! Adapts source-visible method calls to physical methods carrying generated `func_args` slots.
+//! Plans source-visible method ABI adaptation, including EIR-owned parameter widening calls.
+//! Emits wrappers for physical methods carrying generated `func_args` slots.
 //! Owns planning, symbols, and target-aware wrapper assembly for these boundaries.
 //!
 //! Called from:
@@ -10,6 +11,8 @@
 //! - A source variadic keeps its physical entry, and no entry may drop an injected hidden argc.
 //! - The wrapper roots synthesized Mixed arguments and collectors before entering PHP.
 //! - It preserves every return word while releasing temporary owners after the call.
+//! - Shorter variadic implementations use EIR and shared argument planning, not assembly packing.
+//! - Equally variadic typed-to-Mixed promotion uses EIR unpacking rather than raw-word forwarding.
 
 use std::collections::{HashMap, HashSet};
 
@@ -30,6 +33,7 @@ pub(crate) enum MethodKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodAbiPlan {
     Direct,
+    OptionalDefaults,
     AppendEmptyCollector,
     BoxArguments,
     BoxArgumentsAndAppendEmptyCollector,
@@ -47,6 +51,12 @@ pub(crate) fn plan_method_abi(
     caller: &FunctionSig,
     physical: &FunctionSig,
 ) -> Result<MethodAbiPlan, String> {
+    if caller.by_ref_return && !physical.by_ref_return {
+        return Err("source method ABI adaptation cannot bridge a by-reference return mismatch".to_string());
+    }
+    if needs_eir_call_adapter(caller, physical) {
+        return Ok(MethodAbiPlan::OptionalDefaults);
+    }
     if caller.by_ref_return != physical.by_ref_return {
         return Err("source method ABI adaptation cannot bridge a by-reference return mismatch".to_string());
     }
@@ -76,6 +86,14 @@ pub(crate) fn plan_method_abi(
                 || (!caller.ref_params[index] && can_box_param_as_mixed(source_ty, target_ty))
         },
     );
+    let optional_tail = projected.params.len() > caller.params.len()
+        && projected.ref_params.iter().take(caller.params.len()).eq(caller.ref_params.iter())
+        && projected.defaults.iter().enumerate().skip(caller.params.len())
+            .all(|(index, default)| default.is_some()
+                || (projected.variadic.is_some() && index + 1 == projected.params.len()));
+    if optional_tail && compatible_values {
+        return Ok(MethodAbiPlan::OptionalDefaults);
+    }
     if !compatible_shape || !compatible_values {
         let reason = if append_collector {
             "source method ABI adaptation found a visible parameter mismatch"
@@ -94,6 +112,105 @@ pub(crate) fn plan_method_abi(
         (false, true) => MethodAbiPlan::AppendEmptyCollector,
         (true, false) => MethodAbiPlan::BoxArguments,
         (true, true) => MethodAbiPlan::BoxArgumentsAndAppendEmptyCollector,
+    })
+}
+
+/// Plans ordinary EIR calls using declared parameters rather than generated frame slots.
+fn needs_eir_call_adapter(caller: &FunctionSig, physical: &FunctionSig) -> bool {
+    let added_reference = !caller.by_ref_return && physical.by_ref_return;
+    let source_variadic = caller.variadic.is_some()
+        && !crate::func_args::sig_collects_surplus_args(caller);
+    let visible = |sig: &FunctionSig| sig.params.iter().enumerate()
+        .filter(|(_, (name, _))| name != crate::func_args::HIDDEN_ARGS_PARAM
+            && name != crate::func_args::HIDDEN_ARGC_PARAM)
+        .map(|(index, _)| index).collect::<Vec<_>>();
+    let mut source = visible(caller);
+    let target = visible(physical);
+    if source_variadic {
+        if physical.variadic.is_none() || crate::func_args::sig_collects_surplus_args(physical) {
+            return false;
+        }
+        if !added_reference && source.len() == target.len()
+            && !has_promoted_variadic_transport(caller, physical, &source, &target)
+        {
+            return false;
+        }
+        source.retain(|index| caller.variadic.as_deref() != Some(caller.params[*index].0.as_str()));
+    }
+    if variadic_absorbs_source_parameters(caller, physical, &source, &target) {
+        return true;
+    }
+    if target.len() < source.len() { return false; }
+    if target.len() == source.len() && !added_reference { return false; }
+    let prefix = source.iter().zip(&target).all(|(&source, &target)| {
+        let source_ref = caller.ref_params.get(source).copied().unwrap_or(false);
+        let target_ref = physical.ref_params.get(target).copied().unwrap_or(false);
+        let source_ty = &caller.params[source].1;
+        let target_ty = &physical.params[target].1;
+        let transported_variadic = caller.variadic.as_deref() == Some(caller.params[source].0.as_str())
+            && physical.variadic.as_deref() == Some(physical.params[target].0.as_str())
+            && matches!(source_ty, PhpType::Array(_))
+            && matches!(target_ty, PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
+        source_ref == target_ref
+            && (same_physical_param_abi(source_ty, target_ty)
+                || (!source_ref && (can_box_param_as_mixed(source_ty, target_ty) || transported_variadic)))
+    });
+    let optional_tail = target.iter().skip(source.len()).all(|&index| {
+        physical.defaults.get(index).is_some_and(Option::is_some)
+            || physical.variadic.as_deref() == Some(physical.params[index].0.as_str())
+    });
+    prefix && optional_tail
+}
+
+/// Requires an EIR unpack/rebox boundary for a by-value typed collector promoted to Mixed.
+/// Unchanged collectors retain their direct ABI; reference collectors cannot be rebuilt.
+fn has_promoted_variadic_transport(
+    caller: &FunctionSig, physical: &FunctionSig, source: &[usize], target: &[usize],
+) -> bool {
+    let (Some(&source), Some(&target)) = (source.last(), target.last()) else { return false; };
+    caller.variadic.as_deref() == Some(caller.params[source].0.as_str())
+        && physical.variadic.as_deref() == Some(physical.params[target].0.as_str())
+        && !caller.ref_params.get(source).copied().unwrap_or(false)
+        && !physical.ref_params.get(target).copied().unwrap_or(false)
+        && matches!(&caller.params[source].1, PhpType::Array(element)
+            if element.codegen_repr() != PhpType::Mixed)
+        && matches!(&physical.params[target].1, PhpType::Array(element)
+            if element.codegen_repr() == PhpType::Mixed)
+}
+
+/// Routes fixed source parameters absorbed by a shorter implementation variadic through EIR.
+fn variadic_absorbs_source_parameters(
+    caller: &FunctionSig, physical: &FunctionSig, source: &[usize], target: &[usize],
+) -> bool {
+    let Some(variadic) = physical.variadic.as_deref() else { return false; };
+    if crate::func_args::sig_collects_surplus_args(physical) { return false; }
+    let Some(&collector) = target.last() else { return false; };
+    if physical.params[collector].0 != variadic || target.len() > source.len() { return false; }
+    let PhpType::Array(element) = &physical.params[collector].1 else { return false; };
+    let compatible = |source: usize, target_type: &PhpType, target_ref: bool| {
+        let source_ref = caller.ref_params.get(source).copied().unwrap_or(false);
+        source_ref == target_ref
+            && (same_physical_param_abi(&caller.params[source].1, target_type)
+                || (!source_ref && can_box_param_as_mixed(&caller.params[source].1, target_type)))
+    };
+    if let Some(source_variadic) = caller.variadic.as_deref()
+        .filter(|_| !crate::func_args::sig_collects_surplus_args(caller))
+    {
+        let Some(index) = caller.params.iter().position(|(name, _)| name == source_variadic) else {
+            return false;
+        };
+        let PhpType::Array(source_element) = &caller.params[index].1 else { return false; };
+        let source_ref = caller.ref_params.get(index).copied().unwrap_or(false);
+        if source_ref != physical.ref_params.get(collector).copied().unwrap_or(false)
+            || !(same_physical_param_abi(source_element, element)
+                || (!source_ref && can_box_param_as_mixed(source_element, element)))
+        { return false; }
+    }
+    let prefix = target.len() - 1;
+    source.iter().enumerate().all(|(position, &index)| {
+        let slot = if position < prefix { target[position] } else { collector };
+        let ty = if position < prefix { &physical.params[slot].1 } else { element.as_ref() };
+        compatible(index, ty, physical.ref_params.get(slot).copied().unwrap_or(false))
     })
 }
 
@@ -181,6 +298,7 @@ pub(crate) fn source_method_entry_symbol(
     let source = source_visible_signature(physical)?;
     match plan_method_abi(&source, physical)? {
         MethodAbiPlan::Direct => Ok(physical_method_symbol(class_name, method_name, kind)),
+        MethodAbiPlan::OptionalDefaults => Err("optional method defaults require an EIR adapter".to_string()),
         MethodAbiPlan::AppendEmptyCollector
         | MethodAbiPlan::BoxArguments
         | MethodAbiPlan::BoxArgumentsAndAppendEmptyCollector => Ok(source_method_adapter_symbol(
@@ -261,6 +379,9 @@ pub(crate) fn emit_method_adapter(
     box_return_as_mixed: bool,
 ) -> Result<(), String> {
     let plan = plan_method_abi(caller, physical)?;
+    if plan == MethodAbiPlan::OptionalDefaults {
+        return Err("optional method defaults require an EIR adapter".to_string());
+    }
     if box_return_as_mixed && physical.by_ref_return {
         return Err("source method ABI adapter cannot value-box a by-reference return".to_string());
     }
@@ -312,7 +433,9 @@ pub(crate) fn emit_method_adapter(
                 0x7fff_ffff_ffff_fffe,
             );
         }
-        super::value_boxing::emit_box_current_value_as_mixed(emitter, source_ty);
+        // A `?ptr<T>` argument keeps its union, so address 0 is PHP null.
+        let box_ty = crate::types::mixed_box_php_type(&caller.params[param_index - 1].1);
+        super::value_boxing::emit_box_current_value_as_mixed(emitter, &box_ty);
         abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);
         let owner_address = abi::tertiary_scratch_reg(emitter);
         abi::emit_frame_slot_address(emitter, owner_address, offset);
@@ -374,7 +497,13 @@ pub(crate) fn emit_method_adapter(
                 0x7fff_ffff_ffff_fffe,
             );
         }
-        super::value_boxing::emit_box_current_value_as_mixed(emitter, &physical_return);
+        // A `?ptr<T>` implementation keeps its union, so address 0 is PHP null.
+        let box_ty = if physical.by_ref_return {
+            physical_return.clone()
+        } else {
+            crate::types::mixed_box_php_type(&physical.return_type)
+        };
+        super::value_boxing::emit_box_current_value_as_mixed(emitter, &box_ty);
     }
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
@@ -409,6 +538,7 @@ fn can_box_param_as_mixed(source: &PhpType, target: &PhpType) -> bool {
         && !matches!(source.codegen_repr(), PhpType::Never)
 }
 
+/// Selects the raw instance or static method symbol for the physical ABI.
 fn physical_method_symbol(class_name: &str, method_name: &str, kind: MethodKind) -> String {
     match kind {
         MethodKind::Instance => method_symbol(class_name, method_name),
@@ -416,6 +546,7 @@ fn physical_method_symbol(class_name: &str, method_name: &str, kind: MethodKind)
     }
 }
 
+/// Registers an initially empty hidden collector slot for call-operand cleanup.
 fn emit_empty_collector_owner(emitter: &mut Emitter, owner_offset: usize) {
     abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 0);
     abi::emit_load_int_immediate(
@@ -431,6 +562,7 @@ fn emit_empty_collector_owner(emitter: &mut Emitter, owner_offset: usize) {
     abi::emit_push_call_operand_owner(emitter, owner_address, false);
 }
 
+/// Pushes a spilled argument from its frame slot using its target ABI representation.
 fn push_frame_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Float => {
@@ -460,6 +592,7 @@ fn push_frame_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     }
 }
 
+/// Spills the method result before adapter cleanup can clobber its return registers.
 fn preserve_return_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Float => abi::store_at_offset(emitter, abi::float_result_reg(emitter), offset),
@@ -479,6 +612,7 @@ fn preserve_return_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     }
 }
 
+/// Restores the preserved method result to the target return registers after cleanup.
 fn restore_return_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Float => abi::load_at_offset(emitter, abi::float_result_reg(emitter), offset),
@@ -502,6 +636,7 @@ fn restore_return_value(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 mod tests {
     use super::*;
 
+    /// Constructs a checker signature fixture with the requested parameters and variadic marker.
     fn signature(params: Vec<(String, PhpType)>, variadic: Option<String>) -> FunctionSig {
         let len = params.len();
         FunctionSig {
@@ -520,7 +655,94 @@ mod tests {
         }
     }
 
+    /// Promotion of an equally variadic collector uses EIR, including hidden count transport.
     #[test]
+    fn planner_reboxes_equally_variadic_collectors_without_weakening_reference_abi() {
+        let source = signature(vec![("x".into(), PhpType::Int),
+            ("rest".into(), PhpType::Array(Box::new(PhpType::Int)))], Some("rest".into()));
+        assert_eq!(plan_method_abi(&source, &source), Ok(MethodAbiPlan::Direct));
+        let mut physical = source.clone();
+        physical.params[1].1 = PhpType::Array(Box::new(PhpType::Mixed));
+        assert_eq!(plan_method_abi(&source, &physical), Ok(MethodAbiPlan::OptionalDefaults));
+        physical.params.insert(1, (crate::func_args::HIDDEN_ARGC_PARAM.into(), PhpType::Int));
+        physical.param_type_exprs.insert(1, None);
+        physical.param_attributes.insert(1, Vec::new());
+        physical.defaults.insert(1, None);
+        physical.ref_params.insert(1, false);
+        physical.declared_params.insert(1, false);
+        assert_eq!(plan_method_abi(&source, &physical), Ok(MethodAbiPlan::OptionalDefaults));
+        physical.ref_params[2] = true;
+        assert!(plan_method_abi(&source, &physical).is_err());
+        physical.ref_params[2] = false;
+        physical.params[2].1 = PhpType::Array(Box::new(PhpType::Str));
+        assert!(plan_method_abi(&source, &physical).is_err());
+    }
+
+    /// Shorter variadics absorb fixed slots through EIR without accepting incompatible references.
+    #[test]
+    fn planner_routes_absorbed_fixed_parameters_to_eir() {
+        let fixed = signature(vec![("x".into(), PhpType::Int), ("y".into(), PhpType::Int)], None);
+        let source_variadic = signature(vec![("x".into(), PhpType::Int),
+            ("rest".into(), PhpType::Array(Box::new(PhpType::Int)))], Some("rest".into()));
+        let mut physical = signature(vec![("rest".into(), PhpType::Array(Box::new(PhpType::Int)))], Some("rest".into()));
+        assert_eq!(plan_method_abi(&fixed, &physical), Ok(MethodAbiPlan::OptionalDefaults));
+        assert_eq!(plan_method_abi(&source_variadic, &physical), Ok(MethodAbiPlan::OptionalDefaults));
+        physical.ref_params[0] = true;
+        assert!(plan_method_abi(&fixed, &physical).is_err());
+        physical.ref_params[0] = false;
+        let mut incompatible_tail = source_variadic.clone();
+        incompatible_tail.params[1].1 = PhpType::Array(Box::new(PhpType::Str));
+        assert!(plan_method_abi(&incompatible_tail, &physical).is_err());
+        physical.params[0].1 = PhpType::Array(Box::new(PhpType::Str));
+        assert!(plan_method_abi(&fixed, &physical).is_err());
+    }
+
+    /// Extra optional parameters select EIR adaptation without weakening required or reference shapes.
+    #[test]
+    fn planner_routes_optional_defaults_to_eir() {
+        let source = signature(vec![("x".to_string(), PhpType::Int)], None);
+        let mut physical = signature(vec![
+            ("x".to_string(), PhpType::Int), ("extra".to_string(), PhpType::Int),
+        ], None);
+        physical.defaults[1] = Some(crate::parser::ast::Expr::new(
+            crate::parser::ast::ExprKind::IntLiteral(2), crate::span::Span::dummy(),
+        ));
+        assert_eq!(plan_method_abi(&source, &physical).unwrap(), MethodAbiPlan::OptionalDefaults);
+        physical.ref_params[0] = true;
+        assert!(plan_method_abi(&source, &physical).is_err());
+        physical.ref_params[0] = false;
+        physical.defaults[1] = None;
+        assert!(plan_method_abi(&source, &physical).is_err());
+    }
+
+    /// Captured interface slots use declared shapes for optional and source-variadic widening.
+    #[test]
+    fn planner_routes_oct9_captured_shapes_to_eir() {
+        let hidden = crate::func_args::HIDDEN_ARGS_PARAM.to_string();
+        let source = signature(vec![
+            ("x".to_string(), PhpType::Int),
+            (hidden.clone(), PhpType::Array(Box::new(PhpType::Mixed))),
+        ], Some(hidden.clone()));
+        let mut optional = signature(vec![
+            ("x".to_string(), PhpType::Int), ("extra".to_string(), PhpType::Int),
+            (hidden.clone(), PhpType::Array(Box::new(PhpType::Mixed))),
+        ], Some(hidden));
+        optional.defaults[1] = Some(crate::parser::ast::Expr::new(
+            crate::parser::ast::ExprKind::IntLiteral(2), crate::span::Span::dummy(),
+        ));
+        assert_eq!(plan_method_abi(&source, &optional).unwrap(), MethodAbiPlan::OptionalDefaults);
+        let variadic = signature(vec![
+            ("x".to_string(), PhpType::Int),
+            ("rest".to_string(), PhpType::Array(Box::new(PhpType::Int))),
+        ], Some("rest".to_string()));
+        assert_eq!(plan_method_abi(&source, &variadic).unwrap(), MethodAbiPlan::OptionalDefaults);
+        optional.defaults[1] = None;
+        assert!(plan_method_abi(&source, &optional).is_err());
+    }
+
+    /// A single generated collector difference has a dedicated target-aware adapter.
+    #[test]
+    /// Verifies ABI planning accepts one compiler-generated collector appended to a source signature.
     fn planner_accepts_only_one_generated_collector_difference() {
         let source = signature(vec![("name".to_string(), PhpType::Str)], None);
         let mut physical = source.clone();
@@ -540,7 +762,9 @@ mod tests {
         );
     }
 
+    /// A source variadic's unknown count cannot be synthesized by the fixed-signature adapter.
     #[test]
+    /// Verifies ABI planning rejects unsupported actual-count adaptation for source variadics.
     fn planner_rejects_source_variadic_actual_count_adaptation() {
         let source = signature(
             vec![("values".to_string(), PhpType::Mixed)],
@@ -561,7 +785,9 @@ mod tests {
             .contains("actual-count"));
     }
 
+    /// Source variadics retain their raw physical entry and every hidden argc argument.
     #[test]
+    /// Verifies source vtables retain raw variadic ABI and preserve injected argument-count slots.
     fn source_vtable_keeps_source_variadics_raw_and_never_drops_an_injected_hidden_argc() {
         let mut physical = signature(
             vec![("values".to_string(), PhpType::Mixed)],
@@ -653,7 +879,9 @@ mod tests {
             .contains("unsupported physical signature difference"));
     }
 
+    /// Reference returns preserve one pointer rather than boxing the pointed-to value.
     #[test]
+    /// Verifies reference-return adapters preserve the alias pointer without boxing the referenced value.
     fn by_reference_return_is_preserved_as_one_pointer_and_never_value_boxed() {
         let mut caller = signature(Vec::new(), None);
         caller.return_type = PhpType::Mixed;
@@ -673,9 +901,8 @@ mod tests {
 
         let mut mismatched_caller = caller.clone();
         mismatched_caller.by_ref_return = false;
-        assert!(plan_method_abi(&mismatched_caller, &physical)
-            .unwrap_err()
-            .contains("by-reference return mismatch"));
+        assert_eq!(plan_method_abi(&mismatched_caller, &physical).unwrap(),
+            MethodAbiPlan::OptionalDefaults);
 
         let mut emitter = Emitter::new(
             crate::codegen_support::platform::Target::parse("linux-x86_64").unwrap(),
@@ -787,7 +1014,9 @@ mod tests {
         }
     }
 
+    /// Arguments spill before allocation and collector owners balance on every supported target.
     #[test]
+    /// Verifies every target spills arguments before allocation and balances hidden collector ownership.
     fn emitter_spills_before_allocating_and_balances_collector_ownership_on_all_targets() {
         let source = signature(vec![("name".to_string(), PhpType::Str)], None);
         let mut physical = source.clone();

@@ -9,6 +9,9 @@
 
 use super::*;
 
+mod provenance;
+use provenance::transparent_callback_source;
+
 /// Lowers `stream_wrapper_register(protocol, class, flags?)`.
 pub(crate) fn lower_stream_wrapper_register(
     ctx: &mut FunctionContext<'_>,
@@ -83,7 +86,7 @@ pub(crate) fn lower_stream_context_create(
         store_stream_context_options(ctx, options, true)?;
     }
     capture_stream_notification_callback(ctx, inst.operands.get(1).copied())?;
-    emit_fd_result(ctx, 1);
+    emit_fd_result(ctx, crate::codegen_support::runtime::DEFAULT_CONTEXT_PAYLOAD);
     store_if_result(ctx, inst)
 }
 
@@ -93,7 +96,7 @@ pub(crate) fn lower_stream_context_get_default(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_arg_count_between(inst, "stream_context_get_default", 0, 1)?;
-    emit_fd_result(ctx, 0);
+    emit_fd_result(ctx, crate::codegen_support::runtime::DEFAULT_CONTEXT_PAYLOAD);
     store_if_result(ctx, inst)
 }
 
@@ -103,7 +106,7 @@ pub(crate) fn lower_stream_context_set_default(
     inst: &Instruction,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "stream_context_set_default", 1)?;
-    emit_fd_result(ctx, 0);
+    emit_fd_result(ctx, crate::codegen_support::runtime::DEFAULT_CONTEXT_PAYLOAD);
     store_if_result(ctx, inst)
 }
 
@@ -244,29 +247,7 @@ pub(super) fn is_capturable_notification_callable(
     let Some(inst) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
-    Ok(matches!(inst.op, Op::ClosureNew | Op::FirstClassCallableNew))
-}
-
-/// Follows identity-preserving ownership operations used to stage call operands.
-fn transparent_callback_source(
-    function: &crate::ir::Function,
-    mut value: ValueId,
-) -> Result<ValueId> {
-    loop {
-        let Some(value_ref) = function.value(value) else {
-            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-        };
-        let ValueDef::Instruction { inst, .. } = value_ref.def else {
-            return Ok(value);
-        };
-        let Some(inst) = function.instruction(inst) else {
-            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
-        };
-        if !matches!(inst.op, Op::Acquire | Op::Move | Op::Borrow) {
-            return Ok(value);
-        }
-        value = expect_operand(inst, 0)?;
-    }
+    Ok(matches!(inst.op, Op::ClosureNew | Op::FirstClassCallableNew | Op::CallableValueNew))
 }
 
 #[cfg(test)]
@@ -355,6 +336,10 @@ mod producer_tests {
 
 /// Stores the loaded callable descriptor into `_stream_notification_callback`.
 pub(super) fn store_current_result_as_stream_notification_callback(ctx: &mut FunctionContext<'_>) {
+    if ctx.module.web_application {
+        abi::emit_call_label(ctx.emitter, "__rt_web_context_notification_store");
+        return;
+    }
     let addr_reg = abi::symbol_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, addr_reg, "_stream_notification_callback");
@@ -363,6 +348,11 @@ pub(super) fn store_current_result_as_stream_notification_callback(ctx: &mut Fun
 
 /// Clears `_stream_notification_callback` so later transfers do not fire stale callbacks.
 pub(super) fn clear_stream_notification_callback(ctx: &mut FunctionContext<'_>) {
+    if ctx.module.web_application {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        abi::emit_call_label(ctx.emitter, "__rt_web_context_notification_store");
+        return;
+    }
     let addr_reg = abi::symbol_scratch_reg(ctx.emitter);
     let zero_reg = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, addr_reg, "_stream_notification_callback");

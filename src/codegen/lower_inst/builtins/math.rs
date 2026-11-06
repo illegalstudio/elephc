@@ -62,6 +62,10 @@ pub(crate) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             PhpType::Int
         }
+        PhpType::Object(class_name) => {
+            emit_object_math_type_error(ctx, "abs", &class_name);
+            return Ok(());
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "abs for PHP type {:?}",
@@ -76,6 +80,30 @@ pub(crate) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     {
         crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &emitted_type);
     }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the raw integer absolute value selected by the abs int sink.
+///
+/// The operand is a concrete int, bool, or null-capable tagged scalar; tagged null reads as
+/// zero exactly like the ordinary `abs()` lowering. `INT_MIN` still terminates in PHP's warned
+/// float-to-int conversion inside the runtime helper.
+pub(crate) fn lower_abs_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "abs", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.load_value_to_result(value)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {}
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "abs_int for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_abs_int");
     store_if_result(ctx, inst)
 }
 
@@ -119,6 +147,57 @@ pub(crate) fn lower_sqrt(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
             ctx.emitter.instruction("sqrtsd xmm0, xmm0");                       // compute the square root in the floating-point result register
         }
     }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the fused `(int)sqrt(a + b)` target selected by the sqrt add sink.
+///
+/// Both operands are proven concrete integers by the producing pass; the runtime helper keeps
+/// PHP's checked-add promotion, NAN warning and truncation semantics.
+pub(crate) fn lower_sqrt_add_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "sqrt", 2)?;
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(lhs, "x0")?;
+            ctx.load_value_to_reg(rhs, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(lhs, "rdi")?;
+            ctx.load_value_to_reg(rhs, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_sqrt_add_int");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the sequential `sqrt(i + addend)` range reducer selected by the sqrt loop pass.
+///
+/// Operands are the initial float accumulator, the induction start, the exclusive bound and
+/// the integer addend. The runtime helper keeps PHP's checked-add promotion and source-order
+/// float additions.
+pub(crate) fn lower_sqrt_sum_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "sqrt", 4)?;
+    let initial = expect_operand(inst, 0)?;
+    let start = expect_operand(inst, 1)?;
+    let bound = expect_operand(inst, 2)?;
+    let addend = expect_operand(inst, 3)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(initial, "d0")?;
+            ctx.load_value_to_reg(start, "x0")?;
+            ctx.load_value_to_reg(bound, "x1")?;
+            ctx.load_value_to_reg(addend, "x2")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(initial, "xmm0")?;
+            ctx.load_value_to_reg(start, "rdi")?;
+            ctx.load_value_to_reg(bound, "rsi")?;
+            ctx.load_value_to_reg(addend, "rdx")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_sqrt_sum_range");
     store_if_result(ctx, inst)
 }
 
@@ -963,6 +1042,10 @@ fn load_numeric_as_float(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
             Ok(())
         }
+        PhpType::Object(class_name) => {
+            emit_object_math_type_error(ctx, name, &class_name);
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name, other
@@ -1003,6 +1086,20 @@ fn emit_float_select(ctx: &mut FunctionContext<'_>, want_max: bool) {
             ctx.emitter.instruction("movsd xmm0, xmm1");                        // move the selected floating candidate into the result register
         }
     }
+}
+
+/// Raises php-src's scalar-only TypeError for a math builtin receiving an object.
+fn emit_object_math_type_error(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    class_name: &str,
+) {
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx,
+        &format!(
+            "{name}(): Argument #1 ($num) must be of type int|float, {class_name} given"
+        ),
+    );
 }
 
 /// Loads a numeric operand and normalizes integer-like values into the integer result register.

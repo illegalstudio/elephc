@@ -13,6 +13,7 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+use super::offset_convert::{SPL_OFFSET_MODE_LIST, SPL_OFFSET_MODE_LIST_NULLABLE};
 use super::{SPL_DLL_ITER_INDEX_OFFSET, SPL_DLL_ITER_MODE_OFFSET, SPL_DLL_STORAGE_OFFSET};
 
 const SPL_DLL_OBJECT_SIZE: i64 = 32;
@@ -22,30 +23,25 @@ const INT_TAG: i64 = 0;
 const STR_TAG: i64 = 1;
 const BOOL_TAG: i64 = 3;
 const ITER_MODE_DELETE: i64 = 1;
+/// The linked-list offset TypeError reads `<method prefix><type> given`.
+const SPL_DLL_OFFSET_TYPE_GIVEN_SUFFIX_LEN: usize = " given".len();
 const ITER_MODE_LIFO: i64 = 2;
+/// `SPL_DLLIST_IT_FIX`: the internal flag PHP sets on `SplStack`/`SplQueue`, freezing the
+/// LIFO/FIFO bit and appearing in `getIteratorMode()` (a fresh `SplStack` reports 6).
+const ITER_MODE_FIX: i64 = 4;
 const SPL_DLL_POP_EMPTY_MSG_LEN: usize = "Can't pop from an empty datastructure".len();
 const SPL_DLL_SHIFT_EMPTY_MSG_LEN: usize = "Can't shift from an empty datastructure".len();
 const SPL_DLL_PEEK_EMPTY_MSG_LEN: usize = "Can't peek at an empty datastructure".len();
+const SPL_DLL_FROZEN_MODE_MSG_LEN: usize =
+    "Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen".len();
 const SPL_DLL_ADD_RANGE_MSG_LEN: usize =
     "SplDoublyLinkedList::add(): Argument #1 ($index) is out of range".len();
-const SPL_DLL_OFFSET_EXISTS_TYPE_MSG_LEN: usize =
-    "SplDoublyLinkedList::offsetExists(): Argument #1 ($index) must be of type int, non-int given"
-        .len();
 const SPL_DLL_OFFSET_GET_RANGE_MSG_LEN: usize =
     "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) is out of range".len();
-const SPL_DLL_OFFSET_GET_TYPE_MSG_LEN: usize =
-    "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, non-int given"
-        .len();
 const SPL_DLL_OFFSET_SET_RANGE_MSG_LEN: usize =
     "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) is out of range".len();
-const SPL_DLL_OFFSET_SET_TYPE_MSG_LEN: usize =
-    "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) must be of type ?int, non-int given"
-        .len();
 const SPL_DLL_OFFSET_UNSET_RANGE_MSG_LEN: usize =
     "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) is out of range".len();
-const SPL_DLL_OFFSET_UNSET_TYPE_MSG_LEN: usize =
-    "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, non-int given"
-        .len();
 
 /// Emits all SplDoublyLinkedList, SplStack, and SplQueue runtime helpers for the target architecture.
 /// Entry point called by `emit_doubly_linked_list_runtime()` which routes to the correct architecture.
@@ -87,15 +83,17 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emit_offset_unset_aarch64(emitter);
 }
 
-/// Emits `__rt_spl_dll_new` on ARM64: allocates an SPL list object, initializes internal Mixed-array
-/// storage with capacity 4, and stores iterator index/mode at their respective offsets. Returns
-/// the initialized object pointer in x0.
+/// Emits `__rt_spl_dll_new` on ARM64: receiver's concrete class id in x0 and the class's
+/// default iterator mode in x1. Allocates an SPL list object, initializes internal Mixed-array
+/// storage with capacity 4, stores the iterator index and seeds the iterator mode from x1
+/// (`SplStack` 6, `SplQueue` 4, plain list 0). Returns the initialized object pointer in x0.
 fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_new");
-    emitter.instruction("sub sp, sp, #32");                                     // reserve constructor spill slots
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // establish a frame for nested allocator calls
+    emitter.instruction("sub sp, sp, #48");                                     // reserve constructor spill slots (class id, object, default mode)
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish a frame for nested allocator calls
     emitter.instruction("str x0, [sp, #0]");                                    // save the concrete SPL class id
+    emitter.instruction("str x1, [sp, #16]");                                   // save the requested default iterator mode
     emitter.instruction(&format!("mov x0, #{}", SPL_DLL_OBJECT_SIZE));          // request the fixed SPL list object payload size
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the SPL list object payload
     emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
@@ -114,10 +112,11 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the object pointer
     emitter.instruction(&format!("str x0, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // object.storage = internal Mixed array
     emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // iterator index starts at zero
-    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // iterator mode starts FIFO/KEEP
+    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the class default iterator mode
+    emitter.instruction(&format!("str x10, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // seed the class's default mode (FIX/LIFO bits)
     emitter.instruction("mov x0, x9");                                          // return the initialized SPL object
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release constructor spill slots
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release constructor spill slots
     emitter.instruction("ret");                                                 // return the object pointer
 }
 
@@ -349,12 +348,30 @@ fn emit_peek_index_aarch64(emitter: &mut Emitter, null_label: &str, last: bool) 
 }
 
 /// Emits `__rt_spl_dll_set_iterator_mode` and `__rt_spl_dll_get_iterator_mode` on ARM64.
-/// Set: receiver in x0, mode bits in x1; stores x1 at the iterator mode offset and returns void.
-/// Get: receiver in x0; returns iterator mode bits in x0.
+/// Set: receiver in x0, requested mode bits in x1. The request is masked to the low two bits
+/// (LIFO/FIFO/DELETE) and the stored word is `(request & 3) | (current & FIX)`; a fixed-mode list
+/// (`SplStack`/`SplQueue`, FIX bit set) throws RuntimeException when the call would flip the
+/// LIFO/FIFO bit, matching PHP 8.5. Get: receiver in x0; returns the raw mode word in x0.
 fn emit_iterator_mode_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_set_iterator_mode");
-    emitter.instruction(&format!("str x1, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on the receiver
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load the current iterator mode bits
+    emitter.instruction("and x11, x1, #3");                                     // request masked to the LIFO/FIFO/DELETE bits
+    emitter.instruction(&format!("and x10, x9, #{}", ITER_MODE_FIX));           // current FIX bit (set on SplStack/SplQueue)
+    emitter.instruction("orr x11, x11, x10");                                   // stored word = (request & 3) | (current & FIX)
+    emitter.instruction("cbz x10, __rt_spl_dll_set_iterator_mode_store");       // a plain list stores without the freeze check
+    emitter.instruction("eor x10, x9, x1");                                     // which mode bits would this call change?
+    emitter.instruction(&format!("tst x10, #{}", ITER_MODE_LIFO));              // does it flip the frozen LIFO/FIFO bit?
+    emitter.instruction("b.ne __rt_spl_dll_set_iterator_mode_frozen");          // frozen lists reject a LIFO/FIFO change
+    emitter.label("__rt_spl_dll_set_iterator_mode_store");
+    emitter.instruction(&format!("str x11, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // store the masked word with the fix bit preserved
     emitter.instruction("ret");                                                 // return void
+    emitter.label("__rt_spl_dll_set_iterator_mode_frozen");
+    emit_throw_exception_aarch64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
     emitter.label_global("__rt_spl_dll_get_iterator_mode");
     emitter.instruction(&format!("ldr x0, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // return iterator mode bits
     emitter.instruction("ret");                                                 // return integer mode
@@ -1035,14 +1052,10 @@ fn emit_offset_exists_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release offset helper frame
     emitter.instruction("ret");                                                 // return boolean false
     emitter.label("__rt_spl_dll_offset_exists_type_throw");
+    emitter.instruction("ldr x2, [sp, #24]");                                   // the rejected offset's type-name row
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer before throwing
     emitter.instruction("add sp, sp, #64");                                     // release offset helper frame before throwing
-    emit_throw_exception_aarch64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_dll_offset_exists_type_msg",
-        SPL_DLL_OFFSET_EXISTS_TYPE_MSG_LEN,
-    );
+    emit_dll_offset_type_throw_aarch64(emitter, "exists");
 }
 
 /// Emits `__rt_spl_dll_offset_get` on ARM64: receiver in x0, boxed offset in x1.
@@ -1065,14 +1078,10 @@ fn emit_offset_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release offset helper frame
     emitter.instruction("ret");                                                 // return retained Mixed cell
     emitter.label("__rt_spl_dll_offset_get_type_throw");
+    emitter.instruction("ldr x2, [sp, #24]");                                   // the rejected offset's type-name row
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer before throwing
     emitter.instruction("add sp, sp, #64");                                     // release offset helper frame before throwing
-    emit_throw_exception_aarch64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_dll_offset_get_type_msg",
-        SPL_DLL_OFFSET_GET_TYPE_MSG_LEN,
-    );
+    emit_dll_offset_type_throw_aarch64(emitter, "get");
     emitter.label("__rt_spl_dll_offset_get_range_throw");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer before throwing
     emitter.instruction("add sp, sp, #64");                                     // release offset helper frame before throwing
@@ -1085,10 +1094,13 @@ fn emit_offset_get_aarch64(emitter: &mut Emitter) {
 }
 
 /// Emits the shared offset validation preamble on ARM64: receiver in x0, boxed offset in x1.
-/// Unboxes the offset, validates it is an integer and non-negative, loads storage and length,
-/// and checks bounds. Converts LIFO logical offset to physical slot using ITER_MODE_LIFO.
-/// Sets x9 = storage, x10 = physical index on success; jumps to type_label, range_label on
-/// errors. Returns with the offset helper frame established but not yet cleaned up.
+/// Converts the offset through `__rt_spl_offset_convert` with the list's `int $index` rules —
+/// the converter accepts a canonical or weak-coercible numeric string and CONSUMES the owned
+/// box — then validates the index is non-negative, loads storage and length, checks bounds, and
+/// converts the LIFO logical offset to a physical slot using ITER_MODE_LIFO. Sets x9 = storage
+/// and x10 = physical index on success; branches to `type_label` (the rejected type's name row
+/// is in [sp, #24]) or `range_label` on errors. Clobbers x0, x2 and the x9-x15 scratch block and
+/// d0/d1 on every path. Returns with the offset helper frame established but not yet cleaned up.
 fn emit_offset_index_prefix_aarch64(
     emitter: &mut Emitter,
     type_label: &str,
@@ -1100,12 +1112,11 @@ fn emit_offset_index_prefix_aarch64(
     emitter.instruction("add x29, sp, #48");                                    // establish a frame for Mixed unbox/release
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver
     emitter.instruction("str x1, [sp, #8]");                                    // save boxed offset argument
-    emitter.instruction("mov x0, x1");                                          // pass boxed offset to mixed_unbox
-    emitter.instruction("bl __rt_mixed_unbox");                                 // unbox offset into tag and payload words
-    emitter.instruction("str x0, [sp, #16]");                                   // save unboxed offset tag
-    emitter.instruction("str x1, [sp, #24]");                                   // save unboxed integer payload candidate
-    emitter.instruction("ldr x0, [sp, #8]");                                    // reload boxed offset argument
-    emitter.instruction("bl __rt_decref_mixed");                                // release the owned boxed offset argument
+    emitter.instruction("mov x0, x1");                                          // pass the owned boxed offset to the converter
+    emitter.instruction(&format!("mov x1, #{}", SPL_OFFSET_MODE_LIST));         // the list's int $index rules, null reading as 0
+    emitter.instruction("bl __rt_spl_offset_convert");                          // convert the offset and release its box
+    emitter.instruction("str x0, [sp, #16]");                                   // save the status (0, like the int tag, when converted)
+    emitter.instruction("str x1, [sp, #24]");                                   // save the integer index or the rejected type's name row
     emitter.instruction("ldr x12, [sp, #16]");                                  // reload unboxed offset tag
     emitter.instruction(&format!("cmp x12, #{}", INT_TAG));                     // offset must be an integer for list addressing
     emitter.instruction(&format!("b.ne {}", type_label));                       // reject non-integer offsets
@@ -1132,18 +1143,22 @@ fn emit_offset_index_prefix_aarch64(
 /// logical offset to physical slot. Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_set");
-    emitter.instruction("sub sp, sp, #80");                                     // reserve offset-set helper frame
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish a frame for nested release/append calls
+    emitter.instruction("sub sp, sp, #112");                                    // reserve offset-set helper frame
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // establish a frame for nested release/append calls
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver
     emitter.instruction("str x1, [sp, #8]");                                    // save boxed offset argument
     emitter.instruction("str x2, [sp, #16]");                                   // save owned Mixed value argument
-    emitter.instruction("mov x0, x1");                                          // pass boxed offset to mixed_unbox
-    emitter.instruction("bl __rt_mixed_unbox");                                 // unbox offset into tag and payload words
-    emitter.instruction("str x0, [sp, #24]");                                   // save offset tag
-    emitter.instruction("str x1, [sp, #32]");                                   // save integer offset payload candidate
-    emitter.instruction("ldr x0, [sp, #8]");                                    // reload boxed offset argument
-    emitter.instruction("bl __rt_decref_mixed");                                // release boxed offset argument
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the owned value, guarded while the offset converts
+    super::super::exceptions::guards::guard(emitter, 64, 96);
+    emitter.instruction("ldr x0, [sp, #8]");                                    // pass the owned boxed offset to the converter
+    emitter.instruction(&format!("mov x1, #{}", SPL_OFFSET_MODE_LIST_NULLABLE)); // the list's rules, reporting a null to append
+    emitter.instruction("bl __rt_spl_offset_convert");                          // convert the offset and release its box
+    emitter.instruction("stp x0, x1, [sp, #24]");                               // keep the status and index across the unguard
+    super::super::exceptions::guards::unguard(emitter, 64, 96);
+    emitter.instruction("ldp x0, x1, [sp, #24]");                               // reload the status and index
+    emitter.instruction("str x0, [sp, #24]");                                   // save the status (the int or null tag, or a type error)
+    emitter.instruction("str x1, [sp, #32]");                                   // save the integer index or the rejected type's name row
     emitter.instruction("ldr x12, [sp, #24]");                                  // reload offset tag
     emitter.instruction(&format!("cmp x12, #{}", NULL_TAG));                    // null offset means append
     emitter.instruction("b.eq __rt_spl_dll_offset_set_append");                 // append when offset is null
@@ -1182,19 +1197,15 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_offset_set_type_throw");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload rejected owned Mixed value
     emitter.instruction("bl __rt_decref_mixed");                                // release rejected value before throwing
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer before throwing
-    emitter.instruction("add sp, sp, #80");                                     // release offset-set frame before throwing
-    emit_throw_exception_aarch64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_dll_offset_set_type_msg",
-        SPL_DLL_OFFSET_SET_TYPE_MSG_LEN,
-    );
+    emitter.instruction("ldr x2, [sp, #32]");                                   // the rejected offset's type-name row
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer before throwing
+    emitter.instruction("add sp, sp, #112");                                    // release offset-set frame before throwing
+    emit_dll_offset_type_throw_aarch64(emitter, "set");
     emitter.label("__rt_spl_dll_offset_set_range_throw");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload owned Mixed value rejected by invalid offset
     emitter.instruction("bl __rt_decref_mixed");                                // release rejected value to avoid leaking argument ownership
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer before throwing
-    emitter.instruction("add sp, sp, #80");                                     // release offset-set frame before throwing
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer before throwing
+    emitter.instruction("add sp, sp, #112");                                    // release offset-set frame before throwing
     emit_throw_exception_aarch64(
         emitter,
         "_spl_out_of_range_exception_class_id",
@@ -1202,8 +1213,8 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
         SPL_DLL_OFFSET_SET_RANGE_MSG_LEN,
     );
     emitter.label("__rt_spl_dll_offset_set_done");
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release offset-set helper frame
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // release offset-set helper frame
     emitter.instruction("ret");                                                 // return void
 }
 
@@ -1246,14 +1257,10 @@ fn emit_offset_unset_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release offset helper frame
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_offset_unset_type_throw");
+    emitter.instruction("ldr x2, [sp, #24]");                                   // the rejected offset's type-name row
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer before throwing
     emitter.instruction("add sp, sp, #64");                                     // release offset helper frame before throwing
-    emit_throw_exception_aarch64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_dll_offset_unset_type_msg",
-        SPL_DLL_OFFSET_UNSET_TYPE_MSG_LEN,
-    );
+    emit_dll_offset_type_throw_aarch64(emitter, "unset");
     emitter.label("__rt_spl_dll_offset_unset_range_throw");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer before throwing
     emitter.instruction("add sp, sp, #64");                                     // release offset helper frame before throwing
@@ -1304,15 +1311,17 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emit_offset_unset_x86_64(emitter);
 }
 
-/// Emits `__rt_spl_dll_new` on x86_64: allocates an SPL list object, initializes internal
-/// Mixed-array storage with capacity 4, and stores iterator index/mode at their respective
-/// offsets. Returns the initialized object pointer in rax.
+/// Emits `__rt_spl_dll_new` on x86_64: concrete class id in rdi and the class's default iterator
+/// mode in rsi. Allocates an SPL list object, initializes internal Mixed-array storage with
+/// capacity 4, stores the iterator index and seeds the iterator mode from rsi (`SplStack` 6,
+/// `SplQueue` 4, plain list 0). Returns the initialized object pointer in rax.
 fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_new");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for constructor spills
     emitter.instruction("mov rbp, rsp");                                        // establish constructor frame
-    emitter.instruction("sub rsp, 16");                                         // reserve class-id and object-pointer spill slots
+    emitter.instruction("sub rsp, 32");                                         // reserve class-id, object-pointer, and default-mode spill slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save concrete SPL class id
+    emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the requested default iterator mode
     emitter.instruction(&format!("mov rax, {}", SPL_DLL_OBJECT_SIZE));          // request fixed SPL list object payload size
     emitter.instruction("call __rt_heap_alloc");                                // allocate the SPL list object payload
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize object heap kind with x86 marker
@@ -1330,9 +1339,10 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload object pointer
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_DLL_STORAGE_OFFSET)); // object.storage = internal Mixed array
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); // iterator index starts at zero
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_MODE_OFFSET)); // iterator mode starts FIFO/KEEP
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the class default iterator mode
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], r10", SPL_DLL_ITER_MODE_OFFSET)); // seed the class's default mode (FIX/LIFO bits)
     emitter.instruction("mov rax, r11");                                        // return initialized SPL object
-    emitter.instruction("add rsp, 16");                                         // release constructor spills
+    emitter.instruction("add rsp, 32");                                         // release constructor spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return object pointer
 }
@@ -1563,12 +1573,34 @@ fn emit_peek_index_x86_64(emitter: &mut Emitter, null_label: &str, last: bool) {
 }
 
 /// Emits `__rt_spl_dll_set_iterator_mode` and `__rt_spl_dll_get_iterator_mode` on x86_64.
-/// Set: receiver in rdi, mode bits in rsi; stores rsi at the iterator mode offset and returns void.
-/// Get: receiver in rdi; returns iterator mode bits in rax.
+/// Set: receiver in rdi, requested mode bits in rsi. The request is masked to the low two bits
+/// (LIFO/FIFO/DELETE) and the stored word is `(request & 3) | (current & FIX)`; a fixed-mode list
+/// (`SplStack`/`SplQueue`, FIX bit set) throws RuntimeException when the call would flip the
+/// LIFO/FIFO bit, matching PHP 8.5. Get: receiver in rdi; returns the raw mode word in rax.
 fn emit_iterator_mode_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_set_iterator_mode");
-    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], rsi", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on receiver
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load the current iterator mode bits
+    emitter.instruction("mov r11, rsi");                                        // copy the requested mode bits
+    emitter.instruction("and r11, 3");                                          // request masked to the LIFO/FIFO/DELETE bits
+    emitter.instruction("mov r8, r10");                                         // copy the current mode bits
+    emitter.instruction(&format!("and r8, {}", ITER_MODE_FIX));                 // current FIX bit (set on SplStack/SplQueue)
+    emitter.instruction("or r11, r8");                                          // stored word = (request & 3) | (current & FIX)
+    emitter.instruction("test r8, r8");                                         // is this a fixed-mode list (SplStack/SplQueue)?
+    emitter.instruction("je __rt_spl_dll_set_iterator_mode_store_x");           // a plain list stores without the freeze check
+    emitter.instruction("mov r9, r10");                                         // copy the current mode bits
+    emitter.instruction("xor r9, rsi");                                         // which mode bits would this call change?
+    emitter.instruction(&format!("test r9, {}", ITER_MODE_LIFO));               // does it flip the frozen LIFO/FIFO bit?
+    emitter.instruction("jne __rt_spl_dll_set_iterator_mode_frozen_x");         // frozen lists reject a LIFO/FIFO change
+    emitter.label("__rt_spl_dll_set_iterator_mode_store_x");
+    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r11", SPL_DLL_ITER_MODE_OFFSET)); // store the masked word with the fix bit preserved
     emitter.instruction("ret");                                                 // return void
+    emitter.label("__rt_spl_dll_set_iterator_mode_frozen_x");
+    emit_throw_exception_x86_64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
     emitter.label_global("__rt_spl_dll_get_iterator_mode");
     emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // return iterator mode bits
     emitter.instruction("ret");                                                 // return integer mode
@@ -2241,14 +2273,10 @@ fn emit_offset_exists_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return boolean false
     emitter.label("__rt_spl_dll_offset_exists_type_throw");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // the rejected offset's type-name row
     emitter.instruction("add rsp, 48");                                         // release offset helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
-    emit_throw_exception_x86_64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_dll_offset_exists_type_msg",
-        SPL_DLL_OFFSET_EXISTS_TYPE_MSG_LEN,
-    );
+    emit_dll_offset_type_throw_x86_64(emitter, "exists");
 }
 
 /// Emits `__rt_spl_dll_offset_get` on x86_64: receiver in rdi, boxed offset in rsi.
@@ -2271,14 +2299,10 @@ fn emit_offset_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return retained Mixed cell
     emitter.label("__rt_spl_dll_offset_get_type_throw");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // the rejected offset's type-name row
     emitter.instruction("add rsp, 48");                                         // release offset helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
-    emit_throw_exception_x86_64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_dll_offset_get_type_msg",
-        SPL_DLL_OFFSET_GET_TYPE_MSG_LEN,
-    );
+    emit_dll_offset_type_throw_x86_64(emitter, "get");
     emitter.label("__rt_spl_dll_offset_get_range_throw");
     emitter.instruction("add rsp, 48");                                         // release offset helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
@@ -2291,10 +2315,14 @@ fn emit_offset_get_x86_64(emitter: &mut Emitter) {
 }
 
 /// Emits the shared offset validation preamble on x86_64: receiver in rdi, boxed offset in rsi.
-/// Unboxes the offset, validates it is an integer and non-negative, loads storage and length,
-/// and checks bounds. Converts LIFO logical offset to physical slot using ITER_MODE_LIFO.
-/// Sets r9 = storage, r10 = physical index on success; jumps to type_label, range_label on
-/// errors. Returns with the offset helper frame established but not yet cleaned up.
+/// Converts the offset through `__rt_spl_offset_convert` with the list's `int $index` rules —
+/// the converter accepts a canonical or weak-coercible numeric string and CONSUMES the owned
+/// box — then validates the index is non-negative, loads storage and length, checks bounds, and
+/// converts the LIFO logical offset to a physical slot using ITER_MODE_LIFO. Sets r9 = storage
+/// and r10 = physical index on success; branches to `type_label` (the rejected type's name row
+/// is in [rbp, -32]) or `range_label` on errors. Clobbers rax, rdx, rcx, r10, r11, r12 and
+/// where a float path runs, xmm0/xmm1. Preserves rbp and the other callee-saved registers.
+/// Returns with the offset helper frame established but not yet cleaned up.
 fn emit_offset_index_prefix_x86_64(
     emitter: &mut Emitter,
     type_label: &str,
@@ -2306,12 +2334,11 @@ fn emit_offset_index_prefix_x86_64(
     emitter.instruction("sub rsp, 48");                                         // reserve receiver, offset, tag, and payload spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save boxed offset argument
-    emitter.instruction("mov rax, rsi");                                        // pass boxed offset to mixed_unbox
-    emitter.instruction("call __rt_mixed_unbox");                               // unbox offset into tag and payload words
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save unboxed offset tag
-    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save unboxed integer payload candidate
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload boxed offset argument
-    emitter.instruction("call __rt_decref_mixed");                              // release owned boxed offset argument
+    emitter.instruction("mov rdi, rsi");                                        // pass the owned boxed offset to the converter
+    emitter.instruction(&format!("mov rsi, {}", SPL_OFFSET_MODE_LIST));         // the list's int $index rules, null reading as 0
+    emitter.instruction("call __rt_spl_offset_convert");                        // convert the offset and release its box
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the status (0, like the int tag, when converted)
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the integer index or the rejected type's name row
     emitter.instruction("mov r12, QWORD PTR [rbp - 24]");                       // reload unboxed offset tag
     emitter.instruction(&format!("cmp r12, {}", INT_TAG));                      // offset must be an integer for list addressing
     emitter.instruction(&format!("jne {}", type_label));                        // reject non-integer offsets
@@ -2341,16 +2368,22 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_set");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for offsetSet
     emitter.instruction("mov rbp, rsp");                                        // establish offsetSet frame
-    emitter.instruction("sub rsp, 64");                                         // reserve receiver, offset, value, tag, payload, and storage spills
+    emitter.instruction("sub rsp, 96");                                         // reserve receiver, offset, value, tag, payload, and storage spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save boxed offset argument
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save owned Mixed value argument
-    emitter.instruction("mov rax, rsi");                                        // pass boxed offset to mixed_unbox
-    emitter.instruction("call __rt_mixed_unbox");                               // unbox offset into tag and payload words
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save offset tag
-    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save integer offset payload candidate
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload boxed offset argument
-    emitter.instruction("call __rt_decref_mixed");                              // release boxed offset argument
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the owned value, guarded while the offset converts
+    super::super::exceptions::guards::guard(emitter, 64, 96);
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the owned boxed offset to the converter
+    emitter.instruction(&format!("mov rsi, {}", SPL_OFFSET_MODE_LIST_NULLABLE)); // the list's rules, reporting a null to append
+    emitter.instruction("call __rt_spl_offset_convert");                        // convert the offset and release its box
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // keep the status across the unguard
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // keep the index or name row across the unguard
+    super::super::exceptions::guards::unguard(emitter, 64, 96);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the status
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the index or name row
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the status (the int or null tag, or a type error)
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the integer index or the rejected type's name row
     emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // reload offset tag
     emitter.instruction(&format!("cmp r12, {}", NULL_TAG));                     // null offset means append
     emitter.instruction("je __rt_spl_dll_offset_set_append");                   // append when offset is null
@@ -2390,18 +2423,14 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_offset_set_type_throw");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload rejected owned Mixed value
     emitter.instruction("call __rt_decref_mixed");                              // release rejected value before throwing
-    emitter.instruction("add rsp, 64");                                         // release offsetSet frame before throwing
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // the rejected offset's type-name row
+    emitter.instruction("add rsp, 96");                                         // release offsetSet frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
-    emit_throw_exception_x86_64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_dll_offset_set_type_msg",
-        SPL_DLL_OFFSET_SET_TYPE_MSG_LEN,
-    );
+    emit_dll_offset_type_throw_x86_64(emitter, "set");
     emitter.label("__rt_spl_dll_offset_set_range_throw");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload owned Mixed value rejected by invalid offset
     emitter.instruction("call __rt_decref_mixed");                              // release rejected value to avoid leaking argument ownership
-    emitter.instruction("add rsp, 64");                                         // release offsetSet frame before throwing
+    emitter.instruction("add rsp, 96");                                         // release offsetSet frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emit_throw_exception_x86_64(
         emitter,
@@ -2410,7 +2439,7 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
         SPL_DLL_OFFSET_SET_RANGE_MSG_LEN,
     );
     emitter.label("__rt_spl_dll_offset_set_done");
-    emitter.instruction("add rsp, 64");                                         // release offsetSet frame
+    emitter.instruction("add rsp, 96");                                         // release offsetSet frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return void
 }
@@ -2455,14 +2484,10 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_offset_unset_type_throw");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // the rejected offset's type-name row
     emitter.instruction("add rsp, 48");                                         // release offset helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
-    emit_throw_exception_x86_64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_spl_dll_offset_unset_type_msg",
-        SPL_DLL_OFFSET_UNSET_TYPE_MSG_LEN,
-    );
+    emit_dll_offset_type_throw_x86_64(emitter, "unset");
     emitter.label("__rt_spl_dll_offset_unset_range_throw");
     emitter.instruction("add rsp, 48");                                         // release offset helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
@@ -2542,4 +2567,43 @@ fn emit_throw_exception_x86_64(
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emitter.instruction("jmp __rt_throw_current");                              // enter the standard exception unwinder
+}
+
+/// Returns the data symbol and byte length of a linked-list offset method's TypeError prefix,
+/// `SplDoublyLinkedList::offset<Method>(): Argument #1 ($index) must be of type <int>, `.
+fn dll_offset_type_prefix(method: &str) -> (String, usize) {
+    let (name, declared) = match method {
+        "exists" => ("offsetExists", "int"),
+        "get" => ("offsetGet", "int"),
+        "set" => ("offsetSet", "?int"),
+        _ => ("offsetUnset", "int"),
+    };
+    let text = format!("SplDoublyLinkedList::{name}(): Argument #1 ($index) must be of type {declared}, ");
+    (format!("_spl_dll_offset_{method}_type_prefix"), text.len())
+}
+
+/// Branches to `__rt_spl_throw_offset_type` with a linked-list method's message around the name
+/// row the caller left in `x2`: `TypeError("SplDoublyLinkedList::offsetGet(): ... int, string given")`.
+///
+/// The `... given` suffix borrows the unserializer's `_unser_type_given_suffix` data row through
+/// `SPL_DLL_OFFSET_TYPE_GIVEN_SUFFIX_LEN`; a change to that producer's string must move this
+/// length in the same change.
+fn emit_dll_offset_type_throw_aarch64(emitter: &mut Emitter, method: &str) {
+    let (prefix_symbol, prefix_len) = dll_offset_type_prefix(method);
+    abi::emit_symbol_address(emitter, "x0", &prefix_symbol);
+    emitter.instruction(&format!("mov x1, #{}", prefix_len));                   // message prefix length
+    abi::emit_symbol_address(emitter, "x3", "_unser_type_given_suffix");
+    emitter.instruction(&format!("mov x4, #{}", SPL_DLL_OFFSET_TYPE_GIVEN_SUFFIX_LEN)); // message suffix length
+    emitter.instruction("b __rt_spl_throw_offset_type");                        // raise the TypeError naming the offset's type
+}
+
+/// Jumps to `__rt_spl_throw_offset_type` with a linked-list method's message around the name row
+/// the caller left in `rdx`: `TypeError("SplDoublyLinkedList::offsetGet(): ... int, string given")`.
+fn emit_dll_offset_type_throw_x86_64(emitter: &mut Emitter, method: &str) {
+    let (prefix_symbol, prefix_len) = dll_offset_type_prefix(method);
+    emitter.instruction(&format!("lea rdi, [rip + {}]", prefix_symbol));        // message prefix pointer
+    emitter.instruction(&format!("mov rsi, {}", prefix_len));                   // message prefix length
+    emitter.instruction("lea rcx, [rip + _unser_type_given_suffix]");           // message suffix pointer
+    emitter.instruction(&format!("mov r8, {}", SPL_DLL_OFFSET_TYPE_GIVEN_SUFFIX_LEN)); // message suffix length
+    emitter.instruction("jmp __rt_spl_throw_offset_type");                      // raise the TypeError naming the offset's type
 }

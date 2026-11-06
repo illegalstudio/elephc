@@ -40,6 +40,13 @@ pub(super) fn parse_prefix(
 
     let span = tokens[*pos].1.span;
 
+    // Predefined tokens remain name segments before namespace or class access.
+    if crate::parser::stmt::token_as_import_name(&tokens[*pos].0, &tokens[*pos].1).is_some()
+        && matches!(tokens.get(*pos + 1), Some((Token::Backslash | Token::DoubleColon, _)))
+    {
+        return parse_named_expr(tokens, pos, span);
+    }
+
     // `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\true`...: the lexer turns these predefined
     // constants into dedicated tokens, so the name parser never sees an identifier after the `\`
     // (#1307). The fully qualified spelling names the same global constant, so it parses as the
@@ -48,7 +55,14 @@ pub(super) fn parse_prefix(
     if tokens[*pos].0 == Token::Backslash {
         if let Some((next, metadata)) = tokens.get(*pos + 1) {
             let literal_constant = matches!(next, Token::True | Token::False | Token::Null);
-            if literal_constant || crate::parser::stmt::token_as_import_name(next, metadata).is_some() {
+            let continues_name = matches!(
+                tokens.get(*pos + 2),
+                Some((Token::Backslash | Token::DoubleColon | Token::LParen, _))
+            );
+            if literal_constant
+                || (crate::parser::stmt::token_as_import_name(next, metadata).is_some()
+                    && !continues_name)
+            {
                 *pos += 1;
                 let mut expr = parse_prefix(tokens, pos)?;
                 if let ExprKind::ConstRef(name) = &expr.kind {
@@ -67,6 +81,13 @@ pub(super) fn parse_prefix(
     }
 
     match &tokens[*pos].0 {
+        Token::Plus => parse_unary(tokens, pos, span, |inner| {
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::new(ExprKind::IntLiteral(0), inner.span)),
+                op: crate::parser::ast::BinOp::Add,
+                right: inner,
+            }
+        }, 35),
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
         Token::Tilde => parse_unary(tokens, pos, span, ExprKind::BitNot, 35),
@@ -239,6 +260,14 @@ pub(super) fn parse_prefix(
         Token::Identifier(_) | Token::Enum | Token::Backslash => {
             parse_named_expr(tokens, pos, span)
         }
+        // `namespace\helper()`, `namespace\LIMIT`, `namespace\Box::make()`: a relative name
+        // (#825), resolved against the current namespace by the name parser.
+        Token::Namespace if crate::parser::relative_name_starts_at(tokens, *pos) => {
+            if let Some(expr) = parse_relative_constant_token(tokens, pos, span)? {
+                return Ok(expr);
+            }
+            parse_named_expr(tokens, pos, span)
+        }
         Token::Self_ => {
             *pos += 1;
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Self_, "self")
@@ -266,6 +295,22 @@ pub(super) fn parse_prefix(
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => parse_new_object(tokens, pos, span),
+        // `$this(...)` invokes the current object exactly like `($this)(...)`: through
+        // `__invoke` only. A plain `__invoke` method call would fall back to `__call`, which PHP
+        // never does for an object invocation.
+        Token::This if matches!(tokens.get(*pos + 1), Some((Token::LParen, _))) => {
+            let this = Expr::new(ExprKind::This, span);
+            *pos += 2;
+            let args = parse_args(tokens, pos, span)?;
+            let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+            Ok(Expr::new(
+                ExprKind::ExprCall {
+                    callee: Box::new(this),
+                    args,
+                },
+                span,
+            ))
+        }
         Token::This => parse_simple(tokens, pos, span, ExprKind::This),
         Token::Yield => parse_yield(tokens, pos, span),
         other => Err(CompileError::new(
@@ -273,6 +318,52 @@ pub(super) fn parse_prefix(
             &format!("Unexpected token: {:?}", other),
         )),
     }
+}
+
+/// Parses a relative name whose only segment is a literal or predefined constant the lexer gives
+/// its own token: `namespace\PHP_EOL`, `namespace\NAN`, `namespace\true` (#825).
+///
+/// The name parser reads identifiers only, so these failed with "Expected identifier". In the
+/// global namespace the name is exactly the fully qualified `\PHP_EOL`, so it parses through
+/// that form and names the global constant. Inside a namespace it names the constant of that
+/// namespace (`Demo\NAN`, which a namespaced `const NAN` declares), never the global one, as in
+/// PHP. Returns `None`, consuming nothing, for any other relative name, and when `\`, `::` or
+/// `(` follows the token: there it is a name segment (`namespace\NAN::class` is the class
+/// `Demo\NAN`), as in the fully qualified `\NAN::class` path above.
+fn parse_relative_constant_token(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Option<Expr>, CompileError> {
+    let Some((token, metadata)) = tokens.get(*pos + 2) else {
+        return Ok(None);
+    };
+    let constant_token = matches!(token, Token::True | Token::False | Token::Null)
+        || crate::parser::stmt::token_as_import_name(token, metadata).is_some();
+    let continues_name = matches!(
+        tokens.get(*pos + 3),
+        Some((Token::Backslash | Token::DoubleColon | Token::LParen, _))
+    );
+    if !constant_token || continues_name {
+        return Ok(None);
+    }
+    let mut parts = crate::parser::current_namespace_parts();
+    if parts.is_empty() {
+        *pos += 1; // `namespace`; the `\` arm above reads the rest as the global constant
+        let mut expr = parse_prefix(tokens, pos)?;
+        expr.span = Span::with_end_from(span, expr.span);
+        return Ok(Some(expr));
+    }
+    let spelling = token
+        .word_spelling(metadata)
+        .expect("literal and predefined constant tokens have a word spelling");
+    parts.push(spelling.to_string());
+    let end = metadata.span;
+    *pos += 3;
+    Ok(Some(Expr::new(
+        ExprKind::ConstRef(Name::from_parts(crate::names::NameKind::FullyQualified, parts)),
+        Span::with_end_from(span, end),
+    )))
 }
 
 /// Parses `yield` and `yield from` expressions. Consumes the `yield` token and optionally
@@ -426,7 +517,26 @@ fn parse_prefix_inc_dec(
     // original error stands for anything the desugaring declines (a call, for instance,
     // which cannot be read twice).
     let rewind = *pos;
-    if let Ok(target) = parse_expr_bp(tokens, pos, 35) {
+    let operand = super::pratt::parse_prefix_increment_operand(tokens, pos);
+    if let Err(error) = &operand {
+        if !increment && error.message == "Cannot use [] for reading" {
+            return Err(CompileError::new(span,
+                "Pre-decrement on an append dimension is not supported"));
+        }
+    }
+    if let Ok((target, append_kind)) = operand {
+        if matches!(append_kind, super::pratt::PrefixIncrementTarget::Append) {
+            if !increment {
+                return Err(CompileError::new(span,
+                    "Pre-decrement on an append dimension is not supported"));
+            }
+            return Ok(target);
+        }
+        if matches!(append_kind, super::pratt::PrefixIncrementTarget::AppendProperty) {
+            if let Some(error) = super::append_writes::lower_null_property_write(&target, None, span) {
+                return Ok(error);
+            }
+        }
         if let Some(desugared) =
             super::assignment_targets::desugar_lvalue_incdec(target, increment, true, span)
         {
@@ -568,13 +678,14 @@ fn parse_array_literal_with_terminator(
     *pos += 1;
     let mut elems = Vec::new();
     let mut assoc_elems = Vec::new();
-    // Non-empty only once a literal is found to mix a spread with an explicit key, which is the
-    // one shape neither `ArrayLiteral` nor `ArrayLiteralAssoc` can hold.
+    // Non-empty when an explicit key must stay ordered with a spread or with a bare entry whose
+    // implicit key depends on the selected PHP profile (negative integer keys before PHP 8.3).
     let mut mixed_elems: Vec<ArrayEntry> = Vec::new();
     let mut is_assoc = false;
     let mut first = true;
     let mut next_auto_key = 0i64;
     let mut auto_key_initialized = false;
+    let mut auto_key_overflowed = false;
     while *pos < tokens.len() && tokens[*pos].0 != *closing {
         if !first {
             if tokens[*pos].0 != Token::Comma {
@@ -616,6 +727,7 @@ fn parse_array_literal_with_terminator(
             *pos += 1;
             reject_reference_array_element(tokens, pos, closing)?;
             let value = parse_expr(tokens, pos)?;
+            auto_key_overflowed |= explicit_integer_array_key(&expr) == Some(i64::MAX);
             update_next_auto_key_from_explicit_key(
                 &expr,
                 &mut next_auto_key,
@@ -627,6 +739,11 @@ fn parse_array_literal_with_terminator(
                 mixed_elems.push(ArrayEntry::Keyed(expr, value));
             }
         } else if is_assoc {
+            if (auto_key_overflowed || next_auto_key < 0) && mixed_elems.is_empty() {
+                // Preserve implicit keys for profile-dependent negative cursors and overflow.
+                // Runtime construction raises overflow only if this value is evaluated.
+                migrate_assoc_pairs_to_mixed(&mut assoc_elems, &mut mixed_elems);
+            }
             if mixed_elems.is_empty() {
                 let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
                 assoc_elems.push((key, expr));
@@ -635,7 +752,8 @@ fn parse_array_literal_with_terminator(
                 // how many integer slots it consumed, and only the runtime knows that.
                 mixed_elems.push(ArrayEntry::Value(expr));
             }
-            next_auto_key += 1;
+            auto_key_overflowed |= next_auto_key == i64::MAX;
+            next_auto_key = next_auto_key.saturating_add(1);
             auto_key_initialized = true;
         } else {
             elems.push(expr);

@@ -5,21 +5,30 @@
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::eval` default registration.
 //! - `crate::codegen::runtime_callable_invoker::defaults` descriptor invoker metadata.
+//! - Reflection property-default metadata folding and ReflectionClass constant metadata.
+//! - Static property initialization and runtime class-name retention for static defaults.
 //!
 //! Key details:
 //! - Resolution is PURE. Global constants come from `Module::global_constants`, which already
 //!   holds the builtin catalog, and class-like constants follow PHP class, interface and trait
-//!   ancestry, so a folded value never depends on runtime state.
-//! - The resolved tree is target-neutral and carries no ABI encoding beyond the compact scalar
-//!   `kind`/`payload` pair the eval bridge already registers, so both consumers read one shape:
-//!   the eval registration path encodes it, and the descriptor invoker materializes it.
+//!   ancestry. Executable-path defaults retain a runtime marker rather than a host path.
+//! - The resolved tree is target-neutral. Enum results retain evaluated singleton reads when
+//!   a projection or branch fold discards its source; property consumers preserve their order.
+//!   Compact callable metadata excludes those reads because its ABI has no enum value tag.
 //! - Constant recursion is bounded by `MAX_CONST_DEFAULT_DEPTH`, so a self-referential constant
 //!   declines instead of recursing forever.
+//! - Numeric values reuse the PHP-equivalent AST arithmetic folder, including integer division and power.
 
 use crate::names::php_symbol_key;
 use crate::ir::Module;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver};
 use crate::types::{is_php_integer_array_key, ClassInfo, InterfaceInfo};
+
+mod arrays;
+pub(in crate::codegen) use arrays::resolve_array_const_default;
+
+#[cfg(test)]
+mod tests;
 
 /// Compact scalar kind for PHP `null` in a resolved default.
 pub(in crate::codegen) const CONST_DEFAULT_NULL: i64 = 0;
@@ -31,6 +40,8 @@ pub(in crate::codegen) const CONST_DEFAULT_INT: i64 = 2;
 pub(in crate::codegen) const CONST_DEFAULT_FLOAT: i64 = 3;
 /// Compact scalar kind for the empty PHP array in a resolved default.
 pub(in crate::codegen) const CONST_DEFAULT_EMPTY_ARRAY: i64 = 4;
+/// Runtime string default materialized from the generated program's executable path.
+pub(in crate::codegen) const CONST_DEFAULT_EXECUTABLE_PATH: i64 = elephc_builtin_contract::EXECUTABLE_PATH_DEFAULT_KIND as i64;
 
 /// Largest constructor argument count an object-valued default may carry.
 pub(in crate::codegen) const MAX_CONST_DEFAULT_OBJECT_ARGS: usize = u8::MAX as usize;
@@ -46,11 +57,21 @@ pub(in crate::codegen) enum ConstDefaultValue {
         payload: i64,
     },
     String(String),
+    EnumCase { enum_name: String, case_name: String },
+    Evaluated { value: Box<ConstDefaultValue>, enum_cases: Vec<(String, String)> },
     Array(Vec<ConstDefaultArrayElement>),
     Object {
         class_name: String,
         args: Vec<ConstDefaultObjectArg>,
     },
+}
+
+/// A selected enum singleton and the ordered case reads required to evaluate its default.
+#[derive(Clone)]
+pub(in crate::codegen) struct EnumCaseDefault {
+    pub(in crate::codegen) enum_name: String,
+    pub(in crate::codegen) case_name: String,
+    pub(in crate::codegen) evaluated: Vec<(String, String)>,
 }
 
 /// One element of an array-valued resolved default.
@@ -99,6 +120,130 @@ pub(in crate::codegen) fn resolve_const_default(
     resolve_const_default_at(expr, context, 0)
 }
 
+/// Resolves an enum singleton default through bounded aliases in their declaration scope.
+pub(in crate::codegen) fn resolve_enum_case_default(
+    expr: &Expr, context: &ConstDefaultContext<'_>,
+) -> Option<EnumCaseDefault> {
+    let value = resolve_const_default(expr, context)?;
+    let mut evaluated = Vec::new();
+    collect_enum_reads(&value, &mut evaluated);
+    match without_enum_effects(value) {
+        ConstDefaultValue::EnumCase { enum_name, case_name } => {
+            let selected = (enum_name.clone(), case_name.clone());
+            if evaluated.last() != Some(&selected) { evaluated.push(selected); }
+            Some(EnumCaseDefault { enum_name, case_name, evaluated })
+        }
+        _ => None,
+    }
+}
+
+/// Resolves a scalar default whose evaluation reads enum singletons it then discards.
+///
+/// `E::A ? 1 : 2` folds to `1`, but PHP still materializes `E::A` first. Reflection keeps the
+/// ordered reads beside the scalar literal; defaults without such reads return `None`.
+pub(in crate::codegen) fn resolve_enum_read_scalar_default(
+    expr: &Expr, context: &ConstDefaultContext<'_>,
+) -> Option<(ExprKind, Vec<(String, String)>)> {
+    let value = resolve_const_default(expr, context)?;
+    let mut evaluated = Vec::new();
+    collect_enum_reads(&value, &mut evaluated);
+    if evaluated.is_empty() { return None; }
+    resolved_scalar_literal(without_enum_effects(value)).map(|literal| (literal, evaluated))
+}
+
+/// Records first singleton accesses in PHP order; later cached reads have no creation effects.
+fn collect_enum_reads(value: &ConstDefaultValue, reads: &mut Vec<(String, String)>) {
+    match value {
+        ConstDefaultValue::EnumCase { enum_name, case_name } => {
+            let case = (enum_name.clone(), case_name.clone());
+            if !reads.contains(&case) { reads.push(case); }
+        }
+        ConstDefaultValue::Evaluated { value, enum_cases } => {
+            for case in enum_cases {
+                if !reads.contains(case) { reads.push(case.clone()); }
+            }
+            collect_enum_reads(value, reads);
+        }
+        ConstDefaultValue::Array(elements) => {
+            for element in elements { collect_enum_reads(&element.default, reads); }
+        }
+        ConstDefaultValue::Object { args, .. } => {
+            for arg in args { collect_enum_reads(&arg.default, reads); }
+        }
+        _ => {}
+    }
+}
+
+/// Retains evaluated enum reads when a fold discards their original expression tree.
+fn with_enum_reads(value: ConstDefaultValue, enum_cases: Vec<(String, String)>) -> ConstDefaultValue {
+    if enum_cases.is_empty() { value }
+    else { ConstDefaultValue::Evaluated { value: Box::new(value), enum_cases } }
+}
+
+/// Extracts a folded value after its enum reads have been retained by the caller.
+fn without_enum_effects(value: ConstDefaultValue) -> ConstDefaultValue {
+    match value {
+        ConstDefaultValue::Evaluated { value, .. } => without_enum_effects(*value),
+        value => value,
+    }
+}
+
+/// Keeps singleton lookups outside compact callable metadata that has no enum value tag.
+pub(in crate::codegen) fn const_default_contains_enum(value: &ConstDefaultValue) -> bool {
+    match value {
+        ConstDefaultValue::EnumCase { .. } | ConstDefaultValue::Evaluated { .. } => true,
+        ConstDefaultValue::Array(elements) => elements.iter().any(|element| const_default_contains_enum(&element.default)),
+        ConstDefaultValue::Object { args, .. } => args.iter().any(|arg| const_default_contains_enum(&arg.default)),
+        _ => false,
+    }
+}
+
+/// Converts a resolved scalar to its PHP literal without changing its numeric type.
+pub(in crate::codegen) fn resolved_scalar_literal(value: ConstDefaultValue) -> Option<ExprKind> {
+    match value {
+        ConstDefaultValue::String(value) => Some(ExprKind::StringLiteral(value)),
+        ConstDefaultValue::Scalar { kind, payload } => match kind {
+            CONST_DEFAULT_NULL => Some(ExprKind::Null),
+            CONST_DEFAULT_BOOL => Some(ExprKind::BoolLiteral(payload != 0)),
+            CONST_DEFAULT_INT => Some(ExprKind::IntLiteral(payload)),
+            CONST_DEFAULT_FLOAT => Some(ExprKind::FloatLiteral(f64::from_bits(payload as u64))),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Restores resolved scalar and array trees for literal property storage without eager branches.
+pub(in crate::codegen) fn resolved_literal_default(value: ConstDefaultValue) -> Option<ExprKind> {
+    let elements = match value {
+        ConstDefaultValue::Evaluated { .. } => return None,
+        ConstDefaultValue::EnumCase { enum_name, case_name } =>
+            return Some(ExprKind::ScopedConstantAccess {
+                receiver: StaticReceiver::Named(enum_name.into()), name: case_name,
+            }),
+        ConstDefaultValue::Scalar { kind: CONST_DEFAULT_EMPTY_ARRAY, .. } =>
+            return Some(ExprKind::ArrayLiteral(Vec::new())),
+        ConstDefaultValue::Array(elements) => elements,
+        value => return resolved_scalar_literal(value),
+    };
+    let span = crate::span::Span::synthetic();
+    if elements.iter().all(|element| element.key.is_none()) {
+        let items = elements.into_iter().map(|element|
+            Some(Expr::new(resolved_literal_default(element.default)?, span)))
+            .collect::<Option<Vec<_>>>()?;
+        Some(ExprKind::ArrayLiteral(items))
+    } else {
+        let items = elements.into_iter().map(|element| {
+            let key = match element.key? {
+                ConstDefaultArrayKey::Int(value) => ExprKind::IntLiteral(value),
+                ConstDefaultArrayKey::String(value) => ExprKind::StringLiteral(value),
+            };
+            Some((Expr::new(key, span), Expr::new(resolved_literal_default(element.default)?, span)))
+        }).collect::<Option<Vec<_>>>()?;
+        Some(ExprKind::ArrayLiteralAssoc(items))
+    }
+}
+
 /// Resolves one PHP default expression while preserving the constant recursion limit.
 pub(in crate::codegen) fn resolve_const_default_at(
     expr: &Expr,
@@ -123,17 +268,23 @@ fn resolve_constant_expression_const_default(
     match &expr.kind {
         ExprKind::ConstRef(name) => resolve_global_constant_default(context, name, depth + 1),
         ExprKind::ClassConstant { receiver } => {
-            resolve_static_receiver_name(context, receiver).map(ConstDefaultValue::String)
+            resolve_static_receiver_name(context, receiver)
+                .map(|name| ConstDefaultValue::String(crate::names::class_name_literal(&name)))
         }
         ExprKind::ScopedConstantAccess { receiver, name } => {
             resolve_scoped_constant_default(context, receiver, name, depth + 1)
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            arrays::resolve_array_offset_default(array, index, context, depth + 1)
         }
         ExprKind::BinaryOp { left, op, right } => {
             resolve_binary_expression_default(left, op, right, context, depth + 1)
         }
         ExprKind::Not(inner) => {
-            const_default_truthy(&resolve_const_default_at(inner, context, depth + 1)?)
-                .map(|value| const_default_bool(!value))
+            let value = resolve_const_default_at(inner, context, depth + 1)?;
+            let mut reads = Vec::new();
+            collect_enum_reads(&value, &mut reads);
+            Some(with_enum_reads(const_default_bool(!const_default_truthy(&value)?), reads))
         }
         ExprKind::BitNot(inner) => {
             const_default_int(inner, context, depth + 1).map(|value| const_default_int_value(!value))
@@ -141,7 +292,9 @@ fn resolve_constant_expression_const_default(
         ExprKind::NullCoalesce { value, default } => {
             let value = resolve_const_default_at(value, context, depth + 1)?;
             if const_default_is_null(&value) {
-                resolve_const_default_at(default, context, depth + 1)
+                let mut reads = Vec::new();
+                collect_enum_reads(&value, &mut reads);
+                Some(with_enum_reads(resolve_const_default_at(default, context, depth + 1)?, reads))
             } else {
                 Some(value)
             }
@@ -151,18 +304,20 @@ fn resolve_constant_expression_const_default(
             then_expr,
             else_expr,
         } => {
-            if const_default_truthy(&resolve_const_default_at(condition, context, depth + 1)?)? {
-                resolve_const_default_at(then_expr, context, depth + 1)
-            } else {
-                resolve_const_default_at(else_expr, context, depth + 1)
-            }
+            let condition = resolve_const_default_at(condition, context, depth + 1)?;
+            let mut reads = Vec::new();
+            collect_enum_reads(&condition, &mut reads);
+            let branch = if const_default_truthy(&condition)? { then_expr } else { else_expr };
+            Some(with_enum_reads(resolve_const_default_at(branch, context, depth + 1)?, reads))
         }
         ExprKind::ShortTernary { value, default } => {
             let value = resolve_const_default_at(value, context, depth + 1)?;
             if const_default_truthy(&value)? {
                 Some(value)
             } else {
-                resolve_const_default_at(default, context, depth + 1)
+                let mut reads = Vec::new();
+                collect_enum_reads(&value, &mut reads);
+                Some(with_enum_reads(resolve_const_default_at(default, context, depth + 1)?, reads))
             }
         }
         _ => None,
@@ -178,13 +333,8 @@ fn resolve_binary_expression_default(
     depth: usize,
 ) -> Option<ConstDefaultValue> {
     match op {
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => {
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
             resolve_numeric_binary_default(left, op, right, context, depth + 1)
-        }
-        BinOp::Mod => {
-            let left = const_default_int(left, context, depth + 1)?;
-            let right = const_default_int(right, context, depth + 1)?;
-            (right != 0).then(|| const_default_int_value(left % right))
         }
         BinOp::Concat => {
             let left = const_default_string(left, context, depth + 1)?;
@@ -213,22 +363,30 @@ fn resolve_binary_expression_default(
             Some(const_default_int_value(value))
         }
         BinOp::And | BinOp::Or | BinOp::Xor => {
-            let left =
-                const_default_truthy(&resolve_const_default_at(left, context, depth + 1)?)?;
-            let right =
-                const_default_truthy(&resolve_const_default_at(right, context, depth + 1)?)?;
+            let left_value = resolve_const_default_at(left, context, depth + 1)?;
+            let left = const_default_truthy(&left_value)?;
+            let mut reads = Vec::new();
+            collect_enum_reads(&left_value, &mut reads);
+            if matches!(op, BinOp::And) && !left || matches!(op, BinOp::Or) && left {
+                return Some(with_enum_reads(const_default_bool(left), reads));
+            }
+            let right_value = resolve_const_default_at(right, context, depth + 1)?;
+            let right = const_default_truthy(&right_value)?;
+            collect_enum_reads(&right_value, &mut reads);
             let value = match op {
                 BinOp::And => left && right,
                 BinOp::Or => left || right,
                 BinOp::Xor => left ^ right,
                 _ => unreachable!("logical default operator was prefiltered"),
             };
-            Some(const_default_bool(value))
+            Some(with_enum_reads(const_default_bool(value), reads))
         }
         BinOp::NullCoalesce => {
             let left = resolve_const_default_at(left, context, depth + 1)?;
             if const_default_is_null(&left) {
-                resolve_const_default_at(right, context, depth + 1)
+                let mut reads = Vec::new();
+                collect_enum_reads(&left, &mut reads);
+                Some(with_enum_reads(resolve_const_default_at(right, context, depth + 1)?, reads))
             } else {
                 Some(left)
             }
@@ -245,34 +403,19 @@ fn resolve_numeric_binary_default(
     context: &ConstDefaultContext<'_>,
     depth: usize,
 ) -> Option<ConstDefaultValue> {
-    if let (Some(left), Some(right)) = (
-        const_default_int(left, context, depth + 1),
-        const_default_int(right, context, depth + 1),
-    ) {
-        return match op {
-            BinOp::Add => left.checked_add(right).map(const_default_int_value),
-            BinOp::Sub => left.checked_sub(right).map(const_default_int_value),
-            BinOp::Mul => left.checked_mul(right).map(const_default_int_value),
-            BinOp::Div if right != 0 => Some(const_default_float(left as f64 / right as f64)),
-            BinOp::Pow => {
-                let value = (left as f64).powf(right as f64);
-                value.is_finite().then(|| const_default_float(value))
-            }
-            _ => None,
+    let literal = |expr: &Expr| {
+        let kind = match resolve_const_default_at(expr, context, depth + 1)? {
+            ConstDefaultValue::Scalar { kind: CONST_DEFAULT_INT, payload } => ExprKind::IntLiteral(payload),
+            ConstDefaultValue::Scalar { kind: CONST_DEFAULT_FLOAT, payload } =>
+                ExprKind::FloatLiteral(f64::from_bits(payload as u64)),
+            _ => return None,
         };
-    }
-
-    let left = const_default_numeric(left, context, depth + 1)?;
-    let right = const_default_numeric(right, context, depth + 1)?;
-    let value = match op {
-        BinOp::Add => left + right,
-        BinOp::Sub => left - right,
-        BinOp::Mul => left * right,
-        BinOp::Div if right != 0.0 => left / right,
-        BinOp::Pow => left.powf(right),
-        _ => return None,
+        Some(Expr::new(kind, expr.span))
     };
-    value.is_finite().then(|| const_default_float(value))
+    let expression = Expr::new(ExprKind::BinaryOp {
+        left: Box::new(literal(left)?), op: op.clone(), right: Box::new(literal(right)?),
+    }, left.span);
+    resolve_literal_const_default(&crate::optimize::fold_constant_expression(expression))
 }
 
 /// Builds one bool constant value.
@@ -309,6 +452,9 @@ pub(in crate::codegen) fn const_default_null() -> ConstDefaultValue {
 
 /// Returns true when one resolved constant value is PHP `null`.
 pub(in crate::codegen) fn const_default_is_null(default: &ConstDefaultValue) -> bool {
+    if let ConstDefaultValue::Evaluated { value, .. } = default {
+        return const_default_is_null(value);
+    }
     matches!(
         default,
         ConstDefaultValue::Scalar {
@@ -342,6 +488,8 @@ pub(in crate::codegen) fn const_default_truthy(default: &ConstDefaultValue) -> O
             ..
         } => Some(false),
         ConstDefaultValue::String(value) => Some(!value.is_empty() && value != "0"),
+        ConstDefaultValue::EnumCase { .. } => Some(true),
+        ConstDefaultValue::Evaluated { value, .. } => const_default_truthy(value),
         ConstDefaultValue::Array(_) | ConstDefaultValue::Object { .. } => None,
         ConstDefaultValue::Scalar { .. } => None,
     }
@@ -358,25 +506,6 @@ fn const_default_int(
             kind: CONST_DEFAULT_INT,
             payload,
         } => Some(payload),
-        _ => None,
-    }
-}
-
-/// Extracts a numeric value from one resolvable default expression.
-fn const_default_numeric(
-    expr: &Expr,
-    context: &ConstDefaultContext<'_>,
-    depth: usize,
-) -> Option<f64> {
-    match resolve_const_default_at(expr, context, depth)? {
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_INT,
-            payload,
-        } => Some(payload as f64),
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_FLOAT,
-            payload,
-        } => Some(f64::from_bits(payload as u64)),
         _ => None,
     }
 }
@@ -462,101 +591,17 @@ fn resolve_object_const_default_arg(
     }
 }
 
-/// Resolves supported array-valued defaults into a constant value.
-pub(in crate::codegen) fn resolve_array_const_default(
-    expr: &Expr,
-    context: &ConstDefaultContext<'_>,
-    depth: usize,
-) -> Option<ConstDefaultValue> {
-    match &expr.kind {
-        ExprKind::ArrayLiteral(elements) => {
-            let mut default_elements = Vec::with_capacity(elements.len());
-            for element in elements {
-                if matches!(element.kind, ExprKind::Spread(_)) {
-                    return None;
-                }
-                default_elements.push(ConstDefaultArrayElement {
-                    key: None,
-                    default: resolve_const_default_at(element, context, depth + 1)?,
-                });
-            }
-            Some(ConstDefaultValue::Array(default_elements))
-        }
-        ExprKind::ArrayLiteralAssoc(elements) => {
-            let mut default_elements = Vec::with_capacity(elements.len());
-            for (key, value) in elements {
-                default_elements.push(ConstDefaultArrayElement {
-                    key: Some(resolve_array_const_default_key(key, context, depth + 1)?),
-                    default: resolve_const_default_at(value, context, depth + 1)?,
-                });
-            }
-            Some(ConstDefaultValue::Array(default_elements))
-        }
-        _ => None,
-    }
-}
-
-/// Resolves one supported static array key.
-fn resolve_array_const_default_key(
-    expr: &Expr,
-    context: &ConstDefaultContext<'_>,
-    depth: usize,
-) -> Option<ConstDefaultArrayKey> {
-    if let Some(key) = resolve_literal_array_const_default_key(expr) {
-        return Some(key);
-    }
-    match resolve_const_default_at(expr, context, depth + 1)? {
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_NULL,
-            ..
-        } => Some(ConstDefaultArrayKey::String(String::new())),
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_BOOL,
-            payload,
-        } => Some(ConstDefaultArrayKey::Int((payload != 0) as i64)),
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_INT,
-            payload,
-        } => Some(ConstDefaultArrayKey::Int(payload)),
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_FLOAT,
-            payload,
-        } => Some(ConstDefaultArrayKey::Int(
-            f64::from_bits(payload as u64) as i64
-        )),
-        ConstDefaultValue::String(value) => const_default_string_array_key(&value),
-        _ => None,
-    }
-}
-
-/// Resolves one literal static array key.
-pub(in crate::codegen) fn resolve_literal_array_const_default_key(
-    expr: &Expr,
-) -> Option<ConstDefaultArrayKey> {
-    match &expr.kind {
-        ExprKind::IntLiteral(value) => Some(ConstDefaultArrayKey::Int(*value)),
-        ExprKind::BoolLiteral(value) => Some(ConstDefaultArrayKey::Int(i64::from(*value))),
-        ExprKind::FloatLiteral(value) => Some(ConstDefaultArrayKey::Int(*value as i64)),
-        ExprKind::StringLiteral(value) => const_default_string_array_key(value),
-        ExprKind::Null => Some(ConstDefaultArrayKey::String(String::new())),
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(value) => value.checked_neg().map(ConstDefaultArrayKey::Int),
-            ExprKind::FloatLiteral(value) => Some(ConstDefaultArrayKey::Int((-*value) as i64)),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// Normalizes one string array key to PHP's integer-key rules.
 pub(in crate::codegen) fn const_default_string_array_key(
     value: &str,
 ) -> Option<ConstDefaultArrayKey> {
-    if is_php_integer_array_key(value) {
-        value.parse::<i64>().ok().map(ConstDefaultArrayKey::Int)
-    } else {
-        Some(ConstDefaultArrayKey::String(value.to_string()))
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+    if let Ok(decoded) = std::str::from_utf8(&bytes) {
+        if is_php_integer_array_key(decoded) {
+            return decoded.parse::<i64>().ok().map(ConstDefaultArrayKey::Int);
+        }
     }
+    Some(ConstDefaultArrayKey::String(value.to_string()))
 }
 
 /// Resolves one global constant default expression.
@@ -565,6 +610,9 @@ fn resolve_global_constant_default(
     name: &str,
     depth: usize,
 ) -> Option<ConstDefaultValue> {
+    if elephc_builtin_contract::canonical_constant_name(name) == "PHP_BINARY" {
+        return Some(ConstDefaultValue::Scalar { kind: CONST_DEFAULT_EXECUTABLE_PATH, payload: 0 });
+    }
     let expr_kind = context
         .module
         .global_constants
@@ -588,6 +636,14 @@ fn resolve_scoped_constant_default(
     depth: usize,
 ) -> Option<ConstDefaultValue> {
     let class_name = resolve_static_receiver_name(context, receiver)?;
+    if let Some((enum_name, _)) = context.module.enum_infos.iter().find(|(candidate, info)|
+        php_symbol_key(candidate) == php_symbol_key(&class_name)
+            && info.cases.iter().any(|case| case.name == constant_name))
+    {
+        return Some(ConstDefaultValue::EnumCase {
+            enum_name: enum_name.clone(), case_name: constant_name.to_string(),
+        });
+    }
     if let Some((declaring_name, value)) =
         const_default_class_constant_expr(context.module, &class_name, constant_name)
     {
@@ -621,6 +677,10 @@ pub(in crate::codegen) fn resolve_static_receiver_name(
         StaticReceiver::Self_ | StaticReceiver::Static => {
             context.current_class.map(str::to_string)
         }
+        // A generic receiver is rewritten to its instantiated name before the checker runs, so
+        // reaching one here means a template body that is walked and then stripped — it has no
+        // constant to resolve.
+        StaticReceiver::Generic(_) => None,
         StaticReceiver::Parent => {
             let current = context.current_class?;
             resolve_const_default_class(context.module, current)
@@ -669,7 +729,9 @@ fn const_default_interface_constant_expr<'a>(
             continue;
         }
         if let Some(value) = interface_info.constants.get(constant_name) {
-            return Some((resolved_name, value));
+            let owner = interface_info.constant_declaring_interfaces.get(constant_name)
+                .map(String::as_str).unwrap_or(resolved_name);
+            return Some((owner, value));
         }
         queue.extend(interface_info.parents.iter().cloned());
     }

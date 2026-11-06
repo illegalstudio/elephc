@@ -10,8 +10,12 @@
 //! - Composer files execute before the entry program while class-triggered files splice before first use.
 //! - `run_collecting_included` additionally surfaces the canonical path of every file the pass
 //!   loaded, which `crate::opcache_prelude` bakes into the OPcache script manifest.
+//! - Every loaded file is lexed with a fresh source identity that continues the compile's
+//!   counter (its includes too), so its spans never equal another file's in span-keyed maps.
 
 mod alias;
+mod dev_packages;
+pub mod prelude_probe;
 mod index;
 mod interpret;
 mod registry;
@@ -21,6 +25,7 @@ mod walk;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+pub use dev_packages::phpunit_closure;
 pub use registry::Registry;
 
 use crate::errors::CompileError;
@@ -79,6 +84,18 @@ pub fn run_collecting_included(
 
 /// Runs autoload expansion while applying conditional symbols to every physical file loaded.
 pub fn run_collecting_included_with_defines(
+    program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        run_collecting_included_on_compiler_stack(program, base_dir, registry, defines)
+    })
+}
+
+/// Expands autoloads after the public entry point has established the recursive stack budget.
+fn run_collecting_included_on_compiler_stack(
     mut program: Program,
     base_dir: &Path,
     registry: &Registry,
@@ -148,8 +165,10 @@ pub fn run_collecting_included_with_defines(
 
 /// Lower any top-level literal `class_alias()` calls left after another
 /// expansion pass, such as resolver includes or autoloaded files.
-pub fn collect_aliases(program: Program) -> Program {
-    alias::collect_aliases(program)
+/// Rejects explicitly disabled autoload on eligible source forms before constant folding.
+pub fn collect_aliases(program: Program) -> Result<Program, CompileError> {
+    alias::validate_alias_autoload(&program)?;
+    Ok(alias::collect_aliases(program))
 }
 
 /// Inserts PHP's built-in class-like names into `declared` so that references
@@ -196,18 +215,28 @@ fn load_autoloaded_file(
     })?;
     let file_label = path.display().to_string();
     let source_mode = crate::source::SourceMode::from_path(path);
-    let tokens = crate::lexer::tokenize_with_mode(&content, source_mode)
-        .map_err(|e| e.with_file(file_label.clone()))?;
+    // Its own source identity, continuing the compile's counter. Lexed with the entry file's
+    // identity 0, a statement here shared its span with the statement at the same line and
+    // column of the entry and of every other autoloaded file, so span-keyed checker results (a
+    // readonly write guard, a builtin call type, a binding decision) leaked between them: one
+    // class got another class's readonly guard (issue #1445).
+    let source_id = Span::fresh_source_id();
+    Span::register_source_path(source_id, file_label.clone());
+    let tokens =
+        crate::lexer::tokenize_with_mode_and_source_id(&content, source_mode, source_id)
+            .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
         .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed =
-        crate::source::finalize_physical_program(parsed, path, source_mode, defines)?;
-    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_with_defines(
+        crate::source::finalize_physical_program(parsed, &content, path, source_mode, defines)?;
+    // `continuing`, not the root entry: the root one rewinds the source identities, which handed
+    // this file's includes the identities of the entry program's includes.
+    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_continuing(
         parsed,
         path.parent().unwrap_or(base_dir),
         defines,
     )?;
-    let resolved = alias::collect_aliases(resolved);
+    let resolved = collect_aliases(resolved).map_err(|e| e.with_file(file_label.clone()))?;
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level

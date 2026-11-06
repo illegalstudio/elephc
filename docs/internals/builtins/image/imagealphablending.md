@@ -1,8 +1,6 @@
 ---
 title: "imagealphablending() - internals"
 description: "Compiler internals for imagealphablending(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 458
 ---
 
 ## `imagealphablending()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2509](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2509) (`imagealphablending`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagealphablending`)
 - **Function symbol**: `imagealphablending()`
 
 

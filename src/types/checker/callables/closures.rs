@@ -11,7 +11,7 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr};
 use crate::span::Span;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -67,6 +67,11 @@ impl Checker {
         let mut declared_params = Vec::new();
 
         for (idx, (name, type_ann, default, is_ref)) in params.iter().enumerate() {
+            let source_default = default;
+            let owner = self.current_class.as_deref();
+            let parent = owner.and_then(|owner| self.classes.get(owner))
+                .and_then(|class| class.parent.as_deref());
+            let default = super::super::schema::normalize_lexical_callable_default(default, owner, parent)?;
             let (env_ty, sig_ty) = match type_ann {
                 Some(type_ann) => {
                     let declared_ty = self.resolve_declared_param_type_hint(
@@ -74,25 +79,34 @@ impl Checker {
                         span,
                         &format!("Closure parameter ${}", name),
                     )?;
-                    self.validate_resolved_declared_default_type(
-                        &declared_ty,
-                        default.as_ref(),
-                        span,
-                        &format!("Closure parameter ${}", name),
-                    )?;
+                    // A synthesized lexical-scope Error has no value to compare with
+                    // the declared type. Actual value defaults keep normal validation.
+                    let deferred_scope_error = default.as_ref().is_some_and(|value| matches!(value.kind, ExprKind::Throw(_)))
+                        && !source_default.as_ref().is_some_and(|value| matches!(value.kind, ExprKind::Throw(_)));
+                    if !deferred_scope_error {
+                        self.validate_resolved_declared_default_type(
+                            &declared_ty,
+                            default.as_ref(),
+                            span,
+                            &format!("Closure parameter ${}", name),
+                        )?;
+                    }
                     (declared_ty.clone(), declared_ty)
                 }
                 None if *is_ref => (PhpType::Mixed, PhpType::Mixed),
                 None => match contextual_param_types.get(idx) {
                     Some(hint) => (hint.clone(), hint.clone()),
-                    None => (PhpType::Int, PhpType::Mixed),
+                    // No context types it: PHP semantics are `mixed`. The body must be
+                    // checked against the same Mixed the signature publishes, never an
+                    // `int` placeholder that makes valid string uses fail.
+                    None => (PhpType::Mixed, PhpType::Mixed),
                 },
             };
 
             closure_env.insert(name.clone(), env_ty);
             param_types.push((name.clone(), sig_ty));
             param_type_exprs.push(type_ann.clone());
-            defaults.push(default.clone());
+            defaults.push(default);
             ref_params.push(*is_ref);
             declared_params.push(type_ann.is_some());
         }
@@ -178,8 +192,6 @@ impl Checker {
             declared_params: closure_sig.declared_params,
             variadic: variadic.clone(),
             deprecation: None,
-            // Taken from the SOURCE body, for the same reason the named-function site does:
-            // lowering must not have to re-derive this after a pass may have pruned the yield.
             is_generator: super::super::yield_validation::body_contains_yield(body),
         })
     }
@@ -197,11 +209,13 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<(PhpType, bool), CompileError> {
         if super::super::yield_validation::body_contains_yield(body) {
+            self.closure_generator_spans.insert(span);
             let generator_ty = PhpType::Object("Generator".to_string());
             if let Some(type_ann) = return_type {
                 let declared_ret =
                     self.resolve_declared_return_type_hint(type_ann, span, "Closure")?;
-                self.require_compatible_return_type(
+                self.require_compatible_return_hint(
+                    type_ann,
                     &declared_ret,
                     &generator_ty,
                     true,
@@ -227,13 +241,14 @@ impl Checker {
                     "Closure declared never must not return",
                 ));
             }
-            self.require_declared_return_coverage(&declared_ret, body, span, "Closure")?;
+            self.require_return_hint_coverage(type_ann, &declared_ret, body, span, "Closure")?;
             if all_return_infos.is_empty() {
                 return Ok((declared_ret, true));
             }
 
             for return_info in &all_return_infos {
-                self.require_compatible_return_type(
+                self.require_compatible_return_hint(
+                    type_ann,
                     &declared_ret,
                     &return_info.ty,
                     return_info.has_value,
@@ -258,7 +273,53 @@ impl Checker {
             for return_info in &all_return_infos[1..] {
                 inferred_return = wider_type_syntactic(&inferred_return, &return_info.ty);
             }
-            Ok((inferred_return, false))
+            Ok((self.caller_visible_direct_call_return(body, inferred_return), false))
+        }
+    }
+
+    /// Applies the caller-visible container rule to a closure whose body is `return <user call>;`.
+    ///
+    /// EIR lowering stamps exactly that body shape with the callee's
+    /// `crate::types::dynamic_params::caller_visible_checker_return_type` (see
+    /// `crate::ir_lower::function::direct_closure_return_expr_type`), built from the two
+    /// predicates applied here: a callee with an untyped by-value parameter receives it as a
+    /// boxed Mixed cell, so an array it builds from it holds Mixed elements. The checker
+    /// inferred the element from the parameter placeholder instead
+    /// (`int` for an untyped closure parameter), so `strlen($f("hello")[0])` was refused although
+    /// lowering reads the element back as the string it is (issue #1270). Only a container is
+    /// widened, and only for that shape, because only that shape is stamped this way.
+    ///
+    /// A container inside a union is widened too, keeping the union: a callee returning `[$v]`
+    /// or `null` gives `?array<mixed>`, whose elements a `string` parameter accepts, while the
+    /// boxed `Mixed` lowering stamps for that union is its codegen representation.
+    fn caller_visible_direct_call_return(&self, body: &[Stmt], inferred: PhpType) -> PhpType {
+        if !crate::types::dynamic_params::type_contains_container(&inferred) {
+            return inferred;
+        }
+        let [stmt] = body else {
+            return inferred;
+        };
+        let StmtKind::Return(Some(expr)) = &stmt.kind else {
+            return inferred;
+        };
+        let ExprKind::FunctionCall { name, .. } = &expr.kind else {
+            return inferred;
+        };
+        if self.builtin_call_types.contains_key(&expr.span) {
+            return inferred;
+        }
+        let Some(signature) = self.functions.get(name.as_str()) else {
+            return inferred;
+        };
+        if signature.declared_return
+            || !crate::types::dynamic_params::signature_has_dynamic_untyped_param(signature)
+        {
+            return inferred;
+        }
+        match crate::types::dynamic_params::dynamic_param_container_php_type(&inferred) {
+            // Two container members can widen to the same type; fold them back into one.
+            PhpType::Union(members) => self.normalize_union_type(members),
+            widened => widened,
         }
     }
 
@@ -553,7 +614,16 @@ impl Checker {
         &self,
         receiver: &StaticReceiver,
     ) -> Result<Option<String>, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(name) => Ok(self.resolve_class_name_for_metadata(name.as_str())),
             StaticReceiver::Self_ | StaticReceiver::Static => Ok(self.current_class.clone()),
             StaticReceiver::Parent => {

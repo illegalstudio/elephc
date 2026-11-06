@@ -8,6 +8,7 @@
 //! - Focused child modules keep large registry assertions near their area while
 //!   still sharing access to private registry helpers.
 
+mod arity_contract;
 mod direct_hooks;
 mod exposure;
 mod metadata_core;

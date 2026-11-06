@@ -1,8 +1,6 @@
 ---
 title: "mb_decode_mimeheader()"
 description: "Decodes MIME header words into the current internal encoding and unfolds whitespace."
-sidebar:
-  order: 834
 ---
 
 ## mb_decode_mimeheader()
@@ -20,8 +18,9 @@ Decodes MIME header words into the current internal encoding and unfolds whitesp
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_decode_mimeheader.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_decode_mimeheader.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

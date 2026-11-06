@@ -27,18 +27,32 @@ pub mod compiler_stack;
 pub mod conditional;
 /// `ext/curl` easy-handle standard-library prelude injection (`CurlHandle` + `curl_*`).
 pub mod curl_prelude;
+/// Termwind-facing DOM HTML subset (`DOMDocument::loadHTML` and node walk).
+pub mod dom_html_prelude;
 /// Error and warning reporting.
 pub mod errors;
 mod eval_aot;
 /// `#[Export]` attribute scan for cdylib emission.
 pub mod exports;
 /// PHP variadic-argument introspection (`func_num_args`/`func_get_args`/`func_get_arg`) desugaring.
+/// PHPStan/Psalm generic annotations read out of doc comments.
+pub mod docblock;
 pub mod func_args;
+/// Monomorphization support for generic function declarations.
+pub mod generics;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
 mod progress;
-/// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
+/// Immutable BCMath Number standard-library prelude injection.
+pub mod bcmath_prelude;
+/// PHP ext/gmp standard-library prelude injection.
+pub mod gmp_prelude;
+pub mod random_prelude;
+/// Incremental hashing standard-library prelude injection.
 pub mod hash_prelude;
+/// Core attribute and sensitive-value class declarations.
+pub mod core_prelude;
+/// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod image_prelude;
 /// Intrinsic call handling.
 pub mod intrinsics;
@@ -84,6 +98,10 @@ pub mod pdo_prelude;
 /// mysqli (MySQL / MariaDB over the elephc_pdo bridge) prelude injection.
 pub mod mysqli_prelude;
 
+/// Hosting support for real PHP extensions (surface derivation from stubs).
+pub mod php_ext;
+/// Producer-side SDK validation and registration for real PHP hosts.
+pub mod phpext;
 /// PHP language-profile selection and profile-dependence analysis.
 pub mod php_profile;
 /// Reachability pruning of injected prelude declarations.
@@ -103,11 +121,14 @@ pub mod superglobals;
 pub mod synthetic_class;
 /// Termination and exit handling.
 pub mod termination;
+pub mod testing_prelude;
 /// Type system and checking.
 pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).
 pub mod tz_prelude;
 pub mod xml_prelude;
+pub mod fileinfo_prelude;
+pub mod tokenizer_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
 /// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,

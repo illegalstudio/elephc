@@ -6,6 +6,9 @@
 //!
 //! Key details:
 //! - Runtime behavior stays delegated to the array-search hook.
+//! - `$strict` selects `===` over the default `==`, exactly as PHP's
+//!   `array_search(mixed $needle, array $haystack, bool $strict = false)` does; `in_array()`
+//!   shares the same scan.
 
 use super::super::super::*;
 
@@ -31,11 +34,25 @@ pub(in crate::interpreter) fn eval_array_search_declared_values_result(
     _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [needle, array] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
-    eval_array_search_result("array_search", *needle, *array, values)
+    let (needle, array, strict) = eval_array_search_value_args(evaluated_args, values)?;
+    eval_array_search_result("array_search", needle, array, strict, values)
 }
 
-/// Evaluates PHP array search builtins over a needle and haystack expression.
+/// Splits evaluated `in_array()`/`array_search()` arguments into needle, haystack, and `$strict`.
+///
+/// A missing third argument is PHP's `false` default; any other arity is refused.
+pub(in crate::interpreter) fn eval_array_search_value_args(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, RuntimeCellHandle, bool), EvalStatus> {
+    match evaluated_args {
+        [needle, array] => Ok((*needle, *array, false)),
+        [needle, array, strict] => Ok((*needle, *array, values.truthy(*strict)?)),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Evaluates PHP array search builtins over needle, haystack, and optional `$strict` expressions.
 pub(in crate::interpreter) fn eval_builtin_array_search(
     name: &str,
     args: &[EvalExpr],
@@ -43,26 +60,37 @@ pub(in crate::interpreter) fn eval_builtin_array_search(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [needle, array] = args else {
-        return Err(EvalStatus::RuntimeFatal);
+    let (needle, array, strict) = match args {
+        [needle, array] => (needle, array, None),
+        [needle, array, strict] => (needle, array, Some(strict)),
+        _ => return Err(EvalStatus::RuntimeFatal),
     };
     let needle = eval_expr(needle, context, scope, values)?;
     let array = eval_expr(array, context, scope, values)?;
-    eval_array_search_result(name, needle, array, values)
+    let strict = match strict {
+        Some(strict) => {
+            let strict = eval_expr(strict, context, scope, values)?;
+            values.truthy(strict)?
+        }
+        None => false,
+    };
+    eval_array_search_result(name, needle, array, strict, values)
 }
 
-/// Searches an eval array with PHP's default loose comparison semantics.
+/// Searches an eval array with PHP's loose `==` comparison, or `===` when `strict` is set.
 pub(in crate::interpreter) fn eval_array_search_result(
     name: &str,
     needle: RuntimeCellHandle,
     array: RuntimeCellHandle,
+    strict: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let comparison = if strict { EvalBinOp::StrictEq } else { EvalBinOp::LooseEq };
     let len = values.array_len(array)?;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
-        let equal = values.compare(EvalBinOp::LooseEq, needle, value)?;
+        let equal = values.compare(comparison, needle, value)?;
         if values.truthy(equal)? {
             return match name {
                 "in_array" => values.bool_value(true),

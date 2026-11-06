@@ -33,10 +33,15 @@ concurrency:
   group: ios-curl-live
   cancel-in-progress: false
 
+env:
+  # Same release as RUST_VERSION in .github/docker/ci.Dockerfile. Not `stable`:
+  # a newer rustc must not fail the no-warnings gate unannounced.
+  RUST_TOOLCHAIN: "1.98"
+
 jobs:
   curl-ios-live-transfer:
     name: Curl iOS Live HTTPS (ios-sim-arm64)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -44,18 +49,21 @@ jobs:
       - name: Install Rust with the iOS Simulator standard library
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: aarch64-apple-ios-sim
 
       - name: Cache Rust build state
-        uses: actions/cache@v6
+        # Dependencies only (registry, git checkouts, and the dependency
+        # artifacts under target/); the action prunes the workspace crates'
+        # own artifacts before saving. Caching the whole target/ dir put three
+        # 4 GB entries per platform plus every other job's into the repository's
+        # 10 GB allowance, so main's entries were evicted before the next run
+        # and every archive job compiled from scratch.
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            target
-          key: rust-curl-ios-sim-arm64-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            rust-curl-ios-sim-arm64-
+          prefix-key: rust-deps-curl-ios-sim-arm64
+          cache-bin: false
+          cache-on-failure: true
 
       - name: Cache managed native curl for iOS
         uses: actions/cache@v6

@@ -26,7 +26,7 @@
 //!   `opcache_restrict_api_tests` / `opcache_preload_tests` and is deliberately not re-pinned here.
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp dir,
 //!   the same harness style as `opcache_preload_tests` / `opcache_ini_tests`. Host-target only
-//!   (macOS aarch64 local).
+//!   on macOS and Linux.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -328,6 +328,39 @@ if (is_array($s)) {
     assert!(out60.contains("used_now=1\n"), "{out60}");
 }
 
+/// Formats the observed timestamp with the host date utility, independently of elephc.
+/// Child-local timezone and locale settings avoid shared environment mutations and DST races.
+fn system_asctime(timestamp: i64, timezone: Option<&str>) -> String {
+    let mut command = Command::new("date");
+    command.env("LC_ALL", "C");
+    match timezone {
+        Some(zone) => {
+            command.env("TZ", zone);
+        }
+        None => {
+            command.env_remove("TZ");
+        }
+    }
+    if cfg!(target_os = "macos") {
+        command.arg("-r").arg(timestamp.to_string());
+    } else {
+        command.arg(format!("--date=@{timestamp}"));
+    }
+    let output = command
+        .arg("+%a %b %e %H:%M:%S %Y")
+        .output()
+        .expect("failed to run system date oracle");
+    assert!(
+        output.status.success(),
+        "system date failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("system date output is UTF-8")
+        .trim_end_matches('\n')
+        .to_string()
+}
+
 /// `last_used` is formatted in the SYSTEM timezone, because php-src builds it with libc
 /// `asctime(localtime(…))` rather than through PHP's date functions.
 ///
@@ -343,6 +376,8 @@ if (is_array($s)) {
 /// field tracks TZ while `date()` does not, which is why elephc resolves the zone itself and
 /// applies it only around this one formatting — restoring the previous default afterwards, which
 /// the `after_tz` assertion pins.
+/// Each comparison uses the timestamp from that same status snapshot, so it remains exact
+/// across seasons, daylight-saving transitions and clock boundaries between child processes.
 #[test]
 fn last_used_is_formatted_in_the_system_timezone() {
     let dir = make_test_dir("opcache_tz");
@@ -362,8 +397,9 @@ echo 'after_tz=', date_default_timezone_get(), "\n";
     .unwrap();
     let bin = compile(&dir, "tz", &["opcache.enable_cli=1"]);
 
-    let hour = |tz: Option<&str>| -> String {
+    let snapshot = |tz: Option<&str>| -> (String, i64) {
         let mut cmd = Command::new(&bin);
+        cmd.env("LC_ALL", "C");
         match tz {
             Some(zone) => {
                 cmd.env("TZ", zone);
@@ -381,21 +417,94 @@ echo 'after_tz=', date_default_timezone_get(), "\n";
             out.contains("after_tz=UTC\n"),
             "the default timezone must be restored:\n{out}"
         );
-        out.lines()
+        let formatted = out
+            .lines()
             .find_map(|line| line.strip_prefix("last_used="))
             .expect("last_used must be reported")
-            // `Www Mmm dd HH:MM:SS yyyy` — the hour field.
-            .get(11..13)
-            .expect("asctime must carry an hour field")
-            .to_string()
+            .to_string();
+        let timestamp = out
+            .lines()
+            .find_map(|line| line.strip_prefix("ts="))
+            .expect("last_used_timestamp must be reported")
+            .parse::<i64>()
+            .expect("last_used_timestamp is Unix seconds");
+        (formatted, timestamp)
     };
 
-    let utc: i32 = hour(Some("UTC")).parse().unwrap();
-    let new_york: i32 = hour(Some("America/New_York")).parse().unwrap();
-    let paris: i32 = hour(Some("Europe/Paris")).parse().unwrap();
-    // New York is UTC-4 in July, Paris UTC+2 (modulo the day wrap).
-    assert_eq!((new_york - utc).rem_euclid(24), 20, "America/New_York is UTC-4 in July");
-    assert_eq!((paris - utc).rem_euclid(24), 2, "Europe/Paris is UTC+2 in July");
+    for timezone in [Some("UTC"), Some("America/New_York"), Some("Europe/Paris")] {
+        let (formatted, timestamp) = snapshot(timezone);
+        assert_eq!(
+            formatted,
+            system_asctime(timestamp, timezone),
+            "last_used must use the system timezone {timezone:?} at timestamp {timestamp}"
+        );
+    }
+}
+
+/// EVERY `scripts` entry formats `last_used` in the same zone — not just the first.
+///
+/// REGRESSION. `last_used_is_formatted_in_the_system_timezone` above compiles a fixture with
+/// exactly ONE script and reads only the first `last_used=` line, so it could not observe
+/// entries disagreeing with each other. They did: the binary reported its first entry in
+/// local time and EVERY OTHER ENTRY IN UTC.
+///
+/// The cause was a self-poisoning lookup. `__elephc_opcache_system_timezone()` consulted
+/// `getenv('TZ')`, and elephc's `date_default_timezone_set()` WRITES `TZ` — it drives libc
+/// through `putenv` + `tzset`, because the binary carries no tzdata. The first `last_used`
+/// therefore restored the PHP default and left `TZ=UTC` behind, and every later entry read
+/// that back as though it were the system zone. The lookup is memoized now.
+///
+/// VERIFIED against reference PHP 8.5.10 on this fixture: all three entries agree, both with
+/// no `TZ` and with `TZ=America/New_York`.
+#[test]
+fn every_scripts_entry_agrees_on_the_timezone() {
+    let dir = make_test_dir("opcache_tz_multi");
+    fs::write(dir.join("a.php"), "<?php $a = 1;\n").unwrap();
+    fs::write(dir.join("b.php"), "<?php $b = 1;\n").unwrap();
+    fs::write(
+        dir.join("multi.php"),
+        r#"<?php
+require __DIR__ . '/a.php';
+require __DIR__ . '/b.php';
+$s = opcache_get_status();
+foreach ($s['scripts'] as $entry) {
+    echo 'last_used=', $entry['last_used'], "\n";
+}
+"#,
+    )
+    .unwrap();
+    let bin = compile(&dir, "multi", &["opcache.enable_cli=1"]);
+
+    let hours = |tz: Option<&str>| -> Vec<String> {
+        let mut cmd = Command::new(&bin);
+        match tz {
+            Some(zone) => {
+                cmd.env("TZ", zone);
+            }
+            None => {
+                cmd.env_remove("TZ");
+            }
+        }
+        let output = cmd.output().expect("failed to run binary");
+        assert!(output.status.success(), "binary failed for {tz:?}");
+        let out = String::from_utf8_lossy(&output.stdout).into_owned();
+        let hours: Vec<String> = out
+            .lines()
+            .filter_map(|line| line.strip_prefix("last_used="))
+            // `Www Mmm dd HH:MM:SS yyyy` — the hour field.
+            .map(|stamp| stamp.get(11..13).expect("asctime hour").to_string())
+            .collect();
+        assert_eq!(hours.len(), 3, "three manifest entries expected:\n{out}");
+        hours
+    };
+
+    for zone in [None, Some("America/New_York"), Some("Europe/Paris")] {
+        let reported = hours(zone);
+        assert!(
+            reported.iter().all(|hour| *hour == reported[0]),
+            "entries disagree on the zone for {zone:?}: {reported:?}"
+        );
+    }
 }
 
 /// `opcache_reset()` LATCHES: the first call returns `true` and flips
@@ -564,7 +673,8 @@ echo 'self=', var_export(opcache_invalidate(__FILE__), true), "\n";
 // A resolvable NON-manifest path is never reported as cached, however it resolves.
 echo 'cached_empty=', var_export(opcache_is_script_cached(''), true), "\n";
 echo 'cached_tmp=', var_export(opcache_is_script_cached('/tmp'), true), "\n";
-echo 'compile_empty=', var_export(opcache_compile_file(''), true), "\n";
+try { $r = var_export(opcache_compile_file(''), true); } catch (\ValueError $e) { $r = $e->getMessage(); }
+echo 'compile_empty=', $r, "\n";
 "#,
     )
     .unwrap();
@@ -582,7 +692,10 @@ echo 'compile_empty=', var_export(opcache_compile_file(''), true), "\n";
     assert!(out.contains("self=true\n"), "{out}");
     assert!(out.contains("cached_empty=false\n"), "{out}");
     assert!(out.contains("cached_tmp=false\n"), "{out}");
-    assert!(out.contains("compile_empty=false\n"), "{out}");
+    // `opcache_compile_file('')` THROWS once the cache is enabled — reference raises
+    // `ValueError: Path must not be empty` from the open. This row used to pin `false`, which
+    // was never measured: the matrix above is `opcache_invalidate()`'s. MEASURED on 8.5.10.
+    assert!(out.contains("compile_empty=Path must not be empty\n"), "{out}");
 }
 
 /// `opcache.interned_strings_buffer=0` OMITS the whole `interned_strings_usage` key, and every
@@ -770,6 +883,38 @@ echo 'directive=', var_export($c['directives']['opcache.enable'], true), "\n";
 /// `opcache.file_cache` has a C NULL default. `opcache_jit_blacklist` only touches the JIT
 /// blacklist, behind `#ifdef HAVE_JIT`.
 #[test]
+fn opcache_jit_blacklist_refuses_a_non_object_as_reference_does() {
+    // Reference throws `TypeError` for a value that is not a `Closure` (MEASURED on PHP 8.5.10;
+    // reported in the PR #968 review), naming it as `zend_zval_value_name()` does: `true`, not
+    // `bool`. elephc returned `NULL` for all of them. The loop variable keeps each type opaque to
+    // the compiler, so the check that runs is the body's, as in PHP.
+    let dir = make_test_dir("opcache_jit_blacklist_types");
+    fs::write(
+        dir.join("jitbl.php"),
+        r#"<?php
+foreach (["x", 42, 1.5, null, true, [1]] as $v) {
+    try {
+        var_dump(opcache_jit_blacklist($v));
+    } catch (TypeError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+var_dump(opcache_jit_blacklist(function () {}));
+"#,
+    )
+    .unwrap();
+    let bin = compile(&dir, "jitbl", &["opcache.enable_cli=1"]);
+    let prefix = "opcache_jit_blacklist(): Argument #1 ($closure) must be of type Closure, ";
+    let expected: String = ["string", "int", "float", "null", "true", "array"]
+        .iter()
+        .map(|given| format!("{prefix}{given} given\n"))
+        .chain(std::iter::once("NULL\n".to_string()))
+        .collect();
+    assert_eq!(run_binary(&bin), expected);
+}
+
+#[test]
+/// Verifies the file-cache query and JIT-blacklist OPcache declarations expose reference-shaped results.
 fn the_two_missing_functions_exist_and_match_reference() {
     let dir = make_test_dir("opcache_new_fns");
     fs::write(

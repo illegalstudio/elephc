@@ -1,8 +1,6 @@
 ---
 title: "array_replace_recursive()"
 description: "Replaces elements from passed arrays into the first array recursively."
-sidebar:
-  order: 34
 ---
 
 ## array_replace_recursive()
@@ -21,8 +19,9 @@ Replaces elements from passed arrays into the first array recursively.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

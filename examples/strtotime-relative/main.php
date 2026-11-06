@@ -37,6 +37,11 @@ echo "in New York = " . gmdate("Y-m-d H:i:s", $in_new_york) . " UTC\n";
 
 // Absolute formats (deterministic, independent of the current time).
 echo "@epoch = " . strtotime("@1700000000") . "\n";
+// An epoch is already in UTC, so PHP ignores one timezone token after it, and a fraction
+// truncates (a negative one floors). An ISO date may also use a one-digit month or day.
+echo "@epoch UTC = " . strtotime("@1700000000 UTC") . "\n";
+echo "@epoch.fraction = " . strtotime("@1700000000.75") . "\n";
+echo "one-digit ISO = " . date("Y-m-d", strtotime("2024-6-5")) . "\n";
 echo "US slash = " . date("Y-m-d", strtotime("12/25/2024")) . "\n";
 echo "textual = " . date("Y-m-d", strtotime("25 December 2024")) . "\n";
 

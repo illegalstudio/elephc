@@ -1,8 +1,6 @@
 ---
 title: "stripos()"
 description: "Finds the numeric position of the first case-insensitive occurrence of a substring."
-sidebar:
-  order: 921
 ---
 
 ## stripos()
@@ -22,8 +20,9 @@ Finds the numeric position of the first case-insensitive occurrence of a substri
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/stripos.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stripos.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

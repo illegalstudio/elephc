@@ -1,8 +1,6 @@
 ---
 title: "mysqli_store_result()"
 description: "Buffers a query's whole result on the client."
-sidebar:
-  order: 178
 ---
 
 ## mysqli_store_result()
@@ -21,8 +19,9 @@ Buffers a query's whole result on the client.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

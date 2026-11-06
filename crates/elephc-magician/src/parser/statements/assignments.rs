@@ -49,7 +49,7 @@ impl Parser {
             TokenKind::PlusPlus | TokenKind::MinusMinus => {
                 self.parse_prefix_inc_dec_stmt(false)
             }
-            TokenKind::Ident(_) | TokenKind::Backslash
+            TokenKind::Ident(_) | TokenKind::ReservedNameHead(_) | TokenKind::Backslash
                 if self.current_starts_static_property_postfix_inc_dec() =>
             {
                 self.parse_static_property_inc_dec_stmt(false, false)
@@ -126,7 +126,16 @@ impl Parser {
                 source,
             }]);
         }
-        let value = self.parse_expr()?;
+        let value = self.parse_assignment()?;
+        if matches!(self.current(), TokenKind::Ident(word) if ident_eq(word, "and") || ident_eq(word, "xor") || ident_eq(word, "or")) {
+            let value = assignment_value(&name, op, value);
+            let assigned = EvalExpr::Assign { name, value: Box::new(value) };
+            let expr = self.parse_keyword_logical_from(assigned)?;
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return Ok(vec![EvalStmt::Expr(expr)]);
+        }
         if require_semicolon {
             self.expect_semicolon()?;
         }
@@ -139,7 +148,7 @@ impl Parser {
         &mut self,
         require_semicolon: bool,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
-        let class_name = self.parse_qualified_name()?;
+        let class_name = self.parse_class_reference_name(true)?;
         let class_name = self.resolve_static_class_name(class_name);
         self.expect(TokenKind::DoubleColon)?;
         let TokenKind::DollarIdent(property) = self.current() else {
@@ -320,7 +329,7 @@ impl Parser {
         } else {
             None
         };
-        let class_name = self.parse_qualified_name()?;
+        let class_name = self.parse_class_reference_name(true)?;
         let class_name = self.resolve_static_class_name(class_name);
         self.expect(TokenKind::DoubleColon)?;
         let TokenKind::DollarIdent(property) = self.current() else {

@@ -14,7 +14,8 @@
 //!   source payload.
 //! - The element extraction mirrors `__rt_array_to_hash` slot for slot: string elements
 //!   (16-byte slots) are persisted into independent heap copies, heap-backed elements are
-//!   retained, and scalar elements are copied by value, so the result owns its payloads.
+//!   retained, and scalar elements are copied by value, so the result owns its payloads. On
+//!   x86_64 `__rt_incref` reads its pointer from `rax`, not from the first SysV argument register.
 //! - PHP's `preserve_keys` result is key-identical to the sliced source region, which is exactly
 //!   what a hash records and elephc's dense indexed array cannot represent.
 
@@ -160,7 +161,7 @@ fn emit_array_slice_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_array_slice_to_hash_set");                     // scalar elements need no retain
     emitter.instruction("cmp r9, 7");                                           // is the element above the heap-backed tag range?
     emitter.instruction("jg __rt_array_slice_to_hash_set");                     // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // load the heap-backed element pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the heap-backed element pointer into the x86_64 incref argument register
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed element for the result hash
     emitter.instruction("jmp __rt_array_slice_to_hash_set");                    // continue to insertion
     emitter.label("__rt_array_slice_to_hash_string");

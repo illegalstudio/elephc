@@ -10,7 +10,7 @@
 use super::*;
 
 /// Runtime class declared by an eval fragment.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalClass {
     name: String,
     source_location: Option<EvalSourceLocation>,
@@ -278,6 +278,15 @@ impl EvalClass {
         }
     }
 
+    /// Replaces inheritance and trait names with their concrete runtime specializations.
+    pub(crate) fn with_specialized_relations(mut self, parent: Option<String>, interfaces: Vec<String>, traits: Vec<String>, adaptations: Vec<EvalTraitAdaptation>) -> Self {
+        self.parent = parent;
+        self.interfaces = interfaces;
+        self.traits = traits;
+        self.trait_adaptations = adaptations;
+        self
+    }
+
     /// Returns a copy of this class with source-location metadata attached.
     pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
         self.source_location = Some(source_location);
@@ -409,7 +418,7 @@ impl EvalClass {
 }
 
 /// Adaptation rule declared in a runtime eval class `use Trait { ... }` block.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalTraitAdaptation {
     Alias {
         trait_name: Option<String>,
@@ -425,7 +434,7 @@ pub enum EvalTraitAdaptation {
 }
 
 /// Constant metadata for a runtime eval class.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalClassConstant {
     name: String,
     trait_origin: Option<String>,

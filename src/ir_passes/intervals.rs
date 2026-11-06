@@ -16,7 +16,9 @@ use std::collections::HashMap;
 
 use crate::ir::{BlockId, Function, InstId, IrType, ValueDef, ValueId};
 use crate::ir_passes::cfg::reverse_postorder;
-use crate::ir_passes::clobber::{op_is_volatile_safe, terminator_is_volatile_safe};
+use crate::ir_passes::clobber::{
+    edge_materialization_may_call, instruction_is_volatile_safe, terminator_is_volatile_safe,
+};
 use crate::ir_passes::liveness::{terminator_uses, LivenessInfo};
 
 /// A value's contiguous live range in linear program order: live from `start`
@@ -126,6 +128,12 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
     for &block_id in &numbering.order {
         let block = func.block(block_id).expect("ordered block exists");
 
+        // A predecessor's edge-copy retain can run after an earlier parameter
+        // was stored. Keep all parameters at such an entry off volatile homes.
+        if edge_materialization_may_call(func, block_id) {
+            clobbers.push(numbering.block_start[&block_id]);
+        }
+
         for inst_id in &block.instructions {
             let position = numbering.inst_pos[inst_id];
             let inst = func.instruction(*inst_id).expect("valid instruction");
@@ -133,7 +141,7 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
                 extend(*operand, position, &mut ends);
                 *weights.entry(*operand).or_insert(0) += 1;
             }
-            if !op_is_volatile_safe(inst.op) {
+            if !instruction_is_volatile_safe(func, inst) {
                 clobbers.push(position);
             }
         }
@@ -144,7 +152,7 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
                 extend(value, terminator_position, &mut ends);
                 *weights.entry(value).or_insert(0) += 1;
             }
-            if !terminator_is_volatile_safe(term) {
+            if !terminator_is_volatile_safe(func, term) {
                 clobbers.push(terminator_position);
             }
         }

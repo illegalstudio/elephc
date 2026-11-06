@@ -45,7 +45,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         _ => false,
     };
     if !is_literal {
-        return Err(CompileError::new(
+        return Err(CompileError::aot_literal_required(
             cx.span,
             "defined() first argument must be a string literal in AOT mode",
         ));

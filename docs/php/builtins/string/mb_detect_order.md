@@ -1,8 +1,6 @@
 ---
 title: "mb_detect_order()"
 description: "Reads or updates the request's encoding detection order."
-sidebar:
-  order: 837
 ---
 
 ## mb_detect_order()
@@ -20,8 +18,9 @@ Reads or updates the request's encoding detection order.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_detect_order.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_detect_order.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

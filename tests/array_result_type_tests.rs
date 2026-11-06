@@ -246,7 +246,7 @@ fn array_map_result_element_type_is_the_callback_return_type() {
         echo want_string($mapped[0]);";
     let diagnostics = compile_expecting_failure(&dir, src, "app");
     assert!(
-        diagnostics.contains("expects Str, got Bool"),
+        diagnostics.contains("expects string, got bool"),
         "array_map() must report the callback's Bool return as the element type, got:\n{diagnostics}"
     );
 }
@@ -264,7 +264,7 @@ fn array_map_result_element_type_follows_a_string_callback() {
         echo want_int($mapped[0]);";
     let diagnostics = compile_expecting_failure(&dir, src, "app");
     assert!(
-        diagnostics.contains("expects Int, got Str"),
+        diagnostics.contains("expects int, got string"),
         "array_map() must report the callback's Str return as the element type, got:\n{diagnostics}"
     );
 }

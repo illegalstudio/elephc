@@ -1,6 +1,7 @@
 //! Purpose:
 //! Lowers declared-boundary narrowing ops that verify a dynamically-typed value with
-//! PHP's coercive-mode rules instead of silently truncating it.
+//! PHP's coercive-mode rules instead of silently truncating it, and the strict narrowing a
+//! fixed-layout `float`, `f32` or `bool` field applies to a boxed value before its store.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::lower_instruction()`.
@@ -11,10 +12,13 @@
 //!   throws `TypeError`, never wraps.
 //! - Shares the unbox/tag-dispatch/throw helpers with `EnumBackingMixedToInt`, whose
 //!   coercions (float truncation, null-to-0) are intentionally NOT reused here.
+//! - A fixed-layout field narrowing accepts only the tags its field can hold (a float field
+//!   also widens an int); it never casts, so the field gets a raw payload or a `TypeError`.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::Instruction;
+use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
 use super::enums::{
@@ -182,4 +186,214 @@ pub(in crate::codegen::lower_inst) fn emit_float_result_fits_i64_or_jump(
             ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // in-range: exact truncation toward zero
         }
     }
+}
+
+/// Lowers `Op::PropertyBoundaryCheckedToInt`: narrows a checked add/sub/mul result stored
+/// into a DECLARED `int` property. The operand only ever holds an int or the float its
+/// overflow promoted, so an int forwards, a float inside `[-2^63, 2^63)` truncates (such a
+/// float is always integral, so PHP emits no precision deprecation), and every other float
+/// throws the property `TypeError` the backend's weak typed-property guard would raise.
+/// Any other runtime tag cannot reach this op; it fails closed through the same throw.
+///
+/// Unlike the guard on a boxed store, this op only READS the cell and forwards a raw word, so
+/// the frame-cell planner may keep the checked producer out of the heap entirely.
+pub(in crate::codegen::lower_inst) fn lower_property_boundary_checked_to_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let input = *inst.operands.first().ok_or_else(|| {
+        CodegenIrError::unsupported("property_boundary_checked_to_int without operand".to_string())
+    })?;
+    let Some(crate::ir::Immediate::Data(data_id)) = inst.immediate else {
+        return Err(CodegenIrError::unsupported(
+            "property_boundary_checked_to_int without a TypeError message".to_string(),
+        ));
+    };
+    let message = ctx
+        .module
+        .data
+        .strings
+        .get(data_id.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data_id.as_raw()))?;
+    let done = ctx.next_label("prop_boundary_int_done");
+    let l_fail = ctx.next_label("prop_boundary_int_fail");
+    let loaded_ty = ctx.load_value_to_result(input)?.codegen_repr();
+    match loaded_ty {
+        // Constant folding can leave the raw integer word behind; nothing to verify.
+        PhpType::Int | PhpType::Bool => return store_if_result(ctx, inst),
+        // A folded overflow leaves a raw F64 in the float-result register.
+        PhpType::Float => emit_float_result_fits_i64_or_jump(ctx, &l_fail),
+        _ => {
+            // `__rt_mixed_unbox` returns the tag in the int-result register and the payload
+            // in a target-specific register (AArch64: x1; x86_64: rdi).
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let tag_reg = abi::int_result_reg(ctx.emitter);
+            let lo_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x1",
+                Arch::X86_64 => "rdi",
+            };
+            let l_int = ctx.next_label("prop_boundary_int_int");
+            let l_float = ctx.next_label("prop_boundary_int_float");
+            emit_mixed_tag_branch(ctx, tag_reg, 0, &l_int);
+            emit_mixed_tag_branch(ctx, tag_reg, 2, &l_float);
+            abi::emit_jump(ctx.emitter, &l_fail);
+            ctx.emitter.label(&l_int);
+            emit_move_reg(ctx, tag_reg, lo_reg);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&l_float);
+            emit_float_bits_to_float_result(ctx, lo_reg);
+            emit_float_result_fits_i64_or_jump(ctx, &l_fail);
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&l_fail);
+    super::exceptions::emit_type_error(ctx, &message);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// The scalar a fixed-layout field narrowing produces from a boxed `Mixed` value.
+///
+/// Packed class fields and extern struct fields reached through `ptr<T>` store raw bits, so a
+/// value lowering still carries boxed is narrowed before the store: the tags the field can
+/// hold pass, and every other one throws a catchable `TypeError`. `int` fields keep their own
+/// `Op::PackedFieldMixedToInt` lowering.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::codegen::lower_inst) enum FixedFieldScalar {
+    /// A `float` or `f32` field: a float passes and an int widens to the nearest double, the
+    /// conversion PHP applies to an int written to a float.
+    Float,
+    /// A `bool` field: only a bool passes.
+    Bool,
+}
+
+/// The runtime tags `__rt_mixed_unbox` reports and the word a refused one names in the
+/// `TypeError`. Tag 7 (nested) is peeled by the helper; a tag outside the table is an object.
+const FIXED_FIELD_TAGS: [(i64, &str); 9] = [
+    (0, "int given"),
+    (1, "string given"),
+    (2, "float given"),
+    (3, "bool given"),
+    (4, "array given"),
+    (5, "array given"),
+    (8, "null given"),
+    (9, "resource given"),
+    (10, "Closure given"),
+];
+
+/// Lowers `Op::PackedFieldMixedToFloat` and `Op::PackedFieldMixedToBool`: narrows a boxed
+/// `Mixed` value to the raw payload a fixed-layout field of `target` stores, or throws a
+/// catchable `TypeError` built from the message prefix plus the runtime type word.
+///
+/// Like `PackedFieldMixedToInt`, the op is total over every post-fold representation of its
+/// operand: constant folding runs after lowering and can retype the boxed operand to a raw
+/// scalar under the op, and unboxing a raw scalar as a cell pointer would crash.
+pub(in crate::codegen::lower_inst) fn lower_fixed_field_mixed_narrowing(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: FixedFieldScalar,
+) -> Result<()> {
+    let op_name = inst.op.name();
+    let input = *inst.operands.first().ok_or_else(|| {
+        CodegenIrError::unsupported(format!("{} without operand", op_name))
+    })?;
+    let Some(crate::ir::Immediate::Data(data_id)) = inst.immediate else {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} without a TypeError message prefix",
+            op_name
+        )));
+    };
+    let (prefix_label, prefix_len) = ctx.intern_string_data(data_id)?;
+    let loaded_ty = ctx.load_value_to_result(input)?.codegen_repr();
+    if loaded_ty != PhpType::Mixed {
+        emit_raw_fixed_field_narrowing(ctx, target, &loaded_ty, &prefix_label, prefix_len)?;
+        return store_if_result(ctx, inst);
+    }
+    // Unbox the cell: the tag comes back in the int-result register and the payload low word
+    // in the target's unbox payload register.
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let tag_reg = abi::int_result_reg(ctx.emitter);
+    let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    let done = ctx.next_label("fixed_field_narrow_done");
+    let arms: Vec<(i64, &str, String)> = FIXED_FIELD_TAGS
+        .iter()
+        .map(|&(tag, refused)| (tag, refused, ctx.next_label("fixed_field_narrow_tag")))
+        .collect();
+    for (tag, _, label) in &arms {
+        emit_mixed_tag_branch(ctx, tag_reg, *tag, label);
+    }
+    // Any other tag is an object-like value; every refusing arm throws and never falls through.
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "object given");
+    for (tag, refused, label) in &arms {
+        ctx.emitter.label(label);
+        if emit_accepted_fixed_field_payload(ctx, target, *tag, payload_reg) {
+            abi::emit_jump(ctx.emitter, &done);
+        } else {
+            emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, refused);
+        }
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Moves the payload of an accepted runtime tag into the result register `target` stores from
+/// and returns `true`, or emits nothing and returns `false` when the field refuses the tag.
+fn emit_accepted_fixed_field_payload(
+    ctx: &mut FunctionContext<'_>,
+    target: FixedFieldScalar,
+    tag: i64,
+    payload_reg: &str,
+) -> bool {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    match (target, tag) {
+        // A float's payload is its IEEE-754 bit pattern.
+        (FixedFieldScalar::Float, 2) => emit_float_bits_to_float_result(ctx, payload_reg),
+        // An int widens to the nearest double, as PHP converts an int stored to a float.
+        (FixedFieldScalar::Float, 0) => {
+            emit_move_reg(ctx, result_reg, payload_reg);
+            abi::emit_int_result_to_float_result(ctx.emitter);
+        }
+        // A bool's payload is already the 0 or 1 the field stores.
+        (FixedFieldScalar::Bool, 3) => emit_move_reg(ctx, result_reg, payload_reg),
+        _ => return false,
+    }
+    true
+}
+
+/// Narrows an operand constant folding already unboxed, giving a raw scalar the answer the
+/// boxed path gives its runtime tag: the field's own type passes, an int widens into a float
+/// field, and any other scalar throws the same `TypeError`.
+fn emit_raw_fixed_field_narrowing(
+    ctx: &mut FunctionContext<'_>,
+    target: FixedFieldScalar,
+    loaded_ty: &PhpType,
+    prefix_label: &str,
+    prefix_len: usize,
+) -> Result<()> {
+    match (target, loaded_ty) {
+        (FixedFieldScalar::Float, PhpType::Float) | (FixedFieldScalar::Bool, PhpType::Bool) => {
+            return Ok(());
+        }
+        (FixedFieldScalar::Float, PhpType::Int) => {
+            abi::emit_int_result_to_float_result(ctx.emitter);
+            return Ok(());
+        }
+        _ => {}
+    }
+    let refused = match loaded_ty {
+        PhpType::Int => "int given",
+        PhpType::Float => "float given",
+        PhpType::Bool => "bool given",
+        PhpType::Str => "string given",
+        PhpType::Void => "null given",
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "fixed-layout field narrowing of raw PHP type {:?}",
+                other
+            )));
+        }
+    };
+    emit_throw_int_arg_type_error(ctx, prefix_label, prefix_len, refused);
+    Ok(())
 }

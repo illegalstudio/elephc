@@ -53,9 +53,15 @@ the materialization required for the statically known reads and writes.
 Interpreter fallback parses dynamic source into EvalIR. Exact source strings
 up to 64 KiB share a process-wide FIFO cache of 256 immutable parse results;
 larger fragments bypass the cache. The cache avoids repeated tokenization and
-parsing, but execution remains interpreted and scope/context state is never
-cached. Force-linking with `--with-eval` also increases binary size even if no
-call ultimately requires fallback.
+parsing, but execution remains interpreted. Repeated native function activations
+also share an immutable catalog of the module's native callable signatures,
+class metadata and constants. Each thread retains up to eight module catalogs;
+activation scopes, dynamic declarations, references, handlers and materialized
+default values remain separate. On a catalog cache miss, short numeric-only
+fragments can postpone metadata setup for up to 512 eval executions in one
+activation. The next eval initializes the complete catalog before synchronizing
+scope, bounding proof overhead in long loops. Force-linking with `--with-eval`
+also increases binary size even if no call ultimately requires fallback.
 
 ## Quick start
 
@@ -113,7 +119,10 @@ PHP call surfaces.
 
 ## Scope behavior
 
-Variables from the caller's local scope are visible in the fragment.
+Variables from the caller's local scope are visible in the fragment, except
+locals stored as a native pointer word or handle: `ptr<T>` and `?ptr<T>` locals,
+packed record addresses, buffers, and locals that hold `null` and pointers (see
+[Pointers](../beyond-php/pointers.md)). The fragment reads those as undefined.
 Assignments and `unset()` are reflected back into that scope, variables created
 by the fragment remain visible after `eval()`, and `return expr;` returns from
 the `eval()` call itself.
@@ -127,8 +136,8 @@ ABI. AOT literals without writes skip scope materialization when they need no
 caller values or can receive read-only values as direct EIR parameters. Known
 writes use the same core scope cells from an internal EIR function.
 
-Because a scope cell is always boxed `Mixed`, a local read or written inside
-`eval()` may change type freely — `eval('$a = 1; $a = "ciao"; echo $a;')`
+Because a scope cell is always boxed `Mixed`, an untyped local read or written inside
+`eval()` may change type freely: `eval('$a = 1; $a = "ciao"; echo $a;')`
 compiles and runs the same in every mode. This is unrelated to
 [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode), which
 only tightens the AOT checker's monomorphic-local rule for ordinary compiled
@@ -142,6 +151,24 @@ Top-level eval fragments can see CLI `$argc` and `$argv`. `global $name` can
 alias compiler-known program-global storage, and `global $argc` / `global
 $argv` inside function eval fragments alias the CLI argument globals. Unsetting
 such a local alias removes the alias without unsetting the global value.
+
+Superglobals (`$_SERVER`, `$_ENV`, `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`,
+`$_REQUEST`, `$_SESSION`) resolve through the global scope from every fragment,
+with no `global` statement, so a fragment running inside a function reads and
+writes the values the compiled program holds, and `unset()` removes the global
+one: it stays undefined for every later read, and eval never creates it again. When a fragment names a CLI
+superglobal that the compiled program never created, eval creates it as the
+fragment starts, the way PHP's `auto_globals_jit` does, with the contents a
+compiled CLI program gives it (see
+[System & I/O](system-and-io.md)): the environment in `$_ENV`, the environment
+plus the CLI keys in `$_SERVER`, and empty request arrays; `$_SESSION` is never
+created. Two differences remain for such an eval-created superglobal. It is
+created when first named rather than at startup, so it includes variables that
+`putenv()` set before that point. And it belongs to the eval global scope of
+the call that created it: top-level fragments share one, but a fragment inside
+a later function call starts from a fresh copy and does not see writes made
+through another call. Naming the superglobal anywhere in the compiled program
+makes it one shared value everywhere.
 
 ## Supported statements
 
@@ -166,10 +193,20 @@ order for iteration.
 
 Includes follow PHP's cwd-first lookup and then fall back to the eval call-site
 directory. Included PHP files may contain normal `<?php ... ?>` blocks, raw text
-outside PHP tags is echoed, a `return` inside the included file becomes the
+outside PHP tags is echoed byte for byte, a `return` inside the included file becomes the
 include expression value, successful includes without `return` evaluate to `1`,
 repeated `*_once` includes evaluate to `true`, missing `include` returns
 `false` with warnings, and missing `require` aborts the eval fragment.
+
+An included file is parsed as one script, as PHP compiles it, so a template's
+blocks may span the tags: `<?php foreach ($rows as $r) { ?><li><?= $r ?></li><?php } ?>`,
+the alternative syntax (`<?php if ($x): ?>…<?php endif; ?>`) and a function whose
+body spans blocks all run. `<?=` echoes, `?>` swallows the one newline after it,
+`__LINE__` counts from the top of the file, and `<?php` opens code only before
+whitespace or the end of the file (the short `<?` stays text). A parse error
+anywhere in the file stops the include before any of it runs. The file's PHP
+blocks must be UTF-8; the text outside them may hold any bytes. Heredoc and
+nowdoc are not parsed in eval code, in an included file either.
 
 In eval, `get_included_files()` preserves first-inclusion order, with the first
 nonempty native call-site path retained as the main entry. A query inside a
@@ -309,6 +346,24 @@ Post-barrier native direct calls and string-literal `call_user_func()` callbacks
 currently accept simple positional arguments. Post-barrier
 `call_user_func_array()` callbacks can pass indexed or string-keyed argument
 containers to eval-declared functions.
+
+## Generics
+
+Magician supports native generic declarations and the supported PHPStan/Psalm annotations from
+[Generics](../beyond-php/generics.md#generics-in-magician). Functions, classes, interfaces, traits,
+methods, and constructors specialize lazily from written type arguments or evaluated argument
+types. Templates and concrete specializations persist across eval calls and runtime includes.
+
+Bounds, defaults, variance, structural array contracts, typed callable signatures, and substituted
+typed locals are checked at runtime. Binding and specialized contract failures throw catchable
+`TypeError` values. Generic classes have distinct names and static state per specialization.
+Class and constructor arguments may be written together, such as `Pair<int, string>`, before
+any inferred instantiation, including in parent references. Typed arrays validate float and bool
+keys as their stored integer type, following PHP array-key normalization.
+Native syntax requires ordinary mode; PHPDoc templates also work under `--strict-php`.
+
+Specialization reuses the existing call binder and boxed value ABI. It does not change the
+supported expression subset or give interpreted calls AOT's native storage representation.
 
 ## Classes and objects
 
@@ -472,9 +527,15 @@ name. `ReflectionMethod::getShortName()` reports the reflected method name,
 while `ReflectionMethod::getNamespaceName()` reports an empty string and
 `inNamespace()` reports `false`, matching PHP's method reflection behavior.
 `ReflectionFunction` and `ReflectionMethod` report eval user-symbol defaults
-through `isInternal()`, `isUserDefined()`, `isClosure()`, `returnsReference()`,
+through `isInternal()`, `isUserDefined()`, `isClosure()`,
 `isGenerator()`, `isVariadic()`, `isStatic()`,
-`hasTentativeReturnType()`, and `getTentativeReturnType()`. `hasReturnType()`
+`hasTentativeReturnType()`, and `getTentativeReturnType()`.
+`returnsReference()` reports the reflected declaration: `true` for a compiled
+`function &f()` or `function &m()`, for an eval-declared `&get` property
+hook, and for an abstract or interface `&get` hook contract, whether eval or
+compiled code declares it. Eval code itself cannot declare a by-reference
+function, method, or closure (the fragment is rejected), so those report
+`false`. `hasReturnType()`
 and `getReturnType()` expose retained eval return type metadata for supported
 named, nullable, union, and intersection declarations, including `void` and
 `never` as builtin non-nullable named types.
@@ -649,6 +710,16 @@ null, empty-array, supported array-valued, or supported object-valued default
 values when native signatures are registered. Eval code can also reflect
 supported callable-builtin signatures, including internal origin, parameter
 names, parameter types, and return type metadata.
+
+Generated method and constructor defaults that defer a missing-parent `Error`,
+including errors nested inside arrays or constructor arguments, retain their
+expression trees as eval metadata. Omitting the argument raises a catchable
+`Error` through direct or callback calls from `eval()`, while supplying the
+argument explicitly skips the default. Native reflected defaults retain the
+same lazy behavior. Reflection retains default availability without evaluating
+the tree when the parameter object is created. `getDefaultValue()` evaluates the
+whole default on each request, including earlier constructor side effects.
+
 Eval-declared
 functions and methods expose declared-type presence for parameters and return types, simple
 named type metadata through
@@ -776,6 +847,10 @@ for those APIs, including `PropertyHookType::cases()`, `from()`, and
 and bridge-supported generated/AOT instance and static property values, bypass
 public/protected/private visibility like PHP reflection, route concrete eval
 property hooks through their accessors, and still reject readonly writes.
+Readonly storage retained over a setter-only abstract contract may have a broader
+type than the setter, matching native declarations even with a generated/AOT
+parent. A retained abstract setter validates its original argument type without
+initializing that storage, including through `ReflectionProperty::setValue()`.
 `ReflectionProperty::getRawValue()` and `setRawValue()` are supported for
 eval-declared backed instance properties, including backed property hooks, and
 for bridge-supported generated/AOT instance properties. Raw access bypasses
@@ -846,6 +921,23 @@ generated AOT class/interface metadata and eval-created object metadata.
 `interface_exists()`, `trait_exists()`, and `enum_exists()` can probe generated
 AOT metadata. `class_implements()` and `class_parents()` materialize
 generated/AOT interface and parent metadata when the bridge exposes it.
+For an enum declared in the compiled program, the generated interface metadata
+contains only its directly declared interfaces: `class_implements()` called
+from `eval()` still omits their transitive parents and the implicit `UnitEnum`
+and `BackedEnum` interfaces. Relation probes such as `is_a()` and
+`is_subclass_of()` use the same incomplete metadata for those compiled enums.
+Enums declared inside `eval()` do report transitive interface parents and
+`UnitEnum`, plus `BackedEnum` for backed enums, to probes executed inside `eval()`, like PHP.
+Compiled `class_implements()` also reports these interfaces for eval-declared enums.
+Compiled `is_a()` and `is_subclass_of()` calls with a class-name string still return
+`false` for an enum declared only inside `eval()`, because those calls consult the
+AOT class table. A case of an enum declared inside `eval()` uses the dynamic
+object bridge instead: compiled `is_a($case, "UnitEnum")` and
+`is_subclass_of($case, "UnitEnum")` report the implicit enum interface, including
+`BackedEnum` for a backed case. Returning a compiled enum case through `eval()`
+does not add those interfaces: it retains the incomplete AOT metadata, so these
+object probes still return `false` for its implicit `UnitEnum`/`BackedEnum`
+interfaces. Its explicitly declared interfaces remain visible.
 `class_uses()` reports direct trait uses for eval-declared and generated/AOT
 classes, traits, and enums. `class_alias()` can
 alias eval-declared and generated/AOT
@@ -915,6 +1007,8 @@ value, return `false`, and emit the same suppressible duplicate-constant warning
 as AOT `define()`.
 
 Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`,
+the Termwind-facing `LIBXML_NOERROR` / `LIBXML_COMPACT` / `LIBXML_HTML_NODEFDTD` /
+`LIBXML_NOBLANKS` / `LIBXML_NOXMLDECL` flags,
 `PHP_INT_MAX`, `INF`, `NAN`, the `PHP_VERSION*` / `PHP_SAPI` version surface,
 `PATHINFO_*`, `PHP_URL_*`, `FNM_*`, `ARRAY_FILTER_USE_*`, `COUNT_*`, and the supported
 `PREG_*` / `JSON_*` constants. `defined()` sees these names, including an
@@ -975,7 +1069,7 @@ where listed below unless a note says otherwise.
 > elephc-extension builtins below — the whole "Raw memory and buffers" row plus
 > `class_attribute_names()`, `class_attribute_args()`, and
 > `class_get_attributes()` — do not exist inside eval'd code either: calling one
-> is a runtime fatal like any unknown function, and
+> is a runtime fatal for the unavailable extension, and
 > `function_exists()`/`is_callable()` report them as missing, matching the PHP
 > interpreter.
 
@@ -987,19 +1081,39 @@ where listed below unless a note says otherwise.
 | File and directory streams | `fopen()`, `fclose()`, `feof()`, `fflush()`, `fgetc()`, `fgets()`, `fgetcsv()`, `fpassthru()`, `fprintf()`, `fputcsv()`, `fread()`, `fscanf()`, `flock()`, `fseek()`, `fstat()`, `fsync()`, `fdatasync()`, `ftell()`, `ftruncate()`, `fwrite()`, `rewind()`, `vfprintf()`, `opendir()`, `readdir()`, `closedir()`, `rewinddir()` |
 | Streams and stream contexts | `stream_get_filters()`, `stream_get_transports()`, `stream_get_wrappers()`, `stream_isatty()`, `stream_is_local()`, `stream_supports_lock()`, `stream_get_contents()`, `stream_get_line()`, `stream_get_meta_data()`, `stream_copy_to_stream()`, `stream_resolve_include_path()`, `stream_select()`, `stream_set_blocking()`, `stream_set_chunk_size()`, `stream_set_read_buffer()`, `stream_set_timeout()`, `stream_set_write_buffer()`, `stream_context_create()`, `stream_context_get_default()`, `stream_context_get_options()`, `stream_context_get_params()`, `stream_context_set_default()`, `stream_context_set_option()`, `stream_context_set_params()`, `stream_wrapper_register()`, `stream_wrapper_unregister()`, `stream_wrapper_restore()`, `stream_filter_register()`, `stream_filter_append()`, `stream_filter_prepend()`, `stream_filter_remove()`, `stream_bucket_new()`, `stream_bucket_make_writeable()`, `stream_bucket_append()`, `stream_bucket_prepend()` |
 | Stream sockets and network databases | `stream_socket_server()`, `stream_socket_client()`, `stream_socket_accept()`, `stream_socket_enable_crypto()`, `stream_socket_get_name()`, `stream_socket_pair()`, `stream_socket_recvfrom()`, `stream_socket_sendto()`, `stream_socket_shutdown()`, `fsockopen()`, `pfsockopen()`, `gethostname()`, `gethostbyname()`, `gethostbyaddr()`, `getprotobyname()`, `getprotobynumber()`, `getservbyname()`, `getservbyport()`, `long2ip()`, `ip2long()`, `inet_pton()`, `inet_ntop()` |
-| Strings, bytes, and formatting | `strlen()`, `ord()`, `chr()`, `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`, `ucwords()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `strpos()`, `strrpos()`, `strcmp()`, `strcasecmp()`, `trim()`, `ltrim()`, `rtrim()`, `chop()`, `strrev()`, `grapheme_strrev()`, `str_repeat()`, `substr()`, `substr_replace()`, `str_pad()`, `strstr()`, `str_split()`, `wordwrap()`, `nl2br()`, `explode()`, `implode()`, `str_replace()`, `str_ireplace()`, `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`, `parse_url()`, `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`, `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, `base64_decode()`, `gzcompress()`, `gzdeflate()`, `gzinflate()`, `gzuncompress()`, `number_format()`, `sprintf()`, `printf()`, `vsprintf()`, `vprintf()`, `sscanf()` |
+| Strings, bytes, and formatting | `strlen()`, `ord()`, `chr()`, `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`, `ucwords()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `strpos()`, `strrpos()`, `strcmp()`, `strcasecmp()`, `trim()`, `ltrim()`, `rtrim()`, `chop()`, `strrev()`, `grapheme_strrev()`, `str_repeat()`, `substr()`, `substr_replace()`, `str_pad()`, `strstr()`, `str_split()`, `wordwrap()`, `nl2br()`, `explode()`, `implode()`, `str_replace()`, `str_ireplace()`, `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`, `strip_tags()`, `parse_url()`, `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`, `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, `base64_decode()`, `gzcompress()`, `gzdeflate()`, `gzinflate()`, `gzuncompress()`, `number_format()`, `sprintf()`, `printf()`, `vsprintf()`, `vprintf()`, `sscanf()` |
 | Hashing | `crc32()`, `hash()`, `hash_file()`, `hash_hmac()`, `md5()`, `sha1()`, `hash_equals()`, `hash_algos()`, `hash_init()`, `hash_update()`, `hash_final()`, `hash_copy()` |
 | JSON | `json_encode()`, `json_decode()`, `json_validate()`, `json_last_error()`, `json_last_error_msg()` |
 | Regex | `preg_match()`, `preg_match_all()`, `preg_replace()`, `preg_replace_callback()`, `preg_split()`, `mb_ereg_match()` |
 | Arrays and sorting | `array_sum()`, `array_product()`, `array_chunk()`, `array_column()`, `array_combine()`, `array_fill()`, `array_fill_keys()`, `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `array_flip()`, `array_keys()`, `array_values()`, `array_diff()`, `array_intersect()`, `array_diff_key()`, `array_intersect_key()`, `range()`, `array_merge()`, `array_pad()`, `array_reverse()`, `array_slice()`, `array_splice()`, `array_unique()`, `array_key_exists()`, `array_rand()`, `in_array()`, `array_search()`, `array_pop()`, `array_shift()`, `array_push()`, `array_unshift()`, `arsort()`, `asort()`, `krsort()`, `ksort()`, `natcasesort()`, `natsort()`, `rsort()`, `shuffle()`, `sort()`, `uasort()`, `uksort()`, `usort()`, `count()` |
 | Iterators and SPL | `iterator_count()`, `iterator_to_array()`, `iterator_apply()`, `spl_classes()`, `spl_object_id()`, `spl_object_hash()`, `spl_autoload()`, `spl_autoload_call()`, `spl_autoload_extensions()`, `spl_autoload_functions()`, `spl_autoload_register()`, `spl_autoload_unregister()` |
 | Math and random | `abs()`, `sqrt()`, `floor()`, `ceil()`, `round()`, `pow()`, `clamp()`, `min()`, `max()`, `pi()`, `sin()`, `cos()`, `tan()`, `asin()`, `acos()`, `atan()`, `atan2()`, `sinh()`, `cosh()`, `tanh()`, `log()`, `log2()`, `log10()`, `exp()`, `deg2rad()`, `rad2deg()`, `hypot()`, `intdiv()`, `fdiv()`, `fmod()`, `rand()`, `mt_rand()`, `random_int()` |
-| Raw memory and buffers | `buffer_new()`, `buffer_len()`, `buffer_free()`, `ptr()`, `ptr_null()`, `ptr_is_null()`, `ptr_offset()`, `ptr_get()`, `ptr_set()`, `ptr_read8()`, `ptr_read16()`, `ptr_read32()`, `ptr_read_string()`, `ptr_write8()`, `ptr_write16()`, `ptr_write32()`, `ptr_write_string()`, `ptr_sizeof()` |
+| Raw memory and buffers | `buffer_new()`, `buffer_len()`, `buffer_ptr()`, `buffer_free()`, `ptr()`, `ptr_null()`, `ptr_is_null()`, `ptr_offset()`, `ptr_get()`, `ptr_set()`, `ptr_read8()`, `ptr_read16()`, `ptr_read32()`, `ptr_read_string()`, `ptr_write8()`, `ptr_write16()`, `ptr_write32()`, `ptr_write_string()`, `ptr_sizeof()` |
 | Types, metadata, and dynamic calls | `intval()`, `floatval()`, `strval()`, `boolval()`, `settype()`, `gettype()`, `get_called_class()`, `get_class()`, `get_parent_class()`, `get_class_methods()`, `get_class_vars()`, `get_object_vars()`, `get_resource_type()`, `get_resource_id()`, `function_exists()`, `is_callable()`, `class_exists()`, `interface_exists()`, `trait_exists()`, `enum_exists()`, `class_alias()`, `class_implements()`, `class_parents()`, `class_uses()`, `get_declared_classes()`, `get_declared_interfaces()`, `get_declared_traits()`, `method_exists()`, `property_exists()`, `is_a()`, `is_subclass_of()`, `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, `call_user_func()`, `call_user_func_array()`, `empty()`, `isset()`, `unset()`, `is_int()`, `is_integer()`, `is_long()`, `is_float()`, `is_double()`, `is_real()`, `is_nan()`, `is_finite()`, `is_infinite()`, `is_string()`, `is_bool()`, `is_null()`, `is_array()`, `is_object()`, `is_iterable()` for arrays and `Traversable` objects, `is_numeric()`, `is_scalar()`, `is_resource()` |
 | Debug output | `print_r()`, `var_dump()` |
 | Constants | `define()`, `defined()` |
 
 ## Builtin notes
+
+An undefined direct function call throws a catchable `Error` with
+`Call to undefined function name()`. Function lookup fails before its arguments
+are evaluated. Namespace fallback and imported function aliases report the resolved
+missing name. Known builtins whose required capability or prelude is unavailable
+retain their existing runtime diagnostics.
+
+A builtin called with an argument count PHP refuses throws a catchable
+`ArgumentCountError` with PHP's message (`strlen() expects exactly 1 argument,
+0 given`) on every spelling: direct calls, `call_user_func()`,
+`call_user_func_array()`, variable calls, spreads, and callbacks. The arguments
+are evaluated first, as PHP sends them before the callee checks the count. A
+count PHP accepts but an eval handler does not implement yet, such as
+`array_keys()` with a filter value, is still an eval runtime fatal. Eval-declared
+functions, methods, and closures, and compiled functions called from eval, throw
+`ArgumentCountError` when a required argument is missing (`Too few arguments to
+function f(), 0 passed and exactly 1 expected`). PHP's positional message also
+names the calling file and line (`0 passed in ... on line 1 and ...`); eval does
+not track the line of a running statement, so that clause is omitted. A compiled
+function is named by its lowercase registered name.
 
 Eval `settype()` mutates direct variables, array elements, object properties
 including dynamic property names, and static properties including dynamic
@@ -1052,7 +1166,8 @@ fatals. Native non-eval regex codegen remains PCRE2-backed as documented in
 Eval JSON support covers null, booleans, integers, floats, strings, indexed
 arrays, associative arrays, and `stdClass` dynamic properties. `json_encode()`
 supports zero flags plus the documented `JSON_HEX_*`,
-`JSON_UNESCAPED_SLASHES`, `JSON_UNESCAPED_UNICODE`, `JSON_FORCE_OBJECT`,
+`JSON_UNESCAPED_SLASHES`, `JSON_UNESCAPED_UNICODE`,
+`JSON_UNESCAPED_LINE_TERMINATORS`, `JSON_FORCE_OBJECT`,
 `JSON_NUMERIC_CHECK`, `JSON_PARTIAL_OUTPUT_ON_ERROR`, `JSON_PRETTY_PRINT`,
 `JSON_PRESERVE_ZERO_FRACTION`, `JSON_INVALID_UTF8_IGNORE`,
 `JSON_INVALID_UTF8_SUBSTITUTE`, and `JSON_THROW_ON_ERROR` flags. `json_decode()`
@@ -1060,6 +1175,24 @@ and `json_validate()` support PHP-compatible depth handling, malformed UTF-8
 ignore/substitute modes where applicable, `JSON_BIGINT_AS_STRING` for
 overflowing integer tokens in `json_decode()`, and `JsonException` through
 `JSON_THROW_ON_ERROR`.
+
+Both unescaped flags are required to keep U+2028 and U+2029 literal. Backed enum
+cases encode as their integer or string value. Enum `JsonSerializable` callbacks
+run before either default enum rule, and their returned value is encoded
+recursively with the outer flags. Unit enums without custom serialization fail
+with `JSON_ERROR_NON_BACKED_ENUM` (11), or encode as `0` when partial output is
+requested. A serializer returning its enum receiver exposes `name`, then the
+backing `value` when present. This also works for native enum cases passed into
+eval, with the same depth and pretty-print rules as eval-declared cases.
+
+When an encoded result exceeds the depth limit, eval returns `false` and records
+`JSON_ERROR_DEPTH`, or throws a catchable `JsonException` with `JSON_THROW_ON_ERROR`.
+Partial output takes precedence over throwing and keeps the encoded tree while
+recording the depth error. Owned serializer results and traversal reads are
+released on success and failure.
+Invalid UTF-8 array keys still allow their associated values and later callbacks to run.
+If a callback throws after a partial JSON failure, the caller can inspect that
+JSON error after catching the callback's exception.
 
 Eval local filesystem calls operate on host filesystem paths and support the
 implemented stream-wrapper paths, including `file://`, `php://memory`,

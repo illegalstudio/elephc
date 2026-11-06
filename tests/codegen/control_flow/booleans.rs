@@ -336,3 +336,66 @@ echo (0 ?: fallback());
     );
     assert_eq!(out, "1:rhs7");
 }
+
+/// Verifies an object-valued assignment works as a ternary condition (issue #1492).
+///
+/// The backend had no truthiness for object-typed values and refused the program with
+/// `is_truthy for PHP type Object("C")`.
+#[test]
+fn test_object_assignment_as_ternary_condition() {
+    let out = compile_and_run(
+        r#"<?php
+class C {}
+function t(int $n) { $c = new C(); $o = new C(); echo ($c = $o) ? "y" : "n", "\n"; }
+t(1);
+"#,
+    );
+    assert_eq!(out, "y\n");
+}
+
+/// Verifies object truthiness in every condition shape and cast (issue #1492): an assignment in
+/// `if`, a `while` loop over a method that returns an object, `!`, `&&`, `?:`, `(bool)` and
+/// `boolval()`. Expected output is PHP 8.5.10's.
+#[test]
+fn test_object_truthiness_in_conditions_and_casts() {
+    let out = compile_and_run(
+        r#"<?php
+class Row { public function __construct(public int $n) {} }
+class Rows {
+    private int $i = 0;
+    public function next(): Row { $this->i++; return new Row($this->i); }
+}
+$o = new Row(0);
+if ($c = $o) { echo "if-assign|"; }
+$it = new Rows();
+$seen = 0;
+while ($row = $it->next()) {
+    $seen += $row->n;
+    if ($row->n === 3) { break; }
+}
+echo $seen, "|";
+echo !$o ? "neg" : "pos", "|";
+echo $o && $seen ? "and" : "no", "|";
+echo ($o ?: null) === $o ? "short" : "lost", "|";
+var_dump((bool) $o, boolval($o));
+"#,
+    );
+    assert_eq!(out, "if-assign|6|pos|and|short|bool(true)\nbool(true)\n");
+}
+
+/// Verifies an object-typed value that holds PHP null (a missed array read) is falsy, so object
+/// truthiness is a null test rather than a constant `true`. Expected output is PHP 8.5.10's.
+#[test]
+fn test_null_object_slot_is_falsy() {
+    let out = compile_and_run(
+        r#"<?php
+class C {}
+$arr = [new C(), new C()];
+echo @$arr[5] ? "t" : "f", "|";
+$x = @$arr[7];
+echo $x ? "t" : "f", "|";
+var_dump((bool) @$arr[9]);
+"#,
+    );
+    assert_eq!(out, "f|f|bool(false)\n");
+}

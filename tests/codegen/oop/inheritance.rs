@@ -511,17 +511,17 @@ echo $c->b;
     assert_eq!(out, "12:10:2");
 }
 
-/// Verifies property redeclaration can add `readonly` to a typed property, returning "7".
+/// A legal readonly redeclaration preserves the parent modifier and initializes its slot.
 #[test]
-fn test_property_redeclaration_adds_readonly() {
+fn test_property_redeclaration_preserves_readonly() {
     let out = compile_and_run(
         r#"<?php
 class Base {
-    public int $value = 0;
+    public public(set) readonly int $value;
 }
 
 class Child extends Base {
-    public readonly int $value;
+    public public(set) readonly int $value;
 
     public function __construct() {
         $this->value = 7;
@@ -567,13 +567,13 @@ echo $c->show();
 }
 
 /// Verifies property redeclaration can both widen visibility (`protected` to `public`)
-/// and add `readonly` simultaneously, returning "9:9".
+/// while preserving `readonly`, returning "9:9".
 #[test]
-fn test_property_redeclaration_widens_visibility_and_adds_readonly() {
+fn test_property_redeclaration_widens_visibility_and_preserves_readonly() {
     let out = compile_and_run(
         r#"<?php
 class Base {
-    protected int $value = 0;
+    protected readonly int $value;
 
     public function get() {
         return $this->value;

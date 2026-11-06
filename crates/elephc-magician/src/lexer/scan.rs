@@ -21,6 +21,15 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, EvalParseError> {
     Lexer::new(source).tokenize()
 }
 
+/// Tokenizes one code block of a larger file whose first line is `line`.
+///
+/// An included file is lexed block by block (`crate::script_cache::segments`), and every
+/// block has to count lines from where it sits in the file, or `__LINE__` restarts at 1 after
+/// each `?>`.
+pub(crate) fn tokenize_at_line(source: &str, line: i64) -> Result<Vec<Token>, EvalParseError> {
+    Lexer { line, ..Lexer::new(source) }.tokenize()
+}
+
 /// Converts a UTF-8 eval source fragment into parser tokens.
 pub(super) struct Lexer<'a> {
     source: &'a str,
@@ -65,8 +74,16 @@ impl<'a> Lexer<'a> {
             return Ok(vec![Token::new(TokenKind::Eof, self.line)]);
         };
         let line = self.line;
+        if self.source[self.pos..].starts_with("/**") {
+            let start = self.pos;
+            self.skip_block_comment()?;
+            return Ok(vec![Token::new(TokenKind::DocComment(self.source[start..self.pos].to_string()), line)]);
+        }
         if ch == '"' {
             return self.lex_double_quoted(line);
+        }
+        if ch == '?' && self.peek_next_char() == Some('>') {
+            return Ok(self.lex_close_tag(line));
         }
         let kind = match ch {
             '$' => self.lex_variable(),
@@ -319,7 +336,13 @@ impl<'a> Lexer<'a> {
             }
             _ if is_ident_start(ch) => {
                 let ident = self.lex_ident();
-                Ok(magic_const_token(&ident, line).unwrap_or(TokenKind::Ident(ident)))
+                if let Some(magic) = magic_const_token(&ident, line) {
+                    Ok(magic)
+                } else if self.reserved_word_leads_qualified_name(&ident) {
+                    Ok(TokenKind::ReservedNameHead(ident))
+                } else {
+                    Ok(TokenKind::Ident(ident))
+                }
             }
             _ => Err(EvalParseError::UnexpectedToken),
         }?;
@@ -338,6 +361,18 @@ impl<'a> Lexer<'a> {
             return Err(EvalParseError::ExpectedVariable);
         }
         Ok(TokenKind::DollarIdent(name))
+    }
+
+    /// Returns whether the reserved word just read is glued to a `\` and a further segment, so
+    /// that PHP 8 reads it as the first segment of a qualified name (`Function\Lib\g()`,
+    /// `use Default\Theme\Palette;`). `namespace` never qualifies: a leading `namespace\` is
+    /// the relative-name prefix. Ordinary identifiers stay `Ident` either way.
+    fn reserved_word_leads_qualified_name(&self, word: &str) -> bool {
+        let mut rest = self.source[self.pos..].chars();
+        !word.eq_ignore_ascii_case("namespace")
+            && crate::parser::is_reserved_word(word)
+            && rest.next() == Some('\\')
+            && rest.next().is_some_and(is_ident_start)
     }
 
     /// Reads a PHP identifier body at the current byte offset.
@@ -518,6 +553,7 @@ impl<'a> Lexer<'a> {
                 (Some('/'), Some('/')) => self.skip_line_comment(),
                 (Some('#'), Some('[')) => return Ok(()),
                 (Some('#'), _) => self.skip_line_comment(),
+                (Some('/'), Some('*')) if self.source[self.pos..].starts_with("/**") => return Ok(()),
                 (Some('/'), Some('*')) => self.skip_block_comment()?,
                 _ => return Ok(()),
             }
@@ -525,8 +561,14 @@ impl<'a> Lexer<'a> {
     }
 
     /// Advances past a `//` or `#` comment, including its trailing newline when present.
+    ///
+    /// A `?>` ends the comment too, and is left for `next_tokens` to lex as a close tag:
+    /// `eval('// c ?>X')` prints `X` in reference PHP 8.5.10.
     fn skip_line_comment(&mut self) {
         while let Some(ch) = self.peek_char() {
+            if ch == '?' && self.peek_next_char() == Some('>') {
+                return;
+            }
             self.bump_char();
             if ch == '\n' {
                 break;

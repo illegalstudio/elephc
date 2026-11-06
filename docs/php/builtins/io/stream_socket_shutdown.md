@@ -1,8 +1,6 @@
 ---
 title: "stream_socket_shutdown()"
 description: "Shutdown a full-duplex connection."
-sidebar:
-  order: 393
 ---
 
 ## stream_socket_shutdown()
@@ -21,8 +19,9 @@ Shutdown a full-duplex connection.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_shutdown.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_shutdown.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

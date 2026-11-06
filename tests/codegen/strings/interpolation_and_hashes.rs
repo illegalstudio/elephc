@@ -183,6 +183,30 @@ fn test_crc32_case_insensitive_and_int() {
     assert_eq!(out, "891568579"); // crc32("abc") = 891568578
 }
 
+/// Verifies the slicing-by-8 path across unaligned offsets, full blocks and 0-7 byte tails.
+#[test]
+fn test_crc32_slicing_by_8_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("abcdefgh", 16);
+foreach ([0, 1, 7, 8, 9, 15] as $offset) {
+    foreach ([0, 1, 2, 7, 8, 9, 16, 31, 64, 127] as $length) {
+        echo crc32(substr($s, $offset, $length)), "|";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "0|3904355907|2659403885|824863398|2934909520|2205286557|3087087588|1414681513|112611165|209410988|\
+0|1908338681|3265866552|1256229474|1262575293|3290784150|2659172272|4030453049|2279665485|1334975077|\
+0|2439710439|3595084446|3749266864|3395998143|3397370411|3267543299|2512912537|3283797563|1603449881|\
+0|3904355907|2659403885|824863398|2934909520|2205286557|3087087588|1414681513|112611165|1618817494|\
+0|1908338681|3265866552|1256229474|1262575293|3290784150|2659172272|4030453049|2279665485|4171345471|\
+0|2439710439|3595084446|3749266864|3395998143|3397370411|3267543299|2512912537|3283797563|654004123|"
+    );
+}
+
 // --- hash() ---
 
 /// Verifies `hash("md5", ...)` produces the correct hash for "Hello".
@@ -290,17 +314,18 @@ fn hash_equals_timing_safe_compare() {
     assert_eq!(compile_and_run(r#"<?php echo hash_equals("x","") ? "T" : "F";"#), "F");
 }
 
-/// Verifies hash_algos() returns the supported-algorithm set: representative
-/// members are present, an unsupported PHP algo is absent, and — the key drift
-/// guard — every advertised name is actually hashable by hash() (would throw a
-/// ValueError if a name were not in the crate's make() table).
+/// Verifies hash_algos() returns PHP's complete catalog: representative legacy
+/// members are present, a nonexistent name is absent, and — the key drift guard —
+/// every advertised name is actually hashable by hash() (would throw a ValueError
+/// if a name were not in the crate's make() table).
 #[test]
 fn hash_algos_lists_supported_and_each_is_hashable() {
     assert_eq!(compile_and_run(r#"<?php echo in_array("sha256", hash_algos()) ? "1" : "0";"#), "1");
     assert_eq!(compile_and_run(r#"<?php echo in_array("crc32c", hash_algos()) ? "1" : "0";"#), "1");
     assert_eq!(compile_and_run(r#"<?php echo in_array("whirlpool", hash_algos()) ? "1" : "0";"#), "1");
-    // tiger is a documented gap — must NOT be advertised
-    assert_eq!(compile_and_run(r#"<?php echo in_array("tiger128,3", hash_algos()) ? "1" : "0";"#), "0");
+    assert_eq!(compile_and_run(r#"<?php echo in_array("tiger128,3", hash_algos()) ? "1" : "0";"#), "1");
+    assert_eq!(compile_and_run(r#"<?php echo in_array("haval256,5", hash_algos()) ? "1" : "0";"#), "1");
+    assert_eq!(compile_and_run(r#"<?php echo in_array("nope", hash_algos()) ? "1" : "0";"#), "0");
     // Every advertised algorithm must hash without throwing.
     assert_eq!(
         compile_and_run(r#"<?php $ok = 1; foreach (hash_algos() as $a) { if (hash($a, "x") === "") $ok = 0; } echo $ok;"#),
@@ -428,3 +453,102 @@ fn md5_sha1_parity_and_binary() {
 }
 
 // --- sscanf() ---
+
+/// A comment inside a complex `{$…}` interpolation is inert: a quote or brace in it does not end
+/// the capture. MEASURED on reference PHP 8.5.10, all four print `v|`; elephc refused each one
+/// ("Unterminated complex interpolation" or an unexpected token).
+#[test]
+fn test_string_interpolation_complex_with_comments() {
+    for source in [
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[/**/\"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[/***/\"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[/* \" */ \"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[/* } { */ \"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[ // \" } \' \n\"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[ # \" }\n\"k\"]}\", \"|\";",
+    ] {
+        assert_eq!(compile_and_run(source), "v|", "{source}");
+    }
+    // `#[` is an attribute, not a comment.
+    assert_eq!(
+        compile_and_run("<?php $f = fn($x) => \"F\"; echo \"{$f(#[A] fn() => 1)}\", \"|\";"),
+        "F|"
+    );
+}
+
+/// An empty block comment inside `{$…}` parses in runtime `eval()` source and in a dynamically
+/// included file, both of which go through the eval lexer rather than the compiler's.
+///
+/// That lexer skipped the first byte of a block comment's body, which for `/**/` is the closing
+/// star: `"{$a[/**/"k"]}"` ended in "Parse error: eval() fragment is invalid" where reference
+/// PHP 8.5.10 prints `v` (PR #968 review; MEASURED with these files). The eval source is read
+/// from a file so the compiler cannot see it, and the include path is only known at run time.
+#[test]
+fn test_empty_comments_in_interpolation_parse_in_eval_and_dynamic_includes() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "frag.txt",
+                "$a = [\"k\" => \"v\"]; echo \"eval:{$a[/**/\"k\"]}|{$a[/***/\"k\"]}|{$a[/*/ */\"k\"]}\\n\";",
+            ),
+            (
+                "lib.php",
+                "<?php\n$a = [\"k\" => \"v\"];\necho \"include:{$a[/**/\"k\"]}|{$a[/***/\"k\"]}|{$a[/*/ */\"k\"]}\\n\";\n",
+            ),
+            (
+                "main.php",
+                "<?php\neval(file_get_contents(__DIR__ . \"/frag.txt\"));\n$lib = __DIR__ . \"/\" . \"lib.php\";\neval('include $lib;');\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "eval:v|v|v\ninclude:v|v|v\n");
+}
+
+/// Verifies the literal SHA-256 and HMAC-SHA-256 folds while a runtime-built input stays on
+/// the crypto bridge.
+#[test]
+fn test_hash_constant_fold_and_dynamic_fallback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = "abc";
+$key = "key";
+echo hash("sha256", $s), "|";
+echo hash_hmac("sha256", $s, $key), "|";
+echo hash("sha256", "abc" . $argc), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad|\
+9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab|\
+dbfcfd0d87220f629339bd3adcf452d083fde3246625fb3a93e314f833e20d37|\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies the complete PHP hash catalog and legacy algorithm digests match PHP.
+#[test]
+fn test_hash_algos_full_catalog_and_legacy_digests() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo count(hash_algos()), "|";
+echo hash("tiger192,3", "abc"), "|";
+echo hash("haval256,5", "abc"), "|";
+echo hash("gost-crypto", "abc"), "|";
+echo hash("snefru256", "abc"), "|";
+echo hash("murmur3f", "abc"), "|";
+echo hash("xxh128", "abc"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "60|2aab1484e8c158f2bfb8c5ff41b57a525129131c957b5f93|\
+976cd6254c337969e5913b158392a2921af16fca51f5601d486e0a9de01156e7|\
+b285056dbf18d7392d7677369524dd14747459ed8143997e163b2986f92fd42c|\
+7d033205647a2af3dc8339f6cb25643c33ebc622d32979c4b612b02c4903031b|\
+b4963f3f3fad78673ba2744126ca2d52|\
+06b05ab6733a618578af5f94892f3950|\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

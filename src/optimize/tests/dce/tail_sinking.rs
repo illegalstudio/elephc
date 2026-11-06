@@ -41,6 +41,7 @@ fn test_eliminate_dead_code_reduces_empty_if_chain_to_needed_condition_checks() 
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -91,6 +92,7 @@ fn test_eliminate_dead_code_sinks_tail_into_if_fallthrough_branch() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -147,6 +149,7 @@ fn test_eliminate_dead_code_sinks_tail_into_implicit_else_path() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -204,6 +207,7 @@ fn test_eliminate_dead_code_sinks_tail_into_ifdef_fallthrough_paths() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -272,6 +276,7 @@ fn test_eliminate_dead_code_reduces_empty_if_to_effectful_condition_eval() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

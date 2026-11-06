@@ -1,0 +1,6 @@
+# The INI directives this program is compiled with. Each entry is one
+# `--ini KEY=VALUE`, so nobody has to remember the flags on every build.
+[ini]
+"mbstring.language" = "Japanese"
+opcache.enable_cli = true
+opcache.memory_consumption = 64

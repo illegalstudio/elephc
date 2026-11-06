@@ -183,7 +183,7 @@ fn test_json_decode_control_character_error_location() {
     );
     assert_eq!(
         out,
-        "3|Control character error, possibly incorrectly encoded near location 1:3"
+        "3|Control character error, possibly incorrectly encoded near location 1:1"
     );
 }
 
@@ -198,7 +198,7 @@ fn test_json_decode_malformed_utf8_error_location() {
     );
     assert_eq!(
         out,
-        "5|Malformed UTF-8 characters, possibly incorrectly encoded near location 1:3"
+        "5|Malformed UTF-8 characters, possibly incorrectly encoded near location 1:1"
     );
 }
 
@@ -298,7 +298,7 @@ fn test_json_decode_lone_high_with_throw_flag_throws() {
     );
     assert_eq!(
         out,
-        "thrown:Single unpaired UTF-16 surrogate in unicode escape near location 1:8"
+        "thrown:Single unpaired UTF-16 surrogate in unicode escape near location 1:1"
     );
 }
 
@@ -360,4 +360,59 @@ fn test_json_decode_scalar_depth_one_succeeds() {
         r#"<?php $x = json_decode("42", false, 1); echo json_last_error() . ":" . $x;"#,
     );
     assert_eq!(out, "0:42");
+}
+
+/// Verifies an empty document reports the PHP syntax message without coordinates.
+#[test]
+fn test_json_decode_empty_input_has_no_location() {
+    let out = compile_and_run(
+        r#"<?php
+            json_decode("");
+            echo json_last_error_msg();
+        "#,
+    );
+    assert_eq!(out, "Syntax error");
+}
+
+/// Verifies a CRLF line break counts CR as a column and LF as the line separator.
+#[test]
+fn test_json_decode_crlf_syntax_error_location() {
+    let out = compile_and_run(
+        r#"<?php
+            json_decode("[1,\r\n2,]");
+            echo json_last_error_msg();
+        "#,
+    );
+    assert_eq!(out, "Syntax error near location 2:3");
+}
+
+/// Verifies a trailing-comma error is reported at the closing bracket, not the opening one.
+#[test]
+fn test_json_decode_trailing_comma_location_is_not_the_opening_bracket() {
+    let out = compile_and_run(
+        r#"<?php
+            json_decode("[1,]");
+            echo json_last_error_msg();
+        "#,
+    );
+    assert_eq!(out, "Syntax error near location 1:4");
+}
+
+/// Verifies an empty container at the depth limit reports the opening bracket.
+#[test]
+fn test_json_decode_empty_container_at_depth_limit_location() {
+    let out = compile_and_run(
+        r#"<?php
+            json_decode("[]", true, 1);
+            echo json_last_error(), "|", json_last_error_msg(), "\n";
+            json_decode("{}", false, 1);
+            echo json_last_error(), "|", json_last_error_msg(), "\n";
+            json_decode("[]", true, 2);
+            echo json_last_error();
+        "#,
+    );
+    assert_eq!(
+        out,
+        "1|Maximum stack depth exceeded near location 1:1\n1|Maximum stack depth exceeded near location 1:1\n0"
+    );
 }

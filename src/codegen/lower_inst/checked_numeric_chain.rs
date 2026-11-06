@@ -9,6 +9,8 @@
 //! - Every overflow edge preserves the exact integer accumulator and right operand at that step.
 //! - Shared float suffix blocks avoid duplicating code while preserving PHP's first-overflow
 //!   promotion point, including integer precision above the exact-double range.
+//! - The float suffix blocks are deferred to the function's cold tail; the in-range chain falls
+//!   straight through with one not-taken overflow branch per step.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -16,6 +18,7 @@ use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, MixedNumericOp};
 
 use super::super::context::FunctionContext;
+use super::checked_int_to_int::emit_overflow_branch;
 use super::{arithmetic::load_integer_operand, store_if_result};
 
 /// Lowers one fused checked chain and stores its final PHP integer result.
@@ -56,35 +59,33 @@ pub(super) fn lower_checked_numeric_chain_to_int(
             &overflow_labels[index],
         );
     }
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip every float slow block after an in-range integer chain
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip every float slow block after an in-range integer chain
-        }
-    }
-
-    for (index, operation) in operations.iter().copied().enumerate() {
-        ctx.emitter.label(&overflow_labels[index]);
-        emit_overflowing_step_as_float(ctx, operation, saved_lhs_reg, rhs_reg);
-        let target = if index + 1 < operations.len() {
-            &suffix_labels[index]
-        } else {
-            &float_finish_label
-        };
-        emit_jump(ctx, target);
-    }
-
-    for index in 1..operations.len() {
-        ctx.emitter.label(&suffix_labels[index - 1]);
-        load_integer_operand(ctx, inst.operands[index + 1], rhs_reg, inst)?;
-        emit_rhs_as_float(ctx, rhs_reg);
-        emit_float_step(ctx, operations[index]);
-    }
-    ctx.emitter.label(&float_finish_label);
-    abi::emit_php_float_to_int(ctx.emitter, result_reg);
     ctx.emitter.label(&done_label);
+
+    // The float slow blocks are cold: they live in the function's out-of-line tail and rejoin
+    // the in-range path at `done_label`, so the integer chain runs straight through.
+    ctx.emit_cold_path(|ctx| {
+        for (index, operation) in operations.iter().copied().enumerate() {
+            ctx.emitter.label(&overflow_labels[index]);
+            emit_overflowing_step_as_float(ctx, operation, saved_lhs_reg, rhs_reg);
+            let target = if index + 1 < operations.len() {
+                &suffix_labels[index]
+            } else {
+                &float_finish_label
+            };
+            emit_jump(ctx, target);
+        }
+
+        for index in 1..operations.len() {
+            ctx.emitter.label(&suffix_labels[index - 1]);
+            load_integer_operand(ctx, inst.operands[index + 1], rhs_reg, inst)?;
+            emit_rhs_as_float(ctx, rhs_reg);
+            emit_float_step(ctx, operations[index]);
+        }
+        ctx.emitter.label(&float_finish_label);
+        abi::emit_php_float_to_int(ctx.emitter, result_reg);
+        emit_jump(ctx, &done_label);
+        Ok(())
+    })?;
     store_if_result(ctx, inst)
 }
 
@@ -129,7 +130,7 @@ fn emit_checked_step(
             let mnemonic = integer_mnemonic(operation, Arch::X86_64);
             let assembly = format!("{} {}, {}", mnemonic, result_reg, rhs_reg);
             ctx.emitter.instruction(&assembly);                                 // compute the next integer value and set signed-overflow state
-            ctx.emitter.instruction(&format!("jo {}", overflow_label));         // enter float semantics exactly at the first overflowing operation
+            emit_overflow_branch(ctx, "vc", "jo", overflow_label);
         }
     }
 }
@@ -147,7 +148,7 @@ fn emit_aarch64_checked_step(
             let mnemonic = integer_mnemonic(operation, Arch::AArch64);
             let assembly = format!("{} {}, {}, {}", mnemonic, result_reg, result_reg, rhs_reg);
             ctx.emitter.instruction(&assembly);                                 // compute the next integer value and set signed-overflow state
-            ctx.emitter.instruction(&format!("b.vs {}", overflow_label));       // enter float semantics exactly at the first overflowing operation
+            emit_overflow_branch(ctx, "vc", "jo", overflow_label);
         }
         MixedNumericOp::Mul => {
             let high_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -157,7 +158,7 @@ fn emit_aarch64_checked_step(
             ctx.emitter.instruction(&low_product);                              // compute the low 64 bits of the signed product
             let compare = format!("cmp {}, {}, asr #63", high_reg, result_reg);
             ctx.emitter.instruction(&compare);                                  // compare the high product with the low half's sign extension
-            ctx.emitter.instruction(&format!("b.ne {}", overflow_label));       // enter float semantics when the product does not fit in I64
+            emit_overflow_branch(ctx, "eq", "jne", overflow_label);
         }
         MixedNumericOp::Pow => unreachable!("validated checked chains exclude pow"),
     }

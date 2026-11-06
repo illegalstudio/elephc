@@ -399,6 +399,7 @@ fn emit_mkdir_ex_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the file-system success predicate to the caller
 }
 
+/// Emits an x86_64 path-to-C-string libc call with aligned stack and boolean result normalization.
 fn emit_single_path_libc_bool_helper(emitter: &mut Emitter, symbol: &str, extra_setup: Option<&str>) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the helper makes libc calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the call-aligned helper body

@@ -1,8 +1,6 @@
 ---
 title: "str_contains()"
 description: "Determines if a string contains a given substring."
-sidebar:
-  order: 910
 ---
 
 ## str_contains()
@@ -21,8 +19,9 @@ Determines if a string contains a given substring.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/str_contains.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_contains.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

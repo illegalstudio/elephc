@@ -19,8 +19,8 @@
 //!   block that can reach some latch in `L` without passing through `h` — found
 //!   by a backward walk from the latches over reachable predecessors that stops
 //!   at the header. Unreachable blocks never participate.
-//! - PHP loops lower to slot-based CFGs (the loop variable lives in a local slot,
-//!   not a block parameter), so loop edges carry no block arguments. The init
+//! - PHP loops initially lower to slot-based CFGs. Scalar promotion can add
+//!   block parameters and back-edge arguments without changing the CFG. The init
 //!   block that branches into the header is the natural preheader. A preheader is
 //!   detected as the unique reachable out-of-loop predecessor of the header whose
 //!   sole successor is the header; when entry into the loop is shared or

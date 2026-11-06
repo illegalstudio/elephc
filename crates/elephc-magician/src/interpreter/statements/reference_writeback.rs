@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Invoker slots, arrays, nested arrays, object properties, and static properties preserve aliases.
+//! - Array writeback clones preserve element aliases and cursors before replacing shared storage.
 
 use super::*;
 
@@ -51,6 +52,7 @@ pub(in crate::interpreter) fn bind_method_scope_args(
     params: &[String],
     parameter_is_by_ref: &[bool],
     bound_args: &[BoundMethodArg],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for (position, (name, bound_arg)) in params.iter().zip(bound_args.iter()).enumerate() {
@@ -64,18 +66,24 @@ pub(in crate::interpreter) fn bind_method_scope_args(
             if let Some(target) = bound_arg.ref_target.clone() {
                 method_scope.set_reference_target(name.clone(), target);
             }
+            if bound_arg.ref_target.is_some() && values.supports_persistent_references() && !values.is_reference(bound_arg.value)? {
+                let reference = values.reference_new(bound_arg.value)?;
+                context.copy_array_metadata(bound_arg.value, reference);
+                for old in method_scope.set_respecting_references(name.clone(), reference, ScopeCellOwnership::Owned) {
+                    eval_release_value(context, values, old)?;
+                }
+            }
+            if let Some(target) = bound_arg.ref_target.as_ref() {
+                if let Some(reference) = method_scope.visible_cell(name).filter(|_| values.supports_persistent_references()) {
+                    context.bind_local_reference_types(reference, &generic_reference_contracts(target, context));
+                }
+            }
         } else {
-            let value = if values.is_reference(bound_arg.value)? {
-                values.copy_value(bound_arg.value)?
-            } else {
-                bound_arg.value
-            };
-            let ownership = if value == bound_arg.value { ScopeCellOwnership::Borrowed } else { ScopeCellOwnership::Owned };
-            method_scope.set(name.clone(), value, ownership);
+            let value = copy_scope_value(bound_arg.value, context, values)?;
+            method_scope.set(name.clone(), value, ScopeCellOwnership::Owned);
         }
     }
-    alias_duplicate_method_ref_args(method_scope, params, bound_args);
-    Ok(())
+    alias_duplicate_method_ref_args(method_scope, params, bound_args, context, values)
 }
 
 /// Creates local aliases when two by-reference method parameters point at the same caller variable.
@@ -83,7 +91,9 @@ pub(super) fn alias_duplicate_method_ref_args(
     method_scope: &mut ElephcEvalScope,
     params: &[String],
     bound_args: &[BoundMethodArg],
-) {
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     for (position, bound_arg) in bound_args.iter().enumerate() {
         let Some(target) = bound_arg.ref_target.as_ref() else {
             continue;
@@ -95,25 +105,27 @@ pub(super) fn alias_duplicate_method_ref_args(
             let Some(previous_target) = bound_args[previous_position].ref_target.as_ref() else {
                 continue;
             };
-            if !same_method_ref_target(target, previous_target) {
+            if !same_method_ref_target(target, previous_target, values)? {
                 continue;
             }
             if let Some(previous_param) = params.get(previous_position) {
-                method_scope.set_reference(
+                let replaced = method_scope.set_reference(
                     param.clone(),
                     previous_param.clone(),
                     bound_args[previous_position].value,
                     ScopeCellOwnership::Borrowed,
                 );
+                for old in replaced { eval_release_value(context, values, old)?; }
             }
             break;
         }
     }
+    Ok(())
 }
 
 /// Returns true when two evaluated arguments target the same caller-side variable.
-pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalReferenceTarget) -> bool {
-    match (left, right) {
+pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalReferenceTarget, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
+    Ok(match (left, right) {
         (
             EvalReferenceTarget::Variable {
                 scope: left_scope,
@@ -135,7 +147,7 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
                 array_name: right_name,
                 index: right_index,
             },
-        ) => left_scope == right_scope && left_name == right_name && left_index == right_index,
+        ) => left_scope == right_scope && left_name == right_name && same_reference_index(*left_index, *right_index, values)?,
         (
             EvalReferenceTarget::NestedArrayElement {
                 array_target: left_target,
@@ -145,7 +157,7 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
                 array_target: right_target,
                 index: right_index,
             },
-        ) => left_index == right_index && same_method_ref_target(left_target, right_target),
+        ) => same_reference_index(*left_index, *right_index, values)? && same_method_ref_target(left_target, right_target, values)?,
         (
             EvalReferenceTarget::ObjectProperty {
                 object: left_object,
@@ -193,7 +205,16 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
                 && left_access_scope == right_access_scope
         }
         _ => false,
-    }
+    })
+}
+
+/// Compares normalized PHP array keys instead of the identity of their temporary boxes.
+fn same_reference_index(left: RuntimeCellHandle, right: RuntimeCellHandle, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
+    if left == right { return Ok(true); }
+    Ok(match (eval_array_reference_key(left, values)?, eval_array_reference_key(right, values)?) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    })
 }
 
 /// Writes completed by-reference method parameter values back to their caller-side variables.
@@ -258,13 +279,7 @@ pub(super) fn write_back_owned_variable_ref_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let retained = values.retain(value)?;
-    let replaced = match set_owned_scope_cell(context, scope, name.to_string(), retained, values) {
-        Ok(replaced) => replaced,
-        Err(status) => {
-            let _ = eval_release_value(context, values, retained);
-            return Err(status);
-        }
-    };
+    let replaced = set_owned_scope_cell(context, scope, name.to_string(), retained, values)?;
     let mut result = Ok(());
     for replaced in replaced {
         let released = eval_release_value(context, values, replaced);
@@ -346,8 +361,10 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             values,
         ),
         EvalReferenceTarget::Cell { cell } => {
+            for declared in context.local_reference_types(*cell) { validate_generic_local(&declared, "reference", value, context, values)?; }
             if *cell != value && values.is_reference(*cell)? {
                 let previous = values.reference_replace(*cell, value)?;
+                context.copy_array_metadata(value, *cell);
                 eval_release_value(context, values, previous)?;
             }
             Ok(())
@@ -463,21 +480,29 @@ pub(super) fn write_back_invoker_heap_slot(
 }
 
 /// Stores one by-reference method result in a caller-side array element.
+/// Preserves the receiver's array metadata before writing the clone back to shared storage.
 pub(super) fn write_back_method_array_element_ref_target(
     scope: &mut ElephcEvalScope,
     array_name: &str,
     index: RuntimeCellHandle,
     value: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let mut ownership = ScopeCellOwnership::Owned;
+    if let Some(current) = visible_scope_cell(context, scope, array_name) {
+        for declared in generic_local_contracts(scope, array_name, context) {
+            validate_generic_local_element(Some(&declared), current, index, value, context, values)?;
+        }
+    }
     let array = if let Some(existing) =
         scope_entry(context, scope, array_name).filter(|entry| entry.flags().is_visible())
     {
         if values.is_array_like(existing.cell())? {
             ownership = existing.flags().ownership;
-            values.array_clone_shallow(existing.cell())?
+            let array = values.array_clone_shallow(existing.cell())?;
+            context.copy_array_metadata(existing.cell(), array);
+            array
         } else {
             eval_new_array_for_index(index, values)?
         }
@@ -492,6 +517,7 @@ pub(super) fn write_back_method_array_element_ref_target(
 }
 
 /// Stores one by-reference method result in an element of a nested caller-side array target.
+/// Copies the live receiver's metadata before replacing a nested persistent reference.
 pub(super) fn write_back_method_nested_array_element_ref_target(
     array_target: &EvalReferenceTarget,
     index: RuntimeCellHandle,
@@ -501,7 +527,9 @@ pub(super) fn write_back_method_nested_array_element_ref_target(
 ) -> Result<(), EvalStatus> {
     let current = eval_reference_target_value(array_target, context, values)?;
     let array = if values.is_array_like(current)? {
-        values.array_clone_shallow(current)?
+        let array = values.array_clone_shallow(current)?;
+        context.copy_array_metadata(current, array);
+        array
     } else {
         eval_new_array_for_index(index, values)?
     };

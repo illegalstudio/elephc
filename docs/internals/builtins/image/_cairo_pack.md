@@ -1,8 +1,6 @@
 ---
 title: "_cairo_pack() - internals"
 description: "Compiler internals for _cairo_pack(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1154
 ---
 
 ## `_cairo_pack()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:12432](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L12432) (`_cairo_pack`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`_cairo_pack`)
 - **Function symbol**: `_cairo_pack()`
 
 

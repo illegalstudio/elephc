@@ -1,8 +1,6 @@
 ---
 title: "pclose()"
 description: "Closes process file pointer."
-sidebar:
-  order: 752
 ---
 
 ## pclose()
@@ -20,8 +18,11 @@ Closes process file pointer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at compile time for iOS library targets.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/pclose.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/pclose.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
+
+- Compiled code can call it on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at compile time for iOS library targets.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

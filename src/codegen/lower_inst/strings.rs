@@ -8,11 +8,14 @@
 //! Key details:
 //! - PHP string coercion treats `false` and `null` as empty strings, while
 //!   integer true and ordinary ints use the existing `__rt_itoa` helper.
+//! - Those empty results publish the canonical empty string, not a leftover
+//!   pointer, so they stay distinct from the missing typed-array sentinel.
+//! - Raw pointers stringify through `__rt_ptoa`, the same "0x..." formatter `echo` uses.
 //! - Constant string values register lazy interned origins before native copies can create aliases.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, Instruction};
+use crate::ir::{Immediate, Instruction, Op};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -219,7 +222,7 @@ pub(super) fn lower_load_called_class_id(ctx: &mut FunctionContext<'_>, inst: &I
     store_if_result(ctx, inst)
 }
 
-/// Lowers a string concatenation by loading both string pairs into `__rt_concat`'s ABI.
+/// Lowers ordinary concat or a consuming append through their shared string-pair ABI.
 pub(super) fn lower_str_concat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
@@ -235,7 +238,8 @@ pub(super) fn lower_str_concat(ctx: &mut FunctionContext<'_>, inst: &Instruction
             ctx.load_string_value_to_regs(rhs, "rdi", "rsi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
+    let helper = if inst.op == Op::StrAppend { "__rt_str_append" } else { "__rt_concat" };
+    abi::emit_call_label(ctx.emitter, helper);
     store_if_result(ctx, inst)
 }
 
@@ -329,11 +333,44 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Lowers string persistence by copying the string into runtime-owned storage.
+///
+/// A normalized `(string)` cast is marked `Bool(true)`. Its empty result is the
+/// canonical empty literal. Copying that literal allocated a block which
+/// `id(trim(...))`, concatenation, array keys, `yield`, and `try` never released.
 pub(super) fn lower_str_persist(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     require_string(ctx.load_value_to_result(value)?, inst)?;
-    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    if inst.immediate == Some(Immediate::Bool(true)) {
+        copy_normalized_cast_unless_empty(ctx, value)?;
+    } else {
+        super::ownership::persist_loaded_string(ctx, value)?;
+    }
     store_if_result(ctx, inst)
+}
+
+/// Copies a normalized string cast, and reuses the canonical empty string when it is empty.
+fn copy_normalized_cast_unless_empty(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+) -> Result<()> {
+    let (_, length_reg) = abi::string_result_regs(ctx.emitter);
+    let empty = ctx.next_label("str_cast_empty");
+    let done = ctx.next_label("str_cast_persist_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {length_reg}, {empty}"));     // an empty cast reuses the canonical empty literal
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {length_reg}, {length_reg}")); // an empty cast reuses the canonical empty literal
+            ctx.emitter.instruction(&format!("jz {empty}"));                    // skip the heap copy when the cast length is zero
+        }
+    }
+    super::ownership::persist_loaded_string(ctx, value)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&empty);
+    emit_canonical_empty_string(ctx);
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Lowers a float-to-string conversion through the existing runtime formatter.
@@ -366,13 +403,38 @@ pub(super) fn lower_resource_to_string(
     store_if_result(ctx, inst)
 }
 
+/// Converts the `?ptr<T>` word in the result register to a string: a null pointer (0) is PHP
+/// null and converts to `""` (the text `echo` prints for it), any other address to `0x...`.
+pub(in crate::codegen::lower_inst) fn emit_loaded_nullable_pointer_to_string(
+    ctx: &mut FunctionContext<'_>,
+) {
+    let null_case = ctx.next_label("nullable_pointer_to_string_null");
+    let done = ctx.next_label("nullable_pointer_to_string_done");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &null_case);
+    abi::emit_call_label(ctx.emitter, "__rt_ptoa");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null_case);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+    ctx.emitter.label(&done);
+}
+
 /// Lowers an integer-like-to-string conversion, including PHP bool/null string rules.
+///
+/// Raw pointers (`ptr` and `ptr<T>`) share the integer register shape and format as the same
+/// lowercase "0x..." text `echo` prints, so concatenation, interpolation and casts agree with it.
 pub(super) fn lower_int_like_to_string(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    match ctx.load_value_to_result(value)?.codegen_repr() {
+    let loaded_ty = ctx.load_value_to_result(value)?;
+    if crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(value)?) {
+        emit_loaded_nullable_pointer_to_string(ctx);
+        return store_if_result(ctx, inst);
+    }
+    match loaded_ty.codegen_repr() {
         PhpType::Bool => {
             lower_loaded_bool_to_string(ctx)?;
             store_if_result(ctx, inst)
@@ -381,13 +443,17 @@ pub(super) fn lower_int_like_to_string(
             abi::emit_call_label(ctx.emitter, "__rt_itoa");
             store_if_result(ctx, inst)
         }
+        // A packed record address prints like the `ptr<T>` the checker types it as.
+        PhpType::Pointer(_) | PhpType::Packed(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_ptoa");
+            store_if_result(ctx, inst)
+        }
         PhpType::TaggedScalar => {
             lower_loaded_tagged_scalar_to_string(ctx)?;
             store_if_result(ctx, inst)
         }
         PhpType::Void | PhpType::Never => {
-            let len_reg = abi::string_result_regs(ctx.emitter).1;
-            abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+            emit_canonical_empty_string(ctx);
             store_if_result(ctx, inst)
         }
         other => Err(CodegenIrError::unsupported(format!(
@@ -406,10 +472,21 @@ fn lower_loaded_tagged_scalar_to_string(ctx: &mut FunctionContext<'_>) -> Result
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
-    let len_reg = abi::string_result_regs(ctx.emitter).1;
-    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+    emit_canonical_empty_string(ctx);
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Publishes PHP's canonical empty string in the string result registers.
+///
+/// Length alone is not enough. On x86_64 a null-to-string coercion leaves the
+/// tagged null payload, the shared null sentinel, in the string pointer
+/// register. `var_dump` and `is_null` would then treat that empty string as null.
+pub(super) fn emit_canonical_empty_string(ctx: &mut FunctionContext<'_>) {
+    let (label, len) = ctx.data.add_string(b"");
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
 /// Converts the loaded boolean result to PHP string ABI registers.
@@ -422,7 +499,7 @@ fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
             abi::emit_call_label(ctx.emitter, "__rt_itoa");
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the empty-string fallback after true conversion
             ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("mov x2, #0");                              // false has zero string length
+            emit_canonical_empty_string(ctx);
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
@@ -433,7 +510,7 @@ fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
             abi::emit_call_label(ctx.emitter, "__rt_itoa");
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the empty-string fallback after true conversion
             ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("mov rdx, 0");                              // false has zero string length
+            emit_canonical_empty_string(ctx);
             ctx.emitter.label(&done_label);
         }
     }
@@ -443,13 +520,19 @@ fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// Lowers `Op::StrIncDec`: PHP's `++` / `--` applied to a string value.
 ///
 /// The operand is either a concrete `Str` payload or a boxed `Mixed` cell, and the result is
-/// ALWAYS a freshly allocated boxed `Mixed` cell because the operator can change the value's
+/// an owned boxed `Mixed` value because the operator can change the value's
 /// type (`"9"++` is `int(10)`, `"az"++` is `"ba"`). A concrete string goes straight to
 /// `__rt_str_inc_dec`; a boxed value goes through `__rt_mixed_inc_dec`, which routes a string
 /// payload to the same helper and keeps every other payload on the existing numeric path.
 ///
+/// A proven nonescaping numeric update may instead use a frame cell; string or unknown
+/// tags retain the runtime path. Both paths preserve overflow promotion to float.
+///
 /// The `i64` immediate carries the delta and is `+1` for `++` and `-1` for `--`.
 pub(super) fn lower_str_inc_dec(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(offset) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return super::arithmetic::stack_cell::lower_increment(ctx, inst, offset);
+    }
     let value = expect_operand(inst, 0)?;
     let delta = super::expect_i64(inst)?;
     let operand_ty = ctx.value_php_type(value)?.codegen_repr();

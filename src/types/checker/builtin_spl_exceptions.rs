@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `crate::types::checker::driver`
+//! - `crate::optimize::exception_flow` shares the parent edges for AST-only hierarchy construction.
 //!
 //! Key details:
 //! - These classes inherit behavior from `Exception`; only their nominal hierarchy is inserted here.
@@ -18,7 +19,7 @@ use super::builtin_types::InterfaceDeclInfo;
 /// (class_name, parent_name) — every SPL exception is a marker subclass that
 /// inherits constructor, getMessage, and the message property from Exception
 /// transitively.
-const SPL_EXCEPTION_HIERARCHY: &[(&str, &str)] = &[
+pub(crate) const SPL_EXCEPTION_HIERARCHY: &[(&str, &str)] = &[
     ("LogicException", "Exception"),
     ("BadFunctionCallException", "LogicException"),
     ("BadMethodCallException", "BadFunctionCallException"),

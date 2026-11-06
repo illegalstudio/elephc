@@ -17,8 +17,8 @@ use crate::codegen_support::platform::Arch;
 /// Input:  x0 = old array pointer (may be shared)
 /// Output: x0 = new array pointer (with doubled capacity, guaranteed unique)
 ///
-/// Preserves array header fields (length, capacity, elem_size) and copies
-/// the element payload byte-by-byte. Frees the old storage before returning.
+/// Extends a unique bump-tail allocation in place when possible. Otherwise it
+/// preserves array header fields, copies the payload, and frees the old storage.
 /// The new capacity is max(old_capacity * 2, 8).
 pub fn emit_array_grow(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -59,7 +59,24 @@ pub fn emit_array_grow(emitter: &mut Emitter) {
     emitter.label("__rt_array_grow_alloc");
     emitter.instruction("str x12, [sp, #24]");                                  // save new capacity
 
+    // -- extend a unique bump-tail allocation without copying --
+    emitter.instruction("umulh x9, x12, x11");                                  // detect a grown payload product that cannot fit in one machine word
+    emitter.instruction("cbnz x9, __rt_array_grow_reallocate");                 // leave oversized requests to the established allocation failure path
+    emitter.instruction("mul x1, x12, x11");                                    // compute the grown element payload size
+    emitter.instruction("adds x1, x1, #24");                                    // include the fixed indexed-array header with overflow detection
+    emitter.instruction("b.cs __rt_array_grow_reallocate");                     // leave wrapped totals to the established allocation failure path
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the unique indexed-array pointer to the tail-growth probe
+    emitter.instruction("bl __rt_heap_grow_tail");                              // extend the same heap block when it owns the bump tail
+    emitter.instruction("cbz x0, __rt_array_grow_reallocate");                  // fall back to allocate-copy-free when in-place growth is unavailable
+    emitter.instruction("ldr x12, [sp, #24]");                                  // reload the grown capacity after the helper call
+    emitter.instruction("str x12, [x0, #8]");                                   // publish the grown capacity on the in-place indexed array
+    emitter.instruction("str x0, [sp, #24]");                                   // save the unchanged array pointer for the common return path
+    emitter.instruction("b __rt_array_grow_return");                            // skip allocation and payload copying after successful tail growth
+
     // -- allocate new array: 24 + new_capacity * elem_size --
+    emitter.label("__rt_array_grow_reallocate");
+    emitter.instruction("ldr x12, [sp, #24]");                                  // reload the grown capacity after the failed tail-growth probe
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the element size after the failed tail-growth probe
     emitter.instruction("mul x0, x12, x11");                                    // x0 = new_capacity * elem_size
     emitter.instruction("add x0, x0, #24");                                     // x0 = total bytes (header + data)
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate new array → x0
@@ -98,6 +115,7 @@ pub fn emit_array_grow(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // x0 = new array pointer
 
     // -- restore frame and return --
+    emitter.label("__rt_array_grow_return");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = new array
@@ -110,8 +128,9 @@ pub fn emit_array_grow(emitter: &mut Emitter) {
 /// Output: rax = new array pointer (with doubled capacity, guaranteed unique)
 ///
 /// Uses rbp-relative spill slots to preserve values across helper calls.
-/// Preserves array header fields and copies the element payload byte-by-byte.
-/// Frees the old storage before returning. The new capacity is max(old_capacity * 2, 8).
+/// Extends a unique bump-tail allocation in place when possible. Otherwise it
+/// preserves the header, copies the payload, and frees the old storage. The new
+/// capacity is max(old_capacity * 2, 8).
 fn emit_array_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_grow ---");
@@ -137,6 +156,19 @@ fn emit_array_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_array_grow_alloc");                           // keep the doubled capacity when it already reaches the minimum indexed-array growth floor
     emitter.instruction("mov r13, 8");                                          // enforce a minimum indexed-array capacity of eight elements after growth
     emitter.label("__rt_array_grow_alloc");
+    emitter.instruction("mov rsi, r13");                                        // seed the requested heap payload from the grown indexed-array capacity
+    emitter.instruction("imul rsi, r12");                                       // include every grown element slot in the requested heap payload
+    emitter.instruction("jo __rt_array_grow_reallocate");                       // leave oversized products to the established allocation failure path
+    emitter.instruction("add rsi, 24");                                         // include the fixed indexed-array header in the heap payload
+    emitter.instruction("jo __rt_array_grow_reallocate");                       // leave wrapped totals to the established allocation failure path
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the unique indexed-array pointer to the tail-growth probe
+    emitter.instruction("call __rt_heap_grow_tail");                            // extend the same heap block when it owns the bump tail
+    emitter.instruction("test rax, rax");                                       // did the tail-growth probe extend the existing allocation?
+    emitter.instruction("jz __rt_array_grow_reallocate");                       // fall back to allocate-copy-free when in-place growth is unavailable
+    emitter.instruction("mov QWORD PTR [rax + 8], r13");                        // publish the grown capacity on the in-place indexed array
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the unchanged pointer for the common return path
+    emitter.instruction("jmp __rt_array_grow_return");                          // skip allocation and payload copying after successful tail growth
+    emitter.label("__rt_array_grow_reallocate");
     emitter.instruction("mov rdi, r13");                                        // pass the grown indexed-array capacity to the shared array allocator helper
     emitter.instruction("mov rsi, r12");                                        // pass the preserved element size so the grown indexed array keeps its slot width
     emitter.instruction("call __rt_array_new");                                 // allocate the grown indexed-array backing storage through the shared allocator helper
@@ -171,6 +203,7 @@ fn emit_array_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the previous unique indexed-array pointer before releasing its backing storage
     emitter.instruction("call __rt_heap_free");                                 // release the previous unique indexed-array storage now that the grown copy is live
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return the grown indexed-array pointer after releasing the previous storage
+    emitter.label("__rt_array_grow_return");
     emitter.instruction("mov r12, QWORD PTR [rbp - 40]");                       // restore the caller's callee-saved r12 before returning
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // restore the caller's callee-saved r13 before returning
     emitter.instruction("mov r14, QWORD PTR [rbp - 56]");                       // restore the caller's callee-saved r14 before returning

@@ -144,7 +144,7 @@ fn emit_release(emitter: &mut Emitter) {
     abi::emit_jump(emitter, "__rt_local_ref_cell_release");
 }
 
-/// Shares aliased cells but copies singleton cells and retains their contained value.
+/// Shares aliased cells and copies singleton cells with independent boxed value storage.
 fn emit_clone(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
@@ -207,10 +207,16 @@ fn emit_clone(emitter: &mut Emitter) {
     }
     let tag = match emitter.target.arch { Arch::AArch64 => "x9", Arch::X86_64 => "r9" };
     abi::load_at_offset(emitter, tag, 24);
+    emit_singleton_mixed_clone_branch(emitter);
     emit_payload_dispatch(emitter, "__rt_reference_cell_clone_retain", "__rt_reference_cell_clone_retain");
     abi::emit_jump(emitter, "__rt_reference_cell_clone_finish");
     emitter.label("__rt_reference_cell_clone_retain");
     abi::emit_call_label(emitter, "__rt_incref");
+    abi::emit_jump(emitter, "__rt_reference_cell_clone_finish");
+    emitter.label("__rt_reference_cell_clone_mixed");
+    abi::emit_call_label(emitter, "__rt_mixed_clone");
+    abi::load_at_offset(emitter, scratch, 16);
+    abi::emit_store_to_address(emitter, result, scratch, 0);
     emitter.label("__rt_reference_cell_clone_finish");
     abi::load_at_offset(emitter, result, 16);
     abi::emit_frame_restore(emitter, 48);
@@ -223,66 +229,67 @@ fn emit_clone(emitter: &mut Emitter) {
     abi::emit_jump(emitter, "__rt_incref");
 }
 
+/// Separates ordinary Mixed zvals while preserving an independently shared PHP reference wrapper.
+fn emit_singleton_mixed_clone_branch(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x9, #7");                                  // only boxed or iterable payloads can need zval separation
+            emitter.instruction("b.ne __rt_reference_cell_clone_dispatch");     // preserve the ordinary payload-specific ownership path
+            emitter.instruction("ldrb w10, [x0, #-8]");                         // distinguish boxed Mixed storage from a raw iterable container
+            emitter.instruction("cmp w10, #5");                                 // heap kind five owns a boxed PHP value
+            emitter.instruction("b.ne __rt_reference_cell_clone_dispatch");     // raw iterable payloads retain their container identity
+            emitter.instruction("ldr x10, [x0]");                               // inspect whether the boxed value itself carries reference identity
+            emitter.instruction("cmp x10, #7");                                 // persistent PHP reference wrappers use the nested Mixed tag
+            emitter.instruction("b.ne __rt_reference_cell_clone_mixed");        // ordinary boxed values need an independent zval
+            emitter.instruction("ldr x10, [x0, #16]");                          // inspect the persistent-reference marker
+            emitter.instruction("cmp x10, #1");                                 // ordinary nested Mixed boxes have no reference identity
+            emitter.instruction("b.ne __rt_reference_cell_clone_mixed");        // clone an ordinary nested boxed value
+            emitter.instruction("ldr w10, [x0, #-12]");                         // count owners of the inner persistent reference
+            emitter.instruction("cmp w10, #1");                                 // a singleton wrapper can separate like an ordinary value
+            emitter.instruction("b.hi __rt_reference_cell_clone_retain");       // preserve references shared outside the native cell
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp r9, 7");                                   // only boxed or iterable payloads can need zval separation
+            emitter.instruction("jne __rt_reference_cell_clone_dispatch");      // preserve payload-specific ownership for other tags
+            emitter.instruction("cmp BYTE PTR [rax - 8], 5");                   // distinguish boxed Mixed storage from a raw iterable container
+            emitter.instruction("jne __rt_reference_cell_clone_dispatch");      // raw iterable payloads retain their container identity
+            emitter.instruction("cmp QWORD PTR [rax], 7");                      // recognize a potentially persistent reference wrapper
+            emitter.instruction("jne __rt_reference_cell_clone_mixed");         // ordinary boxed values need an independent zval
+            emitter.instruction("cmp QWORD PTR [rax + 16], 1");                 // recognize the persistent-reference ABI marker
+            emitter.instruction("jne __rt_reference_cell_clone_mixed");         // clone an ordinary nested boxed value
+            emitter.instruction("cmp DWORD PTR [rax - 12], 1");                 // count owners of the inner persistent reference
+            emitter.instruction("ja __rt_reference_cell_clone_retain");         // preserve references shared outside the native cell
+        }
+    }
+    abi::emit_jump(emitter, "__rt_reference_cell_clone_mixed");
+    emitter.label("__rt_reference_cell_clone_dispatch");
+}
 
-/// Finds an exact live cell allocation, rejecting borrowed frame and array-interior addresses.
+
+/// Finds an exact live cell in constant time, rejecting borrowed and interior addresses.
 fn emit_owner_lookup(emitter: &mut Emitter) {
     emitter.blank();
     emitter.label_global("__rt_reference_cell_owner");
+    abi::emit_frame_prologue(emitter, 16);
+    // -- reuse allocator-owned identity validation before inspecting any cell header --
+    abi::emit_call_label(emitter, "__rt_gc_candidate_live");
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_reference_cell_owner_done");
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x9", "_heap_buf");
-            emitter.instruction("add x10, x9, #16");                            // require room for a complete allocation header
-            emitter.instruction("cmp x0, x10");                                 // reject null, scalar and frame addresses below the managed payload range
-            emitter.instruction("b.lo __rt_reference_cell_owner_none");         // borrowed addresses have no independent cell owner
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_heap_off", 0);
-            abi::emit_symbol_address(emitter, "x9", "_heap_buf");
-            emitter.instruction("add x10, x9, x10");                            // bound the scan by the current managed heap extent
-            emitter.instruction("cmp x0, x10");                                 // reject pointers outside the allocated heap window
-            emitter.instruction("b.hs __rt_reference_cell_owner_none");         // never inspect foreign or frame storage as a heap header
-            emitter.instruction("ldrb w11, [x0, #-8]");                         // cheaply reject ordinary values and raw fallback cells
-            emitter.instruction(&format!("cmp w11, #{REFERENCE_CELL_HEAP_KIND}")); // only managed reference cells can transfer this owner
-            emitter.instruction("b.ne __rt_reference_cell_owner_none");         // borrowed cells do not participate in managed cell cleanup
-            emitter.instruction("ldr w11, [x0, #-12]");                         // reject previously retired cell allocations
-            emitter.instruction("cbz w11, __rt_reference_cell_owner_none");     // freed storage cannot transfer an owner
-            emitter.label("__rt_reference_cell_owner_scan");
-            emitter.instruction("add x11, x9, #16");                            // compute this allocation's exact payload address
-            emitter.instruction("cmp x11, x0");                                 // distinguish an allocation from a forged-looking interior word
-            emitter.instruction("b.eq __rt_reference_cell_owner_done");         // the input is a live managed reference-cell allocation
-            emitter.instruction("b.hi __rt_reference_cell_owner_none");         // the pointer lies inside an earlier allocation
-            emitter.instruction("ldr w12, [x9]");                               // load this block's allocator-owned payload extent
-            emitter.instruction("add x9, x11, x12");                            // advance to the next uniform allocation header
-            emitter.instruction("b __rt_reference_cell_owner_scan");            // validate the candidate against allocation boundaries
-            emitter.label("__rt_reference_cell_owner_none");
-            emitter.instruction("mov x0, xzr");                                 // report that borrowed storage has no transferable cell owner
+            emitter.instruction("ldrb w9, [x0, #-8]");                          // inspect only an exact live allocation's physical representation
+            emitter.instruction(&format!("cmp w9, #{REFERENCE_CELL_HEAP_KIND}")); // only managed reference cells can transfer this owner
+            emitter.instruction("b.eq __rt_reference_cell_owner_done");         // preserve the exact cell address without acquiring a reference
+            emitter.instruction("mov x0, xzr");                                 // ordinary allocations and borrowed storage have no cell owner
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(emitter, "r8", "_heap_buf");
-            emitter.instruction("lea r9, [r8 + 16]");                           // require room for a complete allocation header
-            emitter.instruction("cmp rax, r9");                                 // reject null, scalar and frame addresses below the managed payload range
-            emitter.instruction("jb __rt_reference_cell_owner_none");           // borrowed addresses have no independent cell owner
-            abi::emit_load_symbol_to_reg(emitter, "r9", "_heap_off", 0);
-            emitter.instruction("add r9, r8");                                  // bound the scan by the current managed heap extent
-            emitter.instruction("cmp rax, r9");                                 // reject pointers outside the allocated heap window
-            emitter.instruction("jae __rt_reference_cell_owner_none");          // never inspect foreign or frame storage as a heap header
-            emitter.instruction(&format!("cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}")); // cheaply reject ordinary values and raw fallback cells
-            emitter.instruction("jne __rt_reference_cell_owner_none");          // borrowed cells do not participate in managed cell cleanup
-            emitter.instruction("cmp DWORD PTR [rax - 12], 0");                 // reject previously retired cell allocations
-            emitter.instruction("je __rt_reference_cell_owner_none");           // freed storage cannot transfer an owner
-            emitter.label("__rt_reference_cell_owner_scan");
-            emitter.instruction("lea r10, [r8 + 16]");                          // compute this allocation's exact payload address
-            emitter.instruction("cmp r10, rax");                                // distinguish an allocation from a forged-looking interior word
-            emitter.instruction("je __rt_reference_cell_owner_done");           // the input is a live managed reference-cell allocation
-            emitter.instruction("ja __rt_reference_cell_owner_none");           // the pointer lies inside an earlier allocation
-            emitter.instruction("mov r11d, DWORD PTR [r8]");                    // load this block's allocator-owned payload extent
-            emitter.instruction("lea r8, [r10 + r11]");                         // advance to the next uniform allocation header
-            emitter.instruction("jmp __rt_reference_cell_owner_scan");          // validate the candidate against allocation boundaries
-            emitter.label("__rt_reference_cell_owner_none");
-            emitter.instruction("xor eax, eax");                                // report that borrowed storage has no transferable cell owner
+            emitter.instruction(&format!("cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}")); // only managed reference cells can transfer this owner
+            emitter.instruction("je __rt_reference_cell_owner_done");           // preserve the validated cell identity without changing ownership
+            emitter.instruction("xor eax, eax");                                // reject other live allocations as reference-cell owners
         }
     }
     emitter.label("__rt_reference_cell_owner_done");
+    abi::emit_frame_restore(emitter, 16);
     abi::emit_return(emitter);
-
 }
 
 /// Reports whether the supplied address is an active boxed-array-walk element borrow.
@@ -296,7 +303,7 @@ fn emit_unmanaged_borrow_lookup(emitter: &mut Emitter) {
             emitter.instruction("cbz x9, __rt_reference_cell_unmanaged_borrow_none"); // an empty chain cannot contain the candidate address
             emitter.instruction("ldr x10, [x9, #8]");                           // read this active node's borrowed hash-entry slot
             emitter.instruction("cmp x0, x10");                                 // require the exact exposed cell, not another array-interior address
-            emitter.instruction("b.eq __rt_reference_cell_unmanaged_borrow_found");  // report an active unmanaged borrow to the escape boundary
+            emitter.instruction("b.eq __rt_reference_cell_unmanaged_borrow_found"); // report an active unmanaged borrow to the escape boundary
             emitter.instruction("ldr x9, [x9]");                                // continue through nested and reentrant boxed walks
             emitter.instruction("b __rt_reference_cell_unmanaged_borrow_scan"); // scan the complete stack-backed borrow chain
             emitter.label("__rt_reference_cell_unmanaged_borrow_found");
@@ -309,12 +316,12 @@ fn emit_unmanaged_borrow_lookup(emitter: &mut Emitter) {
             abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_unmanaged_ref_borrow_top", 0);
             emitter.label("__rt_reference_cell_unmanaged_borrow_scan");
             emitter.instruction("test r10, r10");                               // an empty chain cannot contain the candidate address
-            emitter.instruction("jz __rt_reference_cell_unmanaged_borrow_none");  // leave ordinary references accepted
+            emitter.instruction("jz __rt_reference_cell_unmanaged_borrow_none"); // leave ordinary references accepted
             emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                // read this active node's borrowed hash-entry slot
             emitter.instruction("cmp rax, r11");                                // require the exact exposed cell, not another array-interior address
-            emitter.instruction("je __rt_reference_cell_unmanaged_borrow_found");  // report an active unmanaged borrow to the escape boundary
+            emitter.instruction("je __rt_reference_cell_unmanaged_borrow_found"); // report an active unmanaged borrow to the escape boundary
             emitter.instruction("mov r10, QWORD PTR [r10]");                    // continue through nested and reentrant boxed walks
-            emitter.instruction("jmp __rt_reference_cell_unmanaged_borrow_scan");  // scan the complete stack-backed borrow chain
+            emitter.instruction("jmp __rt_reference_cell_unmanaged_borrow_scan"); // scan the complete stack-backed borrow chain
             emitter.label("__rt_reference_cell_unmanaged_borrow_found");
             emitter.instruction("mov eax, 1");                                  // boolean true: this reference may not be published
             abi::emit_return(emitter);
@@ -443,6 +450,19 @@ mod tests {
                 "__rt_reference_cell_clone_shared:", "__rt_decref_any_reference:"] {
                 assert!(assembly.contains(stub), "{name}: missing local dispatch stub {stub}");
             }
+        }
+    }
+
+    /// Capture enumeration validates each owner with bounded work on every target.
+    #[test]
+    fn reference_cell_owner_validation_has_constant_work_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_owner_lookup(&mut emitter);
+            let assembly = emitter.output();
+            assert_eq!(assembly.matches("__rt_gc_candidate_live").count(), 1, "{name}: {assembly}");
+            assert!(!assembly.contains("_heap_buf") && !assembly.contains("_owner_scan"), "{name}: owner lookup traverses allocation headers");
+            assert!(assembly.lines().count() < 32, "{name}: owner validation exceeds its constant instruction budget");
         }
     }
 

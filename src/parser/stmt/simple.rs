@@ -267,11 +267,13 @@ pub(super) fn parse_this_stmt(
     Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
 }
 
-/// Parses a `const` declaration: `const NAME = value;`.
+/// Parses a `const` declaration: `const NAME = value;` or a declarator list
+/// `const A = 1, B = 2;`.
 ///
-/// Consumes `const`, expects an identifier for the name, then `=`, then the
-/// value expression, and consumes the trailing semicolon. Returns a
-/// `StmtKind::ConstDecl` with the name and value.
+/// Consumes `const`, then for each declarator an identifier for the name, `=`, and the
+/// value expression, and consumes the trailing semicolon. Returns a `StmtKind::ConstDecl`
+/// for a single declarator, or a `StmtKind::Synthetic` holding one `ConstDecl` per name for a
+/// list.
 pub(super) fn parse_const_decl(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -279,34 +281,67 @@ pub(super) fn parse_const_decl(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'const'
 
-    let name = match tokens.get(*pos) {
-        Some((Token::Identifier(n), _)) => n.clone(),
-        // `NAN`, `INF`, `PHP_EOL` and the other predefined constants the lexer turns into
-        // dedicated tokens are still legal names for a namespaced user constant (`Demo\NAN`).
-        Some((token, metadata))
-            if super::namespace_use::token_as_import_name(token, metadata).is_some() =>
-        {
-            super::namespace_use::token_as_import_name(token, metadata)
-                .expect("constant-like token was checked immediately above")
+    // One statement may declare SEVERAL constants, `const A = 1, B = A + 1;`, exactly like a
+    // class body (issue #1142). Each declarator becomes its own `ConstDecl`, in source order, so
+    // the list behaves like one statement per name: a later value can read an earlier name. The
+    // first declaration keeps the statement's span, as a lone `const` always did; each further
+    // one carries the span of its own declarator (`B = A + 1`).
+    let mut declarations = Vec::new();
+    loop {
+        let name_span = tokens.get(*pos).map_or(span, |(_, metadata)| metadata.span);
+        let name = match tokens.get(*pos) {
+            Some((Token::Identifier(n), _)) => n.clone(),
+            // `NAN`, `INF`, `PHP_EOL` and the other predefined constants the lexer turns into
+            // dedicated tokens are still legal names for a namespaced user constant (`Demo\NAN`).
+            Some((token, metadata))
+                if super::namespace_use::token_as_import_name(token, metadata).is_some() =>
+            {
+                super::namespace_use::token_as_import_name(token, metadata)
+                    .expect("constant-like token was checked immediately above")
+            }
+            _ if declarations.is_empty() => {
+                return Err(CompileError::new(
+                    span,
+                    "Expected constant name after 'const'",
+                ))
+            }
+            _ => {
+                return Err(CompileError::new(
+                    name_span,
+                    "Expected a constant name after ',' in the declaration list",
+                ))
+            }
+        };
+        *pos += 1;
+
+        expect_token(
+            tokens,
+            pos,
+            &Token::Assign,
+            "Expected '=' after constant name",
+        )?;
+
+        let value = parse_expr(tokens, pos)?;
+        let declaration_span = if declarations.is_empty() {
+            span
+        } else {
+            crate::parser::expr::span_through_prev_token(tokens, *pos, name_span)
+        };
+        declarations.push(Stmt::new(StmtKind::ConstDecl { name, value }, declaration_span));
+        if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Comma)) {
+            *pos += 1;
+            continue;
         }
-        _ => {
-            return Err(CompileError::new(
-                span,
-                "Expected constant name after 'const'",
-            ))
-        }
-    };
-    *pos += 1;
+        expect_semicolon(tokens, pos)?;
+        break;
+    }
 
-    expect_token(
-        tokens,
-        pos,
-        &Token::Assign,
-        "Expected '=' after constant name",
-    )?;
-
-    let value = parse_expr(tokens, pos)?;
-    expect_semicolon(tokens, pos)?;
-
-    Ok(Stmt::new(StmtKind::ConstDecl { name, value }, span))
+    // A single declarator is the statement itself. A list is handed back as one `Synthetic`
+    // holding a `ConstDecl` per name; the file- and namespace-scope statement loops splice it
+    // back into the enclosing list (`crate::parser::stmt::push_parsed_stmt`), so every later
+    // pass sees the flat shape separate `const` statements produce.
+    if declarations.len() == 1 {
+        return Ok(declarations.pop().expect("one declaration was just checked"));
+    }
+    Ok(Stmt::new(StmtKind::Synthetic(declarations), span))
 }

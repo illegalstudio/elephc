@@ -13,9 +13,12 @@ use crate::{BuiltinId, BuiltinRequirement};
 
 const BCMATH: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_bcmath")];
 const CRYPTO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_crypto")];
+const OPENSSL_CRYPTO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_openssl")];
 const PHAR: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_phar")];
 const PCNTL: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_pcntl")];
+const FILEINFO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_fileinfo")];
 const XML: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_xml")];
+const GMP: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_gmp")];
 const TLS: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_tls")];
 const ZLIB: &[BuiltinRequirement] = &[BuiltinRequirement::SystemLibrary("z")];
 const MBSTRING: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_mbstring")];
@@ -30,6 +33,7 @@ const REGEX: &[BuiltinRequirement] = &[BuiltinRequirement::RuntimeCapability("pc
 
 /// Returns fixed neutral requirements for one canonical shared contract ID.
 pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement] {
+    if matches_name(id, &["finfo_open", "finfo_close", "finfo_set_flags", "finfo_file", "finfo_buffer", "mime_content_type"]) { return FILEINFO; }
     if matches_name(id, &["mb_ereg_match", "mb_split", "mb_ereg_replace", "mb_eregi_replace",
         "mb_ereg_search_init", "mb_ereg_search", "mb_ereg_search_pos", "mb_ereg_search_regs", "mb_ereg_search_getpos", "mb_ereg_search_getregs", "mb_ereg_search_setpos"
     ]) { return MBREGEX; }
@@ -37,6 +41,11 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
         .any(|name| id == BuiltinId::from_canonical_name(name))
     {
         return XML;
+    }
+    if crate::catalog_gmp::contract_names()
+        .any(|name| id == BuiltinId::from_canonical_name(name))
+    {
+        return GMP;
     }
     if matches_name(
         id,
@@ -84,6 +93,21 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
         id,
         &[
             "bcadd",
+            "__elephc_bcnumber_add",
+            "__elephc_bcnumber_ceil",
+            "__elephc_bcnumber_comp",
+            "__elephc_bcnumber_create",
+            "__elephc_bcnumber_div",
+            "__elephc_bcnumber_divmod",
+            "__elephc_bcnumber_floor",
+            "__elephc_bcnumber_mod",
+            "__elephc_bcnumber_mul",
+            "__elephc_bcnumber_pow",
+            "__elephc_bcnumber_powmod",
+            "__elephc_bcnumber_round",
+            "__elephc_bcnumber_sqrt",
+            "__elephc_bcnumber_sub",
+
             "bcceil",
             "bccomp",
             "bcdiv",
@@ -116,14 +140,21 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "hash_init",
             "hash_update",
             "md5",
-            "openssl_cipher_iv_length",
-            "openssl_decrypt",
-            "openssl_encrypt",
-            "openssl_get_cipher_methods",
             "sha1",
         ],
     ) {
         return CRYPTO;
+    }
+    if matches_name(
+        id,
+        &[
+            "openssl_cipher_iv_length",
+            "openssl_decrypt",
+            "openssl_encrypt",
+            "openssl_get_cipher_methods",
+        ],
+    ) {
+        return OPENSSL_CRYPTO;
     }
     if matches_name(
         id,

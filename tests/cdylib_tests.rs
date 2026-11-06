@@ -580,7 +580,7 @@ function deep(int $depth): int {
     if ($depth >= 100000) {
         return $depth;
     }
-    return deep($depth + 1);
+    return 1 + deep($depth + 1);
 }
 
 #[Export]

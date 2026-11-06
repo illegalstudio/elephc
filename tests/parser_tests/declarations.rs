@@ -392,3 +392,148 @@ fn test_parse_enum_with_methods_implements_constants() {
         other => panic!("Expected EnumDecl, got {:?}", other),
     }
 }
+
+/// Extracts `(name, int value)` from every top-level `ConstDecl` in `stmts`.
+fn const_decl_names_and_ints(stmts: &[Stmt]) -> Vec<(String, Option<i64>)> {
+    stmts
+        .iter()
+        .filter_map(|stmt| match &stmt.kind {
+            StmtKind::ConstDecl { name, value } => Some((
+                name.clone(),
+                match value.kind {
+                    ExprKind::IntLiteral(value) => Some(value),
+                    _ => None,
+                },
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Verifies a file-scope `const` declarator list parses to one flat `ConstDecl` per name
+/// (issue #1142).
+///
+/// `const A = 1, B = 2;` used to report `Expected ';'`. The declarations are spliced into the
+/// program list itself rather than nested in a wrapper, so every pass that collects top-level
+/// declarations sees exactly what two `const` statements produce. The first keeps the statement
+/// span, as a lone `const` always did; the second carries its own declarator span.
+#[test]
+fn test_file_scope_const_declarator_list_parses_one_decl_per_name() {
+    let stmts = parse_source("<?php const A = 1, BB = 22;");
+    assert_eq!(stmts.len(), 2, "{:?}", stmts);
+    assert_eq!(
+        const_decl_names_and_ints(&stmts),
+        vec![("A".to_string(), Some(1)), ("BB".to_string(), Some(22))]
+    );
+    assert_eq!((stmts[0].span.line, stmts[0].span.col), (1, 7));
+    assert_eq!(
+        (stmts[1].span.line, stmts[1].span.col, stmts[1].span.end_column()),
+        (1, 20, 27)
+    );
+}
+
+/// Verifies the list form inside both namespace spellings, and that a later value may name an
+/// earlier constant.
+#[test]
+fn test_namespaced_const_declarator_lists_parse_one_decl_per_name() {
+    let stmts = parse_source("<?php namespace Shop; const MIN = 1, MAX = MIN + 9;");
+    assert_eq!(stmts.len(), 3, "{:?}", stmts);
+    let names: Vec<_> = const_decl_names_and_ints(&stmts)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(names, vec!["MIN", "MAX"]);
+
+    let stmts = parse_source("<?php namespace Shop { const MIN = 1, MAX = 10; }");
+    let StmtKind::NamespaceBlock { body, .. } = &stmts[0].kind else {
+        panic!("Expected NamespaceBlock, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(
+        const_decl_names_and_ints(body),
+        vec![("MIN".to_string(), Some(1)), ("MAX".to_string(), Some(10))]
+    );
+}
+
+/// Verifies a malformed file-scope list is rejected by its own cause: a trailing comma and a
+/// declarator without a value, both of which PHP reports as syntax errors.
+#[test]
+fn test_malformed_file_scope_const_declarator_lists_are_rejected() {
+    assert!(parse_fails("<?php const A = 1, ;"));
+    assert!(parse_fails("<?php const A = 1, B;"));
+}
+
+
+/// Every complete leading declare form can precede the strict directive.
+#[test]
+fn test_declare_strict_types_after_leading_declare_forms() {
+    for prefix in [
+        "declare(ticks=1);", "declare(ticks=1) { echo 0; }",
+        "declare(ticks=1): echo 0; enddeclare;", "declare(ticks=1) echo 0;",
+        "declare(ticks=1) declare(ticks=1) echo 0;",
+        "declare(ticks=1) declare(ticks=1);",
+        "declare(ticks=1) if (true) { echo 0; } else { echo 2; }",
+    ] {
+        let stmts = parse_source(&format!("<?php {prefix} declare(strict_types=1); echo 1;"));
+        assert_eq!(stmts.len(), 3, "{prefix}");
+        assert!(stmts[0].strict_types, "main script prefix: {prefix}");
+        assert!(stmts[2].strict_types, "main script suffix: {prefix}");
+        assert!(matches!(stmts[2].kind, StmtKind::Echo(_)));
+    }
+}
+
+/// Prefix tracking consumes each declare once, even in a long flat sequence.
+#[test]
+fn test_declare_strict_types_after_many_leading_declares() {
+    let source = format!("<?php {} declare(strict_types=1); echo 1;", "declare(ticks=1); ".repeat(128));
+    let stmts = parse_source(&source);
+    assert_eq!(stmts.len(), 130);
+    assert!(stmts.iter().all(|stmt| stmt.strict_types));
+}
+
+
+/// An ordinary empty statement is parsed but is not a leading declare directive.
+#[test]
+fn test_declare_related_empty_statements_parse_as_noops() {
+    let stmts = parse_source("<?php ; if (false); echo 1;");
+    assert!(matches!(&stmts[0].kind, StmtKind::Synthetic(body) if body.is_empty()));
+    assert!(matches!(&stmts[1].kind, StmtKind::If { then_body, .. }
+        if matches!(&then_body[0].kind, StmtKind::Synthetic(body) if body.is_empty())));
+}
+
+/// Returns the single statement a bare leading `declare` body produced.
+fn declare_body_stmt(stmt: &Stmt) -> &Stmt {
+    match &stmt.kind {
+        StmtKind::Synthetic(body) if body.len() == 1 => &body[0],
+        _ => stmt,
+    }
+}
+
+/// Assignment preludes in the main-script prefix take the final strict flag; closures keep theirs.
+#[test]
+fn test_declare_strict_types_marks_prefix_assignment_preludes() {
+    let stmts = parse_source(
+        "<?php declare(ticks=1) echo ($a[f()] += 1); \
+         declare(ticks=1) $g = function () { return f(); }; declare(strict_types=1);",
+    );
+    let echo = declare_body_stmt(&stmts[0]);
+    let StmtKind::Echo(Expr { kind: ExprKind::Assignment { prelude, .. }, .. }) = &echo.kind else {
+        panic!("expected an echoed compound assignment, got {:?}", echo.kind);
+    };
+    assert!(!prelude.is_empty(), "the computed index is captured in a prelude");
+    assert!(prelude.iter().all(|stmt| stmt.strict_types), "{prelude:?}");
+    let assign = declare_body_stmt(&stmts[1]);
+    let StmtKind::Assign { value: Expr { kind: ExprKind::Closure { body, .. }, .. }, .. } = &assign.kind else {
+        panic!("expected a closure assignment, got {:?}", assign.kind);
+    };
+    assert!(assign.strict_types);
+    assert!(body.iter().all(|stmt| !stmt.strict_types), "closure bodies stay lexical");
+}
+
+/// A relative-name call is an ordinary statement body, unlike a namespace declaration.
+#[test]
+fn test_declare_single_statement_accepts_relative_name_call() {
+    let stmts = parse_source("<?php declare(ticks=1) namespace\\f();");
+    let call = declare_body_stmt(&stmts[0]);
+    assert!(matches!(&call.kind, StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { .. }, .. })),
+        "{:?}", call.kind);
+}

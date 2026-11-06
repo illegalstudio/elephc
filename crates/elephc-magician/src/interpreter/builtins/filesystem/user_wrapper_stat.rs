@@ -13,6 +13,12 @@
 
 use super::super::super::*;
 
+/// The `url_stat()` flags PHP hands a wrapper for its integer stat getters (`filesize()`,
+/// `filemtime()`, `fileatime()`, `filectime()`, `fileperms()`, `fileowner()`, `filegroup()` and
+/// `fileinode()`): its internal no-cache bit, which userland never sees named. The compiled
+/// runtime passes the same value (`URL_STAT_FLAGS_NOCACHE` in the AOT lowering).
+pub(in crate::interpreter) const EVAL_URL_STAT_FLAGS_NOCACHE: i64 = 4;
+
 /// Dispatches `fstat()` to a wrapper object's `stream_stat()`.
 pub(in crate::interpreter) fn eval_user_wrapper_fstat_result(
     id: i64,

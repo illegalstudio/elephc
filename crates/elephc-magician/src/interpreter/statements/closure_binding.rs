@@ -58,6 +58,7 @@ pub(super) fn eval_closure_from_callable(
         }
         Err(status) => return Err(status),
     };
+    let callable = callable.into_callable_transferring_receiver();
     let valid = eval_validate_closure_from_callable_callback(&callable, context, values);
     let mut target = eval_closure_object_target_from_callable(callable);
     let receiver = target.receiver_mut().copied();

@@ -80,6 +80,77 @@ fn emit_release(builder: &mut Builder<'_>, value: ValueId) {
     );
 }
 
+/// A dominating numeric store cannot replace a join read also reached by a conditional write or clear.
+#[test]
+fn cast_local_ambiguous_overwrite_keeps_boxed_join() {
+    use crate::ir::{FunctionParam, LocalKind};
+    for overwrite in [false, true] {
+        let mut function = Function::new("ambiguous_local".into(), IrType::I64, PhpType::Int);
+        function.params.push(FunctionParam { name: "choose".into(), ir_type: IrType::I64,
+            php_type: PhpType::Bool, by_ref: false, variadic: false });
+        let choose = function.add_local(Some("choose".into()), IrType::I64, PhpType::Bool, LocalKind::PhpLocal);
+        let cell = function.add_local(Some("cell".into()), IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, LocalKind::PhpLocal);
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        let replace = builder.create_named_block("replace", vec![]);
+        let keep = builder.create_named_block("keep", vec![]);
+        let join = builder.create_named_block("join", vec![]);
+        builder.set_entry(entry); builder.position_at_end(entry);
+        let seven = builder.emit_const_i64(7);
+        let initial = emit_checked(&mut builder, Op::ICheckedMul, seven, seven);
+        builder.emit_store_local(cell, initial);
+        let condition = builder.emit_load_local(choose, IrType::I64, PhpType::Bool);
+        builder.terminate(Terminator::CondBr { cond: condition, then_target: replace,
+            then_args: vec![], else_target: keep, else_args: vec![] });
+        builder.position_at_end(replace);
+        builder.emit(Op::ReleaseLocalSlot, vec![], Some(Immediate::LocalSlot(cell)),
+            IrType::Void, PhpType::Void, Ownership::NonHeap);
+        if overwrite {
+            let replacement = emit_checked(&mut builder, Op::ICheckedAdd, seven, seven);
+            builder.emit_store_local(cell, replacement);
+        }
+        builder.terminate(Terminator::Br { target: join, args: vec![] });
+        builder.position_at_end(keep);
+        builder.terminate(Terminator::Br { target: join, args: vec![] });
+        builder.position_at_end(join);
+        let value = builder.emit_load_local(cell, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+        let result = emit_int_cast(&mut builder, value);
+        builder.terminate(Terminator::Return { value: Some(result) });
+        validate_function(&function).unwrap();
+        let before = crate::ir::print_function(&function);
+        assert!(!fuse(&mut function), "overwrite={overwrite}: {before}");
+        assert_eq!(crate::ir::print_function(&function), before);
+        validate_function(&function).unwrap();
+    }
+}
+
+/// Boolean normalization cannot be replaced by a chain returning an arbitrary integer.
+#[test]
+fn boolean_cast_is_not_a_numeric_chain_sink() {
+    let mut function = Function::new("bool_chain".to_string(), IrType::I64, PhpType::Bool);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let seven = builder.emit_const_i64(7);
+        let product = emit_checked(&mut builder, Op::ICheckedMul, seven, seven);
+        let sum = emit_mixed(&mut builder, MixedNumericOp::Add, product, seven);
+        let boolean = builder.emit(
+            Op::Cast, vec![sum], Some(Immediate::CastTarget(IrType::I64)),
+            IrType::I64, PhpType::Bool, Ownership::NonHeap,
+        ).expect("boolean cast");
+        emit_release(&mut builder, product);
+        emit_release(&mut builder, sum);
+        builder.terminate(Terminator::Return { value: Some(boolean) });
+    }
+    assert!(validate_function(&function).is_ok());
+    assert!(!CheckedNumericChain.is_applicable(&function));
+    assert!(!fuse(&mut function));
+    assert_eq!(function.instructions[3].op, Op::Cast);
+    assert!(validate_function(&function).is_ok());
+}
+
 /// Fuses the benchmark-shaped multiply/add region and removes both boxed values.
 #[test]
 fn fuses_multiply_add_chain_at_integer_cast() {
@@ -117,6 +188,41 @@ fn fuses_multiply_add_chain_at_integer_cast() {
     assert_eq!(function.instructions[7].op, Op::Nop);
     assert!(validate_function(&function).is_ok());
     assert!(!fuse(&mut function), "fusion must be idempotent");
+}
+
+/// Commutative scalar parents fuse around a right-hand chain without commuting subtraction.
+#[test]
+fn integer_destinations_right_hand_chain_keeps_operation_semantics() {
+    for operation in [MixedNumericOp::Add, MixedNumericOp::Sub, MixedNumericOp::Mul] {
+        let mut function = Function::new("right_chain".to_string(), IrType::I64, PhpType::Int);
+        let expected;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let first = builder.emit_const_i64(7);
+            let second = builder.emit_const_i64(31);
+            let third = builder.emit_const_i64(3);
+            let product = emit_checked(&mut builder, Op::ICheckedMul, second, third);
+            let root = emit_mixed(&mut builder, operation, first, product);
+            let cast = emit_int_cast(&mut builder, root);
+            emit_release(&mut builder, product);
+            emit_release(&mut builder, root);
+            builder.terminate(Terminator::Return { value: Some(cast) });
+            expected = vec![second, third, first];
+        }
+        let commutative = operation != MixedNumericOp::Sub;
+        assert_eq!(fuse(&mut function), commutative);
+        if commutative {
+            assert_eq!(function.instructions[5].operands, expected);
+            assert_eq!(function.instructions[5].immediate,
+                Some(Immediate::CheckedNumericChain(Box::new(CheckedNumericChainImmediate::new(
+                    vec![MixedNumericOp::Mul, operation],
+                )))));
+        }
+        assert!(validate_function(&function).is_ok());
+    }
 }
 
 /// Retains the complete left-associated operation order in a longer chain.

@@ -1,8 +1,6 @@
 ---
 title: "is_string()"
 description: "Checks whether a variable is a string."
-sidebar:
-  order: 970
 ---
 
 ## is_string()
@@ -20,8 +18,9 @@ Checks whether a variable is a string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_string.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_string.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

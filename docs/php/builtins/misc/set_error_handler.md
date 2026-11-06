@@ -1,8 +1,6 @@
 ---
 title: "set_error_handler()"
 description: "Installs a user error handler and returns the previous handler."
-sidebar:
-  order: 686
 ---
 
 ## set_error_handler()
@@ -21,8 +19,9 @@ Installs a user error handler and returns the previous handler.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/set_error_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/set_error_handler.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

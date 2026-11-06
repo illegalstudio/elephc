@@ -23,6 +23,7 @@ pub mod intval;
 pub mod is_array;
 pub mod is_bool;
 pub mod is_callable;
+pub mod is_countable;
 pub mod is_finite;
 pub mod is_float;
 pub mod is_double;

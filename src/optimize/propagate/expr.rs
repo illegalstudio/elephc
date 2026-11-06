@@ -34,6 +34,15 @@ pub(crate) fn captured_constant_env(
 pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     let invalidation = expr_invalidation(&expr);
     if matches!(invalidation, Invalidation::All) {
+        // `eval()` can retain a reference to any in-scope local, so a later
+        // assignment must not turn that local into a propagated constant.
+        if let ExprKind::FunctionCall { name, .. } = &expr.kind {
+            if crate::names::php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval" {
+                for name in env.keys() {
+                    super::stmt::mark_reference_volatile(name);
+                }
+            }
+        }
         // A present element in a scalar-only array fact cannot warn. Fold only
         // wholly read-only scalar expressions here, never across a call, write,
         // or unknown/missing read whose handler could invalidate another fact.
@@ -270,6 +279,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             class_name,
             args: propagate_args(args, None, None),
         },
+        ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
+            class_type,
+            args: propagate_args(args, None, None),
+        },
         ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
             name_expr: Box::new(propagate_expr(*name_expr, env)),
             args: propagate_args(args, None, None),
@@ -441,6 +454,7 @@ fn propagate_instanceof_target(
 ) -> InstanceOfTarget {
     match target {
         InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
+        InstanceOfTarget::Generic(class_type) => InstanceOfTarget::Generic(class_type),
         InstanceOfTarget::Expr(expr) => {
             InstanceOfTarget::Expr(Box::new(propagate_expr(*expr, env)))
         }

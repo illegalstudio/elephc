@@ -19,6 +19,30 @@ pub struct CompileError {
     pub file: Option<String>,
     pub message: String,
     pub related: Vec<CompileError>,
+    pub kind: CompileErrorKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// The class of a compile error, for consumers that must react to one class specifically.
+pub enum CompileErrorKind {
+    /// Every diagnostic without a more specific class.
+    #[default]
+    General,
+    /// A builtin argument that AOT compilation needs as a compile-time literal was not one.
+    ///
+    /// The backend reads such an argument while lowering the call (a result-shape flag, a
+    /// constant or class name), so no spelling of the call can defer it to run time.
+    AotLiteralRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Severity of a compiler diagnostic that does not stop compilation.
+pub enum WarningKind {
+    /// Ordinary compiler warning.
+    #[default]
+    Warning,
+    /// PHP deprecation notice raised while compiling a constant expression.
+    Deprecation,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +50,7 @@ pub struct CompileError {
 pub struct CompileWarning {
     pub span: Span,
     pub message: String,
+    pub kind: WarningKind,
 }
 
 impl CompileError {
@@ -36,6 +61,15 @@ impl CompileError {
             file: None,
             message: message.to_string(),
             related: Vec::new(),
+            kind: CompileErrorKind::General,
+        }
+    }
+
+    /// Creates the error for a builtin argument that must be a compile-time literal in AOT mode.
+    pub fn aot_literal_required(span: Span, message: &str) -> Self {
+        Self {
+            kind: CompileErrorKind::AotLiteralRequired,
+            ..Self::new(span, message)
         }
     }
 
@@ -76,6 +110,16 @@ impl CompileWarning {
         Self {
             span,
             message: message.to_string(),
+            kind: WarningKind::Warning,
+        }
+    }
+
+    /// Creates a deprecation diagnostic with the given span and message.
+    pub fn deprecation(span: Span, message: &str) -> Self {
+        Self {
+            span,
+            message: message.to_string(),
+            kind: WarningKind::Deprecation,
         }
     }
 }

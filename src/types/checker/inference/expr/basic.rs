@@ -6,10 +6,11 @@
 //!
 //! Key details:
 //! - Preserves PHP array widening, nullability, match joins, and string-offset validation.
+//! - Ternary, `?:` and `match` arms that hold a buffer keep its exact `buffer<T>` type or are
+//!   rejected (`buffer_merges`), since a boxed buffer can no longer be indexed.
 
-use super::{
-    is_valid_string_offset_index, merge_match_arm_result_type, Checker,
-};
+use super::buffer_merges::buffer_merge_result_type;
+use super::{merge_match_arm_result_type, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{ArrayEntry, Expr, ExprKind};
 use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv};
@@ -31,9 +32,16 @@ impl Checker {
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
-            ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
+            ExprKind::Variable(name) => {
+                let ty = self.variable_type_or_eval_dynamic(name, expr.span, env)?;
+                self.record_local_value_read(name, expr.span, &ty, env);
+                Ok(ty)
+            }
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
+                if crate::types::object_operators::binary_plan(&crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty).is_some() {
+                    return Ok(ty);
+                }
                 match ty {
                     PhpType::Int => {
                         if matches!(&inner.kind, ExprKind::IntLiteral(_)) {
@@ -46,6 +54,10 @@ impl Checker {
                     PhpType::Mixed | PhpType::Bool | PhpType::False | PhpType::Void => {
                         Ok(PhpType::Mixed)
                     }
+                    // Negating a counter is ordinary arithmetic — `$i = 4; $i++; echo -$i;` is
+                    // `-5` in php — and the union stays the union: negation cannot turn a float
+                    // into an int or the other way round.
+                    ref ty if ty.is_int_float_union() => Ok(ty.clone()),
                     _ => Err(CompileError::new(
                         expr.span,
                         "Cannot negate a non-numeric value",
@@ -62,7 +74,10 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
-                Some(PhpType::Int) => Ok(PhpType::Mixed),
+                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
+                Some(PhpType::Int) => Ok(if self.has_fixed_tagged_reference_storage(name, env) {
+                    PhpType::Int
+                } else { PhpType::Mixed }),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
                 // PHP's string increment can change the value's type (`"9"++` is
                 // `int(10)`), so the pre-form's value is dynamically tagged. EIR lowering
@@ -77,6 +92,10 @@ impl Checker {
                 Some(PhpType::Bool) | Some(PhpType::False) | Some(PhpType::Void) => {
                     Ok(PhpType::Int)
                 }
+                // What a PREVIOUS `++` left behind: an int that may have promoted at the
+                // overflow boundary. Incrementing it again stays `int|float`, and refusing it
+                // would make the second `$i++` in a row a compile error.
+                Some(ty) if ty.is_int_float_union() => Ok(ty.clone()),
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &increment_type_error(name, other),
@@ -87,6 +106,7 @@ impl Checker {
                 )),
             },
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => match env.get(name) {
+                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
                 Some(PhpType::Int)
                 | Some(PhpType::Bool)
                 | Some(PhpType::False)
@@ -102,6 +122,8 @@ impl Checker {
                 }
                 // The post-forms yield the float the local held before the update.
                 Some(PhpType::Float) => Ok(PhpType::Float),
+                // See the pre-form arm: this is the type a previous `++` produced.
+                Some(ty) if ty.is_int_float_union() => Ok(ty.clone()),
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &increment_type_error(name, other),
@@ -131,7 +153,10 @@ impl Checker {
                     });
                     val_ty = Some(match val_ty {
                         Some(current) if current == vt => current,
-                        Some(_) => PhpType::Mixed,
+                        // Pointers and `null` share one pointer-word element, as in an indexed
+                        // literal; anything else widens to `mixed`.
+                        Some(current) => crate::types::merge_pointer_elements(&current, &vt)
+                            .unwrap_or(PhpType::Mixed),
                         None => vt,
                     });
                 }
@@ -150,11 +175,9 @@ impl Checker {
                 for entry in entries {
                     let next = match entry {
                         ArrayEntry::Spread(source) => {
-                            match self.infer_type(source, env)?.codegen_repr() {
-                                PhpType::Array(elem) => elem.codegen_repr(),
-                                PhpType::AssocArray { value, .. } => value.codegen_repr(),
-                                _ => PhpType::Mixed,
-                            }
+                            // The entry contains an ExprKind::Spread node. Its inference already
+                            // returns the source's element type, including nested array elements.
+                            self.infer_type(source, env)?
                         }
                         ArrayEntry::Keyed(key, value) => {
                             self.infer_type(key, env)?;
@@ -164,7 +187,9 @@ impl Checker {
                     };
                     val_ty = Some(match val_ty {
                         Some(acc) if acc == next => acc,
-                        Some(_) => PhpType::Mixed,
+                        // Pointers and `null` share one pointer-word element.
+                        Some(acc) => crate::types::merge_pointer_elements(&acc, &next)
+                            .unwrap_or(PhpType::Mixed),
                         None => next,
                     });
                 }
@@ -180,11 +205,13 @@ impl Checker {
             } => {
                 self.infer_type(subject, env)?;
                 let mut result_ty: Option<PhpType> = None;
+                let mut arm_types: Vec<(&Expr, PhpType)> = Vec::new();
                 for (conditions, result) in arms {
                     for c in conditions {
                         self.infer_type(c, env)?;
                     }
                     let ty = self.match_arm_result_type(result, env)?;
+                    arm_types.push((result, ty.clone()));
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
@@ -192,10 +219,14 @@ impl Checker {
                 }
                 if let Some(d) = default {
                     let ty = self.match_arm_result_type(d, env)?;
+                    arm_types.push((&**d, ty.clone()));
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
                     });
+                }
+                if let Some(buffer) = buffer_merge_result_type("a match", &arm_types, expr.span)? {
+                    return Ok(buffer);
                 }
                 Ok(result_ty.unwrap_or(PhpType::Void))
             }
@@ -203,170 +234,61 @@ impl Checker {
                 if elems.is_empty() {
                     return Ok(PhpType::Array(Box::new(PhpType::Never)));
                 }
-                if elems.iter().any(|elem| {
-                    matches!(
-                        &elem.kind,
-                        ExprKind::Spread(inner)
-                            if matches!(
-                                self.infer_type(inner, env).map(|ty| ty.codegen_repr()),
-                                Ok(PhpType::AssocArray { .. } | PhpType::Mixed)
-                            )
-                    )
-                }) {
-                    let value_ty = self.assoc_spread_literal_value_type(elems, env);
+                // Every spread source is typed ONCE. The hash-spread scan types the sources in
+                // order, up to the first one that makes the literal a hash, and whichever merge
+                // follows reuses those results. Typing a source again in the merge doubled the
+                // work at every nesting level, so `[...($m ?? [...E, null]), null]` grew
+                // exponentially with its depth.
+                let mut scanned_sources: Vec<Result<PhpType, CompileError>> = Vec::new();
+                let mut has_hash_spread = false;
+                for elem in elems {
+                    let ExprKind::Spread(inner) = &elem.kind else {
+                        continue;
+                    };
+                    let source_ty = self.infer_type(inner, env);
+                    has_hash_spread = matches!(
+                        source_ty.as_ref().map(|ty| ty.codegen_repr()),
+                        Ok(PhpType::AssocArray { .. } | PhpType::Mixed)
+                    );
+                    scanned_sources.push(source_ty);
+                    if has_hash_spread {
+                        break;
+                    }
+                }
+                if has_hash_spread {
+                    let value_ty =
+                        self.assoc_spread_literal_value_type(elems, scanned_sources, env);
                     return Ok(PhpType::AssocArray {
                         key: Box::new(PhpType::Mixed),
                         value: Box::new(value_ty),
                     });
                 }
-                let mut elem_ty = self.infer_type(&elems[0], env)?;
-                for elem in &elems[1..] {
-                    let ty = self.infer_type(elem, env)?;
-                    if ty != elem_ty {
-                        if let Some(merged_ty) = self.merge_array_element_type(&elem_ty, &ty) {
-                            elem_ty = merged_ty;
-                            continue;
+                // No source is a hash, so the scan typed every spread source, in the order the
+                // spreads appear: each spread element takes the next recorded result, and keeps
+                // the diagnostic a spread reports at its own span.
+                let mut scanned_sources = scanned_sources.into_iter();
+                let mut elem_ty: Option<PhpType> = None;
+                for elem in elems {
+                    let ty = match &elem.kind {
+                        ExprKind::Spread(inner) => {
+                            let source_ty = scanned_sources
+                                .next()
+                                .unwrap_or_else(|| self.infer_type(inner, env))?;
+                            self.spread_source_element_type(source_ty, elem.span, false)?
                         }
-                        elem_ty = PhpType::Mixed;
-                    }
+                        _ => self.infer_type(elem, env)?,
+                    };
+                    elem_ty = Some(match elem_ty {
+                        None => ty,
+                        Some(current) if current == ty => current,
+                        Some(current) => self
+                            .merge_array_element_type(&current, &ty)
+                            .unwrap_or(PhpType::Mixed),
+                    });
                 }
-                Ok(PhpType::Array(Box::new(elem_ty)))
+                Ok(PhpType::Array(Box::new(elem_ty.unwrap_or(PhpType::Never))))
             }
-            ExprKind::ArrayAccess { array, index } => {
-                let arr_ty = self.infer_type(array, env)?;
-                let idx_ty = self.infer_type(index, env)?;
-                let buffer = matches!(arr_ty, PhpType::Buffer(_));
-                self.buffer_read_observations.entry(expr.span)
-                    .and_modify(|previous| *previous &= buffer)
-                    .or_insert(buffer);
-                let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
-                match &arr_ty {
-                    PhpType::Str => {
-                        if !is_valid_string_offset_index(index, &idx_ty) {
-                            return Err(CompileError::new(
-                                expr.span,
-                                "String index must be integer",
-                            ));
-                        }
-                        Ok(PhpType::Str)
-                    }
-                    PhpType::Array(elem_ty) => {
-                        if normalized_idx_ty != PhpType::Int {
-                            // PHP allows string keys on indexed arrays: the array
-                            // promotes to hash at runtime. Return the element type
-                            // widened to Mixed so ?? / isset / reads type-check.
-                            Ok(PhpType::Mixed)
-                        } else {
-                            Ok(*elem_ty.clone())
-                        }
-                    }
-                    PhpType::AssocArray { value, .. } => {
-                        // Assoc arrays accept string or int keys
-                        Ok(*value.clone())
-                    }
-                    PhpType::Object(class_name) => {
-                        if self.object_type_implements_interface(class_name, "ArrayAccess") {
-                            Ok(self.array_access_offset_get_type(class_name))
-                        } else {
-                            Err(CompileError::new(expr.span, "Cannot index non-array"))
-                        }
-                    }
-                    PhpType::Union(members) => {
-                        let mut result_members = Vec::new();
-                        let mut saw_indexable_member = false;
-                        let mut first_index_error = None;
-                        for member in members {
-                            match member {
-                                PhpType::Void => result_members.push(PhpType::Void),
-                                PhpType::Str => {
-                                    saw_indexable_member = true;
-                                    if !is_valid_string_offset_index(index, &idx_ty) {
-                                        first_index_error =
-                                            first_index_error.or(Some("String index must be integer"));
-                                        continue;
-                                    }
-                                    result_members.push(PhpType::Str);
-                                }
-                                PhpType::Array(elem_ty) => {
-                                    saw_indexable_member = true;
-                                    if normalized_idx_ty != PhpType::Int {
-                                        // String key on indexed array: PHP promotes
-                                        // to hash at runtime; element may be Mixed.
-                                        result_members.push(PhpType::Mixed);
-                                    } else {
-                                        result_members.push(*elem_ty.clone());
-                                    }
-                                }
-                                PhpType::AssocArray { value, .. } => {
-                                    saw_indexable_member = true;
-                                    result_members.push(*value.clone());
-                                }
-                                PhpType::Object(class_name) => {
-                                    if self.object_type_implements_interface(
-                                        class_name,
-                                        "ArrayAccess",
-                                    ) {
-                                        saw_indexable_member = true;
-                                        result_members
-                                            .push(self.array_access_offset_get_type(class_name));
-                                    }
-                                }
-                                PhpType::Buffer(elem_ty) => {
-                                    saw_indexable_member = true;
-                                    if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) {
-                                        first_index_error =
-                                            first_index_error.or(Some("Buffer index must be integer"));
-                                        continue;
-                                    }
-                                    match elem_ty.as_ref() {
-                                        PhpType::Packed(name) => {
-                                            result_members.push(PhpType::Pointer(Some(name.clone())))
-                                        }
-                                        _ => result_members.push(*elem_ty.clone()),
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        let has_concrete_result =
-                            result_members.iter().any(|member| *member != PhpType::Void);
-                        if !has_concrete_result && saw_indexable_member {
-                            Err(CompileError::new(
-                                expr.span,
-                                first_index_error.unwrap_or("Cannot index non-array"),
-                            ))
-                        } else if result_members.is_empty() {
-                            Err(CompileError::new(expr.span, "Cannot index non-array"))
-                        } else {
-                            Ok(self.normalize_union_type(result_members))
-                        }
-                    }
-                    PhpType::Buffer(elem_ty) => {
-                        if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) {
-                            return Err(CompileError::new(
-                                expr.span,
-                                "Buffer index must be integer",
-                            ));
-                        }
-                        match elem_ty.as_ref() {
-                            PhpType::Packed(name) => Ok(PhpType::Pointer(Some(name.clone()))),
-                            _ => Ok(*elem_ty.clone()),
-                        }
-                    }
-                    // Mixed receivers fall through to runtime dispatch. The
-                    // boxed payload may carry an indexed array, an assoc
-                    // hash, or a stdClass; codegen unboxes and routes to
-                    // the right runtime helper. Missing keys decode to
-                    // `Mixed(null)` at runtime, mirroring PHP's silent
-                    // "undefined index" warning behavior for this very
-                    // common idiom (e.g. `json_decode($json, true)["k"]`).
-                    PhpType::Mixed => Ok(PhpType::Mixed),
-                    // `isset($n['k'])` / `$n['k'] ?? $d` reach through a null base in PHP and
-                    // answer `false` / the default; only a probe context may do so.
-                    PhpType::Void if self.null_probe_depth > 0 => Ok(PhpType::Void),
-                    _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
-                }
-            }
+            ExprKind::ArrayAccess { .. } => self.infer_array_access_type(expr, env),
             ExprKind::Ternary {
                 condition,
                 then_expr,
@@ -377,23 +299,20 @@ impl Checker {
                 // recognized guards) narrow `$x` — or a simple `$x->prop` — in the then/else
                 // branches. A ternary is a single expression (no intervening writes), so the
                 // narrowing is safe to scope to each branch's inference.
-                let (then_ty, else_ty) = if let Some(guard) =
-                    self.guard_narrowing(condition, env)?
-                {
-                    let mut then_env = env.clone();
-                    then_env.insert(guard.var.clone(), guard.then_ty);
-                    let mut else_env = env.clone();
-                    else_env.insert(guard.var, guard.else_ty);
-                    (
-                        self.match_arm_result_type(then_expr, &then_env)?,
-                        self.match_arm_result_type(else_expr, &else_env)?,
-                    )
-                } else {
-                    (
-                        self.match_arm_result_type(then_expr, env)?,
-                        self.match_arm_result_type(else_expr, env)?,
-                    )
-                };
+                let mut then_env = env.clone();
+                let mut else_env = env.clone();
+                let guards = self.guard_narrowings(condition, env)?;
+                let then_ty = self.with_preserved_binding_flow(|checker|
+                    checker.with_flow_narrowings(&guards, true, &mut then_env,
+                        |checker, env| checker.match_arm_result_type(then_expr, env)))?;
+                let else_ty = self.with_preserved_binding_flow(|checker|
+                    checker.with_flow_narrowings(&guards, false, &mut else_env,
+                        |checker, env| checker.match_arm_result_type(else_expr, env)))?;
+                let arms = [(&**then_expr, then_ty), (&**else_expr, else_ty)];
+                if let Some(buffer) = buffer_merge_result_type("a ternary", &arms, expr.span)? {
+                    return Ok(buffer);
+                }
+                let [(_, then_ty), (_, else_ty)] = arms;
                 // Same Mixed/nullable merge as match arms: heterogeneous heap
                 // types must not collapse through the Str-absorbing syntactic join.
                 Ok(merge_match_arm_result_type(self, then_ty, else_ty))
@@ -401,27 +320,17 @@ impl Checker {
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.match_arm_result_type(value, env)?;
                 let default_ty = self.match_arm_result_type(default, env)?;
-                Ok(merge_match_arm_result_type(self, value_ty, default_ty))
+                let arms = [(&**value, value_ty), (&**default, default_ty)];
+                if let Some(buffer) = buffer_merge_result_type("a `?:`", &arms, expr.span)? {
+                    return Ok(buffer);
+                }
+                let [(_, value_ty), (_, default_ty)] = arms;
+                Ok(merge_match_arm_result_type(self, super::truthy_short_ternary_type(self, value_ty), default_ty))
             }
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
-                match thrown_ty {
-                    PhpType::Object(type_name)
-                        if self.object_type_implements_throwable(&type_name)
-                            || self.object_type_may_be_eval_declared(&type_name) =>
-                    {
-                        Ok(PhpType::Void)
-                    }
-                    PhpType::Mixed if self.eval_barrier_active => Ok(PhpType::Void),
-                    PhpType::Object(_) => Err(CompileError::new(
-                        expr.span,
-                        "Type error: throw requires an object implementing Throwable",
-                    )),
-                    _ => Err(CompileError::new(
-                        expr.span,
-                        "Type error: throw requires an object value",
-                    )),
-                }
+                self.validate_finally_throw_type(&thrown_ty, expr.span)?;
+                Ok(PhpType::Void)
             }
             ExprKind::Cast { target, expr } => {
                 let source_ty = self.infer_type(expr, env)?;
@@ -431,18 +340,9 @@ impl Checker {
                     CastType::Float => PhpType::Float,
                     CastType::String => PhpType::Str,
                     CastType::Bool => PhpType::Bool,
-                    CastType::Array
-                        if matches!(source_ty.codegen_repr(), PhpType::Object(_)) =>
-                    PhpType::AssocArray {
-                        key: Box::new(PhpType::Str),
-                        value: Box::new(PhpType::Mixed),
-                    },
-                    CastType::Array
-                        if matches!(
-                            source_ty.codegen_repr(),
-                            PhpType::Mixed | PhpType::Union(_)
-                        ) => PhpType::Mixed,
-                    CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+                    // Shared with EIR lowering so the static type always names the storage
+                    // the lowered conversion produces.
+                    CastType::Array => crate::types::array_cast_result_type(&source_ty),
                     // `(object)` is the identity on an object, so the static class survives the
                     // cast; a runtime-typed source may already hold an unrelated class, which
                     // only `mixed` can describe. Every other source becomes a fresh stdClass.
@@ -478,5 +378,5 @@ impl Checker {
 /// `int`, `float`, `bool`, `null`, `string`, and boxed `mixed` locals all have an increment
 /// path; everything else (arrays, objects, buffers, pointers) reaches this diagnostic.
 fn increment_type_error(name: &str, ty: &PhpType) -> String {
-    format!("Cannot increment/decrement ${} of type {:?}", name, ty)
+    format!("Cannot increment/decrement ${} of type {}", name, ty)
 }

@@ -15,10 +15,24 @@ mod instanceof;
 mod traits;
 #[path = "oop/inheritance.rs"]
 mod inheritance;
+#[path = "oop/final_class_dispatch.rs"]
+mod final_class_dispatch;
 #[path = "oop/interfaces.rs"]
 mod interfaces;
 #[path = "oop/modifiers_and_properties.rs"]
 mod modifiers_and_properties;
+#[path = "oop/lexical_property_defaults.rs"]
+mod lexical_property_defaults;
+#[path = "oop/nested_default_review.rs"]
+mod nested_default_review;
+mod nested_default_grok_scope;
+mod nested_default_review_boundaries;
+mod nested_default_compound_review;
+mod nested_default_numeric_review;
+#[path = "oop/readonly_initialization.rs"]
+mod readonly_initialization;
+#[path = "oop/readonly_native_properties.rs"]
+mod readonly_native_properties;
 #[path = "oop/callables/mod.rs"]
 mod callables;
 #[path = "oop/union_types.rs"]
@@ -37,6 +51,8 @@ mod dynamic_dispatch;
 mod misc;
 #[path = "oop/attributes.rs"]
 mod attributes;
+#[path = "oop/reflection_array_constants.rs"]
+mod reflection_array_constants;
 #[path = "oop/constants.rs"]
 mod constants;
 #[path = "oop/abstract_properties.rs"]
@@ -60,5 +76,21 @@ mod class_relation_names;
 
 /// A property write whose receiver is statically `mixed` or an object union.
 mod mixed_receiver_property_writes;
+#[path = "oop/static_receiver_lifetime.rs"]
+mod static_receiver_lifetime;
+#[path = "oop/static_receiver_dynamic.rs"]
+mod static_receiver_dynamic;
 #[path = "oop/reflection_attribute_filter.rs"]
 mod reflection_attribute_filter;
+#[path = "oop/reflection_to_string.rs"]
+mod reflection_to_string;
+#[path = "oop/reflection_union_type.rs"]
+mod reflection_union_type;
+#[path = "oop/reflection_to_string_review.rs"]
+mod reflection_to_string_review;
+#[path = "oop/reflection_to_string_fallbacks.rs"]
+mod reflection_to_string_fallbacks;
+#[path = "oop/readonly_setter_review.rs"]
+mod readonly_setter_review;
+#[path = "oop/readonly_store_box_review.rs"]
+mod readonly_store_box_review;

@@ -1,6 +1,6 @@
 //! Purpose:
-//! Regression coverage for `array_values()`, `array_flip()` and `in_array()` over a receiver
-//! whose static type is `mixed` (issue #630).
+//! Regression coverage for `array_values()`, `array_flip()`, `in_array()` and `array_slice()`
+//! over a receiver whose static type is `mixed` (issues #630 and #1348).
 //!
 //! Called from:
 //! - The native codegen suite's array module.
@@ -173,4 +173,126 @@ for ($i = 0; $i < 3; $i++) {
         "{}",
         output.stderr
     );
+}
+
+/// `array_slice()` over a `mixed` receiver slices a hash payload instead of answering an empty
+/// array: string keys survive and integer keys are renumbered, while a list is sliced as before
+/// (issue #1348). Expected output is verbatim PHP 8.5.10.
+#[test]
+fn test_array_slice_on_mixed_receiver_shapes() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(): mixed { return ["a" => 1, "b" => 2, "c" => 3]; }
+function show(mixed $v): void { echo json_encode(array_slice($v, 1, 2)), "|"; }
+echo count(array_slice(pick(), 1, 2)), "|";
+show(["a" => 1, "b" => 2, "c" => 3]);
+show([5 => "p", 9 => "q", 12 => "r"]);
+show(["x" => 1, 7 => 2, "y" => 3]);
+show([10, 20, 30]);
+show([]);
+var_dump(array_slice(pick(), -1));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            r#"2|{"b":2,"c":3}|["q","r"]|{"0":2,"y":3}|[20,30]|[]|"#,
+            "array(1) {\n  [\"c\"]=>\n  int(3)\n}\n",
+        )
+    );
+}
+
+/// A declared `array` parameter holding a hash is sliced by its runtime storage as well: the
+/// parameter is a boxed PHP array, so it took the same list-only path and answered `[]`.
+#[test]
+fn test_array_slice_on_declared_array_parameter_holding_a_hash() {
+    let out = compile_and_run(
+        r#"<?php
+function tail(array $a): array { return array_slice($a, 1); }
+print_r(tail(["k" => "v", "m" => [1, 2], "n" => 3.5]));
+print_r(tail([4, 5, 6]));
+foreach (tail(["p" => "P", "q" => "Q", "r" => "R"]) as $key => $value) { echo $key, "=", $value, ";"; }
+echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Array\n(\n    [m] => Array\n        (\n            [0] => 1\n            [1] => 2\n        )\n\n    [n] => 3.5\n)\n",
+            "Array\n(\n    [0] => 5\n    [1] => 6\n)\n",
+            "q=Q;r=R;\n",
+        )
+    );
+}
+
+/// An untyped parameter that call-site specialization types as a hash still reaches EIR as a
+/// boxed value, so its slice takes the boxed path too instead of the backend refusal
+/// `array_slice result PHP type AssocArray`.
+#[test]
+fn test_array_slice_on_specialized_untyped_parameter_holding_a_hash() {
+    let out = compile_and_run(
+        r#"<?php
+function top($scores) { return array_slice($scores, 0, 2); }
+for ($i = 0; $i < 2; $i++) {
+    echo json_encode(top(["a" => 1 + $i, "b" => 2, "c" => 3])), "|";
+}
+"#,
+    );
+    assert_eq!(out, r#"{"a":1,"b":2}|{"a":2,"b":2}|"#);
+}
+
+/// A key-preserving slice of a boxed payload through the callable wrapper owns its elements.
+///
+/// `call_user_func_array(array_slice(...), $args)` passes `$preserve_keys` at run time, and a
+/// list payload is then sliced into a hash by `__rt_array_slice_to_hash`. On x86_64 that helper
+/// handed its retain the wrong register, so the result shared its arrays with the source without
+/// owning them. Hash payloads go through `__rt_hash_slice` with the same flag. Expected output
+/// is verbatim PHP 8.5.10.
+#[test]
+fn test_callable_array_slice_keeping_keys_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$f = array_slice(...);
+for ($i = 0; $i < 3; $i++) {
+    $rows = [["id" => $i], ["id" => $i + 1], "tail" . $i];
+    foreach ([true, false] as $keep) {
+        $args = [$rows, 1, null, $keep];
+        $slice = call_user_func_array($f, $args);
+        echo json_encode($slice), "|";
+    }
+    $args = [["k" => [$i], 4 => "v" . $i, 8 => [$i, $i]], 1, 2, true];
+    echo json_encode(call_user_func_array($f, $args)), "|";
+}
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        concat!(
+            r#"{"1":{"id":1},"2":"tail0"}|[{"id":1},"tail0"]|{"4":"v0","8":[0,0]}|"#,
+            r#"{"1":{"id":2},"2":"tail1"}|[{"id":2},"tail1"]|{"4":"v1","8":[1,1]}|"#,
+            r#"{"1":{"id":3},"2":"tail2"}|[{"id":3},"tail2"]|{"4":"v2","8":[2,2]}|"#,
+        )
+    );
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
+
+/// Slicing boxed hash and list payloads in a loop releases every intermediate array and box.
+#[test]
+fn test_array_slice_on_mixed_receiver_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function pick(mixed $v): mixed { return $v; }
+for ($i = 0; $i < 3; $i++) {
+    $slice = array_slice(pick(["a" => "x" . $i, "b" => [$i], 3 => "z"]), 1);
+    echo count($slice), json_encode($slice), "|";
+    $list = array_slice(pick(["s" . $i, "t", "u"]), 1, 1);
+    echo json_encode($list), "|";
+}
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        r#"2{"b":[0],"0":"z"}|["t"]|2{"b":[1],"0":"z"}|["t"]|2{"b":[2],"0":"z"}|["t"]|"#
+    );
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
 }

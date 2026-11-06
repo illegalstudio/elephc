@@ -1,8 +1,6 @@
 ---
 title: "set_exception_handler()"
 description: "Installs an uncaught-exception handler and returns the previous handler."
-sidebar:
-  order: 687
 ---
 
 ## set_exception_handler()
@@ -20,8 +18,9 @@ Installs an uncaught-exception handler and returns the previous handler.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/set_exception_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/set_exception_handler.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

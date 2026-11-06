@@ -8,9 +8,15 @@
 //! Key details:
 //! - Heap helpers own allocator metadata, debug accounting, and free-list invariants used by all refcounted runtime values.
 //! - Enabled mbstring hooks retire native string identity leases before storage can be reused.
+//! - Mixed wrappers cannot own string identity leases; their string children retire separately.
 
+use super::heap_consolidate::HEAP_BIN_MAX;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+
+#[cfg(test)]
+#[path = "heap_free/tail_scan_tests.rs"]
+mod tail_scan_tests;
 
 
 /// Emits `__rt_heap_free` and `__rt_heap_free_safe` runtime helpers.
@@ -18,12 +24,15 @@ use crate::codegen_support::platform::Arch;
 /// `__rt_heap_free(x0)` returns a heap block to the free list. The block header
 /// (16 bytes before user pointer) contains block size, refcount, and heap kind.
 ///
-/// Optimization: if the block is at the END of the heap (most recently bump-allocated),
-/// just decrement the bump pointer instead of adding to the free list. This makes free
-/// loops O(1) with zero fragmentation.
+/// If the block is at the bump tail, shrink the bump pointer and reclaim any newly
+/// exposed ordered free-list tail blocks. Other insertions start that tail search
+/// only when their merged endpoint reaches the bump frontier.
 ///
-/// Otherwise, small blocks (≤64 bytes payload) go into segregated size-class bins.
-/// Larger blocks join the ordered coalescing free list.
+/// Otherwise, blocks up to `HEAP_BIN_MAX` payload bytes go to the exact size-class bin for their
+/// payload (one push, no coalescing until `__rt_heap_consolidate`). Under `--heap-debug`, the header's byte in `_heap_bin_marks` catches a double free in O(1); the
+/// bin is scanned only when the mark is already set, which a stale mark can also explain.
+/// Web mode instead rejects retired identities through the exact live-base bitmap
+/// before allocator mutation. Larger blocks join the ordered coalescing free list.
 ///
 /// Input: `x0` = user pointer (as returned by `heap_alloc`)
 ///
@@ -61,6 +70,8 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("cmp x12, x17");                                        // would the candidate payload overrun the live heap?
     emitter.instruction("b.hi __rt_heap_free_done");                            // yes — reject the invalid block before free-list insertion
 
+    super::heap_live_bases::emit_free_guard(emitter);
+
     // -- return this block's PHP object handle to the pool before the storage goes --
     // Probe the authoritative side table inline. Most blocks are strings, arrays,
     // hashes, or Mixed cells and have no handle, so they avoid a preserving helper call.
@@ -70,6 +81,7 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("ldr w9, [x10, x9, lsl #2]");                           // inspect the handle bound to this allocation granule
     emitter.instruction("cbz w9, __rt_heap_free_object_handle_done");           // ordinary non-object allocations need no handle release
     emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the freed pointer and caller return address across the handle release
+    emitter.instruction("bl __rt_weak_reference_retire");                       // invalidate non-owning object observers before storage reuse
     emitter.instruction("bl __rt_object_handle_release");                       // hand this object's PHP handle back to the LIFO pool
     emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the freed pointer and caller return address
     emitter.label("__rt_heap_free_object_handle_done");
@@ -77,9 +89,17 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
         super::eval_array_references::emit_eval_array_reference_retirement(emitter);
     }
     if mbstring {
+        // -- string identity belongs to the child buffer, never its Mixed wrapper --
+        emitter.instruction("ldr w9, [x0, #-8]");                               // inspect the validated allocation kind and identity flag after eval observers retire
+        emitter.instruction("and w10, w9, #0xff");                              // isolate the top-level heap kind from header flags
+        emitter.instruction("cmp w10, #5");                                     // a Mixed wrapper cannot be a native string identity owner
+        emitter.instruction("b.eq __rt_heap_free_mbstring_done");               // let the separately owned string child retire its own identity
+        emitter.instruction(&format!("tst w9, #{}", crate::codegen_support::sentinels::MBSTRING_IDENTITY_TRACKED)); // does this allocation carry native string identity metadata?
+        emitter.instruction("b.eq __rt_heap_free_mbstring_done");               // untracked strings skip the full bridge callback
         emitter.instruction("stp x0, x30, [sp, #-16]!");                        // preserve the freed pointer and caller return address across the metadata callback
         emitter.instruction("bl __rt_mbstring_ini_forget");                     // retire the string identity before allocator reuse
         emitter.instruction("ldp x0, x30, [sp], #16");                          // restore the frameless allocator's input and original return address
+        emitter.label("__rt_heap_free_mbstring_done");
     }
 
     // -- debug mode: validate the free list before mutating it --
@@ -91,6 +111,7 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the freed pointer and caller return address after validation
     emitter.label("__rt_heap_free_debug_checked");
 
+    super::heap_live_bases::emit_update(emitter, false);
     // -- compute header address and block end --
     emitter.instruction("sub x9, x0, #16");                                     // x9 = header address (block_size lives here)
     emitter.instruction("ldr w11, [x9]");                                       // x11 = block size (32-bit, zero-extends)
@@ -131,27 +152,25 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
 
     // -- small non-tail blocks go through segregated bins first --
     emitter.label("__rt_heap_free_cache_small");
-    emitter.instruction("cmp x11, #64");                                        // does this payload fit in the segregated small-bin cache?
+    emitter.instruction(&format!("cmp x11, #{}", HEAP_BIN_MAX));                // does this payload have an exact size-class bin?
     emitter.instruction("b.hi __rt_heap_free_insert");                          // no — keep using the general coalescing free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_small_bins");
-    emitter.instruction("mov x12, #0");                                         // default to the <=8-byte bin offset
-    emitter.instruction("cmp x11, #8");                                         // does the freed payload fit in the smallest class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=8-byte bin offset
-    emitter.instruction("mov x12, #8");                                         // otherwise target the <=16-byte bin
-    emitter.instruction("cmp x11, #16");                                        // does the freed payload fit in the <=16-byte class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=16-byte bin offset
-    emitter.instruction("mov x12, #16");                                        // otherwise target the <=32-byte bin
-    emitter.instruction("cmp x11, #32");                                        // does the freed payload fit in the <=32-byte class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=32-byte bin offset
-    emitter.instruction("mov x12, #24");                                        // the remaining cached case is the <=64-byte bin
-    emitter.label("__rt_heap_free_cache_small_ready");
-    emitter.instruction("add x10, x10, x12");                                   // x10 = address of the chosen small-bin head slot
+    emitter.instruction("add x10, x10, x11");                                   // the head for payload n lives at offset n - 8
+    emitter.instruction("sub x10, x10, #8");                                    // x10 = address of this size class's bin head
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
-    emitter.instruction("cbnz x16, __rt_heap_free_cache_small_dupscan");        // heap-debug mode active, scan the bin for a double free
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_web_heap_guard_enabled");
-    emitter.instruction("ldr x16, [x16]");                                      // load the web heap-guard enabled flag
-    emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // neither guard active, skip duplicate detection
+    emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // normal web frees already passed the exact live-base guard
+    emitter.label("__rt_heap_free_cache_small_guarded");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_buf");
+    emitter.instruction("sub x13, x9, x12");                                    // x13 = header offset from the heap base
+    emitter.instruction("lsr x13, x13, #4");                                    // x13 = 16-byte granule index of the header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_bin_marks");
+    emitter.instruction("add x12, x12, x13");                                   // x12 = this header's bin mark
+    emitter.instruction("ldrb w13, [x12]");                                     // is the header already marked as binned?
+    emitter.instruction("cbnz w13, __rt_heap_free_cache_small_dupscan");        // marked: only a scan of the bin can tell a double free from a stale mark
+    emitter.instruction("mov w13, #1");                                         // unmarked: the block cannot already sit in a bin
+    emitter.instruction("strb w13, [x12]");                                     // mark the header as binned
+    emitter.instruction("b __rt_heap_free_cache_small_insert");                 // no scan needed
     emitter.label("__rt_heap_free_cache_small_dupscan");
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current cached block while checking for duplicates
     emitter.label("__rt_heap_free_cache_small_scan");
@@ -173,8 +192,6 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("b __rt_heap_free_post_validate");                      // finish through the common debug validation and free counting path
 
     // -- larger blocks still use the ordered free list for coalescing --
-    emitter.label_shared("__rt_heap_free_insert_cached");
-    emitter.instruction("b __rt_heap_free_insert");                             // enter coalescing from gc_mem_caches through an unconditional cross-atom target
     emitter.label("__rt_heap_free_insert");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_free_list");
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current free block while scanning for insertion point
@@ -217,18 +234,32 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.label("__rt_heap_free_merge_prev");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_heap_free_list");
     emitter.instruction("cmp x10, x14");                                        // was the block inserted at the head of the list?
-    emitter.instruction("b.eq __rt_heap_free_trim_tail");                       // yes — there is no previous block to merge with
+    emitter.instruction("b.eq __rt_heap_free_trim_inserted");                   // no predecessor exists; check whether the inserted end reaches the tail
     emitter.instruction("sub x14, x10, #16");                                   // x14 = previous free block header (prev_next_addr - 16)
     emitter.instruction("ldr w12, [x14]");                                      // x12 = previous block size
     emitter.instruction("add x16, x14, x12");                                   // x16 = previous header + previous payload size
     emitter.instruction("add x16, x16, #16");                                   // x16 = end of previous free block including header
     emitter.instruction("cmp x16, x9");                                         // does the previous free block end where the inserted one begins?
-    emitter.instruction("b.ne __rt_heap_free_trim_tail");                       // no — nothing more to merge locally
+    emitter.instruction("b.ne __rt_heap_free_trim_inserted");                   // the predecessor stays separate; check the inserted block end
     emitter.instruction("add x12, x12, x11");                                   // accumulate current payload size into the previous block
     emitter.instruction("add x12, x12, #16");                                   // include the inserted block header in the merged payload size
     emitter.instruction("str w12, [x14]");                                      // write merged size back to the previous block header
     emitter.instruction("ldr x16, [x9, #16]");                                  // x16 = inserted_block->next
     emitter.instruction("str x16, [x14, #16]");                                 // previous->next = inserted_block->next
+
+    // -- skip tail searches when insertion cannot have exposed a free tail --
+    // The ordered list has no untrimmed tail before insertion. A predecessor
+    // merge changes the start, but x9 + x11 + 16 still gives the merged end.
+    // Direct bump-tail frees bypass this guard because they expose older blocks.
+    emitter.label("__rt_heap_free_trim_inserted");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");
+    emitter.instruction("ldr x14, [x13]");                                      // load the bump frontier after insertion and coalescing
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_buf");
+    emitter.instruction("add x14, x15, x14");                                   // resolve the live heap end without changing the inserted block registers
+    emitter.instruction("add x12, x9, x11");                                    // retain the inserted-plus-successor endpoint after a predecessor merge
+    emitter.instruction("add x12, x12, #16");                                   // include the inserted header in the merged block end
+    emitter.instruction("cmp x12, x14");                                        // can the changed free block reach the bump frontier?
+    emitter.instruction("b.ne __rt_heap_free_post_validate");                   // finish a non-tail insertion without scanning unrelated free blocks
 
     // -- repeatedly trim any free block that now touches the bump tail --
     emitter.label("__rt_heap_free_trim_tail");
@@ -322,7 +353,7 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
 /// Mirrors the ARM64 `emit_heap_free` logic for the x86_64 SYSV ABI:
 /// - Validates pointer is a live heap block via the `crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32` marker
 /// - Bump-reset for tail blocks (O(1))
-/// - Segregated small-bin cache for ≤64-byte payloads
+/// - Exact size-class bins for payloads up to `HEAP_BIN_MAX` bytes
 /// - Ordered coalescing free list for larger blocks
 /// - Optional payload poisoning and debug validation when `_heap_debug_enabled`
 ///
@@ -337,6 +368,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
 
     emitter.instruction("test rax, rax");                                       // ignore null pointers so the x86_64 heap runtime matches the shared heap_free contract
     emitter.instruction("jz __rt_heap_free_done");                              // null payloads do not own heap storage and therefore need no release work
+    super::heap_live_bases::emit_free_guard(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before mutating free-list state
     emitter.instruction("test r8, r8");                                         // is heap-debug validation enabled for this free path?
@@ -357,7 +389,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the current heap kind word before deciding whether a zero refcount is stale or legitimately being freed
     emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word while isolating the ownership marker for the stale-free check
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker from the packed kind metadata
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32));// does this heap-range pointer still carry a live x86_64 heap marker?
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // does this heap-range pointer still carry a live x86_64 heap marker?
     emitter.instruction("je __rt_heap_free_debug_checked");                     // yes — a live marker means this is the first legitimate free path, even if refcount is already zero
     emitter.instruction("mov ecx, DWORD PTR [rax - 12]");                       // load the current live refcount before any x86_64 free-side mutations
     emitter.instruction("test ecx, ecx");                                       // does the header still look like a live heap block?
@@ -368,7 +400,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.label("__rt_heap_free_debug_checked");
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned heap payloads from foreign pointers
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32));// verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
     emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers so callers can safely pass literals or concat-buffer storage
 
     // -- return this block's PHP object handle to the pool before the storage goes --
@@ -382,6 +414,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.instruction("cmp DWORD PTR [r9 + r10 * 4], 0");                     // inspect the handle bound to this allocation granule
     emitter.instruction("je __rt_heap_free_object_handle_done");                // ordinary non-object allocations need no handle release
     emitter.instruction("sub rsp, 8");                                          // align the nested handle-release call from frameless entry parity
+    emitter.instruction("call __rt_weak_reference_retire");                     // invalidate non-owning object observers before storage reuse
     emitter.instruction("call __rt_object_handle_release");                     // hand this object's PHP handle back to the LIFO pool
     emitter.instruction("add rsp, 8");                                          // restore entry parity before the optional eval metadata callback
     emitter.label("__rt_heap_free_object_handle_done");
@@ -389,11 +422,20 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
         super::eval_array_references::emit_eval_array_reference_retirement(emitter);
     }
     if mbstring {
+        // -- string identity belongs to the child buffer, never its Mixed wrapper --
+        emitter.instruction("mov r10d, DWORD PTR [rax - 8]");                   // inspect the validated allocation kind and identity flag after eval observers retire
+        emitter.instruction("and r10d, 0xff");                                  // isolate the top-level heap kind from header flags
+        emitter.instruction("cmp r10d, 5");                                     // a Mixed wrapper cannot be a native string identity owner
+        emitter.instruction("je __rt_heap_free_mbstring_done");                 // let the separately owned string child retire its own identity
+        emitter.instruction(&format!("test DWORD PTR [rax - 8], 0x{:x}", crate::codegen_support::sentinels::MBSTRING_IDENTITY_TRACKED)); // does this allocation carry native string identity metadata?
+        emitter.instruction("jz __rt_heap_free_mbstring_done");                 // untracked strings skip the full bridge callback
         emitter.instruction("sub rsp, 8");                                      // align the identity-retirement call from the frameless entry
         emitter.instruction("call __rt_mbstring_ini_forget");                   // retire the string identity before allocator reuse
         emitter.instruction("add rsp, 8");                                      // restore the allocator's entry stack
+        emitter.label("__rt_heap_free_mbstring_done");
     }
 
+    super::heap_live_bases::emit_update(emitter, false);
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
     emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load the block payload size from the uniform heap header before releasing it
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
@@ -434,29 +476,25 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
 
     // -- small non-tail blocks go through segregated bins first --
     emitter.label("__rt_heap_free_cache_small");
-    emitter.instruction("cmp r11, 64");                                         // does the freed payload fit in the segregated small-bin cache?
+    emitter.instruction(&format!("cmp r11, {}", HEAP_BIN_MAX));                 // does the freed payload have an exact size-class bin?
     emitter.instruction("ja __rt_heap_free_insert");                            // larger payloads still use the ordered coalescing free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_small_bins");
-    emitter.instruction("xor rcx, rcx");                                        // default to the <=8-byte bin offset
-    emitter.instruction("cmp r11, 8");                                          // does the freed payload fit in the smallest cached class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=8-byte bin offset
-    emitter.instruction("mov rcx, 8");                                          // otherwise target the <=16-byte bin offset
-    emitter.instruction("cmp r11, 16");                                         // does the freed payload fit in the <=16-byte class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=16-byte bin offset
-    emitter.instruction("mov rcx, 16");                                         // otherwise target the <=32-byte bin offset
-    emitter.instruction("cmp r11, 32");                                         // does the freed payload fit in the <=32-byte class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=32-byte bin offset
-    emitter.instruction("mov rcx, 24");                                         // remaining cached payloads belong to the <=64-byte bin offset
-    emitter.label("__rt_heap_free_cache_small_ready");
-    emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
+    emitter.instruction("lea r10, [r10 + r11 - 8]");                            // r10 = this size class's bin head (payload n at offset n - 8)
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag before checking cached-bin duplicates
     emitter.instruction("test r8, r8");                                         // is heap-debug duplicate detection enabled?
-    emitter.instruction("jnz __rt_heap_free_cache_small_dupscan");              // heap-debug mode active, scan the bin for a double free
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_web_heap_guard_enabled");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the web heap-guard enabled flag
-    emitter.instruction("test r8, r8");                                         // is the web heap-guard double-free detection enabled?
-    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // neither guard active, skip duplicate detection
+    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // normal web frees already passed the exact live-base guard
+    emitter.label("__rt_heap_free_cache_small_guarded");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+    emitter.instruction("mov rdx, r9");                                         // rdx = header address
+    emitter.instruction("sub rdx, r8");                                         // rdx = header offset from the heap base
+    emitter.instruction("shr rdx, 4");                                          // rdx = 16-byte granule index of the header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_bin_marks");
+    emitter.instruction("add r8, rdx");                                         // r8 = this header's bin mark
+    emitter.instruction("cmp BYTE PTR [r8], 0");                                // is the header already marked as binned?
+    emitter.instruction("jne __rt_heap_free_cache_small_dupscan");              // marked: only a scan of the bin can tell a double free from a stale mark
+    emitter.instruction("mov BYTE PTR [r8], 1");                                // unmarked: the block cannot already sit in a bin, mark it
+    emitter.instruction("jmp __rt_heap_free_cache_small_insert");               // no scan needed
     emitter.label("__rt_heap_free_cache_small_dupscan");
     emitter.instruction("mov rdx, QWORD PTR [r10]");                            // start scanning the cached small-bin chain for duplicate headers
     emitter.label("__rt_heap_free_cache_small_scan");
@@ -477,8 +515,6 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.instruction("jmp __rt_heap_free_post_validate");                    // finish through the shared post-mutation validation and free-counting path
 
     // -- larger blocks still use the ordered free list for coalescing --
-    emitter.label_shared("__rt_heap_free_insert_cached");
-    emitter.instruction("jmp __rt_heap_free_insert");                           // enter coalescing from gc_mem_caches through a cross-section relocation
     emitter.label("__rt_heap_free_insert");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_free_list");
     emitter.instruction("mov rdx, QWORD PTR [r10]");                            // load the current free-list head while scanning for the insertion point
@@ -522,17 +558,29 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.label("__rt_heap_free_merge_prev");
     crate::codegen_support::abi::emit_symbol_address(emitter, "rcx", "_heap_free_list");
     emitter.instruction("cmp r10, rcx");                                        // was the block inserted at the head of the ordered free list?
-    emitter.instruction("je __rt_heap_free_trim_tail");                         // yes — there is no previous free block to merge with
+    emitter.instruction("je __rt_heap_free_trim_inserted");                     // no predecessor exists; check whether the inserted end reaches the tail
     emitter.instruction("lea rcx, [r10 - 16]");                                 // recover the previous free block header from prev_next_addr
     emitter.instruction("mov edx, DWORD PTR [rcx]");                            // load the previous free block payload size before checking adjacency
     emitter.instruction("lea r8, [rcx + rdx + 16]");                            // compute the end address of the previous free block
     emitter.instruction("cmp r8, r9");                                          // does the previous free block end where the inserted block begins?
-    emitter.instruction("jne __rt_heap_free_trim_tail");                        // no — there is no previous neighbor to coalesce with
+    emitter.instruction("jne __rt_heap_free_trim_inserted");                    // the predecessor stays separate; check the inserted block end
     emitter.instruction("add rdx, r11");                                        // accumulate the inserted block payload size into the previous block
     emitter.instruction("add rdx, 16");                                         // include the inserted block header in the merged previous block size
     emitter.instruction("mov DWORD PTR [rcx], edx");                            // write the merged payload size back into the previous block header
     emitter.instruction("mov r8, QWORD PTR [r9 + 16]");                         // preserve the inserted block successor before unlinking the merged header
     emitter.instruction("mov QWORD PTR [rcx + 16], r8");                        // splice the merged previous block directly to the inserted block successor
+
+    // -- skip tail searches when insertion cannot have exposed a free tail --
+    // A predecessor merge preserves r9 + r11 + 16 as the merged endpoint.
+    // Direct bump-tail frees still enter the unconditional scan below.
+    emitter.label("__rt_heap_free_trim_inserted");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off");
+    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // load the bump frontier after insertion and coalescing
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    emitter.instruction("add rcx, r10");                                        // resolve the live heap end without changing the inserted block registers
+    emitter.instruction("lea rdx, [r9 + r11 + 16]");                            // preserve the merged endpoint even when the predecessor absorbed this header
+    emitter.instruction("cmp rdx, rcx");                                        // can the changed free block reach the bump frontier?
+    emitter.instruction("jne __rt_heap_free_post_validate");                    // finish a non-tail insertion without scanning unrelated free blocks
 
     // -- repeatedly trim any ordered free block that now touches the bump tail --
     emitter.label("__rt_heap_free_trim_tail");
@@ -595,6 +643,17 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.instruction("add r11, r10");                                        // r11 = heap base + live heap offset
     emitter.instruction("cmp rax, r11");                                        // is the candidate pointer at or beyond the live heap end?
     emitter.instruction("jae __rt_heap_free_safe_skip");                        // yes, it is not a currently live heap payload
+
+    // -- reject interior pointers and already-free blocks before delegating, as on AArch64 --
+    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the candidate live refcount
+    emitter.instruction("test r10d, r10d");                                     // refcount zero means this is not a live heap payload
+    emitter.instruction("jz __rt_heap_free_safe_skip");                         // an already-freed block is left alone
+    emitter.instruction("mov r10d, DWORD PTR [rax - 16]");                      // load the candidate payload byte size
+    emitter.instruction("cmp r10, 8");                                          // can the candidate block hold the minimum heap payload?
+    emitter.instruction("jb __rt_heap_free_safe_skip");                         // no — reject implausible interior pointers
+    emitter.instruction("add r10, rax");                                        // compute the candidate payload end address
+    emitter.instruction("cmp r10, r11");                                        // does the candidate payload overrun the live heap?
+    emitter.instruction("ja __rt_heap_free_safe_skip");                         // yes — reject the invalid candidate pointer
     emitter.instruction("jmp __rt_heap_free");                                  // delegate in-range candidates to the normal free path
     emitter.label("__rt_heap_free_safe_skip");
     emitter.instruction("ret");                                                 // return without touching foreign/static storage
@@ -620,6 +679,24 @@ mod tests {
         }
     }
 
+    /// `__rt_heap_free_safe` leaves an already-freed block alone on every target: a second
+    /// release of the same string reached `__rt_heap_free` on x86_64 and heap debug reported a
+    /// double free that AArch64 skipped.
+    #[test]
+    fn heap_free_safe_skips_freed_blocks_on_every_target() {
+        for name in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_heap_free(&mut emitter, false, false);
+            let output = emitter.output();
+            let safe = &output[output.find("__rt_heap_free_safe:").unwrap()..];
+            let safe = &safe[..safe.find("__rt_heap_free_safe_skip:").unwrap()];
+            let load = if name == "linux-x86_64" { "DWORD PTR [rax - 12]" } else { "ldr w12, [x11, #4]" };
+            let refcount = safe.find(load).unwrap_or_else(|| panic!("{name}: no refcount load in {safe}"));
+            let delegate = safe.rfind("__rt_heap_free").unwrap();
+            assert!(refcount < delegate, "{name}: {safe}");
+        }
+    }
+
     /// The optional metadata callback must not replace the frameless AArch64 return address.
     #[test]
     fn heap_free_preserves_aarch64_linkage_across_mbstring_retirement() {
@@ -630,6 +707,41 @@ mod tests {
             assert!(output.contains(
                 "stp x0, x30, [sp, #-16]!\n    bl __rt_mbstring_ini_forget\n    ldp x0, x30, [sp], #16"
             ), "{name}");
+        }
+    }
+
+    /// Mixed wrappers skip only the string registry callback, after mandatory eval retirement.
+    #[test]
+    fn heap_free_skips_mixed_string_identity_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for pic in [false, true] {
+                for eval_bridge in [false, true] {
+                    let mut emitter = Emitter::new(target);
+                    emitter.pic_data_refs = pic;
+                    emit_heap_free(&mut emitter, eval_bridge, true);
+                    let output = emitter.output();
+                    let guard = output.find(if target.arch == Arch::AArch64 {
+                        "b.eq __rt_heap_free_mbstring_done"
+                    } else { "je __rt_heap_free_mbstring_done" }).unwrap();
+                    let call = output.find("__rt_mbstring_ini_forget").unwrap();
+                    let done = output.find("__rt_heap_free_mbstring_done:").unwrap();
+                    let clear = output.find(if target.arch == Arch::AArch64 {
+                        "str xzr, [x9, #8]"
+                    } else { "mov QWORD PTR [r9 + 8], 0" }).unwrap();
+                    assert!(guard < call && call < done && done < clear, "{name}, PIC {pic}");
+                    if eval_bridge {
+                        let retired = output.find("__rt_heap_free_eval_references_done:").unwrap();
+                        assert!(retired < guard, "{name}, PIC {pic}");
+                    }
+                }
+                let mut emitter = Emitter::new(target);
+                emitter.pic_data_refs = pic;
+                emit_heap_free(&mut emitter, true, false);
+                let output = emitter.output();
+                assert!(!output.contains("__rt_heap_free_mbstring_done"), "{name}, PIC {pic}");
+                assert!(!output.contains("__rt_mbstring_ini_forget"), "{name}, PIC {pic}");
+            }
         }
     }
 }

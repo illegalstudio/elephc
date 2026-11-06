@@ -15,34 +15,78 @@ use crate::codegen::platform::Target;
 use crate::ir::{print_module, Terminator};
 
 mod aggregate_operand_owners;
+mod loose_comparison_batch;
 mod argument_evaluation_owners;
+mod borrowed_string_reads;
+mod mbstring_fast_semantics;
+mod buffer_element_updates;
+mod ref_local_append;
+mod string_offset_lifetime;
+mod string_offset_writes;
 mod arrays;
+mod unset_collection;
+mod array_edge_guards;
+mod assoc_push;
+mod append_writes;
+mod nullable_array_merges;
 mod array_reference_outputs;
 mod array_implode;
 mod array_membership;
 mod call_coercion_owners;
+mod integer_destinations;
 mod callable_flow_safety;
+mod loop_closures;
+mod method_loop_counters;
+mod nullable_fallback_flow;
+mod reused_loop_counters;
+mod counter_fast_paths;
 mod callable_property_owners;
 mod class_introspection_owners;
 mod closure_bind_owners;
+mod closure_scope_variants;
 mod corpus;
 mod debug_info;
 mod descriptor_ownership;
 mod descriptor_unpack_keys;
 mod destructor_catch_preservation;
+mod dom_html_review;
 mod dynamic_spreads;
 mod effects;
+mod call_effect_followups;
+mod generator_identity;
+mod method_receiver_roots;
+mod enum_argument_boundaries;
+mod enum_review;
+mod enum_result_owners;
+mod string_append;
 mod eval_ownership;
 mod eval_default_helpers;
+mod default_review_boundaries;
 mod exhaustive;
 mod ownership;
+mod property_element_unset;
+mod transient_string_claims;
+mod strip_tags_review;
+mod weak_map_places;
+mod backtrace_labels;
+mod preg_match_all_review;
 mod object_mixed_return_owners;
+mod numeric_string_comparisons;
+mod packed_record_addresses;
+mod fixed_layout_field_narrowing;
+mod scalar_load_owners;
+mod buffer_lengths;
+mod branch_conditions;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
+mod keyed_array_kernels;
 mod boxed_array_multisort;
 mod builtin_datetime_methods;
+mod eval_demand;
 mod instanceof_operand_owners;
+mod guarded_interface_receivers;
+mod guarded_interface_mutations;
 mod if_join_divergent_locals;
 mod switch_initialization;
 mod iter_start_origin;
@@ -52,15 +96,23 @@ mod boxed_array_predicates;
 mod boxed_array_set_comparators;
 mod reference_loop_cleanup;
 mod static_callable_string_owners;
+mod static_nested_updates;
 mod reference_cells;
 mod reference_detach;
 mod reference_property_payload;
+mod reflection_mirror_ownership;
 mod reference_return_boundaries;
 mod callable_operand_owners;
 mod capture_view_owners;
 mod static_properties;
+mod nested_append_review;
+mod property_default_scope;
+mod asymmetric_properties;
+mod static_receiver_writes;
 mod synthetic_arrays;
 mod throwable_constructors;
+mod mixed_throw_errors;
+mod hosted_exception_discard;
 mod xml_parser_arguments;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
@@ -112,6 +164,7 @@ fn try_lower_source_at_for_target(
     let defines = HashSet::new();
     let parsed = crate::source::finalize_physical_program(
         parsed,
+        source,
         &main_file_path,
         source_mode,
         &defines,
@@ -121,7 +174,7 @@ fn try_lower_source_at_for_target(
     let (ast, _) =
         crate::resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines)
             .expect("resolver failed");
-    let ast = crate::autoload::collect_aliases(ast);
+    let ast = crate::autoload::collect_aliases(ast).expect("alias collection failed");
     let mut prelude_inventory = crate::optimize::reachability::PreludeInventory::new();
     let ast = crate::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     // Same injection order as `pipeline::compile`: mysqli after PDO, so the
@@ -148,8 +201,15 @@ fn try_lower_source_at_for_target(
     );
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(
         ast,
         crate::php_version::PhpVersion::default(),
@@ -163,12 +223,21 @@ fn try_lower_source_at_for_target(
         &defines,
     )
     .expect("autoload failed");
+    let ast = crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory)
+        .expect("autoload DOM prelude injection failed");
     // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
     let ast = crate::func_args::desugar(ast).expect("func_args desugar failed");
     let ast = crate::optimize::fold_constants_for_target(ast, target);
-    let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
+    // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint. A generic
+    // CLASS is instantiated by that driver rather than by the checker, so a plain
+    // `check_with_target` here hands the checker a template and reports `Unknown type: T` on an
+    // example that compiles perfectly well through the CLI.
+    let (ast, check_result) = crate::generics::monomorphize(ast, |program, bounds| {
+        crate::types::check_with_target_and_bounds(program, target, bounds)
+    })
+    .expect("type check failed");
     let ast = crate::optimize::propagate_constants(ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let ast = crate::optimize::prune_constant_control_flow(
         ast,
@@ -300,6 +369,28 @@ fn native_reflection_program_lowers_reachable_builtin_methods() {
         r#"<?php
 class Plain {}
 $reflection = new ReflectionClass('Plain');
+echo $reflection->getName();
+"#,
+    );
+    let method_names = module
+        .class_methods
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(method_names.contains("ReflectionClass::__construct"));
+    assert!(method_names.contains("ReflectionClass::getName"));
+}
+
+/// Verifies a user Reflection subclass retains the builtin constructor and inherited methods.
+#[test]
+fn native_reflection_subclass_lowers_reachable_builtin_methods() {
+    let module = lower_source(
+        r#"<?php
+class ReflectedTarget {}
+class UserReflection extends ReflectionClass {
+    public function __construct(string $name) { parent::__construct($name); }
+}
+$reflection = new UserReflection(ReflectedTarget::class);
 echo $reflection->getName();
 "#,
     );

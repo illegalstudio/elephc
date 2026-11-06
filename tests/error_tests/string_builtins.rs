@@ -254,7 +254,7 @@ function pos(): int {
     return strpos("abc", "z");
 }
 "#,
-        "Function 'pos' return type expects Int, got Union([Int, False])",
+        "Function 'pos' return type expects int, got int|false",
     );
 }
 
@@ -373,6 +373,12 @@ fn test_error_htmlspecialchars_wrong_args() {
         "<?php htmlspecialchars();",
         "htmlspecialchars() takes 1 to 3 arguments",
     );
+}
+
+/// Verifies that `strip_tags()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_strip_tags_wrong_args() {
+    expect_error("<?php strip_tags();", "strip_tags() takes 1 or 2 arguments");
 }
 
 /// Verifies that `urlencode()` with no arguments produces the correct arity error.

@@ -239,3 +239,49 @@ fn test_instanceof_accepts_special_class_targets() {
     );
 }
 
+
+/// Verifies an unparenthesized CALL is rejected as an `instanceof` target (issue #1454).
+///
+/// PHP's class reference grammar is a name, `(expr)`, or a chain of property fetches, array
+/// dimensions and static properties, never a call, so every row is a PHP syntax error.
+/// `Foo::$method()` used to parse as a call because the static-property path ran the full
+/// expression parser, while `self::$method()` failed only at the statement's `;`.
+#[test]
+fn test_unparenthesized_call_is_rejected_as_instanceof_target() {
+    for target in [
+        "Foo::$method()",
+        "self::$method()",
+        "$cls()",
+        "$this->cls()",
+        "$a[0]()",
+        "($f)()",
+        "$a->b()->c",
+        "$a?->b()",
+        "$a->m(...)",
+        "Foo()",
+    ] {
+        let source = format!("<?php class Foo {{ function t($x) {{ return $x instanceof {}; }} }}", target);
+        assert!(parse_fails(&source), "`instanceof {}` must not parse", target);
+    }
+}
+
+/// Verifies the targets PHP accepts still parse, including a PARENTHESIZED call and a call
+/// inside an array dimension, which are not calls of the target itself.
+#[test]
+fn test_instanceof_target_forms_php_accepts_still_parse() {
+    for target in [
+        "Foo::$m",
+        "static::$m",
+        "$a->b",
+        "$a[0]",
+        "$a[key()]",
+        "$a?->b",
+        "($cls)",
+        "(Foo::$method())",
+        "(getName())",
+        "Foo",
+    ] {
+        let source = format!("<?php class Foo {{ function t($x) {{ return $x instanceof {}; }} }}", target);
+        assert!(!parse_fails(&source), "`instanceof {}` must parse", target);
+    }
+}

@@ -207,7 +207,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("js __rt_array_merge_boxed_source_done");               // no live entries remain in this source
     emitter.instruction("mov r11, QWORD PTR [r11 + 40]");                       // locate the separately allocated hash entries
     emitter.instruction("shl r10, 6");                                          // each bucket occupies sixty-four bytes
-    emitter.instruction("add r11, r10");                                       // locate the live entry in the separate storage
+    emitter.instruction("add r11, r10");                                        // locate the live entry in the separate storage
     emitter.instruction("mov r10, QWORD PTR [r11 + 56]");                       // follow the next live bucket, skipping tombstones
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // preserve traversal across allocations
     emitter.instruction("mov r10, QWORD PTR [r11 + 8]");                        // borrow the key's low word

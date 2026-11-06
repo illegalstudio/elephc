@@ -33,7 +33,8 @@ fn parse_fragment_accepts_interface_declaration_source() {
     );
 }
 
-/// Verifies interface property hook contracts lower to eval interface metadata.
+/// Verifies interface property hook contracts lower to eval interface metadata, keeping whether
+/// the `get` contract is declared `&get` for `ReflectionMethod::returnsReference()`.
 #[test]
 fn parse_fragment_accepts_interface_property_hook_contracts() {
     let program = parse_fragment(
@@ -54,9 +55,12 @@ fn parse_fragment_accepts_interface_property_hook_contracts() {
                     EvalInterfaceProperty::new("value", true, true).with_type(Some(
                         EvalParameterType::new(vec![EvalParameterTypeVariant::String], false)
                     )),
-                    EvalInterfaceProperty::new("id", true, false).with_type(Some(
-                        EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)
-                    )),
+                    EvalInterfaceProperty::new("id", true, false)
+                        .with_get_returns_by_ref(true)
+                        .with_type(Some(EvalParameterType::new(
+                            vec![EvalParameterTypeVariant::Int],
+                            false
+                        ))),
                 ],
                 Vec::new(),
             )

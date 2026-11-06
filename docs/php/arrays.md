@@ -15,6 +15,75 @@ $arr[1] = 99;          // modify
 $arr[] = 40;           // push
 ```
 
+Empty dimensions are write-only. Assignment expressions such as `($arr[] = 2)`
+return the assigned value; compound appends such as `$arr[] += 2` start from a
+fresh null element, not an existing array value. This also applies to object and
+static array properties. Nested writes such as `$arr[]['key'] = 'value'` and
+`$arr[][] = 1` build new containers. `++$arr[]` appends `1` and returns `1`,
+whereas `$arr[]++` appends `1` and evaluates to null. Explicit nested integer
+keys remain sparse: `$arr[][1] = 'x'` creates only key `1`, not an extra key `0`.
+
+Bare reads, `isset`, `empty`, and `??=` with an empty dimension report
+`Cannot use [] for reading`, as PHP does. Decrement on an append dimension is
+not supported: `$arr[]--` reports
+`Post-decrement on an append dimension is not supported`, and `--$arr[]` reports
+`Pre-decrement on an append dimension is not supported`.
+
+Property writes on a fresh append, such as `$arr[]->x = 1`, `$arr[]->x++`, or
+`++$arr[]->x->y`, append null and then throw a catchable `Error`, as PHP does.
+Computed property selectors and an assignment's right-hand side run before
+the null is appended. Nested property chains name the first property in the
+`Attempt to modify property` error.
+
+Arrays of variadic reference arguments keep the caller's storage when reached
+through a local reference alias. Negative and sparse integer writes add only
+the requested key, preserving the other references without inserting null gaps.
+Reads and JSON encoding observe each referenced argument's current value.
+
+Nested keyed writes also retain the selected scalar element's storage. A string
+element supports PHP string-offset assignment, including a single warning for a
+leading-numeric offset such as `"1abc"`; invalid nonnumeric offsets throw
+`TypeError`. A `false` element is converted to an array with an `E_DEPRECATED`
+diagnostic. Both paths preserve copy-on-write aliases and caller references.
+
+Nested appends preserve object identity: `$items[0][] = $value` invokes
+`offsetSet(null, $value)` when the selected child implements `ArrayAccess`, while
+an array or null child keeps the attached array append path. `WeakMap` children
+reject append with a catchable `Error`. Closure children also throw a catchable
+`Error` on array writes instead of silently discarding the value. Generated nested updates can create
+missing parents below a false or null ancestor, without permitting ordinary reads
+through a scalar value.
+
+A compound append such as `$items[]['k'] += 1` stops if its missing-key handler
+detaches the selected array and no PHP owner keeps that array alive. The expression
+then yields null without inserting the leaf or evaluating the operator, including
+division by zero. Appending an unrelated root sibling does not cancel the operation.
+A saved root-array copy can keep the old target live and receive its pending write.
+If a root mutation detaches the selected cell while a separately boxed child copy
+is the only remaining payload owner, that child copy receives the pending write and
+remains safe for later appends. Two or more independent child copies cancel the write
+instead, leaving every copy unchanged. Multiple copies of the same root array can
+still share a single selected child slot and keep the operation active. When the
+original cell and an independent payload copy both survive, PHP also cancels the
+stale target. A cancelled prefix increment still returns `1`.
+Each missing intermediate key emits its own warning before it is autovivified, unless
+key conversion has already abandoned that dimension before its read.
+
+Losing an intermediate selection is different from losing the final place. For example,
+if the first key handler replaces `$items` during `$items[][1.5][2.5] += 7`, PHP still
+converts the second key, diagnoses its missing leaf, and returns `7` on private temporary
+storage. It does not change the replacement root or saved copies of the abandoned parent.
+If only the final `2.5` conversion loses the place, the expression instead yields null
+without reading the missing leaf or applying the operator.
+
+Plain nested writes with converted keys publish their parents before key diagnostics.
+For `$items[][1.5] = rhs()`, `rhs()` runs first, then a deprecation handler sees `[[]]`.
+A throwing handler leaves that published parent in place. A returning handler may preserve
+the selection through a saved child copy; if it instead abandons the final selected parent, the
+assignment yields null and does not insert the leaf. Plain writes do not emit missing-key
+warnings while creating those parents. Abandoning only an intermediate plain-write parent
+still evaluates the remaining keys and returns the assigned value on private storage.
+
 ## String arrays
 ```php
 <?php
@@ -35,6 +104,35 @@ $items[] = 3.5;
 echo $items[0]; // 1
 echo $items[1]; // two
 ```
+
+## Nested write contexts
+
+Nested assignments and appends keep their parent cells attached to the original array and
+respect copy-on-write. Computed dimensions run once before the right-hand side; bare variable
+keys are read at store time. Missing or null parents are created during the write traversal.
+
+A `false` parent is converted to an empty array after the right-hand side, with PHP's
+false-to-array deprecation before the leaf write. This applies to locals and static arrays,
+including `$items[0][0][1] = 9` and `$items[0][0][] = 3`.
+Statically inferred false elements also support deeper write traversal. Integer, float and
+true parents instead raise `Error: Cannot use a scalar value as an array`.
+
+Nested `??=` probes without converting the parent, evaluates its default only for a missing
+or null leaf, and then uses the ordinary write traversal. Local and static compound updates
+settle computed dimensions and the RHS before fetching writable parents and converting false.
+A throwing conversion handler prevents the leaf read and operator, but does not undo the RHS.
+These update paths preserve by-value array copies.
+
+If the deprecation handler throws, plain writes preserve PHP's opcode completion: integer,
+boolean and string dimensions finish their store before propagation; appends finish their
+append. Null, float and resource dimensions stop without a leaf store, while array/object
+dimensions raise `TypeError` with the callback exception as `previous`. An intermediate
+write fetch completes an eligible dimension with null before propagating the exception.
+
+Local and static read-modify-write updates instead stop on a throwing conversion handler. If a returning handler
+detaches the promoted parent and only its pending write owner remains, the update starts from
+null without an extra undefined-key warning. Parents that still have another owner keep the
+ordinary leaf read and diagnostics.
 
 ## Associative arrays
 ```php
@@ -77,7 +175,8 @@ foreach ($map as $k => $v) { echo "$k=$v "; } // a=1 c=3 b=9
 
 `unset()` also works on indexed arrays. PHP removes the key **without renumbering** the survivors,
 so the array becomes sparse (a hole is left). The remaining keys keep their original values, and a
-later `$arr[] = ...` append continues at `max_key + 1`.
+later `$arr[] = ...` append uses the array's next integer key. Removing a key does not move this
+counter backward, even when the removed key was the highest one.
 
 ```php
 <?php
@@ -113,33 +212,71 @@ echo count($x);        // 1
 echo count($snapshot); // 2 — the copy taken before the call is untouched
 ```
 
-The one shape this does not cover is an **indexed** array reached by reference
-(`function f(array &$a) { unset($a[1]); }`). Removing a key from a packed list leaves a hole, so
-the array has to become a hash — and the caller's slot, still described as `array<T>`, is storage
-the callee cannot retype. That case reports a named compile error instead.
-
-**This refusal is deliberate and permanent, not a gap waiting to be filled.** Lifting it would
-mean a callee silently changing the representation of a caller's local, which is the one thing
-the typed-slot model does not allow; refusing loudly is the intended behaviour. Two workarounds
-cover every use:
+This also works for an **indexed** array passed by reference. Removing an element leaves a hole
+without renumbering the surviving keys, and the caller observes the removal. Appending afterward
+uses the preserved next integer key rather than one past the highest surviving key:
 
 ```php
 <?php
-// 1. Key the array with strings: the removal happens in place, through the reference.
-function dropAssoc(array &$a, string $k) { unset($a[$k]); }
-$map = ["a" => 10, "b" => 20];
-dropAssoc($map, "b");
-print_r($map);    // ["a" => 10]
-
-// 2. Or rebuild and return, letting the CALLER rebind its own slot.
-function dropIndexed(array $a, int $i): array {
-    unset($a[$i]);
-    return $a;
-}
+function dropIndexed(array &$a) { unset($a[1]); }
 $list = [10, 20, 30];
-$list = dropIndexed($list, 1);
-print_r($list);   // [0 => 10, 2 => 30] — PHP's holes, no renumbering
+dropIndexed($list);
+echo implode(",", array_keys($list)); // 0,2
+echo "|", implode(",", $list);       // |10,30
+$list[] = 40;
+echo "|", implode(",", array_keys($list)); // |0,2,3
 ```
+
+An element of an array held in a **property** is removed the same way:
+`unset($this->data[$key])`, `unset($order->lines[$key])` and `unset(self::$cache[$key])` all
+work, with the same no-renumbering, copy-on-write and missing-key rules. PHP's order is kept too:
+the receiver and the key are evaluated before the property is fetched, and a destructor run by
+the removed value sees (and may write) the property after the key is gone.
+
+```php
+<?php
+class Registry {
+    private array $handlers = ["a" => "x", "b" => "y"];
+    public static array $cache = ["k" => 1];
+    public function forget(string $name): void { unset($this->handlers[$name]); }
+    public function names(): array { return array_keys($this->handlers); }
+}
+$r = new Registry();
+$r->forget("a");
+unset(Registry::$cache["k"]);
+print_r($r->names());          // [0 => "b"]
+echo count(Registry::$cache);  // 0
+```
+
+This covers a property declared `array` (instance or static), an untyped instance property
+whose keys are strings, and a property stored as a boxed `mixed` value: a `mixed` or `?array`
+property, and an untyped property that an earlier `unset($o->items)` removed. Such a property
+follows PHP's answer for what it holds at run time: a removed property is recreated as `null`,
+`null` is left alone, `false` reports PHP's conversion deprecation without changing its value,
+a string throws `Error("Cannot unset string offsets")`, an object that
+is not `ArrayAccess` throws `Error("Cannot use object of type C as array")`, and any other scalar
+throws `Error("Cannot unset offset in a non-array variable")`.
+
+The property is always fetched after the key. For a variable or `$this` receiver, that means a
+key expression that reassigns the variable reaches the new object, as in PHP. Removing an element
+of a typed property that is not initialized is a silent no-op, and the property stays
+uninitialized.
+
+A property that holds an `ArrayAccess` object calls its `offsetUnset($key)`, and the property is
+read after the key, as PHP does: a key expression that stores another object into the property
+reaches the new one. ArrayAccess receives the original offset, including array and object values;
+SPL containers apply their own offset conversions. A readonly `mixed` property holding an object
+permits that object's `offsetUnset()` call too. A **readonly** array property refuses removal with PHP's
+`Error("Cannot indirectly modify readonly property C::$p")` once it is initialized, and a
+nullsafe link anywhere in the target (`unset($o?->items[$k])`) is PHP's compile error
+"Can't use nullsafe operator in write context".
+
+An **untyped** property whose default is a list (`public $list = [1, 2];`)
+keeps packed list storage that every method of the class reads, and a removal would have to turn
+it into a hash, so `unset($this->list[$i])` reports a compile error at its line; the same goes for
+an element of an untyped static array. Declaring the property `array` is the fix in both cases.
+A nested element (`unset($o->items[$i][$j])`, not supported for locals either yet) and an element
+of a property named at run time (`unset($o->{$name}[$k])`) are not supported yet.
 
 ## Array union
 
@@ -304,14 +441,14 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 |---|---|---|
 | `count()` | `count($value [, $mode]): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()`. A value that is not countable — `false`, an `int`, `float`, `string`, `null`, or resource arriving through a `mixed` — raises PHP 8's `TypeError` (`count(): Argument #1 ($value) must be of type Countable\|array, X given`) instead of answering `0`. `$mode` accepts `COUNT_NORMAL` (default) and `COUNT_RECURSIVE`; anything else throws `\ValueError`. `COUNT_RECURSIVE` is currently supported only where the receiver cannot hold a nested array — a nested receiver is a compile error rather than a wrong count |
 | `array_count_values()` | `array_count_values($array): array` | Maps each distinct `int`/`string` value to its number of occurrences; other values are skipped with a warning |
-| `array_push()` | `array_push($arr, ...$values): int` | Append any number of elements and return the new count. `array_push($a, 3, 4)` appends both in source order, and `array_push($a)` with no values just reads the count back. |
+| `array_push()` | `array_push($arr, ...$values): int` | Append any number of elements to an indexed or associative array and return the new count. All values are evaluated before appending, including values unpacked from arrays, generators, or other `Traversable` objects. Canonical integer-string unpack keys are positional, while other string keys follow PHP named-argument errors. String receiver keys are preserved; new entries use PHP's next automatic integer key, including its append history. `array_push($a)` only reads the count. A statically typed associative receiver currently requires each value to fit its existing entry type; generator, `Traversable`, declared-`array`, and other runtime-typed spreads therefore require mixed entry storage. Runtime spreads also require stable receiver storage and are rejected for reference-aliased indexed arrays or inferred native property slots. Plain pushed values continue to use copy/write-back for those property slots. Use `$arr[] = $v` when the value type differs. |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
 | `in_array()` | `in_array(mixed $needle, array $haystack, bool $strict = false): bool` | Search for a value. Omitted or `false` strictness uses PHP loose comparison for supported scalar/string values; `true` requires type-identical membership. A `mixed` haystack (for example a `json_decode()` result) is searched at run time; a non-array payload raises a `TypeError`. |
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |
 | `array_values()` | `array_values($arr): array` | Returns copy of values. A `mixed` argument holding an array is accepted; a non-array payload raises a `TypeError` |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
 | `array_search()` | `array_search($needle, $haystack, $strict = false): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found. `$strict` compares with `===` |
-| `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice from an indexed OR associative array. `$offset` and `$length` count positions in insertion order, not keys, and must be literal only for `$preserve_keys`, which must be a literal `true`/`false`. `$preserve_keys` keeps the source INTEGER keys; string keys survive either way, so `array_slice(["x"=>1,"y"=>2], 1, 1)` is `["y"=>2]` with or without it, while `array_slice([5=>1,9=>2], 1, 1)` is `[0=>2]` without and `[9=>2]` with. Indexed **string** arrays are supported: the slice copies each element's `{pointer, length}` pair and owns its own bytes, so writing into the result never disturbs the source. |
+| `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice from an indexed OR associative array. `$offset` and `$length` count positions in insertion order, not keys, and must be literal only for `$preserve_keys`, which must be a literal `true`/`false`. `$preserve_keys` keeps the source INTEGER keys; string keys survive either way, so `array_slice(["x"=>1,"y"=>2], 1, 1)` is `["y"=>2]` with or without it, while `array_slice([5=>1,9=>2], 1, 1)` is `[0=>2]` without and `[9=>2]` with. Indexed **string** arrays are supported: the slice copies each element's `{pointer, length}` pair and owns its own bytes, so writing into the result never disturbs the source. A `mixed` or declared `array` source is sliced by its runtime storage (a hash keeps its string keys and renumbers integer keys) and returns the boxed `array` type; a direct call then needs `$preserve_keys` to be `false`, while a callable (`array_slice(...)`, also through `call_user_func_array()` with a runtime argument array) applies the flag at run time. |
 | `array_splice()` | `array_splice($arr, $offset [, $length [, $replacement]]): array` | Remove a slice in place and return the removed elements. `$replacement` is inserted where the removed slice was: an array contributes its values, a bare scalar is treated as a one-element array, and `null` or `[]` inserts nothing. A replacement whose element type differs from the receiver's promotes the receiver to a heterogeneous array exactly as PHP does (`$a = [1,2,3]; array_splice($a, 1, 1, ["x"]);` leaves `[1, "x", 3]`). That promotion needs a receiver whose storage this call can retype, so it does not apply when the receiver is a by-reference parameter, a `&$x` binding, or an object/static property — those keep a named compile error instead of a mistyped insertion. `$replacement` may be the receiver itself: `array_splice($a, 1, 1, $a)` inserts what `$a` held on the way in, because PHP evaluates the replacement before the removal runs (`[1,2,3]` becomes `[1,1,2,3,3]`). That holds for every receiver form — a local, a property, a static property, a container element, a by-reference parameter, or a `&$x` binding naming the same array — and for every argument spelling. |
 | `array_chunk()` | `array_chunk($arr, $size [, $preserve_keys]): array` | Split arrays, including associative arrays, into chunks. A `$size` of `0` or less throws a `\ValueError`. `$preserve_keys` must be a literal `true`/`false`; when `true` each chunk keeps its source keys, and when `false` every key is dropped — **string keys included**, unlike `array_slice()` — and each chunk renumbers from `0`. |
 | `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
@@ -332,7 +469,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_udiff()` | `array_udiff($arr1, $arr2, $cmp): array` | Two-array form: keeps values absent from $arr2, preserving $arr1 keys and value types. The comparator result is cast to int before testing equality with zero. Supports closures, function names and first-class callables. |
 | `array_uintersect()` | `array_uintersect($arr1, $arr2, $cmp): array` | Two-array form: keeps values also present in $arr2, preserving $arr1 keys and value types. The comparator result is cast to int before testing equality with zero. |
 | `array_unique()` | `array_unique($arr): array` | Remove duplicates, keeping each survivor's original key — an indexed input therefore returns a sparse, hash-shaped result (keys `0, 1, 3` for `[1,2,2,3,1]`), exactly as in PHP |
-| `array_reverse()` | `array_reverse($arr, $preserve_keys = false): array` | Reverse order. `$preserve_keys` must be a literal `bool` in AOT mode because it changes the result shape: `true` keeps the original integer keys, producing an integer-keyed array |
+| `array_reverse()` | `array_reverse($arr, $preserve_keys = false): array` | Reverse order. `$preserve_keys` must be a literal `bool` in AOT mode because it changes the result shape: `true` keeps the original integer keys, producing an integer-keyed array. A declared `array` source, and a callable such as `array_reverse(...)` called through `call_user_func_array()`, take the flag at run time. |
 | `array_flip()` | `array_flip($arr): array` | Exchange keys and values, normalizing integer and numeric-string result keys. A `mixed` argument holding an array is accepted; a non-array payload raises a `TypeError` |
 | `array_shift()` | `array_shift($arr): mixed` | Remove and return first |
 | `array_unshift()` | `array_unshift($arr, ...$values): int` | Prepend one or more elements, in source order, and return the new count |
@@ -342,34 +479,36 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_is_list()` | `array_is_list($arr): bool` | `true` if the keys are exactly `0..count-1` in order (the empty array is a list) |
 | `array_key_first()` | `array_key_first($arr): int\|string\|null` | First key in insertion order, or `null` if the array is empty |
 | `array_key_last()` | `array_key_last($arr): int\|string\|null` | Last key in insertion order, or `null` if the array is empty |
+| `array_first()` | `array_first($arr): mixed` | (PHP 8.5) First value in insertion order, or `null` if the array is empty |
+| `array_last()` | `array_last($arr): mixed` | (PHP 8.5) Last value in insertion order, or `null` if the array is empty |
 | `key()` | `key($arr): int\|string\|null` | Key under the array's internal pointer, or `null` once the pointer is off either end |
 | `current()` | `current($arr): mixed` | Element under the array's internal pointer, or `false` once the pointer is off either end |
 | `next()` | `next(&$arr): mixed` | Advance the internal pointer one position and return the new element, or `false` |
 | `prev()` | `prev(&$arr): mixed` | Rewind the internal pointer one position and return the new element, or `false` |
 | `reset()` | `reset(&$arr): mixed` | Move the internal pointer to the first element and return it, or `false` for an empty array |
 | `end()` | `end(&$arr): mixed` | Move the internal pointer to the last element and return it, or `false` for an empty array |
-| `sort()` | `sort($arr): void` | Sort ascending (in-place) |
-| `rsort()` | `rsort($arr): void` | Sort descending |
-| `asort()` | `asort($arr): void` | Sort by value, maintain keys |
-| `arsort()` | `arsort($arr): void` | Sort by value desc, maintain keys |
+| `sort()` | `sort($arr): bool` | Sort ascending (in-place). Elements may be `int`, `string`, `float`, or heterogeneous (`mixed`); a hash-backed array whose values are `float` is still refused |
+| `rsort()` | `rsort($arr): bool` | Sort descending. Same element types as `sort()` |
+| `asort()` | `asort($arr): bool` | Sort by value, maintain keys |
+| `arsort()` | `arsort($arr): bool` | Sort by value desc, maintain keys |
 | `ksort()` | `ksort($arr, $flags = SORT_REGULAR): bool` | Sort by key ascending, comparing keys under `$flags`. On an indexed array this is a no-op, because its keys are already the ascending slot positions `0..n-1` |
 | `krsort()` | `krsort($arr, $flags = SORT_REGULAR): bool` | Sort by key descending, comparing keys under `$flags`. A non-empty indexed array is promoted to associative storage so its numeric keys can appear in descending iteration order |
-| `natsort()` | `natsort($arr): void` | Natural order sort |
-| `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural sort |
-| `shuffle()` | `shuffle($arr): void` | Randomly shuffle (in-place) |
+| `natsort()` | `natsort($arr): bool` | Natural order sort |
+| `natcasesort()` | `natcasesort($arr): bool` | Case-insensitive natural sort |
+| `shuffle()` | `shuffle($arr): bool` | Randomly shuffle (in-place) |
 | `array_multisort()` | `array_multisort($arr1, $arr2): bool` | Sort equal-length indexed arrays in place by ascending row order: compare `$arr1`, then `$arr2` for ties. AOT accepts two concrete integer arrays or two boxed scalar arrays (for example through declared `array` parameters), not one of each. Concrete string/float arrays, associative arrays, sort flags, and more than two arrays are unsupported. |
-| `array_rand()` | `array_rand($arr): int` | Pick one random key |
+| `array_rand()` | `array_rand(array $array, int $num = 1): int\|string\|array` | Pick one random key, or an array of keys when `$num > 1`; consumes the seeded Mt19937 state |
 | `array_map()` | `array_map($callback, $arr): array` | Apply callback to each element |
 | `array_filter()` | `array_filter($arr, $callback = null, $mode = 0): array` | Preserve keys and values accepted by the callback; omitted/null callbacks remove empty values |
 | `array_reduce()` | `array_reduce($arr, $callback, $init): int` | Reduce to single value |
-| `array_walk()` | `array_walk($arr, $callback): void` | Call a callback on each element. Boxed PHP arrays support writable value references and keys, subject to the reference-escape restrictions below. |
-| `array_walk_recursive()` | `array_walk_recursive($arr, $callback): void` | Apply a callback to non-array leaves. The concrete-array path requires homogeneous scalar leaves and passes values without keys. The boxed PHP-array path supports writable leaf references and keys, subject to the restrictions below. |
+| `array_walk()` | `array_walk($arr, $callback): bool` | Call a callback on each element. Boxed PHP arrays support writable value references and keys, subject to the reference-escape restrictions below. |
+| `array_walk_recursive()` | `array_walk_recursive($arr, $callback): bool` | Apply a callback to non-array leaves. The concrete-array path requires homogeneous scalar leaves and passes values without keys. The boxed PHP-array path supports writable leaf references and keys, subject to the restrictions below. |
 | `array_find()` | `array_find($arr, $callback): mixed` | (PHP 8.4) Returns the first element for which `$callback($value)` is truthy, or `null` if none match. |
 | `array_any()` | `array_any($arr, $callback): bool` | (PHP 8.4) `true` if `$callback($value)` is truthy for at least one element. |
 | `array_all()` | `array_all($arr, $callback): bool` | (PHP 8.4) `true` if `$callback($value)` is truthy for every element. |
-| `usort()` | `usort($arr, $callback): void` | Sort with user comparison |
-| `uksort()` | `uksort($arr, $callback): void` | Sort by key with user comparison |
-| `uasort()` | `uasort($arr, $callback): void` | Sort with user comparison, maintain keys |
+| `usort()` | `usort($arr, $callback): bool` | Sort with user comparison |
+| `uksort()` | `uksort($arr, $callback): bool` | Sort by key with user comparison |
+| `uasort()` | `uasort($arr, $callback): bool` | Sort with user comparison, maintain keys |
 | `call_user_func()` | `call_user_func($callback, ...): mixed` | Call a callback value |
 | `call_user_func_array()` | `call_user_func_array($callback, $args): mixed` | Call with args from array |
 | `function_exists()` | `function_exists(string $name): bool` | Check if a global or fully-qualified function name is defined. A literal name const-folds; any other string expression is matched case-insensitively at run time against the functions this binary declares |
@@ -384,7 +523,7 @@ objects available in the compiled program. Invalid boxed callbacks throw
 array value with the original keys and copy-on-write behavior. The AOT path
 currently accepts one source array, not the multi-array zip form.
 
-> Callback arguments can be string literals, runtime string names for user functions, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` resolve runtime string callback variables through descriptor dispatch. `array_map()` stores mixed result elements when the selected callback return shape is only known at runtime. `array_map()` also runs over a heterogeneous (boxed `mixed`) input array: each element is passed to the callback as a `mixed` value, so a callback with a `mixed` (or untyped) parameter sees and can return each element with its original runtime type.
+> Callback arguments can be string literals, runtime string names for user functions, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` resolve runtime string callback variables through descriptor dispatch. `array_map()` uses direct element storage when the resolved callback returns `int`, `bool`, or `string`, including a known callback named by a string; descriptor wrappers cast boxed callback results to that declared type. Other or unresolved return shapes use boxed `mixed` elements. The checker and EIR report the same result container type across returns, arguments, and property storage. `array_map()` also runs over a heterogeneous (boxed `mixed`) input array: each element is passed to the callback as a `mixed` value, so a callback with a `mixed` (or untyped) parameter sees and can return each element with its original runtime type.
 > When a parameter is declared only as `array`, its element type is initially unknown. Array-callback checking preserves explicit callback parameter declarations and uses them to type the closure body instead of fabricating an `int` element. Known element types are still checked normally, and this contextual rule does not make `mixed` globally compatible with object, array, or other refcounted declarations. `array_map()` currently rejects known object-element arrays because its callback runtime does not yet support that input layout.
 > `call_user_func_array()` also accepts dynamic indexed and associative argument arrays for callbacks with a known signature, including userland variadic callbacks. When a callable value has no single static signature at the call site, elephc emits an AOT runtime dispatch over user functions and closure/FCC wrappers available in that codegen context, then applies the matched target's descriptor metadata: parameter names, defaults, by-reference flags, variadic position, return shape, captures, hidden receiver arguments, and callable shape. Runtime string callback names dispatch over user functions, supported builtins, and public static-method strings by case-insensitive name matching, materialize the matched descriptor, and invoke its generated descriptor invoker. Descriptor invokers receive a temporary boxed Mixed clone of the argument container and inspect its runtime tag to handle indexed arrays and associative hashes through the same signature-level wrapper, so the source `$args` remains usable with its original static layout after the call. String keys bind named parameters; unconsumed string and numeric keys are copied into `...$rest` for variadic callbacks. Dynamic arrays passed to by-reference callback parameters use temporary reference cells, so callback writes do not mutate the source argument array.
 
@@ -402,6 +541,23 @@ rejected. The borrowed element reference must not escape the callback through a
 closure capture or a property reference: those operations throw a catchable
 `Error`. Ordinary compiler-managed references are unaffected. These restrictions
 are specific to the boxed walk path and are not a claim of full PHP parity.
+
+The sorting, shuffle, and array-walk functions above return `true` on successful
+completion; their results can be used as boolean expressions.
+
+### Mixed-valued associative arrays
+
+`array_reverse()`, `array_shift()`, `array_unshift()`, and `rsort()` also support
+associative arrays whose values use boxed `mixed` storage. Reverse honors
+`$preserve_keys`; shift and unshift renumber numeric keys while preserving string
+keys. `rsort()` sorts supported scalar values in descending order and renumbers
+the keys. Mutations preserve copy-on-write snapshots and retain removed values
+before releasing their entries.
+
+Calling `array_unshift($arr)` without values also renumbers numeric keys and
+resets the next append index, including for typed associative arrays. See
+[`examples/mixed_hash_array_builtins/main.php`](../../examples/mixed_hash_array_builtins/main.php)
+for a mixed-key example.
 
 ### Sorting runtime-typed indexed arrays
 

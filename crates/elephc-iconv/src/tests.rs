@@ -11,6 +11,7 @@
 //! - Diagnostics are asserted as full message bodies because both backends render them.
 
 use crate::error::IconvError;
+use crate::ffi::Converter;
 use crate::mime::encode::{MimeEncodeOptions, Scheme};
 use crate::{convert, mime, search};
 
@@ -70,6 +71,59 @@ fn honors_translit_and_ignore_suffixes() {
             .unwrap(),
         b"ab"
     );
+}
+
+/// Verifies converters for one charset pair keep their own `//TRANSLIT` and `//IGNORE`
+/// options while each other is open (#811).
+///
+/// Apple's iconv (the Citrus-based one since macOS 14) keys converter state on the
+/// suffix-free charset pair and lets every `iconv_open()` overwrite that pair's
+/// transliterate and discard flags, so the descriptor opened last decided how every live
+/// descriptor of the pair converted. `iconv_mime_encode()` opens a plain `UTF-8 -> ASCII`
+/// converter, which is how a MIME test running alongside turned
+/// `honors_translit_and_ignore_suffixes` intermittently red. Holding the descriptors in one
+/// thread makes the collision deterministic; glibc keeps descriptors independent, and there
+/// this pins the same contract.
+#[test]
+fn converters_for_one_charset_pair_keep_their_own_suffixes() {
+    let approximated = if cfg!(target_os = "macos") { &b"h'ello"[..] } else { &b"hello"[..] };
+    let subject = "h\u{e9}llo".as_bytes();
+    let mut translit = Converter::open(b"UTF-8", b"ASCII//TRANSLIT").unwrap();
+    let mut plain = Converter::open(b"UTF-8", b"ASCII").unwrap();
+    assert_eq!(translit.convert_all(subject).unwrap(), approximated);
+    assert_eq!(plain.convert_all(subject), Err(IconvError::IllegalSequence));
+
+    let mut discard = Converter::open(b"UTF-8", b"ASCII//IGNORE").unwrap();
+    assert_eq!(plain.convert_all(subject), Err(IconvError::IllegalSequence));
+    assert_eq!(translit.convert_all(subject).unwrap(), approximated);
+    assert_eq!(discard.convert_all_ignoring(subject, true).unwrap(), b"hllo");
+}
+
+/// Apple's discard mode must reach libc even after a plain descriptor resets the charset pair.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn apple_ignore_restores_descriptor_discard_mode_without_userspace_skipping() {
+    let subject = "h\u{e9}llo".as_bytes();
+    let mut discard = Converter::open(b"UTF-8", b"ASCII//IGNORE").unwrap();
+    let mut plain = Converter::open(b"UTF-8", b"ASCII").unwrap();
+
+    for _ in 0..3 {
+        assert_eq!(plain.convert_all(subject), Err(IconvError::IllegalSequence));
+        // convert_all has no illegal-sequence skip loop: libc must discard the character.
+        assert_eq!(discard.convert_all(subject).unwrap(), b"hllo");
+    }
+    assert_eq!(plain.convert_all(subject), Err(IconvError::IllegalSequence));
+}
+
+/// Verifies opening a converter changes only `LC_CTYPE`, leaving `LC_NUMERIC` in `C`.
+///
+/// The bridge installs a UTF-8 character-classification locale for `//TRANSLIT`, but
+/// Apple's libc numbers `LC_CTYPE` 2 and uses 0 for `LC_ALL`, so on macOS and iOS the first
+/// conversion replaced every category of the process locale, decimal separator included.
+#[test]
+fn opening_a_converter_changes_only_lc_ctype() {
+    drop(Converter::open(b"UTF-8", b"ISO-8859-1").unwrap());
+    assert_eq!(crate::ffi::numeric_locale_name(), b"C");
 }
 
 /// Verifies the search pair stops at its first match instead of scanning a malformed tail.

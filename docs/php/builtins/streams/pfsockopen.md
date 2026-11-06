@@ -1,8 +1,6 @@
 ---
 title: "pfsockopen()"
 description: "Open persistent Internet or Unix domain socket connection."
-sidebar:
-  order: 778
 ---
 
 ## pfsockopen()
@@ -24,8 +22,9 @@ Open persistent Internet or Unix domain socket connection.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/pfsockopen.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/pfsockopen.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

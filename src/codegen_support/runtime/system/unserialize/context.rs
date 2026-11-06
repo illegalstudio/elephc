@@ -5,14 +5,15 @@
 //! - `super::emit_unserialize()` between recursive decoding and object-storage helpers.
 //!
 //! Key details:
-//! - Begin and end isolate nested calls by snapshotting policy, depth, and reference-registry state.
+//! - Begin and end snapshot policy and depth; modern calls also snapshot the reference registry.
+//! - A negative saved count marks legacy sharing, whose owners survive until the outer decode ends.
 
 use crate::codegen_support::emit::Emitter;
 
 /// Emits the AArch64 begin/end helpers that isolate one active unserialize call.
 ///
-/// Nested calls snapshot the outer policy, parser depth, and populated reference
-/// slots into a linked heap context. The end helper preserves the parsed result,
+/// Nested calls snapshot the outer policy and parser depth into a linked heap
+/// context. Modern hooks also copy populated reference slots; legacy hooks share them. The end helper preserves the parsed result,
 /// releases the current call's owned allow-list, and restores the outer context.
 pub(super) fn emit_unserialize_context_aarch64(emitter: &mut Emitter) {
     emitter.blank();
@@ -39,6 +40,12 @@ pub(super) fn emit_unserialize_context_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x11, #65536");                                     // materialize the fixed registry capacity
     emitter.instruction("cmp x10, x11");                                        // does the logical count exceed the physical registry?
     emitter.instruction("csel x11, x10, x11, lo");                              // copy only the populated in-bounds registry prefix
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x12", "_unser_legacy_active", 0);
+    emitter.instruction("cbz x12, __rt_unserialize_begin_copy_count");          // ordinary nested hydration snapshots its own registry
+    emitter.instruction("mov x10, #-1");                                        // mark a shared legacy registry in the saved count slot
+    emitter.instruction("str x10, [sp]");                                       // retain the sharing marker across allocation
+    emitter.instruction("mov x11, #0");                                         // a shared registry needs no copied prefix
+    emitter.label("__rt_unserialize_begin_copy_count");
     emitter.instruction("str x11, [sp, #8]");                                   // preserve the copy count across allocation
     emitter.instruction("lsl x0, x11, #3");                                     // convert the copied slot count to bytes
     emitter.instruction("add x0, x0, #56");                                     // include the seven-word context header
@@ -86,8 +93,11 @@ pub(super) fn emit_unserialize_context_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x9]");                                       // this call starts without an owned allow-list
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_allowed_list_mixed");
     emitter.instruction("str xzr, [x9]");                                       // default to direct-string list representation
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_unser_legacy_active", 0);
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_count");
+    emitter.instruction("cbnz x10, __rt_unserialize_begin_keep_count");         // nested legacy payloads consume the enclosing reference indices
     emitter.instruction("str xzr, [x9]");                                       // reset this call's reference-registry count
+    emitter.label("__rt_unserialize_begin_keep_count");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_depth");
     emitter.instruction("str xzr, [x9]");                                       // reset this call's recursive parser depth
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame and return address
@@ -99,6 +109,7 @@ pub(super) fn emit_unserialize_context_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and return address across releases
     emitter.instruction("add x29, sp, #32");                                    // establish a stable frame for restoration
     emitter.instruction("str x0, [sp]");                                        // preserve the parsed Mixed result across cleanup
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_promote_legacy_data");
     crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_detach_data");
     crate::codegen_support::abi::emit_store_to_sp(emitter, "x0", 16);
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_allowed_list");
@@ -124,7 +135,9 @@ pub(super) fn emit_unserialize_context_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x12, [x11]");                                      // restore the outer list representation flag
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_unser_count");
     emitter.instruction("ldr x12, [x10, #32]");                                 // recover the outer logical registry count
+    emitter.instruction("tbnz x12, #63, __rt_unserialize_end_keep_count");      // retain indices added by a nested Serializable callback
     emitter.instruction("str x12, [x11]");                                      // restore the outer logical registry count
+    emitter.label("__rt_unserialize_end_keep_count");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_unser_depth");
     emitter.instruction("ldr x12, [x10, #40]");                                 // recover the suspended outer parser depth
     emitter.instruction("str x12, [x11]");                                      // restore the suspended outer parser depth
@@ -195,6 +208,11 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, 65536");                                      // materialize the fixed registry capacity
     emitter.instruction("cmp r10, r11");                                        // does the logical count exceed the physical registry?
     emitter.instruction("cmovb r11, r10");                                      // copy only the populated in-bounds registry prefix
+    emitter.instruction("cmp QWORD PTR [rip + _unser_legacy_active], 0");       // distinguish shared legacy payloads from ordinary nesting
+    emitter.instruction("je __rt_unserialize_begin_copy_count_x");              // ordinary calls preserve their registry prefix
+    emitter.instruction("mov QWORD PTR [rbp - 8], -1");                         // mark a shared registry in the saved count slot
+    emitter.instruction("xor r11d, r11d");                                      // shared references remain in the live table
+    emitter.label("__rt_unserialize_begin_copy_count_x");
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // preserve the copy count across allocation
     emitter.instruction("mov rax, r11");                                        // start computing the snapshot allocation size
     emitter.instruction("shl rax, 3");                                          // convert copied slots to bytes
@@ -231,7 +249,10 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rip + _unser_allowed_mode], 0");        // default this call to allow-all until options are installed
     emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list], 0");        // this call starts without an owned allow-list
     emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list_mixed], 0");  // default to direct-string list representation
+    emitter.instruction("cmp QWORD PTR [rip + _unser_legacy_active], 0");       // nested legacy payloads share reference numbering
+    emitter.instruction("jne __rt_unserialize_begin_keep_count_x");             // preserve the enclosing live reference count
     emitter.instruction("mov QWORD PTR [rip + _unser_count], 0");               // reset this call's reference-registry count
+    emitter.label("__rt_unserialize_begin_keep_count_x");
     emitter.instruction("mov QWORD PTR [rip + _unser_depth], 0");               // reset this call's recursive parser depth
     emitter.instruction("leave");                                               // restore the caller frame after begin setup
     emitter.instruction("ret");                                                 // enter the new isolated unserialize call
@@ -241,6 +262,7 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for result/context spills
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spills for the result and snapshot pointer
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the parsed Mixed result across cleanup
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_promote_legacy_data");
     crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_detach_data");
     crate::codegen_support::abi::store_at_offset(emitter, "rax", 24);
     emitter.instruction("mov rax, QWORD PTR [rip + _unser_allowed_list]");      // load this call's owned allow-list reference
@@ -262,7 +284,10 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r10 + 24]");                       // recover the outer list representation flag
     emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list_mixed], r11"); // restore the outer list representation flag
     emitter.instruction("mov r11, QWORD PTR [r10 + 32]");                       // recover the outer logical registry count
+    emitter.instruction("test r11, r11");                                       // negative counts mark a shared legacy registry
+    emitter.instruction("js __rt_unserialize_end_keep_count_x");                // retain reference indices consumed by the nested payload
     emitter.instruction("mov QWORD PTR [rip + _unser_count], r11");             // restore the outer logical registry count
+    emitter.label("__rt_unserialize_end_keep_count_x");
     emitter.instruction("mov r11, QWORD PTR [r10 + 40]");                       // recover the suspended outer parser depth
     emitter.instruction("mov QWORD PTR [rip + _unser_depth], r11");             // restore the suspended outer parser depth
     emitter.instruction("mov r11, QWORD PTR [r10 + 48]");                       // load the bounded registry snapshot length

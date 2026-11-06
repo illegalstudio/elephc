@@ -1,8 +1,6 @@
 ---
 title: "method_exists()"
 description: "Checks whether a class method exists."
-sidebar:
-  order: 96
 ---
 
 ## method_exists()
@@ -21,8 +19,9 @@ Checks whether a class method exists.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/method_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/method_exists.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

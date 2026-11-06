@@ -1,8 +1,6 @@
 ---
 title: "hash_update() - internals"
 description: "Compiler internals for hash_update(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 805
 ---
 
 ## `hash_update()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/hash_prelude.rs`:136](https://github.com/illegalstudio/elephc/blob/main/src/hash_prelude.rs#L136) (`hash_update`)
+- **Lowering**: [`src/hash_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/hash_prelude.rs) (`hash_update`)
 - **Function symbol**: `hash_update()`
 
 

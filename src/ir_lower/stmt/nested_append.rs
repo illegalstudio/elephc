@@ -166,8 +166,11 @@ pub(super) fn recognize<'a>(
     // anything else falls open to ordinary lowering. A property container is gated at lowering
     // time instead, on the IR type of the loaded property.
     if let BaseKind::Local(name) = base {
+        let ty = ctx.local_type(name);
+        let supported = matches!(&ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            || matches!(&ty, PhpType::Object(class) if class.eq_ignore_ascii_case("WeakMap"));
         if !ctx.has_local_slot(name)
-            || !matches!(ctx.local_type(name), PhpType::Array(_) | PhpType::AssocArray { .. })
+            || !supported
         {
             return None;
         }
@@ -181,6 +184,48 @@ pub(super) fn recognize<'a>(
         base,
         index,
     })
+}
+
+/// Fuses an array-root append whose parser-generated writeback matches the captured read.
+pub(super) fn try_lower_array_root(
+    ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], span: Span,
+) -> bool {
+    if body.len() < 3 { return false; }
+    let (prefix, triple) = body.split_at(body.len() - 3);
+    let StmtKind::Assign { name: temp, value: target } = &triple[0].kind else { return false; };
+    if !temp.starts_with(NESTED_APPEND_TEMP_PREFIX) { return false; }
+    let ExprKind::ArrayAccess { array, .. } = &target.kind else { return false; };
+    let StmtKind::ArrayPush { array: pushed, value } = &triple[1].kind else { return false; };
+    let (stored, matches_target) = match &triple[2].kind {
+        StmtKind::NestedArrayAssign { target: written, value } => (value, written == target),
+        StmtKind::ArrayAssign { array: written, index, value } => (value, matches!(
+            &array.kind, ExprKind::Variable(name) if name == written
+        ) && matches!(&target.kind, ExprKind::ArrayAccess { index: read, .. } if read.as_ref() == index)),
+        StmtKind::StaticPropertyArrayAssign { receiver, property, index, value } => (value, matches!(
+            &array.kind, ExprKind::StaticPropertyAccess { receiver: read, property: name }
+                if read == receiver && name == property
+        ) && matches!(&target.kind, ExprKind::ArrayAccess { index: read, .. } if read.as_ref() == index)),
+        _ => return false,
+    };
+    if pushed != temp || !matches_target
+        || !matches!(&stored.kind, ExprKind::Variable(name) if name == temp)
+    { return false; }
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
+    let supported = match &root.kind {
+        ExprKind::Variable(name) => ctx.has_local_slot(name) && matches!(
+            ctx.local_type(name).codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+        ),
+        ExprKind::StaticPropertyAccess { .. } =>
+            super::nested_array_writes::nested_target_has_static_array_root(ctx, target)
+                && (matches!(array.kind, ExprKind::ArrayAccess { .. })
+                    || super::nested_array_writes::static_root_supports_attached_fetch(ctx, root)),
+        _ => false,
+    };
+    if !supported { return false; }
+    for stmt in prefix { super::lower_stmt(ctx, stmt); }
+    super::nested_plain_writes::lower_append(ctx, target, value, span);
+    true
 }
 
 /// Lowers a recognized nested append: vivify if missing, then read, detach, push in place,
@@ -203,6 +248,11 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     for stmt in group.prefix {
         super::lower_stmt(ctx, stmt);
     }
+    if let (StmtKind::Assign { value: target, .. }, StmtKind::ArrayPush { value, .. }) =
+        (&group.read.kind, &group.push.kind)
+    {
+        if crate::ir_lower::expr::lower_weak_map_append(ctx, target, value, span) { return; }
+    }
 
     // Load the container and probe the key. For a local this is a `LoadLocal`; for a property it is
     // an ordinary property read, which is pure and can be replayed.
@@ -213,6 +263,9 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         // Anything else (a `Mixed` property, an object) is out of scope: fall open to today's
         // lowering, which is what the parser's desugar already produces.
         _ => {
+            if ctx.value_is_owning_temporary(container) {
+                crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
+            }
             super::lower_stmt(ctx, group.read);
             super::lower_stmt(ctx, group.push);
             super::lower_stmt(ctx, group.write_back);
@@ -228,7 +281,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         isset_op.default_effects(),
         Some(span),
     );
-    if matches!(group.base, BaseKind::Local(_)) {
+    if matches!(group.base, BaseKind::Local(_)) || ctx.value_is_owning_temporary(container) {
         crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
     }
     crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
@@ -272,25 +325,62 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     // base the new pointer would never reach the property and it would be left stale. A property
     // base therefore keeps the auto-vivification and stays quadratic.
     if let BaseKind::Local(name) = &group.base {
-        if matches!(ctx.local_type(name), PhpType::Array(_) | PhpType::AssocArray { .. }) {
-            // Re-load the container and key: they were emitted in a predecessor block, and the
-            // vivification may have republished a grown or copy-on-write-split container pointer into
-            // the local. A `LoadLocal` is pure, and the key is either replayable or already hoisted into
-            // a prefix temporary, so neither is evaluated twice observably.
-            let container = ctx.load_local(name, Some(span));
-            let key = lower_expr(ctx, group.index);
-            ctx.emit_void(
-                Op::SlotDetach,
-                vec![container.value, key.value],
-                None,
-                Op::SlotDetach.default_effects(),
-                Some(span),
-            );
+        let local_ty = ctx.local_type(name).codegen_repr();
+        // Mixed-slot indexed locals can be runtime-promoted hashes or carry invoker markers.
+        // The raw indexed SlotDetach writer cannot republish either shape safely. Preserve
+        // the ordinary read/push/write-back COW path for them, including reference variadics.
+        let polymorphic_indexed = matches!(&local_ty,
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed)
+            && (ctx.is_ref_bound_local(name)
+                || super::index_expr_key_type(ctx, group.index).codegen_repr() != PhpType::Int);
+        if !polymorphic_indexed
+            && matches!(local_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            detach_array_bucket(ctx, group, name, span);
         }
     }
 
     super::lower_stmt(ctx, group.push);
     super::lower_stmt(ctx, group.write_back);
+}
+
+/// Detaches only actual arrays, preserving a selected scalar until its append error is caught.
+/// Boxed buckets retain the in-place fast path without removing strings before RHS evaluation.
+fn detach_array_bucket(
+    ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup<'_>, name: &str, span: Span,
+) {
+    let StmtKind::Assign { name: temp, .. } = &group.read.kind else { return; };
+    let bucket_ty = ctx.local_type(temp).codegen_repr();
+    let merge = if bucket_ty == PhpType::Mixed {
+        let bucket = ctx.load_local(temp, Some(span));
+        let is_array = ctx.emit_value(
+            Op::TypePredicate, vec![bucket.value],
+            Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)),
+            PhpType::Bool, Op::TypePredicate.default_effects(), Some(span),
+        );
+        let detach = ctx.builder.create_named_block("napp.detach", Vec::new());
+        let append = ctx.builder.create_named_block("napp.append", Vec::new());
+        ctx.builder.terminate(crate::ir::Terminator::CondBr {
+            cond: is_array.value, then_target: detach, then_args: Vec::new(),
+            else_target: append, else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(detach);
+        Some(append)
+    } else if matches!(bucket_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        None
+    } else {
+        return;
+    };
+    // Vivification can republish the container; reload it and the replayable or hoisted key.
+    let container = ctx.load_local(name, Some(span));
+    let key = lower_expr(ctx, group.index);
+    ctx.emit_void(
+        Op::SlotDetach, vec![container.value, key.value], None,
+        Op::SlotDetach.default_effects(), Some(span),
+    );
+    if let Some(append) = merge {
+        ctx.builder.terminate(crate::ir::Terminator::Br { target: append, args: Vec::new() });
+        ctx.builder.position_at_end(append);
+    }
 }
 
 /// Loads the nested append's outer container as a value.

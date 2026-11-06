@@ -16,6 +16,9 @@ sidebar:
 | `bool`           | Yes              | `true`/`false` as distinct type. `echo false` prints nothing, `echo true` prints `1`. Coerces to 0/1 in arithmetic.    |
 | `float`          | Yes              | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`, `1_000.5`, `1e1_0`. Constants: `INF`, `NAN`.       |
 | `array`          | Yes              | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Heterogeneous indexed and associative payloads widen to boxed `mixed`. Arrays use copy-on-write semantics. |
+| `array<T>`       | Yes (extension)  | Pins the element type so it keeps register-width storage instead of widening to boxed `mixed`. An elephc extension rejected by `--strict-php`; see [Generics](../beyond-php/generics.md). |
+| `array<K, V>`    | Yes (extension)  | The associative form: hash storage with both halves typed. `K` must be `int`, `string`, or `mixed`. Not interchangeable with `array<T>`, which is a packed element vector. Also rejected by `--strict-php`. |
+| `Box<T>`         | Yes (extension)  | A generic class or interface named with type arguments. Instantiated into one ordinary class per distinct argument list, so `Box<int>` holds a machine integer where `Box<string>` holds a string. An elephc extension rejected by `--strict-php`; see [Generics](../beyond-php/generics.md). |
 | `mixed`          | Yes              | Supported in type hints and typed locals. Runtime values are boxed with a per-value tag, including heterogeneous array payloads and union storage. |
 | `iterable`       | Yes              | PHP pseudo-type for `array \| Traversable`. Supports indexed arrays, associative arrays, `Iterator`, and `IteratorAggregate`; runtime operations (`foreach`, `echo`, `gettype()`, `var_dump()`, `===`, casts, `is_iterable()`) dispatch on heap-kind, value-type, or interface metadata as needed. |
 | `resource`       | Inferred only    | File handles and standard streams are modeled separately from integers. `fopen()` returns `resource\|false`, and `STDIN`, `STDOUT`, and `STDERR` are stream resources. PHP does not allow `resource` as a type declaration, so elephc does not accept `resource` annotations. |
@@ -25,18 +28,18 @@ sidebar:
 | `int|string`     | Yes              | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime.                                    |
 | `?int`           | Yes              | Nullable shorthand — sugar for `int|null`. The explicit `T|null` form (e.g. `A|null`) is also accepted.                |
 | `string|null`    | Yes              | Union with the `null` literal type. Folds to the nullable shorthand `?string`, so `string|null` and `?string` are identical. |
-| `int|false`      | Yes              | Union with the `false` literal type (PHP's `strpos`-style return). `false`/`true` widen to `bool`; the runtime value is a real boolean. |
+| `int|false`      | Yes              | Union with the `false` literal subtype (PHP's `strpos`-style return). The checker keeps `false` distinct from `bool`; both use the same boolean runtime representation. |
 | `void`           | Return only      | Valid as a function, method, closure, arrow, or extern return type. Internally, `null` is represented as `Void`.        |
 | `never`          | Return only      | Marks a function, method, closure, or interface method that **never returns** — it must always `throw`, call `exit()`/`die()`, or loop forever. Returning is rejected at type-check time. |
 | `ptr` / `ptr<T>` | elephc extension | Raw 64-bit pointer, optionally carrying a checked compile-time pointee tag. See [Pointers](../beyond-php/pointers.md). |
-| `buffer<T>`      | elephc extension | Fixed-size contiguous storage for POD scalars, pointers, or packed records. See [Buffers](../beyond-php/buffers.md).   |
+| `buffer<T>`      | elephc extension | Fixed-size contiguous storage for POD scalars, C widths (`buffer<u8>`, `buffer<f32>`), pointers, or packed records. See [Buffers](../beyond-php/buffers.md). |
 | `packed class`   | elephc extension | Flat POD record type with compile-time field offsets. See [Packed Classes](../beyond-php/packed-classes.md).           |
 
 Integer-form numeric literals keep the `int` type only while they fit in PHP's signed 64-bit range. Larger decimal, hexadecimal, octal, or binary literals are promoted to `float`, matching PHP on 64-bit builds.
 
 ### Literal pseudo-types in unions
 
-PHP lets `null`, `false`, and `true` appear as type members. elephc accepts them in parameter, return, and property positions, matched case-insensitively like the other built-in type names.
+PHP lets `null`, `false`, and `true` appear as type members. elephc accepts them in parameter and return positions, and accepts `null` and `false` as property types, matched case-insensitively like the other built-in type names; a property type containing `true` is rejected (see [Literal property types](#literal-property-types)).
 
 ```php
 <?php
@@ -56,7 +59,7 @@ class Setting {
 Rules:
 
 - `T|null` is exactly equivalent to the nullable shorthand `?T` — both compile to the same type, so `string|null` and `?string` are interchangeable.
-- `false` and `true` widen to `bool`. elephc does not track literal-bool precision, so `int|false` is accepted wherever `int|bool` is; the stored value is still a genuine boolean at runtime.
+- `false` remains a distinct subtype in declarations such as `int|false`, and `bool` accepts it. A union that also contains `bool` absorbs the redundant `false` member. Literal `true` types use `bool`; the runtime representation of `false` is the ordinary boolean representation.
 - A multi-member union may mix these with other members (`int|string|null`); the `null` member keeps the whole union nullable.
 - The nullable shorthand still may not be combined with a pipe union: write `T|null`, not `?T|U`.
 
@@ -176,6 +179,8 @@ $f = (float)42;      // 42.0
 $s = (string)42;     // "42"
 $b = (bool)0;        // false
 $a = (array)42;      // [42]
+$l = (array)[1, 2];  // [1, 2] (the same array, unchanged)
+$n = (array)null;    // []
 $o = (array)$obj;    // property name => value hash, with PHP's visibility-mangled keys
 $m = (array)$mixed;  // dispatches on the runtime tag: arrays pass through, scalars wrap, objects project
 $p = (object)['k' => 1]; // stdClass with a `k` property
@@ -188,6 +193,12 @@ array's keys rendered as strings (so `(object)['x', 'y']` has the properties
 other non-object value to a `stdClass` carrying it in a single `scalar`
 property. An object source is returned **unchanged** — `(object)$obj === $obj`
 — rather than copied.
+
+`(array)` returns an array **unchanged**, turns `null` into an empty array,
+and wraps any scalar (`int`, `float`, `bool`, `string`) as a one-element list
+`[0 => value]`. The static type follows the source: `(array)"x"` is a list of
+strings, `(array)$list` keeps the list's own type, and a runtime-typed source
+(`mixed`, a union such as `int|string` or `?array`) is typed as PHP `array`.
 
 `(array)` on an object projects all of its properties into a string-keyed hash
 using PHP's exact key mangling — `x` for a public property, `"\0*\0y"` for a
@@ -222,6 +233,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `is_object()`   | `is_object($val): bool`      | Returns true if value is an object |
 | `is_scalar()`   | `is_scalar($val): bool`      | Returns true for int, float, string, or bool (not null, array, object, or resource) |
 | `is_iterable()` | `is_iterable($val): bool`    | Returns true if array or Traversable-compatible iterable |
+| `is_countable()` | `is_countable($val): bool`  | Returns true for an array or an object whose class implements `Countable`; a statically typed object that cannot decide it is checked against its runtime class |
 | `is_callable()` | `is_callable($val): bool`    | Returns true for closures, first-class callables, strings case-insensitively naming known builtins, user functions, or public static methods (`"Class::method"`), `[$obj, "method"]` arrays with public methods, `[ClassName::class, "method"]` static method arrays, and objects with public `__invoke()`. |
 | `is_resource()` | `is_resource($val): bool`    | Returns true if value is an open resource handle |
 | `is_nan()`      | `is_nan($val): bool`         | Returns true if NAN            |
@@ -240,6 +252,20 @@ PHP's predicate aliases are supported and behave identically to their canonical
 forms: `is_integer()` and `is_long()` are aliases of `is_int()`, and
 `is_double()` and `is_real()` are aliases of `is_float()`.
 
+`is_countable()` is the guard to use before `count()` on a value that may not be
+countable. It is decided at compile time when the declared type settles it, and
+against the runtime class otherwise, so a `Countable` subclass behind a base-class
+parameter still answers `true`:
+
+```php
+function size(mixed $value): int {
+    return is_countable($value) ? count($value) : -1;
+}
+echo size([1, 2, 3]);                  // 3
+echo size(new ArrayObject(["a", "b"])); // 2
+echo size("text");                     // -1
+```
+
 ### Type narrowing
 
 Inside an `if` (or `if`/`elseif`*/`else` chain) guarded by a type predicate on a variable, that variable is narrowed to the tested type within the matching branch(es), so it can be used as that type without an explicit cast. `is_int()`, `is_float()`, `is_string()`, and `is_bool()` (and their aliases) narrow to the matching scalar, and `$x instanceof SomeClass` narrows to that class — including calling its methods. Each subsequent `elseif`, and the `else` branch, see the complement of all previous guards. The statements *after* the whole construct also see the complement when the chain is exhaustive by divergence — there is no `else` and *every* clause body always diverges (`return`, `throw`, `exit()`, `die()`, or a call to a `: never` function) — because reaching them means every guard was false. A leading `!` flips the then/else branches.
@@ -253,7 +279,34 @@ function describe($x): string {        // $x may be int or a Point across call s
 }
 ```
 
-Narrowing is not tracked across a reassignment of the variable inside the branch. The assignment itself is checked against the variable's own type — the one it had before the guard, not the narrowed one — so the standard fallback idiom compiles even though the narrowed view and the assigned value have nothing in common:
+Compound `&&` and `||` guards combine facts according to short-circuit evaluation. An `&&` body sees both operands as true; after a throwing `||` guard, both operands must have been false. The right operand also sees the facts established by the left operand on the path that evaluates it:
+
+```php
+function fallback(?string $raw, ?int $default = null): int {
+    if ($raw === null && $default !== null) { return $default; }
+    return 0;
+}
+```
+
+Assignments such as `$options = $options ?? new Options()` and `$options ??= new Options()` establish a non-null local receiver when the default excludes null. This also holds inside a branch after the assignment completes. A nullable default keeps the nullable type when the current value may be null. After a retained non-null coalescing fact, another coalescing assignment keeps that fact and skips its default, even when the default is nullable. The skipped expression is still checked for diagnostics. An `unset` invalidates the fact, including inside a conditional branch.
+
+A `null` default keeps a scalar result nullable: `$x = $n ?? null` over `?int $n` is `?int`, as `$n ?: null` is, and `$m[$k] ?? null` over an `array<float>` is `?float` because the read can miss. A guard such as `if ($x !== null)` narrows it back. Arrays, objects and pointers keep their own type beside a `null` default, so `$cfg['items'] ?? null` stays an array, and a default that never yields (`throw`, `exit`) leaves the value type alone.
+
+A nullable local must also be bound on every path reaching its use before its read can exclude null. For example, `if ($choose) { $value = $parameter; $value ??= 5; }` establishes an integer inside that branch, but the following read or closure capture remains nullable because the branch may be skipped. Joins account for loop entry, switch alternatives and exception paths, including an exception before the first assignment. A completed assignment in `finally` can establish the binding for the continuation. These presence checks preserve the existing handling of raw scalar locals and do not enable strict undefined-variable diagnostics globally.
+
+Existing locals assigned inside nullsafe arguments or dynamic member names keep the skipped and evaluated alternatives in following reads. The assignment runs only when the receiver is non-null.
+
+An `instanceof` check against a second interface grants that interface inside the guarded branch. After the branch, the receiver keeps its original interface contract unless an assignment changes it. A receiver whose concrete subclass is already known keeps that subclass when probing a parent class or an implemented interface.
+
+When a compound guard leaves several alternatives for an original `mixed` value, the read remains `mixed`. For example, `is_int($value) || is_string($value)` preserves existing weak conversions at parameters, returns and properties, including values copied into locals or captured by closures. The same applies to nullable alternatives and objects implementing `Stringable`. A single scalar guard still narrows: `is_float($value)` requires an explicit `(int)` cast at an integer parameter because a float conversion can lose precision. Declared union contracts and by-reference storage rules are unchanged. See [Parameter type coercion](#parameter-type-coercion).
+
+A narrowed read keeps the variable's original storage representation. A nullable or union scalar cannot be passed to a concrete scalar parameter by reference when that parameter requires raw scalar storage. Declare the reference parameter nullable or `mixed` to match the variable's storage. Coalescing does not establish a persistent non-null fact for reference-aliased, global or static bindings. Inside a loop, a retained non-null fact must also hold on later iterations: a nullable write on a continuing path restores the nullable view at loop entry. Writes followed by `break` or `return` affect their exit path without changing a reachable guard complement in the loop body.
+
+After a nullable integer receives a non-null fallback, ordinary reads and by-value closure captures use the integer value while reference calls keep the nullable storage. A complete `if ($value === null) { $value = 40; }` fallback also establishes an integer read. A partial assignment or a later reference call does not retain that proof. Integer reads require a stable, definitely bound local: reference aliases and incoming reference parameters keep their nullable representation so writes through another alias remain visible. A by-value capture without that proof preserves the actual value, including null. A declared `int` return checks that snapshot when the closure is invoked. An `unset` on a continuing loop path also removes the proof for reads on later iterations; a fallback inside the body can establish it again.
+
+An incoming `?int &$value` reference keeps the caller's tagged integer/null storage. A guarded `++` or `--` works while its result fits in an integer; overflow raises an explicit runtime storage error. PHP would promote that result to float, which this reference representation cannot hold. Use `mixed &$value` when an update must support float promotion.
+
+Narrowing is not tracked across a reassignment of the variable inside the branch. The assignment itself is checked against the variable's own type, the one it had before the guard, so the standard fallback idiom compiles even though the narrowed view and the assigned value have nothing in common:
 
 ```php
 $files = glob($dir . "/*.meta");   // string[]|false
@@ -278,6 +331,17 @@ $f(5);         // int(5)
 ### Local retyping
 
 A local is monomorphic by default, but three shapes let it change type anyway. `unset($a)` ends the binding, and the next assignment re-binds `$a` at any type with no diagnostic. A plain straight-line reassignment (`$a = 0; $a = "ciao";`) re-binds `$a` to a fresh slot of the new type and warns. A branch-divergent assignment (`if (…) { $a = 0; } else { $a = "ciao"; }`) compiles the local as boxed `mixed` storage for the whole body and warns — a performance signal as much as a correctness one, since every read of it then goes through the box.
+
+A `for` initializer is straight-line code too: it runs exactly once whenever the loop statement does, so `for ($i = 0; …) { … } $i = "done";` re-binds `$i` with the same warning as `$i = 0; for (; …) { … } $i = "done";`.
+
+The same straight-line re-bind also happens silently, with no warning, when a numeric local is reassigned a different numeric type, so a counter name reused by a later loop gets a slot of its own in each loop:
+
+```php
+for ($i = 0; $i < $n; $i++) { … }       // $i stays a raw integer counter
+for ($i = $n - 1; $i >= 0; $i--) { … }  // $n - 1 may overflow to float: this $i is boxed
+```
+
+Nothing PHP can observe changes (the old value is dropped either way, and each loop still promotes to float exactly where PHP does); only the second loop pays for the boxed storage its own initializer needs.
 
 One behaviour differs from PHP: reading a variable after `unset()` is a compile error, where PHP warns and evaluates the read as `null`. Probe the name with `isset()` (or `empty()` / `??`), which stay legal on an unbound name:
 
@@ -337,7 +401,15 @@ Add the explicit cast the call site means — `takesInt((int) $f)`, `takesFloat(
 
 ### Strict types
 
-A file that opens with `declare(strict_types=1);` gets PHP's strict parameter binding: a declared scalar parameter accepts only an argument of exactly that type, plus the single widening of `int` into a declared `float`. Every conversion in the tables above becomes a compile error naming the `TypeError` PHP would throw at run time.
+A file whose leading `declare` sequence enables `strict_types=1` gets PHP's strict parameter binding: a declared scalar parameter accepts only an argument of exactly that type, plus the single widening of `int` into a declared `float`. Every conversion in the tables above becomes a compile error naming the `TypeError` PHP would throw at run time.
+
+The directive may follow earlier top-level `declare` statements, including a bare
+single-statement body such as `declare(ticks=1) echo 0;`. An ordinary statement
+between declarations, or a strict directive nested inside a body, is rejected.
+The main script uses its final strict flag even for an earlier declare body;
+functions, methods and closures defined before the directive retain their original
+binding mode. A later `declare(strict_types=0)` does not clear an earlier `1`.
+
 
 | Argument type → | `int` | `float` | `string` | `bool` |
 |---|---|---|---|---|
@@ -382,7 +454,7 @@ echo coerceHere(true);      // compile error — this call lives in a strict fil
 - **Builtin function arguments** keep their own per-builtin rules; the directive does not tighten them. PHP throws `TypeError` for `strlen(42)` under `strict_types=1` while elephc still applies each builtin's own argument checking.
 - **Return types, typed property assignments and typed constants** are unaffected; PHP also applies `strict_types` to those.
 - **Positional spread arguments** (`f(...$args)`) and **variadic parameters of an inline closure literal** (`function (int ...$xs) {}`) are not checked against the declared parameter type, in strict or coercive mode.
-- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules.
+- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules. The exception is an **object union** in the exact shape `Class|false` or `Class|null` passed to a `Class` parameter of a user-declared method or constructor: elephc accepts it and inserts a runtime `instanceof` guard that throws `TypeError` for the other alternative.
 
 ### Callable strings
 
@@ -402,38 +474,50 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 
 ### Known incompatibilities with PHP
 
+- A guarded `++` or `--` on an incoming `?int &$value` reference raises a runtime storage error on integer overflow, where PHP promotes the value to float. Use `mixed &$value` when the reference must support float promotion.
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
+- Dynamic property names accept statically typed strings, integers, and `mixed` values. A statically typed `Stringable` object is still rejected rather than converted through `__toString()` as PHP does.
+- A runtime-name property lookup that misses declared object slots can return `null` without PHP's `Undefined property` warning. This separate diagnostic gap also applies when a later write correctly throws an `Error` for that null result.
 - Integer `+`, `-`, and `*` overflow promotes to `float` for both constant-folded and runtime arithmetic, matching PHP on 64-bit builds. `intval()`/`(int)` of an integer-valued string near the 64-bit boundary (e.g. `intval("9223372036854775807")`) is still lossy at the string-conversion boundary.
 - The `**` operator is int-preserving like PHP (`2 ** 3` is `int(8)`), but the `pow()` **function** still always returns a `float` (`pow(2, 3)` is `float(8)` where PHP gives `int(8)`). A numeric *string* operand to `**` is always computed on the floating-point path, so an integer-form string stays a `float` (`"2" ** 3` is `float(8)`, PHP gives `int(8)`); the printed value still matches. The other arithmetic operators (`+`, `-`, `*`, `/`, `%`) coerce numeric-string operands with PHP's int-or-float rules — see the numeric-string arithmetic note below.
-- Arithmetic (`+ - * / % **`) accepts numeric and leading-numeric string operands and coerces them at runtime with PHP's numeric-string grammar: an integer-form string coerces to `int` (`"123" + 3` is `int(126)`), a float-form string (containing a `.` or exponent) to `float` (`"1.5" + 3` is `float(4.5)`), an integer-form string outside the 64-bit range to `float` (`"99999999999999999999" + 1` is `float(1.0E+20)`), and a leading-numeric string uses its numeric prefix (`"  +12foo" + 3` is `int(15)`). Three gaps remain. A **fully non-numeric** string with no numeric prefix (`"hi"`) is a `TypeError` in PHP; elephc reports it as a compile error when the operand is a constant string literal (`"hi" + 1`), but a non-numeric string whose value is only known at **runtime** is coerced to `0` rather than raising PHP's runtime `TypeError` — so a program that *catches* that `TypeError` does not compile. Likewise the `Warning: A non-numeric value encountered` PHP emits for a leading-numeric operand is reported at compile time for constant literals only, not for runtime string values, and `%` on a float-form string does not emit PHP's `Deprecated: Implicit conversion from float-string ... loses precision` (`"1.9" % 2` is `int(1)` in both). Relational comparison (`< <= > >= <=>`) deliberately does **not** widen to string operands this way (see the previous bullet).
+- Arithmetic (`+ - * / % **`) accepts numeric and leading-numeric string operands and coerces them at runtime with PHP's numeric-string grammar: an integer-form string coerces to `int` (`"123" + 3` is `int(126)`), a float-form string (containing a `.` or exponent) to `float` (`"1.5" + 3` is `float(4.5)`), an integer-form string outside the 64-bit range to `float` (`"99999999999999999999" + 1` is `float(1.0E+20)`), and a leading-numeric string uses its numeric prefix (`"  +12foo" + 3` is `int(15)`). Three gaps remain. A **fully non-numeric** string with no numeric prefix (`"hi"`) is a `TypeError` in PHP; elephc reports it as a compile error when the operand is a constant string literal (`"hi" + 1`), but a non-numeric string whose value is only known at **runtime** is coerced to `0` rather than raising PHP's runtime `TypeError` — so a program that *catches* that `TypeError` does not compile. Likewise the `Warning: A non-numeric value encountered` PHP emits for a leading-numeric operand is reported at compile time for constant literals only, not for runtime string values, and `%` on a float-form string does not emit PHP's `Deprecated: Implicit conversion from float-string ... loses precision` (`"1.9" % 2` is `int(1)` in both). Relational comparisons between two runtime string operands follow PHP numeric-string and byte-wise ordering rules; string-versus-number comparisons remain unsupported.
 - The numeric-string coercion is scoped to the binary arithmetic operators. Unary negation still rejects a `string` operand at compile time (`-"5"` is a compile error where PHP gives `int(-5)`), and so do the bitwise operators (`"6" << 1`, `&`, `|`, `^`, `>>`), which PHP 8 coerces under the same "Saner string to number conversions" rules.
 - Converting an array to a string (via `.` concatenation, `echo`, or string interpolation) yields the literal `"Array"`, matching PHP's value, but elephc does not emit PHP's `E_WARNING` "Array to string conversion".
 - Scalar loose comparison (`==`, `!=`) follows PHP-style bool truthiness, null-vs-empty-string, numeric-string, non-numeric string byte-comparison, and numeric `int`-vs-`float` rules for constant-folded literals and non-folded runtime scalar operands. One known gap: when an **untyped (`mixed`) operand holds a `float`** at runtime — e.g. `switch ($x)` over an untyped `$x = 1.5`, or `$x == 1` — the value is truncated to `int` before comparing, so `1.5` wrongly compares equal to `1`. Statically-typed `float` operands compare correctly; only untyped float-bearing values are affected.
-- Relational comparison (`<`, `<=`, `>`, `>=`, `<=>`) between two **runtime** string operands is rejected at compile time with "Comparison operators require numeric operands" / "Spaceship operator requires numeric operands", where PHP compares them (numerically when both look numeric, byte-wise otherwise). The constant-folded form is not affected: `"a" <=> "b"`, `"B" < "a"` and `"10" > "9"` are evaluated at compile time with PHP's exact rules and produce PHP's answer, so only comparisons whose operands are not compile-time constants hit the restriction.
 - `??=` is checked against typed assignment storage for variables, object properties, static properties, and non-append array elements. For concrete local variable types, the fallback must keep the same type or be a literal `null`.
 - Plain array numeric casts (`(int)$array`, `(float)$array`) follow elephc's existing array cast semantics (return the element count rather than PHP's `0`/`1`). Direct `iterable` numeric casts use PHP's empty/non-empty `0`/`1` semantics.
 - `__destruct` runs when an object's refcount reaches zero (scope exit, reassignment, `unset`, program end), matching PHP's timing, but **object resurrection is not supported**: re-storing `$this` so the object would outlive the destructor does not keep it alive — the object is still freed once `__destruct` returns.
 - Under the compatibility `--null-repr=sentinel` opt-out, the integer `9223372036854775806` (`PHP_INT_MAX - 1`) collides with elephc's internal null marker in unboxed scalar slots and is misread as `null` by `echo`, `var_dump()`, `is_null()`, `??`, and related null checks. The default tagged null representation does not have this collision: the full 64-bit integer range round-trips.
-- `match` (and ternary) arms whose scalar types share one runtime representation merge to it instead of each arm keeping its own type: an `int` arm together with a `bool` arm collapses to one representation (`match($n) { 1 => 42, default => true }` yields `bool(true)` where PHP keeps `int(42)`). Arms with otherwise distinct runtime representations — object, array, string, int, float, `null` — each keep their own runtime type, matching PHP.
 - Inside a namespace that declares its own constant named after a predefined one (`const NAN = …;`, `const PHP_EOL = …;`), an unqualified `NAN` / `PHP_EOL` still reads the global constant, where PHP reads the namespaced one first. Read the namespaced constant through `constant(__NAMESPACE__ . '\NAN')`, or give it a name no predefined constant uses (#1349).
 - A `mixed` or union bound passed to `random_int()`, `mt_rand()` or `rand()` is coerced like `(int)`: an int passes through, a float truncates, a numeric string parses. A non-numeric string becomes `0`, where PHP throws a `TypeError` for the `int` parameter.
-- A property default of `self::class` or `parent::class` is refused in the backend; PHP resolves it to the declaring class (or its parent). A named `Foo::class` default works. Spell the class out, or assign the value in the constructor (#1351).
+- A `SplDoublyLinkedList`, `SplStack` or `SplQueue` offset of `null` reads as index `0`, as in PHP, but without PHP's `Passing null to parameter #1 ($index) of type int is deprecated`. `SplFixedArray` offsets follow PHP for an int, bool, float (with PHP's `Implicit conversion from float … to int loses precision` deprecation) or canonical integer string (`"1"`), and any other offset raises `Cannot access offset of type <type> on SplFixedArray` — including a resource offset, where PHP instead warns `Resource ID#N used as offset, casting to integer (N)` and indexes by the handle.
+- Invoking an object (`$this(...)`, `($this)(...)`, `$obj(...)`) is checked against the static class: the class must declare or inherit `__invoke`. An abstract parent calling `$this()` when only a subclass defines `__invoke` is refused at compile time, where PHP resolves the method at run time.
+- `usort()` callbacks that do not define a consistent order always terminate and keep every element, but the resulting order can differ from PHP's. `sort()` and `rsort()` over raw float and boxed scalar arrays follow PHP's comparison schedule, including `NAN` placement.
 - Variable variables (`$$name`, `${$expr}`) are not supported yet. Native AOT
   locals use fixed compile-time stack slots; supporting a runtime-computed name
   will require routing the access through Magician's materialized named scope
   and synchronizing the affected native locals. Use an array keyed by the
   dynamic name in portable elephc code for now.
+- `array_push()` rejects nested receivers rooted in function, method or closure parameters, and boxed local copies of untyped parameters. Those incoming containers use boxed storage whose nested reference lowering is not yet supported; the compiler reports `array_push() nested parameter storage is not supported`.
+- `array_push()` rejects dynamic property receivers, including literal names such as `$object->{"items"}` and indexed children of those properties, because their reads do not provide writable receiver binding. Use `$object->items` instead. Nullsafe member access cannot be passed by reference, so a receiver such as `$object?->items` reports `Argument #1 ($array) could not be passed by reference` during checking.
+- An associative or declared-`array` receiver selected beneath a temporary parent, such as `array_push(makeRows()[0], 2)`, requires the parent array to be stored in a local variable first. A statically indexed receiver from a temporary parent remains supported, for example when `makeRows()` returns `array<array<int>>`.
+- Native `array_push()` receiver places also accept numeric arithmetic, warning-free casts, POD buffer reads with integer indexes, fresh buffer allocation and integer-buffer factories limited to local computation. Numeric operands must have known numeric types and no external aliases; object/string coercions, globals and unknown `mixed` values do not satisfy this proof. Integer/boolean casts additionally require proven integer operands, including bounded loop arithmetic, because float casts can invoke warning handlers. A factory must take positional integer values without references, use only its parameters and definitely assigned locals, and create, read or write its own integer buffers. Integer intermediates must fit their range. Bounded `for` loops are allowed when their bodies do not rebind existing locals. Globals, static state, object inputs, callbacks, further function calls, deprecation handlers and reference returns remain outside this proof, so those arguments need live declared-`array` receiver storage instead.
+- `array_push()` requires its receiver to be passed directly before any unpacked arguments, for example `array_push($a, ...$values)` or `array_push(array: $a)`. Supplying the receiver through unpacking, including `array_push(...["array" => $a])`, is rejected because the unpacked entry has separate storage from `$a`. A named receiver after an unpack is also rejected, even when that unpack is empty. Native receiver places that use copy/write-back, including inferred untyped properties and nested native reference aliases, accept literal/local value trees, the numeric and buffer computations described above, and literal/local indexes. Other computed indexes or values can replace the selected storage during argument evaluation; use a declared `array` property for that live-reference behavior.
 - A `null` variable passed to a **non-nullable by-reference parameter** is rejected at compile time (`must be of type int, null given`). That is php-src's own rule for a *userland* `function f(int &$x)`, which throws a `TypeError`, and it applies here to elephc-PHP builtins written with a by-reference parameter too. The one place it bites in practice is `curl_multi_exec($mh, $still_running)`: php.net's examples often seed `$still_running = null`, which php-src accepts only because `curl_multi_exec()` is an *internal* function, where the coercion happens on the way in. Seed it with an `int` — `$still_running = 1;` — which is valid in both. The same applies to any other elephc builtin declared `int &$out`, and to your own by-reference parameters.
+- `array_push()` onto a **statically typed associative receiver** requires each pushed value to fit its existing entry type. For example, a `string` cannot be pushed into an `array<string, int>`, although PHP accepts it. A receiver whose entries already use `mixed` accepts heterogeneous values. Generator, `Traversable`, declared-`array`, and other runtime-typed spreads require that mixed entry storage because their element layout is not statically available. Values backed by untyped parameters or globals also require mixed entries. A concrete indexed receiver joined to another local by `=&`, or previously captured by reference, requires plain pushed values with the same element representation in its enclosing body. Mutation of the captured variable itself inside a by-reference closure can widen its boxed storage; a read-only capture keeps its native layout. Nested native indexed receivers rooted in a reference also require matching element representations, including inside a closure. Runtime spreads are rejected for the broader set of reference-aliased indexed receivers even when their inferred elements match. Runtime spreads into inferred native property slots, static locals, or indexed children of globals are rejected until their copy/write-back coordinator is available. Associative static-local receivers are also rejected. Property receivers passed through an untyped parameter require a declared receiver class so their field layout is stable. Use `$arr[] = $v` to widen a non-aliased inferred receiver; broader explicit reference-group widening remains separate work (issue #1508).
+- A **concrete local that is already a reference alias** cannot be passed to a by-reference variadic parameter: `$q = &$p; replace($p);` with `function replace(&...$items)` is rejected at compile time (`requires a variable with mixed/union/nullable storage when passed by reference`). PHP shares one zval, so the callee's `$items[0] = …` writes through to both `$p` and `$q`; elephc would have to widen the shared cell to boxed `mixed`, and that is only safe when the cell is boxed as the alias is created rather than at the call, because every earlier read of the local is typed from the cell's final representation. A local that already holds boxed `mixed` storage works — a `mixed` or union value, for example `$p = $argc > 5 ? 1 : "x"; $q = &$p; replace($p);`. See issue #1285.
 - Reference aliases to array elements (`$b =& $a[0]`) are limited to **indexed arrays with integer indices**; associative arrays (`$b =& $a['key']`) are rejected at compile time. Referencing an out-of-range index binds the alias to a null cell instead of creating the element (PHP autovivifies it as `null`), and the alias points into the array's storage, so it is only valid while the array is alive and not reallocated by growth.
 - Reference *elements* inside array literals (`$r = [&$a, &$b];`, `['k' => &$a]`, `array(&$a)`) are rejected at compile time with `Reference elements in array literals ([&$x]) are not supported`. PHP stores such an element as a reference cell aliasing the source variable, so `$r[0] = 9` writes through to `$a`. elephc's arrays hold plain values and its only reference form points *into* array storage (the `$b =& $a[0]` case above), never out of it — an element aliasing a local would be a pointer to a stack slot the array can outlive. Assign the value and copy back, or alias an existing element with `$b =& $a[0]`.
 - `goto` and its target labels are not supported and are rejected at compile time (`` `goto` is not supported ``). elephc's termination analysis, flow-sensitive narrowing, loop/branch pruning, and constant propagation all read control flow from the statement tree, which an arbitrary intra-function jump invalidates. Use `break` (including `break 2;`), `continue`, a loop flag, or an early `return`. See [Control Structures](./control-structures.md#goto).
 - A local bound by reference to another local (`$y = &$x;`) keeps the representation it had when the reference was taken, even across a plain assignment: `$x = null; $y = &$x; $x = "s";` reads `$x` back as `NULL`, and `$x = 0; $y = &$x; if ($c) { $x = null; }` reads the `null` path back as `int(9223372036854775806)`. Captures by reference (`function () use (&$x)`) are not affected.
 - `++` / `--` on a `string` follows PHP exactly, including the perl-style alphanumeric carry (`"az"++` is `"ba"`, `"Zz"++` is `"AAa"`) and the numeric-string retype (`"9"++` is `int(10)`, `"3.5"++` is `float(4.5)`). Because the operator can change the value's type, a `string` local that is a `++`/`--` target is given boxed `mixed` frame storage for its whole lifetime, so its runtime type follows the value rather than the declaration. The one divergence: PHP raises `E_DEPRECATED` for `++` on a non-alphanumeric string and for `--` on a non-numeric string, and elephc has no runtime deprecation channel, so it produces the same value without the notice. `++` / `--` on an array, object, buffer, or pointer local is still rejected at compile time.
-- `print_r($value, true)` captures into a fixed 64 KiB buffer: rendered output longer than 65536 bytes is truncated at the cap (PHP returns the full string). Echo mode (`print_r($value)`) is unaffected.
+- String offset writes (`$s[$i] = $v`) follow PHP for string variables, with these gaps (see [Strings](./strings.md#writing-to-a-string-offset)): a write through a property (`$o->s[0] = "x"`, `C::$s[0] = "x"`) is rejected at compile time; the offset must be an integer, a float, or a numeric string literal (PHP also accepts `bool`, `null`, and runtime strings, warning or throwing at run time); compound assignment, `++`/`--`, `$s[] = $v`, which always throw `Error` in PHP, are compile errors instead; and when a warning handler replaces the variable in the middle of the write, PHP abandons the write and the expression is `null`: elephc abandons it too for a string held in `mixed` or `global` storage, but the expression still evaluates to the byte, and a plain `string` local (reachable from a handler only as a `static` or a by-reference parameter) keeps the written string instead of the handler's value. Boxed and nested string writes share runtime offset conversion, including warnings for leading-numeric strings and scalar casts; nested writes retain their existing catchable errors.
+- `print_r($value, true)` grows its capture into owned storage past the inline 64 KiB block, so the full rendered string is returned like PHP. Echo mode (`print_r($value)`) is unaffected.
 - `json_encode()` of an instance of a declared class (not `stdClass`) encodes its declared public properties only: dynamic properties added to an `#[\AllowDynamicProperties]` class, or created by a deprecated runtime-named write, are not included. `var_dump()`, `print_r()` and `var_export()` do list them, after the declared properties and in insertion order, exactly like PHP.
 - `func_num_args()`, `func_get_args()` and `func_get_arg()` are compiled away rather than dispatched as builtin calls, so `function_exists()` reports `false` for the three names where PHP reports `true`. Their supported scopes are also narrower than PHP's: they are rejected in a function with an optional (defaulted) parameter, in a function that already declares its own variadic, and in a method that overrides a parent method or implements an interface method. Everywhere else — functions, methods, static methods, closures, arrow functions, generators — they match PHP, including reporting the current values of the declared parameters. See [Functions](./functions.md#argument-introspection).
 - Surplus *positional* arguments (PHP allows any user function to be called with more arguments than it declares, discarding the extras) are only accepted by functions that use one of the three argument-introspection constructs above. Every other user function keeps elephc's compile-time arity check, so `function f($a) {} f(1, 2);` is a compile error where PHP runs it.
-- `serialize()`/`unserialize()` cover scalars, arrays, and objects (including the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods and `r:`/`R:` object back-references) byte-for-byte compatibly with PHP. Objects are registered before property hydration, so self-references resolve correctly; unknown class names materialize as `__PHP_Incomplete_Class` and preserve their original wire name. Remaining gaps: the deprecated `Serializable` interface (`C:` wire form) is unsupported, writing a property of an unserialized object held in a `Mixed` does not persist (a separate `Mixed` property-write limitation), and `unserialize()` does not emit PHP's `E_WARNING` / `E_NOTICE` on malformed input — it just returns `false`.
+- `serialize()`/`unserialize()` cover scalars, arrays, and objects (including the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods and `r:`/`R:` object back-references) byte-for-byte compatibly with PHP. Objects are registered before property hydration, so self-references resolve correctly; unknown class names materialize as `__PHP_Incomplete_Class` and preserve their original wire name. Remaining gaps include the unsupported deprecated `Serializable` interface (`C:` wire form) and writes to properties of an unserialized object held in a `Mixed` not persisting (a separate `Mixed` property-write limitation). Malformed input emits an offset/length warning before `unserialize()` returns `false`. A hydrated value that does not match a typed property's declaration is rejected with PHP's catchable `TypeError` (`Cannot assign string to property C::$n of type ?int`), spelling the value as PHP does (including the literal `true`/`false` for a bool) and naming the declared type (`?int`, `?float`, `array`, a class name, …). One gap remains: an object of the wrong class still hydrates an object-typed property, because the slot check verifies only that the value is an object, not that its class is the declared class or a subclass; the class/interface members of an `iterable` or union type are likewise not checked, and two properties of one serialized object that share a reference are hydrated as independent per-slot clones, so a shared raw `int` is widened per property where PHP keeps the shared value.
+- An uninitialized typed property (declared without a default and never assigned) is omitted by `print_r()`, `var_export()`, `get_object_vars()` and `(array)`, like PHP, but `json_encode()` and `serialize()` still emit it (as `0`, `""` or `null` for its type) where PHP leaves it out, and `var_dump()` names a nullable or union type `uninitialized(mixed)` where PHP prints the declared type (`uninitialized(?string)`).
 - Reading a variable after a straight-line `unset()` of it is a compile error (`Undefined variable: $a`), in both modes, where PHP warns and evaluates the read as `null`. See [Local retyping](#local-retyping) above for the full unset/retype/mixed-storage mechanism and the `isset()`/`empty()`/`??` probes that stay legal on the unbound name.
 - `defined('Class::CONST')` follows PHP visibility for public, protected, and private members, including lexical `self::`/`parent::`, runtime-called-class `static::`, and constants imported into classes through traits; invalid relative scopes raise a catchable `Error`. The trait name itself is not a valid constant receiver. Eval-mode class-constant names remain unresolved, and dynamic and first-class-callable `defined()` names are still rejected at compile time.
 - `is_a()` and `is_subclass_of()` take a class NAME as well as an object, including an interface
@@ -445,11 +529,48 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
   name only known at runtime still answers `false` rather than walking the hierarchy, because the
   emitted program has no name-keyed class table to consult. The same restriction is louder in
   `class_parents()`, `class_implements()` and `class_exists()`, which reject a non-literal name at
-  compile time instead of answering. One gap of its own: an enum does not carry its implicit
-  `UnitEnum`/`BackedEnum` interfaces, so `is_subclass_of("Suit", "UnitEnum")` is `false` where PHP
-  says `true`. For an enum with an `implements` clause, `class_implements()` lists only the
-  directly declared interfaces; it omits their transitive parents and the implicit
-  `UnitEnum`/`BackedEnum` interfaces.
+  compile time instead of answering. One gap of its own: an enum declared in the compiled
+  program does not carry its implicit `UnitEnum`/`BackedEnum` interfaces, so
+  `is_subclass_of("Suit", "UnitEnum")` is `false` where PHP says `true`. This limitation also
+  affects compiled `is_a()` and `is_subclass_of()` calls with a class-name string for an enum
+  declared only inside `eval()`: those calls consult the AOT class table, which does not contain
+  the eval declaration. A case of an enum declared inside `eval()` is an object subject
+  instead; compiled `is_a($case, "UnitEnum")` and `is_subclass_of($case, "UnitEnum")` use
+  the dynamic object bridge and report its implicit interfaces, including `BackedEnum`
+  for a backed case. A compiled enum case returned through `eval()` retains incomplete
+  AOT metadata: those object probes still return `false` for its implicit
+  `UnitEnum`/`BackedEnum` interfaces, while explicitly declared interfaces remain visible.
+  For a compiled enum with an `implements` clause,
+  `class_implements()` lists only the directly declared interfaces; it omits their transitive
+  parents and the implicit `UnitEnum`/`BackedEnum` interfaces. An enum declared inside `eval()`
+  reports transitive parents and its implicit enum interfaces to relation probes executed inside
+  `eval()`, like PHP. Compiled `class_implements()` also reports those interfaces for an
+  eval-declared enum; it does not share the compiled relation probes' limitation.
+- `strtotime()` answers `false` for some strings PHP parses. After an `@<timestamp>` it accepts
+  only the one timezone token PHP ignores (`"@123 UTC"`, `"@123abc"`); a relative offset, time,
+  zone identifier, UTC offset, or strtotime keyword after the epoch (`"@123 +1 day"`,
+  `"@123 12:30"`, `"@123 Europe/Rome"`, `"@123 noon"`) is not evaluated. An ISO date needs a
+  four-digit year and two-digit time fields (`"99-01-01"` and `"2020-01-05 9:30"` are `false`),
+  and a military zone letter after a time (`"2024-06-15 12:30x"`, which PHP reads as UTC-11) is
+  not recognized. Inside `eval()`, `strtotime()` supports only `now` and zero-padded ISO dates,
+  and answers `-1` rather than `false` for anything else. See [System & I/O](./system-and-io.md)
+  for the forms that are supported.
+- `empty($box['k'])` on a **nullable static property** holding an `ArrayAccess` object
+  (`public static ?Box $box`) calls `offsetGet()` without asking `offsetExists()` first, where
+  PHP asks `offsetExists()` and skips `offsetGet()` for a missing offset. That property reads as
+  a plain `mixed` value, so its class is not known when `empty()` is lowered. Variables, `$this`,
+  instance properties (nullable or not), non-nullable static properties and call results all go
+  through `offsetExists()` first.
+- `PDOException::getCode()` returns PDO's SQLSTATE string (`"HY000"`) only when the receiver is
+  statically a `PDOException`: a `catch (PDOException $e)` block, or a parameter or property
+  declared `PDOException`. Through a `Throwable`, `Exception`, or `RuntimeException` receiver
+  (`catch (Exception $e)`, a `getPrevious()` result, a `Throwable` parameter) elephc types
+  `getCode()` as `int` and reads the driver's integer code (`errorInfo[1]`), where PHP returns the
+  SQLSTATE string; an `instanceof PDOException` check on such a variable does not change that,
+  and `$e->errorInfo` does not compile on it (the property is declared on `PDOException` only).
+  Catch `PDOException`, or after the `instanceof` check pass the exception to a parameter
+  declared `PDOException`: through that receiver both `getCode()` and `$e->errorInfo[0]` give the
+  SQLSTATE. See [PDO](./pdo.md#pdoexception-shape).
 
 ### Filesystem functions not implemented
 
@@ -460,11 +581,11 @@ These standard PHP filesystem functions are intentionally absent from elephc bec
 
 ### Compiler diagnostics
 
-elephc reports errors with source spans. Example:
+elephc reports errors with the file, line and column they come from. Example:
 
 ```text
-error[3:5]: Undefined variable: $name
-error[8:1]: Function 'foo' declared return type string but returns int
+error[main.php:3:5]: Undefined variable: $name
+error[src/Helpers.php:8:1]: Function 'foo' declared return type string but returns int
 ```
 
 The compiler also emits non-fatal warnings (unused variables, unreachable code).
@@ -472,3 +593,20 @@ The compiler also emits non-fatal warnings (unused variables, unreachable code).
 ### Runtime diagnostics
 
 Runtime warnings flow through a suppressible diagnostics channel. The `@` operator hides those warnings for its operand only, while fatal runtime errors and compile-time diagnostics remain visible. Current suppressible warnings include `fopen()` / `file_get_contents()` open failures and duplicate `define()` calls.
+
+## Literal property types
+
+Standalone `false` properties and `false` parameters accept the exact boolean
+`false`; values such as integer zero, null, and empty strings are rejected before
+boolean coercion. Known instance, static, and parent calls retain this check.
+Object refusals name the runtime class in their `TypeError`.
+Initialize literal `false` properties in a constructor: declaration defaults
+such as `public false $ready = false` are currently unsupported.
+
+Ordinary standalone `null` properties accept only null and retain typed-property
+initialization checks. The `null` declaration is distinct from a forbidden
+`void` property.
+
+Literal `true` property types are currently unsupported. Ordinary and promoted
+properties, including nullable and union forms containing `true`, produce an
+explicit compile diagnostic instead of silently widening to `bool`.

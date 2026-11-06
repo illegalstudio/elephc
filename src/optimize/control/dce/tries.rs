@@ -53,6 +53,7 @@ pub(super) fn dce_try_stmt(
                 || dce_block_with_guards(catch.body, body_guards),
             );
             Some(crate::parser::ast::CatchClause {
+                exception_type_args: catch.exception_type_args,
                 exception_types: catch.exception_types,
                 variable,
                 body,
@@ -143,6 +144,7 @@ pub(super) fn dce_try_stmt_with_tail(
                 || dce_block_with_guards(catch.body, body_guards),
             );
             Some(crate::parser::ast::CatchClause {
+                exception_type_args: catch.exception_type_args,
                 exception_types: catch.exception_types,
                 variable,
                 body,

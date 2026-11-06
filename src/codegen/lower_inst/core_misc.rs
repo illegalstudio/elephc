@@ -100,12 +100,12 @@ pub(super) fn lower_gc_control(
                 crate::codegen::platform::Arch::AArch64 => {
                     abi::emit_load_int_immediate(ctx.emitter, "x0", op.as_i64());
                     abi::emit_call_label(ctx.emitter, "__rt_gc_status_metric");
-                    ctx.emitter.instruction("fmov d0, x0");
+                    ctx.emitter.instruction("fmov d0, x0");                     // return the timing metric through the floating result register
                 }
                 crate::codegen::platform::Arch::X86_64 => {
                     abi::emit_load_int_immediate(ctx.emitter, "rdi", op.as_i64());
                     abi::emit_call_label(ctx.emitter, "__rt_gc_status_metric");
-                    ctx.emitter.instruction("movq xmm0, rax");
+                    ctx.emitter.instruction("movq xmm0, rax");                  // return the timing metric through the floating result register
                 }
             }
         }

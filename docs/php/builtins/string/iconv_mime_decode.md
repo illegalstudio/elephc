@@ -1,8 +1,6 @@
 ---
 title: "iconv_mime_decode()"
 description: "Decodes one MIME header field into the requested character encoding."
-sidebar:
-  order: 812
 ---
 
 ## iconv_mime_decode()
@@ -22,8 +20,9 @@ Decodes one MIME header field into the requested character encoding.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/iconv_mime_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/iconv_mime_decode.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

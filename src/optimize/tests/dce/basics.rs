@@ -27,6 +27,7 @@ fn test_eliminate_dead_code_invalidates_outer_strict_bool_guard_after_local_writ
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

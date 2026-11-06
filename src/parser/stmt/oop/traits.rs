@@ -14,6 +14,7 @@ use crate::names::Name;
 use crate::parser::ast::{TraitAdaptation, TraitUse, Visibility};
 use crate::span::Span;
 
+use super::super::params::parse_inherited_name;
 use super::super::{expect_semicolon, expect_token, parse_name};
 
 /// Parses a `use TraitName [, TraitName]*` declaration with optional `{ ... }` adaptation block.
@@ -28,13 +29,14 @@ pub(in crate::parser::stmt) fn parse_trait_use(
 ) -> Result<TraitUse, CompileError> {
     *pos += 1; // consume 'use'
     let mut trait_names = Vec::new();
+    let mut type_args = Vec::new();
     loop {
-        trait_names.push(parse_name(
-            tokens,
-            pos,
-            span,
-            "Expected trait name after 'use'",
-        )?);
+        // A generic trait is used at its type arguments (`use Holder<int>;`), read by the same
+        // routine as an inherited `implements Repository<User>`.
+        let (name, args) =
+            parse_inherited_name(tokens, pos, span, "Expected trait name after 'use'")?;
+        trait_names.push(name);
+        type_args.push(args);
         if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
             *pos += 1;
             continue;
@@ -97,7 +99,9 @@ pub(in crate::parser::stmt) fn parse_trait_use(
                     let mut instead_of = Vec::new();
                     loop {
                         match tokens.get(*pos).map(|(t, _)| t) {
-                            Some(Token::Identifier(_)) | Some(Token::Backslash) => {
+                            // `name_starts_at` also takes the relative `insteadof namespace\B`
+                            // (#825), like the adaptation target before it.
+                            Some(_) if super::super::name_starts_at(tokens, *pos) => {
                                 instead_of.push(parse_name(
                                     tokens,
                                     pos,
@@ -153,6 +157,7 @@ pub(in crate::parser::stmt) fn parse_trait_use(
     }
     Ok(TraitUse {
         trait_names,
+        type_args,
         adaptations,
         span,
     })

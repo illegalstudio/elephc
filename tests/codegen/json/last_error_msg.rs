@@ -43,3 +43,43 @@ fn test_json_last_error_msg_concat() {
     );
     assert_eq!(out, "msg=No error;");
 }
+
+/// Verifies json_last_error_msg keeps the numeric location after the source string is replaced.
+#[test]
+fn test_json_last_error_msg_survives_replaced_source() {
+    let out = compile_and_run(
+        r#"<?php
+            function bad() { return "[{"; }
+            json_decode(bad());
+            $gone = str_repeat("Z", 32);
+            echo json_last_error_msg(), ":", strlen($gone);
+        "#,
+    );
+    assert_eq!(out, "Syntax error near location 1:3:32");
+}
+
+/// Verifies a later successful decode clears a previous location-bearing message.
+#[test]
+fn test_json_last_error_msg_clears_location_after_success() {
+    let out = compile_and_run(
+        r#"<?php
+            json_decode("[{");
+            json_decode("[]");
+            echo json_last_error_msg();
+        "#,
+    );
+    assert_eq!(out, "No error");
+}
+
+/// Verifies public json_validate failures replace a previous decode location.
+#[test]
+fn test_json_last_error_msg_validate_has_own_location_suffix() {
+    let out = compile_and_run(
+        r#"<?php
+            json_decode("[{");
+            json_validate("{");
+            echo json_last_error_msg();
+        "#,
+    );
+    assert_eq!(out, "Syntax error near location 1:2");
+}

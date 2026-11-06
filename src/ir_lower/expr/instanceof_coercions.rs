@@ -31,6 +31,10 @@ pub(super) fn lower_instanceof(
     // must retire after the op has read it.
     let mut dynamic_target: Option<LoweredValue> = None;
     let immediate = match target {
+        // Lowering only ever sees the instantiated class, which is an ordinary `Name`.
+        InstanceOfTarget::Generic(_) => unreachable!(
+            "InstanceOfTarget::Generic must be instantiated by generics::classes"
+        ),
         InstanceOfTarget::Name(name) => {
             if name.as_str().trim_start_matches('\\') == "static" && ctx.local_slots.contains_key("this") {
                 // Apply the same storage-aware retirement to the implicit target
@@ -104,7 +108,14 @@ pub(crate) fn coerce_to_int_at_span(
     match value.ir_type {
         IrType::I64 => value,
         IrType::F64 => ctx.emit_value(Op::FToI, vec![value.value], None, PhpType::Int, Op::FToI.default_effects(), span),
-        IrType::Str => ctx.emit_value(Op::StrToI, vec![value.value], None, PhpType::Int, Op::StrToI.default_effects(), span),
+        IrType::Str => {
+            let result = ctx.emit_value(Op::StrToI, vec![value.value], None, PhpType::Int, Op::StrToI.default_effects(), span);
+            // The integer cannot alias a string copied to capture an operand.
+            if ctx.value_needs_release_after_use(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+            }
+            result
+        }
         _ => {
             let result = ctx.emit_value(
                 Op::Cast,
@@ -184,7 +195,7 @@ pub(super) fn coerce_to_string(ctx: &mut LoweringContext<'_, '_>, value: Lowered
 }
 
 /// Coerces a value to string storage using an explicit source span.
-pub(super) fn coerce_to_string_at_span(
+pub(crate) fn coerce_to_string_at_span(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Option<crate::span::Span>,

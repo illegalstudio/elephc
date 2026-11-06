@@ -332,6 +332,16 @@ impl ElephcEvalContext {
         self.dynamic_destructing_objects.remove(&identity);
     }
 
+    /// Suppresses destructor execution for a receiver whose construction did not complete.
+    pub fn suppress_dynamic_object_destructor(&mut self, identity: u64) {
+        self.dynamic_destructed_objects.insert(identity);
+    }
+
+    /// Reports an executed or suppressed destructor, including failed construction receivers.
+    pub fn dynamic_object_destructor_is_finished(&self, identity: u64) -> bool {
+        self.dynamic_destructed_objects.contains(&identity)
+    }
+
     /// Returns whether one dynamic object identity was registered with a class-like name.
     pub fn dynamic_object_is_class(&self, identity: u64, class_name: &str) -> bool {
         let class_name = normalize_class_name(class_name);

@@ -25,13 +25,13 @@ pub(super) fn emit_backtrace_entry_wrapper(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_backtrace_entry_next");
     if arm {
         emitter.instruction("cbz x9, __elephc_eval_backtrace_entry_empty");     // stop after the outermost activation
-        emitter.instruction("ldr x10, [x9, #16]");                               // ownership guards store their own address here
-        emitter.instruction("cmp x10, x9");                                      // distinguish a guard from a PHP activation
+        emitter.instruction("ldr x10, [x9, #16]");                              // ownership guards store their own address here
+        emitter.instruction("cmp x10, x9");                                     // distinguish a guard from a PHP activation
         emitter.instruction("b.eq __elephc_eval_backtrace_entry_skip");         // guard offset 24 is an owner, not a reader
     } else {
         emitter.instruction("test r10, r10");                                   // test whether another activation exists
         emitter.instruction("jz __elephc_eval_backtrace_entry_empty");          // stop after the outermost activation
-        emitter.instruction("cmp QWORD PTR [r10 + 16], r10");                    // ownership guards store their own address here
+        emitter.instruction("cmp QWORD PTR [r10 + 16], r10");                   // ownership guards store their own address here
         emitter.instruction("je __elephc_eval_backtrace_entry_skip");           // guard offset 24 is an owner, not a reader
     }
     abi::emit_load_from_address(emitter, reader, cursor, 24);

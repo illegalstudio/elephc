@@ -46,7 +46,10 @@ fn php_visible_extension_builtins() -> Vec<String> {
 /// surface sit inside the same structural audits.
 fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program)> {
     let mut built = vec![
+        ("bcmath_prelude", crate::bcmath_prelude::bcmath_declarations()),
         ("hash_prelude", crate::hash_prelude::hash_declarations()),
+        ("core_prelude", crate::core_prelude::core_declarations()),
+        ("random_prelude", crate::random_prelude::random_declarations()),
         ("tz_prelude", crate::tz_prelude::tz_declarations()),
         (
             "var_export_prelude",
@@ -66,6 +69,9 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("image_prelude", crate::image_prelude::image_declarations()),
         ("curl_prelude", parsed_curl_prelude()),
         ("xml_prelude", crate::xml_prelude::xml_declarations()),
+        ("fileinfo_prelude", crate::fileinfo_prelude::fileinfo_declarations()),
+        ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations()),
+        ("testing_prelude", crate::testing_prelude::testing_declarations()),
         (
             "version_prelude",
             crate::version_prelude::version_declarations(
@@ -104,6 +110,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             ),
         ),
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
+        ("web_application", crate::web_prelude::application::declarations()),
     ];
     // The mysqli prelude is a second bridge surface built as Rust AST like the others; the
     // gate must cover its `__elephc_*` internal-alias discipline too. The shared `elephc_pdo`
@@ -178,6 +185,11 @@ fn prelude_sources() -> Vec<(&'static str, String)> {
         .map(|(name, program)| {
             let source = if name == "curl_prelude" {
                 crate::curl_prelude::CURL_PRELUDE_SRC.to_string()
+            } else if name == "web_application" {
+                // The source is already PHP and includes an explicitly global namespace block.
+                // The built-prelude printer deliberately does not model that parsed construct.
+                format!("{}\n{}", crate::web_prelude::application::CONTRACT_SOURCE,
+                    crate::web_prelude::application::ADAPTER_SOURCE.replacen("<?php", "", 1))
             } else {
                 crate::synthetic_class::print::print_program(&program)
             };
@@ -233,12 +245,18 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
 /// `curl_prelude` is parsed rather than built (see `injected_prelude_programs`); it is audited
 /// through the same AST path, because the gate is about what a prelude CALLS, not about how
 /// its declarations were produced.
+///
+/// The extension-hosting prelude is audited too, on a sample hosted surface: it depends on the
+/// project's installed extensions, and its extern declarations have no PHP text, so it sits
+/// outside `injected_prelude_programs`.
 #[test]
 fn injected_preludes_never_call_php_visible_extension_builtins() {
     let extension_names = php_visible_extension_builtins();
 
+    let mut programs = injected_prelude_programs();
+    programs.push(("php_ext_prelude", crate::php_ext::prelude::sample_declarations()));
     let mut violations: Vec<String> = Vec::new();
-    for (prelude, program) in &injected_prelude_programs() {
+    for (prelude, program) in &programs {
         let called = crate::synthetic_class::called_function_names(program);
         for name in &extension_names {
             if called.iter().any(|call| call.eq_ignore_ascii_case(name)) {
@@ -826,6 +844,12 @@ fn dump_prelude_contract_seed_on_request() {
     /// Serializes a parsed PHP type into the seed catalog spelling.
     fn type_text(ty: &TypeExpr) -> String {
         match ty {
+            // No builtin declares one; rendering it keeps this helper total.
+            TypeExpr::CallableSig { params, ret } => format!(
+                "callable({}): {}",
+                params.iter().map(type_text).collect::<Vec<_>>().join(", "),
+                type_text(ret)
+            ),
             TypeExpr::Int => "int".to_string(),
             TypeExpr::Float => "float".to_string(),
             TypeExpr::Bool => "bool".to_string(),
@@ -834,10 +858,15 @@ fn dump_prelude_contract_seed_on_request() {
             TypeExpr::Void => "void".to_string(),
             TypeExpr::Never => "never".to_string(),
             TypeExpr::Iterable => "iterable".to_string(),
-            TypeExpr::Array(_) => "array".to_string(),
+            TypeExpr::Array(_) | TypeExpr::AssocArray { .. } => "array".to_string(),
             TypeExpr::Ptr(_) => "ptr".to_string(),
             TypeExpr::Buffer(_) => "buffer".to_string(),
             TypeExpr::Named(name) => name.as_str().to_string(),
+            TypeExpr::GenericClass { name, args } => format!(
+                "{}<{}>",
+                name.as_str(),
+                args.iter().map(type_text).collect::<Vec<_>>().join(", ")
+            ),
             TypeExpr::Nullable(inner) => format!("?{}", type_text(inner)),
             TypeExpr::Union(members) => members.iter().map(type_text).collect::<Vec<_>>().join("|"),
             TypeExpr::Intersection(members) => {

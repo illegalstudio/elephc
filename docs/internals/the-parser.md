@@ -67,6 +67,7 @@ Things that have a value:
 | `YieldFrom(Expr)` | `yield from inner()` | Contextual `yield from` delegation. The lexer leaves `from` as an identifier and the parser recognizes it only immediately after `yield`. |
 | `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]`, `[...$arr, 4]` | Indexed array; elements may include `Spread` expressions |
 | `ArrayLiteralAssoc(Vec<(Expr, Expr)>)` | `["a" => 1]` | Associative array |
+| `ArrayLiteralMixed(Vec<ArrayEntry>)` | `[...$left, "key" => $value]` | Mixed spread and explicit keyed entries, preserved in source order |
 | `Match { subject, arms, default }` | `match($x) { 1, 2 => "low", 3 => "high" }` | Match expression (returns a value). `arms` is `Vec<(Vec<Expr>, Expr)>`, so each arm can have multiple comma-separated patterns before `=>`, and `default` is optional (`Option<Box<Expr>>`) |
 | `ArrayAccess { array, index }` | `$arr[0]`, `$str[-1]` | Same AST node is used for indexed arrays, associative-array lookups, and string indexing |
 | `Ternary { condition, then_expr, else_expr }` | `$a ? $b : $c` | |
@@ -105,6 +106,14 @@ Things that have a value:
 
 ### Statements (`Stmt`)
 
+The parser also emits synthetic statement groups. Their structure can carry
+checker specializations, such as nested appends into an empty array, and
+source-map boundaries. File and namespace statement lists expose groups that
+contain declarations before function discovery. Name resolution reuses the same
+rule for transformed programs. Both stages preserve ordinary lowered groups. Flattening
+every synthetic group can change types, autovivification and source maps.
+
+
 Things that do something:
 
 Each `Stmt` also carries a source `span` and an `attributes` list. The list is populated only for declaration statements that can legally be decorated with PHP attributes; attributes before non-declaration statements are rejected during parsing.
@@ -124,7 +133,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `NestedArrayAssign { target, value }` | `$arr[0][1] = 5;`, `$obj->items[0] = 5;` |
 | `ArrayPush { array, value }` | `$arr[] = 5;` |
 | `TypedAssign { type_expr, name, value }` | `int $x = 42;`, `buffer<int> $xs = buffer_new<int>(8);` |
-| `FunctionDecl { name, params, param_attributes, variadic, variadic_by_ref, variadic_type, return_type, by_ref_return, body }` | `function foo(int $a, &$b, string $c = "x"): string { }`, `function &ref(): int { ... }` — params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` where the tuple stores name, declared type, default value, and `is_ref` (pass by reference). `param_attributes` stores the PHP 8 attribute groups attached to each parameter (aligned with `params`, plus the variadic when present). `variadic` is `Option<String>` for variadic parameters (`...$args`), `variadic_by_ref` is `true` for a by-reference variadic (`&...$args`), `variadic_type` is the optional declared element type on that variadic (`int ...$xs`), `return_type` is an optional declared `TypeExpr`, and `by_ref_return` is `true` when declared `function &f()` so calls return a reference (alias) to the returned lvalue rather than a copy |
+| `FunctionDecl { name, type_params, params, param_attributes, variadic, variadic_by_ref, variadic_type, return_type, by_ref_return, body }` | `function foo(int $a, &$b, string $c = "x"): string { }`, `function &ref(): int { ... }` , params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` where the tuple stores name, declared type, default value, and `is_ref` (pass by reference). `param_attributes` stores the PHP 8 attribute groups attached to each parameter (aligned with `params`, plus the variadic when present). `variadic` is `Option<String>` for variadic parameters (`...$args`), `variadic_by_ref` is `true` for a by-reference variadic (`&...$args`), `variadic_type` is the optional declared element type on that variadic (`int ...$xs`), `return_type` is an optional declared `TypeExpr`, and `by_ref_return` is `true` when declared `function &f()` so calls return a reference (alias) to the returned lvalue rather than a copy |
 | `FunctionVariantGroup { name, variants }` | Internal resolver metadata for include-loaded hidden function implementations behind one public name |
 | `FunctionVariantMark { name, variant }` | Internal include-body marker that activates the hidden function variant loaded at that runtime include point |
 | `Return(Option<Expr>)` | `return $x;` or `return;` |
@@ -136,7 +145,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `Throw(Expr)` | `throw new Exception("boom");` |
 | `Synthetic(Vec<Stmt>)` | Internal lowering only; a source construct that has already been expanded into one or more ordinary statements before final codegen |
 | `Try { try_body, catches, finally_body }` | `try { ... } catch (Exception $e) { ... } finally { ... }` |
-| `ConstDecl { name, value }` | `const MAX = 100;` |
+| `ConstDecl { name, value }` | `const MAX = 100;`, `const MIN = 1, MAX = MIN + 9;` (a declarator list yields one `ConstDecl` per name, spliced into the enclosing file or namespace statement list) |
 | `IfDef { symbol, then_body, else_body }` | `ifdef DEBUG { ... } else { ... }` |
 | `NamespaceDecl { name: Option<Name> }` | `namespace App\Core;`, `namespace;` |
 | `NamespaceBlock { name: Option<Name>, body }` | `namespace App\Core { ... }`, `namespace { ... }` |
@@ -144,11 +153,11 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` for simple local positional destructuring; skipped, keyed, nested, and non-local destructuring patterns lower to `Synthetic` assignment statements |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls. `static $count;` without an initializer is also accepted and desugars to `init = null`, matching PHP |
-| `ClassDecl { name, extends, implements, is_abstract, is_final, is_readonly_class, trait_uses, properties, constants, methods }` | `final readonly class Point extends Shape implements Named { use NamedTrait; ... }` |
-| `EnumDecl { name, backing_type, cases, implements, trait_uses, methods, constants }` | `enum Status: int { case Ok = 1; case Err = 2; }` — `trait_uses` holds `use Trait;` clauses inside the enum body, flattened into enum method metadata by the checker |
+| `ClassDecl { name, generics, extends, implements, is_abstract, is_final, is_readonly_class, trait_uses, properties, constants, methods }` | `final readonly class Point extends Shape implements Named { use NamedTrait; ... }` |
+| `EnumDecl { name, generics, backing_type, cases, implements, trait_uses, methods, constants }` | `enum Status: int { case Ok = 1; case Err = 2; }` , `trait_uses` holds `use Trait;` clauses inside the enum body, flattened into enum method metadata by the checker |
 | `PackedClassDecl { name, fields }` | `packed class Vec2 { public float $x; public float $y; }` |
-| `InterfaceDecl { name, extends, properties, methods, constants }` | `interface Named extends Stringable { public string $name { get; } public function name(): string; }` |
-| `TraitDecl { name, trait_uses, properties, constants, methods }` | `trait Named { public const KIND = "name"; ... }` |
+| `InterfaceDecl { name, generics, extends, properties, methods, constants }` | `interface Named extends Stringable { public string $name { get; } public function name(): string; }` |
+| `TraitDecl { name, generics, trait_uses, properties, constants, methods }` | `trait Named { public const KIND = "name"; ... }` — `generics` holds the type parameters of `trait Holder<T>`, `None` for an ordinary trait |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
 | `StaticPropertyAssign { receiver, property, value }` | `Counter::$count = 10;`, `self::$count = 10;` |
 | `StaticPropertyArrayPush { receiver, property, value }` | `Counter::$items[] = 10;`, `self::$items[] = 10;` |
@@ -179,7 +188,7 @@ At statement level, parsing is split between `parser/mod.rs` and the `stmt/` sub
 | `Interface` | Interface declaration |
 | `Trait` | Trait declaration |
 | `Function` | Function declaration |
-| `Namespace` | Namespace declaration |
+| `Namespace` | Namespace declaration, or an expression statement when `\` follows (a relative name such as `namespace\helper();`) |
 | `Use` | Namespace import declaration |
 | `Declare` | `declare(...)` directive; lowers to `Synthetic` (see above) |
 | `Return` | Return statement |
@@ -206,7 +215,7 @@ Current recovery behavior is intentionally simple:
 - the parser still prefers correctness over aggressive recovery, so heavily malformed input may still collapse into fewer diagnostics than an IDE-style parser would produce
 - before recursive parsing starts, `reject_excessive_nesting()` scans the token stream against a hard cap (`MAX_COMPILER_NESTING = 1024` bracket depth) and rejects deeper input with "maximum compiler nesting depth exceeded", so pathological nesting cannot overflow the parser's stack
 - that cap only works if the compiler can actually WALK 1024 levels. Every recursive AST pass costs a frame per level — the parser, `optimize::fold::fold_expr`, the magic-constant walker, `Checker::infer_type`, the optimizer's rewriters, EIR lowering — and the default main-thread stack ran out around 140, so `$a = [[[…1…]]]` at 200 levels aborted the process instead of reaching the diagnostic (issue #686). `compiler_stack::with_compiler_stack` runs a compile with `COMPILER_STACK_BYTES` (256 MiB) of stack, reserved rather than committed, so the depth costs only the pages it actually touches. It is a memory mapping obtained on demand rather than a worker thread, so the body keeps its return value, may borrow non-`Send` data, and panics through the caller normally — and there is no spawn that could fail and leave the run short of stack
-- **every recursive PHASE wraps itself in `with_compiler_stack`**, at the one function each of its spellings funnels through: `parser::parse`, `conditional::apply`, `magic_constants::substitute_file_and_scope_constants`, `name_resolver::resolve`, `optimize::fold_constants`, `types::check_types_with_options`, `optimize::propagate_constants`, the three control-flow passes, `optimize::prune_unreachable_declarations` and `ir_lower`'s program lowering. An embedder calling one phase on a small worker thread is therefore safe without knowing this exists, which is what `tests/embedder_stack_tests.rs` pins: each phase, at depth 1024, on a 256 KiB thread. The size is set by those fixtures rather than inherited, so the codegen suite's 32 MiB `RUST_MIN_STACK` cannot hide a missing wrapper
+- **every recursive PHASE wraps itself in `with_compiler_stack`**, at the one function each of its spellings funnels through: `parser::parse`, `conditional::apply`, `magic_constants::substitute_file_and_scope_constants`, the include resolver (`resolver::resolve_collecting_includes_with_defines`, which covers `has_includes`, declaration discovery and resolution), `autoload::run_collecting_included_with_defines`, `name_resolver::resolve`, `optimize::fold_constants` and `fold_constants_for_target` (including its second fold), `types::check_types_with_options`, `optimize::propagate_constants`, the three control-flow passes, the `optimize::PostTypecheckOptimizer` constructors and its `propagate` / `prune` / `normalize` / `eliminate_dead_code` phases (the form the CLI pipeline calls), `func_args::desugar`, the PHP-profile scans (`php_profile::floor_violation` and `php_profile::report`), every stdlib prelude's `inject_if_used*` / `inject_if_web` entry and the usage detectors the pipeline calls directly (`pdo_prelude::program_uses_pdo`, `mysqli_prelude::program_uses_mysqli`, `object_cast_prelude::program_uses_object_cast`, `opcache_prelude::collect_preload_symbols`), `optimize::prune_unreachable_declarations` and `ir_lower`'s program lowering. An embedder calling one phase on a small worker thread is therefore safe without knowing this exists, which is what `tests/embedder_stack_tests.rs` pins: each phase, at depth 1024, on a 256 KiB thread. The size is set by those fixtures rather than inherited, so the codegen suite's 32 MiB `RUST_MIN_STACK` cannot hide a missing wrapper
 - **a DRIVER wraps itself too**: `main` and the codegen test harness. Not for the phases — those carry their own budget — but for what a driver does between them with an AST that deep. Moving it, cloning it and dropping it all recurse through derived `Clone` and `Drop` code, which no guard can be placed inside; removing the harness's wrapper aborts the 1024-level fixture in `ExprKind::clone`. Wrapping the whole run also means the phases inside it reuse that reservation instead of taking one each, which is what `COMPILER_STACK_HEADROOM` (half the reservation) decides
 - the two derived walks are not equally hungry, and the difference is measured rather than assumed: at depth 1024, `Drop` of a whole `Program` completes on a **256 KiB** thread, while `Clone` of one needs the driver's reservation. So an embedder that merely holds a phase's result and lets it fall out of scope is fine on an ordinary worker thread; one that CLONES it is the case the wrapper exists for. `tests/embedder_stack_tests.rs` keeps every deep value's whole lifetime inside its small thread, destructor included, so that claim is exercised rather than described
 
@@ -229,9 +238,15 @@ Parsed type annotations use `TypeExpr` before the checker resolves them into
 
 ```
 Int  Float  Bool  False  Str  Void  Never  Iterable
-Array(Box<TypeExpr>)  Ptr(Option<Name>)  Buffer(Box<TypeExpr>)  Named(Name)
+Array(Box<TypeExpr>)  AssocArray { key, value }
+Ptr(Option<Name>)  Buffer(Box<TypeExpr>)  Named(Name)
+GenericClass { name, args }  CallableSig { params, ret }
 Nullable(Box<TypeExpr>)  Union(Vec<TypeExpr>)  Intersection(Vec<TypeExpr>)
 ```
+
+A nested pointer target is encoded in the `Ptr` name, for example
+`ptr<ptr<u8>>` becomes `Ptr(Some(Name::unqualified("ptr<u8>")))`. Class-name consumers
+unwrap nested target strings with `names::pointer_target_leaf` or `pointer_target_leaf_name`.
 
 `Iterable` represents PHP's `iterable` pseudo-type in parameter, return,
 property, and typed-local annotations. `False` is PHP's literal `false` type,
@@ -240,6 +255,19 @@ type of a typed array annotation. Nullable shorthand (`?T`), explicit unions
 (`T|U`), and PHP 8.1 intersections (`A&B`, where every member must be a
 class/interface type) are represented separately so the checker can reject
 invalid forms such as `?T|U` and normalize accepted declarations.
+
+`AssocArray` is the declared `array<K, V>` hash layout, distinct from the
+packed `array<T>` represented by `Array`. `GenericClass` names a class or
+interface with type arguments; specialization rewrites it to an ordinary
+`Named` type. `CallableSig` carries parameter and return annotations for
+checking and inference while preserving ordinary callable descriptor storage.
+
+Generic function and method declarations carry `type_params`; explicit calls
+carry `type_args`. Class-like declarations carry optional `generics` metadata.
+`NewGeneric { class_type, args }`, generic static receivers, and generic
+`instanceof` targets are transient forms rewritten to ordinary concrete class
+references by specialization before EIR lowering. See
+[Generics](../beyond-php/generics.md).
 
 ### Class-related types
 
@@ -251,12 +279,12 @@ invalid forms such as `?T|U` and normalize accepted declarations.
 | `Attribute` | `name`, `args`, `span` | A PHP 8 attribute entry from a `#[...]` group. The parser validates names and optional argument expressions. Class, method, property, and method-parameter names plus supported literal args feed `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported Reflection `getAttributes()` APIs. Method parameter names, positions, optional/variadic/by-reference flags, declared-type presence, and method-parameter attributes feed the supported `ReflectionMethod::getParameters()` / `ReflectionParameter` slice. |
 | `AttributeGroup` | `attributes`, `span` | One bracketed attribute group. Declaration sites can carry one or more groups. |
 | `EnumCaseDecl` | `name`, `value`, `span`, `attributes` | A backed or unit enum case declaration, with declaration-level attributes preserved in the AST. |
-| `ClassConst` | `name`, `visibility`, `is_final`, `value`, `span`, `attributes` | A class, interface, or trait constant declaration. |
-| `ClassProperty` | `name`, `visibility`, `type_expr`, `hooks`, `readonly`, `is_final`, `is_static`, `is_abstract`, `by_ref`, `default`, `span`, `attributes` | A property declaration inside a class, trait, or interface, optionally carrying a parsed property type declaration, hook contract, static-property marker, by-reference promotion marker, or declaration-level attributes |
-| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `param_attributes`, `variadic`, `return_type`, `body`, `span`, `attributes` | A method declaration inside a class, trait, or interface, including source-order parameter attribute groups |
+| `ClassConst` | `name`, `visibility`, `is_final`, `type_expr`, `value`, `span`, `attributes` | A class, interface, or trait constant declaration. A declarator list (`const A = 1, B = 2;`) yields one entry per name, and `span` covers that entry's own declarator (`B = 2`). |
+| `ClassProperty` | `name`, `visibility`, `set_visibility`, `type_expr`, `hooks`, `readonly`, `is_final`, `is_static`, `is_abstract`, `by_ref`, `is_promoted`, `default`, `span`, `attributes` | A property declaration inside a class, trait, or interface, optionally carrying separate setter visibility, a parsed property type declaration, hook contract, static-property marker, by-reference promotion marker, or declaration-level attributes. A declarator list (`public int $a = 1, $b;`) yields one entry per name, and a class-body entry's `span` covers its own declarator (`$a = 1`) |
+| `ClassMethod` | `name`, `type_params`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `param_attributes`, `variadic`, `return_type`, `body`, `span`, `attributes` | A method declaration inside a class, trait, or interface, including source-order parameter attribute groups |
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
-| `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
+| `TraitUse` | `trait_names`, `type_args`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body; `type_args` holds the type arguments of `use Holder<int>`, aligned with `trait_names` |
 | `TraitAdaptation` | `Alias { trait_name: Option<Name>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<Name>, method, instead_of: Vec<Name> }` | PHP-style trait conflict resolution and aliasing |
 | `UseItem` / `UseKind` | `kind`, `name`, `alias` | Namespace import entries for `use`, `use function`, `use const`, and group-use declarations |
 | `CallableTarget` | `Function(Name)`, `StaticMethod { receiver, method }`, `Method { object, method }` | Structured target of first-class callable syntax such as `foo(...)` or `Cls::bar(...)` |
@@ -311,7 +339,7 @@ unary (- ! ~ @ clone)  35                prefix
 
 For `??`, the Pratt table still uses `BinOp::NullCoalesce` to assign binding power, but the parser builds a dedicated `ExprKind::NullCoalesce { value, default }` node rather than a generic `BinaryOp`.
 
-For `instanceof`, the Pratt loop handles the keyword at expression level and then parses either a class/interface target name or a dynamic target expression. Its binding power matches PHP's behavior where `!$obj instanceof User` parses as `!($obj instanceof User)`.
+For `instanceof`, the Pratt loop handles the keyword at expression level and then parses either a class/interface target name or a dynamic target expression. Its binding power matches PHP's behavior where `!$obj instanceof User` parses as `!($obj instanceof User)`. A dynamic target follows PHP's class-reference grammar: a parenthesized `(expr)` group is the whole target, and a variable chain may use property fetches, array dimensions and static properties but never a call, so `$obj instanceof Foo::$method()` is rejected rather than parsed as a call.
 
 For `|>`, the Pratt loop handles `Token::PipeArrow` before the generic `BinOp` table and builds `ExprKind::Pipe { value, callable }`. The binding power `(24, 25)` places it below concatenation, shifts, and arithmetic, but above comparisons, `??`, ternary, logical operators, and assignment. This matches PHP 8.5 and keeps pipe-specific validation, such as requiring parenthesized arrow-function targets, out of generic binary-operator lowering.
 
@@ -403,6 +431,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `Identifier` / `\Identifier` / qualified name + `(` | Parse as function call with arguments |
 | `Identifier` / `\Identifier` / qualified name + `(...)` | Parse as first-class callable → `FirstClassCallable(CallableTarget::Function)` |
 | `Identifier` / `\Identifier` / qualified name (no `(`) | Parse as constant reference → `ConstRef` |
+| `namespace` + `\` + name | A relative name, parsed like the three rows above. The name parser resolves it on the spot to the fully qualified name in the namespace being parsed (`namespace\helper()` in `App` is `\App\helper()`). `parser::relative_names` tracks that namespace structurally: `namespace X;` sets it, a braced `namespace X { ... }` sets it for its body and restores the previous one at its `}`, and every parsed file starts in the global namespace |
 | `function` + `(` | Parse anonymous function (closure) → `Closure` |
 | `fn` + `(` | Parse arrow function → `Closure` (with `is_arrow = true`) |
 | `static` + `function` / `fn` + `(` | Parse static closure → `Closure` (with `is_static = true`); the type checker rejects `$this` inside the body |
@@ -412,6 +441,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `new` + `self` / `static` / `parent` | Parse scoped object instantiation → `NewScopedObject`; the argument list is optional |
 | `<receiver>::class` | Parse `MyClass::class`, `\App\C::class`, `self::class`, `parent::class`, `static::class` → `ClassConstant` |
 | `<object-expression>::class` | Parse `$object::class`, `make_object()::class` → `ObjectClassName` |
+| `$this` + `(` | Parse an invocation of the current object → `ExprCall` whose callee is `This` (the same node as `($this)(...)`), which reaches `__invoke` only, never `__call` |
 | `$this` | Return `This` node |
 | `...` + expr | Parse spread/unpack → `Spread` |
 | `ptr_cast` + `<Type>` + `(` | Parse pointer cast syntax → `PtrCast` |
@@ -482,7 +512,7 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 | `Continue` | Continue statement with optional positive integer level |
 | `Include` / `Require` / `IncludeOnce` / `RequireOnce` | Include statement (path is parsed as an expression and later folded by the resolver when it is a compile-time string) |
 | `Const` | Constant declaration (`const NAME = value;`) |
-| `Namespace` | Namespace declaration (`namespace App\Core;` or `namespace App\Core { ... }`) |
+| `Namespace` | Namespace declaration (`namespace App\Core;` or `namespace App\Core { ... }`); `namespace` followed by `\` is a relative name instead (`namespace\helper();`) and parses as an expression statement |
 | `Use` | Namespace import declaration (`use Foo\Bar;`, `use function Foo\bar as baz;`) |
 | `Declare` | `declare(...)` directive statement or block; lowers to `Synthetic` |
 | `Global` | Global variable declaration (`global $x, $y;`) |
@@ -508,7 +538,7 @@ $arr[] = 5;      →  ArrayPush { array: "arr", value: IntLiteral(5) }
 $x++;            →  ExprStmt(PostIncrement("x"))
 ```
 
-Compound assignments (`+=`, `-=`, `*=`, `**=`, `/=`, `.=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`) are desugared into regular assignments with binary operations. Null coalescing assignment (`??=`) is represented as a regular assignment with a `NullCoalesce` value; codegen recognizes this shape and emits a conditional store so the right-hand side is only evaluated when the current target value is `null`. In expression form, the type checker and optimizer treat `ExprKind::Assignment`, its hidden prelude, and its conditional value temp as observable assignment machinery so the assignment cannot be folded away or hidden by stale constant-propagation facts.
+Compound assignments (`+=`, `-=`, `*=`, `**=`, `/=`, `.=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`) are desugared into regular assignments with binary operations. Null coalescing assignment (`??=`) is represented as a regular assignment with a `NullCoalesce` value; EIR lowering recognizes this shape and emits a conditional store so the right-hand side is only evaluated when the current target value is `null`. For one element of a local, property, or static-property array, the store itself is conditional too: the element is probed once and written only when the probe produced `null`, as in PHP. In expression form, the type checker and optimizer treat `ExprKind::Assignment`, its hidden prelude, and its conditional value temp as observable assignment machinery so the assignment cannot be folded away or hidden by stale constant-propagation facts.
 
 Compound assignments can target variables, object properties, static properties, and non-append array elements. For simple targets, the parser lowers directly to the final assignment node. For effectful non-local targets such as `$obj->items[next_key()] += 1`, the parser emits a `StmtKind::Synthetic` sequence that stores the receiver or index expressions in hidden temporaries, then performs the read-modify-write using those temporaries. This preserves PHP's single-evaluation behavior without making codegen duplicate the target expressions.
 

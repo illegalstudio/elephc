@@ -1,8 +1,6 @@
 ---
 title: "mb_parse_str()"
 description: "Parses URL-encoded input with shared encoding detection and writes decoded variables by reference."
-sidebar:
-  order: 863
 ---
 
 ## mb_parse_str()
@@ -21,8 +19,9 @@ Parses URL-encoded input with shared encoding detection and writes decoded varia
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_parse_str.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_parse_str.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

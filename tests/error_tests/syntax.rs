@@ -822,3 +822,131 @@ fn test_error_for_condition_comma_list_is_named() {
         "not supported in a for CONDITION",
     );
 }
+
+/// Verifies a relative name is refused in every `use` import form (#825), as PHP's grammar
+/// refuses it ("unexpected namespace-relative name"), instead of being skipped or read as a
+/// name whose first segment is `namespace`.
+#[test]
+fn test_error_relative_name_in_use_import() {
+    for source in [
+        "<?php namespace App; use namespace\\Box;",
+        "<?php namespace App; use function namespace\\helper;",
+        "<?php namespace App; use const namespace\\LIMIT;",
+        "<?php namespace App; use Lib\\Tool, namespace\\Box;",
+    ] {
+        expect_error(source, "cannot be imported with 'use'");
+    }
+}
+
+/// Verifies a relative name is fully resolved, so it never falls back to a global function
+/// (`namespace\strlen()` in `App` is `App\strlen`, undefined, as in PHP), and that a bare
+/// `namespace\` with no name after it is a syntax error (#825).
+#[test]
+fn test_error_relative_name_has_no_global_fallback_and_needs_a_name() {
+    expect_error(
+        "<?php namespace App; echo namespace\\strlen(\"abc\");",
+        "Undefined function: App\\strlen",
+    );
+    expect_error(
+        "<?php namespace App; echo namespace\\;",
+        "Expected identifier after '\\' in qualified name",
+    );
+    // Inside a namespace, `namespace\PHP_EOL` is that namespace's constant, not the global one.
+    expect_error(
+        "<?php namespace App; echo namespace\\PHP_EOL;",
+        "Undefined constant: App\\PHP_EOL",
+    );
+}
+
+/// Verifies a namespace declaration is refused anywhere but the top level of a file (#825
+/// review), as PHP refuses it ("unexpected token namespace"). Accepted inside a function or `if`
+/// body, it moved the parser's relative-name namespace for the rest of the file while the
+/// resolver scoped it to that body, so a later `namespace\X` could bind to the wrong class.
+#[test]
+fn test_error_nested_namespace_declaration() {
+    for source in [
+        "<?php namespace App; function g() { namespace Other; }",
+        "<?php if (true) { namespace Other; }",
+        "<?php namespace App { namespace Other; }",
+        "<?php $f = function () { namespace Other { } };",
+    ] {
+        expect_error(source, "only allowed at the top level of a file");
+    }
+}
+
+/// Verifies a malformed file-scope `const` declarator list is rejected by its own cause
+/// (issue #1142): a trailing comma names the missing constant, and a declarator without a value
+/// names the missing `=`.
+#[test]
+fn test_error_malformed_file_scope_const_declarator_list() {
+    expect_error(
+        "<?php const A = 1, ;",
+        "Expected a constant name after ',' in the declaration list",
+    );
+    expect_error("<?php const A = 1, B;", "Expected '=' after constant name");
+}
+
+/// Verifies an unparenthesized call used as an `instanceof` target is a syntax error with one
+/// diagnostic, whether the parser consumed the call (`Foo::$method()`) or left its argument list
+/// behind (`self::$method()`) (issue #1454). PHP rejects both forms.
+#[test]
+fn test_error_unparenthesized_call_as_instanceof_target() {
+    for target in ["Foo::$method()", "self::$method()", "$this->cls()"] {
+        expect_error(
+            &format!(
+                "<?php class Foo {{ public static $method = 'Foo'; function t($x) {{ return $x instanceof {}; }} }}",
+                target
+            ),
+            "Cannot use an unparenthesized call as an instanceof target",
+        );
+    }
+}
+
+/// Static method targets get the same specific diagnostic as other unparenthesized calls.
+#[test]
+fn test_error_unparenthesized_static_call_as_instanceof_target() {
+    for target in ["Foo::method()", "self::method()", "parent::method()", "static::method()", r"\App\Foo::method()"] {
+        expect_error(&format!("<?php $x = 1; echo $x instanceof {target};"), "Cannot use an unparenthesized call as an instanceof target");
+    }
+}
+
+/// A class-name fetch followed by parentheses is not a static method call or a valid hint target.
+#[test]
+fn test_error_instanceof_class_fetch_is_not_a_method_call() {
+    for target in ["Foo::class()", "Foo::CLASS()", "self::class()"] {
+        expect_error(
+            &format!("<?php class Foo {{ function test($x) {{ return $x instanceof {target}; }} }}"),
+            "Expected ';'",
+        );
+    }
+}
+
+/// Constant-list diagnostics distinguish missing names and point comma successors at the bad token.
+#[test]
+fn test_error_class_constant_name_after_comma() {
+    for (owner, expected_column) in [("class", 30), ("trait", 30), ("interface", 34), ("enum", 29)] {
+        let source = format!("<?php {owner} C {{ const A = 1, ; }}");
+        let error = check_source_full(&source).unwrap_err();
+        assert!(error.message.contains("Expected a constant name after ',' in the declaration list"));
+        assert_eq!((error.span.line, error.span.col), (1, expected_column), "{owner}: {error:?}");
+        expect_error(&format!("<?php {owner} C {{ const ; }}"), "Expected class constant name after 'const'");
+    }
+    expect_error("<?php class C { const FIRST = 1; const ; }", "Expected class constant name after 'const'");
+}
+
+/// Verifies `namespace` itself stays refused as a one-word namespace name, as in PHP ("Cannot
+/// use 'Namespace' as namespace name"), now that every other reserved word is accepted as one
+/// (`namespace Default;`, #840).
+#[test]
+fn test_error_namespace_is_not_a_namespace_name() {
+    expect_error("<?php namespace Namespace;", "Expected namespace name after 'namespace'");
+    expect_error("<?php namespace namespace { }", "Expected namespace name after 'namespace'");
+}
+
+/// Verifies a reserved word is a name only when glued into a qualified name (#826): standing
+/// alone, or before a group-use `\{`, it is still the keyword, as in PHP.
+#[test]
+fn test_error_lone_reserved_word_is_not_a_name() {
+    expect_error("<?php Default::accent();", "Unexpected token");
+    expect_error("<?php use Default\\{Palette};", "Expected imported name");
+}

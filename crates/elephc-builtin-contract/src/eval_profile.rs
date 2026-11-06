@@ -101,16 +101,6 @@ fn eval_signature_override(id: BuiltinId) -> Option<EvalSignatureProfile> {
             override_reason: Some(EvalSignatureOverrideReason::AdditionalOptionalParameters),
         });
     }
-    if id == BuiltinId::from_canonical_name("preg_match_all") {
-        return Some(EvalSignatureProfile {
-            signature: BuiltinSignature {
-                params: PREG_MATCH_ALL_PARAMS,
-                variadic: None,
-                required_param_count: None,
-            },
-            override_reason: Some(EvalSignatureOverrideReason::AdditionalByReferenceOutput),
-        });
-    }
     None
 }
 
@@ -207,7 +197,6 @@ const PREG_MATCH_PARAMS: &[ParamSpec] = &[
     },
 ];
 
-const PREG_MATCH_ALL_PARAMS: &[ParamSpec] = PREG_MATCH_PARAMS;
 
 #[cfg(test)]
 mod tests {
@@ -249,8 +238,8 @@ mod tests {
                     .map(|reason| (contract.name, reason))
             })
             .collect::<Vec<_>>();
-        assert_eq!(overridden.len(), 6);
+        assert_eq!(overridden.len(), 5);
         assert_eq!(overridden[0].0, "implode");
-        assert_eq!(overridden[5].0, "preg_match_all");
+        assert_eq!(overridden[4].0, "preg_match");
     }
 }

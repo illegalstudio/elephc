@@ -1,8 +1,6 @@
 ---
 title: "fgetcsv()"
 description: "Gets line from file pointer and parse for CSV fields."
-sidebar:
-  order: 315
 ---
 
 ## fgetcsv()
@@ -22,8 +20,9 @@ Gets line from file pointer and parse for CSV fields.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fgetcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fgetcsv.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,6 +1,6 @@
 //! Purpose:
-//! Lowers integer arithmetic, bitwise, shift, and integer-to-float division EIR
-//! opcodes for the Phase 04 stack-slot backend.
+//! Lowers integer, float and boxed arithmetic, bitwise operations and shifts.
+//! Keeps scalar operands and temporary numeric cells consistent with the runtime ABI.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::lower_instruction()`.
@@ -8,10 +8,12 @@
 //! Key details:
 //! - The lowering preserves PHP scalar semantics and keeps all target
 //!   register choices behind ABI helpers where shared helpers exist.
+//! - Only exact integer constants may use the borrowed stack-cell RHS path.
+//! - Checked result cells use frame storage only after a complete nonescaping lifetime proof.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, Instruction, MixedNumericOp, ValueId};
+use crate::ir::{Function, Immediate, Instruction, IrHeapKind, IrType, MixedNumericOp, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -20,6 +22,12 @@ use super::{
 };
 use crate::codegen::{CodegenIrError, Result};
 
+#[cfg(test)]
+#[path = "arithmetic/borrowed_integer_rhs_tests.rs"]
+mod borrowed_integer_rhs_tests;
+
+pub(super) mod stack_cell;
+
 /// Lowers a two-operand integer arithmetic or bitwise instruction.
 pub(super) fn lower_int_binop(
     ctx: &mut FunctionContext<'_>,
@@ -27,25 +35,69 @@ pub(super) fn lower_int_binop(
     aarch64_mnemonic: &str,
     x86_64_mnemonic: &str,
 ) -> Result<()> {
+    if super::strength_reduction::try_lower_constant_multiply(ctx, inst)? { return Ok(()); }
+    if super::immediate_operands::try_int_binop(ctx, inst)? { return Ok(()); }
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
-    load_integer_operand(ctx, lhs, result_reg, inst)?;
-    load_integer_operand(ctx, rhs, rhs_reg, inst)?;
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let home = inst.result.and_then(|result| ctx.allocation.register_of(result));
+    // The x86_64 two-operand form cannot write the result into the register that
+    // holds the right operand. That fallback computes into the result register,
+    // so the value still needs its usual store-to-home copy.
+    let mut wrote_home = false;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // Three-operand forms read both register-allocated operands in place.
+            let lhs_reg = integer_operand_register(ctx, lhs, result_reg, inst)?;
+            let rhs_reg = integer_operand_register(ctx, rhs, scratch_reg, inst)?;
+            let destination = home.unwrap_or(result_reg);
             ctx.emitter.instruction(
-                &format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, result_reg, rhs_reg)
-            );                                                                  // compute the integer arithmetic result from both SSA operands
+                &format!("{} {}, {}, {}", aarch64_mnemonic, destination, lhs_reg, rhs_reg)
+            );                                                                  // compute the result directly in its allocated home
+            wrote_home = home.is_some();
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
-                &format!("{} {}, {}", x86_64_mnemonic, result_reg, rhs_reg)
-            );                                                                  // update the integer result register with the arithmetic operand
+            let rhs_reg = integer_operand_register(ctx, rhs, scratch_reg, inst)?;
+            if let Some(destination) = home.filter(|destination| *destination != rhs_reg) {
+                if ctx.allocation.register_of(lhs) != Some(destination) {
+                    load_integer_operand(ctx, lhs, destination, inst)?;
+                }
+                ctx.emitter.instruction(
+                    &format!("{} {}, {}", x86_64_mnemonic, destination, rhs_reg)
+                );                                                              // update the allocated home with the arithmetic operand
+                wrote_home = true;
+            } else {
+                load_integer_operand(ctx, lhs, result_reg, inst)?;
+                ctx.emitter.instruction(
+                    &format!("{} {}, {}", x86_64_mnemonic, result_reg, rhs_reg)
+                );                                                              // update the integer result register with the arithmetic operand
+            }
         }
     }
-    store_if_result(ctx, inst)
+    if !wrote_home {
+        store_if_result(ctx, inst)?;
+    }
+    Ok(())
+}
+
+/// Returns a register holding an integer operand that the consuming instruction only reads.
+///
+/// An `int`/`bool` value with an allocated register home is used in place; anything else is
+/// loaded into `fallback` with the usual null-to-zero coercion.
+pub(super) fn integer_operand_register(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    fallback: &str,
+    inst: &Instruction,
+) -> Result<String> {
+    if let Some(home) = ctx.allocation.register_of(value) {
+        if matches!(ctx.value_php_type(value)?, PhpType::Int | PhpType::Bool) {
+            return Ok(home.to_string());
+        }
+    }
+    load_integer_operand(ctx, value, fallback, inst)?;
+    Ok(fallback.to_string())
 }
 
 /// Lowers a checked integer binary operation that may overflow to float.
@@ -58,6 +110,9 @@ pub(super) fn lower_int_checked_binop(
     inst: &Instruction,
     helper: &str,
 ) -> Result<()> {
+    if let Some(offset) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return stack_cell::lower(ctx, inst, offset);
+    }
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let lhs_reg = abi::int_result_reg(ctx.emitter);
@@ -209,7 +264,7 @@ pub(super) fn lower_float_div(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::X86_64 => {
             let bits_reg = abi::secondary_scratch_reg(ctx.emitter);
             ctx.emitter.instruction(&format!("movq {}, xmm0", bits_reg));       // raw IEEE-754 bits of the divisor
-            ctx.emitter.instruction(&format!("add {}, {}", bits_reg, bits_reg));// shift out the sign bit so -0.0 tests equal to +0.0 (NaN stays non-zero)
+            ctx.emitter.instruction(&format!("add {bits_reg}, {bits_reg}"));    // shift out the sign bit so -0.0 tests equal to +0.0 (NaN stays non-zero)
             ctx.emitter.instruction(&format!("jz {}", zero_label));             // branch to the zero-divisor throw for both +0.0 and -0.0
             ctx.emitter.instruction("divsd xmm1, xmm0");                        // divide the dividend by the divisor in the float scratch register
             ctx.emitter.instruction("movsd xmm0, xmm1");                        // move the quotient into the float result register
@@ -344,11 +399,39 @@ pub(super) fn lower_mixed_numeric_binop(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    if let Some(offset) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return stack_cell::lower_mixed(ctx, inst, offset);
+    }
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let op = expect_mixed_numeric_op(inst)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
+    if matches!(op, MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul)
+        && is_mixed_like(&lhs_ty)
+        && ctx.value_ir_type(lhs)? == IrType::Heap(IrHeapKind::Mixed)
+    {
+        let rhs_reg = match ctx.emitter.target.arch {
+            Arch::AArch64 => "x1",
+            Arch::X86_64 => "rdi",
+        };
+        if let Some(integer) = integer_rhs_constant(ctx.function, rhs) {
+            ctx.load_value_to_result(lhs)?;
+            abi::emit_load_int_immediate(ctx.emitter, rhs_reg, integer);
+            assert!(abi::emit_mixed_numeric_integer_rhs_call(ctx.emitter, op));
+            return store_if_result(ctx, inst);
+        }
+        // A proven scalar counter is already an integer payload. Lend it to the same
+        // read-only integer-rhs helper instead of allocating a Mixed box for it.
+        if ctx.value_ir_type(rhs)? == IrType::I64
+            && matches!(rhs_ty.codegen_repr(), PhpType::Int | PhpType::Bool)
+        {
+            ctx.load_value_to_result(lhs)?;
+            ctx.load_value_to_reg(rhs, rhs_reg)?;
+            assert!(abi::emit_mixed_numeric_integer_rhs_call(ctx.emitter, op));
+            return store_if_result(ctx, inst);
+        }
+    }
     let left_box_temp = !is_mixed_like(&lhs_ty);
     let right_box_temp = !is_mixed_like(&rhs_ty);
 
@@ -377,6 +460,20 @@ pub(super) fn lower_mixed_numeric_binop(
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     store_if_result(ctx, inst)
+}
+
+/// Requires an actual PHP integer constant, excluding bool/null values sharing I64 storage.
+fn integer_rhs_constant(function: &Function, value: ValueId) -> Option<i64> {
+    let metadata = function.value(value)?;
+    if metadata.php_type != PhpType::Int || metadata.ir_type != IrType::I64 {
+        return None;
+    }
+    let ValueDef::Instruction { inst, .. } = metadata.def else { return None };
+    let definition = function.instruction(inst)?;
+    match (&definition.op, &definition.immediate) {
+        (Op::ConstI64, Some(Immediate::I64(integer))) => Some(*integer),
+        _ => None,
+    }
 }
 
 /// Returns true when a PHP type is already represented as a boxed Mixed pointer.

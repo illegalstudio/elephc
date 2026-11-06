@@ -11,22 +11,50 @@ use super::*;
 
 /// Lowers first-class callable creation.
 pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
-    let operands = if let CallableTarget::Method { object, .. } = target {
-        vec![lower_expr(ctx, object).value]
-    } else {
-        Vec::new()
-    };
+    lower_callable_descriptor(ctx, target, expr, Op::FirstClassCallableNew)
+}
+
+/// Lowers an implicit string or array callable without creating PHP Closure identity.
+pub(super) fn lower_callable_value(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
+    lower_callable_descriptor(ctx, target, expr, Op::CallableValueNew)
+}
+
+/// Shares invocation metadata while preserving whether the source created a PHP object.
+fn lower_callable_descriptor(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr, op: Op) -> LoweredValue {
+    if let CallableTarget::Method { object, method } = target {
+        let object = lower_expr(ctx, object);
+        return lower_instance_callable_descriptor(ctx, object, method, expr.span, op);
+    }
     let data = ctx.intern_string(&callable_target_name(target));
     ctx.emit_value(
-        Op::FirstClassCallableNew,
-        operands,
+        op,
+        Vec::new(),
         Some(Immediate::ProfiledData {
             data,
             strict_php: crate::strict_php::is_enabled(),
         }),
         PhpType::Callable,
-        Op::FirstClassCallableNew.default_effects(),
+        op.default_effects(),
         Some(expr.span),
+    )
+}
+
+/// Captures an already evaluated method receiver without replaying its source expression.
+pub(super) fn lower_instance_callable_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, method: &str, span: crate::span::Span,
+) -> LoweredValue {
+    lower_instance_callable_descriptor(ctx, receiver, method, span, Op::FirstClassCallableNew)
+}
+
+/// Captures the receiver once for either a PHP Closure or an internal callable value.
+fn lower_instance_callable_descriptor(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, method: &str, span: crate::span::Span, op: Op,
+) -> LoweredValue {
+    let data = ctx.intern_string(&format!("object::{method}"));
+    ctx.emit_value(
+        op, vec![receiver.value],
+        Some(Immediate::ProfiledData { data, strict_php: crate::strict_php::is_enabled() }),
+        PhpType::Callable, op.default_effects(), Some(span),
     )
 }
 
@@ -38,6 +66,8 @@ pub(super) fn callable_profile_immediate() -> Option<Immediate> {
 /// Lowers a pointer cast.
 pub(super) fn lower_ptr_cast(ctx: &mut LoweringContext<'_, '_>, target_type: &str, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    // A packed record address reaches the cast as a raw pointer word.
+    let value = ctx.retype_packed_address_for_pointer_sink(value, &PhpType::Pointer(None), Some(inner.span));
     let data = ctx.intern_string(target_type);
     ctx.emit_value(
         Op::PtrCast,
@@ -49,7 +79,7 @@ pub(super) fn lower_ptr_cast(ctx: &mut LoweringContext<'_, '_>, target_type: &st
     )
 }
 
-/// Lowers buffer allocation.
+/// Lowers buffer allocation, converting a non-`int` length to an element count first.
 pub(super) fn lower_buffer_new(
     ctx: &mut LoweringContext<'_, '_>,
     element_type: &TypeExpr,
@@ -57,7 +87,11 @@ pub(super) fn lower_buffer_new(
     expr: &Expr,
 ) -> LoweredValue {
     let len_value = lower_expr(ctx, len);
-    let php_type = PhpType::Buffer(Box::new(ctx.type_expr_to_php_type_for_value(element_type)));
+    let len_value = super::buffer_length::lower_buffer_length(ctx, len_value, len.span);
+    // `buffer_new<u8>()`: a C width name is the element's storage format, not a class.
+    let element_php_type = crate::types::width_type_from_type_expr(element_type)
+        .unwrap_or_else(|| ctx.type_expr_to_php_type_for_value(element_type));
+    let php_type = PhpType::Buffer(Box::new(element_php_type));
     ctx.emit_value(
         Op::BufferNew,
         vec![len_value.value],
@@ -448,6 +482,12 @@ pub(super) fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receive
     if matches!(receiver, StaticReceiver::Static) {
         let fallback_class = ctx.current_class.clone().unwrap_or_else(|| receiver_name(receiver));
         let class_name = lower_class_constant(ctx, receiver, expr);
+        crate::ir_lower::property_default_errors::for_dynamic_class(ctx, class_name, expr.span);
+        if let Some(value) = super::object_construction::lower_planned_collector_new(
+            ctx, class_name, &fallback_class, args, expr,
+        ) {
+            return value;
+        }
         for (arg_index, arg) in args.iter().enumerate() {
             let place = match &arg.kind {
                 ExprKind::NamedArg { value, .. } => value.as_ref(),

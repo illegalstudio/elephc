@@ -1,8 +1,6 @@
 ---
 title: "mysqli_field_tell()"
 description: "Returns a result's current column cursor position."
-sidebar:
-  order: 127
 ---
 
 ## mysqli_field_tell()
@@ -20,8 +18,9 @@ Returns a result's current column cursor position.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

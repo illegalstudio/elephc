@@ -16,16 +16,28 @@ use crate::types::traits::FlattenedClass;
 use crate::types::ClassInfo;
 
 mod constants;
+mod enum_interfaces;
 mod interfaces;
 mod methods;
 mod properties;
+mod property_defaults;
 mod state;
+
+pub(crate) use property_defaults::validate_trait_property_defaults;
+pub(crate) use property_defaults::collect_trait_default_origins;
+pub(crate) use constants::validate_compile_time_default_in_scope;
+pub(crate) use constants::normalize_lexical_default_in_scope;
+pub(crate) use constants::normalize_free_function_default_in_scope;
 
 use super::super::Checker;
 use super::validation::build_constructor_param_map;
 use state::ClassBuildState;
 
 pub(super) use crate::types::{collect_attribute_args, collect_attribute_names};
+
+pub(crate) use enum_interfaces::{expand_enum_interfaces, validate_enum_interface_contracts};
+pub(super) use constants::resolve_lexical_class_value;
+pub(super) use methods::validate_method_shape;
 
 /// Recursively builds and registers `ClassInfo` for `class_name` and its inheritance chain.
 ///
@@ -45,7 +57,10 @@ pub(crate) fn build_class_info_recursive(
 
     if !building.insert(class_name.to_string()) {
         return Err(CompileError::new(
-            crate::span::Span::dummy(),
+            class_map
+                .get(class_name)
+                .map(|class| class.span)
+                .unwrap_or_else(crate::span::Span::dummy),
             &format!(
                 "Circular inheritance detected involving class {}",
                 class_name
@@ -54,6 +69,51 @@ pub(crate) fn build_class_info_recursive(
     }
 
     let class = load_class(class_name, class_map)?;
+    build_loaded_class_info(class_name, class, class_map, checker, next_class_id, building)
+        .map_err(|error| locate_at_declaration(error, class_span_of(class_name, class_map)))
+}
+
+/// The declaration span of `class_name`, when the program declares it.
+fn class_span_of(
+    class_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+) -> crate::span::Span {
+    class_map
+        .get(class_name)
+        .map(|class| class.span)
+        .unwrap_or_else(crate::span::Span::dummy)
+}
+
+/// Points every location-less error of one class's schema build at the class declaration.
+///
+/// The schema checks report against `Span::dummy()`, so on a program of thousands of classes
+/// `error: Class A cannot extend final class B` named neither a file nor a line. The class
+/// being built is the declaration the error is about; an error a parent's build already
+/// located keeps its own position.
+fn locate_at_declaration(mut error: CompileError, span: crate::span::Span) -> CompileError {
+    if span.line == 0 {
+        return error;
+    }
+    if error.span.line == 0 && error.file.is_none() {
+        error.span = span;
+    }
+    error.related = error
+        .related
+        .into_iter()
+        .map(|related| locate_at_declaration(related, span))
+        .collect();
+    error
+}
+
+/// [`build_class_info_recursive`] for a class whose declaration is loaded and not yet building.
+fn build_loaded_class_info(
+    class_name: &str,
+    class: FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
     validate_class_modifiers(&class)?;
     let parent_info = resolve_parent_info(
         class_name,
@@ -66,7 +126,7 @@ pub(crate) fn build_class_info_recursive(
     validate_parent_constraints(&class, parent_info.as_ref())?;
 
     let mut state = ClassBuildState::from_parent(parent_info.as_ref());
-    properties::apply_properties(&mut state, &class, checker)?;
+    properties::apply_properties(&mut state, &class, class_map, checker)?;
     methods::apply_methods(&mut state, &class, checker)?;
     interfaces::collect_interfaces(&mut state, &class, class_map, checker)?;
     validate_final_constant_constraints(&class, parent_info.as_ref(), &state, checker)?;
@@ -81,7 +141,16 @@ pub(crate) fn build_class_info_recursive(
     interfaces::ensure_concrete_class_implements_abstracts(&state, &class)?;
 
     let constructor_param_to_prop = constructor_param_to_prop_for(&class, parent_info.as_ref());
-    let class_info = state.into_class_info(*next_class_id, &class, constructor_param_to_prop)?;
+    // Builtins registered without source carry no source span; a prelude's classes do, but come
+    // from compiler-generated statements.
+    let is_internal =
+        !class.span.is_from_source() || checker.internal_class_decls.contains(&class.name);
+    let class_info = state.into_class_info(
+        *next_class_id,
+        &class,
+        constructor_param_to_prop,
+        is_internal,
+    )?;
     checker.classes.insert(class.name.clone(), class_info);
     *next_class_id += 1;
     building.remove(class_name);

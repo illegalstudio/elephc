@@ -1,8 +1,6 @@
 ---
 title: "get_class_methods() - internals"
 description: "Compiler internals for get_class_methods(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 86
 ---
 
 ## `get_class_methods()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/get_class_methods.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/get_class_methods.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

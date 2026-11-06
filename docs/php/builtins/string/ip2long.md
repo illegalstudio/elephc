@@ -1,8 +1,6 @@
 ---
 title: "ip2long()"
 description: "Converts a string containing an IPv4 address into a long integer."
-sidebar:
-  order: 823
 ---
 
 ## ip2long()
@@ -20,8 +18,9 @@ Converts a string containing an IPv4 address into a long integer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/ip2long.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/ip2long.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

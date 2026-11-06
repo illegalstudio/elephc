@@ -18,6 +18,7 @@ fn test_eliminate_dead_code_keeps_statements_after_fallthrough_try() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "answer".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -30,6 +31,7 @@ fn test_eliminate_dead_code_keeps_statements_after_fallthrough_try() {
                     StmtKind::Try {
                         try_body: vec![Stmt::echo(Expr::int_lit(7))],
                         catches: vec![crate::parser::ast::CatchClause {
+                            exception_type_args: Vec::new(),
                             exception_types: vec!["Exception".into()],
                             variable: Some("e".into()),
                             body: vec![Stmt::new(
@@ -72,6 +74,7 @@ fn test_eliminate_dead_code_sinks_tail_into_try_fallthrough_paths() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -87,6 +90,7 @@ fn test_eliminate_dead_code_sinks_tail_into_try_fallthrough_paths() {
                             Stmt::echo(Expr::int_lit(7)),
                         ],
                         catches: vec![crate::parser::ast::CatchClause {
+                            exception_type_args: Vec::new(),
                             exception_types: vec!["Exception".into()],
                             variable: Some("e".into()),
                             body: vec![Stmt::new(
@@ -128,6 +132,7 @@ fn test_eliminate_dead_code_sinks_tail_into_try_fallthrough_paths() {
                     Stmt::echo(Expr::int_lit(9)),
                 ],
                 catches: vec![crate::parser::ast::CatchClause {
+                    exception_type_args: Vec::new(),
                     exception_types: vec!["Exception".into()],
                     variable: Some("e".into()),
                     body: vec![Stmt::new(

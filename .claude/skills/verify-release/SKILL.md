@@ -48,7 +48,7 @@ Read the current version section in `ROADMAP.md`:
 
 - For every `[x]` item: verify the feature actually exists (grep for the function name, check for the AST node, etc.).
 - For every `[ ]` item: confirm it is genuinely not implemented.
-- Report any notable implemented feature that is missing from the current version section. If the user asks to fix verification findings, add the missing work there as `[x]`; release preparation may record delivered work that was not planned earlier.
+- Do not add a `[x]` item for implemented work that was not already planned. Per-version delivered work belongs in `CHANGELOG.md`. If the user asks to fix verification findings, mark only an existing planned item `[x]`.
 
 ### 4. Test Coverage
 

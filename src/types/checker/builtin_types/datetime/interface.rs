@@ -40,6 +40,7 @@ pub(super) fn abstract_method(
     return_type: Option<TypeExpr>,
 ) -> ClassMethod {
     ClassMethod {
+        type_params: Vec::new(),
         name: name.to_string(),
         visibility: Visibility::Public,
         is_static: false,

@@ -18,6 +18,59 @@ pub(super) fn lower_break(ctx: &mut LoweringContext<'_, '_>, level: usize) {
     terminate_branch(ctx, frame.break_block, loop_cleanup_count_for_branch(level));
 }
 
+/// Releases the exceptions a finalizer took that a jump leaves behind, at the point in the exit
+/// sequence where reference PHP discards them.
+///
+/// Leaving a `finally` copy DISCARDS the exception it took, and reference destroys it right
+/// there, unwinding strictly innermost first: the loops opened INSIDE the copy, then the
+/// discard, then the loops and `finally` blocks around it. MEASURED on PHP 8.5.10 —
+/// `finally { foreach (new It() as $v) { return $v; } }` prints `[It][E]`, a `foreach` around the
+/// `try` prints `[E][It]`, an enclosing `finally` runs after the discard (`[E][outer]`), and an
+/// included file's `finally { return 9; }` destructs before the caller's next statement.
+///
+/// So an entry is released once every finally frame inside its copy has run (`finally_depth`
+/// reached) and only if the jump leaves its copy's loops (`target_loop_depth`, `None` for a
+/// `return`); the loops inside its copy are cleaned first and recorded in `exit_cleaned_loops`,
+/// so no later cleanup on this path repeats them. Released and cleared, so the frame's cleanup
+/// finds nothing left; each released entry is dropped for the REST of this exit path, which the
+/// caller restores.
+fn release_taken_exceptions(ctx: &mut LoweringContext<'_, '_>, target_loop_depth: Option<usize>) {
+    let finally_depth = ctx.finally_stack.len();
+    let mut kept = Vec::new();
+    let mut released = Vec::new();
+    for entry in std::mem::take(&mut ctx.taken_finally_exceptions) {
+        let (_, loop_depth, entry_finally_depth) = &entry;
+        let leaves = target_loop_depth.is_none_or(|target| target < *loop_depth);
+        if leaves && *entry_finally_depth >= finally_depth {
+            released.push(entry);
+        } else {
+            kept.push(entry);
+        }
+    }
+    ctx.taken_finally_exceptions = kept;
+    // Innermost first. Entries on the list at once are always nested — an inner take happens
+    // only while an outer copy is being lowered — so reverse push order IS nesting order, and
+    // the stable sort by loop depth keeps it for ties. Sorting by loop depth alone left two
+    // takes with no loop between them in push order, outermost first: `[x][y]` where reference
+    // destroys `[y][x]` (MEASURED on PHP 8.5.10).
+    released.reverse();
+    released.sort_by_key(|(_, loop_depth, _)| std::cmp::Reverse(*loop_depth));
+    for (temp, loop_depth, _) in released {
+        let open = ctx.loop_stack.len();
+        emit_innermost_loop_cleanups(ctx, open.saturating_sub(loop_depth));
+        ctx.exit_cleaned_loops.extend(loop_depth..open);
+        let discarded = ctx.load_local(&temp, None);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![discarded.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionDiscard)),
+            crate::ir::Effects::all(),
+            None,
+        );
+        ctx.release_owned_hidden_temp(&temp, None);
+    }
+}
+
 /// Lowers a `continue` terminator.
 pub(super) fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
     let Some(frame) = loop_target(ctx, level) else {
@@ -350,6 +403,13 @@ fn acquire_and_return_reference_cell(
 
 /// Lowers a return expression with contextual array-literal element storage when available.
 pub(super) fn lower_return_expr(ctx: &mut LoweringContext<'_, '_>, value_expr: &Expr) -> LoweredValue {
+    // A pointer-array return keeps pointer words whatever the returned expression builds.
+    if !ctx.by_ref_return
+        && crate::ir_lower::expr::is_pointer_array_destination(&ctx.return_php_type)
+    {
+        let return_ty = ctx.return_php_type.clone();
+        return crate::ir_lower::expr::lower_expr_for_destination(ctx, value_expr, &return_ty);
+    }
     if matches!(value_expr.kind, ExprKind::ArrayLiteral(_)) {
         if let PhpType::Array(elem_ty) = ctx.return_php_type.codegen_repr() {
             return lower_array_literal_with_expected_type(ctx, value_expr, *elem_ty);
@@ -387,28 +447,17 @@ pub(super) fn persist_scratch_return_string(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if value.ir_type != IrType::Str
-        || ctx.builder.value_ownership(value.value) == Ownership::Owned
-    {
+    if !string_value_needs_persistence(ctx, value) {
         return value;
     }
-    let Some(op) = ctx.builder.value_defining_op(value.value) else {
-        return value;
-    };
-    if !string_op_uses_scratch_storage(op) {
-        return value;
-    }
-    ctx.emit_value(
-        Op::StrPersist,
-        vec![value.value],
-        None,
-        PhpType::Str,
-        Op::StrPersist.default_effects(),
-        Some(span),
-    )
+    persist_pending_string(ctx, value, span)
 }
 
 /// Gives typed object returns an independent owner and stabilizes borrowed heap reads.
+///
+/// A borrowed string-to-string cast is persisted too. It aliases its operand except
+/// when that operand is the missing-entry sentinel, which the cast turns into the
+/// canonical empty string. The caller must receive storage it can release on its own.
 ///
 /// Function-static slots are included: the slot keeps owning its boxed value across
 /// calls, so `return $static_local` must hand the caller an extra reference, since the
@@ -436,6 +485,27 @@ pub(super) fn acquire_borrowed_return_value(
     if temporary {
         return value;
     }
+    // A string-to-string cast normalizes a missing-entry sentinel but otherwise
+    // aliases its operand. Returning that alias would either free the operand
+    // before the caller reads it or hand the caller storage it must not release.
+    // Persist the normalized view so the caller owns an independent string.
+    if value.ir_type == IrType::Str
+        && ctx.builder.value_defining_op(value.value) == Some(Op::Cast)
+        && ctx
+            .builder
+            .value_defining_instruction(value.value)
+            .and_then(|inst| inst.operands.first().copied())
+            .is_some_and(|source| ctx.builder.value_type(source) == IrType::Str)
+    {
+        return ctx.emit_owned_value(
+            Op::StrPersist,
+            vec![value.value],
+            None,
+            PhpType::Str,
+            Op::StrPersist.default_effects(),
+            Some(span),
+        );
+    }
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
     }
@@ -460,6 +530,7 @@ pub(super) fn acquire_borrowed_return_value(
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
                 | Op::LoadStaticLocal
+                | Op::LoadStaticProperty
         )
     ) {
         return value;
@@ -467,22 +538,87 @@ pub(super) fn acquire_borrowed_return_value(
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
 }
 
+/// Identifies local-backed values whose return transfers the frame's existing reference.
+fn pending_return_uses_local_owner(ctx: &LoweringContext<'_, '_>, mut value: crate::ir::ValueId) -> bool {
+    while let Some(inst) = ctx.builder.value_defining_instruction(value) {
+        match inst.op {
+            Op::Move | Op::Borrow | Op::ArrayToMixed | Op::HashToMixed => {
+                let Some(source) = inst.operands.first() else { return false; };
+                value = *source;
+            }
+            Op::LoadLocal | Op::LoadStaticLocal => {
+                let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return false; };
+                return matches!(ctx.builder.local_kind(slot), LocalKind::PhpLocal | LocalKind::StaticLocal);
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Terminates with a return after running active finally bodies from inner to outer.
-pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
+pub(crate) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
+    let pending = value.filter(|value| {
+        !ctx.finally_stack.is_empty()
+            && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(*value))
+            && ctx.value_is_owning_temporary(LoweredValue {
+                value: *value,
+                ir_type: ctx.builder.value_type(*value),
+            })
+            // Concrete local container reads are only provisional owners. Their
+            // final return transfers the local reference; parking it a second
+            // time would let unwind cleanup release that reference twice.
+            && !pending_return_uses_local_owner(ctx, *value)
+    }).map(|value| {
+        let ty = ctx.builder.value_php_type(value);
+        let name = ctx.declare_owned_hidden_temp(ty.clone());
+        let slot = ctx.local_slots[&name];
+        // A caught throw can revisit this return site in the same activation.
+        // Retire that abandoned return before publishing its replacement.
+        ctx.emit_void(
+            Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(), None,
+        );
+        ctx.store_local(&name, LoweredValue {
+            value, ir_type: ctx.builder.value_type(value),
+        }, ty, None);
+        name
+    });
+    terminate_return_with_owner(ctx, value, pending.as_deref());
+}
+
+/// Keeps a pending return frame-owned across every copied finalizer until its final transfer.
+fn terminate_return_with_owner(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: Option<crate::ir::ValueId>,
+    pending: Option<&str>,
+) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
-    if run_innermost_finally(ctx, false) {
+    let saved_taken = ctx.taken_finally_exceptions.clone();
+    let saved_cleaned = ctx.exit_cleaned_loops.clone();
+    release_taken_exceptions(ctx, None);
+    if run_innermost_finally(ctx, false, None) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_return(ctx, value);
+            terminate_return_with_owner(ctx, value, pending);
         }
         // Finalizer frames are consumed only on the emitted control-flow path.
         // Restore the lexical lowering state for sibling and fallthrough blocks.
         ctx.finally_stack = saved_finally_stack;
         ctx.try_loop_depths = saved_try_loop_depths;
+        ctx.taken_finally_exceptions = saved_taken;
+        ctx.exit_cleaned_loops = saved_cleaned;
         return;
     }
     emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
+    ctx.taken_finally_exceptions = saved_taken;
+    ctx.exit_cleaned_loops = saved_cleaned;
     ctx.emit_eval_scope_finalizer(None);
+    if let Some(pending) = pending {
+        // A normal return transfers this exact SSA owner to the caller. Throws
+        // and superseding returns instead leave it to activation cleanup.
+        ctx.clear_owned_hidden_temp(pending, None);
+    }
     ctx.builder.terminate(Terminator::Return { value });
 }
 
@@ -493,15 +629,24 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
 pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId, loop_cleanup_count: usize) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
-    if run_innermost_finally(ctx, false) {
+    let saved_taken = ctx.taken_finally_exceptions.clone();
+    let saved_cleaned = ctx.exit_cleaned_loops.clone();
+    // `break N` / `continue N` target the loop at this depth: `loop_cleanup_count` is N - 1.
+    let target_loop_depth = ctx.loop_stack.len().saturating_sub(loop_cleanup_count + 1);
+    release_taken_exceptions(ctx, Some(target_loop_depth));
+    if run_innermost_finally(ctx, false, Some(target_loop_depth)) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_branch(ctx, target, loop_cleanup_count);
         }
         ctx.finally_stack = saved_finally_stack;
         ctx.try_loop_depths = saved_try_loop_depths;
+        ctx.taken_finally_exceptions = saved_taken;
+        ctx.exit_cleaned_loops = saved_cleaned;
         return;
     }
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
+    ctx.taken_finally_exceptions = saved_taken;
+    ctx.exit_cleaned_loops = saved_cleaned;
     if record_switch_exit_edge(ctx, target) {
         return;
     }
@@ -515,7 +660,7 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
 pub(super) fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
-    if run_innermost_finally(ctx, true) {
+    if run_innermost_finally(ctx, true, None) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_throw(ctx, value);
         }
@@ -540,12 +685,22 @@ pub(crate) fn lower_throw_access_error(
     message: &str,
     span: Span,
 ) {
+    lower_throw_access_exception(ctx, "Error", message, span);
+}
+
+/// Lowers a statically-decided access violation as a named catchable exception.
+pub(crate) fn lower_throw_access_exception(
+    ctx: &mut LoweringContext<'_, '_>,
+    exception_class: &str,
+    message: &str,
+    span: Span,
+) {
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
     let error_expr = Expr::new(
         ExprKind::NewObject {
-            class_name: crate::names::Name::unqualified("Error"),
+            class_name: crate::names::Name::unqualified(exception_class),
             args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
         },
         span,
@@ -566,6 +721,20 @@ pub(crate) fn lower_throw_access_error_expr(
     message: &str,
     span: Span,
 ) -> LoweredValue {
+    lower_throw_access_error_expr_as(ctx, message, span, PhpType::Void)
+}
+
+/// Lowers a statically-decided access violation while preserving the surrounding result type.
+///
+/// The returned value is unreachable at runtime, but later expression lowering still inspects its
+/// PHP and EIR types. Keeping the expected type prevents a chained operation after the throwing
+/// expression from being rejected as an operation on `Void` before the exception can be caught.
+pub(crate) fn lower_throw_access_error_expr_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: Span,
+    php_type: PhpType,
+) -> LoweredValue {
     let error_expr = Expr::new(
         ExprKind::NewObject {
             class_name: crate::names::Name::unqualified("Error"),
@@ -581,6 +750,12 @@ pub(crate) fn lower_throw_access_error_expr(
         Op::ThrowException.default_effects(),
         Some(span),
     );
+    let ir_type = crate::ir_lower::context::value_ir_type(&php_type);
+    let ownership = if matches!(Ownership::for_php_type(&php_type), Ownership::NonHeap) {
+        Ownership::NonHeap
+    } else {
+        Ownership::Borrowed
+    };
     LoweredValue {
         value: ctx
             .builder
@@ -588,14 +763,14 @@ pub(crate) fn lower_throw_access_error_expr(
                 Op::ConstNull,
                 Vec::new(),
                 None,
-                IrType::I64,
-                PhpType::Void,
-                Ownership::NonHeap,
+                ir_type,
+                php_type,
+                ownership,
                 Op::ConstNull.default_effects(),
                 Some(span),
             )
             .expect("const_null produces a value"),
-        ir_type: IrType::I64,
+        ir_type,
     }
 }
 
@@ -606,12 +781,17 @@ pub(super) fn loop_cleanup_count_for_branch(level: usize) -> usize {
 
 /// Emits cleanup for the innermost active loops that will not reach their exit block.
 pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, count: usize) {
+    // Skips the loops this exit path already cleaned before discarding a `finally` copy's
+    // exception (`release_taken_exceptions`, the only writer of `exit_cleaned_loops`).
     let frames = ctx
         .loop_stack
         .iter()
+        .copied()
+        .enumerate()
         .rev()
         .take(count)
-        .copied()
+        .filter(|(index, _)| !ctx.exit_cleaned_loops.contains(index))
+        .map(|(_, frame)| frame)
         .collect::<Vec<_>>();
     for frame in frames {
         if let Some((state, span)) = frame.iterator_cleanup {
@@ -650,11 +830,26 @@ pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, co
 }
 
 /// Runs and removes the innermost applicable finally frame.
-pub(super) fn run_innermost_finally(ctx: &mut LoweringContext<'_, '_>, is_throw: bool) -> bool {
+///
+/// `target_loop_depth` is the loop a `break`/`continue` lands in, `None` for a `return` or a
+/// throw. A frame pushed at or below that depth protects a region the jump never leaves — the
+/// loop was opened INSIDE the `try` — so it is not run, and neither is anything under it. It
+/// used to run anyway: `try { while (…) { break; } throw … } catch …` ran the `finally` early,
+/// popped the try's handler, and the later throw escaped its own `catch` as "Uncaught"; inside a
+/// `finally` entered with an exception pending, the same `break` dropped the chaining handler
+/// (MEASURED on reference PHP 8.5.10: `caught t F`, and `new|old`).
+pub(super) fn run_innermost_finally(
+    ctx: &mut LoweringContext<'_, '_>,
+    is_throw: bool,
+    target_loop_depth: Option<usize>,
+) -> bool {
     let Some(frame) = ctx.finally_stack.last() else {
         return false;
     };
     if is_throw && !frame.run_on_throw {
+        return false;
+    }
+    if target_loop_depth.is_some_and(|target| frame.loop_depth <= target) {
         return false;
     }
     let frame = ctx
@@ -677,7 +872,9 @@ pub(super) fn push_finally_frame(
     handler_cleanup: Option<(i64, Span)>,
 ) -> usize {
     let depth = ctx.finally_stack.len();
+    let loop_depth = ctx.loop_stack.len();
     ctx.finally_stack.push(FinallyFrame {
+        loop_depth,
         body: body.to_vec(),
         run_on_throw,
         handler_cleanup,

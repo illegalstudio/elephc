@@ -5,13 +5,16 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for associative arrays, indexed, associative-array helper builtins, nested arrays, array callbacks, list/key-edge builtins, the internal array pointer family, the hash key/value sorts that relink iteration order, runtime allocation-size guards, the maximum-size bounds reference PHP reports as a catchable `ValueError`, mutating builtins whose by-reference argument is a by-reference parameter or a property, static property, or container element, array builtin parameters widened to match reference PHP's parameter lists, the storage type stamped on array literals returned directly from a closure, when an element write reads its index relative to the right-hand side, the element type an array literal stamps on a builtin call, and `array_values`/`array_flip`/`in_array` over a `mixed` receiver.
+//! - Submodules group focused fixtures for associative arrays, indexed, associative-array helper builtins, nested arrays, array callbacks, list/key-edge builtins, the internal array pointer family, the hash key/value sorts that relink iteration order, runtime allocation-size guards, the maximum-size bounds reference PHP reports as a catchable `ValueError`, mutating builtins whose by-reference argument is a by-reference parameter or a property, static property, or container element, array builtin parameters widened to match reference PHP's parameter lists, the storage type stamped on array literals returned directly from a closure, when an element write reads its index relative to the right-hand side, the element type an array literal stamps on a builtin call, `array_values`/`array_flip`/`in_array` over a `mixed` receiver, and float-key deprecations on compound updates through property, static-property, and boxed `mixed` receivers.
 
 mod allocation_guards;
 mod fill_boxed_integers;
 mod size_bounds;
 mod assoc;
+mod assoc_push;
 mod append_history;
+mod append_writes;
+mod append_cancellation_review;
 mod closure_literal_returns;
 mod by_ref_params;
 mod by_ref_places;
@@ -36,9 +39,12 @@ mod nested_autovivify;
 mod nested_mixed_write;
 mod mixed_append_autovivify;
 mod assoc_set_ops;
+mod bare_array_values;
 mod assoc_spread;
+mod assoc_literal_spreads;
 mod widened_signatures;
 mod write_evaluation_order;
 mod float_key_diagnostics;
+mod float_key_compound_receivers;
 mod literal_element_types;
 mod mixed_receiver_builtins;

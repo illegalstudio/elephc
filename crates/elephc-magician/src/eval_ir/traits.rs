@@ -10,7 +10,7 @@
 use super::*;
 
 /// Runtime trait declared by an eval fragment.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalTrait {
     name: String,
     source_location: Option<EvalSourceLocation>,
@@ -81,6 +81,13 @@ impl EvalTrait {
             properties,
             methods,
         }
+    }
+
+    /// Replaces nested trait uses with their concrete specializations.
+    pub(crate) fn with_traits(mut self, traits: Vec<String>, adaptations: Vec<EvalTraitAdaptation>) -> Self {
+        self.traits = traits;
+        self.trait_adaptations = adaptations;
+        self
     }
 
     /// Returns a copy of this trait with source-location metadata attached.

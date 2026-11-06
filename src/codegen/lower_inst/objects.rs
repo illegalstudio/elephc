@@ -31,7 +31,7 @@ use crate::ir::{
 use crate::codegen_support::dynamic_new::known_dynamic_new_builtin_class_names;
 use crate::names::{label_fragment, method_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
-use crate::types::{ClassInfo, InterfaceInfo, PhpType};
+use crate::types::{ClassInfo, InterfaceInfo, PhpType, ScalarWidth};
 
 use super::super::context::FunctionContext;
 use super::{
@@ -70,7 +70,12 @@ pub(super) struct PropertySlot {
     offset: usize,
     is_declared: bool,
     is_packed: bool,
+    /// Storage width of a packed field declared with a C width name (`i32`, `u8`, `f32`), whose
+    /// `php_type` is the `int` or `float` it reads as; `None` for 8-byte fields.
+    width: Option<ScalarWidth>,
     is_reference: bool,
+    /// Argument diagnostic prefix when this temporary slot models an inherited setter.
+    abstract_setter_type_error_prefix: Option<String>,
 }
 
 /// Declared-property candidate reachable from a `Mixed` object receiver.
@@ -115,6 +120,21 @@ struct PropertyDefault {
     is_reference: bool,
 }
 
+/// Strategy used to initialize a newly allocated object's physical property slots.
+enum PropertyInitialization {
+    /// Copy backend-supported literal defaults directly into their slots.
+    Inline(Vec<PropertyDefault>),
+    /// Run the EIR initializer so constant expressions retain their runtime branch semantics.
+    Thunk { class_id: u64 },
+}
+
+impl PropertyInitialization {
+    /// Returns whether initialization requires calling the class's EIR thunk.
+    fn uses_thunk(&self) -> bool {
+        matches!(self, Self::Thunk { .. })
+    }
+}
+
 /// Concrete class that a dynamic factory can instantiate in this EIR module.
 struct DynamicNewCandidate {
     class_name: String,
@@ -123,7 +143,7 @@ struct DynamicNewCandidate {
     allow_dynamic_properties: bool,
     uninitialized_marker_offsets: Vec<usize>,
     owned_reference_property_offsets: Vec<(usize, PhpType, bool)>,
-    property_defaults: Vec<PropertyDefault>,
+    property_initialization: PropertyInitialization,
     constructor_impl: Option<ConstructorCallTarget>,
 }
 
@@ -149,7 +169,12 @@ pub(in crate::codegen::lower_inst) mod throwable_new;
 mod fiber_dynamic_entry;
 mod dynamic_mixed_candidates;
 mod dynamic_factory;
+mod reflection_constructor;
+// The one stderr-and-exit sequence for the whole lowering tree. Every caller names it rather than
+// open-coding the platform split, so `Emitter::syscall`'s macOS-to-Linux mapping has a single site.
+pub(super) use dynamic_factory::emit_fatal_message;
 mod dynamic_pdo;
+mod dynamic_class_flags;
 mod property_defaults;
 mod known_property_reads;
 mod mixed_property_reads;
@@ -165,10 +190,13 @@ mod property_compatibility;
 mod property_loads;
 mod property_fetch_for_write;
 mod property_stores;
+mod property_hook_writes;
 mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
 mod mixed_property_type_guard;
+mod extern_fields;
+pub(super) use mixed_property_type_guard::emit_string_into_int_diagnostics;
 
 #[allow(unused_imports)]
 use fixed_new::*;
@@ -186,6 +214,7 @@ use dynamic_mixed_candidates::*;
 use dynamic_factory::*;
 #[allow(unused_imports)]
 pub(in crate::codegen::lower_inst) use dynamic_pdo::*;
+pub(in crate::codegen::lower_inst) use dynamic_class_flags::*;
 #[allow(unused_imports)]
 use property_defaults::*;
 #[allow(unused_imports)]
@@ -204,6 +233,7 @@ use named_property_writes::*;
 use instanceof_entry::*;
 #[allow(unused_imports)]
 use allocation_clone::*;
+pub(super) use allocation_clone::emit_object_allocation;
 #[allow(unused_imports)]
 use interface_layout::*;
 #[allow(unused_imports)]
@@ -214,6 +244,7 @@ use property_compatibility::*;
 use property_loads::*;
 #[allow(unused_imports)]
 use property_stores::*;
+use property_hook_writes::*;
 #[allow(unused_imports)]
 use property_store_values::*;
 #[allow(unused_imports)]
@@ -222,6 +253,7 @@ use typed_property_guards::*;
 use instanceof_helpers::*;
 #[allow(unused_imports)]
 use mixed_property_type_guard::*;
+use extern_fields::*;
 
 pub(super) use dynamic_property_read_entry::{lower_dynamic_prop_get, lower_nullsafe_prop_get};
 pub(super) use fiber_dynamic_entry::{
@@ -235,6 +267,7 @@ pub(super) use known_property_reads::{
     lower_prop_initialized,
 };
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
+pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG, RUNTIME_TAGS};
 pub(super) use property_store_values::{lower_packed_field_mixed_to_int, release_adopted_mixed_source};
 pub(super) use property_resolution::{
     emit_boxed_null, emit_nullable_receiver_object_payload, nullable_object_receiver_class,

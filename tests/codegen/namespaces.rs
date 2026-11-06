@@ -11,6 +11,33 @@ use crate::support::*;
 
 mod polyfills;
 
+/// Namespaced constants ending in dedicated lexer tokens resolve by their qualified names.
+#[test]
+fn test_qualified_predefined_constant_names_read_local_values() {
+    let out = compile_and_run(r#"<?php
+namespace Demo\Math { const NAN = 'demo-nan'; const PHP_EOL = '<eol>'; }
+namespace Other {
+    use Demo\Math;
+    echo \Demo\Math\NAN, "\n";
+    echo Math\PHP_EOL, "\n";
+    echo is_nan(\NAN) ? 'global-nan' : 'wrong', "\n";
+}
+"#);
+    assert_eq!(out, "demo-nan\n<eol>\nglobal-nan\n");
+}
+
+/// Predefined lexer tokens can also name classes when PHP syntax selects a class context.
+#[test]
+fn test_qualified_predefined_class_names_use_class_metadata() {
+    let out = compile_and_run(r#"<?php
+class INF { public static function method(): string { return 'method'; } }
+$value = new \INF;
+echo \INF::class, "\n", \INF::method(), "\n";
+echo $value instanceof \INF ? 'instance' : 'wrong';
+"#);
+    assert_eq!(out, "INF\nmethod\ninstance");
+}
+
 /// Verifies `use function` aliasing and global builtin resolution inside a namespaced file.
 /// Uses a two-namespace fixture: `Demo\Util\render` aliased as `paint` and global `strlen`.
 /// Checks that the alias resolves correctly and global builtins are accessible without prefix.
@@ -38,7 +65,7 @@ echo strlen("bc");
 fn test_namespace_class_can_call_global_extern_function() {
     let out = compile_and_run(
         r#"<?php
-extern function getpid(): int;
+extern function getpid(): i32;
 
 namespace Demo\App;
 
@@ -53,6 +80,39 @@ echo $probe->ok();
 "#,
     );
     assert_eq!(out, "1");
+}
+
+/// Verifies braced and unbraced namespace extern declarations keep their PHP-visible qualified
+/// names while both link to the unqualified libc symbol.
+#[test]
+fn test_namespaced_extern_functions_use_unqualified_c_symbols() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require "braced.php";
+require "unbraced.php";
+echo Braced\abs(-3), " ", Unbraced\abs(-4), "\n";
+"#,
+            ),
+            (
+                "braced.php",
+                r#"<?php
+namespace Braced { extern function abs(i32 $value): i32; }
+"#,
+            ),
+            (
+                "unbraced.php",
+                r#"<?php
+namespace Unbraced;
+extern function abs(i32 $value): i32;
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "3 4\n");
 }
 
 /// Verifies that pointer builtins (`ptr_null`, `ptr_is_null`) are accessible inside a
@@ -367,6 +427,52 @@ class User {
         "main.php",
     );
     assert_eq!(out, "ok");
+}
+
+/// Regression test for a packed class declared in another namespace and file, then named by
+/// class member signatures through `use`: the shape PSR-4 autoloading produces. The member
+/// types used to fail with "Unknown type" as if the packed class file were never loaded.
+#[test]
+fn test_namespace_include_resolves_packed_class_in_member_signatures() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+namespace Demo\App;
+require "geometry.php";
+
+use Demo\Geometry\Vec2;
+
+final class Path {
+    public buffer<Vec2> $points;
+
+    public function __construct() {
+        $this->points = buffer_new<Vec2>(2);
+        $this->points[1]->x = 4.5;
+    }
+
+    public function x(buffer<Vec2> $points, int $index): float {
+        return $points[$index]->x;
+    }
+}
+
+$path = new Path();
+echo $path->x($path->points, 1), "|", buffer_len($path->points);
+"#,
+            ),
+            (
+                "geometry.php",
+                r#"<?php
+namespace Demo\Geometry;
+
+packed class Vec2 { public float $x; public float $y; }
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "4.5|2");
 }
 
 /// Verifies that `use const` aliasing and fully-qualified constant paths both resolve
@@ -717,4 +823,548 @@ var_dump(\true, \false, \null, \TRUE);
         out,
         "eol\nmax\npi\nmin|/\ninf nan\ne sqrt2 eps\nstdout os\neight\nbool(true)\nbool(false)\nNULL\nbool(true)\n"
     );
+}
+
+/// `namespace\name` is PHP's relative name, "name in the current namespace", for a
+/// function, a constant, a class in `new`, a static call, `::class`, `instanceof`, an
+/// `implements` list and a parameter type. It failed to parse with
+/// `Unexpected token: Namespace`. Regression for #825.
+#[test]
+fn test_relative_namespace_names_resolve_in_the_current_namespace() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\Sub;
+
+const LIMIT = 7;
+
+function helper(): int { return 1; }
+
+class Box {
+    public function __construct(public int $v = 3) {}
+    public static function make(): static { return new static(5); }
+}
+
+interface Shape {}
+final class Square implements namespace\Shape {}
+
+echo namespace\helper(), "\n";
+echo namespace\LIMIT, "\n";
+$b = new namespace\Box();
+echo $b->v, "\n";
+echo namespace\Box::make()->v, "\n";
+echo namespace\Box::class, "\n";
+var_dump(new Square() instanceof namespace\Shape);
+function takes(namespace\Box $b): int { return $b->v; }
+echo takes(new Box(9)), "\n";
+echo \strlen("abc"), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "1\n",
+            "7\n",
+            "3\n",
+            "5\n",
+            "Demo\\Sub\\Box\n",
+            "bool(true)\n",
+            "9\n",
+            "3\n",
+        )
+    );
+}
+
+/// Each braced namespace block is its own current namespace for a relative name, and the
+/// global `namespace {}` block makes `namespace\who()` the global function.
+#[test]
+fn test_relative_namespace_names_follow_braced_namespace_blocks() {
+    let out = compile_and_run(
+        r#"<?php
+namespace First {
+    function who(): string { return "first"; }
+    echo namespace\who(), "\n";
+}
+namespace Second {
+    function who(): string { return "second"; }
+    echo namespace\who(), "\n";
+}
+namespace {
+    function who(): string { return "global"; }
+    echo namespace\who(), "\n";
+    echo First\who(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "first\n",
+            "second\n",
+            "global\n",
+            "first\n",
+        )
+    );
+}
+
+/// A relative name keeps resolving in the enclosing namespace after the word `namespace` is
+/// used as an enum case, a method name and a member access: a token scan read `case namespace;`
+/// as the declaration `namespace;` and bound every later `namespace\...` in the global
+/// namespace. Also covers `extends`, `implements`, trait `use`, return, property and `catch`
+/// types, an attribute (read back through Reflection), a first-class callable, and a relative
+/// name in the global block that follows. Regression for #825; expected output is PHP 8.5's.
+#[test]
+fn test_relative_namespace_names_survive_namespace_as_a_member_name() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App {
+    enum Mode { case namespace; case other; }
+    #[\Attribute]
+    class Tag { public function __construct(public string $v = "tag") {} }
+    class Foo {
+        const C = "C";
+        public static function who() { return __CLASS__; }
+        public function namespace() { return "method named namespace"; }
+    }
+    interface Shape {}
+    trait Greets { public function hi() { return "hi from " . static::class; } }
+    class E extends \Exception {}
+    function f() { return __FUNCTION__; }
+    const K = 7;
+    echo namespace\f(), "\n";
+    echo namespace\K, "\n";
+    echo namespace\Foo::who(), "\n";
+    echo namespace\Foo::C, "\n";
+    echo namespace\Foo::class, "\n";
+    $o = new namespace\Foo();
+    echo $o->namespace(), "\n";
+    var_dump($o instanceof namespace\Foo);
+    var_dump(Mode::namespace === namespace\Mode::namespace);
+    class Bar extends namespace\Foo implements namespace\Shape { use namespace\Greets; }
+    echo (new Bar)->hi(), "\n";
+    function typed(namespace\Foo $x): namespace\Foo { return $x; }
+    echo get_class(typed(new Foo)), "\n";
+    try { throw new namespace\E("boom"); } catch (namespace\E $e) { echo "caught ", get_class($e), "\n"; }
+    #[namespace\Tag("x")]
+    function attributed() { return "attributed"; }
+    echo attributed(), "\n";
+    $r = new \ReflectionFunction('App\attributed');
+    echo $r->getAttributes()[0]->getName(), "\n";
+    $cb = namespace\f(...);
+    echo $cb(), "\n";
+    class Holder { public namespace\Foo $p; public function __construct() { $this->p = new Foo; } }
+    echo get_class((new Holder)->p), "\n";
+}
+namespace {
+    function f() { return "global f"; }
+    echo namespace\f(), "\n";
+    echo namespace\App\f(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "App\\f\n",
+            "7\n",
+            "App\\Foo\n",
+            "C\n",
+            "App\\Foo\n",
+            "method named namespace\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "hi from App\\Bar\n",
+            "App\\Foo\n",
+            "caught App\\E\n",
+            "attributed\n",
+            "App\\Tag\n",
+            "App\\f\n",
+            "App\\Foo\n",
+            "global f\n",
+            "App\\f\n",
+        )
+    );
+}
+
+/// `eval()` resolves a relative name in the eval fragment's own namespace, once: the eval
+/// parser read `namespace` as a first segment and prefixed the namespace again, so
+/// `namespace\helper()` in `App` called `App\namespace\helper`. The global fragment's relative
+/// name is the global function. Regression for #825; expected output is PHP 8.5's.
+#[test]
+fn test_eval_relative_namespace_names_resolve_in_the_fragment_namespace() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App {
+    function helper() { return "App\\helper"; }
+    const LIMIT = 3;
+    class Box { public static function make() { return "App\\Box::make"; } }
+}
+namespace {
+    function helper() { return "global helper"; }
+    $code = $argc > 5 ? 'return 0;' : 'namespace App; echo namespace\helper(), "|", namespace\LIMIT, "|", namespace\Box::make(), "|", namespace\Box::class, "\n"; namespace\helper();';
+    eval($code);
+    eval('echo namespace\helper(), "\n";');
+    eval('namespace App { echo get_class(new namespace\Box()), "\n"; }');
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "App\\helper|3|App\\Box::make|App\\Box\n",
+            "global helper\n",
+            "App\\Box\n",
+        )
+    );
+}
+
+/// A relative name works in the three positions the second review found refused: an
+/// `insteadof` list (`namespace\A::m insteadof namespace\B`), the static-property form of
+/// `instanceof` (`$x instanceof namespace\Cfg::$cls`), and a constant the lexer gives its own
+/// token. Inside a namespace `namespace\NAN` is that namespace's constant; in the global
+/// namespace `namespace\PHP_EOL`, `namespace\true`, `namespace\null`, `namespace\INF` and
+/// `namespace\M_PI` are the global constants. Regression for #825; expected output is PHP 8.5's.
+#[test]
+fn test_relative_names_in_insteadof_instanceof_and_constant_tokens() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App {
+    trait A { public function m() { return "a"; } }
+    trait B { public function m() { return "b"; } }
+    class C { use namespace\A, namespace\B { namespace\A::m insteadof namespace\B; } }
+    echo (new C())->m(), "\n";
+    class Cfg { public static $cls = "Exception"; }
+    $x = new \Exception();
+    var_dump($x instanceof namespace\Cfg::$cls);
+    const NAN = "App NAN";
+    echo namespace\NAN, "\n";
+}
+namespace {
+    echo "[", namespace\PHP_EOL, "]\n";
+    var_dump(namespace\true, namespace\null, namespace\INF);
+    echo namespace\M_PI > 3 ? "pi" : "no", "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "a\nbool(true)\nApp NAN\n[\n]\nbool(true)\nNULL\nfloat(INF)\npi\n"
+    );
+}
+
+/// Verifies relative and qualified names whose segment is a predefined-constant or keyword token
+/// name classes in class contexts (#825 review): `namespace\NAN::class`, a static call through it,
+/// and `instanceof` targets read from a static property of `namespace\NAN` or `namespace\enum`.
+#[test]
+fn test_relative_token_class_names_in_class_contexts() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+class NAN {
+    public static $cls = "Exception";
+    public static function make(): string { return "made"; }
+}
+class enum { public static $cls = "Error"; }
+$x = new \Exception();
+echo namespace\NAN::class, "\n";
+echo namespace\NAN::make(), "\n";
+var_dump($x instanceof namespace\NAN::$cls);
+var_dump($x instanceof namespace\enum::$cls);
+var_dump($x instanceof enum::$cls);
+var_dump($x instanceof \App\NAN::$cls);
+"#,
+    );
+    assert_eq!(
+        out,
+        "App\\NAN\nmade\nbool(true)\nbool(false)\nbool(false)\nbool(true)\n"
+    );
+}
+
+/// A reserved word is an ordinary segment of a qualified name, as in `Demo\Namespace` or
+/// `Vendor\Default\Theme`. Namespace declarations, `use` imports, `use function`, calls,
+/// `::class` and `instanceof` all have to accept it. The declaration failed with
+/// `Expected identifier after '\' in qualified name`. Regression for #826 and #840.
+#[test]
+fn test_reserved_words_are_ordinary_qualified_name_segments() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require __DIR__ . '/kwns_lib.php';
+
+use Vendor\Default\Theme\Example;
+use Demo\Namespace\Subject as Aliased;
+use function Demo\Namespace\describe;
+
+echo (new Example())->name(), "\n";
+echo get_class(new Aliased()), "\n";
+echo describe(), "\n";
+echo \Demo\Namespace\describe(), "\n";
+echo Vendor\Default\Theme\Example::class, "\n";
+var_dump(new Aliased() instanceof Demo\Namespace\Subject);
+"#,
+            ),
+            (
+                "kwns_lib.php",
+                r#"<?php
+namespace Vendor\Default\Theme {
+    class Example { public function name(): string { return "default theme"; } }
+}
+namespace Demo\Namespace {
+    final class Subject {}
+    function describe(): string { return __NAMESPACE__; }
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "default theme\n",
+            "Demo\\Namespace\\Subject\n",
+            "Demo\\Namespace\n",
+            "Demo\\Namespace\n",
+            "Vendor\\Default\\Theme\\Example\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+/// A qualified name whose FIRST segment is a reserved word, as in `Default\Theme\Palette`,
+/// must work everywhere a name can stand: calls, static calls and properties, class constants,
+/// typed and nullable parameters, return and property types, `implements`, `catch`, `new`,
+/// `instanceof`, `::class`, attributes, and plain, comma and group `use` imports whose first
+/// segment is `function`. Before the fix these reached the keyword's own parser (statement
+/// dispatch, expression prefix, type and catch parsing) and failed. A keyword separated from
+/// `\` by a space stays the keyword, so `\strlen()` after `+` and `new \X` keep working.
+/// Regression for #826. Expected output is PHP 8.5's.
+#[test]
+fn test_reserved_word_first_segments_work_in_every_name_position() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Function\Lib { class Foo {} function g() { return __FUNCTION__; } const K = 3; }
+namespace Default\Theme {
+    #[\Attribute]
+    class Attr { }
+    class Palette { public static $hits = 0; public static function accent() { return "teal"; } const X = 1; }
+    interface I {}
+    class E extends \Exception {}
+}
+namespace Static\Kit { class Factory { public function make() { return "made"; } } }
+namespace Main {
+use Function\Lib\Foo;
+use Default\Theme\Palette, Function\Lib\Foo as Foo2;
+use Default\Theme\{Attr, I};
+echo get_class(new Foo), " ", get_class(new Foo2), "\n";
+echo \Default\Theme\Palette::accent(), "\n";
+function t(\Default\Theme\Palette $p): \Default\Theme\Palette { return $p; }
+echo get_class(t(new Palette)), "\n";
+}
+namespace {
+#[Default\Theme\Attr]
+function attributed() { return "attr ok"; }
+echo attributed(), "\n";
+echo Default\Theme\Palette::accent(), "\n";
+echo Default\Theme\Palette::X, "\n";
+echo Function\Lib\g(), "\n";
+echo Function\Lib\K, "\n";
+Default\Theme\Palette::$hits = 5;
+Default\Theme\Palette::$hits++;
+echo Default\Theme\Palette::$hits, "\n";
+function t2(Default\Theme\Palette $p): Default\Theme\Palette { return $p; }
+echo get_class(t2(new Default\Theme\Palette)), "\n";
+function t3(?Default\Theme\Palette $p = null): string { return $p === null ? "null" : "set"; }
+echo t3(), " ", t3(new Default\Theme\Palette), "\n";
+class Z implements Default\Theme\I {}
+var_dump(new Z instanceof Default\Theme\I);
+try { throw new Default\Theme\E("x"); } catch (Default\Theme\E $e) { echo "caught ", get_class($e), "\n"; }
+$n = Default\Theme\Palette::class; echo $n, "\n";
+echo (new Static\Kit\Factory())->make(), "\n";
+var_dump((new Static\Kit\Factory()) instanceof Static\Kit\Factory);
+class Holder { public Default\Theme\Palette $p; public function __construct() { $this->p = new Default\Theme\Palette; } }
+echo get_class((new Holder)->p), "\n";
+$f = fn(Default\Theme\Palette $p) => get_class($p);
+echo $f(new Default\Theme\Palette), "\n";
+echo strlen("x") + \strlen("yz"), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Function\\Lib\\Foo Function\\Lib\\Foo\n",
+            "teal\n",
+            "Default\\Theme\\Palette\n",
+            "attr ok\n",
+            "teal\n",
+            "1\n",
+            "Function\\Lib\\g\n",
+            "3\n",
+            "6\n",
+            "Default\\Theme\\Palette\n",
+            "null set\n",
+            "bool(true)\n",
+            "caught Default\\Theme\\E\n",
+            "Default\\Theme\\Palette\n",
+            "made\n",
+            "bool(true)\n",
+            "Default\\Theme\\Palette\n",
+            "Default\\Theme\\Palette\n",
+            "3\n",
+        )
+    );
+}
+
+/// A reserved word glued into a qualified name is a name in EVERY parser position, including the
+/// keyword checks that run before a statement or expression is dispatched: a statement led by
+/// `Default\...` or `Case\...` inside a `switch` case body (`Case\Kit\pick();` was silently
+/// read as another case label), a `match` arm pattern led by `Default\...`, the `endif`, `else`
+/// and `finally` checks after a body, `catch (Self\X ...)` and `Parent\X`, the `static` and
+/// `readonly` member modifiers (`public Static\Factory $f` is a typed property, not a static
+/// one), `insteadof`, `instanceof Name::$prop`, a builtin type word (`Int\Money`), string and
+/// heredoc interpolation, and a one-word namespace declaration (`namespace Else { }`). The lexer
+/// now emits such a word as an identifier, as PHP 8 lexes the whole name as one token.
+/// Regression for #826 (review round 2); expected output is PHP 8.5's.
+#[test]
+fn test_reserved_word_names_survive_every_keyword_check() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Default\Theme {
+    class Palette {
+        const X = 1;
+        public static $hits = 0;
+        public static $cls = "Default\\Theme\\Palette";
+        public static function accent() { return "teal"; }
+        public function tone($n) { return "tone" . $n; }
+    }
+}
+namespace Case\Kit { function pick() { echo "picked\n"; return 1; } }
+namespace EndIf { class Marker { public static function ping() { echo "ping\n"; } } }
+namespace Else { class Gate { public static function go() { echo "else-go\n"; } } }
+namespace Finally\Kit { function done() { echo "done\n"; } }
+namespace Self { class Boom extends \Exception {} }
+namespace Parent { class Boom extends \Exception {} }
+namespace Static { class Factory {} }
+namespace Readonly { class Config {} }
+namespace Int { class Money { public function __construct(public int $cents) {} } }
+namespace List {
+    trait A { public function m() { return "A"; } }
+    trait B { public function m() { return "B"; } }
+}
+namespace {
+switch ($argc) {
+    case 1:
+        Default\Theme\Palette::accent();
+        echo "switch default-led\n";
+        Case\Kit\pick();
+        break;
+}
+$v = $argc;
+echo match ($v) { Default\Theme\Palette::X => "match one", default => "match other" }, "\n";
+if ($argc > 0):
+    EndIf\Marker::ping();
+endif;
+if ($argc > 5) { echo "no\n"; } Else\Gate::go();
+try { echo "try\n"; } catch (Exception $e) { } Finally\Kit\done();
+try { throw new Self\Boom("s"); } catch (Self\Boom $e) { echo "caught ", get_class($e), "\n"; }
+try { throw new Parent\Boom("p"); } catch (Parent\Boom | Self\Boom $e) { echo "caught ", get_class($e), "\n"; }
+class Holder {
+    public Static\Factory $f;
+    public Readonly\Config $c;
+    public function __construct() { $this->f = new Static\Factory(); $this->c = new Readonly\Config(); }
+}
+$h = new Holder();
+$r = new ReflectionProperty("Holder", "f");
+var_dump($r->isStatic());
+$r = new ReflectionProperty("Holder", "c");
+var_dump($r->isReadOnly());
+$h->c = new Readonly\Config();
+echo get_class($h->f), " ", get_class($h->c), "\n";
+class Picker { use List\A, List\B { List\A::m insteadof List\B; } }
+echo (new Picker())->m(), "\n";
+function money(Int\Money $m): Int\Money { return $m; }
+echo money(new Int\Money(250))->cents, "\n";
+$p = new Default\Theme\Palette();
+var_dump($p instanceof Default\Theme\Palette::$cls);
+echo "{$p->tone(Default\Theme\Palette::X)}\n";
+echo <<<TXT
+heredoc {$p->tone(Default\Theme\Palette::X + 1)}
+TXT;
+echo "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "switch default-led\n",
+            "picked\n",
+            "match one\n",
+            "ping\n",
+            "else-go\n",
+            "try\n",
+            "done\n",
+            "caught Self\\Boom\n",
+            "caught Parent\\Boom\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "Static\\Factory Readonly\\Config\n",
+            "A\n",
+            "250\n",
+            "bool(true)\n",
+            "tone1\n",
+            "heredoc tone2\n",
+        )
+    );
+}
+
+/// `eval()` of a runtime string (the Magician interpreter, not the AOT parser) reads a reserved
+/// word glued into a qualified name as a name too: `Function\Lib\g();` was dispatched as a
+/// function declaration, `Static\Kit\Factory::make();` as a `static` variable, and
+/// `use Function\Lib\Foo;` imported the FUNCTION `Lib\Foo`, where PHP and the compiled path
+/// import the class `Function\Lib\Foo`. Regression for #826; expected output is PHP 8.5's.
+#[test]
+fn test_eval_reads_reserved_word_first_segments_as_names() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Function\Lib { class Foo {} function g() { return "Function\\Lib\\g"; } }
+namespace Static\Kit { class Factory { public static function make() { echo "made\n"; } } }
+namespace Vendor\Default\Theme { class Box { public static function make() { return "inner"; } } }
+namespace {
+    $code = $argc > 5 ? 'return 0;' : 'namespace Probe; use Function\Lib\Foo; echo \Function\Lib\g(), "|", get_class(new Foo()), "\n";';
+    eval($code);
+    $code = $argc > 5 ? 'return 0;' : 'Static\Kit\Factory::make(); Function\Lib\g(); echo Function\Lib\g(), "\n";';
+    eval($code);
+    $code = $argc > 5 ? 'return 0;' : 'namespace Probe; use Vendor\Default\Theme\Box; echo Box::make(), "|", get_class(new Box()), "\n";';
+    eval($code);
+    $code = $argc > 5 ? 'return 0;' : 'namespace Vendor; echo namespace\Default\Theme\Box::make(), "\n";';
+    eval($code);
+}
+"#,
+    );
+    assert_eq!(out, "Function\\Lib\\g|Function\\Lib\\Foo\nmade\nFunction\\Lib\\g\ninner|Vendor\\Default\\Theme\\Box\ninner\n");
+}
+
+/// A qualified name whose segment spells a predefined constant (`\Vendor\PHP_EOL`,
+/// `PHP_EOL\Sub`) is a class name, as in PHP, while `\PHP_EOL`, `\PHP_INT_MAX` and `\true`
+/// still read the global constants. Review follow-up for #826.
+#[test]
+fn test_constant_named_segments_in_qualified_names() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App {
+class Box {}
+$o = new Box();
+echo $o instanceof \Vendor\PHP_EOL ? "y" : "n", "\n";
+echo $o instanceof PHP_EOL\Sub ? "y" : "n", "\n";
+echo namespace\true::class, "\n";
+echo \Vendor\PHP_EOL::class, "|", \PHP_EOL === "\n" ? "nl" : "x", "\n";
+echo strlen(\PHP_EOL), " ", \PHP_INT_MAX > 0 ? "big" : "small", " ", \true ? "t" : "f", "\n";
+}
+namespace { var_dump(namespace\true, namespace\null, namespace\INF); }
+"#,
+    );
+    assert_eq!(out, "n\nn\nApp\\true\nVendor\\PHP_EOL|nl\n1 big t\nbool(true)\nNULL\nfloat(INF)\n");
 }

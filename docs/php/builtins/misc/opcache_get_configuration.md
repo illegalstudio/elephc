@@ -1,26 +1,25 @@
 ---
 title: "opcache_get_configuration()"
-description: "Returns the OPcache directives, blacklist, and version."
-sidebar:
-  order: 637
+description: "Returns the OPcache directives, blacklist, and version, or false when API access is restricted."
 ---
 
 ## opcache_get_configuration()
 
 ```php
-function opcache_get_configuration(): array
+function opcache_get_configuration(): array|false
 ```
 
-Returns the OPcache directives, blacklist, and version.
+Returns the OPcache directives, blacklist, and version, or false when API access is restricted.
 
 **Parameters**: none.
 
-**Returns**: `array`
+**Returns**: `array|false`
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

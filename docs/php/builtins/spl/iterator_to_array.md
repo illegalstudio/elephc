@@ -1,8 +1,6 @@
 ---
 title: "iterator_to_array()"
 description: "Copy the iterator into an array."
-sidebar:
-  order: 767
 ---
 
 ## iterator_to_array()
@@ -21,8 +19,9 @@ Copy the iterator into an array.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/iterator_to_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/iterator_to_array.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

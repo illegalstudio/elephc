@@ -14,20 +14,28 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
     let target = callable_target_data(ctx, inst)?.to_string();
     let strict_php = instruction_strict_php_profile(inst);
     if emit_static_late_bound_first_class_callable(ctx, &target)? {
-        return store_if_result(ctx, inst);
+        return store_callable_descriptor(ctx, inst);
     }
     if emit_instance_method_first_class_callable(ctx, inst, &target)? {
-        return store_if_result(ctx, inst);
+        return store_callable_descriptor(ctx, inst);
     }
     if let Some(descriptor) = first_class_callable_descriptor(ctx, &target, strict_php)? {
         let owns_string_return = descriptor.owns_string_return;
+        let default_scope = if descriptor.kind == callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD {
+            descriptor.invocation.receiver_name.as_ref().and_then(|receiver| {
+                let info = ctx.module.class_infos.get(receiver)?;
+                let method = descriptor.invocation.method_name.as_ref()?;
+                Some(info.static_method_impl_classes.get(method).unwrap_or(receiver).clone())
+            })
+        } else { None };
         let invoker_label = descriptor
             .sig
             .as_ref()
-            .map(|sig| emit_runtime_callable_invoker_with_string_owner(
+            .map(|sig| emit_runtime_callable_invoker_in_class(
                 ctx, sig, &[], owns_string_return,
                 descriptor.kind != callable_descriptor::CALLABLE_DESC_KIND_BUILTIN
                     && descriptor.kind != callable_descriptor::CALLABLE_DESC_KIND_EXTERN,
+                default_scope.as_deref(),
             ));
         let descriptor_label = match descriptor.entry_label.as_deref() {
             Some(entry_label) => {
@@ -57,6 +65,16 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
         emit_runtime_closure_descriptor_with_captures(ctx, &descriptor_label, &[], &[])?;
     } else {
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    }
+    store_callable_descriptor(ctx, inst)
+}
+
+/// Keeps descriptor storage and captures while removing object identity for implicit callables.
+fn store_callable_descriptor(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.op == Op::CallableValueNew {
+        // The shared constructor leaves its descriptor in the result register. Releasing only
+        // its handle preserves the descriptor's owner, captures, and fresh physical identity.
+        abi::emit_call_label(ctx.emitter, "__rt_object_handle_release");
     }
     store_if_result(ctx, inst)
 }
@@ -117,8 +135,8 @@ pub(super) fn emit_static_late_bound_first_class_callable(
     // string ownership before returning, including borrowed-result overrides.
     let owns_string_return = wrapper_sig.return_type.codegen_repr() == PhpType::Str
         && !wrapper_sig.by_ref_return;
-    let invoker_label = emit_runtime_callable_invoker_with_string_owner(
-        ctx, &wrapper_sig, &captures, owns_string_return, true,
+    let invoker_label = emit_runtime_callable_invoker_in_class(
+        ctx, &wrapper_sig, &captures, owns_string_return, true, Some(&impl_class),
     );
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
@@ -205,11 +223,14 @@ pub(super) fn emit_instance_method_first_class_callable(
     let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
         ctx.module, &impl_class, &method_key, false,
     );
-    let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &sig, &captures, owns_string_return, true);
+    let invoker_label = emit_runtime_callable_invoker_in_class(
+        ctx, &sig, &captures, owns_string_return, true, Some(&impl_class),
+    );
+    let declared_name = format!("{}::{}", impl_class, method_name);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &entry_label,
-        Some(target),
+        Some(&declared_name),
         callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
         Some(&sig),
         &captures,

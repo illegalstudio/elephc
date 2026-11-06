@@ -71,7 +71,7 @@ static void check_links(struct hash *hash) {
 /* Raw objects, ordinary Mixed boxes, and nested arrays all retire after the root disappears. */
 static void removal(unsigned mode, int copied, unsigned position, unsigned wrapping, int named) {
     CHECK(live == 0 && hash_write_guard_top == NULL);
-    allocated = 0;
+    fixture_reset();
     current = selected = hash_new(4, 7);
     alias = copied ? fixture_retain(selected) : NULL;
     snapshot = NULL;
@@ -130,7 +130,7 @@ static void remove_from_active_release(void *value) {
 /* Capture construction must complete its later replacement without double-releasing the deleted owner. */
 static void removal_during_capture(unsigned mode) {
     CHECK(live == 0);
-    allocated = 0;
+    fixture_reset();
     current = selected = hash_new(4, 7);
     alias = fixture_retain(selected);
     remove_mode = mode;
@@ -151,7 +151,7 @@ static void removal_during_capture(unsigned mode) {
 
 /* Missing and scalar-valued roots need no destructor and preserve history and alias identity. */
 static void scalar_removal(void) {
-    allocated = 0;
+    fixture_reset();
     struct hash *hash = hash_new(4, 7);
     struct value key = {0, 12, 0};
     CHECK(query_remove(NULL, hash, &key) == 0 && hash->length == 0 && hash->pins == 0);
@@ -165,6 +165,7 @@ static void scalar_removal(void) {
 }
 
 int main(void) {
+    quarantine_cycles();
     unsigned modes[] = {0, REMOVE_REINSERT, REMOVE_GROW, REMOVE_COPY,
         REMOVE_REINSERT | REMOVE_GROW | REMOVE_COPY, REMOVE_RETARGET,
         REMOVE_RETARGET | REMOVE_DROP_ALIAS, REMOVE_RETARGET | REMOVE_DROP_ALIAS | REMOVE_COPY};
@@ -183,5 +184,7 @@ int main(void) {
     removal_during_capture(0);
     removal_during_capture(REMOVE_THROW);
     scalar_removal();
+    fixture_reset();
+    CHECK(allocated == 0);
     return 0;
 }

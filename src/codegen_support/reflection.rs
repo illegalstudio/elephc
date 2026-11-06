@@ -12,13 +12,59 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::ir::Function;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
-use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, ClassInfo};
+use crate::types::{
+    collect_attribute_args, collect_attribute_names, AttrArgEntry, AttrArgValue, AttrKey,
+    ClassInfo, FunctionSig,
+};
 
 /// Borrowed attribute-name/argument metadata from a reflection-visible source.
 pub(crate) type AttributeMetadataSource<'a> =
     (&'a [String], &'a [Option<Vec<AttrArgEntry>>]);
+
+/// Owned attribute-name/argument metadata, for a source only reachable through AST groups.
+pub(crate) type OwnedAttributeMetadata = (Vec<String>, Vec<Option<Vec<AttrArgEntry>>>);
+
+/// Returns the attribute lists declared on the parameters of `signature`, one per parameter that
+/// carries any. `ReflectionParameter::getAttributes()` reads the same groups, so a factory built
+/// from these is the one its `newInstance()` dispatches to.
+pub(crate) fn parameter_attribute_metadata(signature: &FunctionSig) -> Vec<OwnedAttributeMetadata> {
+    signature
+        .param_attributes
+        .iter()
+        .filter(|groups| !groups.is_empty())
+        .map(|groups| (collect_attribute_names(groups), collect_attribute_args(groups)))
+        .collect()
+}
+
+/// Returns the reflection-visible attribute metadata of the lowered top-level functions: each
+/// function's own attributes and its parameters'. Both factory consumers (the synthetic
+/// `ReflectionAttribute` bodies and the attribute-array emitter) build from this one list, so
+/// they number the factories identically.
+pub(crate) fn function_attribute_metadata(functions: &[Function]) -> Vec<OwnedAttributeMetadata> {
+    let mut sources = Vec::new();
+    for function in functions {
+        if !function.attribute_names.is_empty() {
+            sources.push((function.attribute_names.clone(), function.attribute_args.clone()));
+        }
+        if let Some(signature) = &function.signature {
+            sources.extend(parameter_attribute_metadata(signature));
+        }
+    }
+    sources
+}
+
+/// Borrows owned attribute metadata in the shape the factory collectors take.
+pub(crate) fn borrow_attribute_metadata(
+    owned: &[OwnedAttributeMetadata],
+) -> Vec<AttributeMetadataSource<'_>> {
+    owned
+        .iter()
+        .map(|(names, args)| (names.as_slice(), args.as_slice()))
+        .collect()
+}
 
 #[derive(Clone)]
 /// Factory record for compile-time reflection attribute metadata.
@@ -50,9 +96,9 @@ pub(crate) fn resolve_class_name<'a>(
 }
 
 /// Scans every class in `classes` and collects all distinct class-level,
-/// method-level, property-level, and constant-level attribute name/argument
-/// pairs into a sorted vector of `ReflectionAttributeFactory` records with
-/// sequential ids.
+/// method-level, method-parameter-level, property-level, and constant-level
+/// attribute name/argument pairs into a sorted vector of
+/// `ReflectionAttributeFactory` records with sequential ids.
 pub(crate) fn collect_attribute_factories(
     classes: &HashMap<String, ClassInfo>,
 ) -> Vec<ReflectionAttributeFactory> {
@@ -88,6 +134,17 @@ pub(crate) fn collect_attribute_factories_with_extra(
                 collect_from_attribute_lists(classes, names, args, &mut unique);
             }
         }
+        // Method parameters carry attributes too; without a factory their `newInstance()`
+        // falls through to `null`.
+        for signature in class_info
+            .methods
+            .values()
+            .chain(class_info.static_methods.values())
+        {
+            for (names, args) in parameter_attribute_metadata(signature) {
+                collect_from_attribute_lists(classes, &names, &args, &mut unique);
+            }
+        }
     }
     for (names, args) in extra_attrs {
         collect_from_attribute_lists(classes, names, args, &mut unique);
@@ -107,25 +164,44 @@ pub(crate) fn collect_attribute_factories_with_extra(
         .collect()
 }
 
-/// Returns the factory id for an attribute, considering classes plus extra
-/// metadata sources such as top-level function attributes retained by EIR.
-pub(crate) fn attribute_factory_id_with_extra(
-    classes: &HashMap<String, ClassInfo>,
-    extra_attrs: &[AttributeMetadataSource<'_>],
-    attr_name: &str,
-    attr_args: &[AttrArgEntry],
-) -> i64 {
-    // Non-class attributes are registered under their raw name (see
-    // `collect_from_attribute_lists`), so fall back to it when the name does
-    // not resolve to a real class.
-    let lookup_name = resolve_class_name(classes, attr_name)
-        .map(|resolved| resolved.to_string())
-        .unwrap_or_else(|| attr_name.to_string());
-    collect_attribute_factories_with_extra(classes, extra_attrs)
-        .into_iter()
-        .find(|factory| factory.class_name == lookup_name && factory.args == attr_args)
-        .map(|factory| factory.id)
-        .unwrap_or(0)
+/// The attribute factory ids of one program, keyed by resolved attribute name and captured
+/// arguments.
+///
+/// Numbering the factories walks every class and every lowered function, so a caller that
+/// materializes several attributes builds this table once and looks each attribute up in it,
+/// instead of renumbering the whole program per attribute.
+pub(crate) struct AttributeFactoryIds<'a> {
+    classes: &'a HashMap<String, ClassInfo>,
+    ids: HashMap<(String, Vec<AttrArgEntry>), i64>,
+}
+
+impl<'a> AttributeFactoryIds<'a> {
+    /// Numbers the factories of `classes` plus `extra_attrs` exactly as the synthetic
+    /// `ReflectionAttribute` bodies do, so the ids agree with `newInstance()`'s dispatch.
+    pub(crate) fn new(
+        classes: &'a HashMap<String, ClassInfo>,
+        extra_attrs: &[AttributeMetadataSource<'_>],
+    ) -> Self {
+        let ids = collect_attribute_factories_with_extra(classes, extra_attrs)
+            .into_iter()
+            .map(|factory| ((factory.class_name, factory.args), factory.id))
+            .collect();
+        Self { classes, ids }
+    }
+
+    /// Returns the factory id of one attribute, or `0` when no factory matches it.
+    pub(crate) fn id(&self, attr_name: &str, attr_args: &[AttrArgEntry]) -> i64 {
+        // Non-class attributes are registered under their raw name (see
+        // `collect_from_attribute_lists`), so fall back to it when the name does
+        // not resolve to a real class.
+        let lookup_name = resolve_class_name(self.classes, attr_name)
+            .map(|resolved| resolved.to_string())
+            .unwrap_or_else(|| attr_name.to_string());
+        self.ids
+            .get(&(lookup_name, attr_args.to_vec()))
+            .copied()
+            .unwrap_or(0)
+    }
 }
 
 /// Builds the synthetic `ReflectionAttribute::newInstance()` body using class
@@ -145,7 +221,17 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
             continue;
         }
         let condition = factory_condition(factory.id);
-        let then_body = vec![Stmt::new(
+        let mut then_body = Vec::new();
+        if let Some(flags) = crate::types::checker::core_attributes::flags(&factory.class_name) {
+            use crate::synthetic_class::{e_binop, e_int, e_new_fq, e_str, e_this_prop, s_if, s_throw};
+            then_body.push(s_if(e_binop(e_binop(e_this_prop("__target"), BinOp::BitAnd, e_int(flags)), BinOp::StrictEq, e_int(0)),
+                vec![s_throw(e_new_fq("Error", vec![e_str(&format!("Attribute \"{}\" cannot target this declaration", factory.class_name))]))], vec![], None));
+            if flags & elephc_builtin_contract::CORE_ATTRIBUTE_IS_REPEATABLE == 0 {
+                then_body.push(s_if(e_this_prop("__is_repeated"),
+                    vec![s_throw(e_new_fq("Error", vec![e_str(&format!("Attribute \"{}\" must not be repeated", factory.class_name))]))], vec![], None));
+            }
+        }
+        then_body.push(Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::NewObject {
                     class_name: name_from_canonical(&factory.class_name),
@@ -169,7 +255,7 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
                 span,
             ))),
             span,
-        )];
+        ));
         body.push(Stmt::new(
             StmtKind::If {
                 condition,

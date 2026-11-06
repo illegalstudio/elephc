@@ -42,9 +42,10 @@ fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
 /// yields the value type; boxed PHP array declarations yield Mixed.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // An empty array yields null, which a pointer element can only carry as `?ptr<T>`.
     match ty {
-        PhpType::Array(elem) => Ok(*elem),
-        PhpType::AssocArray { value, .. } => Ok(*value),
+        PhpType::Array(elem) => Ok(crate::types::pointer_element_read_type(*elem)),
+        PhpType::AssocArray { value, .. } => Ok(crate::types::pointer_element_read_type(*value)),
         ty if ty.is_php_array() => Ok(PhpType::Mixed),
         _ => Err(CompileError::new(cx.span, "array_pop() argument must be array")),
     }

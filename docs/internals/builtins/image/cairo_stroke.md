@@ -1,8 +1,6 @@
 ---
 title: "cairo_stroke() - internals"
 description: "Compiler internals for cairo_stroke(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 442
 ---
 
 ## `cairo_stroke()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13632](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13632) (`cairo_stroke`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`cairo_stroke`)
 - **Function symbol**: `cairo_stroke()`
 
 

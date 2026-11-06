@@ -12,6 +12,34 @@
 
 use super::*;
 
+/// Named class constants fold before property storage, reflection and eval default registration.
+#[test]
+fn test_named_class_constant_defaults_fold_in_all_property_consumers() {
+    let out = compile_and_run(r#"<?php
+namespace Defaults;
+class Payload {}
+use Defaults\Payload as Alias;
+class Holder {
+    public string $plain = Alias::class;
+    public string $handler = Alias::class . "Handler";
+    public static string $staticPlain = \Defaults\Payload::class;
+    public static string $staticHandler = \Defaults\Payload::class . "Handler";
+}
+$holder = new Holder();
+echo $holder->plain, "|", $holder->handler, "|", Holder::$staticPlain, "|", Holder::$staticHandler, "\n";
+$source = $argc > 0 ? '
+$property = new ReflectionProperty("Defaults\\Holder", "plain");
+echo $property->getDefaultValue(), "|";
+$property = new ReflectionProperty("Defaults\\Holder", "staticPlain");
+echo $property->getDefaultValue(), "|";
+$defaults = get_class_vars("Defaults\\Holder");
+echo $defaults["handler"], "|", $defaults["staticHandler"];
+' : '';
+eval($source);
+"#);
+    assert_eq!(out, "Defaults\\Payload|Defaults\\PayloadHandler|Defaults\\Payload|Defaults\\PayloadHandler\nDefaults\\Payload|Defaults\\Payload|Defaults\\PayloadHandler|Defaults\\PayloadHandler");
+}
+
 /// Verifies that an untyped instance property with no default reads as null before any assignment.
 #[test]
 fn test_untyped_property_without_default_defaults_to_null() {

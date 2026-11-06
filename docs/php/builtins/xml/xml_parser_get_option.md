@@ -1,8 +1,6 @@
 ---
 title: "xml_parser_get_option()"
 description: "Reads an XML_OPTION_* parser option."
-sidebar:
-  order: 1013
 ---
 
 ## xml_parser_get_option()
@@ -21,8 +19,9 @@ Reads an XML_OPTION_* parser option.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xml_parser_get_option.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xml_parser_get_option.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -10,9 +10,15 @@
 //!   subset (null/bool/int/float/string); array support is added in a later increment.
 //! - Round-trips go through both helpers so a regression in either is caught.
 //! - Object casts and `get_object_vars()` retain PHP visibility, key, and built-in property rules.
+//! - Classes PHP refuses to (un)serialize are covered by the `not_serializable` submodule.
 
 use crate::support::*;
 use elephc::codegen_support::platform::Target;
+
+#[path = "serialize/not_serializable.rs"]
+mod not_serializable;
+#[path = "serialize/private_slot_shadowing.rs"]
+mod private_slot_shadowing;
 
 /// Verifies `serialize()` formats each scalar type exactly like PHP's wire format.
 #[test]
@@ -299,6 +305,170 @@ echo serialize(unserialize("d:1.0E+20;")), "\n";
     assert_eq!(out, "bool(true)\nbool(true)\nd:1.0E+20;\n");
 }
 
+/// `serialize()` leaves out every typed property that was never initialized, whatever its
+/// visibility, and counts only the ones it writes, as PHP does. Reading such a slot used to print
+/// its uninitialized marker as a value, or crash on a string property. The round trip keeps the
+/// property uninitialized, so assigning it later serializes it normally. Measured on PHP 8.5.10.
+#[test]
+fn test_serialize_omits_uninitialized_typed_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Account {
+    private int $id;
+    private int $version = 3;
+    protected string $owner;
+    protected string $label = 'main';
+    public ?int $limit = null;
+    public array $tags;
+    public float $rate;
+}
+$account = new Account();
+echo str_replace("\0", '~', serialize($account)), "\n";
+$copy = unserialize(serialize($account));
+echo get_class($copy), "\n";
+$copy->tags = ['a'];
+$copy->rate = 1.5;
+echo str_replace("\0", '~', serialize($copy)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:7:\"Account\":3:{s:16:\"~Account~version\";i:3;s:8:\"~*~label\";s:4:\"main\";",
+            "s:5:\"limit\";N;}\n",
+            "Account\n",
+            "O:7:\"Account\":5:{s:16:\"~Account~version\";i:3;s:8:\"~*~label\";s:4:\"main\";",
+            "s:5:\"limit\";N;s:4:\"tags\";a:1:{i:0;s:1:\"a\";}s:4:\"rate\";d:1.5;}\n",
+        )
+    );
+}
+
+/// The default walk counts the initialized properties before writing any of them and checks each
+/// slot again as it writes it, exactly like php-src's `php_var_serialize_intern`. So when writing
+/// an earlier property runs a hook that initializes or unsets a later one, the payload is PHP's own,
+/// count and all, even though PHP cannot unserialize it either. Measured on PHP 8.5.10.
+#[test]
+fn test_serialize_counts_properties_before_writing_them_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+class Outer { public ?Inner $in = null; public int $later; }
+class Inner {
+    public Outer $outer;
+    public function __sleep(): array { $this->outer->later = 5; return []; }
+}
+$o = new Outer(); $i = new Inner(); $i->outer = $o; $o->in = $i;
+echo serialize($o), "\n";
+class Outer2 { public ?Inner2 $in = null; public int $later = 3; }
+class Inner2 {
+    public Outer2 $outer;
+    public function __sleep(): array { $outer = $this->outer; unset($outer->later); return []; }
+}
+$o2 = new Outer2(); $i2 = new Inner2(); $i2->outer = $o2; $o2->in = $i2;
+echo serialize($o2), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:5:\"Outer\":1:{s:2:\"in\";O:5:\"Inner\":0:{}s:5:\"later\";i:5;}\n",
+            "O:6:\"Outer2\":2:{s:2:\"in\";O:6:\"Inner2\":0:{}}\n",
+        )
+    );
+}
+
+/// `__sleep()` writes only the named properties that hold a value, and the count in front of the
+/// body covers exactly those: an uninitialized typed property (a `Closure` one included, which
+/// must not trigger the Closure refusal) is left out, as in PHP. The count is only known once
+/// every name was looked up, so it is written after the body and moved in front of it; nested
+/// `__sleep()` objects, a back-reference and a two-digit count keep the payload byte-exact and
+/// round-trippable. Measured on PHP 8.5.10.
+#[test]
+fn test_serialize_sleep_counts_only_initialized_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Inner {
+    public int $id;
+    public string $tag = 'in';
+    public function __sleep(): array { return ['id', 'tag']; }
+}
+class Wide {
+    public int $p0 = 0; public int $p1 = 1; public int $p2 = 2; public int $p3 = 3;
+    public int $p4 = 4; public int $p5 = 5; public int $p6 = 6; public int $p7 = 7;
+    public int $p8 = 8; public int $p9 = 9; public int $p10 = 10; public int $gap;
+    public Inner $inner;
+    public ?Inner $again = null;
+    public array $list = [];
+    public function __sleep(): array {
+        return ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'p9', 'p10', 'gap', 'inner', 'again', 'list'];
+    }
+}
+class Task {
+    public Closure $callback;
+    public int $n = 3;
+    public function __sleep(): array { return ['callback', 'n']; }
+}
+$wide = new Wide();
+$wide->inner = new Inner();
+$wide->again = $wide->inner;
+$wide->list = [new Inner(), 'x'];
+$wire = serialize($wide);
+echo $wire, "\n";
+$copy = unserialize($wire);
+echo $copy->p10, " ", $copy->inner->tag, " ", var_export($copy->again === $copy->inner, true), "\n";
+echo serialize(new Task()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:4:\"Wide\":14:{s:2:\"p0\";i:0;s:2:\"p1\";i:1;s:2:\"p2\";i:2;s:2:\"p3\";i:3;",
+            "s:2:\"p4\";i:4;s:2:\"p5\";i:5;s:2:\"p6\";i:6;s:2:\"p7\";i:7;s:2:\"p8\";i:8;",
+            "s:2:\"p9\";i:9;s:3:\"p10\";i:10;s:5:\"inner\";O:5:\"Inner\":1:{s:3:\"tag\";s:2:\"in\";}",
+            "s:5:\"again\";r:13;s:4:\"list\";a:2:{i:0;O:5:\"Inner\":1:{s:3:\"tag\";s:2:\"in\";}",
+            "i:1;s:1:\"x\";}}\n",
+            "10 in true\n",
+            "O:4:\"Task\":1:{s:1:\"n\";i:3;}\n",
+        )
+    );
+}
+
+/// `unserialize()` initializes the typed properties it restores, including ones declared without
+/// a default: reading them works afterwards, and serializing the copy again reproduces the
+/// payload (a still-uninitialized nested property stays left out). The restored slots used to
+/// keep their uninitialized marker, so reads failed and a second `serialize()` dropped them.
+/// Measured on PHP 8.5.10.
+#[test]
+fn test_unserialize_initializes_typed_properties_without_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class Point {
+    public int $x;
+    public array $tags;
+    public Point $next;
+    public mixed $m;
+    public function __construct() { $this->x = 1; $this->tags = ['a']; $this->m = 'k'; }
+}
+$p = new Point();
+$p->next = new Point();
+$wire = serialize($p);
+echo $wire, "\n";
+$copy = unserialize($wire);
+echo $copy->next->x, " ", $copy->tags[0], " ", $copy->m, "\n";
+echo serialize($copy) === $wire ? "same\n" : "changed\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:5:\"Point\":4:{s:1:\"x\";i:1;s:4:\"tags\";a:1:{i:0;s:1:\"a\";}",
+            "s:4:\"next\";O:5:\"Point\":3:{s:1:\"x\";i:1;s:4:\"tags\";a:1:{i:0;s:1:\"a\";}",
+            "s:1:\"m\";s:1:\"k\";}s:1:\"m\";s:1:\"k\";}\n",
+            "1 a k\n",
+            "same\n",
+        )
+    );
+}
+
 /// Verifies object serialization (Stage A): public/protected/private mangled keys,
 /// declaration order, mixed-typed properties, null, nested objects, and objects
 /// inside indexed/associative arrays — all byte-exact with the PHP interpreter.
@@ -469,9 +639,26 @@ class GuardedPayload {
 $wire = serialize(new GuardedPayload());
 $value = unserialize($wire, ['allowed_classes' => false]);
 echo get_class($value), "\n";
+var_dump($value instanceof __PHP_Incomplete_Class);
+var_dump($value);
+echo print_r($value, true);
 "#,
     );
-    assert_eq!(out, "__PHP_Incomplete_Class\n");
+    assert_eq!(
+        out,
+        "__PHP_Incomplete_Class\nbool(true)\n\
+         object(__PHP_Incomplete_Class)#1 (2) {\n\
+         \x20 [\"__PHP_Incomplete_Class_Name\"]=>\n\
+         \x20 string(14) \"GuardedPayload\"\n\
+         \x20 [\"value\"]=>\n\
+         \x20 int(7)\n\
+         }\n\
+         __PHP_Incomplete_Class Object\n\
+         (\n\
+         \x20   [__PHP_Incomplete_Class_Name] => GuardedPayload\n\
+         \x20   [value] => 7\n\
+         )\n"
+    );
 }
 
 /// Verifies an `allowed_classes` allow-list hydrates and wakes only the named
@@ -1330,4 +1517,441 @@ echo get_class($value), "|", serialize($value);
         out,
         "__PHP_Incomplete_Class|O:7:\"Missing\":1:{s:4:\"self\";r:1;}",
     );
+}
+
+/// `unserialize()` of a null into a boxed-Mixed property (untyped, `?string`, `?float`) stores the
+/// parsed null cell like any other value.
+///
+/// It stored the in-band `NULL_SENTINEL` word instead, which is not a Mixed cell pointer, so the
+/// first reader of the property — `=== null`, `var_dump`, `json_encode` — dereferenced it and the
+/// program segfaulted.
+#[test]
+fn test_unserialize_null_into_mixed_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public $n = 5; public ?string $m = "a"; public ?float $f = 1.5; }
+$p = new P();
+$p->n = $argc > 5 ? 1 : null;
+$p->m = $argc > 5 ? "z" : null;
+$p->f = $argc > 5 ? 2.5 : null;
+$u = unserialize(serialize($p));
+var_dump($u->n === null, $u->m === null, isset($u->f), $u->n ?? "dflt");
+echo json_encode($u), "\n";
+var_dump($u);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "string(4) \"dflt\"\n",
+            "{\"n\":null,\"m\":null,\"f\":null}\n",
+            "object(P)#2 (3) {\n",
+            "  [\"n\"]=>\n",
+            "  NULL\n",
+            "  [\"m\"]=>\n",
+            "  NULL\n",
+            "  [\"f\"]=>\n",
+            "  NULL\n",
+            "}\n",
+        )
+    );
+}
+
+/// `unserialize()` into a tagged `?int` property stores an int and a null as themselves, and
+/// raises PHP's `TypeError` for a string, float, bool or array instead of writing the wrong
+/// payload (#1629). The heap is not asserted clean: `unserialize()` of an object leaks on main
+/// whatever the property type (#1562).
+#[test]
+fn test_unserialize_mismatched_value_into_nullable_int_property_raises_type_error() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public ?int $n = null; }
+$out = "";
+for ($i = 0; $i < 20 + $argc; $i++) {
+    $out = "";
+    foreach (['i:7;', 'N;', 's:3:"abc";', 'd:1.5;', 'b:1;', 'a:0:{}'] as $payload) {
+        try {
+            $o = unserialize('O:1:"C":1:{s:1:"n";' . $payload . '}');
+            $out .= json_encode($o->n) . " ";
+        } catch (Throwable $error) {
+            $out .= get_class($error) . " ";
+        }
+    }
+}
+echo $out, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7 null TypeError TypeError TypeError TypeError \n");
+}
+
+/// The exact wording of PHP 8.4's typed-property hydration `TypeError` for every mismatched
+/// scalar, array and null, plus the values PHP accepts (int and null for `?int`, int for
+/// `?float`).
+#[test]
+fn test_unserialize_typed_property_type_error_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public ?int $n = null; }
+class F { public ?float $f = null; }
+class S { public ?string $s = null; }
+class B { public ?bool $b = null; }
+$cases = [
+    ['C', 's:3:"abc";'], ['C', 's:1:"5";'], ['C', 'd:1.5;'], ['C', 'd:2;'], ['C', 'b:1;'],
+    ['C', 'i:7;'], ['C', 'N;'], ['F', 'i:3;'], ['F', 's:3:"1.5";'], ['S', 'i:9;'],
+    ['B', 'i:1;'], ['C', 'a:0:{}'],
+];
+foreach ($cases as [$cls, $payload]) {
+    $prop = ['C' => 'n', 'F' => 'f', 'S' => 's', 'B' => 'b'][$cls];
+    $data = 'O:1:"' . $cls . '":1:{s:1:"' . $prop . '";' . $payload . '}';
+    try {
+        $o = unserialize($data);
+        echo $cls, " ", $payload, " => ", json_encode($o->$prop), "\n";
+    } catch (Throwable $e) {
+        echo $cls, " ", $payload, " => ", get_class($e), ": ", $e->getMessage(), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "C s:3:\"abc\"; => TypeError: Cannot assign string to property C::$n of type ?int\n",
+            "C s:1:\"5\"; => TypeError: Cannot assign string to property C::$n of type ?int\n",
+            "C d:1.5; => TypeError: Cannot assign float to property C::$n of type ?int\n",
+            "C d:2; => TypeError: Cannot assign float to property C::$n of type ?int\n",
+            "C b:1; => TypeError: Cannot assign true to property C::$n of type ?int\n",
+            "C i:7; => 7\n",
+            "C N; => null\n",
+            "F i:3; => 3\n",
+            "F s:3:\"1.5\"; => TypeError: Cannot assign string to property F::$f of type ?float\n",
+            "S i:9; => TypeError: Cannot assign int to property S::$s of type ?string\n",
+            "B i:1; => TypeError: Cannot assign int to property B::$b of type ?bool\n",
+            "C a:0:{} => TypeError: Cannot assign array to property C::$n of type ?int\n",
+        )
+    );
+}
+
+/// A `false` member rejects a `true` payload on hydration: `b:1;` must raise PHP's TypeError
+/// while `b:0;` stores `false` (review follow-up for #1629). `int|false` keeps its `False` member
+/// (`normalize_union_members` drops it only when `bool` is also declared), so the runtime
+/// accepted-mask requires a zero payload for boxed tag 3.
+#[test]
+fn test_unserialize_false_member_requires_a_false_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int|false $count = false; }
+foreach (['b:1;', 'b:0;', 'i:5;', 'i:0;', 'N;'] as $p) {
+    try {
+        $o = unserialize('O:1:"C":1:{s:5:"count";' . $p . '}');
+        echo $p, " => ", var_export($o->count, true), "\n";
+    } catch (Throwable $e) {
+        echo $p, " => ", get_class($e), ": ", $e->getMessage(), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "b:1; => TypeError: Cannot assign true to property C::$count of type int|false\n",
+            "b:0; => false\n",
+            "i:5; => 5\n",
+            "i:0; => 0\n",
+            "N; => TypeError: Cannot assign null to property C::$count of type int|false\n",
+        )
+    );
+}
+
+/// The message names a non-nullable type without the `?`, resolves a mismatched object's
+/// concrete class, spells a class missing from the program as `__PHP_Incomplete_Class`, and
+/// spells a private property by its plain name rather than the NUL-mangled wire key. The values
+/// PHP accepts still hydrate.
+#[test]
+fn test_unserialize_typed_property_type_error_names_declared_type_and_plain_property() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public int $i = 0; protected string $s = ""; private ?bool $b = null; }
+class O { public ?stdClass $o = null; }
+class A { public array $a = []; }
+class I { public int $n = 0; }
+function show(string $cls, string $key, string $payload): void {
+    try {
+        $o = unserialize('O:1:"' . $cls . '":1:{' . $key . $payload . '}');
+        echo $cls, " => ok\n";
+    } catch (Throwable $e) {
+        echo $cls, " => ", $e->getMessage(), "\n";
+    }
+}
+show('P', 's:1:"i";', 'N;');
+show('P', 's:4:"' . "\0" . '*' . "\0" . 's";', 'i:5;');
+show('P', 's:4:"' . "\0" . 'P' . "\0" . 'b";', 'i:1;');
+show('P', 's:4:"' . "\0" . 'P' . "\0" . 'b";', 'b:0;');
+show('O', 's:1:"o";', 'a:0:{}');
+show('O', 's:1:"o";', 'O:8:"stdClass":0:{}');
+show('A', 's:1:"a";', 'i:3;');
+show('A', 's:1:"a";', 'a:1:{i:0;i:1;}');
+show('I', 's:1:"n";', 'O:7:"Missing":0:{}');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "P => Cannot assign null to property P::$i of type int\n",
+            "P => Cannot assign int to property P::$s of type string\n",
+            "P => Cannot assign int to property P::$b of type ?bool\n",
+            "P => ok\n",
+            "O => Cannot assign array to property O::$o of type ?stdClass\n",
+            "O => ok\n",
+            "A => Cannot assign int to property A::$a of type array\n",
+            "A => ok\n",
+            "I => Cannot assign __PHP_Incomplete_Class to property I::$n of type int\n",
+        )
+    );
+}
+
+/// PHP widens an `int` into a `float` property on hydration, for both the nullable (`?float`,
+/// boxed storage) and non-nullable (`float`, inline slot) shapes, so the stored value must be a
+/// real float rather than the integer bits reinterpreted as a double.
+#[test]
+fn test_unserialize_widens_int_into_float_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class F { public ?float $f = null; }
+class G { public float $g = 0.0; }
+$f = unserialize('O:1:"F":1:{s:1:"f";i:3;}');
+$g = unserialize('O:1:"G":1:{s:1:"g";i:3;}');
+var_dump($f->f, $g->g);
+var_dump(is_float($f->f), is_float($g->g));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "float(3)\n",
+            "float(3)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+/// PHP names the class that DECLARES a typed property in the hydration `TypeError`, not the
+/// concrete class being hydrated, so an inherited property reports the parent.
+#[test]
+fn test_unserialize_typed_property_type_error_names_the_declaring_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Parent1 { public int $p = 0; }
+class Child1 extends Parent1 {}
+try {
+    unserialize('O:6:"Child1":1:{s:1:"p";s:3:"abc";}');
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign string to property Parent1::$p of type int\n"
+    );
+}
+
+/// An untyped property (`public $x = 5;`) has no PHP declaration to enforce: elephc infers an
+/// `int` slot from the default, but PHP accepts any value there, so hydration must not raise a
+/// `TypeError` naming a declaration the source never wrote.
+#[test]
+fn test_unserialize_untyped_property_with_inferred_default_accepts_any_value() {
+    let out = compile_and_run(
+        r#"<?php
+class PU { public $x = 5; }
+$u = unserialize('O:2:"PU":1:{s:1:"x";s:3:"abc";}');
+echo "ok\n";
+"#,
+    );
+    assert_eq!(out, "ok\n");
+}
+
+/// PHP coerces an `int` into a `float` member when the type has a `float` member and no `int`
+/// member (`float|string`), but keeps the `int` when the type also declares `int` (`int|float`).
+#[test]
+fn test_unserialize_widens_int_into_a_float_union_member() {
+    let out = compile_and_run(
+        r#"<?php
+class FS { public float|string $fs = 0; }
+class Num { public int|float $num = 0; }
+$fs = unserialize('O:2:"FS":1:{s:2:"fs";i:1;}');
+$num = unserialize('O:3:"Num":1:{s:3:"num";i:1;}');
+var_dump($fs->fs, $num->num);
+var_dump(is_float($fs->fs), is_int($num->num));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "float(1)\n",
+            "int(1)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+/// PHP prints union members in its canonical order (string, int, float), not the source order,
+/// so the hydration `TypeError` text matches reference PHP regardless of how the union is written.
+#[test]
+fn test_unserialize_type_error_uses_php_canonical_union_order() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public int|float $x = 0; }
+class B { public float|string $y = 0; }
+try {
+    unserialize('O:1:"A":1:{s:1:"x";s:3:"abc";}');
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    unserialize('O:1:"B":1:{s:1:"y";a:0:{}}');
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Cannot assign string to property A::$x of type int|float\n",
+            "Cannot assign array to property B::$y of type string|float\n",
+        )
+    );
+}
+
+/// A `false` payload is spelled `false` (not `bool`), and an object rejected by a scalar slot
+/// names its concrete class — the case that resolves the class name before releasing the box.
+#[test]
+fn test_unserialize_type_error_spells_false_and_object() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public ?int $n = null; }
+try {
+    unserialize('O:1:"C":1:{s:1:"n";b:0;}');
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    unserialize('O:1:"C":1:{s:1:"n";O:8:"stdClass":0:{}}');
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Cannot assign false to property C::$n of type ?int\n",
+            "Cannot assign stdClass to property C::$n of type ?int\n",
+        )
+    );
+}
+
+/// A declared `false` member accepts `b:0;` but rejects `b:1;` (`true` shares boxed tag 3), and an
+/// undeclared class is spelled `__PHP_Incomplete_Class`, as PHP does (#1629 review).
+#[test]
+fn test_unserialize_type_error_rejects_true_for_a_false_member_and_names_incomplete_class() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int|false $count = false; }
+try {
+    $o = unserialize('O:1:"C":1:{s:5:"count";b:1;}');
+    echo "stored ", var_export($o->count, true), "\n";
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+$o = unserialize('O:1:"C":1:{s:5:"count";b:0;}');
+echo var_export($o->count, true), "\n";
+class H { public int $n = 1; }
+try {
+    unserialize('O:1:"H":1:{s:1:"n";O:3:"Bar":0:{}}');
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Cannot assign true to property C::$count of type int|false\n",
+            "false\n",
+            "Cannot assign __PHP_Incomplete_Class to property H::$n of type int\n",
+        )
+    );
+}
+
+/// A typed-property hydration `TypeError` releases the partially hydrated object's owning box
+/// (#1629 review): the throw unwinds past `__rt_unser_obj_fail`, the only other place that drops
+/// the box, so the store helper must release it. `unserialize()` of an object leaks on main
+/// whatever the property type (#1562), so this compares the `TypeError` path with a successful
+/// hydration of the same shape: the failing path must not leak MORE than the succeeding one.
+#[test]
+fn test_unserialize_typed_property_type_error_releases_the_partial_object() {
+    let type_error = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public int $n = 1; public string $s = "a"; }
+for ($i = 0; $i < 40 + $argc; $i++) {
+    try { unserialize('O:1:"C":2:{s:1:"s";s:1:"z";s:1:"n";s:1:"x";}'); } catch (Throwable $e) {}
+}
+echo "ok\n";
+"#,
+    );
+    let success = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public int $n = 1; public string $s = "a"; }
+for ($i = 0; $i < 40 + $argc; $i++) {
+    try { unserialize('O:1:"C":2:{s:1:"s";s:1:"z";s:1:"n";i:9;}'); } catch (Throwable $e) {}
+}
+echo "ok\n";
+"#,
+    );
+    assert_eq!(type_error.stdout, "ok\n", "stderr: {}", type_error.stderr);
+    assert_eq!(success.stdout, "ok\n", "stderr: {}", success.stderr);
+    let failing = live_blocks(&type_error.stderr).expect("type-error heap summary");
+    let succeeding = live_blocks(&success.stderr).expect("success heap summary");
+    assert!(
+        failing <= succeeding,
+        "the failing hydration leaked more than a successful one ({failing} > {succeeding}):\n{}\n{}",
+        type_error.stderr,
+        success.stderr
+    );
+}
+
+/// Extracts the `live_blocks=N` count from a `--heap-debug` summary, treating `clean` as zero.
+fn live_blocks(stderr: &str) -> Option<u64> {
+    let rest = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("HEAP DEBUG: leak summary: "))?;
+    if rest.starts_with("clean") {
+        return Some(0);
+    }
+    rest.split_whitespace()
+        .next()
+        .and_then(|word| word.strip_prefix("live_blocks="))
+        .and_then(|n| n.parse().ok())
+}
+
+/// Verifies malformed payload warnings name the failure cursor, not always offset zero.
+#[test]
+fn test_unserialize_warning_reports_the_failure_offset() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(unserialize('s:5:"abcde"'));
+var_dump(unserialize('a:1:{i:0;i:1;'));
+var_dump(unserialize('x:1;'));
+"#,
+    );
+    assert!(out.stderr.contains("Error at offset 11 of 11 bytes"), "{}", out.stderr);
+    assert!(out.stderr.contains("Error at offset 13 of 13 bytes"), "{}", out.stderr);
+    assert!(out.stderr.contains("Error at offset 0 of 4 bytes"), "{}", out.stderr);
 }

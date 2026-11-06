@@ -67,12 +67,20 @@ pub(super) fn lower_try_catch(
         Op::TryPushHandler.default_effects(),
         Some(span),
     );
+    // A `break`, `continue` or `return` that leaves this body must pop the handler, as a
+    // `finally` frame does: a frame with an empty body and this handler as its cleanup is run
+    // by every exit that crosses it, and by none that stays inside. Without it the handler
+    // outlived the body, and a later throw landed in this `catch`, then resumed after it
+    // (`AFTER WRONG:outside AFTER` where reference prints `AFTER OUTER:outside`). A throw
+    // still goes to the handler, which pops itself (`run_on_throw` is false).
+    let depth = push_finally_frame(ctx, &[], false, Some((handler_token, span)));
     // A throw raised inside this body may be caught here, so it does not leave the loops this
     // `try` is nested in; recording the depth is what tells `terminate_throw` which loops it
     // really leaves (issue #690).
     ctx.push_try_loop_depth();
     lower_block(ctx, try_body);
     ctx.pop_try_loop_depth();
+    pop_finally_frame_if_active(ctx, depth);
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         branch_to(ctx, after_block);
@@ -221,10 +229,29 @@ pub(super) fn lower_catch_dispatch_with_finally(
         lower_catch_match(ctx, catch, catch_body, next_catch, span);
         ctx.builder.position_at_end(catch_body);
         lower_catch_bind(ctx, catch, span);
-        let depth = push_finally_frame(ctx, finally_body, true, None);
+        // The catch body runs under its OWN handler. An exception leaving it — a `throw`, or a
+        // call that throws — must still run the `finally`, with that exception pending. Without
+        // a handler here only an explicit `throw` reached the finalizer: a throwing CALL
+        // skipped it entirely (MEASURED: `catch (X $c) { boom(); } finally { echo "F"; }` never
+        // printed `F`; reference does, then propagates). Exits by jump pop it on the way out.
+        let body_handler = ctx
+            .builder
+            .create_named_block("try.catch_body_unwind", Vec::new());
+        let body_token = body_handler.as_raw() as i64;
+        ctx.emit_void(
+            Op::TryPushHandler,
+            Vec::new(),
+            Some(Immediate::I64(body_token)),
+            Op::TryPushHandler.default_effects(),
+            Some(span),
+        );
+        let depth = push_finally_frame(ctx, finally_body, false, Some((body_token, span)));
+        ctx.push_try_loop_depth();
         lower_block(ctx, &catch.body);
+        ctx.pop_try_loop_depth();
         pop_finally_frame_if_active(ctx, depth);
         if !ctx.builder.insertion_block_is_terminated() {
+            emit_try_pop_handler(ctx, body_token, span);
             lower_block(ctx, finally_body);
             if !ctx.builder.insertion_block_is_terminated() {
                 branch_to(ctx, after_block);
@@ -232,16 +259,125 @@ pub(super) fn lower_catch_dispatch_with_finally(
             }
         }
         ctx.clear_static_callable_locals();
+        ctx.builder.position_at_end(body_handler);
+        emit_try_pop_handler(ctx, body_token, span);
+        lower_finally_with_pending_exception(ctx, finally_body, span);
+        ctx.clear_static_callable_locals();
         ctx.builder.position_at_end(next_catch);
     }
 
-    let current = lower_current_exception(ctx, span);
-    lower_block(ctx, finally_body);
-    if !ctx.builder.insertion_block_is_terminated() {
-        terminate_throw(ctx, current.value);
-    }
+    // No catch matched: the finalizer runs with the exception pending, then rethrows it.
+    lower_finally_with_pending_exception(ctx, finally_body, span);
     after_reachable
 }
+
+/// Runs a `finally` body while an exception is pending, then rethrows that exception.
+///
+/// The pending exception is TAKEN into a hidden owned temp first, as
+/// `catch (Throwable $t) { <finally>; throw $t; }` would, and each way out of the body settles
+/// it the way php-src does (every case MEASURED on reference PHP 8.5.10):
+///
+/// - the body falls through: the exception is rethrown, its reference MOVED back to the
+///   in-flight cell (load, forget the slot, throw — `throw $temp` handed the same reference on
+///   while the slot kept it, and unwinding freed it under the in-flight exception);
+/// - the body leaves by `return` or an included file's `return`: the exception is DISCARDED
+///   at the jump (`control_exit::release_taken_exceptions`); peeking at it instead leaked one
+///   object per call;
+/// - an exception ESCAPES the body — a `throw`, or a call that throws: the pending exception is
+///   appended to the END of its `previous` chain (`X:new <- X:orig`, and `new <- p <- orig` when
+///   the new one already had a previous), then it propagates. elephc chained nothing and
+///   leaked the pending exception. A `handler` around the body catches the escape, so a
+///   throwing call is covered as well as a `throw`; an exception the body catches itself never
+///   reaches it, and is not chained (`inner` stays alone), as in reference.
+fn lower_finally_with_pending_exception(
+    ctx: &mut LoweringContext<'_, '_>,
+    finally_body: &[Stmt],
+    span: Span,
+) {
+    let taken = bind_in_flight_exception(ctx, span);
+    // Recorded BEFORE the chaining handler's frame is pushed, so a jump out of the body pops
+    // that handler first and only then discards the exception.
+    ctx.taken_finally_exceptions
+        .push((taken.clone(), ctx.loop_stack.len(), ctx.finally_stack.len()));
+
+    let chain_handler = ctx
+        .builder
+        .create_named_block("finally.chain_pending", Vec::new());
+    let chain_token = chain_handler.as_raw() as i64;
+    let fell_through = ctx.builder.create_named_block("finally.rethrow_pending", Vec::new());
+    ctx.emit_void(
+        Op::TryPushHandler,
+        Vec::new(),
+        Some(Immediate::I64(chain_token)),
+        Op::TryPushHandler.default_effects(),
+        Some(span),
+    );
+    // An empty frame: a jump out of the body only has to pop the handler.
+    let depth = push_finally_frame(ctx, &[], false, Some((chain_token, span)));
+    ctx.push_try_loop_depth();
+    lower_block(ctx, finally_body);
+    ctx.pop_try_loop_depth();
+    pop_finally_frame_if_active(ctx, depth);
+    let reaches_rethrow = !ctx.builder.insertion_block_is_terminated();
+    if reaches_rethrow {
+        emit_try_pop_handler(ctx, chain_token, span);
+        branch_to(ctx, fell_through);
+    }
+
+    // An exception escaped the body: chain the pending one under it, then let it propagate.
+    ctx.builder.position_at_end(chain_handler);
+    ctx.clear_static_callable_locals();
+    emit_try_pop_handler(ctx, chain_token, span);
+    let escaped = ctx.emit_owned_value(
+        Op::CatchBind,
+        Vec::new(),
+        None,
+        PhpType::Object("Throwable".to_string()),
+        Op::CatchBind.default_effects(),
+        Some(span),
+    );
+    let pending = ctx.load_local(&taken, Some(span));
+    ctx.clear_owned_hidden_temp(&taken, Some(span));
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![escaped.value, pending.value],
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ExceptionFinallyChain,
+        )),
+        crate::ir::Effects::all(),
+        Some(span),
+    );
+    terminate_throw(ctx, escaped.value);
+
+    ctx.taken_finally_exceptions.pop();
+    ctx.builder.position_at_end(fell_through);
+    if !reaches_rethrow {
+        ctx.builder.terminate(Terminator::Unreachable);
+        return;
+    }
+    ctx.clear_static_callable_locals();
+    let value = ctx.load_local(&taken, Some(span));
+    ctx.clear_owned_hidden_temp(&taken, Some(span));
+    terminate_throw(ctx, value.value);
+}
+
+/// Takes and clears the in-flight exception into a hidden owned temporary, as a variable-less
+/// `catch (Throwable)` would, and returns the temporary's name.
+fn bind_in_flight_exception(ctx: &mut LoweringContext<'_, '_>, span: Span) -> String {
+    let php_type = PhpType::Object("Throwable".to_string());
+    let temp = ctx.declare_owned_hidden_temp(php_type.clone());
+    let caught = ctx.emit_owned_value(
+        Op::CatchBind,
+        Vec::new(),
+        None,
+        php_type.clone(),
+        Op::CatchBind.default_effects(),
+        Some(span),
+    );
+    ctx.store_local(&temp, caught, php_type, Some(span));
+    temp
+}
+
 
 /// Emits the match tests for one catch clause and branches to body or next clause.
 pub(super) fn lower_catch_match(
@@ -318,7 +454,53 @@ pub(super) fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchC
         Op::CatchBind.default_effects(),
         Some(span),
     );
+    let incoming_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[caught.value], span);
+    // Only a matched user catch consumes a replacement here. Internal CatchBind users rethrow
+    // after cleanup and must preserve the pending host predecessor automatically.
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![caught.value],
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ExceptionCatchHostReplacement,
+        )),
+        crate::ir::Effects::all(),
+        Some(span),
+    );
+    // Keep the old PHP value alive until the replacement is visible. Its last release can
+    // throw, and an outer catch must already observe the newly bound exception at that point.
+    let previous_owner = catch.variable.as_ref().and_then(|name| {
+        if !ctx.has_local_slot(name) {
+            if ctx.loop_stack.is_empty()
+                && !ctx.has_eval_barrier()
+                && !ctx.local_uses_global_storage(name)
+            {
+                return None;
+            }
+            // A first syntactic binding can replace a previous iteration's value, a value
+            // reloaded by eval, or program-global storage populated by another scope. Frame
+            // slots are zero-initialized when absent; global loads use their shared symbol.
+            if !ctx.local_uses_global_storage(name) {
+                ctx.declare_local(name, php_type.clone());
+            }
+        }
+        let previous = ctx.load_local_for_retirement_pin(name, Some(span));
+        crate::ir_lower::expr::root_value_for_later_use(ctx, previous, span).1
+    });
+    // Reorder only owner records, preserving their values: the incoming transfer must be
+    // disarmed before retiring the old value can throw. Owner records are a strict stack.
+    if let Some(owner) = previous_owner {
+        crate::ir_lower::expr::unregister_owned_call_operand(ctx, owner, span);
+    }
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, incoming_pins, span);
+    if let Some(owner) = previous_owner {
+        crate::ir_lower::expr::register_owned_call_operand(ctx, owner, span);
+    }
+    let store_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[caught.value], span);
     ctx.store_local(&variable, caught, php_type, Some(span));
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, store_pins, span);
+    if let Some(owner) = previous_owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+    }
 }
 
 /// Returns the local type to use for a catch variable.

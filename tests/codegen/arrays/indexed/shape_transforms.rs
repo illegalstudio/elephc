@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+//! - Runtime array_push spreads cover indexed receiver staging, iteration and heap ownership.
 
 use super::*;
 use crate::support::compile_and_run_with_heap_debug;
@@ -350,6 +351,206 @@ $r = [1]; array_push($r, 2, 3, 4); echo $r[0], $r[1], $r[2], $r[3], "\n";
     );
 }
 
+/// A Generator spread into an indexed local appends each yielded value and releases every owner.
+#[test]
+fn test_array_push_indexed_generator_spread_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function indexedPushGenerator(): Generator { yield 3; yield 4; }
+for ($i = 0; $i < 32; $i++) {
+    $values = [1, 2];
+    $count = array_push($values, ...indexedPushGenerator());
+}
+echo $count, "|", json_encode($values), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "4|[1,2,3,4]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A runtime indexed-list spread appends its elements separately and leaves the heap balanced.
+#[test]
+fn test_array_push_indexed_runtime_list_spread_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 32; $i++) {
+    $values = [1, 2];
+    $tail = [$argc > 0 ? 3 : 30, 4];
+    $count = array_push($values, ...$tail);
+}
+echo $count, "|", json_encode($values), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "4|[1,2,3,4]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Reference aliases accept compatible plain values, while prior builtins do not create aliases.
+#[test]
+fn test_array_push_indexed_reference_alias_compatible_plain_values_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = [1];
+$alias =& $values;
+$count = array_push($alias, 2, 3);
+echo $count, "|", json_encode($values), "|", json_encode($alias), "\n";
+$sequential = [1];
+array_push($sequential, 2);
+echo array_push($sequential, "x"), "|", json_encode($sequential), "\n";
+$sorted = [2, 1];
+sort($sorted);
+echo array_push($sorted, "x"), "|", json_encode($sorted), "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "3|[1,2,3]|[1,2,3]\n3|[1,2,\"x\"]\n3|[1,2,\"x\"]\n",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested indexed receivers under a reference-bound root use copy/write-back without crashing.
+#[test]
+fn test_array_push_nested_indexed_reference_root_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = [[1], [2]];
+$alias =& $rows;
+$first = array_push($rows[0], 2);
+$second = array_push($rows[1]);
+$loopRows = [[1], [2]];
+$loopAlias =& $loopRows;
+for ($i = 0; $i < 2; $i++) {
+    array_push($loopRows[$i], (int) ($i + 10));
+}
+$hashRows = [["a" => 1]];
+$hashAlias =& $hashRows;
+$hashCount = array_push($hashRows[0], 2);
+echo $first, "|", $second, "|", json_encode($rows), "|", json_encode($alias), "\n";
+echo json_encode($loopRows), "|", json_encode($loopAlias), "\n";
+echo $hashCount, "|", json_encode($hashRows), "|", json_encode($hashAlias), "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "2|1|[[1,2],[2]]|[[1,2],[2]]\n[[1,10],[2,11]]|[[1,10],[2,11]]\n2|[{\"a\":1,\"0\":2}]|[{\"a\":1,\"0\":2}]\n",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Closure-body mutations keep their boxed capture path while native alias readers stay typed.
+#[test]
+fn test_array_push_reference_captures_allow_plain_value_widening() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$captured = [1];
+$add = function () use (&$captured) { return array_push($captured, "y"); };
+echo $add(), "|", json_encode($captured), "\n";
+$shared = [1];
+$alias =& $shared;
+$readShared = function () use (&$shared) { return json_encode($shared); };
+array_push($alias, 2);
+echo json_encode($alias), "|", $readShared(), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "2|[1,\"y\"]\n[1,2]|[1,2]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Unrelated read-only array captures retain native storage for typed consumers in both frames.
+/// The pre-bound native reference control has the same retained graph, so require no added owner.
+#[test]
+fn test_array_push_capture_plans_preserve_read_only_array_builtins() {
+    let source = r#"<?php
+$values = [3, 1, 2];
+$read = function () use (&$values) {
+    echo min($values), "/", max($values), "|", array_search(1, $values, true), "\n";
+    echo implode(",", array_merge($values, [4])), "|";
+    echo implode(",", array_diff($values, [1])), "|";
+    echo implode(",", $values + [5 => 5]), "\n";
+};
+$read();
+echo min($values), "/", max($values), "|", array_search(1, $values, true), "\n";
+echo implode(",", array_merge($values, [4])), "|", implode(",", array_diff($values, [1])), "\n";
+$floats = [2.5, 1.5];
+$floatRead = function () use (&$floats) { return min($floats) + max($floats) + array_sum($floats); };
+echo $floatRead(), "\n";
+array_push($values, 10);
+echo min($values), "/", max($values), "\n";
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    let control = compile_and_run_with_heap_debug(&source
+        .replacen("$read =", "$controlAlias =& $values;\n$read =", 1)
+        .replacen("$floatRead =", "$floatAlias =& $floats;\n$floatRead =", 1));
+    assert_eq!(out.stdout,
+        "1/3|1\n3,1,2,4|3,2|3,1,2,5\n1/3|1\n3,1,2,4|3,2\n8\n1/10\n",
+        "stderr: {}", out.stderr);
+    assert_eq!(control.stdout, out.stdout, "native control: {}", control.stderr);
+    let summary = |stderr: &str| stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .expect("heap debug must report final ownership").to_owned();
+    assert_eq!(summary(&out.stderr), summary(&control.stderr),
+        "candidate: {}\npre-bound native control: {}", out.stderr, control.stderr);
+}
+
+/// Nested capture mutations preserve compatible native layouts and outer indexed reads.
+#[test]
+fn test_array_push_nested_captures_preserve_compatible_storage() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$rows = [[1]];
+$push = function () use (&$rows) { array_push($rows[0], 2); };
+$push();
+echo $rows[0][0], "|", $rows[0][1], "|", json_encode($rows), "\n";
+$named = [[[2, 3]]];
+$popNamed = function () use (&$named) { return array_pop(array: $named[0][0]); };
+echo $popNamed(), "|", $named[0][0][0], "|", json_encode($named), "\n";
+"#);
+    assert_eq!(out.stdout, "1|2|[[1,2]]\n3|2|[[[2]]]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Indexed spread appends share the ordinary widening path for every source and value shape.
+#[test]
+fn test_array_push_indexed_heterogeneous_spreads_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function heterogeneousPushGenerator(): Generator { yield "x"; yield 1.5; }
+function emptyPushGenerator(): Generator { yield "g"; yield 2.5; }
+$dynamic = [1, 2];
+$tail = [$argc > 0 ? "x" : "y", "z"];
+echo array_push($dynamic, ...$tail), "|", json_encode($dynamic), "\n";
+$literal = [$argc];
+echo array_push($literal, ...["a", "b"]), "|", json_encode($literal), "\n";
+$generated = [1, 2];
+echo array_push($generated, ...heterogeneousPushGenerator()), "|", json_encode($generated), "\n";
+$plain = [1];
+$more = [$argc + 1];
+echo array_push($plain, "s", ...$more), "|", json_encode($plain), "\n";
+$empty = [];
+$items = [$argc + 1, 2, $argc + 3];
+echo array_push($empty, ...$items), "|", $empty[0] + $empty[2], "|", json_encode($empty), "\n";
+$emptyGenerated = [];
+echo array_push($emptyGenerated, ...emptyPushGenerator()), "|", json_encode($emptyGenerated), "\n";
+$strings = ["a"];
+echo array_push($strings, ...[$argc + 1, 5]), "|", json_encode($strings), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, concat!(
+        "4|[1,2,\"x\",\"z\"]\n",
+        "3|[1,\"a\",\"b\"]\n",
+        "4|[1,2,\"x\",1.5]\n",
+        "3|[1,\"s\",2]\n",
+        "3|6|[2,2,4]\n",
+        "2|[\"g\",2.5]\n",
+        "3|[\"a\",2,5]\n",
+    ), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies a multi-value `array_push()` neither leaks the appended values nor double releases
 /// the storage its own growth relocated.
 ///
@@ -375,6 +576,28 @@ echo count($g), "\n";
     );
 }
 
+/// Verifies one unique packed array can reach 400,000 integer slots inside the default
+/// eight-megabyte heap while heap-debug accounting remains balanced.
+///
+/// Allocate-copy-free growth leaves every retired bump allocation below the live tail. Before
+/// tail extension, the final 262,144-to-524,288 capacity step exhausted the default heap even
+/// though the final live array occupies only about four megabytes.
+#[test]
+fn test_unique_packed_array_tail_growth_fits_default_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = [];
+for ($i = 0; $i < 400000; $i++) { array_push($values, $i); }
+echo count($values), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "400000\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "tail-grown packed array leaked: {}",
+        out.stderr
+    );
+}
 
 /// Verifies the growth republish through a BY-REFERENCE parameter, where the new pointer has to
 /// travel back out to the caller's storage rather than into a local slot.
@@ -491,16 +714,16 @@ echo count($o), ",", $o[32], "\n";
 /// receiver, not only through a by-reference parameter.
 ///
 /// #1104 pinned `store_value_to_ref_cell_local` after `__rt_array_grow`. These two receivers
-/// republish through different store paths — a property slot and an element slot — and were
+/// republish through different store paths (a property slot and an element slot) and were
 /// covered only by the 2-value `viaRef` rows of the signature test, which never reallocate.
 /// A dropped republish here is a use-after-free rather than a leak, because
 /// `__rt_array_grow` frees the old buffer as soon as it has published the new pointer, so the
 /// stdout assertion is the load-bearing one and the heap assertion catches the double release.
 ///
-/// The STATIC property receiver is the third one the follow-up asks for. It is broken: in a
-/// loop it loses one element per reallocation and, read through `implode()` in the same loop,
-/// fails outright. That is issue #1207, filed from this fixture; the row belongs here once it
-/// is fixed.
+/// Static-property growth is also fixed. Its count/element and in-loop `implode()` cases
+/// have separate heap-clean regressions in `pinned_fixed_issues`:
+/// `test_issue_1207_array_push_into_static_property_grows_inside_a_loop` and
+/// `test_issue_1207_static_property_array_push_then_implode_in_a_loop`.
 ///
 /// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
 #[test]
@@ -529,11 +752,11 @@ echo count($o->items), ",", $o->items[32], "|", count($rows[0]), ",", $rows[0][3
 /// future pre-size or bulk-append lowering would disturb: it could satisfy every assertion
 /// with ZERO reallocations and the growth pin would silently stop pinning growth.
 ///
-/// The side channel is the allocation count. `__rt_array_grow` is the only thing in these
-/// programs that allocates after the array literal — the values are integers — so each
-/// program is compared against a control that builds the SAME arrays and calls a by-reference
-/// function that appends nothing. A reallocation shows up as an extra `allocs` and nothing
-/// else can produce one.
+/// The side channel is the allocation count. A second live array is allocated after the array
+/// under test, deliberately preventing its first growth from extending the bump tail in place.
+/// Each program is compared against a control that builds the same arrays and calls a
+/// by-reference function that appends nothing. The forced fallback reallocation therefore
+/// shows up as an extra `allocs` and nothing else can produce one.
 ///
 /// The two halves are measured separately on purpose. A bulk-append lowering could pre-size
 /// the variadic call and leave the one-per-call loop growing, which a combined total would
@@ -559,19 +782,21 @@ fn test_array_push_growth_through_a_by_ref_parameter_really_reallocates() {
         r#"<?php
 function pushMany(array &$a): int { return array_push($a, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33); }
 $x = [1];
+$blocker = [99];
 $n = pushMany($x);
-echo $n, ",", count($x), ",", $x[32], "\n";
+echo $n, ",", count($x), ",", $x[32], ",", $blocker[0], "\n";
 "#,
-        "33,33,33\n",
+        "33,33,33,99\n",
     );
     let variadic_control = allocs(
         r#"<?php
 function lengthOf(array &$a): int { return count($a); }
 $x = [1];
+$blocker = [99];
 $n = lengthOf($x);
-echo $n, ",", count($x), ",", $x[0], "\n";
+echo $n, ",", count($x), ",", $x[0], ",", $blocker[0], "\n";
 "#,
-        "1,1,1\n",
+        "1,1,1,99\n",
     );
     assert!(
         variadic > variadic_control,
@@ -583,19 +808,21 @@ echo $n, ",", count($x), ",", $x[0], "\n";
         r#"<?php
 function pushOne(array &$a, int $v): int { return array_push($a, $v); }
 $y = [1];
+$blocker = [99];
 for ($i = 2; $i < 34; $i++) { pushOne($y, $i); }
-echo count($y), ",", $y[32], "\n";
+echo count($y), ",", $y[32], ",", $blocker[0], "\n";
 "#,
-        "33,33\n",
+        "33,33,99\n",
     );
     let one_per_call_control = allocs(
         r#"<?php
 function lengthOf(array &$a): int { return count($a); }
 $y = [1];
+$blocker = [99];
 for ($i = 2; $i < 34; $i++) { lengthOf($y); }
-echo count($y), ",", $y[0], "\n";
+echo count($y), ",", $y[0], ",", $blocker[0], "\n";
 "#,
-        "1,1\n",
+        "1,1,99\n",
     );
     assert!(
         one_per_call > one_per_call_control,
@@ -639,5 +866,137 @@ $d = [10]; pushViaRef($d); echo implode(",", $d), "\n";
             "10,1,1\n",
             "10,1,1\n",
         )
+    );
+}
+
+/// A raw-int append emits the inline fast path and keeps the helper as the cold fallback.
+///
+/// The fast path only fires for a unique, int-shaped, capacity-available array; the slow label
+/// still covers the first append, COW splits, growth, null receivers and hash promotion. The
+/// storage-kind dispatch is inline, so the loop body must not call `__rt_heap_kind` either.
+#[test]
+fn test_array_push_int_inline_fast_path_on_all_supported_targets() {
+    let source = r#"<?php
+function fill(int $n): int {
+    $data = [];
+    $i = 0;
+    while ($i < $n) {
+        $data[] = $i & 63;
+        $i += 1;
+    }
+    return count($data);
+}
+echo fill($argc + 9);
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let dir = make_cli_test_dir("elephc_array_push_int_inline");
+        let path = dir.join("main.php");
+        fs::write(&path, source).unwrap();
+        let mut cmd = elephc_cli_command(&dir);
+        cmd.args(["--emit-asm", "--target", target]);
+        if target.starts_with("ios-") {
+            cmd.args(["--emit", "staticlib"]);
+        }
+        let output = cmd.arg(&path).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{target}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let asm = fs::read_to_string(path.with_extension("s")).unwrap();
+        let push_body = asm
+            .split("@block name=while.body")
+            .find(|body| body.contains("op=array_push"))
+            .unwrap_or_else(|| panic!("{target}: missing push loop body\n{asm}"));
+        assert!(
+            push_body.contains("array_push_int_slow"),
+            "{target}: the inline fast path and its slow label must be emitted\n{push_body}"
+        );
+        assert!(
+            !push_body.contains("__rt_heap_kind"),
+            "{target}: append dispatch must be inline\n{push_body}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// `array_sum` takes the packed int fast path and falls back for overflow, hash and float arrays.
+#[test]
+fn test_array_sum_typed_int_fast_path_matches_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = []; $a[] = 1; $a[] = 2; $a[] = 3;
+echo array_sum($a), '|';
+$b = []; $b[] = PHP_INT_MAX; $b[] = 1;
+echo gettype(array_sum($b)), ':', array_sum($b), '|';
+$c = []; $c[] = 1; $c['x'] = 5;
+echo array_sum($c), '|';
+$d = []; $d[] = 1.5; $d[] = 2.5;
+echo gettype(array_sum($d)), ':', array_sum($d), '|';
+$e = [];
+echo gettype(array_sum($e)), ':', array_sum($e), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "6|double:9.2233720368548E+18|6|double:4|integer:0\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// The SIMD `array_sum` fast path accepts positive ranges only when elements fit in 32 unsigned
+/// bits and the total stays below `2^63`; every other range restarts the exact scalar sequence.
+#[test]
+fn test_array_sum_simd_gate_matches_php_fallbacks() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$positive = [];
+for ($i = 0; $i < 101; $i++) { $positive[] = $i + 1; }
+echo array_sum($positive), '|';
+$odd = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+echo array_sum($odd), '|';
+$negative = [];
+for ($i = 0; $i < 100; $i++) { $negative[] = $i - 50; }
+echo array_sum($negative), '|';
+$wide = [4294967296];
+for ($i = 0; $i < 99; $i++) { $wide[] = 1; }
+echo array_sum($wide), '|';
+$overflow = [PHP_INT_MAX];
+for ($i = 0; $i < 99; $i++) { $overflow[] = 1; }
+echo gettype(array_sum($overflow)), ':', array_sum($overflow), '|';
+$tail9 = array_fill(0, 8, 1); $tail9[] = PHP_INT_MAX;
+echo gettype(array_sum($tail9)), ':', array_sum($tail9), '|';
+$tail17 = array_fill(0, 16, 1); $tail17[] = PHP_INT_MAX;
+echo gettype(array_sum($tail17)), ':', array_sum($tail17), '|';
+$zero97 = array_fill(0, 100, 1); $zero97[97] = $argc > 0 ? 0 : 1;
+echo array_sum($zero97), '|';
+$loop = -7;
+for ($i = 0; $i < 101; $i++) { $loop += $positive[$i]; }
+echo $loop, '|';
+$float = 1.5;
+for ($i = 0; $i < 101; $i++) { $float += $positive[$i]; }
+echo gettype($float), ':', $float, "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "5151|45|-50|4294967395|double:9.2233720368548E+18|double:9.2233720368548E+18|double:9.2233720368548E+18|99|5144|double:5152.5\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
     );
 }

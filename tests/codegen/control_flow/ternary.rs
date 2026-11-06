@@ -338,3 +338,159 @@ echo $r[0], "\n", $r[1], "\n", $a[0], "\n";
     );
     assert_eq!(out, "1\n2\n1\n");
 }
+
+/// Verifies `count()` of a `?array` ternary whose array branch is a closure call (issue #1364).
+///
+/// The merge temp was typed from the syntactic `int` guess for the call, so beside the `null`
+/// branch it became a tagged `?int` scalar and the backend refused `count()` on it.
+#[test]
+fn test_ternary_nullable_closure_call_result_is_countable() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fn(int $i): array => [$i, $i];
+$i = 3;
+$c = $argc == 1 ? $h($i) : null;
+echo count($c), "\n";
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+/// Verifies ternary, `match` and `?:` merges keep the value of every call shape (issue #1364).
+///
+/// Each call was typed `int` by the syntactic fallback, which refused an array or string next to
+/// `null` and silently turned a string or array branch into an integer (`$flag ? word() : other()`
+/// printed `0`). Covers user functions, instance and static methods, an arrow-function call, and
+/// a builtin outside the syntactic allowlist. Expected output is PHP 8.5.10's.
+#[test]
+fn test_ternary_and_match_merges_keep_call_result_types() {
+    let out = compile_and_run(
+        r#"<?php
+function pair(int $i): array { return [$i, $i]; }
+function word(): string { return "word"; }
+function other(): string { return "other"; }
+class Box {
+    public function label(): string { return "label"; }
+    public static function make(): array { return [7, 8, 9]; }
+}
+$box = new Box();
+$f = fn(): string => "arrow";
+$flag = $argc == 1;
+$a = $flag ? pair(2) : null;
+echo count($a), "|";
+$b = $flag ? word() : other();
+echo $b, "|";
+$c = $flag ? $box->label() : null;
+echo $c, "|";
+$d = $flag ? Box::make() : Box::make();
+echo count($d), "|";
+$e = $flag ? $f() : $f();
+echo $e, "|";
+$g = $flag ? array_keys(["x" => 1, "y" => 2]) : null;
+echo count($g), "|";
+echo $flag ? word() : 5, "|";
+$m = match ($argc) { 1 => word(), default => null };
+echo $m, "|";
+$s = pair(1) ?: null;
+echo count($s), "\n";
+"#,
+    );
+    assert_eq!(out, "2|word|label|3|arrow|2|word|word|2\n");
+}
+
+/// A pop or shift from an empty typed array is null even when another branch has the
+/// array element's scalar type. Branch temps must store the builtin's boxed result.
+#[test]
+fn test_pop_shift_branch_merges_preserve_empty_array_null() {
+    let out = compile_and_run(
+        r#"<?php
+$words = ['word'];
+$floats = [1.5];
+array_pop($words);
+array_shift($floats);
+$flag = $argc === 1;
+var_dump($flag ? array_pop($words) : 'fallback');
+var_dump($flag ? array_shift($floats) : 2.5);
+var_dump(match ($argc) { 1 => array_shift($words), default => 'fallback' });
+var_dump(match ($argc) { 1 => array_pop($floats), default => 2.5 });
+var_dump(array_pop($words) ?: 'fallback');
+var_dump(array_shift($floats) ?: 2.5);
+$words = ['word'];
+$floats = [1.5];
+var_dump($flag ? array_pop($words) : 'fallback');
+var_dump(match ($argc) { 1 => array_shift($floats), default => 2.5 });
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nNULL\nNULL\nNULL\nstring(8) \"fallback\"\nfloat(2.5)\nstring(4) \"word\"\nfloat(1.5)\n"
+    );
+}
+
+/// Verifies the merge typing of nested ternaries of array literals stays linear: each arm is
+/// typed once per level, whichever storage the merge picks. An arm typed twice per level made a
+/// 22-deep nesting exceed 15 seconds, so a 24-deep one must compile well inside the bound.
+#[test]
+fn test_nested_array_literal_ternaries_compile_in_linear_time() {
+    let mut nested = String::from("$n");
+    for _ in 0..24 {
+        nested = format!("($flag ? [{nested}] : [])");
+    }
+    let source = format!(
+        "<?php\n$flag = $argc > 0;\n$n = $argc;\n$a = {nested};\necho count($a), \"\\n\";\n"
+    );
+    let started = std::time::Instant::now();
+    let out = compile_and_run(&source);
+    let elapsed = started.elapsed();
+    assert_eq!(out, "1\n");
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "nested ternary merge typing took {elapsed:?}"
+    );
+}
+
+/// Verifies the typing of nested ternaries whose arm spreads the level below stays linear: the
+/// checker typed each spread source in its hash-spread scan and again in the element merge, so
+/// every level doubled the work. A 24-deep nesting must compile well inside the bound. Each level
+/// keeps the spread level's elements and appends `$n`, so the outermost array holds 25.
+#[test]
+fn test_nested_spread_literal_ternaries_compile_in_linear_time() {
+    let mut nested = String::from("[$n]");
+    for _ in 0..24 {
+        nested = format!("($flag ? [...{nested}, $n] : [])");
+    }
+    let source = format!(
+        "<?php\n$flag = $argc > 0;\n$n = $argc;\n$a = {nested};\necho count($a), \"\\n\";\n"
+    );
+    let started = std::time::Instant::now();
+    let out = compile_and_run(&source);
+    let elapsed = started.elapsed();
+    assert_eq!(out, "25\n");
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "nested spread ternary typing took {elapsed:?}"
+    );
+}
+
+/// Verifies ternary and `match` arms that are array literals keep each literal's element type in
+/// the merge: literal arms used to be typed by the syntactic fallback (`int` for a variable or
+/// call element), so `[$float]` was stored under an int element type and read back as its bits.
+#[test]
+fn test_array_literal_merge_arms_keep_their_element_types() {
+    let out = compile_and_run(
+        r#"<?php
+function ff(): float { return 1.25; }
+$f = 2.5 + $argc;
+$s = "ab" . $argc;
+$r = $argc > 1 ? [$f] : [$f];
+var_dump($r[0]);
+$q = $argc > 0 ? [$s] : [0];
+var_dump($q[0]);
+$w = match ($argc) { 1 => [ff()], default => [ff(), 2] };
+var_dump($w[0]);
+$h = $argc > 0 ? ["k" => $f] : ["k" => 1];
+var_dump($h["k"]);
+"#,
+    );
+    assert_eq!(out, "float(3.5)\nstring(3) \"ab1\"\nfloat(1.25)\nfloat(3.5)\n");
+}

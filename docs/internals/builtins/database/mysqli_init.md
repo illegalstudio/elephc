@@ -1,8 +1,6 @@
 ---
 title: "mysqli_init() - internals"
 description: "Compiler internals for mysqli_init(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 137
 ---
 
 ## `mysqli_init()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:97](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L97) (`mysqli_init`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_init`)
 - **Function symbol**: `mysqli_init()`
 
 

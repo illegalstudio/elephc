@@ -38,11 +38,12 @@ def generate():
         "//! Key details:",
         "//! - Regenerate with `python3 scripts/mbstring/generate_encodings.py`.",
         "//! - Canonical spelling, order, and aliases come from PHP's reflection fixture.",
+        "//! - One immutable static prevents codec-table copies at each catalog use site.",
         "",
         "use super::{catalog::{Codec, EncodingInfo, Slicing}, doublebyte::DoubleByte, euctw::EucTw, gb18030::Gb18030, hz::Hz, iso2022kr::Iso2022Kr, jis::{Jis, Variant}, jis2004::Jis2004, mobile_utf8::MobileUtf8, mobile_sjis::MobileSjis, singlebyte::SingleByte, transfer::Transfer, utf7::Utf7, UnicodeEncoding};",
         "",
         "/// Complete encoding list in PHP's public enumeration order.",
-        "pub(super) const ENCODINGS: &[EncodingInfo] = &[",
+        "pub(super) static ENCODINGS: &[EncodingInfo] = &[",
     ]
     for name, info in surface["encodings"].items():
         aliases = ", ".join(json.dumps(alias) for alias in info["aliases"])

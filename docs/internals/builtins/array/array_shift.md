@@ -1,8 +1,6 @@
 ---
 title: "array_shift() - internals"
 description: "Compiler internals for array_shift(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 37
 ---
 
 ## `array_shift()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_shift.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_shift.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

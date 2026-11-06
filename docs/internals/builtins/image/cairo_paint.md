@@ -1,8 +1,6 @@
 ---
 title: "cairo_paint() - internals"
 description: "Compiler internals for cairo_paint(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 422
 ---
 
 ## `cairo_paint()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13599](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13599) (`cairo_paint`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`cairo_paint`)
 - **Function symbol**: `cairo_paint()`
 
 

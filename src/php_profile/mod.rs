@@ -81,7 +81,21 @@ impl Provenance {
 /// rejected here; the check fires only on a build that was already claiming a version its own
 /// source contradicts. See `floor`'s preamble for why every judgement call in computing the
 /// floor is made toward under-reporting.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): the construct scan walks
+/// the whole program, so an embedder calling it without the CLI driver's wrapper gets the same
+/// stack budget.
 pub fn floor_violation(program: &[Stmt], profile: PhpVersion) -> Option<crate::errors::CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        floor_violation_on_compiler_stack(program, profile)
+    })
+}
+
+/// The body of [`floor_violation`], run on the stack `with_compiler_stack` sized.
+fn floor_violation_on_compiler_stack(
+    program: &[Stmt],
+    profile: PhpVersion,
+) -> Option<crate::errors::CompileError> {
     let required = floor::floor(program)?;
     if required.profile.version_id() <= profile.version_id() {
         return None;
@@ -129,7 +143,23 @@ pub fn floor_violation(program: &[Stmt], profile: PhpVersion) -> Option<crate::e
 /// prelude is injected. The `--web` prelude calls `__elephc_php_version_id()` and defines the
 /// session surface itself, so scanning after injection would report every `--web` build as
 /// profile-dependent on the strength of elephc's own generated code.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): the sensitivity scan
+/// walks the whole program, so an embedder calling it without the CLI driver's wrapper gets the
+/// same stack budget.
 pub fn report(program: &[Stmt], web: bool, profile: PhpVersion, provenance: Provenance) {
+    crate::compiler_stack::with_compiler_stack(|| {
+        report_on_compiler_stack(program, web, profile, provenance)
+    })
+}
+
+/// The body of [`report`], run on the stack `with_compiler_stack` sized.
+fn report_on_compiler_stack(
+    program: &[Stmt],
+    web: bool,
+    profile: PhpVersion,
+    provenance: Provenance,
+) {
     let found = sensitivity::scan(program, web);
     if found.is_empty() {
         return;

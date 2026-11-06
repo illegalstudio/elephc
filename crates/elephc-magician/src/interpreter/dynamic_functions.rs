@@ -391,12 +391,13 @@ pub(in crate::interpreter) fn eval_array_call_arg_values(
     let len = values.array_len(arg_array)?;
     let mut evaluated_args = Vec::with_capacity(len);
     let mut saw_named = false;
-    let unpacked = append_unpacked_call_arg_values(
+    let unpacked = append_ordered_call_arg_values(
         arg_array,
         &mut evaluated_args,
         &mut saw_named,
         context,
         values,
+        "Cannot use positional argument after named argument",
     );
     if let Err(status) = unpacked {
         for argument in evaluated_args {
@@ -415,6 +416,19 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    append_ordered_call_arg_values(array, evaluated_args, saw_named, context, values,
+        "Cannot use positional argument after named argument during unpacking")
+}
+
+/// Shares legacy array traversal while retaining the caller's PHP ordering diagnostic.
+fn append_ordered_call_arg_values(
+    array: RuntimeCellHandle,
+    evaluated_args: &mut Vec<EvaluatedCallArg>,
+    saw_named: &mut bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    order_error: &str,
+) -> Result<(), EvalStatus> {
     let len = values.array_len(array)?;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
@@ -424,7 +438,7 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values(
             EVAL_TAG_INT => {
                 if *saw_named {
                     values.release(key)?;
-                    return Err(EvalStatus::RuntimeFatal);
+                    return eval_throw_error(order_error, context, values);
                 }
                 let value = match values.array_get(array, key) {
                     Ok(value) => value,

@@ -159,8 +159,8 @@ fn emit_stream_context_set_option_4_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, 7");                                          // value tag = Mixed
     emitter.instruction("call __rt_hash_new");                                  // call runtime helper
     abi::emit_store_reg_to_symbol(emitter, "rax", "_stream_context_options", 0); // store runtime value
-    emitter.instruction("mov rdi, rax");                                        // prepare SysV call argument
-    emitter.instruction("call __rt_incref");                                    // call runtime helper
+    emitter.comment("rax already holds the fresh top hash __rt_incref reads from its input register"); // no SysV rdi shuffle: the incref helper is not a SysV callee
+    emitter.instruction("call __rt_incref");                                    // retain the just-created top hash for the global slot
     emitter.label("__rt_scso4_top_ok_x86");
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save top hash ptr
 
@@ -192,8 +192,8 @@ fn emit_stream_context_set_option_4_linux_x86_64(emitter: &mut Emitter) {
 
     // -- re-insert sub-hash into top. Incref first to survive the
     //    overwrite-decref inside __rt_hash_set. --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // sub-hash ptr → __rt_incref's first arg
-    emitter.instruction("call __rt_incref");                                    // call runtime helper
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // sub-hash ptr in the incref helper's input register
+    emitter.instruction("call __rt_incref");                                    // sub-hash now has +1 refcount to survive the upcoming overwrite-decref
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // top hash
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // prepare SysV call argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // prepare SysV call argument
@@ -207,4 +207,77 @@ fn emit_stream_context_set_option_4_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 80");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Emitter-level regressions for the `__rt_incref` input register used by
+    //! `stream_context_set_option_4`.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - `__rt_incref` reads its pointer from `rax` on linux-x86_64 (see
+    //!   `runtime/arrays/incref.rs`), not from the SysV `rdi`. #1707 fixed the same
+    //!   bug in other helpers; these pin the top-level and nested-hash retains here.
+
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Strips instruction comments and blank lines so adjacency can be asserted.
+    fn instructions(target: &str) -> Vec<String> {
+        let target = Target::parse(target).unwrap();
+        let mut emitter = Emitter::new(target);
+        emit_stream_context_set_option_4(&mut emitter);
+        emitter
+            .output()
+            .lines()
+            .map(|line| line.split("//").next().unwrap().trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect()
+    }
+
+    /// linux-x86_64 retains pass the pointer in `__rt_incref`'s input register (`rax`),
+    /// never in the SysV argument register `rdi`, for both the top-level and nested
+    /// sub-hash retain sites.
+    #[test]
+    fn test_stream_context_set_option_4_x86_64_retains_use_incref_input_register() {
+        let assembly = instructions("linux-x86_64");
+        let call = "call __rt_incref";
+        let calls = assembly.iter().filter(|line| *line == call).count();
+        assert!(calls >= 2, "expected both retain sites, found {calls}");
+        assert!(
+            assembly
+                .windows(2)
+                .any(|pair| pair[0] == "mov rax, QWORD PTR [rbp - 64]" && pair[1] == call),
+            "nested-hash retain must load the pointer into rax before {call}"
+        );
+        for pair in assembly.windows(2) {
+            assert!(
+                !(pair[0].starts_with("mov rdi,") && pair[1] == call),
+                "a retain site sets up {call} from rdi: {}",
+                pair[0]
+            );
+        }
+    }
+
+    /// aarch64 retains keep passing the pointer in `x0`, matching `__rt_incref`'s
+    /// AArch64 input register.
+    #[test]
+    fn test_stream_context_set_option_4_aarch64_retains_use_x0() {
+        for name in ["macos-aarch64", "linux-aarch64"] {
+            let assembly = instructions(name);
+            let call = "bl __rt_incref";
+            let calls = assembly.iter().filter(|line| *line == call).count();
+            assert!(calls >= 2, "{name}: expected both retain sites, found {calls}");
+            assert!(
+                assembly
+                    .windows(2)
+                    .any(|pair| pair[0] == "ldr x0, [sp, #56]" && pair[1] == call),
+                "{name}: nested-hash retain must load the pointer into x0 before {call}"
+            );
+        }
+    }
 }

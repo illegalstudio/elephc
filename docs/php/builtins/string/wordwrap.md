@@ -1,8 +1,6 @@
 ---
 title: "wordwrap()"
 description: "Wraps a string to a given number of characters."
-sidebar:
-  order: 944
 ---
 
 ## wordwrap()
@@ -23,8 +21,9 @@ Wraps a string to a given number of characters.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/wordwrap.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/wordwrap.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

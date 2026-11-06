@@ -23,6 +23,7 @@ mod collection_calls;
 mod construction_raw;
 mod lifecycle_scalars;
 mod native_results;
+mod object_operators;
 mod numeric_string;
 mod output;
 mod reflection;
@@ -35,6 +36,16 @@ use reflection::impl_reflection_ops;
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
+    /// Binds source operands through the shared native method argument planner.
+    fn operator_static_call(&mut self, class: &str, method: &str, args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.call_static_operator(class, method, args)
+    }
+
+    /// Binds source operands through the shared native instance method planner.
+    fn operator_method_call(&mut self, object: RuntimeCellHandle, method: &str, args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.call_instance_operator(object, method, args)
+    }
+
     /// Marks the canonical cell and native inventory closed after Magician released its handle.
     fn resource_closed(&mut self, resource: RuntimeCellHandle) -> Result<(), EvalStatus> {
         unsafe { __elephc_eval_resource_state(resource.as_ptr(), -1); }
@@ -166,6 +177,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
             )
         };
         self.release(arg_array)?;
+        if status == EvalStatus::UncaughtThrowable.code() {
+            let thrown = self.take_pending_native_throwable().ok_or(EvalStatus::RuntimeFatal)?;
+            self.schedule_pending_throw(thrown)?;
+            return Err(EvalStatus::UncaughtThrowable);
+        }
         if status != EvalStatus::Ok.code() {
             return Err(EvalStatus::RuntimeFatal);
         }

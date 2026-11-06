@@ -10,13 +10,14 @@
 # .github/workflows/ci-image.yml whenever this file or that workflow changes
 # on main.
 #
-# Bump RUST_VERSION deliberately, in its own PR: the CI "no warnings" gate
-# greps cargo build output, so a floating `stable` toolchain would let a new
-# Rust release break every open PR unannounced. Keep the version aligned with
-# the local test images (Dockerfile.test-linux-x86_64 / -arm64).
+# Bump RUST_VERSION deliberately, in its own PR, together with workflow
+# RUST_TOOLCHAIN. The CI "no warnings" gate greps cargo build output, so a
+# floating `stable` toolchain would let a new Rust release break every open PR
+# unannounced. Keep the version aligned with the local test images
+# (Dockerfile.test-linux-x86_64 / -arm64).
 FROM ubuntu:24.04
 
-ARG RUST_VERSION=1.95.0
+ARG RUST_VERSION=1.98
 ARG NEXTEST_VERSION=0.9.140
 
 # The apt list mirrors what the CI jobs previously installed per job, plus:
@@ -37,6 +38,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         libbz2-dev \
         libpcre2-dev \
         libssl-dev \
+        m4 \
         netbase \
         pkg-config \
         python3 \

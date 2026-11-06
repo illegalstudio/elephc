@@ -16,6 +16,52 @@ use elephc::names::is_generated_local_name;
 
 use super::*;
 
+/// Intermediate and final probes bracket compound reads without reading plain-write children.
+#[test]
+fn append_live_guard_roles_bracket_dimension_reads() {
+    for (operator, expected) in [
+        ("=", vec!["parent_pre", "final_pre"]),
+        ("+=", vec!["parent_pre", "read", "parent_post", "final_pre", "read", "final_post"]),
+    ] {
+        let statements = parse_source(&format!("<?php echo ($items[][1.5][2.5] {operator} 7);"));
+        let StmtKind::Echo(expression) = &statements[0].kind else { panic!("expected echo"); };
+        let ExprKind::Assignment { prelude, .. } = &expression.kind else { panic!("expected assignment"); };
+        let order: Vec<_> = prelude.iter().filter_map(|stmt| {
+            let StmtKind::Assign { name, value } = &stmt.kind else { return None; };
+            if name.starts_with("__elephc_append_live_guard_") {
+                assert!(is_generated_local_name(name));
+                ["parent_pre", "parent_post", "final_pre", "final_post"].into_iter()
+                    .find(|role| name.ends_with(&format!("_{role}#gen")))
+            } else if matches!(value.kind, ExprKind::ArrayAccess { .. }) { Some("read") }
+            else { None }
+        }).collect();
+        assert_eq!(order, expected, "{operator}");
+    }
+}
+
+/// Plain converted-key appends publish their parent before an unread unforgeable live guard.
+#[test]
+fn append_plain_live_guard_preserves_rhs_publication_order() {
+    let statements = parse_source("<?php echo ($items[][1.5] = rhs());");
+    let StmtKind::Echo(expression) = &statements[0].kind else { panic!("expected echo"); };
+    let ExprKind::Assignment { prelude, .. } = &expression.kind else { panic!("expected assignment"); };
+    let rhs = prelude.iter().position(|stmt| matches!(&stmt.kind,
+        StmtKind::Assign { value, .. } if matches!(&value.kind,
+            ExprKind::FunctionCall { name, .. } if name.as_str() == "rhs"))).unwrap();
+    let push = prelude.iter().position(|stmt| matches!(&stmt.kind,
+        StmtKind::ArrayPush { array, value } if array == "items" && matches!(value.kind, ExprKind::Null))).unwrap();
+    let guard = prelude.iter().position(|stmt| matches!(&stmt.kind,
+        StmtKind::Assign { name, .. } if name.starts_with("__elephc_append_live_guard_"))).unwrap();
+    assert!(rhs < push && push < guard);
+    let StmtKind::Assign { name, value } = &prelude[guard].kind else { unreachable!() };
+    assert!(is_generated_local_name(name));
+    assert!(matches!(&value.kind, ExprKind::Variable(name)
+        if name.starts_with("__elephc_append_update_cell_") && is_generated_local_name(name)));
+    assert!(!prelude.iter().any(|stmt| matches!(&stmt.kind,
+        StmtKind::Assign { value, .. } if matches!(value.kind, ExprKind::ArrayAccess { .. }))),
+        "a plain write must not read a missing child to trigger its live guard");
+}
+
 /// Returns every name in the parsed AST that looks like a compiler-synthesized local.
 ///
 /// The candidate set is deliberately wider than the marker itself: it also catches a name that

@@ -63,16 +63,16 @@ fn emit_invoke(emitter: &mut Emitter, mbregex: bool) {
     let not_query = "__elephc_runtime_builtin_v1_mbstring_not_query";
     if arm {
         emitter.instruction(&format!("cmp x19, #{}", RuntimeBuiltinId::MbConvertVariables.as_u32())); // identify live caller roots by the shared runtime identity
-        emitter.instruction(&format!("b.ne {not_variables}"));                 // keep all other mbstring calls on their existing hosts
-        emitter.instruction("mov x5, #0");                                     // select flat eval argument references in the V6 context
-        emitter.instruction("bl __rt_mbstring_variables_invoke");              // convert through the protected live-variable callback table
-        emitter.instruction(&format!("b {done}"));                             // use ordinary result boxing and pending-exception handling
+        emitter.instruction(&format!("b.ne {not_variables}"));                  // keep all other mbstring calls on their existing hosts
+        emitter.instruction("mov x5, #0");                                      // select flat eval argument references in the V6 context
+        emitter.instruction("bl __rt_mbstring_variables_invoke");               // convert through the protected live-variable callback table
+        emitter.instruction(&format!("b {done}"));                              // use ordinary result boxing and pending-exception handling
     } else {
         emitter.instruction(&format!("cmp ebx, {}", RuntimeBuiltinId::MbConvertVariables.as_u32())); // select live caller roots
-        emitter.instruction(&format!("jne {not_variables}"));                  // preserve existing operation routing
-        emitter.instruction("xor r9d, r9d");                                   // select flat eval argument references in the V6 context
-        emitter.instruction("call __rt_mbstring_variables_invoke");            // run the same protected V6 conversion coordinator
-        emitter.instruction(&format!("jmp {done}"));                           // share result and status translation
+        emitter.instruction(&format!("jne {not_variables}"));                   // preserve existing operation routing
+        emitter.instruction("xor r9d, r9d");                                    // select flat eval argument references in the V6 context
+        emitter.instruction("call __rt_mbstring_variables_invoke");             // run the same protected V6 conversion coordinator
+        emitter.instruction(&format!("jmp {done}"));                            // share result and status translation
     }
     emitter.label(not_variables);
     if arm {

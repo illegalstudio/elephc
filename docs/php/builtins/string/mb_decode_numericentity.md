@@ -1,8 +1,6 @@
 ---
 title: "mb_decode_numericentity()"
 description: "Decodes numeric entities selected by the ordered conversion map."
-sidebar:
-  order: 835
 ---
 
 ## mb_decode_numericentity()
@@ -22,8 +20,9 @@ Decodes numeric entities selected by the ordered conversion map.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_decode_numericentity.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_decode_numericentity.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

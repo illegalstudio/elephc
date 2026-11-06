@@ -36,6 +36,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             let curl_capacity = 0;
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
+                    + crate::catalog_gmp::CONTRACTS.len()
                     + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
@@ -43,6 +44,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
                     + curl_capacity,
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_gmp::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
@@ -156,9 +158,29 @@ mod tests {
         // The PHP-visible `curl_*` surface is published only with the `curl`
         // feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(contracts().len(), 1133 + curl_surface);
+        // +11 over main: the `__elephc_opcache_rt_*` runtime script-cache helpers this
+        // branch adds (see `support.rs` for the roll-call).
+        // +4: the `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64` pointer builtins.
+        // +1: `buffer_ptr`, the payload address of a buffer.
+        // +5: native heap usage, peak reset, and allocation/free counters.
+        // +4: the internal `__elephc_ptr_get` and `__elephc_zval_{pack,free,unpack}` aliases
+        // the extension-hosting prelude calls.
+        // +2: PHP 8.5 array value-edge functions.
+        assert_eq!(contracts().len(), 1248 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
+    }
+
+    /// Array value-edge functions became available in PHP 8.5, after the find/any/all family.
+    #[test]
+    fn array_edge_value_contracts_match_php_85() {
+        for name in ["array_first", "array_last"] {
+            let contract = lookup(name).expect("array value-edge contract");
+            assert_eq!(contract.since, Some(crate::PhpVersion::Php85), "{name}");
+            assert_eq!(contract.signature().required_param_count(), 1, "{name}");
+            assert!(!contract.params[0].by_ref, "{name}");
+            assert_eq!(contract.returns, crate::TypeSpec::Mixed, "{name}");
+        }
     }
 
     /// Verifies the PHP 8.5 clone function keeps its object and override-array contract.
@@ -208,7 +230,7 @@ mod tests {
             lookup("openssl_encrypt")
                 .expect("openssl_encrypt contract")
                 .requirements,
-            &[crate::BuiltinRequirement::Bridge("elephc_crypto")]
+            &[crate::BuiltinRequirement::Bridge("elephc_openssl")]
         );
         assert_eq!(
             lookup("preg_match").expect("preg_match contract").requirements,

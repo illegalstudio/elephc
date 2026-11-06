@@ -16,6 +16,7 @@
 //! - Purely syntactic. It never consults the type environment, so it produces the same answer on
 //!   every one of the checker's repeated walks over the same body (top level twice, method bodies
 //!   to stability, function bodies once per call-site specialization).
+//! - Guard visibility follows each statement's physical source mode, not the caller's mode.
 //! - Disabled under `--strict-locals`: the scan returns without marking anything and a divergent
 //!   assignment errors exactly as it does today.
 //! - The same walk also answers a question that has nothing to do with marking: does this body
@@ -749,7 +750,8 @@ fn type_guard_subject(condition: &Expr) -> Option<(&str, PhpType)> {
             let target = match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str()
             {
                 "is_int" | "is_integer" | "is_long" => PhpType::Int,
-                "is_float" | "is_double" | "is_real" => PhpType::Float,
+                "is_float" | "is_double" => PhpType::Float,
+                "is_real" if !crate::strict_php::is_enabled() => PhpType::Float,
                 "is_string" => PhpType::Str,
                 "is_bool" => PhpType::Bool,
                 "is_null" => PhpType::Void,
@@ -772,6 +774,9 @@ fn type_guard_subject(condition: &Expr) -> Option<(&str, PhpType)> {
                 guarded_variable_name(value)?,
                 PhpType::Object(class.as_str().to_string()),
             )),
+            // `generics::classes` names the instantiated class before this scan runs, so a
+            // generic target here would be a template — which narrows to no storage at all.
+            InstanceOfTarget::Generic(_) => None,
             InstanceOfTarget::Expr(_) => None,
         },
         // `$x === null` / `$x === false` (either operand order). `!==` is the negated form and is
@@ -811,8 +816,16 @@ fn guarded_variable_name(expr: &Expr) -> Option<&str> {
 ///
 /// `depth` mirrors `Checker::local_conditional_depth`, which `check_stmt` raises for the WHOLE of
 /// `If`/`IfDef`/`Switch`/`While`/`DoWhile`/`For`/`Foreach`/`Try`/`Throw`/`IncludeOnceGuard`
-/// (conditions, `for` init/update and loop subjects included).
+/// (conditions, `for` update and loop subjects included). The one exception is a `for`
+/// initializer, which runs unconditionally and is checked at the statement's own depth.
 fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
+    crate::strict_php::with_source_mode(stmt.source_mode, || {
+        collect_stmt_in_current_source_mode(checker, stmt, depth, facts);
+    });
+}
+
+/// Collects one statement after installing the same physical source profile as the checker.
+fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
     match &stmt.kind {
         StmtKind::Assign { name, value } => {
             // `$x .= "a"` / `$x ??= 1` reach the checker as a plain `Assign` whose value is a
@@ -953,10 +966,12 @@ fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
             collect_block(checker, body, depth + 1, facts);
         }
         StmtKind::For { init, condition, update, body } => {
-            // `check_stmt` puts the ENTIRE `for` — init and update included — in one conditional
-            // scope, so an assignment in the header is at the body's depth, not the outer one.
+            // `check_stmt` puts the `for` in one conditional scope, but the checker lowers the
+            // depth back for the INITIALIZER, which runs exactly once whenever the statement
+            // does: an assignment there is at the statement's depth. The condition and the
+            // update repeat with the body and stay at the body's depth.
             if let Some(init) = init {
-                collect_stmt(checker, init, depth + 1, facts);
+                collect_stmt(checker, init, depth, facts);
             }
             if let Some(condition) = condition {
                 collect_expr(checker, condition, depth + 1, facts);
@@ -980,7 +995,7 @@ fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
         }
         StmtKind::Try { try_body, catches, finally_body } => {
             collect_block(checker, try_body, depth + 1, facts);
-            for CatchClause { exception_types: _, variable, body } in catches {
+            for CatchClause { exception_type_args: _, exception_types: _, variable, body } in catches {
                 // The catch variable is bound by the clause, not by an assignment statement.
                 if let Some(variable) = variable {
                     disqualify(facts, variable);
@@ -1074,6 +1089,7 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
         ExprKind::StaticMethodCall { receiver: _, method: _, args }
         | ExprKind::NewScopedObject { receiver: _, args }
         | ExprKind::NewObject { class_name: _, args }
+        | ExprKind::NewGeneric { class_type: _, args }
         | ExprKind::ClosureCall { var: _, args } => {
             disqualify_call_arguments(facts, args);
             collect_exprs(checker, args, depth, facts);
@@ -1292,4 +1308,24 @@ fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
 /// without the `String` this walk would allocate at EVERY call node in the body.
 fn is_eval_call(name: &str) -> bool {
     name.trim_start_matches('\\').eq_ignore_ascii_case("eval")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The storage scan must not classify strict-PHP userland is_real as a float guard.
+    #[test]
+    fn strict_user_is_real_is_not_a_storage_type_guard() {
+        let condition = Expr::new(ExprKind::FunctionCall {
+            name: Name::unqualified("is_real"),
+            args: vec![Expr::new(ExprKind::Variable("value".into()), crate::span::Span::dummy())],
+        }, crate::span::Span::dummy());
+        assert!(matches!(type_guard_subject(&condition), Some(("value", PhpType::Float))));
+        {
+            let _guard = crate::strict_php::scoped_enable();
+            assert!(type_guard_subject(&condition).is_none());
+        }
+        assert!(type_guard_subject(&condition).is_some());
+    }
 }

@@ -10,6 +10,57 @@
 use super::super::*;
 use super::support::*;
 
+/// Named count-only calls reject conflicting order bits and unsupported flag bits.
+#[test]
+fn execute_program_preg_third_review_omitted_invalid_flags() {
+    let program = parse_fragment(br#"
+foreach ([3, 4, 7, -1] as $flag) {
+    try { echo preg_match_all('/(a)/', 'aaa', flags: $flag), '|'; }
+    catch (ValueError $e) { echo 'VE|'; }
+}
+return preg_match_all('/(a)/', 'aaa', flags: PREG_OFFSET_CAPTURE);
+"#).expect("parse omitted capture fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute omitted captures");
+    assert_eq!(values.output, "VE|VE|VE|VE|");
+    assert_eq!(values.get(result), FakeValue::Int(3));
+}
+
+/// Unsupported flags raise a catchable `ValueError` before aliased captures are touched.
+#[test]
+fn execute_program_preg_third_review_extra_flag_bits() {
+    let program = parse_fragment(br#"
+$matches = ['old']; $alias =& $matches;
+foreach ([4, -1, PREG_SET_ORDER | 4] as $flag) {
+    try { echo preg_match_all('/(a)/', 'aaa', $alias, $flag), ':', count($matches), '|'; }
+    catch (ValueError $e) { echo 'VE|'; }
+}
+return true;
+"#).expect("parse unsupported flags fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute unsupported flags");
+    assert_eq!(values.output, "VE|VE|VE|");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Global regex iteration retains UTF-8 progress, terminal empty matches and prefix context.
+#[test]
+fn execute_program_preg_review_empty_match_progression() {
+    let program = parse_fragment(r#"
+echo preg_match_all('//u', 'éé', $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE), ':', $matches[2][0][1], '|';
+echo preg_match_all('/^/', ''), '|', preg_match_all('/(?:|a)/', 'a'), '|';
+echo preg_match_all('/(?=b)/', 'ab'), '|', preg_match_all('/a|^b/', 'ab'), '|';
+echo preg_match_all('/a|(?<=a)b/', 'ab');
+return true;"#.as_bytes()).expect("parse global matching fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute global matches");
+    assert_eq!(values.output, "3:4|1|3|1|1|2");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Keeps invalid UTF-8 literal bytes intact through ASCII case conversion and retained function defaults.
 #[test]
 fn string_literal_bytes_survive_case_conversion_and_defaults() {
@@ -311,6 +362,26 @@ return preg_match(pattern: "/x/", subject: "x", flags: PREG_OFFSET_CAPTURE);"#,
     assert_eq!(values.get(result), FakeValue::Int(1));
 }
 
+/// Conflicting preg order bits fail closed instead of producing a set-order matrix.
+#[test]
+fn execute_program_preg_oct9_conflicting_order() {
+    let program = parse_fragment(br#"
+$matches = ["old"];
+try { echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER), ":", count($matches), "|"; }
+catch (ValueError $e) { echo "VE|"; }
+try { echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_OFFSET_CAPTURE), ":", count($matches), "|"; }
+catch (ValueError $e) { echo "VE|"; }
+try { $result = preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL); }
+catch (ValueError $e) { echo "VE|"; $result = 0; }
+return $result;
+"#).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.output, "VE|VE|VE|");
+    assert_eq!(values.get(result), FakeValue::Int(0));
+}
+
 /// Verifies eval HTML entity builtins encode, decode, and dispatch as callables.
 #[test]
 fn execute_program_dispatches_html_entity_builtins() {
@@ -334,6 +405,47 @@ return function_exists("html_entity_decode");"#,
             "&lt;b&gt;&quot;Hi&quot; &amp; &#039;bye&#039;&lt;/b&gt;:&lt;a&gt;:<b>hi</b>:&lt;x&gt;:\"q\":11"
         );
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval `htmlspecialchars()` and `htmlentities()` honour `$flags` like the compiled
+/// helper: `"` only under `ENT_COMPAT`, `'` only under `ENT_HTML_QUOTE_SINGLE` (1), and the
+/// single quote as `&apos;` under the XML1, XHTML and HTML5 doctypes.
+///
+/// Eval ignored `$flags` and always escaped both quotes as under `ENT_QUOTES`, so it disagreed
+/// with the compiled program (#1464). `$encoding` stays accepted and unused, as it is there.
+/// Expectations are PHP 8.5.
+#[test]
+fn execute_program_html_entity_encoders_honour_flags() {
+    let program = parse_fragment(
+        br#"$s = "<a href=\"x\">O'Neil & co</a>";
+echo htmlspecialchars($s, ENT_NOQUOTES); echo "|";
+echo htmlspecialchars($s, ENT_COMPAT); echo "|";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_HTML5); echo "|";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_XML1); echo "|";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_XHTML); echo "|";
+echo htmlspecialchars("'\"", 1); echo "|";
+echo htmlentities("'\"<", ENT_NOQUOTES); echo "|";
+echo htmlentities(string: "'\"", flags: ENT_COMPAT | ENT_HTML5); echo "|";
+echo call_user_func("htmlspecialchars", "'\"", ENT_NOQUOTES); echo "|";
+echo call_user_func_array("htmlentities", ["'", ENT_QUOTES | ENT_XML1, "UTF-8"]); echo "|";
+return htmlspecialchars("'\"", ENT_QUOTES, "UTF-8");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "&lt;a href=\"x\"&gt;O'Neil &amp; co&lt;/a&gt;\
+         |&lt;a href=&quot;x&quot;&gt;O'Neil &amp; co&lt;/a&gt;\
+         |&lt;a href=&quot;x&quot;&gt;O&apos;Neil &amp; co&lt;/a&gt;\
+         |&lt;a href=&quot;x&quot;&gt;O&apos;Neil &amp; co&lt;/a&gt;\
+         |&lt;a href=&quot;x&quot;&gt;O&apos;Neil &amp; co&lt;/a&gt;\
+         |&#039;\"|'\"&lt;|'&quot;|'\"|&apos;|"
+    );
+    assert_eq!(values.get(result), FakeValue::String("&#039;&quot;".to_string()));
 }
 /// Verifies eval URL codec builtins dispatch through direct, named, and callable paths.
 #[test]
@@ -732,5 +844,25 @@ return mb_substitute_character(63);
     let mut values = FakeOps::default();
     let result = execute_program(&program, &mut scope, &mut values).expect("execute substitution-setting fragment");
     assert_eq!(values.output, "33:21:none::21");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval `strip_tags()` strips tags, honors allow-lists, and is callable.
+#[test]
+fn execute_program_dispatches_strip_tags_builtin() {
+    let program = parse_fragment(
+        br#"echo strip_tags("<p>Hello <b>World</b></p>"); echo ":";
+echo strip_tags("<p>Hello <b>World</b></p>", "<p>"); echo ":";
+echo strip_tags("1 < 2"); echo ":";
+echo call_user_func("strip_tags", "<x>y</x>"); echo ":";
+return function_exists("strip_tags");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Hello World:<p>Hello World</p>:1 < 2:y:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

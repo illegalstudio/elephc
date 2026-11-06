@@ -85,8 +85,7 @@ echo $bound();
 
 /// A Closure value written by dynamic eval is rebound by Magician rather than interpreted as an
 /// AOT closure descriptor by the native binder.
-#[test]
-fn dynamic_eval_closure_bind_uses_eval_static_dispatch_on_every_target() {
+fn check_dynamic_eval_closure_bind_uses_eval_static_dispatch(name: &str) {
     let source = r#"<?php
 class Vault {
     private string $code = "old";
@@ -98,47 +97,56 @@ try { eval($source); } catch (Error $error) {}
 $bound = Closure::bind($peek, new Vault(), Vault::class);
 echo $bound();
 "#;
-    for name in [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64",
-    ] {
-        let module = super::lower_source_at_for_target(
-            source,
-            Path::new("main.php"),
-            Path::new("."),
-            Target::parse(name).unwrap(),
-        );
-        let main = module
-            .functions
+    let module = super::lower_source_at_for_target(
+        source,
+        Path::new("main.php"),
+        Path::new("."),
+        Target::parse(name).unwrap(),
+    );
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.flags.is_main)
+        .unwrap();
+    let bind = main
+        .instructions
+        .iter()
+        .find(|instruction| instruction.op == Op::EvalStaticMethodCall)
+        .unwrap_or_else(|| panic!("{name}: dynamic Closure::bind must use eval dispatch"));
+    let Some(Immediate::Data(target)) = bind.immediate else {
+        panic!("{name}: eval static bind must name its target");
+    };
+    assert_eq!(
+        module.data.strings[target.as_raw() as usize],
+        "Closure::bind",
+        "{name}: eval dispatch target",
+    );
+    assert!(
+        main.instructions
             .iter()
-            .find(|function| function.flags.is_main)
-            .unwrap();
-        let bind = main
-            .instructions
-            .iter()
-            .find(|instruction| instruction.op == Op::EvalStaticMethodCall)
-            .unwrap_or_else(|| panic!("{name}: dynamic Closure::bind must use eval dispatch"));
-        let Some(Immediate::Data(target)) = bind.immediate else {
-            panic!("{name}: eval static bind must name its target");
-        };
-        assert_eq!(
-            module.data.strings[target.as_raw() as usize],
-            "Closure::bind",
-            "{name}: eval dispatch target",
-        );
-        assert!(
-            main.instructions
-                .iter()
-                .all(|instruction| instruction.op != Op::ClosureBind),
-            "{name}: the native binder must not consume a Magician Closure object",
-        );
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-    }
+            .all(|instruction| instruction.op != Op::ClosureBind),
+        "{name}: the native binder must not consume a Magician Closure object",
+    );
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
 }
+
+/// Gives every target its own CI timeout while preserving the shared eval-dispatch checks.
+macro_rules! dynamic_eval_bind_target_test {
+    ($test:ident, $target:literal) => {
+        /// Dynamic eval closure binding uses Magician dispatch and emits valid target assembly.
+        #[test]
+        fn $test() {
+            check_dynamic_eval_closure_bind_uses_eval_static_dispatch($target);
+        }
+    };
+}
+
+dynamic_eval_bind_target_test!(dynamic_eval_closure_bind_uses_eval_static_dispatch_macos, "macos-aarch64");
+dynamic_eval_bind_target_test!(dynamic_eval_closure_bind_uses_eval_static_dispatch_ios_device, "ios-arm64");
+dynamic_eval_bind_target_test!(dynamic_eval_closure_bind_uses_eval_static_dispatch_ios_simulator, "ios-sim-arm64");
+dynamic_eval_bind_target_test!(dynamic_eval_closure_bind_uses_eval_static_dispatch_linux_arm64, "linux-aarch64");
+dynamic_eval_bind_target_test!(dynamic_eval_closure_bind_uses_eval_static_dispatch_linux_x86_64, "linux-x86_64");
 
 /// `Closure::call()` roots its freshly bound descriptor and retires it after the invocation.
 #[test]
@@ -318,9 +326,9 @@ echo $bound();
     }
 }
 
-/// A receiver loaded from global Mixed storage is detached before the runtime binder sees it.
+/// A global receiver snapshot is validated by the backend before the runtime binder sees it.
 #[test]
-fn suspended_generator_bind_unboxes_global_receiver_on_every_target() {
+fn suspended_generator_bind_validates_global_receiver_on_every_target() {
     let source = r#"<?php
 class Vault {
     private string $code = "old";
@@ -362,28 +370,14 @@ $generator->next();
             .iter()
             .find(|instruction| instruction.op == Op::ClosureBind)
             .unwrap_or_else(|| panic!("{name}: runtime closure bind was emitted"));
-        let mut receiver = bind.operands[1];
-        while let Some(producer) = generator.instructions.iter().find(|instruction| {
-            instruction.result == Some(receiver)
-                && matches!(instruction.op, Op::Acquire | Op::Borrow)
-        }) {
-            receiver = producer.operands[0];
-        }
-        let extraction = generator
-            .instructions
-            .iter()
-            .find(|instruction| instruction.result == Some(receiver))
-            .unwrap_or_else(|| panic!("{name}: bound receiver has a producer"));
+        let receiver = bind.operands[1];
         assert_eq!(
-            extraction.op,
-            Op::MixedUnbox,
-            "{name}: the binder receives the object payload, not its Mixed cell",
+            generator.value(receiver).unwrap().php_type.codegen_repr(),
+            PhpType::Mixed,
+            "{name}: the backend validates the rooted object/null snapshot before binding",
         );
-        assert_eq!(
-            extraction.result_php_type,
-            PhpType::Object("Vault".to_string()),
-            "{name}: explicit scope supplies the detached receiver representation",
-        );
+        assert!(matches!(bind.immediate, Some(Immediate::ClosureBindScope(Some(_)))),
+            "{name}: runtime closure selection retains the requested Vault visibility");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }

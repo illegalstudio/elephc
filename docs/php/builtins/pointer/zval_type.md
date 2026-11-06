@@ -1,8 +1,6 @@
 ---
 title: "zval_type()"
 description: "Returns the PHP zval type byte for a zval pointer."
-sidebar:
-  order: 746
 ---
 
 ## zval_type()
@@ -20,9 +18,11 @@ Returns the PHP zval type byte for a zval pointer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
-- **Strict PHP mode**: hidden - this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
+
+- Hidden in strict PHP mode: this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

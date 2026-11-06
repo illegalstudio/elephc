@@ -16,6 +16,7 @@ fn function_decl(name: &str, by_ref_return: bool, body: Vec<Stmt>) -> Stmt {
     Stmt::new(
         StmtKind::FunctionDecl {
             name: name.into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,

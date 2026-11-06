@@ -1,13 +1,17 @@
 //! Purpose:
-//! Normalizes class-constant value expressions while class schema metadata is built.
+//! Normalizes class-constant values and validates compile-time property default expressions.
 //! Resolves lexical `self::` and `parent::` constant receivers to concrete class names.
 //!
 //! Called from:
 //! - `crate::types::checker::schema::classes::state::ClassBuildState::into_class_info()`
+//! - `crate::types::checker::schema::enums::insert_enum_metadata()`.
+//! - `crate::types::checker::schema::classes::properties::apply_properties()`
 //!
 //! Key details:
 //! - Class constant values are later re-inferred and emitted outside the declaring class scope.
 //! - `static::` is rejected in compile-time constants to match PHP's early-bound rules.
+//! - Validation-only scopes walk past lazy parent constants without binding parent class names.
+//! - Lexical callable defaults also defer missing class-name scopes until their argument is omitted.
 
 use crate::errors::CompileError;
 use crate::names::{Name, NameKind};
@@ -16,6 +20,25 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 use crate::types::traits::FlattenedClass;
+
+/// Separates real lexical binding from a discarded pass over lazy parent constant accesses.
+#[derive(Clone, Copy)]
+enum ParentScope<'a> {
+    Bound(&'a str),
+    Missing,
+    MissingCallable,
+    ValidateLazyConstants,
+    ValidateLazyCallableDefaults,
+    NoClass,
+    NoClassFunction,
+}
+
+impl<'a> From<Option<&'a str>> for ParentScope<'a> {
+    /// Retains the actual parent scope for normalization and emitted default trees.
+    fn from(parent: Option<&'a str>) -> Self {
+        parent.map(Self::Bound).unwrap_or(Self::Missing)
+    }
+}
 
 /// Normalizes a class-constant value expression by resolving lexical `self::` and
 /// `parent::` constant receivers to their concrete class names. Rejects `static::`
@@ -28,7 +51,99 @@ pub(super) fn resolve_lexical_class_constant_value(
     value: &Expr,
     class: &FlattenedClass,
 ) -> Result<Expr, CompileError> {
-    rewrite_expr(value, &class.name, class.extends.as_deref())
+    resolve_lexical_class_value(value, &class.name, class.extends.as_deref())
+}
+
+/// Binds a class-like constant's lexical receivers before storing it outside declaration scope.
+pub(in crate::types::checker::schema) fn resolve_lexical_class_value(
+    value: &Expr,
+    class_name: &str,
+    parent_name: Option<&str>,
+) -> Result<Expr, CompileError> {
+    rewrite_expr(value, class_name, parent_name.into()).map_err(|mut error| {
+        if is_missing_parent_default_error(&error) {
+            error.message = format!("Class '{}' has no parent class", class_name);
+        }
+        error
+    })
+}
+
+/// Validates a property's lexical scope while retaining PHP's missing-parent diagnostic.
+pub(super) fn validate_property_default_in_scope(
+    value: &Expr,
+    class_name: &str,
+    parent_name: Option<&str>,
+) -> Result<(), CompileError> {
+    normalize_property_default_in_scope(value, class_name, parent_name).map(|_| ())
+}
+
+/// Binds the stored default tree before literal initialization or call-site lowering.
+pub(crate) fn normalize_property_default_in_scope(
+    value: &Expr,
+    class_name: &str,
+    parent_name: Option<&str>,
+) -> Result<Expr, CompileError> {
+    rewrite_expr(value, class_name, parent_name.into())
+}
+
+/// Checks hard default errors without letting an earlier lazy parent constant stop the walk.
+pub(crate) fn validate_compile_time_default_in_scope(
+    value: &Expr,
+    class_name: &str,
+    parent_name: Option<&str>,
+) -> Result<(), CompileError> {
+    let parent = parent_name.map(ParentScope::Bound).unwrap_or(ParentScope::ValidateLazyConstants);
+    // The placeholder receiver is discarded here, never installed into a stored default.
+    rewrite_expr(value, class_name, parent).map(|_| ())
+}
+
+/// Binds callable defaults while keeping missing lexical scopes lazy and late-static errors hard.
+pub(crate) fn normalize_lexical_default_in_scope(
+    value: &Expr, owner_class: Option<&str>, parent_class: Option<&str>,
+) -> Result<Expr, CompileError> {
+    let owner = owner_class.unwrap_or("");
+    let validation_parent = parent_class.map(ParentScope::Bound)
+        .unwrap_or(ParentScope::ValidateLazyCallableDefaults);
+    // Discard this copy, but visit every entry so an earlier lazy error cannot
+    // mask a later forbidden late-static receiver in the same default tree.
+    rewrite_expr(value, owner, validation_parent)?;
+    let parent = if owner_class.is_none() { ParentScope::NoClass }
+        else { parent_class.map(ParentScope::Bound).unwrap_or(ParentScope::MissingCallable) };
+    let mut rewritten = rewrite_expr(value, owner, parent)?;
+    crate::types::deferred_defaults::prune_literal_branches(&mut rewritten);
+    Ok(rewritten)
+}
+
+/// Free functions defer relative factories/constants but reject unbound class-name literals.
+pub(crate) fn normalize_free_function_default_in_scope(value: &Expr) -> Result<Expr, CompileError> {
+    let mut rewritten = rewrite_expr(value, "", ParentScope::NoClassFunction)?;
+    crate::types::deferred_defaults::prune_literal_branches(&mut rewritten);
+    Ok(rewritten)
+}
+
+/// Identifies errors that can remain lazy in imported or ordinary constant defaults.
+pub(crate) fn is_missing_parent_default_error(error: &CompileError) -> bool {
+    matches!(error.message.as_str(),
+        "Cannot use \"parent\" when current class scope has no parent"
+        | "Cannot access \"parent\" when current class scope has no parent")
+}
+
+/// Retains a default's presence and lexical error without evaluating it at declaration time.
+pub(crate) fn deferred_default_error(message: String, span: Span) -> Expr {
+    let exception = Expr::new(ExprKind::NewObject {
+        class_name: Name::unqualified("Error"),
+        args: vec![Expr::new(ExprKind::StringLiteral(message), span)],
+    }, span);
+    Expr::new(ExprKind::Throw(Box::new(exception)), span)
+}
+
+/// Defers only lexical receiver failures, retaining preceding values and lazy branch selection.
+fn callable_receiver_error_is_lazy(scope: ParentScope<'_>, error: &CompileError) -> bool {
+    matches!(scope, ParentScope::MissingCallable | ParentScope::NoClass | ParentScope::NoClassFunction)
+        && (is_missing_parent_default_error(error) || matches!(error.message.as_str(),
+            "Cannot use \"self\" when no class scope is active"
+            | "Cannot access \"self\" when no class scope is active"
+            | "Cannot access \"parent\" when no class scope is active"))
 }
 
 /// Recursively rewrites all expressions in a class-constant value, resolving lexical
@@ -36,7 +151,7 @@ pub(super) fn resolve_lexical_class_constant_value(
 fn rewrite_expr(
     expr: &Expr,
     class_name: &str,
-    parent_name: Option<&str>,
+    parent_name: ParentScope<'_>,
 ) -> Result<Expr, CompileError> {
     let kind = match &expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
@@ -218,8 +333,12 @@ fn rewrite_expr(
             callee: Box::new(rewrite_expr(callee, class_name, parent_name)?),
             args: rewrite_expr_list(args, class_name, parent_name)?,
         },
-        ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
-            class_name: class_name.clone(),
+        ExprKind::NewObject { class_name: constructed_class, args } => ExprKind::NewObject {
+            class_name: constructed_class.clone(),
+            args: rewrite_expr_list(args, class_name, parent_name)?,
+        },
+        ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
+            class_type: class_type.clone(),
             args: rewrite_expr_list(args, class_name, parent_name)?,
         },
         ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
@@ -306,21 +425,89 @@ fn rewrite_expr(
             element_type: element_type.clone(),
             len: Box::new(rewrite_expr(len, class_name, parent_name)?),
         },
-        ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant {
-            receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?,
-        },
+        ExprKind::ClassConstant { receiver: StaticReceiver::Static } => {
+            return Err(CompileError::new(
+                expr.span,
+                "static::class cannot be used for compile-time class name resolution",
+            ));
+        }
+        ExprKind::ClassConstant { receiver } => {
+            let resolved = match rewrite_constant_receiver(receiver, class_name, parent_name, expr.span, true) {
+                Ok(resolved) => resolved,
+                Err(error) if !matches!(parent_name, ParentScope::NoClassFunction)
+                    && callable_receiver_error_is_lazy(parent_name, &error) => {
+                    return Ok(deferred_default_error(error.message, expr.span));
+                }
+                Err(error) => return Err(error),
+            };
+            let StaticReceiver::Named(name) = resolved
+            else { unreachable!("constant receiver is bound to a class name") };
+            ExprKind::StringLiteral(crate::names::class_name_literal(name.as_str()))
+        }
         ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
             object: Box::new(rewrite_expr(object, class_name, parent_name)?),
         },
         ExprKind::ScopedConstantAccess { receiver, name } => {
+            let receiver = match rewrite_constant_receiver(receiver, class_name, parent_name, expr.span, false) {
+                Ok(resolved) => resolved,
+                Err(error) if callable_receiver_error_is_lazy(parent_name, &error) => {
+                    return Ok(deferred_default_error(error.message, expr.span));
+                }
+                Err(error) => return Err(error),
+            };
             ExprKind::ScopedConstantAccess {
-                receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?,
+                receiver,
                 name: name.clone(),
             }
         }
-        ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
-            receiver: receiver.clone(),
-            args: rewrite_expr_list(args, class_name, parent_name)?,
+        ExprKind::NewScopedObject { receiver, args } => {
+            let args = rewrite_expr_list(args, class_name, parent_name)?;
+            let bound = match (receiver, parent_name) {
+                (StaticReceiver::Self_, _) if !class_name.is_empty() => Some(class_name),
+                (StaticReceiver::Self_, ParentScope::ValidateLazyConstants
+                    | ParentScope::ValidateLazyCallableDefaults) => None,
+                (StaticReceiver::Self_, _) => {
+                    let error = CompileError::new(
+                        expr.span,
+                        "Cannot access \"self\" when no class scope is active",
+                    );
+                    if callable_receiver_error_is_lazy(parent_name, &error) {
+                        return Ok(deferred_default_error(error.message, expr.span));
+                    }
+                    return Err(error);
+                }
+                (StaticReceiver::Parent, ParentScope::Bound(parent)) => Some(parent),
+                (StaticReceiver::Parent, ParentScope::ValidateLazyConstants
+                    | ParentScope::ValidateLazyCallableDefaults) => None,
+                (StaticReceiver::Parent, _) => {
+                    let message = if matches!(parent_name, ParentScope::NoClass | ParentScope::NoClassFunction) {
+                        "Cannot access \"parent\" when no class scope is active"
+                    } else {
+                        "Cannot access \"parent\" when current class scope has no parent"
+                    };
+                    let error = CompileError::new(expr.span, message);
+                    if callable_receiver_error_is_lazy(parent_name, &error) {
+                        return Ok(deferred_default_error(error.message, expr.span));
+                    }
+                    return Err(error);
+                }
+                (StaticReceiver::Static, _) => {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "\"static\" is not allowed in compile-time constants",
+                    ));
+                }
+                _ => None,
+            };
+            if let Some(class) = bound {
+                ExprKind::NewObject {
+                    class_name: Name::from_parts(NameKind::FullyQualified,
+                        class.trim_start_matches('\\').split('\\').map(str::to_string).collect()),
+                    args,
+                }
+            } else {
+                ExprKind::NewScopedObject { receiver: receiver.clone(), args }
+            }
         },
         ExprKind::Yield { key, value } => ExprKind::Yield {
             key: key
@@ -357,7 +544,7 @@ fn rewrite_expr(
 fn rewrite_expr_list(
     exprs: &[Expr],
     class_name: &str,
-    parent_name: Option<&str>,
+    parent_name: ParentScope<'_>,
 ) -> Result<Vec<Expr>, CompileError> {
     exprs
         .iter()
@@ -370,10 +557,13 @@ fn rewrite_expr_list(
 fn rewrite_instanceof_target(
     target: &InstanceOfTarget,
     class_name: &str,
-    parent_name: Option<&str>,
+    parent_name: ParentScope<'_>,
 ) -> Result<InstanceOfTarget, CompileError> {
     match target {
         InstanceOfTarget::Name(name) => Ok(InstanceOfTarget::Name(name.clone())),
+        InstanceOfTarget::Generic(class_type) => {
+            Ok(InstanceOfTarget::Generic(class_type.clone()))
+        }
         InstanceOfTarget::Expr(expr) => Ok(InstanceOfTarget::Expr(Box::new(rewrite_expr(
             expr,
             class_name,
@@ -388,7 +578,7 @@ fn rewrite_instanceof_target(
 fn rewrite_callable_target(
     target: &CallableTarget,
     class_name: &str,
-    parent_name: Option<&str>,
+    parent_name: ParentScope<'_>,
 ) -> Result<CallableTarget, CompileError> {
     match target {
         CallableTarget::Function(name) => Ok(CallableTarget::Function(name.clone())),
@@ -409,21 +599,50 @@ fn rewrite_callable_target(
 fn rewrite_constant_receiver(
     receiver: &StaticReceiver,
     class_name: &str,
-    parent_name: Option<&str>,
+    parent_name: ParentScope<'_>,
     span: Span,
+    class_name_resolution: bool,
 ) -> Result<StaticReceiver, CompileError> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Ok(StaticReceiver::Named(name.clone())),
+        StaticReceiver::Self_ | StaticReceiver::Parent
+            if matches!(parent_name, ParentScope::NoClass | ParentScope::NoClassFunction) => {
+            let keyword = if matches!(receiver, StaticReceiver::Self_)
+                || (class_name_resolution && matches!(parent_name, ParentScope::NoClass)) {
+                "self"
+            } else { "parent" };
+            let action = if class_name_resolution { "use" } else { "access" };
+            Err(CompileError::new(span, &format!(
+                "Cannot {action} \"{keyword}\" when no class scope is active",
+            )))
+        }
         StaticReceiver::Self_ => Ok(StaticReceiver::Named(fqn_name(class_name))),
-        StaticReceiver::Parent => parent_name
-            .map(fqn_name)
-            .map(StaticReceiver::Named)
-            .ok_or_else(|| {
-                CompileError::new(span, &format!("Class '{}' has no parent class", class_name))
-            }),
+        StaticReceiver::Parent => match parent_name {
+            ParentScope::Bound(parent) => Ok(StaticReceiver::Named(fqn_name(parent))),
+            ParentScope::ValidateLazyConstants if !class_name_resolution => {
+                Ok(StaticReceiver::Named(fqn_name(class_name)))
+            }
+            ParentScope::ValidateLazyCallableDefaults => {
+                Ok(StaticReceiver::Named(fqn_name(class_name)))
+            }
+            _ => Err(CompileError::new(span, if class_name_resolution {
+                "Cannot use \"parent\" when current class scope has no parent"
+            } else {
+                "Cannot access \"parent\" when current class scope has no parent"
+            })),
+        },
         StaticReceiver::Static => Err(CompileError::new(
             span,
-            "Cannot use static:: in class constant expression",
+            "\"static::\" is not allowed in compile-time constants",
         )),
     }
 }

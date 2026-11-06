@@ -219,7 +219,7 @@ impl Pass for ScopePass {
     }
 
     /// Delegates to `enter_function` since methods share function-level scope semantics.
-    fn enter_method(&mut self, name: &str) {
+    fn enter_method(&mut self, name: &str, _type_params: &[crate::parser::ast::TypeParam]) {
         self.enter_function(name);
     }
 

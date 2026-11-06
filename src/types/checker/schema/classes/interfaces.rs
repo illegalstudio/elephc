@@ -39,6 +39,15 @@ pub(super) fn collect_interfaces(
     let mut seen_interfaces: HashSet<String> = state.interfaces.iter().cloned().collect();
     let mut queue = Vec::new();
     for interface_name in class.implements.iter().rev() {
+        if !checker.enums.contains_key(&class.name)
+            && (php_symbol_key(interface_name) == "unitenum"
+                || checker.interface_extends_interface(interface_name, "UnitEnum"))
+        {
+            return Err(CompileError::new(
+                class.span,
+                &format!("Non-enum class {} cannot implement interface UnitEnum", class.name),
+            ));
+        }
         if interface_is_throwable_contract(checker, interface_name)
             && !class_can_implement_throwable_contract(state, class)
         {
@@ -296,6 +305,7 @@ fn validate_static_interface_method(
                     || declaration_is_source(checker, interface_name),
                     |owner| declaration_is_source(checker, owner),
                 ),
+        checker.enums.contains_key(&class.name),
     )?;
     if required_sig.declared_return && !actual_sig.declared_return {
         return Err(CompileError::new(
@@ -515,6 +525,9 @@ fn validate_interface_method(
         .methods
         .iter()
         .find(|m| php_symbol_key(&m.name) == method_name);
+    let required_owner = interface_info.method_declaring_interfaces
+        .get(method_name).map(String::as_str).unwrap_or(interface_name);
+    let tentative_return = php_symbol_key(required_owner) == "serializable";
     validate_signature_compatibility(
         actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,
@@ -534,8 +547,9 @@ fn validate_interface_method(
                     || declaration_is_source(checker, interface_name),
                     |owner| declaration_is_source(checker, owner),
                 ),
+        checker.enums.contains_key(&class.name),
     )?;
-    if required_sig.declared_return && !actual_sig.declared_return {
+    if required_sig.declared_return && !actual_sig.declared_return && !tentative_return {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -575,28 +589,34 @@ fn validate_interface_method(
         .get(method_name)
         .map(String::as_str)
         .unwrap_or(&class.name);
-    let return_compatible = (is_pdo_exception_get_code_contract(
-        contract_owner,
-        method_name,
-        &actual_sig.return_type,
-    ) || is_pdo_exception_get_code_contract(
-        &class.name,
-        method_name,
-        &actual_sig.return_type,
-    )) || late_static_compatible.unwrap_or_else(|| {
-        interface_self_return_conforms(
-            checker,
-            class,
-            interface_name,
-            &required_sig.return_type,
-            &actual_sig.return_type,
-        ) || declared_return_type_compatible(
-            checker,
-            &required_sig.return_type,
-            &actual_sig.return_type,
-        )
-    });
-    if required_sig.declared_return && !return_compatible {
+    // The prelude's SQLSTATE `getCode()` keeps `Exception` as its declaring class, so a
+    // subclass that inherits the body is recognized through the class implementing it.
+    let implementing_class = state
+        .method_impl_classes
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(&class.name);
+    // Only Throwable's original contract has PDO's internal SQLSTATE exception.
+    // A user interface can inherit that contract, but its own getCode declaration cannot.
+    let pdo_throwable_exemption = php_symbol_key(required_owner) == "throwable"
+        && [contract_owner, implementing_class, class.name.as_str()]
+        .into_iter()
+        .any(|owner| is_pdo_exception_get_code_contract(owner, method_name, &actual_sig.return_type));
+    let return_compatible = pdo_throwable_exemption
+        || late_static_compatible.unwrap_or_else(|| {
+            interface_self_return_conforms(
+                checker,
+                class,
+                interface_name,
+                &required_sig.return_type,
+                &actual_sig.return_type,
+            ) || declared_return_type_compatible(
+                checker,
+                &required_sig.return_type,
+                &actual_sig.return_type,
+            )
+        });
+    if required_sig.declared_return && !return_compatible && !tentative_return {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)

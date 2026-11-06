@@ -37,7 +37,9 @@
 
 use super::dump_dynamic_props::emit_load_dump_dyn_hash;
 use crate::codegen_support::abi;
-use crate::codegen_support::sentinels::{emit_branch_if_null_container, NULL_SENTINEL};
+use crate::codegen_support::sentinels::{
+    emit_branch_if_null_container, emit_resolve_tagged_scalar_property_tag, NULL_SENTINEL,
+};
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Byte width of one `_class_prop_desc_*` property row.
@@ -256,6 +258,7 @@ pub fn emit_obj_prop_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_obj_prop_value_null");                       // PHP omits it, so report PHP null
     emitter.instruction("ldr x1, [x14]");                                       // load the slot low word (the payload)
     emitter.instruction("ldr x0, [x13, #24]");                                  // load the property's runtime value tag
+    emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
 
     emitter.label("__rt_obj_prop_value_tagged");
     emitter.instruction("cmp x0, #4");                                          // only pointer-shaped tags can carry a null payload
@@ -327,6 +330,7 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_obj_prop_value_null_x86");                     // PHP omits it, so report PHP null
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the slot low word (the payload)
     emitter.instruction("mov rax, QWORD PTR [rax + 24]");                       // load the property's runtime value tag
+    emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
 
     emitter.label("__rt_obj_prop_value_tagged_x86");
     emitter.instruction("cmp rax, 4");                                          // only pointer-shaped tags can carry a null payload

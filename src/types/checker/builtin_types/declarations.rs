@@ -104,6 +104,10 @@ pub(crate) fn inject_builtin_throwables(
         "JsonException",
         "Fiber",
         "FiberError",
+        "ClosedGeneratorException",
+        "CompileError",
+        "ParseError",
+        "RequestParseBodyException",
     ] {
         let builtin_key = php_symbol_key(builtin_name);
         if interface_map
@@ -444,6 +448,18 @@ pub(crate) fn inject_builtin_throwables(
         },
     );
 
+    for (name, parent) in [
+        ("ClosedGeneratorException", "Exception"),
+        ("CompileError", "Error"),
+        ("ParseError", "CompileError"),
+        ("RequestParseBodyException", "Exception"),
+    ] {
+        let mut declaration = class_map["JsonException"].clone();
+        declaration.name = name.to_string();
+        declaration.extends = Some(parent.to_string());
+        class_map.insert(name.to_string(), declaration);
+    }
+
     // Drop optional classes the program cannot reach after the redeclaration check has run over
     // the whole list — so `class ArgumentCountError {}` in user code is still rejected exactly as
     // before, whether or not the gate wanted ours. Removing here rather than gating each literal
@@ -469,6 +485,10 @@ pub(crate) fn inject_builtin_throwables(
         "RuntimeException",
         "Fiber",
         "FiberError",
+        "ClosedGeneratorException",
+        "CompileError",
+        "ParseError",
+        "RequestParseBodyException",
     ] {
         if !wanted.contains(builtin_name) {
             class_map.remove(builtin_name);

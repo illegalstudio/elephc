@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
+//! - The loop records body stores of a missing-string sentinel before the body is lowered.
 
 use super::*;
 
@@ -29,7 +30,16 @@ pub(super) fn lower_typed_assign(
         .as_ref()
         .map(|assignment| assignment.value)
         .unwrap_or_else(|| lower_expr(ctx, value));
+    let lowered = crate::ir_lower::expr::coerce_integer_arithmetic(ctx, lowered, &php_type, span);
+    // `?ptr<T> $x = null` (or a packed record address) stores the pointer word.
+    let lowered = ctx.retype_packed_address_for_pointer_sink(lowered, &php_type, Some(span));
     let lowered = coerce_typed_assign_value(ctx, lowered, &php_type, span);
+    let lowered = coerce_declared_array_storage(ctx, lowered, &php_type, span);
+    if php_type == PhpType::Int && !ctx.conditional_local_declarations.contains(name) {
+        ctx.integer_local_declarations.insert(name.to_owned());
+    } else {
+        ctx.integer_local_declarations.remove(name);
+    }
     ctx.declare_local(name, php_type.clone());
     ctx.store_local(name, lowered, php_type, Some(span));
     let callable_result = if direct_closure {
@@ -56,6 +66,69 @@ pub(super) fn lower_typed_assign(
     }
 }
 
+/// Converts a typed-local array initializer to the element storage its DECLARATION asks for.
+///
+/// Without this the declaration allocates `array<int>` from `[1,2,3]`, binds the slot as the
+/// declared `array<mixed>`, and emits nothing in between, so the element header tag still says
+/// int while every later load reads the slot as boxed — `array $a = [1,2,3]; $a[0] = 9;` then
+/// segfaulted on a CONFORMING write.
+///
+/// The INFERRED form was already correct because it has a previous local type for
+/// `array_storage_conversion` to compare against; a fresh declaration has none, so the
+/// conversion has to be driven from the value's type instead of the slot's history. Same
+/// predicate and same op mapping as the region fixpoint, so the two cannot drift.
+///
+/// Deliberately NOT part of [`coerce_typed_assign_value`], which `lower_property_assign` shares:
+/// widening into a declared `array` PROPERTY has its own copy-on-write contract that hands the
+/// property a unique converted clone while leaving the caller's source owner alone. Converting
+/// there too rewrote the source itself, so `$source = [11,22]; $bag->items = $source;` printed
+/// pointers for `$source` while the property still read correctly.
+fn coerce_declared_array_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    php_type: &PhpType,
+    span: Span,
+) -> LoweredValue {
+    let target_ty = php_type.codegen_repr();
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if source_ty == target_ty {
+        return value;
+    }
+    let Some(op) = crate::ir_lower::stmt::repr_fixpoint::conversion_op(&source_ty, &target_ty)
+    else {
+        return value;
+    };
+    // The conversion takes its operand as an OWNED reference and rewrites the array's storage in
+    // place when it is the only owner — that is what makes it free for a fresh literal. A
+    // declaration that copies another local (`array $copy = $source;`) hands it a borrowed load
+    // instead, so without a reference of its own it rewrote `$source`: its elements came back as
+    // Mixed cells while its slot still read them as ints, and `echo $source[0]` printed a pointer.
+    //
+    // Acquiring first is what makes `__rt_array_ensure_unique` inside the conversion copy rather
+    // than convert in place, which is the same contract that already keeps the source intact when
+    // the destination is a declared `array` PROPERTY. A fresh temporary already owns itself and is
+    // converted directly, so the literal form allocates nothing extra.
+    //
+    // `value_is_owning_temporary` is the wrong question to ask here: it answers yes for a plain
+    // `load_local` of a user local, because it describes what a CONSUMER may release, not who
+    // holds the slot's reference. The operand's own ownership is the discriminator — a fresh
+    // temporary is `Owned`, a local read is `MaybeOwned`, and only the latter needs a reference
+    // taken before the conversion consumes one.
+    let value = if ctx.builder.value_ownership(value.value) == Ownership::Owned {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    };
+    ctx.emit_value(
+        op,
+        vec![value.value],
+        None,
+        target_ty,
+        op.default_effects(),
+        Some(span),
+    )
+}
+
 /// Coerces a typed local assignment into the storage shape required by the declared type.
 pub(in crate::ir_lower) fn coerce_typed_assign_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -64,6 +137,12 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
     span: Span,
 ) -> LoweredValue {
     let target_ty = php_type.codegen_repr();
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    let value = if source_ty == PhpType::Int && php_type.coerces_integer_to_float() {
+        coerce_to_float(ctx, value, Some(span))
+    } else {
+        value
+    };
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
     if source_ty == target_ty {
         return value;
@@ -288,7 +367,8 @@ pub(super) fn lower_foreach(
 
         ctx.builder.position_at_end(first_nonempty);
         let value_slot = ctx.declare_local(value_var, PhpType::Mixed);
-        ctx.release_stored_local_value(value_var, value_slot, Some(array.span));
+        ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(value_slot)),
+            Op::ReleaseLocalSlot.default_effects(), Some(array.span));
         branch_to(ctx, body_block);
     } else {
         branch_to(ctx, header);
@@ -325,6 +405,10 @@ pub(super) fn lower_foreach(
         value: source,
         span: array.span,
     });
+    let missing_strings = crate::ir_lower::expr::loop_region_missing_string_names(
+        ctx, body, None, None,
+    );
+    ctx.push_loop_carried_missing_strings(missing_strings);
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: header,
@@ -335,43 +419,12 @@ pub(super) fn lower_foreach(
         iterator_cleanup: by_ref_origin.map(|_| (iterator_state, array.span)),
         receiver_pin,
     });
-    if let Some(key_var) = key_var {
-        let key = ctx.emit_value(
-            Op::IterCurrentKey,
-            vec![iterator.value],
-            None,
-            PhpType::Mixed,
-            Op::IterCurrentKey.default_effects(),
-            Some(array.span),
-        );
-        ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
-    }
-    if value_by_ref {
-        let slot = ctx.declare_local(value_var, foreach_ref_value_type(&source_ty));
-        ctx.release_ref_cell_owner(value_var, Some(array.span));
-        ctx.emit_void(
-            Op::IterCurrentValueRef,
-            vec![iterator.value],
-            Some(Immediate::LocalSlot(slot)),
-            Op::IterCurrentValueRef.default_effects(),
-            Some(array.span),
-        );
-        ctx.mark_ref_bound_local(value_var);
-        ctx.mark_local_initialized(value_var);
-    } else {
-        let value_ty = foreach_value_type(&source_ty);
-        let value = ctx.emit_value(
-            Op::IterCurrentValue,
-            vec![iterator.value],
-            None,
-            value_ty.clone(),
-            Op::IterCurrentValue.default_effects(),
-            Some(array.span),
-        );
-        ctx.store_local(value_var, value, value_ty, Some(array.span));
-    }
+    super::foreach_bindings::bind_current(
+        ctx, iterator, &source_ty, key_var, value_var, value_by_ref, array.span,
+    );
     lower_block(ctx, body);
     ctx.loop_stack.pop();
+    ctx.pop_loop_carried_missing_strings();
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
@@ -689,13 +742,65 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
             PhpType::Callable => PhpType::Callable,
             PhpType::Object(class_name) => PhpType::Object(class_name),
             elem @ (PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) => elem,
+            // A pointer element is its raw word and may be the null pointer, so the binding is
+            // `?ptr<T>` like an indexed read of the same element.
+            pointer @ PhpType::Pointer(_) => crate::types::pointer_element_read_type(pointer),
+            // A buffer handle is its raw word; a stored element is never null.
+            buffer @ PhpType::Buffer(_) => buffer,
             _ => PhpType::Mixed,
         },
+        // A hash of pointers binds the pointer word too (see `lower_foreach_current_value`); a
+        // stored `null` is the word 0, so the binding keeps PHP null.
+        PhpType::AssocArray { value, .. } if matches!(value.codegen_repr(), PhpType::Pointer(_)) => {
+            crate::types::pointer_element_read_type(value.codegen_repr())
+        }
+        // A hash of buffers binds the handle word the same way.
+        PhpType::AssocArray { value, .. } if matches!(value.codegen_repr(), PhpType::Buffer(_)) => {
+            value.codegen_repr()
+        }
         PhpType::Object(class_name) if class_name == "Phar" || class_name == "PharData" => {
             PhpType::Object("PharFileInfo".to_string())
         }
         _ => PhpType::Mixed,
     }
+}
+
+/// Emits the current foreach value with the type the loop variable binds.
+///
+/// Hash iteration hands every entry out boxed as `Mixed`, and a pointer or buffer entry is boxed
+/// as an integer-like payload. For a hash of pointers or buffers the box is cast back to that
+/// word and retyped, so `$p->x`, `$p === null` and `$buf[$i]` see the pointer or handle instead
+/// of a boxed integer.
+pub(super) fn lower_foreach_current_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    iterator: LoweredValue,
+    source_ty: &PhpType,
+    value_ty: &PhpType,
+    span: Span,
+) -> LoweredValue {
+    let unbox_hash_word = matches!(source_ty, PhpType::AssocArray { .. })
+        && matches!(value_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_));
+    let current_ty = if unbox_hash_word { PhpType::Mixed } else { value_ty.clone() };
+    let value = ctx.emit_value(
+        Op::IterCurrentValue,
+        vec![iterator.value],
+        None,
+        current_ty,
+        Op::IterCurrentValue.default_effects(),
+        Some(span),
+    );
+    if !unbox_hash_word {
+        return value;
+    }
+    let word = crate::ir_lower::expr::coerce_to_int_at_span(ctx, value, Some(span));
+    ctx.emit_value(
+        Op::Move,
+        vec![word.value],
+        None,
+        value_ty.clone(),
+        Op::Move.default_effects(),
+        Some(span),
+    )
 }
 
 /// Returns the local value type used when a foreach binds the value by reference.

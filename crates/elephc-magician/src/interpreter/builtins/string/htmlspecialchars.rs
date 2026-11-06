@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the HTML entity hook.
+//! - `$flags` selects the escaped quotes and the single-quote entity exactly like the compiled
+//!   `__rt_htmlspecialchars` helper (#1464); `$encoding` is evaluated and not applied, as there.
 
 eval_builtin! {
     contract: "htmlspecialchars",
@@ -25,9 +27,21 @@ pub(in crate::interpreter) fn eval_builtin_htmlspecialchars(
     super::htmlspecialchars::eval_builtin_html_entity_named("htmlspecialchars", args, context, scope, values)
 }
 
+/// PHP's `ENT_HTML_QUOTE_SINGLE` bit: escape `'`.
+const ENT_HTML_QUOTE_SINGLE: i64 = 1;
+/// PHP's `ENT_COMPAT` bit: escape `"`.
+const ENT_COMPAT: i64 = 2;
+/// PHP's doctype bits; any of `ENT_XML1` (16), `ENT_XHTML` (32), or `ENT_HTML5` (48) spells
+/// the single quote `&apos;` instead of HTML 4.01's `&#039;`.
+const ENT_DOCTYPE_MASK: i64 = 48;
+/// PHP's default `$flags`: `ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401`.
+pub(in crate::interpreter) const ENT_DEFAULT_FLAGS: i64 = 11;
+
 /// Evaluates a named HTML entity encode/decode builtin over one string expression.
-/// The encoders accept optional flags/encoding arguments; like the static
-/// runtime they are evaluated but have no effect (ENT_QUOTES behaviour).
+///
+/// The encoders accept optional `$flags` and `$encoding` arguments. Every argument is evaluated
+/// in source order; `$flags` then selects the quote handling and `$encoding` has no effect,
+/// exactly as in the compiled helper.
 pub(in crate::interpreter) fn eval_builtin_html_entity_named(
     name: &str,
     args: &[EvalExpr],
@@ -36,45 +50,62 @@ pub(in crate::interpreter) fn eval_builtin_html_entity_named(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let accepts_options = matches!(name, "htmlspecialchars" | "htmlentities");
-    let value = match args {
-        [value] => value,
-        [value, _] | [value, _, _] if accepts_options => value,
+    let (value, flags) = match args {
+        [value] => (value, None),
+        [value, flags] | [value, flags, _] if accepts_options => (value, Some(flags)),
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     let value = eval_expr(value, context, scope, values)?;
-    for extra in &args[1..] {
-        eval_expr(extra, context, scope, values)?;
+    let flags = match flags {
+        Some(flags) => Some(eval_expr(flags, context, scope, values)?),
+        None => None,
+    };
+    if let [_, _, encoding] = args {
+        eval_expr(encoding, context, scope, values)?;
     }
-    eval_html_entity_named_result(name, value, values)
+    let flags = match flags {
+        Some(flags) => eval_int_value(flags, values)?,
+        None => ENT_DEFAULT_FLAGS,
+    };
+    eval_html_entity_named_result(name, value, flags, values)
 }
 
 /// Applies the eval-supported HTML entity transform for one PHP string value.
+///
+/// `flags` only affects the encoders; `html_entity_decode()` ignores it.
 pub(in crate::interpreter) fn eval_html_entity_named_result(
     name: &str,
     value: RuntimeCellHandle,
+    flags: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
-        "htmlspecialchars" | "htmlentities" => eval_htmlspecialchars_result(value, values),
+        "htmlspecialchars" | "htmlentities" => eval_htmlspecialchars_result(value, flags, values),
         "html_entity_decode" => eval_html_entity_decode_value_result(value, values),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
 }
 
-/// Encodes the HTML-special byte characters covered by elephc's static helper.
+/// Encodes the HTML-special byte characters the compiled helper encodes, under `$flags`.
+///
+/// `"` is escaped only under `ENT_COMPAT` and `'` only under `ENT_HTML_QUOTE_SINGLE`, so
+/// `ENT_NOQUOTES` leaves both literal; the single quote is `&#039;` under HTML 4.01 and `&apos;`
+/// under the XML1, XHTML and HTML5 doctypes.
 pub(in crate::interpreter) fn eval_htmlspecialchars_result(
     value: RuntimeCellHandle,
+    flags: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let bytes = values.string_bytes(value)?;
+    let single_quote: &[u8] = if flags & ENT_DOCTYPE_MASK == 0 { b"&#039;" } else { b"&apos;" };
     let mut output = Vec::with_capacity(bytes.len());
     for byte in bytes {
         match byte {
             b'&' => output.extend_from_slice(b"&amp;"),
             b'<' => output.extend_from_slice(b"&lt;"),
             b'>' => output.extend_from_slice(b"&gt;"),
-            b'"' => output.extend_from_slice(b"&quot;"),
-            b'\'' => output.extend_from_slice(b"&#039;"),
+            b'"' if flags & ENT_COMPAT != 0 => output.extend_from_slice(b"&quot;"),
+            b'\'' if flags & ENT_HTML_QUOTE_SINGLE != 0 => output.extend_from_slice(single_quote),
             _ => output.push(byte),
         }
     }

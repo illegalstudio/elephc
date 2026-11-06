@@ -39,6 +39,32 @@ $printer = new ProductPrinter();
 $printer->printLine();
 echo ProductPrinter::kind() . "\n";
 
+// A base interface can expose an optional capability through an instanceof guard.
+function printLabel(Named $item): void {
+    if ($item instanceof Labeled) {
+        echo $item->label() . "\n";
+    }
+    if (!($item instanceof ProductPrinter)) {
+        return;
+    }
+    echo $item->name . "\n";
+}
+
+printLabel($printer);
+
+// A concrete guard also permits writes and removal of the concrete property's storage.
+function renameProduct(Named $item, string $name): void {
+    if ($item instanceof ProductPrinter) {
+        $item->name = $name;
+        echo $item->name . "\n";
+        unset($item->name);
+        echo isset($item->name) ? "named\n" : "unnamed\n";
+        $item->name = $name;
+    }
+}
+
+renameProduct($printer, "gadget");
+
 class OneSlotMap implements ArrayAccess {
     private string $value = "";
 

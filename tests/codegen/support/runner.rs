@@ -5,7 +5,8 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Handles platform-specific linker flags, qemu ARM64 execution, and runtime object caching.
+//! - Handles platform-specific linker flags, qemu ARM64 execution, and runtime object caching
+//!   (one on-disk object per runtime shape, shared across nextest's per-test processes).
 //! - Archived CI shards trust the bridge staticlibs packaged by the build job,
 //!   avoiding source-mtime rebuilds and network access on test runners.
 //! - Translates typed runtime requirements through `LinkPlan` and supplies a test-only,
@@ -76,6 +77,11 @@ struct TestBridgeStaticlib {
 /// Lists bridge staticlibs that codegen fixtures may link through `extra_link_libs`.
 const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
+        lib_name: "elephc_tokenizer",
+        package: "elephc-tokenizer",
+        php_extensions: &["tokenizer"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_tls",
         package: "elephc-tls",
         php_extensions: &["openssl"],
@@ -93,9 +99,24 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["hash"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_openssl",
+        package: "elephc-openssl",
+        php_extensions: &["openssl"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_bcmath",
         package: "elephc-bcmath",
         php_extensions: &["bcmath"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_gmp",
+        package: "elephc-gmp",
+        php_extensions: &["gmp"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_random",
+        package: "elephc-random",
+        php_extensions: &["random"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_mbstring",
@@ -136,6 +157,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         lib_name: "elephc_curl",
         package: "elephc-curl",
         php_extensions: &["curl"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_fileinfo",
+        package: "elephc-fileinfo",
+        php_extensions: &["fileinfo"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_xml",
@@ -191,7 +217,7 @@ impl std::ops::Deref for TestLinkRequirements {
 
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
 /// no intermediate `.s` file is created.
-fn assemble_from_stdin(asm: &str, obj_path: &Path) {
+pub(crate) fn assemble_from_stdin(asm: &str, obj_path: &Path) {
     let mut cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
         cmd.args(["-arch", target().darwin_arch_name()]);
@@ -209,29 +235,79 @@ fn assemble_from_stdin(asm: &str, obj_path: &Path) {
     assert!(status.success(), "assembler failed");
 }
 
+/// Returns the directory every test process shares for assembled runtime objects.
+///
+/// `ELEPHC_TEST_RUNTIME_CACHE_DIR` overrides the location; otherwise the objects live under
+/// the system temp dir. nextest runs every test in its own process, so a per-process cache
+/// re-generated and re-assembled the ~2 MB runtime for every single test (about a third of a
+/// trivial fixture's wall time); this directory lets processes share one object per runtime
+/// shape while the content hash in the file name keeps distinct shapes apart.
+fn runtime_cache_dir() -> std::path::PathBuf {
+    static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::var_os("ELEPHC_TEST_RUNTIME_CACHE_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("elephc_test_runtime_cache"));
+        fs::create_dir_all(&dir).expect("failed to create the runtime object cache directory");
+        dir
+    })
+    .clone()
+}
+
+/// Returns a runtime object assembled from `runtime_asm`, reusing the on-disk copy when
+/// another process (or an earlier run on this machine) already assembled it.
+///
+/// The key is the target name plus an FNV-1a hash of the full runtime assembly, so
+/// feature-gated runtimes, custom heap sizes and targets get distinct objects. A miss
+/// assembles into a process-unique temporary file in the same directory and renames it into
+/// place: a concurrent reader never sees a partially written object, and when two processes
+/// race on the same key both copies are byte-identical, so whichever rename lands last is as
+/// good as the other.
+fn disk_cached_runtime_obj(runtime_asm: &str) -> std::path::PathBuf {
+    static TEMP_ID: AtomicU64 = AtomicU64::new(0);
+    let hash = runtime_asm_hash(runtime_asm);
+    let dir = runtime_cache_dir();
+    let obj_path = dir.join(format!("runtime_{}_{hash:016x}.o", target().as_str()));
+    if fs::metadata(&obj_path).map(|meta| meta.len() > 0).unwrap_or(false) {
+        return obj_path;
+    }
+    let temp_path = dir.join(format!(
+        "runtime_{}_{hash:016x}.{}.{}.tmp",
+        target().as_str(),
+        std::process::id(),
+        TEMP_ID.fetch_add(1, Ordering::SeqCst)
+    ));
+    assemble_from_stdin(runtime_asm, &temp_path);
+    if let Err(err) = fs::rename(&temp_path, &obj_path) {
+        let _ = fs::remove_file(&temp_path);
+        assert!(
+            obj_path.exists(),
+            "failed to publish runtime object {}: {err}",
+            obj_path.display()
+        );
+    }
+    obj_path
+}
+
 /// Returns the cached base runtime object path, assembling the runtime on first call.
-/// Creates a temp directory, generates an 8_388_608-byte heap runtime without optional
-/// feature families, assembles it with `as`, and caches the `.o` path for legacy tests.
+/// Generates an 8_388_608-byte heap runtime without optional feature families, assembles it
+/// through the shared on-disk cache, and keeps the path for the rest of the process.
 pub(crate) fn get_runtime_obj() -> &'static Path {
     RUNTIME_OBJ.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("elephc_test_runtime_{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
         let runtime_asm = elephc::codegen::generate_runtime_with_features(
             8_388_608,
             target(),
             elephc::codegen::RuntimeFeatures::none(),
         );
-        let obj_path = dir.join("runtime.o");
-        assemble_from_stdin(&runtime_asm, &obj_path);
-        obj_path
+        disk_cached_runtime_obj(&runtime_asm)
     })
 }
 
 /// Returns a cached runtime object assembled from the exact runtime assembly string.
 ///
-/// The cache key is an FNV-1a hash of the full runtime assembly, so feature-gated
-/// runtimes and custom heap sizes get distinct objects while repeated tests can
-/// still share the assembled output.
+/// The in-process map answers repeated requests without hashing the file system; the
+/// shared on-disk cache behind it answers them across processes, which is what nextest's
+/// process-per-test model needs for the cache to pay off at all.
 pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
     let hash = runtime_asm_hash(runtime_asm);
     let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
@@ -239,20 +315,7 @@ pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
     if let Some(path) = cache.get(&hash) {
         return path.clone();
     }
-
-    let dir = std::env::temp_dir().join(format!("elephc_test_runtime_{}", std::process::id()));
-    fs::create_dir_all(&dir).unwrap();
-    let asm_path = dir.join(format!("runtime_{hash:016x}.s"));
-    let obj_path = dir.join(format!("runtime_{hash:016x}.o"));
-    fs::write(&asm_path, runtime_asm).unwrap();
-
-    let mut cmd = Command::new(assembler_cmd());
-    if target().platform == Platform::MacOS {
-        cmd.args(["-arch", target().darwin_arch_name()]);
-    }
-    cmd.arg("-o").arg(&obj_path).arg(&asm_path);
-    let status = cmd.status().expect("failed to assemble feature runtime");
-    assert!(status.success(), "feature runtime assembler failed");
+    let obj_path = disk_cached_runtime_obj(runtime_asm);
     cache.insert(hash, obj_path.clone());
     obj_path
 }
@@ -267,18 +330,48 @@ fn runtime_asm_hash(asm: &str) -> u64 {
     hash
 }
 
-/// Assembles a base runtime object with a custom heap size, writing the `.o` to `dir`.
-/// Generates ARM64/x86_64 runtime assembly without optional feature families and assembles
-/// it using `assembler_cmd()`. Used by tests that need non-default heap sizes.
-pub(crate) fn assemble_custom_runtime(heap_size: usize, dir: &Path) -> std::path::PathBuf {
+/// Returns a base runtime object with a custom heap size, through the shared on-disk cache.
+/// Generates ARM64/x86_64 runtime assembly without optional feature families; used by tests
+/// that need non-default heap sizes.
+pub(crate) fn assemble_custom_runtime(heap_size: usize) -> std::path::PathBuf {
     let runtime_asm = elephc::codegen::generate_runtime_with_features(
         heap_size,
         target(),
         elephc::codegen::RuntimeFeatures::none(),
     );
-    let obj_path = dir.join("runtime.o");
-    assemble_from_stdin(&runtime_asm, &obj_path);
-    obj_path
+    disk_cached_runtime_obj(&runtime_asm)
+}
+
+#[cfg(test)]
+mod runtime_cache_tests {
+    use super::*;
+
+    /// Two requests for the same runtime assembly share one on-disk object, a different
+    /// assembly gets a different one, and every returned object is a non-empty file.
+    #[test]
+    fn runtime_objects_are_shared_on_disk_by_assembly_hash() {
+        let base = elephc::codegen::generate_runtime_with_features(
+            8_388_608,
+            target(),
+            elephc::codegen::RuntimeFeatures::none(),
+        );
+        let bigger = elephc::codegen::generate_runtime_with_features(
+            16_777_216,
+            target(),
+            elephc::codegen::RuntimeFeatures::none(),
+        );
+        let first = disk_cached_runtime_obj(&base);
+        let second = disk_cached_runtime_obj(&base);
+        let other = disk_cached_runtime_obj(&bigger);
+        assert_eq!(first, second);
+        assert_ne!(first, other);
+        for path in [&first, &other] {
+            assert!(fs::metadata(path).unwrap().len() > 0, "{}", path.display());
+            assert!(path.starts_with(runtime_cache_dir()));
+        }
+        assert_eq!(get_runtime_obj(), runtime_obj_for_asm(&base).as_path());
+        assert_eq!(assemble_custom_runtime(16_777_216), other);
+    }
 }
 
 /// Returns the bridge staticlibs requested by a fixture's effective link libraries.
@@ -318,6 +411,7 @@ mod bridge_extension_tests {
     #[test]
     fn bridge_extension_metadata_matches_distinct_and_shared_surfaces() {
         let linked = vec![
+            "elephc_tokenizer".to_string(),
             "elephc_pdo".to_string(),
             "elephc_iconv".to_string(),
             "elephc_pcntl".to_string(),
@@ -325,7 +419,7 @@ mod bridge_extension_tests {
         ];
         assert_eq!(
             test_linked_extensions(&linked),
-            ["iconv", "pcntl", "posix", "curl"]
+            ["tokenizer", "iconv", "pcntl", "posix", "curl"]
         );
     }
 }
@@ -464,6 +558,20 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
 /// Builds bridge archives needed by CLI-based fixtures before invoking the compiler binary.
 pub(crate) fn ensure_cli_bridge_staticlibs(actual_link_libs: &[&str]) {
     ensure_bridge_staticlibs(actual_link_libs, &bridge_staticlib_dir());
+}
+
+/// Pins CLI subprocesses to the same trusted archives used by archived test fixtures.
+/// Explicit linker overrides avoid comparing build-job artifacts with newer checkout
+/// timestamps. Ordinary local runs retain the compiler's source freshness checks.
+pub(crate) fn configure_prebuilt_cli_bridges(command: &mut Command) {
+    if !prebuilt_bridge_staticlibs_are_trusted() {
+        return;
+    }
+    let directory = bridge_staticlib_dir().canonicalize()
+        .expect("resolve prebuilt CLI bridge directory");
+    for bridge in TEST_BRIDGE_STATICLIBS {
+        command.env(format!("{}_LIB_DIR", bridge.lib_name.to_ascii_uppercase()), &directory);
+    }
 }
 
 /// Builds (or reuses, if fresh) the curl-aware magician archive a fixture that links BOTH
@@ -1227,8 +1335,37 @@ fn test_link_plan(
     // reads the same durable cache structurally (see `super::xml_native`). A fixture
     // whose artifact is missing skips (or, under `ELEPHC_TEST_REQUIRE_XML_NATIVE`,
     // panics) before it ever reaches this point.
+    if named.contains("elephc_fileinfo") {
+        if let Some(archives) = super::fileinfo_native::archives() {
+            for archive in archives { plan.push(LinkItem::managed_archive(archive, "libmagic")); }
+        }
+    }
     if named.contains("elephc_xml") && !xml_pushed {
         push_xml_native_if_available(&mut plan);
+    }
+    // The cipher bridge declares libcrypto's provider/EVP symbols without linking
+    // them. The production path resolves `openssl-crypto` (and its `zlib`
+    // dependency) through `pipeline::backend`; the harness reads the same durable
+    // cache structurally. A fixture whose artifacts are missing skips before this.
+    if named.contains("elephc_openssl") {
+        if let Some(packages) = openssl_native_packages() {
+            for package in packages {
+                plan.push(LinkItem::SearchPath(package.library_dir.clone()));
+            }
+            for package in packages {
+                for archive in &package.archives {
+                    plan.push(LinkItem::managed_archive(archive.clone(), package.name));
+                }
+            }
+        }
+    }
+    // The gmp bridge declares libgmp's `__gmpz_*` symbols without linking them; the
+    // managed `gmp` package supplies the single `libgmp.a` archive at final link time.
+    // The harness reads the same durable cache structurally (see `super::gmp_native`).
+    if named.contains("elephc_gmp") {
+        if let Some(package) = gmp_native_package() {
+            push_gmp_native_archives(&mut plan, package);
+        }
     }
     for path in extra_link_paths {
         plan.push(LinkItem::SearchPath(path.as_str().into()));
@@ -1236,7 +1373,8 @@ fn test_link_plan(
     for framework in extra_frameworks {
         plan.push(LinkItem::Framework(framework.clone()));
     }
-    plan.without_redundant_embedded_bridges()
+    super::magician_link::with_apple_libraries(plan, target().platform)
+        .without_redundant_embedded_bridges()
 }
 
 /// Appends the managed native curl chain as EXACT ARCHIVES, in catalog dependency order.
@@ -1282,6 +1420,18 @@ fn push_xml_native_if_available(plan: &mut elephc::link_plan::LinkPlan) -> bool 
             true
         }
         None => false,
+    }
+}
+
+/// Appends the managed native libgmp artifact as an exact archive path.
+fn push_gmp_native_archives(
+    plan: &mut elephc::link_plan::LinkPlan,
+    package: &GmpNativePackage,
+) {
+    use elephc::link_plan::LinkItem;
+    plan.push(LinkItem::SearchPath(package.library_dir.clone()));
+    for archive in &package.archives {
+        plan.push(LinkItem::managed_archive(archive, GMP_NATIVE_PACKAGE));
     }
 }
 
@@ -1391,12 +1541,54 @@ pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
     run_binary_with_env(bin_path, dir, &[])
 }
 
+/// Runs a compiled binary with stderr redirected onto stdout, preserving write order.
+///
+/// Used only by PHPT fixtures, whose expected output is PHP's single displayed stream.
+pub(crate) fn run_binary_merged(bin_path: &Path, dir: &Path) -> Output {
+    let mut cmd = if target().platform == Platform::Linux
+        && target().arch == Arch::AArch64
+        && cfg!(target_arch = "x86_64")
+    {
+        let mut command = Command::new("/bin/sh");
+        let mut script = String::from("exec qemu-aarch64-static");
+        if let Some(sysroot) = qemu_sysroot() {
+            script.push_str(&format!(" -L {}", sysroot));
+        }
+        script.push_str(" \"$0\" \"$@\" 2>&1");
+        command.arg("-c").arg(script).arg(bin_path);
+        command
+    } else {
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg("exec \"$0\" \"$@\" 2>&1").arg(bin_path);
+        command
+    };
+    cmd.current_dir(dir);
+    run_command_with_timeout(cmd)
+}
+
 /// Runs a compiled binary with isolated environment overrides, using qemu for
 /// cross-architecture Linux AArch64 fixtures when required.
 pub(crate) fn run_binary_with_env(
     bin_path: &Path,
     dir: &Path,
     env: &[(&str, &std::ffi::OsStr)],
+) -> Output {
+    run_binary_with_env_and_args(bin_path, dir, env, &[])
+}
+
+/// Runs a compiled binary with extra command-line arguments after the program name, so the
+/// program starts with `$argc == 1 + args.len()`.
+pub(crate) fn run_binary_with_args(bin_path: &Path, dir: &Path, args: &[&str]) -> Output {
+    run_binary_with_env_and_args(bin_path, dir, &[], args)
+}
+
+/// Runs a compiled binary with environment overrides and extra command-line arguments, using
+/// qemu for cross-architecture Linux AArch64 fixtures when required.
+fn run_binary_with_env_and_args(
+    bin_path: &Path,
+    dir: &Path,
+    env: &[(&str, &std::ffi::OsStr)],
+    args: &[&str],
 ) -> Output {
     let mut output = if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
@@ -1406,14 +1598,14 @@ pub(crate) fn run_binary_with_env(
         if let Some(sysroot) = qemu_sysroot() {
             cmd.args(["-L", sysroot]);
         }
-        cmd.arg(bin_path).current_dir(dir).envs(env.iter().copied());
+        cmd.arg(bin_path).args(args).current_dir(dir).envs(env.iter().copied());
         run_command_with_timeout(cmd)
     } else {
         let mut cmd = Command::new(bin_path);
-        cmd.current_dir(dir).envs(env.iter().copied());
+        cmd.args(args).current_dir(dir).envs(env.iter().copied());
         run_command_with_timeout(cmd)
     };
-    append_macos_signal_diagnostics(&mut output, bin_path, dir, env);
+    append_macos_signal_diagnostics(&mut output, bin_path, dir, env, args);
     output
 }
 
@@ -1424,6 +1616,7 @@ fn append_macos_signal_diagnostics(
     bin_path: &Path,
     dir: &Path,
     env: &[(&str, &std::ffi::OsStr)],
+    args: &[&str],
 ) {
     use std::os::unix::process::ExitStatusExt as _;
 
@@ -1463,6 +1656,7 @@ fn append_macos_signal_diagnostics(
         "--",
     ])
     .arg(bin_path)
+    .args(args)
     .current_dir(dir)
     .envs(env.iter().copied());
     let diagnostic = run_command_with_timeout(cmd);
@@ -1481,6 +1675,7 @@ fn append_macos_signal_diagnostics(
     _bin_path: &Path,
     _dir: &Path,
     _env: &[(&str, &std::ffi::OsStr)],
+    _args: &[&str],
 ) {
 }
 
@@ -1629,6 +1824,8 @@ pub(crate) struct ProgramOutput {
     pub(crate) stderr: String,
     // true if the process exited with a successful (zero) exit code.
     pub(crate) success: bool,
+    // Preserves the exit code or terminating signal for failure diagnostics.
+    pub(crate) status: std::process::ExitStatus,
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,
@@ -1661,7 +1858,86 @@ pub(crate) fn assemble_and_run_capture(
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
         success: output.status.success(),
+        status: output.status,
     }
+}
+
+/// Assembles and runs one fixture with stderr merged into stdout at the OS level.
+///
+/// PHP's CLI writes `display_errors` diagnostics to stdout, and PHPT `--EXPECT--`
+/// records them interleaved with program output. elephc writes runtime diagnostics to
+/// stderr, so a PHPT runner must merge the two file descriptors before reading them;
+/// concatenating captured streams afterwards would lose the source order.
+pub(crate) fn assemble_and_run_capture_merged(
+    user_asm: &str,
+    runtime_obj: &Path,
+    dir: &Path,
+    requirements: &TestLinkRequirements,
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) -> ProgramOutput {
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    assemble_from_stdin(user_asm, &obj_path);
+    link_binary(
+        &obj_path,
+        runtime_obj,
+        &bin_path,
+        requirements,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    let output = run_binary_merged(&bin_path, dir);
+    ProgramOutput {
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::new(),
+        success: output.status.success(),
+        status: output.status,
+    }
+}
+
+/// Assembles and links a fixture ONCE, then runs the binary once per argument vector and
+/// captures every run, without asserting success.
+///
+/// Every other runner starts the program with no arguments, so `$argc` is always 1 and a fixture
+/// whose control flow branches on `$argc` executes only one of its arms. Running the same binary
+/// again with extra arguments executes the others.
+pub(crate) fn assemble_and_run_capture_per_argv(
+    user_asm: &str,
+    runtime_obj: &Path,
+    dir: &Path,
+    requirements: &TestLinkRequirements,
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+    argvs: &[&[&str]],
+) -> Vec<ProgramOutput> {
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    assemble_from_stdin(user_asm, &obj_path);
+    link_binary(
+        &obj_path,
+        runtime_obj,
+        &bin_path,
+        requirements,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    argvs
+        .iter()
+        .map(|args| {
+            let output = run_binary_with_args(&bin_path, dir, args);
+            ProgramOutput {
+                stdout: String::from_utf8(output.stdout).unwrap(),
+                stderr: String::from_utf8(output.stderr).unwrap(),
+                success: output.status.success(),
+                status: output.status,
+            }
+        })
+        .collect()
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,

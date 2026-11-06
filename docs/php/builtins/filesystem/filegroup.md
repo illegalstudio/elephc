@@ -1,8 +1,6 @@
 ---
 title: "filegroup()"
 description: "Gets file group."
-sidebar:
-  order: 267
 ---
 
 ## filegroup()
@@ -20,8 +18,9 @@ Gets file group.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/filegroup.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filegroup.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

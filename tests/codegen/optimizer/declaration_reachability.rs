@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Symbol assertions prove declarations disappear instead of relying only on preserved stdout.
+//! - The exception-routing example test drives the CLI so exception-aware DCE sees the checker's
+//!   class hierarchy, which the AST-only fixture helpers do not provide.
 //! - PDO fixtures cover prelude classes, method pruning, and bridge requirements together.
 
 use super::*;
@@ -48,6 +50,23 @@ fn test_unused_user_function_program_still_runs() {
     assert_eq!(out, "1");
 }
 
+/// A terminal exit cannot prune generic class bodies used by preceding executable code.
+#[test]
+fn test_generic_class_specialization_survives_terminal_exit() {
+    let out = compile_and_run(
+        r#"<?php
+class Box<T> {
+    public function __construct(private T $value) {}
+    public function get(): T { return $this->value; }
+}
+$box = new Box<int>($argc + 4);
+echo $box->get();
+exit(0);
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
 /// Verifies exception-aware DCE removes a disjoint catch before declaration reachability scans it.
 #[test]
 fn test_exception_dce_exposes_catch_only_function_to_reachability() {
@@ -74,6 +93,98 @@ fn test_exception_dce_exposes_catch_only_function_to_reachability() {
     assert!(
         !user_asm.contains(&format!(".globl {catch_only}\n")),
         "a function referenced only by a disjoint catch must be pruned: {user_asm}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the `examples/exception-routing` program loses every catch-only declaration.
+///
+/// Its four dead clauses cover a disjoint handler, a narrowed `throw $e`, a parent clause after
+/// all of its thrown children, and a child clause shadowed by its parent. Each one is the only
+/// reference to the declarations checked below, so exception-aware DCE plus declaration
+/// reachability must drop them all while the binary still prints PHP's output. The test drives
+/// the CLI because only the real pipeline hands the exception analysis the checker's class
+/// hierarchy: the example's exceptions extend `RuntimeException`, which the AST-only fixture
+/// helpers cannot resolve.
+#[test]
+fn test_exception_routing_example_prunes_catch_only_declarations() {
+    let dir = make_cli_test_dir("elephc_decl_reach_exception_routing_example");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, include_str!("../../../examples/exception-routing/main.php")).unwrap();
+
+    let emitted = elephc_cli_command(&dir)
+        .arg("--emit-ir")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI with --emit-ir");
+    assert!(
+        emitted.status.success(),
+        "elephc --emit-ir failed: stderr={}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let ir = String::from_utf8_lossy(&emitted.stdout);
+    assert!(ir.contains("function settle("), "missing the live pipeline stage: {ir}");
+    assert_eq!(
+        ir.matches("= catch_bind").count(),
+        6,
+        "four of the example's ten catch clauses can never run: {ir}"
+    );
+    for declaration in [
+        "restockAndRetry",
+        "legacyPaymentFallback",
+        "PaymentIncident",
+        "CarrierDesk",
+    ] {
+        assert!(
+            !ir.contains(declaration),
+            "{declaration} is referenced only by an impossible catch and must be pruned: {ir}"
+        );
+    }
+
+    let compiled = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI");
+    assert!(
+        compiled.status.success(),
+        "elephc failed: stderr={}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let run = Command::new(dir.join("main")).output().unwrap();
+    assert!(
+        run.status.success(),
+        "example binary failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "order A-100\n",
+            "  stock:    reserved, 8 left\n",
+            "  payment:  charged 2599 cents\n",
+            "  shipping: booked, 499 cents postage\n",
+            "order A-101\n",
+            "  stock:    rejected, quantity must be positive (got 0)\n",
+            "  payment:  charged 2599 cents\n",
+            "  shipping: booked, 499 cents postage\n",
+            "order A-102\n",
+            "  stock:    backordered, not enough units (3 available)\n",
+            "  payment:  charged 2599 cents\n",
+            "  shipping: booked, 499 cents postage\n",
+            "order A-103\n",
+            "  stock:    reserved, 9 left\n",
+            "  payment:  declined, card declined by the issuer\n",
+            "  shipping: booked, 499 cents postage\n",
+            "order A-104\n",
+            "  [fraud screen] payment escalated for manual review\n",
+            "  stock:    reserved, 9 left\n",
+            "  payment:  on hold, amount above the fraud limit\n",
+            "  shipping: booked, 499 cents postage\n",
+            "order A-105\n",
+            "  stock:    reserved, 9 left\n",
+            "  payment:  charged 2599 cents\n",
+            "  shipping: delayed, no carrier takes parcels over 30 kg\n",
+        )
     );
     let _ = fs::remove_dir_all(&dir);
 }

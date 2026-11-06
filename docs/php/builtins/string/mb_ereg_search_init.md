@@ -1,8 +1,6 @@
 ---
 title: "mb_ereg_search_init()"
 description: "Initializes the retained multibyte regex subject and optionally compiles a search pattern."
-sidebar:
-  order: 847
 ---
 
 ## mb_ereg_search_init()
@@ -22,8 +20,9 @@ Initializes the retained multibyte regex subject and optionally compiles a searc
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_search_init.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_search_init.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

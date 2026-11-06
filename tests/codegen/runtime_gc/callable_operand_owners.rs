@@ -214,6 +214,29 @@ catch (RuntimeException $error) { echo 'caught'; unset($error); }
     assert_eq!(compile_and_run_tagged(source), "A,B|caught");
 }
 
+/// The generic indexed typed `array_map` releases its partial result when the callback
+/// throws a return-type TypeError.
+#[test]
+fn test_core_typed_array_map_releases_partial_result_on_typeerror() {
+    let source = r#"<?php
+$ov = [PHP_INT_MAX, 1, 2, 3];
+try {
+    array_sum(array_map(fn(int $x): int => $x + 1, array_values($ov)));
+    echo "no-throw";
+} catch (TypeError $error) {
+    echo "caught";
+}
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught", "{}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// A by-value reference-call result survives argument cleanup whose destructor throws.
 ///
 /// The lease is the only owner of the callee's payload while the caller retires the argument
@@ -623,7 +646,7 @@ echo callBoundInLoop(32), ':', callBoundWithSameFrameCatch(), ':', callBoundWith
 #[test]
 fn test_core_static_callable_forms_balance_fresh_string_arguments_across_repeated_calls() {
     let source = r#"<?php
-extern function atoi(string $value): int;
+extern function atoi(string $value): i32;
 function passthrough(string $value): string { return $value; }
 function parseThroughExternCallable(string $left, string $right): int {
     return call_user_func('atoi', implode('', [$left, $right]));

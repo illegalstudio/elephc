@@ -35,12 +35,16 @@ pub(in crate::interpreter) fn eval_iterator_apply_declared_values_result(
     match evaluated_args {
         [iterator, callback] => {
             let callback = eval_callable(*callback, context, values)?;
-            eval_iterator_apply_result(*iterator, &callback, Vec::new(), context, values)
+            callback.with_values(context, values, |callback, context, values| {
+                eval_iterator_apply_result(*iterator, callback, Vec::new(), context, values)
+            })
         }
         [iterator, callback, args] => {
             let callback = eval_callable(*callback, context, values)?;
-            with_iterator_apply_arguments(*args, context, values, |arguments, context, values| {
-                eval_iterator_apply_result(*iterator, &callback, arguments, context, values)
+            callback.with_values(context, values, |callback, context, values| {
+                with_iterator_apply_arguments(*args, context, values, |arguments, context, values| {
+                    eval_iterator_apply_result(*iterator, callback, arguments, context, values)
+                })
             })
         }
         _ => Err(EvalStatus::RuntimeFatal),
@@ -59,15 +63,19 @@ pub(in crate::interpreter) fn eval_builtin_iterator_apply(
             let iterator = eval_expr(iterator, context, scope, values)?;
             let callback = eval_expr(callback, context, scope, values)?;
             let callback = eval_callable_from_scope(callback, context, scope, values)?;
-            eval_iterator_apply_result(iterator, &callback, Vec::new(), context, values)
+            callback.with_values(context, values, |callback, context, values| {
+                eval_iterator_apply_result(iterator, callback, Vec::new(), context, values)
+            })
         }
         [iterator, callback, callback_args] => {
             let iterator = eval_expr(iterator, context, scope, values)?;
             let callback = eval_expr(callback, context, scope, values)?;
             let callback = eval_callable_from_scope(callback, context, scope, values)?;
-            let callback_args = eval_expr(callback_args, context, scope, values)?;
-            with_iterator_apply_arguments(callback_args, context, values, |arguments, context, values| {
-                eval_iterator_apply_result(iterator, &callback, arguments, context, values)
+            callback.with_values(context, values, |callback, context, values| {
+                let callback_args = eval_expr(callback_args, context, scope, values)?;
+                with_iterator_apply_arguments(callback_args, context, values, |arguments, context, values| {
+                    eval_iterator_apply_result(iterator, callback, arguments, context, values)
+                })
             })
         }
         _ => Err(EvalStatus::RuntimeFatal),

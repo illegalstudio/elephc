@@ -16,3 +16,5 @@ mod benches;
 mod repros;
 #[path = "null_sentinel/tagged.rs"]
 mod tagged;
+#[path = "null_sentinel/tagged_properties.rs"]
+mod tagged_properties;

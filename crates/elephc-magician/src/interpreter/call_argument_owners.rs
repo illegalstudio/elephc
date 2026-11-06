@@ -50,8 +50,9 @@ fn with_array_call_argument_result<R, V: RuntimeValueOps>(
     let mut arguments = Vec::new();
     let mut saw_named = false;
     let mut preserved = None;
-    let result = append_unpacked_call_arg_values_with_owners(
-        copy, &mut arguments, &mut saw_named, context, values, Some(&mut owners),
+    let result = append_unpacked_arguments(
+        copy, &mut arguments, &mut saw_named, context, values, Some(&mut owners), true,
+        "Cannot use positional argument after named argument",
     )
     .and_then(|()| {
         let arguments = arguments
@@ -94,7 +95,8 @@ pub(in crate::interpreter) fn append_unpacked_call_arg_values_with_owners(
     values: &mut impl RuntimeValueOps,
     owners: Option<&mut Vec<RuntimeCellHandle>>,
 ) -> Result<(), EvalStatus> {
-    append_unpacked_arguments(array, evaluated_args, saw_named, context, values, owners, true)
+    append_unpacked_arguments(array, evaluated_args, saw_named, context, values, owners, true,
+        "Cannot use positional argument after named argument during unpacking")
 }
 
 /// Captures unpacked builtin values without keeping persistent references as mutable argument values.
@@ -102,7 +104,8 @@ pub(in crate::interpreter) fn append_unpacked_value_call_args(
     array: RuntimeCellHandle, evaluated_args: &mut Vec<EvaluatedCallArg>, saw_named: &mut bool,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps, owners: &mut Vec<RuntimeCellHandle>,
 ) -> Result<(), EvalStatus> {
-    append_unpacked_arguments(array, evaluated_args, saw_named, context, values, Some(owners), false)
+    append_unpacked_arguments(array, evaluated_args, saw_named, context, values, Some(owners), false,
+        "Cannot use positional argument after named argument during unpacking")
 }
 
 /// Shares array key order and marker handling while selecting reference-preserving or value reads.
@@ -110,6 +113,7 @@ fn append_unpacked_arguments(
     array: RuntimeCellHandle, evaluated_args: &mut Vec<EvaluatedCallArg>, saw_named: &mut bool,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
     mut owners: Option<&mut Vec<RuntimeCellHandle>>, preserve_references: bool,
+    order_error: &str,
 ) -> Result<(), EvalStatus> {
     let len = values.array_len(array)?;
     for position in 0..len {
@@ -120,7 +124,7 @@ fn append_unpacked_arguments(
             EVAL_TAG_INT => {
                 if *saw_named {
                     values.release(key)?;
-                    return Err(EvalStatus::RuntimeFatal);
+                    return eval_throw_error(order_error, context, values);
                 }
                 let read = if owners.is_some() && preserve_references {
                     values.array_get_preserving_references(array, key)

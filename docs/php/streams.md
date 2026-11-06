@@ -289,11 +289,13 @@ Supported wrapper methods include `stream_open`, `stream_read`, `stream_write`,
 `stream_set_option`, `stream_cast`, `url_stat`, and the directory methods
 `dir_opendir`, `dir_readdir`, `dir_rewinddir`, and `dir_closedir`.
 
-`url_stat` is consulted by the whole stat family — `stat()`, `lstat()`,
-`file_exists()`, `filesize()`, `filemtime()`, `is_file()`, `is_dir()`,
-`is_readable()`, `is_writable()`, `is_writeable()`, and `is_executable()` — each
-handing the wrapper the same `STREAM_URL_STAT_*` flag values reference PHP
-passes. See [System & I/O](system-and-io.md) for the per-builtin semantics.
+`url_stat` is consulted by the whole stat family: `stat()`, `lstat()`,
+`file_exists()`, the integer getters (`filesize()`, `filemtime()`, `fileatime()`,
+`filectime()`, `fileperms()`, `fileowner()`, `filegroup()`, and `fileinode()`),
+`is_file()`, `is_dir()`, `is_readable()`, `is_writable()`, `is_writeable()`, and
+`is_executable()`. Each one hands the wrapper the same `STREAM_URL_STAT_*` flag
+values reference PHP passes. See [System & I/O](system-and-io.md) for the
+per-builtin semantics.
 
 Wrapper methods should declare return types that match their PHP contracts.
 `stream_stat()` and `url_stat()` are exceptions: declare them without a return

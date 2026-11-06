@@ -61,7 +61,17 @@ fn parsed_bridge_externs() -> Program {
 /// Returns whether the program references the PDO surface. Exposed so the
 /// pipeline can record the "PDO" PHP surface for `extension_loaded()` reporting
 /// using the same detection that decides prelude injection.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): the scan walks the whole
+/// program, so an embedder calling it without the CLI driver's wrapper gets the same stack budget.
 pub fn program_uses_pdo(program: &[Stmt]) -> bool {
+    crate::compiler_stack::with_compiler_stack(|| {
+        program_uses_pdo_on_compiler_stack(program)
+    })
+}
+
+/// The body of [`program_uses_pdo`], run on the stack `with_compiler_stack` sized.
+fn program_uses_pdo_on_compiler_stack(program: &[Stmt]) -> bool {
     detect::program_uses_pdo(program)
 }
 
@@ -1643,7 +1653,7 @@ class PDO {
         // bridge only consults $_mySslConfig for a mysql: DSN, so they stay inert
         // for the other drivers. ATTR_SSL_CAPATH (1010) is adapted to a temporary
         // multi-PEM CA bundle; ATTR_SSL_CIPHER (1011) is forwarded to the driver-option
-        // parser and fails explicitly because rustls exposes no PDO cipher-string mapping.
+        // parser, which maps supported OpenSSL/IANA names to rustls cipher suites.
         // $_mySslVerify stays -1 ("unset") until an
         // explicit ATTR_SSL_VERIFY_SERVER_CERT is seen.
         $_mySslCa = "";
@@ -6870,7 +6880,23 @@ pub fn inject_if_used(
 /// PHP 8.5 renumbered every high fetch-mode flag into the low byte. Generating the
 /// constants and all decoding masks from the same version selection prevents a source
 /// program compiled for 8.4 from being interpreted with 8.5 flag semantics.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used_for_version(
+    program: Program,
+    force: bool,
+    php_version: PhpVersion,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_for_version_on_compiler_stack(program, force, php_version, inventory)
+    })
+}
+
+/// The body of [`inject_if_used_for_version`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_for_version_on_compiler_stack(
     program: Program,
     force: bool,
     php_version: PhpVersion,
@@ -7748,7 +7774,7 @@ mod version_tests {
             rest = &after[close..];
         }
         cleaned.push_str(rest);
-        cleaned
+        crate::synthetic_class::oracle::assignment_names(&cleaned)
     }
 
     /// Compares the two Programs the compiler could inject, as PHP text, on request.

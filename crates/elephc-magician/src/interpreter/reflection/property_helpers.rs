@@ -111,6 +111,24 @@ pub(super) fn eval_reflection_property_set_raw_value_args(
     Ok((args[0], args[1]))
 }
 
+/// Returns whether `method_name` (`$property::get`) names the `get` hook of an abstract or
+/// interface property contract declared `&get`. Such a contract has no accessor method to carry
+/// the by-reference flag, so the declaration answers `ReflectionMethod::returnsReference()`.
+pub(super) fn eval_reflection_get_contract_returns_reference(
+    declaring_class: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    let Some((property_name, "get")) = method_name
+        .strip_prefix('$')
+        .and_then(|body| body.rsplit_once("::"))
+    else {
+        return false;
+    };
+    eval_reflection_property_for_hooks(declaring_class, property_name, context)
+        .is_some_and(|(_, property)| property.get_contract_returns_by_ref())
+}
+
 /// Returns the eval property metadata eligible for ReflectionProperty hook APIs.
 pub(super) fn eval_reflection_property_for_hooks(
     declaring_class: &str,
@@ -141,7 +159,8 @@ pub(super) fn eval_reflection_property_for_hooks(
                         .with_abstract_hook_contract(
                             property.requires_get(),
                             property.requires_set(),
-                        );
+                        )
+                        .with_get_contract_returns_by_ref(property.get_returns_by_ref());
                     (declaring_class.to_string(), property)
                 })
         })
@@ -155,7 +174,8 @@ pub(super) fn eval_reflection_property_for_hooks(
                 let property = EvalClassProperty::new(property.name(), None)
                     .with_type(property.property_type().cloned())
                     .with_attributes(property.attributes().to_vec())
-                    .with_abstract_hook_contract(property.requires_get(), property.requires_set());
+                    .with_abstract_hook_contract(property.requires_get(), property.requires_set())
+                    .with_get_contract_returns_by_ref(property.get_returns_by_ref());
                 (owner, property)
             })
         })
@@ -272,7 +292,18 @@ pub(super) fn eval_reflection_property_hook_method_object(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let metadata = eval_reflection_property_hook_method_metadata(declaring_class, property, hook);
+    let metadata = if matches!(hook, EvalReflectionPropertyHook::Set) && property.requires_set_hook()
+        && !property.is_abstract() && !property.has_set_hook()
+    {
+        let (owner, parameter_type) = eval_inherited_abstract_setter_contract(
+            declaring_class, property.name(), context,
+        ).unwrap_or_else(|| (declaring_class.to_string(), property.settable_type().cloned()));
+        let contract = property.clone().with_type(parameter_type).with_set_hook_type(None)
+            .with_abstract_hook_contract(false, true);
+        eval_reflection_property_hook_method_metadata(&owner, &contract, hook)
+    } else {
+        eval_reflection_property_hook_method_metadata(declaring_class, property, hook)
+    };
     eval_reflection_member_object_result(
         EVAL_REFLECTION_OWNER_METHOD,
         &hook.reflected_method_name(property.name()),
@@ -343,6 +374,7 @@ pub(super) fn eval_reflection_property_hook_parameters(
         required_parameter_count: 1,
     };
     vec![EvalReflectionParameterMetadata {
+        native_default_factory: None,
         name: "value".to_string(),
         declaring_class_name: Some(declaring_class.to_string()),
         declaring_function: Some(declaring_function),

@@ -1,8 +1,6 @@
 ---
 title: "ksort()"
 description: "Sorts an array by key in ascending order, comparing keys under $flags."
-sidebar:
-  order: 58
 ---
 
 ## ksort()
@@ -21,8 +19,9 @@ Sorts an array by key in ascending order, comparing keys under $flags.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/ksort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/ksort.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

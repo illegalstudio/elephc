@@ -34,7 +34,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
 
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_BRIDGE_STACK_BYTES);
     save_eval_code_string(ctx);
-    ensure_eval_context(ctx)?;
+    ensure_eval_context_handle(ctx)?;
     mark_eval_strict_php(ctx, inst);
     mark_eval_php_version(ctx);
     set_eval_call_site(ctx, inst);
@@ -42,18 +42,21 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     ensure_eval_global_scope(ctx)?;
     let sync_locals = eval_sync_locals(ctx);
     let sync_globals = eval_sync_globals(ctx);
+    prepare_dynamic_eval_scope_access_mask(ctx, &sync_locals, &sync_globals)?;
+    let catalog = prepare_eval_scope_flush(ctx)?;
     let global_aliases = eval_global_aliases(ctx);
-    flush_eval_scope_locals(ctx, &sync_locals)?;
-    flush_eval_global_scope(ctx, &sync_globals)?;
+    flush_dynamic_eval_scope_locals(ctx, &sync_locals)?;
+    flush_dynamic_eval_global_scope(ctx, &sync_globals)?;
     mark_eval_scope_global_aliases(ctx, &global_aliases);
     set_eval_context_global_scope(ctx);
+    prepare_eval_native_catalog(ctx, catalog)?;
     let pushed_class_scope = push_eval_context_class_scope(ctx)?;
     load_eval_context_to_arg(ctx, 0);
     load_eval_scope_to_arg(ctx, 1);
     move_saved_eval_code_to_eval_args(ctx);
     let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_execute");
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_execute_with_deferred_catalog");
     abi::emit_call_label(ctx.emitter, &symbol);
     pop_eval_context_class_scope(ctx, pushed_class_scope);
     prepare_eval_scope_reload(ctx);
@@ -62,8 +65,8 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     protect_eval_reload_owners(ctx);
     ctx.emitter.comment("reload eval scope before propagating its pending exception");
-    reload_eval_scope_locals(ctx, &sync_locals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
-    reload_eval_global_scope(ctx, &sync_globals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
+    reload_dynamic_eval_scope_locals(ctx, &sync_locals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
+    reload_dynamic_eval_global_scope(ctx, &sync_globals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
     finish_eval_scope_reload(ctx);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_BRIDGE_STACK_BYTES);
@@ -305,7 +308,9 @@ pub(super) fn emit_eval_scope_read_param_source(
         EvalScopeReadParamSource::Local(local) => {
             let ty = ctx.load_local_to_result(local.slot)?.codegen_repr();
             if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-                emit_box_current_value_as_mixed(ctx.emitter, &ty);
+                // A `?ptr<T>` local keeps its union, so address 0 is PHP null.
+                let box_ty = ctx.local_mixed_box_type(local.slot)?;
+                emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
             }
         }
         EvalScopeReadParamSource::Null => emit_core_mixed_null_cell(ctx),

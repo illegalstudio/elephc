@@ -18,6 +18,7 @@ pub(super) fn builtin_reflection_attribute_constructor_method() -> ClassMethod {
 pub(super) fn builtin_reflection_private_constructor_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__construct".to_string(),
         visibility: Visibility::Private,
         is_static: false,
@@ -42,6 +43,7 @@ pub(super) fn builtin_reflection_private_constructor_method() -> ClassMethod {
 pub(super) fn builtin_reflection_attribute_get_name_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "getName".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -75,6 +77,7 @@ pub(super) fn builtin_reflection_attribute_get_name_method() -> ClassMethod {
 pub(super) fn builtin_reflection_attribute_get_arguments_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "getArguments".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -108,6 +111,7 @@ pub(super) fn builtin_reflection_attribute_get_arguments_method() -> ClassMethod
 pub(super) fn builtin_reflection_attribute_new_instance_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "newInstance".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -139,6 +143,7 @@ pub(super) fn builtin_reflection_attribute_new_instance_method() -> ClassMethod 
 pub(super) fn builtin_reflection_class_new_instance_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "newInstance".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -181,6 +186,7 @@ pub(super) fn builtin_reflection_class_new_instance_method() -> ClassMethod {
 pub(super) fn builtin_reflection_method_invoke_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "invoke".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -210,6 +216,7 @@ pub(super) fn builtin_reflection_method_invoke_method() -> ClassMethod {
 pub(super) fn builtin_reflection_method_invoke_args_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "invokeArgs".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -239,6 +246,7 @@ pub(super) fn builtin_reflection_method_invoke_args_method() -> ClassMethod {
 pub(super) fn builtin_reflection_method_create_from_method_name_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "createFromMethodName".to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -274,6 +282,7 @@ pub(super) fn builtin_reflection_method_create_from_method_name_method() -> Clas
 pub(super) fn builtin_reflection_set_accessible_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "setAccessible".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -300,6 +309,7 @@ pub(super) fn builtin_reflection_set_accessible_method() -> ClassMethod {
 pub(super) fn builtin_reflection_function_invoke_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "invoke".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -329,6 +339,7 @@ pub(super) fn builtin_reflection_function_invoke_method() -> ClassMethod {
 pub(super) fn builtin_reflection_function_invoke_args_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "invokeArgs".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -359,6 +370,7 @@ pub(super) fn builtin_reflection_function_invoke_args_method() -> ClassMethod {
 pub(super) fn builtin_reflection_class_new_instance_args_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "newInstanceArgs".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -399,6 +411,7 @@ pub(super) fn builtin_reflection_slot_getter(
 ) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -433,6 +446,7 @@ pub(super) fn builtin_reflection_slot_getter(
 pub(super) fn builtin_reflection_function_constructor_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__construct".to_string(),
         visibility: Visibility::Public,
         is_static: false,

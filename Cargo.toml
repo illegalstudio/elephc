@@ -1,6 +1,6 @@
 [package]
 name = "elephc"
-version = "0.27.0"
+version = "0.27.7"
 edition = "2021"
 default-run = "elephc"
 description = "A PHP-to-native AOT compiler"
@@ -30,8 +30,8 @@ categories = ["compilers", "command-line-utilities"]
 # see crates/elephc-curl/build.rs for how its own gated tests opt into a real
 # link.
 [workspace]
-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml"]
-default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-process-context", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-openssl", "crates/elephc-bcmath", "crates/elephc-gmp", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml", "crates/elephc-fileinfo", "crates/elephc-tokenizer", "crates/elephc-tokenizer-engine", "crates/elephc-random", "crates/elephc-zend"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-process-context", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-openssl", "crates/elephc-bcmath", "crates/elephc-gmp", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml", "crates/elephc-fileinfo", "crates/elephc-tokenizer", "crates/elephc-tokenizer-engine", "crates/elephc-random", "crates/elephc-zend"]
 resolver = "2"
 
 [[bin]]
@@ -46,6 +46,7 @@ name = "gen_builtins"
 path = "tools/gen_builtins.rs"
 
 [dependencies]
+elephc-generics = { path = "crates/elephc-generics" }
 elephc-builtin-contract = { path = "crates/elephc-builtin-contract" }
 elephc-monitoring-contract = { path = "crates/elephc-monitoring-contract" }
 inventory = "0.3"
@@ -60,8 +61,8 @@ sha2 = "0.10"
 # `elephc monitor https://…` verifies the certificate before speaking the probe
 # protocol. Same rustls/ring pair the TLS bridge already pins, so the workspace
 # keeps one TLS stack and stays musl-friendly for the Docker test images.
-rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
-webpki-roots = "0.26"
+rustls = { version = "0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "1.0.10"
 toml = "0.9"
 toml_edit = "0.25"
 tar = "0.4"
@@ -90,6 +91,11 @@ elephc-pcntl = { path = "crates/elephc-pcntl" }
 indicatif = "0.17"
 console = "0.15"
 
+# build.rs generates the hosted-extension C header from crates/elephc-zend's
+# Rust ABI definitions (see crates/elephc-zend/abi_header.rs).
+[build-dependencies]
+syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
+
 # Bridge crates are runtime staticlibs, not used by the Rust compiler itself,
 # but codegen tests link their libelephc_*.a artifacts into compiled PHP
 # programs. They ship as dev-dependencies so `cargo test` / `cargo nextest run`
@@ -100,6 +106,7 @@ elephc-tls = { path = "crates/elephc-tls" }
 elephc-pdo = { path = "crates/elephc-pdo" }
 elephc-crypto = { path = "crates/elephc-crypto" }
 elephc-bcmath = { path = "crates/elephc-bcmath" }
+elephc-gmp = { path = "crates/elephc-gmp" }
 elephc-mbstring = { path = "crates/elephc-mbstring" }
 elephc-phar = { path = "crates/elephc-phar" }
 elephc-tz = { path = "crates/elephc-tz" }
@@ -107,6 +114,8 @@ elephc-image = { path = "crates/elephc-image" }
 elephc-web = { path = "crates/elephc-web" }
 elephc-magician = { path = "crates/elephc-magician" }
 elephc-curl = { path = "crates/elephc-curl" }
+elephc-random = { path = "crates/elephc-random" }
+elephc-zend = { path = "crates/elephc-zend" }
 # flate2 lets the phar:// codegen tests build gzip (raw-DEFLATE) fixture entries
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.
@@ -116,8 +125,11 @@ flate2 = "1"
 serde_json = "1"
 # The streams codegen tests host a local HTTPS fixture so https:// wrapper
 # success coverage does not depend on outbound network access.
-rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+rustls = { version = "0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2"
+# The php-src GMP PHPT runner compiles `--EXPECTF--` placeholders into an anchored
+# pattern; `regex` is already in the lock through the workspace's existing tooling.
+regex = "1"
 
 [features]
 # Keeps the codegen test package and its PDO dev-dependency on the same libpq
@@ -167,12 +179,6 @@ pdo-cubrid = ["elephc-pdo/cubrid"]
 # export the curl rows into the generated builtin documentation.
 curl = ["elephc-magician/curl", "elephc-builtin-contract/curl"]
 
-# PDO needs two mysql client controls that upstream 28.0.0 does not expose:
-# caller-supplied authentication RSA keys and rustls cipher-suite selection.
-# Keep the small audited patch in-tree until those options land upstream.
-[patch.crates-io]
-mysql = { path = "vendor/mysql-28.0.0" }
-
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of
 # the six test binaries. `line-tables-only` keeps file:line in panic backtraces
@@ -180,3 +186,6 @@ mysql = { path = "vendor/mysql-28.0.0" }
 # linker chew through on every edit -> `cargo test` cycle.
 [profile.dev]
 debug = "line-tables-only"
+
+[workspace.dependencies]
+elephc-fileinfo = { path = "crates/elephc-fileinfo" }

@@ -1,8 +1,6 @@
 ---
 title: "count_chars()"
 description: "Returns byte-frequency information about a string as a tally or a byte list."
-sidebar:
-  order: 790
 ---
 
 ## count_chars()
@@ -21,8 +19,9 @@ Returns byte-frequency information about a string as a tally or a byte list.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/count_chars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/count_chars.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

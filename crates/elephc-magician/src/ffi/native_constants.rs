@@ -5,7 +5,7 @@
 //! - Generated EIR backend assembly during eval context initialization.
 //!
 //! Key details:
-//! - Scalar payloads cross the ABI as integer words or borrowed UTF-8 bytes.
+//! - Scalar payloads cross the ABI as integer words or borrowed PHP string bytes.
 //! - Core and user constants live in separate context registries so PHP's
 //!   `Core` / `user` categories stay exact; neither joins the dynamic
 //!   `define()` map that the native constant inventory exports back to AOT.
@@ -47,12 +47,13 @@ pub unsafe extern "C" fn __elephc_eval_register_native_global_constant(
     value_word: u64,
     value_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_global_constant_inner(
             ctx, name_ptr, name_len, kind, value_word, value_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one AOT scalar user-declared constant for eval lookup and introspection.
@@ -73,10 +74,11 @@ pub unsafe extern "C" fn __elephc_eval_register_native_user_constant(
     value_word: u64,
     value_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_user_constant_inner(ctx, name_ptr, name_len, kind, value_word, value_len)
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one AOT array-valued user-declared constant for eval lookup and introspection.
@@ -98,10 +100,11 @@ pub unsafe extern "C" fn __elephc_eval_register_native_user_constant_array(
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_user_constant_array_inner(ctx, name_ptr, name_len, spec_ptr, spec_len)
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Validates and stores one scalar global constant after the ABI panic boundary.
@@ -207,9 +210,13 @@ fn user_constant_value_is_supported(value: &NativeCallableDefault) -> bool {
         | NativeCallableDefault::Int(_)
         | NativeCallableDefault::Float(_)
         | NativeCallableDefault::String(_)
+        | NativeCallableDefault::Bytes(_)
         | NativeCallableDefault::EmptyArray => true,
         NativeCallableDefault::Array(elements) => user_constant_elements_are_supported(elements),
-        NativeCallableDefault::Object { .. } => false,
+        NativeCallableDefault::Object { .. }
+        | NativeCallableDefault::DeferredError(_)
+        | NativeCallableDefault::Expression { .. }
+        | NativeCallableDefault::ExecutablePath => false,
     }
 }
 
@@ -229,8 +236,11 @@ unsafe fn native_scalar_constant_value(
         NATIVE_CONSTANT_INT => EvalNativeGlobalConstant::Int(value_word as i64),
         NATIVE_CONSTANT_FLOAT => EvalNativeGlobalConstant::Float(f64::from_bits(value_word)),
         NATIVE_CONSTANT_STRING => {
-            let value = abi_name_to_string(value_word as *const u8, value_len).ok()?;
-            EvalNativeGlobalConstant::String(value)
+            let value = crate::ffi::util::abi_data_bytes(value_word as *const u8, value_len).ok()?;
+            match String::from_utf8(value) {
+                Ok(value) => EvalNativeGlobalConstant::String(value),
+                Err(error) => EvalNativeGlobalConstant::Bytes(error.into_bytes()),
+            }
         }
         NATIVE_CONSTANT_RESOURCE => EvalNativeGlobalConstant::Resource(value_word as i64),
         _ => return None,

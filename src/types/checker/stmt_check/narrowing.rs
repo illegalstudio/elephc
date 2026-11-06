@@ -20,7 +20,8 @@
 //! - Guarded places are locals, simple instance properties (`$var->p`, `$this->p`) and simple
 //!   static properties (`self::$p`, `Cls::$p`); `static::$p` is excluded because late static
 //!   binding can select a different storage. Property places are keyed under a `\x01` sigil, so
-//!   `purge_property_narrowings` drops all of them after any call.
+//!   `purge_property_narrowings` drops all of them after any call, except a `readonly` property
+//!   of `$this` in a hierarchy that declares no `__clone` (`purge_property_narrowings_after_call`).
 //! - A completed `$this->p = <non-null>` / `self::$p = <non-null>` write re-establishes the fact
 //!   for that place (as the DECLARED type minus null), and `control_flow` joins that branch-exit
 //!   fact with the guard complement. Together these make PHP's lazy-initialization idiom
@@ -38,6 +39,8 @@ use crate::termination::{block_terminal_effect_with_divergence, TerminalEffect};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
+
+mod conditions;
 
 /// A detected type-guard narrowing: the guarded binding's env key and the types it takes in the
 /// then-branch (guard true) and else-branch (guard false).
@@ -70,6 +73,41 @@ impl GuardTarget {
 }
 
 impl Checker {
+    /// Checks a branch under its guarded read views while retaining the original storage types.
+    pub(crate) fn with_flow_narrowings<T>(
+        &mut self,
+        guards: &[GuardNarrowing],
+        then_branch: bool,
+        env: &mut TypeEnv,
+        body: impl FnOnce(&mut Self, &mut TypeEnv) -> Result<T, CompileError>,
+    ) -> Result<T, CompileError> {
+        let storage_entry = self.guarded_union_types.clone();
+        let mut saved = Vec::with_capacity(guards.len());
+        for guard in guards {
+            let view = if then_branch { &guard.then_ty } else { &guard.else_ty };
+            let previous = env.get(&guard.var).cloned();
+            saved.push((self.enter_flow_narrowing(&guard.var, previous.as_ref(), view), previous));
+            env.insert(guard.var.clone(), view.clone());
+        }
+        let result = body(self, env);
+        for (origin, previous) in saved.into_iter().rev() {
+            // A guard-only view refines the existing value without rebinding its storage.
+            // Close an unrepresentable view before the arm's exit is joined.
+            let guard_only = self.narrowed_local_origins.get(&origin.name).is_some_and(|entry|
+                !entry.stored_in_region && entry.view.as_ref() == env.get(&origin.name));
+            if let Some(previous) = previous {
+                if guard_only && env.get(&origin.name).is_some_and(|view|
+                    !self.type_contains_values(&previous, view))
+                {
+                    env.insert(origin.name.clone(), previous);
+                }
+            }
+            self.exit_flow_narrowing(origin);
+        }
+        self.restore_guarded_storage_provenance(&storage_entry);
+        result
+    }
+
     /// Detects a type-predicate guard in an `if`/ternary condition and computes the then/else
     /// narrowing for the guarded binding against the current environment. Handles the scalar
     /// `is_*` predicates, `is_null`, `instanceof Class`, and `=== false` / `=== null`, each with an
@@ -265,6 +303,53 @@ impl Checker {
         env.retain(|key, _| !key.starts_with('\u{1}'));
     }
 
+    /// Drops the property narrowings a call may invalidate. A call can reassign any reachable
+    /// property, except an initialized `readonly` one reached through `$this`: the property
+    /// cannot be written again and `$this` cannot be rebound, so a guard on `$this->plugin`
+    /// still holds after the call (`$this->plugin->name() . $this->plugin->count()` inside
+    /// `instanceof Sold`). Any other root can be rebound by the call (a by-reference parameter,
+    /// a `=&` alias, a global, a by-reference closure capture), so its facts are dropped.
+    pub(crate) fn purge_property_narrowings_after_call(&self, env: &mut TypeEnv) {
+        let kept: Vec<String> = env
+            .keys()
+            .filter(|key| self.narrowed_property_survives_calls(key))
+            .cloned()
+            .collect();
+        env.retain(|key, _| !key.starts_with('\u{1}') || kept.contains(key));
+    }
+
+    /// Returns whether an instance-property narrowing key names a `readonly` property of `$this`
+    /// that no call can change. PHP 8.3+ lets a readonly property be reinitialized while an
+    /// object is cloned, from `__clone` or any method it calls, so a hierarchy that declares
+    /// `__clone` anywhere keeps no fact across a call. Constructors keep none either: lowering
+    /// carries no receiver fact there, although a second write would be an `Error` in PHP.
+    fn narrowed_property_survives_calls(&self, key: &str) -> bool {
+        let Some(property) = key.strip_prefix("\u{1}prop\u{1}$this->") else {
+            return false;
+        };
+        if self.current_method.as_deref().is_some_and(|method| method.eq_ignore_ascii_case("__construct")) {
+            return false;
+        }
+        let Some(class_name) = self.current_class.as_deref() else {
+            return false;
+        };
+        let class_name = class_name.trim_start_matches('\\');
+        self.classes.get(class_name).is_some_and(|info| {
+            info.is_readonly_class || info.readonly_properties.contains(property)
+        }) && !self.hierarchy_declares_clone(class_name)
+    }
+
+    /// Returns whether `class_name`, one of its ancestors or one of its descendants has a
+    /// `__clone` method, any of which may run while an object of that class is cloned.
+    fn hierarchy_declares_clone(&self, class_name: &str) -> bool {
+        self.classes.iter().any(|(name, info)| {
+            (name == class_name
+                || self.is_subclass_of(name, class_name)
+                || self.is_subclass_of(class_name, name))
+                && info.methods.contains_key("__clone")
+        })
+    }
+
     /// Drops synthetic property narrowings rooted at one local variable after that local is
     /// rebound. Other receivers remain valid and keep their precision.
     pub(crate) fn purge_property_narrowings_for_root(env: &mut TypeEnv, root: &str) {
@@ -305,14 +390,14 @@ impl Checker {
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> =
-                    members.iter().filter(|m| guard_matches(m, target)).cloned().collect();
+                    members.iter().filter(|m| guard_matches(self, m, target)).cloned().collect();
                 if kept.is_empty() {
                     target.fallback_type()
                 } else {
                     self.normalize_union_type(kept)
                 }
             }
-            _ if guard_matches(current, target) => current.clone(),
+            _ if guard_matches(self, current, target) => current.clone(),
             _ => target.fallback_type(),
         }
     }
@@ -324,7 +409,7 @@ impl Checker {
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> =
-                    members.iter().filter(|m| !guard_matches(m, target)).cloned().collect();
+                    members.iter().filter(|m| !guard_matches(self, m, target)).cloned().collect();
                 if kept.is_empty() {
                     current.clone()
                 } else {
@@ -424,7 +509,8 @@ fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> 
             // the namespace qualification, so `\is_int($x)` and `Ns\is_int($x)` narrow too.
             let target = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
                 "is_int" | "is_integer" | "is_long" => GuardTarget::Exact(PhpType::Int),
-                "is_float" | "is_double" | "is_real" => GuardTarget::Exact(PhpType::Float),
+                "is_float" | "is_double" => GuardTarget::Exact(PhpType::Float),
+                "is_real" if !crate::strict_php::is_enabled() => GuardTarget::Exact(PhpType::Float),
                 "is_string" => GuardTarget::Exact(PhpType::Str),
                 "is_bool" => GuardTarget::Exact(PhpType::Bool),
                 // `is_null($x)`: same narrowing as `$x === null` — elephc models a `?T` value's
@@ -489,9 +575,9 @@ fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> 
 ///
 /// `Mixed` and `Never` are treated as possibly-null because neither carries enough information
 /// to prove otherwise; a union is non-null only when every member is.
-fn type_is_definitely_non_null(ty: &PhpType) -> bool {
+pub(in crate::types::checker) fn type_is_definitely_non_null(ty: &PhpType) -> bool {
     match ty {
-        PhpType::Void | PhpType::Never | PhpType::Mixed => false,
+        PhpType::Void | PhpType::Never | PhpType::Mixed | PhpType::TaggedScalar => false,
         PhpType::Union(members) => members.iter().all(type_is_definitely_non_null),
         _ => true,
     }
@@ -499,13 +585,13 @@ fn type_is_definitely_non_null(ty: &PhpType) -> bool {
 
 /// Returns true when a union member is compatible with a guard target, used to keep (then) or drop
 /// (else) members. Exact targets require a matching variant; an `Object` target matches an object
-/// member with the same class name (inheritance-aware narrowing is left for the future), and
+/// member compatible with the target class or interface, and
 /// `AnyArray` matches either array shape.
-fn guard_matches(member: &PhpType, target: &GuardTarget) -> bool {
+fn guard_matches(checker: &Checker, member: &PhpType, target: &GuardTarget) -> bool {
     match target {
         GuardTarget::AnyArray => matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }),
-        GuardTarget::Exact(PhpType::Object(target_class)) => {
-            matches!(member, PhpType::Object(member_class) if member_class == target_class)
+        GuardTarget::Exact(target @ PhpType::Object(_)) => {
+            matches!(member, PhpType::Object(_)) && checker.type_accepts(target, member)
         }
         GuardTarget::Exact(PhpType::Bool) => matches!(member, PhpType::Bool | PhpType::False),
         GuardTarget::Exact(target) => member == target,

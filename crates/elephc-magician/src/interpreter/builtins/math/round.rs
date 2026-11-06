@@ -114,6 +114,7 @@ pub(in crate::interpreter) trait RoundTieOps {
 }
 
 impl<T: RuntimeValueOps> RoundTieOps for T {
+    /// Computes whether a runtime numeric cell is even using the shared remainder operation.
     fn is_even(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         let two = self.int(2)?;
         let remainder = self.fmod(value, two)?;

@@ -9,10 +9,11 @@
 //! - Materializes DB-Library rowsets so bridge handles remain independent and safe.
 //! - PDO placeholders are emulated client-side because DB-Library has no prepare API.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_uchar, CStr, CString};
 use std::ptr;
-use std::sync::{Mutex, Once, OnceLock};
+use std::sync::{Once, OnceLock};
 
 const SUCCEED: c_int = 1;
 const FAIL: c_int = 0;
@@ -125,41 +126,68 @@ type MessageHandler = unsafe extern "C" fn(
 
 #[link(name = "sybdb")]
 extern "C" {
+    /// Initializes the DB-Library client before opening connections.
     fn dbinit() -> c_int;
+    /// Allocates a DB-Library login record.
     fn dblogin() -> *mut LoginRecord;
+    /// Releases a DB-Library login record.
     fn dbloginfree(login: *mut LoginRecord);
+    /// Sets a selected login-record string field.
     fn dbsetlname(login: *mut LoginRecord, value: *const c_char, which: c_int) -> c_int;
+    /// Selects the protocol version on a login record.
     fn dbsetlversion(login: *mut LoginRecord, version: c_uchar) -> c_int;
+    /// Sets the DB-Library connection timeout in seconds.
     fn dbsetlogintime(seconds: c_int) -> c_int;
+    /// Sets the DB-Library query timeout in seconds.
     fn dbsettime(seconds: c_int) -> c_int;
+    /// Opens a FreeTDS connection using the login record and selected DB-Library mode.
     fn tdsdbopen(
         login: *mut LoginRecord,
         server: *const c_char,
         msdblib: c_int,
     ) -> *mut DbProcess;
+    /// Closes a DB-Library connection.
     fn dbclose(process: *mut DbProcess);
+    /// Reports whether the connection is unusable.
     fn dbdead(process: *mut DbProcess) -> c_int;
+    /// Appends SQL text to the connection command buffer.
     fn dbcmd(process: *mut DbProcess, sql: *const c_char) -> c_int;
+    /// Executes the buffered SQL command.
     fn dbsqlexec(process: *mut DbProcess) -> c_int;
+    /// Advances to the next result set and reports its status.
     fn dbresults(process: *mut DbProcess) -> c_int;
+    /// Advances to the next row of the current result set.
     fn dbnextrow(process: *mut DbProcess) -> c_int;
+    /// Returns the current result-set column count.
     fn dbnumcols(process: *mut DbProcess) -> c_int;
+    /// Returns the selected result column name.
     fn dbcolname(process: *mut DbProcess, column: c_int) -> *mut c_char;
+    /// Returns the selected result column native type.
     fn dbcoltype(process: *mut DbProcess, column: c_int) -> c_int;
+    /// Returns the selected result column declared length.
     fn dbcollen(process: *mut DbProcess, column: c_int) -> c_int;
+    /// Returns the selected result column source name.
     fn dbcolsource(process: *mut DbProcess, column: c_int) -> *mut c_char;
+    /// Returns native precision and scale metadata for the selected result column.
     fn dbcoltypeinfo(process: *mut DbProcess, column: c_int) -> *mut DbTypeInfo;
+    /// Returns the selected result column user-defined type identifier.
     fn dbcolutype(process: *mut DbProcess, column: c_int) -> c_int;
+    /// Returns the selected column bytes in the current row.
     fn dbdata(process: *mut DbProcess, column: c_int) -> *mut c_uchar;
+    /// Returns the selected column byte length in the current row.
     fn dbdatlen(process: *mut DbProcess, column: c_int) -> c_int;
+    /// Returns the affected-row count for the current command.
     fn dbcount(process: *mut DbProcess) -> c_int;
+    /// Cancels pending results on the connection.
     fn dbcancel(process: *mut DbProcess) -> c_int;
+    /// Sets a native DB-Library connection option.
     fn dbsetopt(
         process: *mut DbProcess,
         option: c_int,
         char_parameter: *const c_char,
         int_parameter: c_int,
     ) -> c_int;
+    /// Converts native data between the supplied source and destination types.
     fn dbconvert(
         process: *mut DbProcess,
         source_type: c_int,
@@ -169,16 +197,23 @@ extern "C" {
         dest: *mut c_uchar,
         dest_len: c_int,
     ) -> c_int;
+    /// Decodes a native datetime into the broken-down date record.
     fn dbdatecrack(
         process: *mut DbProcess,
         record: *mut DbDateRec2,
         datetime: *mut DbDateTime,
     ) -> c_int;
+    /// Attaches bridge-owned diagnostic state to the connection.
     fn dbsetuserdata(process: *mut DbProcess, data: *mut c_uchar);
+    /// Returns the bridge-owned diagnostic state attached to the connection.
     fn dbgetuserdata(process: *mut DbProcess) -> *mut c_uchar;
+    /// Installs the DB-Library error callback and returns the previous callback.
     fn dberrhandle(handler: Option<ErrorHandler>) -> Option<ErrorHandler>;
+    /// Installs the DB-Library message callback and returns the previous callback.
     fn dbmsghandle(handler: Option<MessageHandler>) -> Option<MessageHandler>;
+    /// Returns the client library version string.
     fn dbversion() -> *const c_char;
+    /// Returns the negotiated connection protocol version.
     fn dbtds(process: *mut DbProcess) -> c_int;
 }
 
@@ -193,10 +228,19 @@ struct ErrorState {
     os_message: String,
 }
 
-/// Last diagnostic raised before DB-Library has produced a connection handle.
-fn open_error() -> &'static Mutex<ErrorState> {
-    static ERROR: OnceLock<Mutex<ErrorState>> = OnceLock::new();
-    ERROR.get_or_init(|| Mutex::new(ErrorState::default()))
+// Last diagnostic raised before DB-Library has produced a connection handle.
+// Thread-local, so concurrent failing `dblib:` constructors cannot observe each
+// other's error, matching `odbc.rs` / `cubrid.rs` (#1730).
+thread_local! {
+    static OPEN_ERROR: RefCell<ErrorState> = RefCell::new(ErrorState::default());
+}
+
+/// Returns the SQLSTATE and native code captured by this thread's latest failed DBLIB open.
+pub(crate) fn open_diagnostic() -> (String, i64) {
+    OPEN_ERROR.with(|slot| {
+        let error = slot.borrow();
+        (error.sqlstate.clone(), error.native_code)
+    })
 }
 
 /// Converts a possibly-null DB-Library C string into an owned Rust string.
@@ -248,14 +292,15 @@ unsafe extern "C" fn error_handler(
             return INT_CANCEL;
         }
     }
-    if let Ok(mut state) = open_error().lock() {
+    OPEN_ERROR.with(|slot| {
+        let mut state = slot.borrow_mut();
         state.sqlstate = sqlstate.to_string();
         state.native_code = i64::from(db_error);
         state.message = message;
         state.os_code = i64::from(os_error);
         state.severity = i64::from(severity);
         state.os_message = os;
-    }
+    });
     INT_CANCEL
 }
 
@@ -457,9 +502,7 @@ impl DblibConn {
     pub fn open(dsn: &str) -> Result<Self, String> {
         initialize()?;
         let options = parse_dsn(dsn)?;
-        if let Ok(mut error) = open_error().lock() {
-            *error = ErrorState::default();
-        }
+        OPEN_ERROR.with(|slot| *slot.borrow_mut() = ErrorState::default());
         unsafe {
             dbsetlogintime(options.connection_timeout.max(0));
             dbsettime(options.query_timeout.max(0));
@@ -491,12 +534,14 @@ impl DblibConn {
             let link = tdsdbopen(login, host.as_ptr(), TDSDBOPEN_SYBASE_MODE);
             dbloginfree(login);
             if link.is_null() {
-                let message = open_error()
-                    .lock()
-                    .ok()
-                    .map(|error| error.message.clone())
-                    .filter(|message| !message.is_empty())
-                    .unwrap_or_else(|| "PDO_DBLIB: unable to connect".to_string());
+                let message = OPEN_ERROR.with(|slot| {
+                    let message = slot.borrow().message.clone();
+                    if message.is_empty() {
+                        "PDO_DBLIB: unable to connect".to_string()
+                    } else {
+                        message
+                    }
+                });
                 return Err(message);
             }
             let max_text = b"2147483647\0";
@@ -1435,6 +1480,55 @@ mod tests {
         assert_eq!(tds_login_version("7.4"), Some(8));
         assert_eq!(tds_login_version("unsupported"), None);
         assert_eq!(server_name(&options), "db:1433");
+    }
+
+    /// The pre-handle DB-Library diagnostic is per-thread: a write on one thread is not
+    /// visible on another, and a fresh thread sees the default (issue #1730).
+    #[test]
+    fn open_diagnostic_is_thread_local() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        OPEN_ERROR.with(|slot| {
+            let mut state = slot.borrow_mut();
+            state.sqlstate = "28000".to_string();
+            state.native_code = 20014;
+            state.message = "parent failure".to_string();
+        });
+        let child_barrier = barrier.clone();
+        let child = std::thread::spawn(move || {
+            let initial = open_diagnostic();
+            OPEN_ERROR.with(|slot| {
+                let mut state = slot.borrow_mut();
+                state.sqlstate = "HY001".to_string();
+                state.native_code = 222;
+                state.message = "child failure".to_string();
+            });
+            child_barrier.wait();
+            (initial, open_diagnostic())
+        });
+        barrier.wait();
+        let parent = open_diagnostic();
+        let (child_initial, child_final) = child.join().unwrap();
+
+        assert_eq!(parent, ("28000".to_string(), 20014));
+        assert_eq!(child_initial, (String::new(), 0));
+        assert_eq!(child_final, ("HY001".to_string(), 222));
+    }
+
+    /// A `dblib:` constructor failure publishes the pre-handle diagnostic into PDO's
+    /// last-open cells through `store_open_failure`, not only through the error handler
+    /// (issue #1730).
+    #[test]
+    fn dblib_open_failure_publishes_the_pre_handle_diagnostic() {
+        OPEN_ERROR.with(|slot| {
+            let mut state = slot.borrow_mut();
+            state.sqlstate = "28000".to_string();
+            state.native_code = 20014;
+            state.message = "Login failed".to_string();
+        });
+        crate::store_open_failure("dblib:host=db;dbname=app", "PDO_DBLIB: unable to connect");
+        let state = unsafe { std::ffi::CStr::from_ptr(crate::elephc_pdo_last_open_sqlstate()) };
+        assert_eq!(state.to_str().unwrap(), "28000");
+        assert_eq!(crate::elephc_pdo_last_open_native_code(), 20014);
     }
 
     /// Leaves FreeTDS aliases untouched when no explicit PDO port extension is present.

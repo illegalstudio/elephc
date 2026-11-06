@@ -48,7 +48,7 @@ pub(in crate::interpreter) fn eval_builtin_unset(
     for arg in args {
         match arg {
             EvalExpr::LoadVar(name) => {
-                if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
+                if let Some(replaced) = unset_scope_cell(context, scope, name.clone()) {
                     eval_release_value(context, values, replaced)?;
                 }
             }

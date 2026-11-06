@@ -9,6 +9,43 @@
 
 use super::*;
 
+/// Static-rooted compound array targets capture a replayable RHS before reading any dimension.
+#[test]
+fn test_static_array_compound_assignment_captures_rhs_first() {
+    for target in ["C::$o->items[0]", "C::$o->child->items[0]", "C::$o->items[0][0]", "C::$items[0]"] {
+        let stmts = parse_source(&format!("<?php echo ({target} += $rhs);"));
+        let StmtKind::Echo(expr) = &stmts[0].kind else { panic!("expected echo"); };
+        let ExprKind::Assignment { prelude, .. } = &expr.kind else { panic!("expected assignment"); };
+        assert_eq!(prelude.len(), 2, "{target}");
+        assert!(matches!(&prelude[0].kind,
+            StmtKind::Assign { value: Expr { kind: ExprKind::Variable(name), .. }, .. } if name == "rhs"), "{target}");
+    }
+}
+
+/// Static array assignment expressions capture their RHS once for the write and result.
+#[test]
+fn test_static_array_assignment_result_captures_replayable_hook() {
+    let stmts = parse_source("<?php echo (C::$items[0] = $hook->value);");
+    let StmtKind::Echo(expr) = &stmts[0].kind else { panic!("expected echo"); };
+    let ExprKind::Assignment { value, result_target, prelude, .. } = &expr.kind else { panic!("expected assignment"); };
+    assert_eq!(prelude.len(), 1);
+    assert!(matches!(value.kind, ExprKind::Variable(_)));
+    assert_eq!(result_target.as_deref(), Some(value.as_ref()));
+}
+
+/// Static property chains capture even a replayable compound RHS before traversing the receiver.
+#[test]
+fn test_static_chain_compound_assignment_captures_rhs_first() {
+    let stmts = parse_source("<?php echo (C::$o->child->v += $rhs);");
+    let StmtKind::Echo(expr) = &stmts[0].kind else { panic!("expected echo"); };
+    let ExprKind::Assignment { prelude, .. } = &expr.kind else { panic!("expected assignment"); };
+    assert_eq!(prelude.len(), 2);
+    assert!(matches!(&prelude[0].kind,
+        StmtKind::Assign { value: Expr { kind: ExprKind::Variable(name), .. }, .. } if name == "rhs"));
+    assert!(matches!(&prelude[1].kind,
+        StmtKind::Assign { value: Expr { kind: ExprKind::BinaryOp { .. }, .. }, .. }));
+}
+
 /// Verifies that a parenthesized expression on the RHS of a word logical operator
 /// (`and`) parses as a `BinaryOp(And)` within the assignment's value field, not as
 /// some other expression wrapper. Regression check for precedence handling when
@@ -295,4 +332,40 @@ fn test_null_coalesce_assignment_expression_stabilizes_computed_mutated_index() 
         },
         other => panic!("expected Echo, got {:?}", other),
     }
+}
+
+/// A compound append evaluates its RHS, reserves a null slot, then computes/stores the value.
+/// Generated builtin helpers must retain distinct identities for checked-call metadata.
+#[test]
+fn test_compound_append_reserves_slot_before_operation_and_keeps_call_identities() {
+    let stmts = parse_source("<?php $items[] /= divisor();");
+    let StmtKind::ExprStmt(expr) = &stmts[0].kind else {
+        panic!("expected a compound append expression: {:?}", stmts[0]);
+    };
+    let ExprKind::Assignment { prelude, .. } = &expr.kind else {
+        panic!("expected a stabilized append expression: {:?}", expr);
+    };
+    let rhs = prelude.iter().position(|stmt| matches!(&stmt.kind,
+        StmtKind::Assign { value, .. }
+            if matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name.as_str() == "divisor")
+    )).expect("RHS evaluated once in the prelude");
+    let reserve = prelude.iter().position(|stmt| matches!(&stmt.kind,
+        StmtKind::ArrayPush { value, .. } if matches!(value.kind, ExprKind::Null)
+    )).expect("new null slot reserved");
+    let write = prelude.iter().position(|stmt| matches!(&stmt.kind,
+        StmtKind::RefAssign { source, .. } if matches!(source.kind, ExprKind::ArrayAccess { .. })
+    )).expect("reserved slot captured for its update");
+    assert!(rhs < reserve && reserve < write);
+    let helpers = prelude.iter().filter_map(|stmt| {
+        let expr = match &stmt.kind {
+            StmtKind::Assign { value, .. } | StmtKind::ExprStmt(value) => value,
+            _ => return None,
+        };
+        matches!(&expr.kind, ExprKind::FunctionCall { name, .. } if name.is_fully_qualified())
+            .then_some(expr)
+    }).collect::<Vec<_>>();
+    assert!(!helpers.is_empty());
+    assert!(helpers.iter().all(|call| call.span.identifies_a_node() && !call.span.is_from_source()));
+    let identities = helpers.iter().map(|call| call.span).collect::<std::collections::HashSet<_>>();
+    assert_eq!(identities.len(), helpers.len());
 }

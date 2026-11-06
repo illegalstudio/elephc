@@ -191,6 +191,7 @@ return $s . "";
 pub(super) fn datetime_extract_micros() -> ClassMethod {
     let body = super::bodies::extract_micros();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_extract_micros".to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -261,6 +262,7 @@ return $__out;
 pub(super) fn datetime_extract_modify_micros() -> ClassMethod {
     let body = super::bodies::extract_modify_micros();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_extract_modify_micros".to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -284,6 +286,7 @@ pub(super) fn datetime_extract_modify_micros() -> ClassMethod {
 pub(super) fn datetime_strip_modify_micros() -> ClassMethod {
     let body = super::bodies::strip_modify_micros();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_strip_modify_micros".to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -307,6 +310,7 @@ pub(super) fn datetime_strip_modify_micros() -> ClassMethod {
 pub(super) fn datetime_strip_micros() -> ClassMethod {
     let body = super::bodies::strip_micros();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_strip_micros".to_string(),
         visibility: Visibility::Public,
         is_static: true,
@@ -333,6 +337,7 @@ pub(super) fn datetime_strip_micros() -> ClassMethod {
 pub(super) fn datetime_strftime() -> ClassMethod {
     let body = super::bodies::strftime();
     ClassMethod {
+        type_params: Vec::new(),
         name: "__elephc_strftime".to_string(),
         visibility: Visibility::Public,
         is_static: true,

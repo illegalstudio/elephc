@@ -1,8 +1,6 @@
 ---
 title: "curl_copy_handle()"
 description: "Copies a cURL handle along with all of its preferences."
-sidebar:
-  order: 695
 ---
 
 ## curl_copy_handle()
@@ -20,8 +18,9 @@ Copies a cURL handle along with all of its preferences.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_copy_handle.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_copy_handle.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

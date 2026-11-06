@@ -57,6 +57,7 @@ fn test_propagate_constants_merges_identical_try_catch_assignments() {
             StmtKind::Try {
                 try_body: vec![Stmt::assign("base", Expr::int_lit(2))],
                 catches: vec![crate::parser::ast::CatchClause {
+                    exception_type_args: Vec::new(),
                     exception_types: vec![Name::from("Exception")],
                     variable: Some("e".to_string()),
                     body: vec![Stmt::assign("base", Expr::int_lit(2))],
@@ -89,6 +90,7 @@ fn test_propagate_constants_ignores_unreachable_catch_after_non_throwing_try() {
             StmtKind::Try {
                 try_body: vec![Stmt::assign("base", Expr::int_lit(2))],
                 catches: vec![crate::parser::ast::CatchClause {
+                    exception_type_args: Vec::new(),
                     exception_types: vec![Name::from("Exception")],
                     variable: Some("e".to_string()),
                     body: vec![Stmt::assign("base", Expr::int_lit(9))],
@@ -106,4 +108,37 @@ fn test_propagate_constants_ignores_unreachable_catch_after_non_throwing_try() {
         propagated[1],
         Stmt::echo(Expr::int_lit(8))
     );
+}
+
+/// Tests that a switch body entered by falling through keeps the writes of the body before it.
+///
+/// `case 1: $k = 10;` falls into `case 2: echo $k + 1;`, so `$k` is not the `0` it held before
+/// the switch there, and the echo must not fold to `1`.
+#[test]
+fn test_propagate_constants_keeps_fallthrough_writes_in_the_next_switch_body() {
+    let echo_k_plus_one = Stmt::echo(Expr::binop(Expr::var("k"), BinOp::Add, Expr::int_lit(1)));
+    let program = vec![
+        Stmt::assign("k", Expr::int_lit(0)),
+        Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("flag"),
+                cases: vec![
+                    (vec![Expr::int_lit(1)], vec![Stmt::assign("k", Expr::int_lit(10))]),
+                    (
+                        vec![Expr::int_lit(2)],
+                        vec![echo_k_plus_one.clone(), Stmt::new(StmtKind::Break(1), Span::dummy())],
+                    ),
+                ],
+                default: None,
+            },
+            Span::dummy(),
+        ),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    let StmtKind::Switch { cases, .. } = &propagated[1].kind else {
+        panic!("expected the switch to survive propagation");
+    };
+    assert_eq!(cases[1].1[0], echo_k_plus_one);
 }

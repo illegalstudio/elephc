@@ -27,6 +27,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub rsp, {}", boundary_bytes));               // reserve the handler record plus source/result spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve source pointer across setjmp
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve source length across setjmp
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_legacy_active", 0);
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // checkpoint legacy sharing before a hydration hook can throw
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", previous_handler_offset)); // handler.next = previous exception-handler head
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
@@ -36,7 +38,7 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!("lea r10, [rbp - {}]", previous_handler_offset)); // compute this wrapper's exception-handler record address
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("lea rdi, [rbp - {}]", boundary_bytes - TRY_HANDLER_JMP_BUF_OFFSET)); // pass this boundary's opaque jmp_buf to setjmp
-    emitter.bl_c("setjmp"); // catch Throwable control flow escaping hydration hooks
+    emitter.save_exception_handler();                                           // catch Throwable control flow escaping hydration hooks
     emitter.instruction("test eax, eax");                                       // did control return through longjmp?
     emitter.instruction("jnz __rt_unserialize_mixed_throw_x");                  // clean runtime state before propagating the Throwable
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // base = preserved source string pointer
@@ -52,8 +54,14 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("call __rt_unser_at");                                  // parse while the cleanup boundary is active
     emitter.instruction("jmp __rt_unserialize_mixed_parsed_x");                 // share exception-boundary teardown with validation failures
     emitter.label("__rt_unserialize_mixed_invalid_x");
+    emitter.instruction("mov rdi, rdx");                                        // pass the validator's failure offset to the warning builder
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the complete source length
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "rdx", "_unser_call_line", 0);
+    emitter.instruction("call __rt_unserialize_report_error");                  // report PHP's offset/length warning before returning false
     emitter.instruction("xor eax, eax");                                        // null result signals a bounded parse failure
     emitter.label("__rt_unserialize_mixed_parsed_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // restore the entry's sharing mode after successful hydration
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_unser_legacy_active", 0);
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the parsed box while popping the boundary
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", previous_handler_offset)); // reload the previous exception-handler head
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
@@ -63,6 +71,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("leave");                                               // release the exception boundary and restore the caller frame
     emitter.instruction("ret");                                                 // return the parsed box to the lowering's normal end path
     emitter.label("__rt_unserialize_mixed_throw_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // restore sharing skipped by a callback's nonlocal throw
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_unser_legacy_active", 0);
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", previous_handler_offset)); // reload the handler preceding this internal boundary
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", boundary_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
@@ -83,10 +93,12 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     // [rbp-72]=scratch/hook [80]=policy/data hash [88]=registry index [96]=object box
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 96");                                         // recursive parser frame (with a reference-index slot)
+    // [104]=unfinished array [112]=unfinished hook data; cleanup records at rsp+0/48/96.
+    emitter.instruction("sub rsp, 272");                                        // keep custom-envelope scratch separate from all three cleanup records
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the base pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the current position
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the end position
+    super::parser_owners::emit_enter(emitter);
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r8", "_unser_depth", 0); // load current recursive unserialize depth
     emitter.instruction("add r8, 1");                                           // account for this parser frame
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r8", "_unser_depth", 0); // publish parser depth before consuming wire bytes
@@ -127,6 +139,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("je __rt_unser_at_array");                              // parse array
     emitter.instruction("cmp r9d, 79");                                         // ASCII 'O' (object)?
     emitter.instruction("je __rt_unser_at_object");                             // parse object
+    emitter.instruction("cmp r9d, 67");                                         // C carries an opaque Serializable payload
+    emitter.instruction("je __rt_unser_at_object");                             // share class allocation and reference publication
     emitter.instruction("jmp __rt_unser_at_fail");                              // unsupported wire form
 
     // -- null: "N;" --
@@ -281,6 +295,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 7");                                          // hash value_type = boxed Mixed
     emitter.instruction("call __rt_hash_new");                                  // allocate the destination hash
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the hash pointer
+    emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // keep the unfinished array reachable by exception cleanup
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize the entry index
     emitter.label("__rt_unser_at_array_loop");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the entry index
@@ -306,10 +321,9 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // key_lo
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // key_hi (-1 for int keys)
-    emitter.instruction("mov r8, 0");                                           // value_hi unused
-    emitter.instruction("mov r9, 7");                                           // value tag = boxed Mixed (transfer the box)
-    emitter.instruction("call __rt_hash_set");                                  // insert the entry -> rax = (possibly new) hash
+    emitter.instruction("call __rt_unser_store_entry");                         // insert the entry, reusing a duplicate key's box
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the updated hash pointer
+    emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // keep the unfinished array reachable by exception cleanup
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the entry index
     emitter.instruction("add rcx, 1");                                          // advance the entry index
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // persist the entry index
@@ -337,6 +351,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_unser_at_ret");                               // return box and new position
     emitter.label("__rt_unser_at_array_fail");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // partially built hash pointer
+    emitter.instruction("mov QWORD PTR [rbp - 104], 0");                        // detach the owner before explicit cleanup can throw
     emitter.instruction("call __rt_hash_free_deep");                            // release keys and transferred boxed values locally
     emitter.instruction("xor eax, eax");                                        // report parse failure
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // preserve current cursor for the caller
@@ -344,6 +359,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- object: "O:" + namelen + ":\"" + class + "\":" + count + ":{" + count*(key value) + "}" --
     emitter.label("__rt_unser_at_object");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // preserve the original marker before cursor reuse
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // load the original object position
+    emitter.instruction("movzx r9d, BYTE PTR [r10 + r11]");                     // distinguish C payloads from O property tables
+    emitter.instruction("mov QWORD PTR [rbp - 120], r9");                       // retain the marker in unused parser scratch
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload base
     emitter.instruction("add r10, QWORD PTR [rbp - 16]");                       // pointer to the type byte
     emitter.instruction("add r10, 2");                                          // skip "O:" to the class-name length digits
@@ -437,6 +456,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("add r10, 2");                                          // skip ':' and '{' to the body
     emitter.instruction("sub r10, QWORD PTR [rbp - 8]");                        // body position offset
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // advance the cursor to the body
+    super::custom::emit_body(emitter);
     emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // blocked objects cannot inspect class hook tables
     emitter.instruction("je __rt_unser_obj_default");                           // parse properties without hydration
     // -- __unserialize magic: parse the body into an assoc array, then call
@@ -452,6 +472,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 7");                                          // hash value_type = boxed Mixed
     emitter.instruction("call __rt_hash_new");                                  // allocate the $data hash
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save the $data hash pointer
+    emitter.instruction("mov QWORD PTR [rbp - 112], rax");                      // keep unfinished hydration data reachable by exception cleanup
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // entry index = 0
     emitter.label("__rt_unser_obj_data_loop");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the entry index
@@ -475,10 +496,9 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // $data hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // key_lo
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // key_hi (-1 for int keys)
-    emitter.instruction("mov r8, 0");                                           // value_hi unused
-    emitter.instruction("mov r9, 7");                                           // value tag = boxed Mixed (transfer the box)
-    emitter.instruction("call __rt_hash_set");                                  // insert the entry -> rax = (possibly new) hash
+    emitter.instruction("call __rt_unser_store_entry");                         // insert the entry, reusing a duplicate key's box
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save the updated $data hash pointer
+    emitter.instruction("mov QWORD PTR [rbp - 112], rax");                      // keep unfinished hydration data reachable by exception cleanup
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the entry index
     emitter.instruction("add rcx, 1");                                          // advance the entry index
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // persist the entry index
@@ -527,9 +547,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rdi + 24]");                       // opaque property hash
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // serialized property key pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // serialized property key length
-    emitter.instruction("mov r8, 0");                                           // boxed Mixed values have no high payload word
-    emitter.instruction("mov r9, 7");                                           // transfer the parsed box as a Mixed hash value
-    emitter.instruction("call __rt_hash_set");                                  // insert property, preserving key/value ownership and order
+    emitter.instruction("call __rt_unser_store_entry");                         // insert the property, reusing a duplicate key's box
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // incomplete-object payload after a possible hash grow
     emitter.instruction("mov QWORD PTR [r10 + 24], rax");                       // retain updated property hash pointer
     emitter.label("__rt_unser_obj_skip_prop_store_x");
@@ -549,7 +567,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // does the class define __wakeup?
     emitter.instruction("jz __rt_unser_at_obj_box");                            // no → box the object directly
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // $this receiver
-    emitter.instruction("call r10");                                            // call __wakeup($this)
+    emitter.instruction("mov rsi, r10");                                        // pass the wakeup target to the scoped modern adapter
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_invoke_wakeup");
     emitter.label("__rt_unser_at_obj_box");
     emitter.instruction("mov rax, QWORD PTR [rbp - 96]");                       // return the stable box published before body parsing
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload position (at the closing '}')
@@ -558,6 +577,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     emitter.label("__rt_unser_obj_data_fail_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // partially built __unserialize data hash
+    emitter.instruction("mov QWORD PTR [rbp - 112], 0");                        // detach the owner before explicit cleanup can throw
     emitter.instruction("call __rt_hash_free_deep");                            // release keys and transferred child boxes
     emitter.instruction("jmp __rt_unser_obj_fail_x");                           // release the partially hydrated object too
     emitter.label("__rt_unser_obj_fail_x");
@@ -568,6 +588,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");                      // remove the failed object from future reference lookup
     emitter.label("__rt_unser_obj_fail_noreg_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 96]");                       // partially hydrated object's owning Mixed box
+    emitter.instruction("mov QWORD PTR [rbp - 96], 0");                         // detach the owner before explicit cleanup can throw
     emitter.instruction("call __rt_decref_mixed");                              // release the box and its object ownership
     emitter.instruction("xor eax, eax");                                        // report parse failure
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // preserve the child decoder's current cursor
@@ -579,10 +600,11 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // newpos = unchanged position
 
     emitter.label("__rt_unser_at_ret");
+    super::parser_owners::emit_leave(emitter);
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r8", "_unser_depth", 0); // load parser depth before returning to the caller
     emitter.instruction("sub r8, 1");                                           // release this completed recursive parser frame
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r8", "_unser_depth", 0); // keep sibling parses independent
-    emitter.instruction("add rsp, 96");                                         // deallocate the parser frame
+    emitter.instruction("add rsp, 272");                                        // release the parser frame and custom-envelope scratch
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return rax=box, rdx=newpos
 
@@ -634,6 +656,15 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9 + r11*8]");                      // the registered value box (0 if none)
     emitter.instruction("test r9, r9");                                         // was this reserved registry slot left unpublished?
     emitter.instruction("jz __rt_unser_at_ref_fail");                           // → null
+    emitter.label("__rt_unser_at_ref_deref_x");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // inspect the registry cell's boxed tag
+    emitter.instruction("cmp r10, 7");                                          // does the slot hold a nested Mixed wrapper?
+    emitter.instruction("jne __rt_unser_at_ref_deref_done_x");                  // concrete cells resolve directly
+    emitter.instruction("mov r9, QWORD PTR [r9 + 8]");                          // follow the wrapper to the current owner
+    emitter.instruction("test r9, r9");                                         // did the wrapper point at a cleared box?
+    emitter.instruction("jz __rt_unser_at_ref_fail");                           // a cleared wrapper resolves to null
+    emitter.instruction("jmp __rt_unser_at_ref_deref_x");                       // peel another nested wrapper if present
+    emitter.label("__rt_unser_at_ref_deref_done_x");
     emitter.instruction("cmp QWORD PTR [rbp - 72], 114");                       // lowercase r denotes object identity, not an array reference
     emitter.instruction("jne __rt_unser_at_ref_clone");                         // uppercase R accepts any published value shape
     emitter.instruction("cmp QWORD PTR [r9], 6");                               // require an object for lowercase r

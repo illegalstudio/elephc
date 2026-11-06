@@ -15,11 +15,12 @@
 //!   selected window — something elephc's dense indexed representation cannot express.
 //! - The result shape depends on an argument VALUE, not on argument types, so it must travel on
 //!   the `Checked` contract: a `Shared` resolver is re-run by `semantics::lower_registry_call`
-//!   with `args: &[]` and could not see the flag there. A boxed `Mixed`/`Union` source therefore
-//!   reports `array<mixed>` — the exact layout `lower_mixed_array_slice` materializes — rather
-//!   than a bare `Mixed`, which is also PHP-accurate because `array_slice()` always returns an
-//!   array. `RuntimeFnId::ArraySlice::fallback_result_type` supplies the same layout for
-//!   synthetic call sites with no checked type.
+//!   with `args: &[]` and could not see the flag there. A boxed `Mixed`/`Union` source reports the
+//!   boxed PHP array type, because its payload may be a list or a hash: `lower_mixed_array_slice`
+//!   renumbers a list, keeps a hash's string keys, and boxes whichever storage it built.
+//!   `RuntimeFnId::ArraySlice::fallback_result_type` covers call sites with no checked type: an
+//!   associative source keeps its layout, a boxed source gets the boxed PHP array type (the one
+//!   the callable wrapper pins), and an indexed source keeps `array<mixed>`.
 //! - The checked type below is a CHECKER type: call-site specialization narrows an untyped
 //!   parameter (`function top($scores)`) that EIR still lowers under the boxed-`Mixed` ABI
 //!   contract, so the type recorded here can be narrower than the operand the slice helper
@@ -59,7 +60,8 @@ fn literal_preserve_keys(flag: Option<&Expr>) -> Option<bool> {
 ///
 /// Without `preserve_keys` a slice preserves the input array shape, so the (array-or-assoc)
 /// first-argument type is returned unchanged and a boxed `Mixed`/`Union` first argument yields
-/// `array<mixed>`. With a literal `preserve_keys: true` an indexed source keeps the integer keys of
+/// the boxed PHP array type, since its payload may be a list or a hash. With a literal
+/// `preserve_keys: true` an indexed source keeps the integer keys of
 /// the selected window, which is an `AssocArray` keyed by `Int`; a source that is already associative
 /// keeps its own shape because narrowing a hash preserves its keys. Non-array first arguments and
 /// a non-literal flag are rejected, and so is a key-preserving slice of a boxed `Mixed` array,
@@ -69,7 +71,7 @@ fn literal_preserve_keys(flag: Option<&Expr>) -> Option<bool> {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let preserve = literal_preserve_keys(cx.args.get(3)).ok_or_else(|| {
-        CompileError::new(
+        CompileError::aot_literal_required(
             cx.span,
             "array_slice() preserve_keys argument must be a literal bool in AOT mode",
         )
@@ -81,7 +83,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 "array_slice() preserve_keys requires a statically known array type",
             ));
         }
-        return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
+        return Ok(PhpType::php_array());
     }
     if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return Err(CompileError::new(

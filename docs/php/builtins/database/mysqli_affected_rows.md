@@ -1,8 +1,6 @@
 ---
 title: "mysqli_affected_rows()"
 description: "Returns how many rows the last write affected."
-sidebar:
-  order: 99
 ---
 
 ## mysqli_affected_rows()
@@ -20,8 +18,9 @@ Returns how many rows the last write affected.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

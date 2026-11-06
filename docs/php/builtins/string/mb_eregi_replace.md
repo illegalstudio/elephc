@@ -1,8 +1,6 @@
 ---
 title: "mb_eregi_replace()"
 description: "Replaces multibyte regex matches without case sensitivity."
-sidebar:
-  order: 852
 ---
 
 ## mb_eregi_replace()
@@ -23,8 +21,9 @@ Replaces multibyte regex matches without case sensitivity.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_eregi_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_eregi_replace.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

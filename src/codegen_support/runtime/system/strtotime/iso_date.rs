@@ -10,8 +10,15 @@
 //! - Entry label `__rt_strtotime_iso_entry` (ARM64) / `__rt_strtotime_iso_entry_linux_x86_64` (x86_64) expects the dispatcher frame already set up.
 //! - Inputs come from `[sp+48]` (trimmed ptr) and `[sp+56]` (trimmed len); the result `struct tm` is built at `[sp+0..47]`.
 //! - All exits branch to the shared `__rt_strtotime_ret` / `__rt_strtotime_fail` epilogues owned by the dispatcher (`mod.rs`).
+//! - PHP also accepts a one-digit month or day (`2020-1-5`, timelib's `gnudateshort`). A pre-pass
+//!   zero-pads such a date into `_strtotime_iso_buf` and points the ptr/len slots at the copy,
+//!   so the fixed-offset parser below reads `2020-01-05` with the rest of the input unchanged.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+
+/// Size in bytes of `_strtotime_iso_buf`, the scratch copy a short date is padded into. An input
+/// longer than this minus the two zeros the padding can insert is parsed as written.
+pub(crate) const ISO_PAD_BUF_LEN: usize = 64;
 
 /// Dispatches to the architecture-specific ISO date parser.
 /// Routes to `emit_iso_date_arm64` or `emit_iso_date_linux_x86_64` based on `emitter.target`.
@@ -62,6 +69,202 @@ fn emit_x86_64_reject_if_above(emitter: &mut Emitter, reg: &str, max: u32) {
     emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // reject out-of-range date/time component
 }
 
+/// Emits the ARM64 pre-pass that zero-pads a one-digit month or day (`YYYY-M-D`).
+///
+/// Recognizes four year digits (already routed here by the dispatcher's `-` at offset 4), a
+/// one- or two-digit month, `-`, and a one- or two-digit day not followed by a third digit. When
+/// either field has one digit, the input is copied into `_strtotime_iso_buf` with a `0` inserted
+/// before that field and the rest copied unchanged, and the dispatcher's ptr/len slots are pointed
+/// at the copy. Anything else (already padded, malformed, or too long for the buffer) is left as
+/// written for the fixed-offset parser to accept or reject exactly as before.
+fn emit_pad_short_date_arm64(emitter: &mut Emitter) {
+    emitter.comment("-- zero-pad a one-digit month/day (YYYY-M-D) into _strtotime_iso_buf --");
+    emitter.instruction("ldr x1, [sp, #48]");                                   // trimmed input pointer
+    emitter.instruction("ldr x2, [sp, #56]");                                   // trimmed input length
+    emitter.instruction(&format!("cmp x2, #{}", ISO_PAD_BUF_LEN - 2));          // room for two inserted zeros?
+    emitter.instruction("b.hi __rt_strtotime_iso_pad_done");                    // too long → parse as written
+    emitter.instruction("cmp x2, #8");                                          // shortest short date is YYYY-M-D
+    emitter.instruction("b.lt __rt_strtotime_iso_pad_done");                    // too short → parse as written
+    emitter.instruction("ldrb w9, [x1, #5]");                                   // first month char
+    emitter.instruction("sub w9, w9, #48");                                     // convert from ASCII
+    emitter.instruction("cmp w9, #9");                                          // a month digit?
+    emitter.instruction("b.hi __rt_strtotime_iso_pad_done");                    // no → parse as written
+    emitter.instruction("mov x10, #6");                                         // second '-' index for a one-digit month
+    emitter.instruction("ldrb w9, [x1, #6]");                                   // char after the first month digit
+    emitter.instruction("cmp w9, #45");                                         // '-' already → one-digit month
+    emitter.instruction("b.eq __rt_strtotime_iso_pad_month");                   // month length known
+    emitter.instruction("sub w9, w9, #48");                                     // convert from ASCII
+    emitter.instruction("cmp w9, #9");                                          // a second month digit?
+    emitter.instruction("b.hi __rt_strtotime_iso_pad_done");                    // no → parse as written
+    emitter.instruction("mov x10, #7");                                         // second '-' index for a two-digit month
+    emitter.instruction("ldrb w9, [x1, #7]");                                   // char after the two month digits
+    emitter.instruction("cmp w9, #45");                                         // '-' ?
+    emitter.instruction("b.ne __rt_strtotime_iso_pad_done");                    // longer month or junk → parse as written
+    emitter.label("__rt_strtotime_iso_pad_month");
+    emitter.instruction("add x12, x10, #1");                                    // day start index
+    emitter.instruction("cmp x12, x2");                                         // any day digits?
+    emitter.instruction("b.ge __rt_strtotime_iso_pad_done");                    // no → parse as written
+    emitter.instruction("ldrb w9, [x1, x12]");                                  // first day char
+    emitter.instruction("sub w9, w9, #48");                                     // convert from ASCII
+    emitter.instruction("cmp w9, #9");                                          // a day digit?
+    emitter.instruction("b.hi __rt_strtotime_iso_pad_done");                    // no → parse as written
+    emitter.instruction("mov x14, #1");                                         // day length = 1
+    emitter.instruction("add x13, x12, #1");                                    // index after the first day digit
+    emitter.instruction("cmp x13, x2");                                         // input ends after one day digit?
+    emitter.instruction("b.ge __rt_strtotime_iso_pad_fields");                  // yes → one-digit day
+    emitter.instruction("ldrb w9, [x1, x13]");                                  // char after the first day digit
+    emitter.instruction("sub w9, w9, #48");                                     // convert from ASCII
+    emitter.instruction("cmp w9, #9");                                          // a second day digit?
+    emitter.instruction("b.hi __rt_strtotime_iso_pad_fields");                  // no → one-digit day
+    emitter.instruction("mov x14, #2");                                         // day length = 2
+    emitter.instruction("add x13, x13, #1");                                    // index after the second day digit
+    emitter.instruction("cmp x13, x2");                                         // input ends after the day?
+    emitter.instruction("b.ge __rt_strtotime_iso_pad_fields");                  // yes → two-digit day
+    emitter.instruction("ldrb w9, [x1, x13]");                                  // char after the two day digits
+    emitter.instruction("sub w9, w9, #48");                                     // convert from ASCII
+    emitter.instruction("cmp w9, #9");                                          // a third day digit?
+    emitter.instruction("b.ls __rt_strtotime_iso_pad_done");                    // yes → PHP rejects it; parse as written
+    emitter.label("__rt_strtotime_iso_pad_fields");
+    emitter.instruction("sub x15, x10, #5");                                    // month length (1 or 2)
+    emitter.instruction("add x9, x15, x14");                                    // month length + day length
+    emitter.instruction("cmp x9, #4");                                          // both fields already two digits?
+    emitter.instruction("b.eq __rt_strtotime_iso_pad_done");                    // yes → nothing to pad
+    abi::emit_symbol_address(emitter, "x3", "_strtotime_iso_buf");
+    emitter.instruction("mov x4, #0");                                          // output index
+    emitter.instruction("mov x5, #0");                                          // input index
+    emitter.label("__rt_strtotime_iso_pad_year");
+    emitter.instruction("ldrb w9, [x1, x5]");                                   // load a YYYY- byte
+    emitter.instruction("strb w9, [x3, x4]");                                   // copy it
+    emitter.instruction("add x4, x4, #1");                                      // advance output
+    emitter.instruction("add x5, x5, #1");                                      // advance input
+    emitter.instruction("cmp x5, #5");                                          // copied "YYYY-"?
+    emitter.instruction("b.lt __rt_strtotime_iso_pad_year");                    // no → next byte
+    emitter.instruction("cmp x15, #2");                                         // two-digit month?
+    emitter.instruction("b.eq __rt_strtotime_iso_pad_month_copy");              // yes → no padding
+    emitter.instruction("mov w9, #48");                                         // '0'
+    emitter.instruction("strb w9, [x3, x4]");                                   // pad the one-digit month
+    emitter.instruction("add x4, x4, #1");                                      // advance output
+    emitter.label("__rt_strtotime_iso_pad_month_copy");
+    emitter.instruction("ldrb w9, [x1, x5]");                                   // load a month digit or the second '-'
+    emitter.instruction("strb w9, [x3, x4]");                                   // copy it
+    emitter.instruction("add x4, x4, #1");                                      // advance output
+    emitter.instruction("add x5, x5, #1");                                      // advance input
+    emitter.instruction("cmp x5, x12");                                         // reached the day?
+    emitter.instruction("b.lt __rt_strtotime_iso_pad_month_copy");              // no → next byte
+    emitter.instruction("cmp x14, #2");                                         // two-digit day?
+    emitter.instruction("b.eq __rt_strtotime_iso_pad_rest");                    // yes → no padding
+    emitter.instruction("mov w9, #48");                                         // '0'
+    emitter.instruction("strb w9, [x3, x4]");                                   // pad the one-digit day
+    emitter.instruction("add x4, x4, #1");                                      // advance output
+    emitter.label("__rt_strtotime_iso_pad_rest");
+    emitter.instruction("cmp x5, x2");                                          // copied the whole input?
+    emitter.instruction("b.ge __rt_strtotime_iso_pad_store");                   // yes → publish the copy
+    emitter.instruction("ldrb w9, [x1, x5]");                                   // load a day digit or suffix byte
+    emitter.instruction("strb w9, [x3, x4]");                                   // copy it unchanged
+    emitter.instruction("add x4, x4, #1");                                      // advance output
+    emitter.instruction("add x5, x5, #1");                                      // advance input
+    emitter.instruction("b __rt_strtotime_iso_pad_rest");                       // next byte
+    emitter.label("__rt_strtotime_iso_pad_store");
+    emitter.instruction("str x3, [sp, #48]");                                   // parse the padded copy
+    emitter.instruction("str x4, [sp, #56]");                                   // with its padded length
+    emitter.label("__rt_strtotime_iso_pad_done");
+}
+
+/// Emits the x86_64 pre-pass that zero-pads a one-digit month or day (`YYYY-M-D`).
+///
+/// Mirrors `emit_pad_short_date_arm64` with SysV scratch registers; the dispatcher's ptr/len
+/// slots are `[rsp+48]`/`[rsp+56]` here, as in the parser that follows.
+fn emit_pad_short_date_linux_x86_64(emitter: &mut Emitter) {
+    emitter.comment("-- zero-pad a one-digit month/day (YYYY-M-D) into _strtotime_iso_buf --");
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 48]");                       // trimmed input pointer
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 56]");                       // trimmed input length
+    emitter.instruction(&format!("cmp rsi, {}", ISO_PAD_BUF_LEN - 2));          // room for two inserted zeros?
+    emitter.instruction("ja __rt_strtotime_iso_pad_done_linux_x86_64");         // too long → parse as written
+    emitter.instruction("cmp rsi, 8");                                          // shortest short date is YYYY-M-D
+    emitter.instruction("jb __rt_strtotime_iso_pad_done_linux_x86_64");         // too short → parse as written
+    emitter.instruction("movzx eax, BYTE PTR [rdi + 5]");                       // first month char
+    emitter.instruction("sub eax, 48");                                         // convert from ASCII
+    emitter.instruction("cmp eax, 9");                                          // a month digit?
+    emitter.instruction("ja __rt_strtotime_iso_pad_done_linux_x86_64");         // no → parse as written
+    emitter.instruction("mov r8d, 6");                                          // second '-' index for a one-digit month
+    emitter.instruction("movzx eax, BYTE PTR [rdi + 6]");                       // char after the first month digit
+    emitter.instruction("cmp eax, 45");                                         // '-' already → one-digit month
+    emitter.instruction("je __rt_strtotime_iso_pad_month_linux_x86_64");        // month length known
+    emitter.instruction("sub eax, 48");                                         // convert from ASCII
+    emitter.instruction("cmp eax, 9");                                          // a second month digit?
+    emitter.instruction("ja __rt_strtotime_iso_pad_done_linux_x86_64");         // no → parse as written
+    emitter.instruction("mov r8d, 7");                                          // second '-' index for a two-digit month
+    emitter.instruction("movzx eax, BYTE PTR [rdi + 7]");                       // char after the two month digits
+    emitter.instruction("cmp eax, 45");                                         // '-' ?
+    emitter.instruction("jne __rt_strtotime_iso_pad_done_linux_x86_64");        // longer month or junk → parse as written
+    emitter.label("__rt_strtotime_iso_pad_month_linux_x86_64");
+    emitter.instruction("lea r9, [r8 + 1]");                                    // day start index
+    emitter.instruction("cmp r9, rsi");                                         // any day digits?
+    emitter.instruction("jae __rt_strtotime_iso_pad_done_linux_x86_64");        // no → parse as written
+    emitter.instruction("movzx eax, BYTE PTR [rdi + r9]");                      // first day char
+    emitter.instruction("sub eax, 48");                                         // convert from ASCII
+    emitter.instruction("cmp eax, 9");                                          // a day digit?
+    emitter.instruction("ja __rt_strtotime_iso_pad_done_linux_x86_64");         // no → parse as written
+    emitter.instruction("mov r10d, 1");                                         // day length = 1
+    emitter.instruction("lea rcx, [r9 + 1]");                                   // index after the first day digit
+    emitter.instruction("cmp rcx, rsi");                                        // input ends after one day digit?
+    emitter.instruction("jae __rt_strtotime_iso_pad_fields_linux_x86_64");      // yes → one-digit day
+    emitter.instruction("movzx eax, BYTE PTR [rdi + rcx]");                     // char after the first day digit
+    emitter.instruction("sub eax, 48");                                         // convert from ASCII
+    emitter.instruction("cmp eax, 9");                                          // a second day digit?
+    emitter.instruction("ja __rt_strtotime_iso_pad_fields_linux_x86_64");       // no → one-digit day
+    emitter.instruction("mov r10d, 2");                                         // day length = 2
+    emitter.instruction("add rcx, 1");                                          // index after the second day digit
+    emitter.instruction("cmp rcx, rsi");                                        // input ends after the day?
+    emitter.instruction("jae __rt_strtotime_iso_pad_fields_linux_x86_64");      // yes → two-digit day
+    emitter.instruction("movzx eax, BYTE PTR [rdi + rcx]");                     // char after the two day digits
+    emitter.instruction("sub eax, 48");                                         // convert from ASCII
+    emitter.instruction("cmp eax, 9");                                          // a third day digit?
+    emitter.instruction("jbe __rt_strtotime_iso_pad_done_linux_x86_64");        // yes → PHP rejects it; parse as written
+    emitter.label("__rt_strtotime_iso_pad_fields_linux_x86_64");
+    emitter.instruction("lea r11, [r8 - 5]");                                   // month length (1 or 2)
+    emitter.instruction("lea rax, [r11 + r10]");                                // month length + day length
+    emitter.instruction("cmp rax, 4");                                          // both fields already two digits?
+    emitter.instruction("je __rt_strtotime_iso_pad_done_linux_x86_64");         // yes → nothing to pad
+    abi::emit_symbol_address(emitter, "rdx", "_strtotime_iso_buf");
+    emitter.instruction("xor ecx, ecx");                                        // output index
+    emitter.instruction("xor r8d, r8d");                                        // input index
+    emitter.label("__rt_strtotime_iso_pad_year_linux_x86_64");
+    emitter.instruction("movzx eax, BYTE PTR [rdi + r8]");                      // load a YYYY- byte
+    emitter.instruction("mov BYTE PTR [rdx + rcx], al");                        // copy it
+    emitter.instruction("add rcx, 1");                                          // advance output
+    emitter.instruction("add r8, 1");                                           // advance input
+    emitter.instruction("cmp r8, 5");                                           // copied "YYYY-"?
+    emitter.instruction("jb __rt_strtotime_iso_pad_year_linux_x86_64");         // no → next byte
+    emitter.instruction("cmp r11, 2");                                          // two-digit month?
+    emitter.instruction("je __rt_strtotime_iso_pad_month_copy_linux_x86_64");   // yes → no padding
+    emitter.instruction("mov BYTE PTR [rdx + rcx], 48");                        // pad the one-digit month with '0'
+    emitter.instruction("add rcx, 1");                                          // advance output
+    emitter.label("__rt_strtotime_iso_pad_month_copy_linux_x86_64");
+    emitter.instruction("movzx eax, BYTE PTR [rdi + r8]");                      // load a month digit or the second '-'
+    emitter.instruction("mov BYTE PTR [rdx + rcx], al");                        // copy it
+    emitter.instruction("add rcx, 1");                                          // advance output
+    emitter.instruction("add r8, 1");                                           // advance input
+    emitter.instruction("cmp r8, r9");                                          // reached the day?
+    emitter.instruction("jb __rt_strtotime_iso_pad_month_copy_linux_x86_64");   // no → next byte
+    emitter.instruction("cmp r10, 2");                                          // two-digit day?
+    emitter.instruction("je __rt_strtotime_iso_pad_rest_linux_x86_64");         // yes → no padding
+    emitter.instruction("mov BYTE PTR [rdx + rcx], 48");                        // pad the one-digit day with '0'
+    emitter.instruction("add rcx, 1");                                          // advance output
+    emitter.label("__rt_strtotime_iso_pad_rest_linux_x86_64");
+    emitter.instruction("cmp r8, rsi");                                         // copied the whole input?
+    emitter.instruction("jae __rt_strtotime_iso_pad_store_linux_x86_64");       // yes → publish the copy
+    emitter.instruction("movzx eax, BYTE PTR [rdi + r8]");                      // load a day digit or suffix byte
+    emitter.instruction("mov BYTE PTR [rdx + rcx], al");                        // copy it unchanged
+    emitter.instruction("add rcx, 1");                                          // advance output
+    emitter.instruction("add r8, 1");                                           // advance input
+    emitter.instruction("jmp __rt_strtotime_iso_pad_rest_linux_x86_64");        // next byte
+    emitter.label("__rt_strtotime_iso_pad_store_linux_x86_64");
+    emitter.instruction("mov QWORD PTR [rsp + 48], rdx");                       // parse the padded copy
+    emitter.instruction("mov QWORD PTR [rsp + 56], rcx");                       // with its padded length
+    emitter.label("__rt_strtotime_iso_pad_done_linux_x86_64");
+}
+
 /// Emits ARM64 assembly for the ISO date/datetime parser sub-routine.
 /// Entry label: `__rt_strtotime_iso_entry`.
 /// Inputs: trimmed ptr at `[sp+48]`, trimmed len at `[sp+56]`.
@@ -76,6 +279,7 @@ fn emit_iso_date_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: ISO date sub-routine ---");
     emitter.label("__rt_strtotime_iso_entry");
+    emit_pad_short_date_arm64(emitter);
 
     // -- reload trimmed ptr/len from dispatcher slots --
     emitter.instruction("ldr x1, [sp, #48]");                                   // reload trimmed input pointer
@@ -447,6 +651,7 @@ fn emit_iso_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: ISO date sub-routine ---");
     emitter.label("__rt_strtotime_iso_entry_linux_x86_64");
+    emit_pad_short_date_linux_x86_64(emitter);
 
     // -- reload trimmed ptr/len from dispatcher slots --
     emitter.instruction("mov rdi, QWORD PTR [rsp + 48]");                       // reload trimmed input pointer from dispatcher slot

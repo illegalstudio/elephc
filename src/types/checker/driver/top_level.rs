@@ -48,6 +48,7 @@ impl Checker {
         let saved_external_ref_bindings =
             std::mem::take(&mut self.active_external_ref_bindings);
         let mut global_env = self.seed_global_env();
+        self.definitely_bound_locals.extend(global_env.keys().cloned());
         // The pre-scan has to decide before the first statement is checked: a marked local binds
         // boxed `Mixed` at its FIRST store. Top level has no parameters, so the by-reference and
         // declared-type exclusion sets the scan consults are empty — `enter_local_binding_scope`
@@ -180,7 +181,7 @@ impl Checker {
     /// Suppressible messages include array-index, property-access, and callable-related diagnostics
     /// that arise before method bodies refine property and return types. A parameter mismatch
     /// caused by provisional null metadata is discarded only when the final statement has no errors.
-    fn is_suppressible_initial_top_level_error(message: &str) -> bool {
+    pub(super) fn is_suppressible_initial_top_level_error(message: &str) -> bool {
         matches!(
             message,
             "Array index must be integer"
@@ -188,8 +189,13 @@ impl Checker {
                 | "Property access requires an object or typed pointer"
         ) || message.starts_with("Undefined property: ")
             || (message.starts_with("Cannot call $") && message.contains("not a callable"))
+            // Spelled as the diagnostic reads, which is PHP's own vocabulary: this branch of the
+            // checker renders types with `Display` (`callable`, `null`) rather than `Debug`
+            // (`Callable`, `Void`). Matching a rendered message is a coupling, so it is worth
+            // naming — the old spelling kept compiling and silently stopped suppressing anything,
+            // and the provisional error it was written to discard reached the user instead.
             || (message.contains(" parameter $")
-                && message.ends_with(" expects Callable, got Void"))
+                && message.ends_with(" expects callable, got null"))
     }
 
     /// Builds the initial `TypeEnv` with built-in globals `$argc`, `$argv`, and external globals.

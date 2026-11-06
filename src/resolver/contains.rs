@@ -174,6 +174,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_has_includes),
         ExprKind::NewDynamic { name_expr, args } => {
             expr_has_includes(name_expr) || args.iter().any(expr_has_includes)
@@ -269,6 +270,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
 fn instanceof_target_has_includes(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_has_includes(expr),
     }
 }

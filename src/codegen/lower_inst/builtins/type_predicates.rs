@@ -1,5 +1,5 @@
 //! Purpose:
-//! Lowers static and runtime PHP type predicates, including iterable checks.
+//! Lowers static and runtime PHP type predicates, including iterable and countable checks.
 //!
 //! Called from:
 //! - `super` EIR type-predicate and runtime-function dispatch.
@@ -24,6 +24,7 @@ pub(crate) fn lower_type_predicate(
         PhpTypePredicate::Bool => {
             lower_static_type_predicate(ctx, inst, "type_predicate", PhpType::Bool)
         }
+        PhpTypePredicate::Countable => lower_is_countable(ctx, inst),
         PhpTypePredicate::Float => {
             lower_static_type_predicate(ctx, inst, "type_predicate", PhpType::Float)
         }
@@ -118,6 +119,7 @@ pub(crate) fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instructio
         | PhpType::Buffer(_)
         | PhpType::Packed(_)
         | PhpType::Resource(_)
+        | PhpType::Narrow(_)
         | PhpType::TaggedScalar => false,
         PhpType::Mixed | PhpType::Union(_) => {
             emit_mixed_is_iterable(ctx, value)?;
@@ -295,6 +297,139 @@ pub(in crate::codegen::lower_inst) fn interface_extends_traversable(ctx: &Functi
 /// Normalizes a PHP class or interface name for metadata lookups.
 pub(in crate::codegen::lower_inst) fn normalized_type_name(type_name: &str) -> &str {
     type_name.trim_start_matches('\\')
+}
+
+/// Lowers `is_countable()`: true for arrays and for objects whose class implements `Countable`.
+///
+/// A statically typed object answers `true` at compile time only when its declared class or
+/// interface already implements `Countable`; otherwise the runtime class is checked, because a
+/// subclass (or a class behind an interface type) may still implement it. Boxed values test
+/// their runtime tag, and `iterable` values their heap kind, before the same object check.
+pub(crate) fn lower_is_countable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "is_countable", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)? {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => emit_static_bool(ctx, true),
+        PhpType::Object(name) if object_name_satisfies_interface(ctx, &name, "Countable") => {
+            emit_static_bool(ctx, true)
+        }
+        PhpType::Object(_) => {
+            ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+            emit_object_countable_check(ctx);
+        }
+        PhpType::Mixed | PhpType::Union(_) => emit_mixed_is_countable(ctx, value)?,
+        PhpType::Iterable => emit_iterable_is_countable(ctx, value)?,
+        _ => emit_static_bool(ctx, false),
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Emits the runtime `Countable` check for an object pointer in the first integer argument
+/// register, leaving PHP's boolean answer in the integer result register.
+///
+/// A module that knows no `Countable` interface has no class that implements it, so the answer
+/// is a constant `false` there.
+fn emit_object_countable_check(ctx: &mut FunctionContext<'_>) {
+    let Some(countable_id) = ctx
+        .module
+        .interface_infos
+        .get("Countable")
+        .map(|info| info.interface_id)
+    else {
+        emit_static_bool(ctx, false);
+        return;
+    };
+    let target = ctx.emitter.target;
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 1),
+        countable_id as i64,
+    );
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), 1);
+    abi::emit_call_label(ctx.emitter, "__rt_exception_matches"); // test the object's runtime interface list for Countable
+}
+
+/// Emits runtime `is_countable()` for a boxed Mixed or Union value.
+///
+/// Boxed indexed and associative arrays (tags 4 and 5) are countable; a boxed object (tag 6)
+/// is countable when its class implements `Countable`; every other payload is not.
+fn emit_mixed_is_countable(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let array_case = ctx.next_label("is_countable_mixed_array");
+    let object_case = ctx.next_label("is_countable_mixed_object");
+    let done = ctx.next_label("is_countable_mixed_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // check for a boxed indexed-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", array_case));           // indexed arrays are countable
+            ctx.emitter.instruction("cmp x0, #5");                              // check for a boxed associative-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", array_case));           // associative arrays are countable
+            ctx.emitter.instruction("cmp x0, #6");                              // check for a boxed object payload
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // objects need a Countable interface check
+            ctx.emitter.instruction("mov x0, #0");                              // every other boxed payload is not countable
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the array and object result paths
+            ctx.emitter.label(&object_case);
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed object pointer to the interface matcher
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // check for a boxed indexed-array payload
+            ctx.emitter.instruction(&format!("je {}", array_case));             // indexed arrays are countable
+            ctx.emitter.instruction("cmp rax, 5");                              // check for a boxed associative-array payload
+            ctx.emitter.instruction(&format!("je {}", array_case));             // associative arrays are countable
+            ctx.emitter.instruction("cmp rax, 6");                              // check for a boxed object payload
+            ctx.emitter.instruction(&format!("je {}", object_case));            // objects need a Countable interface check
+            ctx.emitter.instruction("xor eax, eax");                            // every other boxed payload is not countable
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the array and object result paths
+            ctx.emitter.label(&object_case);
+        }
+    }
+    emit_object_countable_check(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&array_case);
+    emit_static_bool(ctx, true);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits runtime `is_countable()` for an `iterable` value, whose raw heap pointer is either an
+/// indexed array, an associative array, or a `Traversable` object.
+fn emit_iterable_is_countable(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let array_case = ctx.next_label("is_countable_iterable_array");
+    let object_case = ctx.next_label("is_countable_iterable_object");
+    let done = ctx.next_label("is_countable_iterable_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #2");                              // heap kind 2 identifies indexed arrays
+            ctx.emitter.instruction(&format!("b.eq {}", array_case));           // indexed arrays are countable
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 identifies associative arrays
+            ctx.emitter.instruction(&format!("b.eq {}", array_case));           // associative arrays are countable
+            ctx.emitter.instruction("cmp x0, #4");                              // heap kind 4 identifies object payloads
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // objects need a Countable interface check
+            ctx.emitter.instruction("mov x0, #0");                              // any other heap kind is not countable
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the array and object result paths
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 2");                              // heap kind 2 identifies indexed arrays
+            ctx.emitter.instruction(&format!("je {}", array_case));             // indexed arrays are countable
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 identifies associative arrays
+            ctx.emitter.instruction(&format!("je {}", array_case));             // associative arrays are countable
+            ctx.emitter.instruction("cmp rax, 4");                              // heap kind 4 identifies object payloads
+            ctx.emitter.instruction(&format!("je {}", object_case));            // objects need a Countable interface check
+            ctx.emitter.instruction("xor eax, eax");                            // any other heap kind is not countable
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the array and object result paths
+        }
+    }
+    ctx.emitter.label(&object_case);
+    ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    emit_object_countable_check(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&array_case);
+    emit_static_bool(ctx, true);
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value

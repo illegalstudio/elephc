@@ -109,6 +109,7 @@ fn packed_field_refs_listid(_field: &PackedField) -> bool {
 fn instanceof_target_refs_listid(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_refs_listid(expr),
     }
 }
@@ -238,7 +239,9 @@ fn expr_refs_listid(expr: &Expr) -> bool {
         ExprKind::ExprCall { callee, args } => {
             expr_refs_listid(callee) || args.iter().any(expr_refs_listid)
         }
-        ExprKind::NewObject { args, .. } => args.iter().any(expr_refs_listid),
+        ExprKind::NewObject { args, .. } | ExprKind::NewGeneric { args, .. } => {
+            args.iter().any(expr_refs_listid)
+        }
         ExprKind::NewDynamic { name_expr, args } => {
             expr_refs_listid(name_expr) || args.iter().any(expr_refs_listid)
         }

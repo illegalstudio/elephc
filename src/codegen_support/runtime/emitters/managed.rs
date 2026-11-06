@@ -18,6 +18,8 @@ use crate::codegen_support::RuntimeFeatures;
 pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // Array runtime functions
     arrays::emit_heap_alloc(emitter);
+    arrays::emit_heap_grow_tail(emitter);
+    arrays::emit_heap_consolidate(emitter);
     super::super::reference_cells::emit_reference_cells(emitter);
     arrays::emit_heap_debug_fail(emitter);
     arrays::emit_heap_debug_check_live(emitter);
@@ -30,6 +32,11 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_ensure_unique(emitter);
     arrays::emit_array_grow(emitter);
     arrays::emit_array_new(emitter);
+    arrays::emit_array_map_sum_probe_int(emitter);
+    arrays::emit_array_sum_probe_small(emitter);
+    arrays::emit_array_sum_int(emitter);
+    arrays::emit_keyed_kernels(emitter);
+    arrays::emit_array_type_check(emitter);
     arrays::emit_array_push_int(emitter);
     arrays::emit_array_push_refcounted(emitter);
     arrays::emit_array_push_str(emitter);
@@ -101,6 +108,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_hash_chunk(emitter);
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);
+    arrays::emit_mt_uniform(emitter);
     arrays::emit_array_rand(emitter);
     arrays::emit_array_fill(emitter);
     arrays::emit_array_fill_assoc(emitter);
@@ -112,6 +120,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_diff_refcounted(emitter);
     arrays::emit_array_is_list(emitter);
     arrays::emit_array_edge_key(emitter);
+    arrays::emit_array_edge_value(emitter);
     arrays::emit_array_ptr_seek(emitter);
     arrays::emit_array_ptr_key(emitter);
     arrays::emit_array_ptr_value(emitter);
@@ -164,7 +173,9 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_map_mixed(emitter);
     arrays::emit_array_map_str(emitter);
     arrays::emit_array_map_str_owned(emitter);
+    arrays::emit_array_filter_int_direct(emitter);
     arrays::emit_array_predicate_boxed(emitter);
+    arrays::emit_array_reduce_int_direct(emitter);
     arrays::emit_array_reduce(emitter);
     arrays::emit_array_reduce_str(emitter);
     arrays::emit_array_reduce_boxed(emitter);
@@ -173,22 +184,32 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_walk_recursive(emitter);
     arrays::emit_array_udiff_uintersect(emitter);
     arrays::emit_php_compare_slots(emitter);
+    arrays::emit_float_compare_slots(emitter);
+    arrays::emit_float_sort(emitter);
     arrays::emit_usort(emitter);
     arrays::emit_usort_str(emitter);
     arrays::emit_array_to_mixed(emitter);
+    arrays::emit_array_to_pointer_words(emitter);
     arrays::emit_array_merge_into(emitter);
     arrays::emit_array_merge_into_refcounted(emitter);
     arrays::emit_decref_any(emitter);
     arrays::emit_decref_mixed(emitter);
     arrays::emit_gc_note_child_ref(emitter);
     arrays::emit_gc_eval_object_children(emitter);
+    arrays::emit_gc_callable_children(emitter);
+    arrays::emit_gc_object_children(emitter);
+    arrays::emit_gc_frame_children(emitter);
+    arrays::emit_gc_frame_slots(emitter);
     arrays::emit_gc_mark_reachable(emitter);
     arrays::emit_gc_control(emitter);
+    arrays::emit_memory(emitter);
     arrays::emit_gc_destructors(emitter);
+    arrays::gc_candidates::emit(emitter);
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_reference(emitter);
     arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
+    arrays::emit_mixed_from_owned_string(emitter);
     arrays::emit_mixed_cast_array(emitter);
     arrays::emit_mixed_abs(emitter);
     arrays::emit_mixed_instanceof(emitter);
@@ -234,6 +255,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     // SPL runtime-managed containers
     spl::emit_doubly_linked_list_runtime(emitter);
     spl::emit_fixed_array_runtime(emitter);
+    spl::emit_spl_offset_runtime(emitter);
 
     // PHP resource-id registry (its own numbering space, unrelated to object handles)
     resource_ids::emit_resource_ids(emitter);
@@ -252,7 +274,9 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_mixed_cell_autovivify_array(emitter);
     objects::emit_mixed_array_get(emitter);
     objects::emit_throw_object_not_array(emitter);
+    objects::emit_mixed_object_offset_unset(emitter);
     objects::emit_throw_serialization_denied(emitter);
+    objects::emit_throw_unserialization_denied(emitter);
     objects::emit_mixed_array_set(emitter);
     objects::emit_mixed_array_append(emitter);
     objects::emit_mixed_array_fetch_for_write(emitter);
@@ -274,6 +298,9 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_pr_obj_desc(emitter);
     objects::emit_print_r_object(emitter);
     objects::emit_obj_dump_dyn_props(emitter);
+    objects::emit_obj_debuginfo_fetch(emitter);
+    objects::emit_vd_debuginfo_object(emitter);
+    objects::emit_pr_debuginfo_object(emitter);
     objects::emit_obj_dyn_prop_at(emitter);
     objects::emit_obj_prop_count(emitter);
     objects::emit_obj_prop_name(emitter);
@@ -282,6 +309,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
 
     // Buffer runtime functions
     buffers::emit_buffer_resolve(emitter);
+    buffers::emit_buffer_try_resolve(emitter);
     buffers::emit_buffer_new(emitter);
     buffers::emit_buffer_free(emitter);
     buffers::emit_buffer_len(emitter);

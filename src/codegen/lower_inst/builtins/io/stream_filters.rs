@@ -341,6 +341,7 @@ pub(super) fn lower_iconv_stream_filter_attach(
     let to_cstr = format!("{}\0", to);
     let (from_sym, _) = ctx.data.add_string(from_cstr.as_bytes());
     let (to_sym, _) = ctx.data.add_string(to_cstr.as_bytes());
+    let option_bits = crate::codegen::stream_filters::iconv_write::iconv_target_option_bits(to);
     let write_label = ctx.next_label("iconv_mode_write");
     let after_label = ctx.next_label("iconv_mode_done");
     match ctx.emitter.target.arch {
@@ -354,7 +355,7 @@ pub(super) fn lower_iconv_stream_filter_attach(
             emit_iconv_read_transform_for_current_fd(ctx, &from_sym, &to_sym);
             ctx.emitter.instruction(&format!("b {}", after_label));             // skip the write-filter attach path
             ctx.emitter.label(&write_label);
-            emit_iconv_write_transform_for_current_fd(ctx, &from_sym, &to_sym);
+            emit_iconv_write_transform_for_current_fd(ctx, &from_sym, &to_sym, option_bits);
             ctx.emitter.label(&after_label);
         }
         Arch::X86_64 => {
@@ -367,7 +368,7 @@ pub(super) fn lower_iconv_stream_filter_attach(
             emit_iconv_read_transform_for_current_fd(ctx, &from_sym, &to_sym);
             ctx.emitter.instruction(&format!("jmp {}", after_label));           // skip the write-filter attach path
             ctx.emitter.label(&write_label);
-            emit_iconv_write_transform_for_current_fd(ctx, &from_sym, &to_sym);
+            emit_iconv_write_transform_for_current_fd(ctx, &from_sym, &to_sym, option_bits);
             ctx.emitter.label(&after_label);
         }
     }
@@ -406,10 +407,14 @@ pub(super) fn emit_iconv_read_transform_for_current_fd(
 }
 
 /// Emits the WRITE transform attachment for the current iconv stream descriptor.
+///
+/// `option_bits` are the target charset's `//TRANSLIT`/`//IGNORE` bits, which Apple targets
+/// record per descriptor and restore before each conversion.
 pub(super) fn emit_iconv_write_transform_for_current_fd(
     ctx: &mut FunctionContext<'_>,
     from_sym: &str,
     to_sym: &str,
+    option_bits: u8,
 ) {
     let labels = vec![
         ctx.next_label("iconv_w_fwrite"),
@@ -425,6 +430,7 @@ pub(super) fn emit_iconv_write_transform_for_current_fd(
         ctx.emitter,
         from_sym,
         to_sym,
+        option_bits,
         |_| labels.next().expect("iconv write transform label"),
     );
 }

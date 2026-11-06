@@ -1,8 +1,6 @@
 ---
 title: "jdtojewish()"
 description: "Converts a Julian Day count into a Jewish date string."
-sidebar:
-  order: 232
 ---
 
 ## jdtojewish()
@@ -22,8 +20,9 @@ Converts a Julian Day count into a Jewish date string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -9,10 +9,10 @@
 //! - Owns every CCI connection/request handle and copies transient CCI result metadata immediately.
 //! - Materializes result rows so PDO's forward and scroll fetch orientations share one safe path.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_long, c_uchar, c_ulong, c_void, CStr, CString};
 use std::ptr;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::OnceLock;
 
 use libloading::Library;
@@ -48,7 +48,9 @@ const CUBRID_STMT_SELECT: i32 = 21;
 const CUBRID_STMT_UPDATE: i32 = 22;
 const CUBRID_STMT_DELETE: i32 = 23;
 
-static OPEN_ERROR_CODE: AtomicI64 = AtomicI64::new(0);
+thread_local! {
+    static OPEN_ERROR_CODE: Cell<i64> = const { Cell::new(0) };
+}
 
 #[repr(C)]
 #[derive(Clone)]
@@ -397,14 +399,14 @@ fn native_error(result: i32, native: &NativeError) -> ErrorState {
     }
 }
 
-/// Returns the SQLSTATE and native code captured by the latest failed CUBRID open.
+/// Returns the SQLSTATE and native code captured by this thread's latest failed CUBRID open.
 pub fn open_diagnostic() -> (&'static str, i64) {
-    ("HY000", OPEN_ERROR_CODE.load(Ordering::Relaxed))
+    ("HY000", OPEN_ERROR_CODE.with(Cell::get))
 }
 
 /// Records a constructor failure for PDOException and returns its display text.
 fn record_open_error(error: &ErrorState) -> String {
-    OPEN_ERROR_CODE.store(error.code, Ordering::Relaxed);
+    OPEN_ERROR_CODE.with(|code| code.set(error.code));
     error.message.clone()
 }
 
@@ -529,10 +531,10 @@ impl Drop for CubridConn {
 impl CubridConn {
     /// Opens a PDO_CUBRID DSN through the process CCI client.
     pub fn open(dsn: &str) -> Result<Self, String> {
-        OPEN_ERROR_CODE.store(0, Ordering::Relaxed);
+        OPEN_ERROR_CODE.with(|code| code.set(0));
         let api = api()?;
         let dsn = parse_dsn(dsn).map_err(|message| {
-            OPEN_ERROR_CODE.store(-30_019, Ordering::Relaxed);
+            OPEN_ERROR_CODE.with(|code| code.set(-30_019));
             message
         })?;
         let url = c_string(&dsn.url)?;
@@ -554,7 +556,7 @@ impl CubridConn {
         if auto_commit < 0 {
             let mut disconnect_error = NativeError::default();
             unsafe { (api.disconnect)(handle, &mut disconnect_error) };
-            OPEN_ERROR_CODE.store(auto_commit as i64, Ordering::Relaxed);
+            OPEN_ERROR_CODE.with(|code| code.set(auto_commit as i64));
             return Err(format!("CCI, CCI error {auto_commit}"));
         }
         let mut connection = Self {
@@ -1560,6 +1562,35 @@ impl CubridStmt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Concurrent constructors retain their own native diagnostic codes.
+    #[test]
+    fn open_diagnostic_is_thread_local() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        record_open_error(&ErrorState {
+            code: 111,
+            message: "parent failure".into(),
+            ..ErrorState::default()
+        });
+        let child_barrier = barrier.clone();
+        let child = std::thread::spawn(move || {
+            let initial = open_diagnostic();
+            record_open_error(&ErrorState {
+                code: 222,
+                message: "child failure".into(),
+                ..ErrorState::default()
+            });
+            child_barrier.wait();
+            (initial, open_diagnostic())
+        });
+        barrier.wait();
+        let parent = open_diagnostic();
+        let (child_initial, child_final) = child.join().unwrap();
+
+        assert_eq!(parent, ("HY000", 111));
+        assert_eq!(child_initial, ("HY000", 0));
+        assert_eq!(child_final, ("HY000", 222));
+    }
 
     /// Parses defaults, credentials, and pass-through CCI URL options.
     #[test]

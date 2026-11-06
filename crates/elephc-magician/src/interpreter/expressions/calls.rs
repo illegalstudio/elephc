@@ -11,6 +11,7 @@
 //!   normalized callable invocation.
 
 use super::*;
+use std::borrow::Cow;
 
 mod first_class;
 mod first_class_support;
@@ -39,10 +40,36 @@ pub(in crate::interpreter) fn eval_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_call_with_error_name(name, name, args, context, scope, values)
+}
+
+/// Normalizes mixed-case lookup keys without allocating for ordinary lowercase calls.
+fn call_lookup_name(name: &str) -> Cow<'_, str> {
+    if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        Cow::Owned(name.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(name)
+    }
+}
+
+/// Keeps source spelling for errors while resolving a case-insensitive call target.
+fn eval_call_with_error_name(
+    name: &str,
+    error_name: &str,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let lookup_name = call_lookup_name(name);
+    let name = lookup_name.as_ref();
     if eval_expr_language_construct_name(name) {
         let args = positional_call_arg_exprs(args)?;
         return eval_positional_expr_call(name, &args, context, scope, values);
     }
+    // Ahead of every specialised handler below: each one used to refuse a wrong count with a
+    // `RuntimeFatal` of its own, where PHP throws a catchable `ArgumentCountError`.
+    eval_check_builtin_source_arity(name, args, context, scope, values)?;
     if name == "flock" {
         return eval_builtin_flock(args, context, scope, values);
     }
@@ -79,43 +106,32 @@ pub(in crate::interpreter) fn eval_call(
     }
     // The xml surface forwards to the host's compiled prelude; the source-level path keeps
     // `xml_parse_into_struct()`'s by-reference outputs and named arguments intact.
+    if eval_fileinfo_builtin_name(name) {
+        return eval_builtin_fileinfo_call(name, args, context, scope, values);
+    }
     if eval_xml_builtin_name(name) {
         return eval_builtin_xml_call(name, args, context, scope, values);
     }
-    // `opcache_get_configuration` is prelude-provided on the native side (not a
-    // catalog builtin), so eval dispatches it as a plain runtime handler rather than
-    // through the PHP-visible builtin registry, keeping the two builtin sets in sync.
-    if name == "opcache_get_configuration" {
-        return eval_opcache_get_configuration_call(args, context, scope, values);
-    }
-    // `opcache_reset` is likewise prelude-provided on native; eval returns the CLI
-    // default cache-enabled boolean (false) as a plain runtime handler.
-    if name == "opcache_reset" {
-        return eval_opcache_reset_call(args, context, scope, values);
-    }
-    // `opcache_get_status` is likewise prelude-provided on native; eval reports the CLI
-    // default (cache disabled) and so returns `false` as a plain runtime handler.
-    if name == "opcache_get_status" {
-        return eval_opcache_get_status_call(args, context, scope, values);
-    }
-    // The five OPcache file/script functions are likewise prelude-provided on native; eval
-    // reports the CLI default (cache disabled) and returns `false` from each, except the
-    // `void` `opcache_jit_blacklist`, which evaluates to `NULL`. See
-    // `network_env::opcache_file_functions`.
-    if name == "opcache_is_script_cached" {
-        return eval_opcache_is_script_cached_call(args, context, scope, values);
-    }
-    if name == "opcache_invalidate" {
-        return eval_opcache_invalidate_call(args, context, scope, values);
-    }
-    if name == "opcache_compile_file" {
-        return eval_opcache_compile_file_call(args, context, scope, values);
-    }
-    if name == "opcache_is_script_cached_in_file_cache" {
-        return eval_opcache_is_script_cached_in_file_cache_call(args, context, scope, values);
-    }
-    if name == "opcache_jit_blacklist" {
-        return eval_opcache_jit_blacklist_call(args, context, scope, values);
+    // ALL EIGHT OPcache functions are prelude-provided on the native side (they are not
+    // catalog builtins), so eval carries a fallback handler for each. Every one of those
+    // handlers is guarded the same way, and the uniformity is the point rather than a
+    // stylistic preference.
+    //
+    // When the binary DOES carry the prelude declaration, that declaration is the only thing
+    // that knows the compile-time manifest, the live runtime script cache, the resolved
+    // `--ini` values and `ini_set()` overrides — and `opcache.restrict_api`, which the
+    // prelude implements as a guard at the top of each body. A handler that intercepts ahead
+    // of it does not merely answer with stale data: it answers INSTEAD of the refusal. With
+    // `opcache.restrict_api=/nonexistent`, native `opcache_reset()` warns and returns
+    // `false` while an eval'd `opcache_reset()` returned `true` and scheduled a real flush,
+    // so `eval()` was a way around the directive for seven of the eight names.
+    //
+    // So `opcache_direct` hands the call to that declaration when it exists, and to the
+    // by-values dispatch `call_user_func()` reaches when it does not — in both cases after
+    // binding the arguments to the reference parameters and checking the internal-function
+    // count, which the declaration's userland signature would answer differently.
+    if let Some(parameters) = eval_opcache_parameters(name, context) {
+        return eval_opcache_direct_call(name, parameters, args, context, scope, values);
     }
     if let Some(result) = eval_date_procedural_alias_call(name, args, context, scope, values)? {
         return Ok(result);
@@ -167,13 +183,28 @@ pub(in crate::interpreter) fn eval_call(
         return eval_builtin_call(name, args, context, scope, values);
     }
 
+    let (base, written) = split_generic_name(name)?;
+    if let Some(template) = context.generic_function_template(&base).cloned() {
+        if matches!(template.prototype.as_ref(), EvalStmt::FunctionDecl { .. }) {
+            return eval_generic_function(&template, written.as_deref(), args, context, scope, values);
+        }
+    }
     if let Some(function) = context.function(name).cloned() {
         return eval_dynamic_function(&function, args, context, scope, values);
     }
     if let Some(function) = context.native_function(name) {
         return eval_native_function(function, args, context, scope, values);
     }
-    Err(EvalStatus::UnsupportedConstruct)
+    // A known builtin may require an unavailable prelude or capability. Preserve
+    // that diagnostic; an undefined function is a catchable PHP Error.
+    if elephc_builtin_contract::lookup(name).is_some() {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    eval_throw_error(
+        &format!("Call to undefined function {}()", error_name.trim_start_matches('\\')),
+        context,
+        values,
+    )
 }
 
 /// Evaluates an unqualified namespaced function call with PHP's global fallback.
@@ -185,13 +216,20 @@ pub(in crate::interpreter) fn eval_namespaced_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if let Some(function) = context.function(name).cloned() {
+    let lookup_name = call_lookup_name(name);
+    let (base, written) = split_generic_name(&lookup_name)?;
+    if let Some(template) = context.generic_function_template(&base).cloned() {
+        if matches!(template.prototype.as_ref(), EvalStmt::FunctionDecl { .. }) {
+            return eval_generic_function(&template, written.as_deref(), args, context, scope, values);
+        }
+    }
+    if let Some(function) = context.function(&lookup_name).cloned() {
         return eval_dynamic_function(&function, args, context, scope, values);
     }
-    if let Some(function) = context.native_function(name) {
+    if let Some(function) = context.native_function(&lookup_name) {
         return eval_native_function(function, args, context, scope, values);
     }
-    eval_call(fallback_name, args, context, scope, values)
+    eval_call_with_error_name(fallback_name, name, args, context, scope, values)
 }
 
 /// Evaluates a variable or expression callable and dispatches it with source-order arguments.
@@ -233,8 +271,10 @@ fn eval_dynamic_call_with_callback(
         }
     }
     let callback = eval_callable(callback, context, values)?;
-    with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
-        eval_evaluated_callable_with_call_array_args(&callback, arguments, context, values)
+    callback.with_values(context, values, |callback, context, values| {
+        with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+            eval_evaluated_callable_with_call_array_args(&callback, arguments, context, values)
+        })
     })
 }
 

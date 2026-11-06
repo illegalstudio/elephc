@@ -20,7 +20,8 @@ impl Checker {
     /// Checks:
     /// - Parameter names are unique within the declaration.
     /// - No parameter uses `void` C type.
-    /// - PHP parameter types are supported for FFI (int, float, str, bool, resource, pointer, buffer, callable).
+    /// - PHP parameter types are supported for FFI (int, float, str, bool, resource, pointer, buffer,
+    ///   callable, and the `string|null` union of a `?string` parameter).
     /// - Integer and float register argument counts each stay within the ARM64 ABI limit of 8.
     /// - Return type is not callable, array, assoc-array, or object.
     ///
@@ -59,6 +60,12 @@ impl Checker {
                     "Extern parameters cannot use type void",
                 ));
             }
+            if matches!(param.c_type, CType::NullableStr) {
+                // `?string` is the `string|null` union on the PHP side and one `char*` integer
+                // register on the C side, NULL for PHP null.
+                int_regs += 1;
+                continue;
+            }
             match php_ty {
                 PhpType::Float => float_regs += 1,
                 PhpType::Str
@@ -80,7 +87,8 @@ impl Checker {
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
-                | PhpType::Packed(_) => {
+                | PhpType::Packed(_)
+                | PhpType::Narrow(_) => {
                     return Err(CompileError::new(
                         span,
                         &format!("Unsupported extern parameter type in {}()", name),
@@ -116,7 +124,9 @@ impl Checker {
 
     /// Validates an extern class field declaration's C type.
     ///
-    /// Rejects `void` and `callable` C types on extern fields; all other C types are permitted.
+    /// Rejects `void` and `callable`, which have no struct layout, and `?string`, which only
+    /// extern function parameters and returns support; every other extern type, including the
+    /// explicit C widths (`i8` to `u64`, `f32`), is laid out naturally.
     ///
     /// Inputs:
     /// - `class_name`: class name for error messages.
@@ -128,6 +138,15 @@ impl Checker {
         field: &crate::parser::ast::ExternField,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
+        if matches!(field.c_type, CType::NullableStr) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Extern class '{}' field ${} cannot be ?string; ?string is supported on extern function parameters and returns only (a string field reads a NULL char* as \"\")",
+                    class_name, field.name
+                ),
+            ));
+        }
         if matches!(field.c_type, CType::Void | CType::Callable) {
             return Err(CompileError::new(
                 span,
@@ -145,7 +164,7 @@ impl Checker {
     /// Checks:
     /// - Name is not `argc` or `argv` (reserved superglobals).
     /// - No duplicate extern global with the same name already registered.
-    /// - C type is not `void` or `callable`.
+    /// - C type is not `void`, `callable`, `?string`, or an explicit C width (`i8`..`u64`, `f32`).
     ///
     /// Inputs:
     /// - `name`: variable name (without `$` prefix) for error messages.
@@ -170,6 +189,24 @@ impl Checker {
             return Err(CompileError::new(
                 span,
                 &format!("Duplicate extern global declaration: ${}", name),
+            ));
+        }
+        if matches!(c_type, CType::IntWidth(_) | CType::F32) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Extern global ${} uses an explicit C width; extern globals support int, float, bool, string, ptr, and ptr<T> only",
+                    name
+                ),
+            ));
+        }
+        if matches!(c_type, CType::NullableStr) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Extern global ${} cannot be ?string; extern globals support int, float, bool, string, ptr, and ptr<T> only",
+                    name
+                ),
             ));
         }
         if matches!(c_type, CType::Void | CType::Callable) {

@@ -350,3 +350,160 @@ fn restriction_follows_the_entry_script_not_the_executing_file() {
     );
     assert!(entry_err.is_empty(), "entry-prefixed build must not warn: {entry_err:?}");
 }
+
+/// A RUNTIME-PROVIDED `eval()` source is refused exactly as a native call is.
+///
+/// The program names no OPcache function anywhere, so the guarded native bodies are never
+/// injected and every call lands in the interpreter's own handlers — which did not check the
+/// restriction, and scheduled a real restart. The PR review's reproducer, extended to every
+/// restricted function and to a `$f()` spelling. MEASURED on reference PHP 8.5: the warning, then
+/// `bool(false)`, for each; with an allowing prefix, `opcache_reset()` answers `bool(true)`.
+#[test]
+fn a_runtime_eval_source_is_refused_as_native_calls_are() {
+    let dir = make_test_dir("opcache_ra_runtime_eval");
+    fs::write(dir.join("lib.php"), "<?php\n").unwrap();
+    let source = "<?php\n$code = getenv('REVIEW_CODE');\neval($code);\n";
+    assert!(!source.contains("opcache"), "PREMISE: nothing statically names the OPcache API");
+    let build = |stem: &str, restrict: &str| -> PathBuf {
+        fs::write(dir.join(format!("{stem}.php")), source).unwrap();
+        let output = Command::new(elephc_bin())
+            .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .current_dir(&dir)
+            .arg(dir.join(format!("{stem}.php")))
+            .args(["--php-version", "8.5"])
+            .args(["--ini", "opcache.enable_cli=1"])
+            .args(["--ini", "opcache.file_update_protection=0"])
+            .arg("--ini")
+            .arg(format!("opcache.restrict_api={restrict}"))
+            .output()
+            .expect("failed to spawn elephc");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        dir.join(stem)
+    };
+    let run = |bin: &Path, code: &str| -> (String, String) {
+        let output = Command::new(bin)
+            .env("REVIEW_CODE", code)
+            .output()
+            .expect("failed to run compiled binary");
+        (
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+
+    let denied = build("denied", "/nonexistent");
+    for code in [
+        "var_dump(opcache_reset());",
+        "var_dump(opcache_get_status(false));",
+        "var_dump(opcache_get_configuration());",
+        "var_dump(opcache_is_script_cached(__DIR__ . '/lib.php'));",
+        "var_dump(opcache_invalidate(__DIR__ . '/lib.php'));",
+        "var_dump(opcache_is_script_cached_in_file_cache(__DIR__ . '/lib.php'));",
+        "$f = 'opcache_' . 'reset'; var_dump($f());",
+    ] {
+        let (stdout, stderr) = run(&denied, code);
+        assert_eq!(stdout, "bool(false)\n", "{code}");
+        assert_eq!(stderr.matches(RESTRICT_WARNING).count(), 1, "{code}:\n{stderr}");
+    }
+
+    let allowed = build("allowed", &dir.display().to_string());
+    let (stdout, stderr) = run(&allowed, "var_dump(opcache_reset());");
+    assert_eq!(stdout, "bool(true)\n", "an allowing prefix leaves the API usable");
+    assert!(!stderr.contains(RESTRICT_WARNING), "{stderr}");
+}
+
+/// A refused eval call takes a non-UTF-8 path as bytes, and still type-checks `$closure`.
+///
+/// Both from the PR #968 review, both MEASURED on PHP 8.5.10 with the same opaque source. A
+/// path carrying byte 0xFF made the eval handler fatal ("eval() runtime failed") while
+/// converting it, which, once arguments came before the refusal, pre-empted both `t()` and the
+/// warning; reference takes paths as bytes. And `opcache_jit_blacklist()` answered `NULL` for
+/// any value where reference throws `TypeError`, on the direct call and through
+/// `call_user_func` alike. The byte comes from native code, so the path reaches the eval
+/// handler as a runtime value rather than as a literal the lexer decoded.
+#[test]
+fn a_refused_eval_call_takes_byte_paths_and_checks_its_closure() {
+    let dir = make_test_dir("opcache_ra_eval_bytes");
+    let source = "<?php\n$p = '/nonexistent' . chr(255);\n$code = getenv('REVIEW_CODE');\neval($code);\n";
+    assert!(!source.contains("opcache"), "PREMISE: nothing statically names the OPcache API");
+    fs::write(dir.join("main.php"), source).unwrap();
+    let output = Command::new(elephc_bin())
+        .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .current_dir(&dir)
+        .arg(dir.join("main.php"))
+        .args(["--php-version", "8.5"])
+        .args(["--ini", "opcache.enable_cli=1"])
+        .args(["--ini", "opcache.restrict_api=/nonexistent"])
+        .output()
+        .expect("failed to spawn elephc");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    let code = "function t() { echo \"T\\n\"; return true; }\n\
+                var_dump(opcache_invalidate($p, t()));\n\
+                var_dump(opcache_is_script_cached($p));\n\
+                try { opcache_jit_blacklist(\"x\"); } catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; }\n\
+                try { call_user_func(\"opcache_jit_blacklist\", 7); } catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; }\n\
+                var_dump(opcache_jit_blacklist(function () {}));\n";
+    let output = Command::new(dir.join("main"))
+        .env("REVIEW_CODE", code)
+        .output()
+        .expect("failed to run compiled binary");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let prefix = "opcache_jit_blacklist(): Argument #1 ($closure) must be of type Closure, ";
+    assert_eq!(
+        stdout,
+        format!("T\nbool(false)\nbool(false)\n{prefix}string given\n{prefix}int given\nNULL\n"),
+        "{stderr}"
+    );
+    assert_eq!(stderr.matches(RESTRICT_WARNING).count(), 2, "{stderr}");
+}
+
+/// A refused call still evaluates its arguments, once each and in source order.
+///
+/// The engine evaluates a call's arguments before entering the function, and php-src's
+/// restricted functions parse their parameters before `validate_api_restriction()`. The eval
+/// handlers refused first, so `opcache_is_script_cached(mark())` warned without ever calling
+/// `mark()`. The PR #968 review's reproducer, extended to the `$force` argument, to the other
+/// argument-taking restricted functions, and to `opcache_jit_blacklist()`, which never evaluated
+/// its argument at all. MEASURED on reference PHP 8.5.10 with the same opaque source: each call's
+/// output, then the warning and `bool(false)`.
+#[test]
+fn a_refused_eval_call_still_evaluates_its_arguments_in_order() {
+    let dir = make_test_dir("opcache_ra_eval_args");
+    let source = "<?php\n$code = getenv('REVIEW_CODE');\neval($code);\n";
+    assert!(!source.contains("opcache"), "PREMISE: nothing statically names the OPcache API");
+    fs::write(dir.join("main.php"), source).unwrap();
+    let output = Command::new(elephc_bin())
+        .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .current_dir(&dir)
+        .arg(dir.join("main.php"))
+        .args(["--php-version", "8.5"])
+        .args(["--ini", "opcache.enable_cli=1"])
+        .args(["--ini", "opcache.restrict_api=/nonexistent"])
+        .output()
+        .expect("failed to spawn elephc");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    let code = "function mark() { echo \"ARG\\n\"; return \"/missing\"; }\n\
+                function flag() { echo \"FLAG\\n\"; return true; }\n\
+                function scripts() { echo \"SCRIPTS\\n\"; return false; }\n\
+                function closure() { echo \"CLOSURE\\n\"; return function () {}; }\n\
+                var_dump(opcache_is_script_cached(mark()));\n\
+                var_dump(opcache_invalidate(mark(), flag()));\n\
+                var_dump(opcache_is_script_cached_in_file_cache(mark()));\n\
+                var_dump(opcache_get_status(scripts()));\n\
+                var_dump(opcache_jit_blacklist(closure()));\n";
+    let output = Command::new(dir.join("main"))
+        .env("REVIEW_CODE", code)
+        .output()
+        .expect("failed to run compiled binary");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stdout,
+        "ARG\nbool(false)\nARG\nFLAG\nbool(false)\nARG\nbool(false)\nSCRIPTS\nbool(false)\nCLOSURE\nNULL\n",
+        "{stderr}"
+    );
+    assert_eq!(stderr.matches(RESTRICT_WARNING).count(), 4, "{stderr}");
+}

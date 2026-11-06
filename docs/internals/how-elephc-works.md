@@ -117,11 +117,20 @@ In this example, there's nothing to resolve — the AST passes through unchanged
 **File:** `src/name_resolver/`
 
 Between include resolution and name resolution, elephc injects demand-loaded PHP
-preludes for built-in surfaces that need helper declarations: PDO,
+preludes for built-in surfaces that need helper declarations, including PDO,
 timezone-introspection APIs, `DateTimeZone::listIdentifiers()` filtering, and
 `var_export()`. These passes run after includes so usage inside included files is
 detected, and before name resolution so injected declarations participate in the
 same canonical-name pipeline as user code.
+
+Before injection, `src/autoload/prelude_probe.rs` runs name resolution and
+autoloading on a disposable copy of the include-resolved program. Its PDO,
+mysqli, timezone, image, hash, curl, XML, and `var_export` detectors find uses
+that occur only in autoloaded class files. The real pipeline then injects those
+preludes before resolving names. The probe restores thread-local source IDs and
+anonymous-class numbering while keeping process-global synthetic spans and
+include temporaries monotonic. This work has the `autoload-prelude-probe`
+timing label; it does not replace the later real autoload expansion.
 
 After includes are flattened, elephc resolves namespace-aware names. This pass applies the current `namespace`, any `use` / `use function` / `use const` imports, and rewrites references to their canonical fully-qualified names before semantic analysis.
 
@@ -288,7 +297,7 @@ function main:
   return
 ```
 
-After validation, a fixed-point optimization pass driver (`src/ir_passes/`) runs the registered EIR transformation passes over each function until none reports a change. The current pass set performs [identity arithmetic folding](the-ir.md#optimization-passes) (`x + 0` → `x`, `x * 0` → `0`, …), local peephole rewrites, per-block constant folding, dominance-aware common-subexpression elimination, loop-invariant code motion, CFG-aware dead-instruction and dead-store elimination, and branch simplification. A cross-function [small-function inliner](the-ir.md#small-function-inlining) splices small, non-recursive, destructor-free helpers into their callers, and the whole pipeline runs to a module-level fixed point so inlining and the per-function passes feed each other. In debug and test builds the driver re-validates each function after every pass, so an optimization bug aborts the compile immediately. These passes are on by default and can be disabled with [`--no-ir-opt`](../compiling/optimization.md#eir-optimization-passes).
+After validation, a fixed-point optimization pass driver (`src/ir_passes/`) runs the registered EIR transformation passes over each function until none reports a change. The current pass set performs [identity arithmetic folding](the-ir.md#optimization-passes) (`x + 0` → `x`, `x * 0` → `0`, …), local peephole rewrites, scalar local promotion, canonical loop optimization, integer range analysis, per-block constant folding, dominance-aware common-subexpression elimination, loop-invariant code motion, CFG-aware dead-instruction and dead-store elimination, branch simplification, and concat scratch-state optimization. A cross-function [small-function inliner](the-ir.md#small-function-inlining) splices small, non-recursive, destructor-free helpers into their callers, and the whole pipeline runs to a module-level fixed point so inlining and the per-function passes feed each other. In debug and test builds the driver re-validates each function after every pass, so an optimization bug aborts the compile immediately. These passes are on by default and can be disabled with [`--no-ir-opt`](../compiling/optimization.md#eir-optimization-passes).
 
 The exact textual IR contains value ids, types, ownership, spans, and terminators, but the important point is that the removed `if` shell does not reappear. `--emit-ir` stops here after printing the optimized, validated textual EIR; add `--no-ir-opt` to see the IR before the passes run.
 

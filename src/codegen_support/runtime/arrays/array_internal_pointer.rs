@@ -32,13 +32,14 @@ use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Emits the AArch64 inline normalization prologue shared by all three helpers.
+/// Emits the AArch64 inline normalization prologue shared by all three helpers and by
+/// `__rt_array_edge_value` (`array_first` / `array_last`).
 ///
 /// Unwraps boxed Mixed cells until a bare container remains, then leaves the container
 /// pointer in `x0`, its live element count in `x11`, and its heap kind in `x12`, or
 /// branches to `invalid` when the input is not a live array or hash. Only `x9`-`x12` are
 /// touched, so the caller's `x1`/`x2` argument registers survive.
-fn emit_normalize_aarch64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
+pub(super) fn emit_normalize_aarch64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
     emitter.label(&format!("{}_norm", prefix));
     emitter.instruction(&format!("cbz x0, {}", invalid));                       // a null container is never positionable
     crate::codegen_support::abi::emit_load_int_immediate(
@@ -71,13 +72,14 @@ fn emit_normalize_aarch64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
     emitter.instruction("ldr x11, [x0, #0]");                                   // x11 = live element count from header word 0
 }
 
-/// Emits the x86_64 inline normalization prologue shared by all three helpers.
+/// Emits the x86_64 inline normalization prologue shared by all three helpers and by
+/// `__rt_array_edge_value` (`array_first` / `array_last`).
 ///
 /// Unwraps boxed Mixed cells until a bare container remains, then leaves the container
 /// pointer in `rdi` and its live element count in `r11`, or branches to `invalid`. Only
 /// `rax`, `r10` and `r11` are touched, so the caller's `rsi`/`rdx` argument registers
 /// survive; callers that need the heap kind reload the header byte after the check.
-fn emit_normalize_x86_64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
+pub(super) fn emit_normalize_x86_64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
     emitter.label(&format!("{}_norm", prefix));
     emitter.instruction("test rdi, rdi");                                       // is the container pointer null?
     emitter.instruction(&format!("je {}", invalid));                            // a null container is never positionable
@@ -360,11 +362,16 @@ pub fn emit_array_ptr_value(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x10, #24]");                                  // x9 = value_lo from the hash entry
     emitter.instruction("ldr x13, [x10, #32]");                                 // x13 = value_hi from the hash entry
     emitter.instruction("ldr x14, [x10, #40]");                                 // x14 = value_tag from the hash entry
+    emitter.instruction("cmp x14, #7");                                         // is the payload already a boxed Mixed cell?
+    emitter.instruction("b.eq __rt_aptr_val_hash_boxed");                       // then it IS the value; boxing it again nests a Mixed in a Mixed
     emitter.instruction("mov x0, x14");                                         // value_tag = the entry's runtime tag
     emitter.instruction("mov x1, x9");                                          // value_lo = the entry's low payload word
     emitter.instruction("mov x2, x13");                                         // value_hi = the entry's high payload word
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_aptr_val_deref_done", "x0", "x1", "x2");
     emitter.instruction("b __rt_mixed_from_value");                             // retain/persist the payload and return the box
+    emitter.label("__rt_aptr_val_hash_boxed");
+    emitter.instruction("mov x0, x9");                                          // the entry payload IS the Mixed cell the caller wants
+    emitter.instruction("b __rt_incref");                                       // retain it and return it; incref preserves x0
     emitter.label("__rt_aptr_val_false");
     emitter.instruction("mov x0, #3");                                          // value_tag = 3 (bool)
     emitter.instruction("mov x1, #0");                                          // value_lo = 0 (false)
@@ -395,10 +402,15 @@ fn emit_array_ptr_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [r10 + 24]");                        // r8 = value_lo from the hash entry
     emitter.instruction("mov r9, QWORD PTR [r10 + 32]");                        // r9 = value_hi from the hash entry
     emitter.instruction("mov rax, QWORD PTR [r10 + 40]");                       // rax = value_tag from the hash entry
+    emitter.instruction("cmp rax, 7");                                          // is the payload already a boxed Mixed cell?
+    emitter.instruction("je __rt_aptr_val_hash_boxed");                         // then it IS the value; boxing it again nests a Mixed in a Mixed
     emitter.instruction("mov rdi, r8");                                         // value_lo = the entry's low payload word
     emitter.instruction("mov rsi, r9");                                         // value_hi = the entry's high payload word
     super::hash_entry_reference::emit_inline_entry_deref(emitter, "__rt_aptr_val_deref_done", "rax", "rdi", "rsi");
     emitter.instruction("jmp __rt_mixed_from_value");                           // retain/persist the payload and return the box
+    emitter.label("__rt_aptr_val_hash_boxed");
+    emitter.instruction("mov rax, r8");                                         // the entry payload IS the Mixed cell the caller wants
+    emitter.instruction("jmp __rt_incref");                                     // retain it and return it; incref preserves rax
     emitter.label("__rt_aptr_val_false");
     emitter.instruction("xor edi, edi");                                        // value_lo = 0 (false)
     emitter.instruction("xor esi, esi");                                        // value_hi unused

@@ -97,7 +97,11 @@ pub(super) fn parse_method_params(
         }
 
         let type_ann = if looks_like_typed_param(tokens, *pos) {
-            Some(parse_type_expr(tokens, pos, span)?)
+            Some(if promotion.is_some() {
+                super::body::parse_property_type_expr(tokens, pos, span)?
+            } else {
+                parse_type_expr(tokens, pos, span)?
+            })
         } else {
             None
         };

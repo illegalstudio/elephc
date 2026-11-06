@@ -28,12 +28,32 @@ pub(super) fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instructio
             closure.params.len()
         )));
     }
-    let visible_param_count = closure.params.len() - inst.operands.len();
-    let signature = function_signature_from_eir_with_param_count(closure, visible_param_count);
     let captures = closure_capture_params_from_eir(closure, inst.operands.len());
+    let descriptor_label = emit_static_closure_descriptor(ctx, closure, inst.operands.len());
+    // Every closure gets HEAP storage, capture-free ones included. In PHP a Closure
+    // is an object and consumes an object handle from the same pool `new` draws
+    // from, including a capture-free closure whose descriptor could otherwise be static.
+    emit_runtime_closure_descriptor_with_captures(
+        ctx, &descriptor_label, &captures, &inst.operands,
+    )?;
+    store_if_result(ctx, inst)
+}
+
+/// Emits the immutable descriptor header for a closure entry and its uniform invoker.
+pub(super) fn emit_static_closure_descriptor(
+    ctx: &mut FunctionContext<'_>,
+    closure: &Function,
+    capture_count: usize,
+) -> String {
+    let visible_param_count = closure.params.len() - capture_count;
+    let signature = function_signature_from_eir_with_param_count(closure, visible_param_count);
+    let captures = closure_capture_params_from_eir(closure, capture_count);
     let owns_string_return = crate::codegen::runtime_callable_invoker::function_returns_owned_string(closure);
-    let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &signature, &captures, owns_string_return, true);
-    let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+    let default_scope = closure.lexical_class.clone();
+    let invoker_label = emit_runtime_callable_invoker_in_class(
+        ctx, &signature, &captures, owns_string_return, true, default_scope.as_deref(),
+    );
+    callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &function_symbol(&closure.name),
         Some(&closure.name),
@@ -45,24 +65,7 @@ pub(super) fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instructio
             callable_descriptor::CallableDescriptorShape::Closure,
         ),
         Some(&invoker_label),
-    );
-    // Every closure gets HEAP storage, capture-free ones included. In PHP a Closure
-    // is an object and consumes an object handle from the same pool `new` draws
-    // from — `$f = function () {}; var_dump(new P());` prints `object(P)#2` — so a
-    // capture-free closure that collapsed to a static `.data` descriptor address
-    // would have no allocation to bind a handle to and no lifetime to release one
-    // at, and every `#N` after it would be off by one. Routing it through the same
-    // runtime descriptor the capturing case already uses gives the closure real
-    // storage, so `__rt_object_handle_acquire` binds a handle at creation and
-    // `__rt_callable_descriptor_release` → `__rt_heap_free` hands it back exactly
-    // when PHP destroys the Closure.
-    emit_runtime_closure_descriptor_with_captures(
-        ctx,
-        &descriptor_label,
-        &captures,
-        &inst.operands,
-    )?;
-    store_if_result(ctx, inst)
+    )
 }
 
 /// Returns the hidden closure capture params from the tail of the EIR closure ABI.
@@ -137,7 +140,7 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
             if capture_ty.codegen_repr() == PhpType::Str {
                 abi::emit_call_label(ctx.emitter, "__rt_str_persist");
             } else {
-                abi::emit_incref_if_refcounted(ctx.emitter, capture_ty);
+                abi::emit_incref_if_refcounted(ctx.emitter, &capture_ty.codegen_repr());
             }
         }
         callable_descriptor::emit_store_current_result_to_runtime_capture(
@@ -486,98 +489,9 @@ pub(super) fn store_current_result_to_ref_cell(
     }
 }
 
-/// Reconstructs callable signature metadata from an emitted EIR function.
-pub(in crate::codegen) fn function_signature_from_eir(function: &crate::ir::Function) -> FunctionSig {
-    function_signature_from_eir_with_param_count(function, function.params.len())
-}
-
-/// Reconstructs signature metadata from the first `param_count` EIR params.
-pub(super) fn function_signature_from_eir_with_param_count(
-    function: &crate::ir::Function,
-    param_count: usize,
-) -> FunctionSig {
-    if let Some(signature) = &function.signature {
-        let mut signature = signature.clone();
-        let original_param_count = signature.params.len();
-        ensure_variadic_param_slot(&mut signature);
-        if original_param_count == param_count {
-            return signature.clone();
-        }
-    }
-
-    FunctionSig {
-        params: function
-            .params
-            .iter()
-            .take(param_count)
-            .map(|param| (param.name.clone(), param.php_type.clone()))
-            .collect(),
-        param_type_exprs: vec![None; param_count],
-        param_attributes: Vec::new(),
-        defaults: function
-            .params
-            .iter()
-            .take(param_count)
-            .map(|_| None)
-            .collect(),
-        return_type: function.return_php_type.clone(),
-        declared_return: !matches!(function.return_php_type, PhpType::Mixed),
-        by_ref_return: false,
-        ref_params: function
-            .params
-            .iter()
-            .take(param_count)
-            .map(|param| param.by_ref)
-            .collect(),
-        declared_params: function
-            .params
-            .iter()
-            .take(param_count)
-            .map(|param| !matches!(param.php_type, PhpType::Mixed))
-            .collect(),
-        variadic: function
-            .params
-            .iter()
-            .take(param_count)
-            .find(|param| param.variadic)
-            .map(|param| param.name.clone()),
-        deprecation: None,
-        is_generator: false,
-    }
-}
-
-/// Adds the virtual variadic array slot when the EIR ABI stores it outside `params`.
-pub(super) fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
-    let Some(variadic) = signature.variadic.clone() else {
-        return;
-    };
-    if signature.params.iter().any(|(name, _)| name == &variadic) {
-        return;
-    }
-    let variadic_index = signature.params.len();
-    let variadic_type_expr = if signature.param_type_exprs.len() > variadic_index {
-        signature.param_type_exprs.remove(variadic_index)
-    } else {
-        None
-    };
-    let variadic_ref = if signature.ref_params.len() > variadic_index {
-        signature.ref_params.remove(variadic_index)
-    } else {
-        false
-    };
-    let variadic_declared = if signature.declared_params.len() > variadic_index {
-        signature.declared_params.remove(variadic_index)
-    } else {
-        false
-    };
-    signature
-        .params
-        .push((variadic, PhpType::Array(Box::new(PhpType::Mixed))));
-    signature.defaults.push(None);
-    signature.ref_params.push(variadic_ref);
-    signature.declared_params.push(variadic_declared);
-    signature.param_type_exprs.push(variadic_type_expr);
-}
+pub(in crate::codegen) use crate::codegen::callable_signatures::{
+    function_signature_from_eir, function_signature_from_eir_with_param_count,
+};
 
 #[cfg(test)]
 mod tests {

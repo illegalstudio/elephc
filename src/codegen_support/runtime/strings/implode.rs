@@ -38,7 +38,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use super::concat_scratch::CONCAT_BUF_CAPACITY;
+use crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL;
 
 /// Destination headroom guaranteed before a nested `__rt_mixed_cast_string`.
 ///
@@ -106,12 +106,13 @@ fn emit_implode_ensure_room_aarch64(emitter: &mut Emitter, site: &str) {
 ///
 /// `x9` must hold the live cursor. Clobbers `x12`-`x15`.
 fn emit_implode_publish_offset_aarch64(emitter: &mut Emitter, site: &str) {
+    let cap = emitter.concat_capacity;
     let grown = format!("__rt_implode_off_grown_{}", site);
     let store = format!("__rt_implode_off_store_{}", site);
     emitter.instruction("ldr x13, [sp, #24]");                                  // destination base
     crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_concat_buf");
     emitter.instruction("sub x15, x13, x14");                                   // candidate scratch offset of the destination
-    emitter.instruction(&format!("mov x12, #{}", CONCAT_BUF_CAPACITY));         // concat scratch capacity in bytes
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x12", cap as i64); // concat scratch capacity in bytes
     emitter.instruction("cmp x15, x12");                                        // is the destination outside the scratch window (unsigned: heap wraps high)?
     emitter.instruction(&format!("b.hs {}", grown));                            // a grown join holds no scratch
     emitter.instruction("sub x14, x9, x14");                                    // absolute offset of the live destination cursor
@@ -167,13 +168,15 @@ fn emit_implode_ensure_room_x86_64(emitter: &mut Emitter, site: &str) {
 ///
 /// `r10` must hold the live cursor. Clobbers `rcx`, `rdx`, `r8` and `r9`.
 fn emit_implode_publish_offset_x86_64(emitter: &mut Emitter, site: &str) {
+    let cap = emitter.concat_capacity;
     let grown = format!("__rt_implode_off_grown_{}", site);
     let store = format!("__rt_implode_off_store_{}", site);
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // destination base
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_buf");
     emitter.instruction("mov rdx, rcx");                                        // copy the base before converting it to a scratch offset
     emitter.instruction("sub rdx, r8");                                         // candidate scratch offset of the destination
-    emitter.instruction(&format!("cmp rdx, {}", CONCAT_BUF_CAPACITY));          // is the destination outside the scratch window (unsigned: heap wraps high)?
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", cap as i64); // load the shared scratch capacity
+    emitter.instruction("cmp rdx, r9");                                         // is the destination outside the scratch window (unsigned: heap wraps high)?
     emitter.instruction(&format!("jae {}", grown));                             // a grown join holds no scratch
     emitter.instruction("mov r9, r10");                                         // copy the live cursor before converting it to an absolute offset
     emitter.instruction("sub r9, r8");                                          // absolute offset of the live destination cursor
@@ -196,6 +199,7 @@ fn emit_implode_publish_offset_x86_64(emitter: &mut Emitter, site: &str) {
 /// The result is written into the shared concat buffer and _concat_off is updated
 /// to reflect the bytes consumed by this call.
 pub fn emit_implode(emitter: &mut Emitter) {
+    let cap = emitter.concat_capacity;
     super::implode_cast::emit_implode_element_cast(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_implode_linux_x86_64(emitter);
@@ -206,10 +210,22 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.comment("--- runtime: implode ---");
     emitter.label_global("__rt_implode");
 
+    // -- the generic entry reads the element layout from the array header --
+    emitter.instruction("ldr x4, [x3, #-8]");                                   // load packed indexed-array metadata for element layout dispatch
+    emitter.instruction("lsr x4, x4, #8");                                      // move the indexed-array value_type tag into the low bits
+    emitter.instruction("and x4, x4, #0x7f");                                   // isolate the indexed-array element value_type tag
+    // An explicit branch, not a fall-through: the typed entry is its own global symbol, so on
+    // Mach-O it is a separate atom that dead-stripping may move or drop.
+    emitter.instruction("b __rt_implode_typed");                                // continue in the shared join body
+
+    // -- typed entry: x4 = element value_type chosen by the caller --
+    emitter.label_global("__rt_implode_typed");
+
     // -- set up stack frame (128 bytes) --
     emitter.instruction("sub sp, sp, #128");                                    // allocate 128 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish new frame pointer
+    emitter.instruction("str x4, [sp, #40]");                                   // preserve the value_type tag across mixed element casts
     emitter.instruction("stp x1, x2, [sp]");                                    // save glue string ptr and length
     emitter.instruction("str x3, [sp, #16]");                                   // save array pointer
 
@@ -223,7 +239,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("str x6, [sp, #32]");                                   // save offset variable address
     // The destination starts as the scratch tail and grows out of it on demand, so the
     // capacity it is measured against is what remains of the 64 KiB buffer, not all of it.
-    emitter.instruction(&format!("mov x12, #{}", CONCAT_BUF_CAPACITY));         // total concat scratch capacity in bytes
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x12", cap as i64); // total concat scratch capacity in bytes
     emitter.instruction("subs x12, x12, x8");                                   // room left in the scratch buffer from the entry offset
     emitter.instruction("csel x12, x12, xzr, pl");                              // a full (or over-full) scratch starts this join at zero capacity
     emitter.instruction("str x12, [sp, #80]");                                  // save the destination capacity
@@ -231,10 +247,6 @@ pub fn emit_implode(emitter: &mut Emitter) {
     // -- load array length and initialize index --
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload array pointer
     emitter.instruction("ldr x10, [x3]");                                       // load array element count
-    emitter.instruction("ldr x12, [x3, #-8]");                                  // load packed indexed-array metadata for element layout dispatch
-    emitter.instruction("lsr x12, x12, #8");                                    // move the indexed-array value_type tag into the low bits
-    emitter.instruction("and x12, x12, #0x7f");                                 // isolate the indexed-array element value_type tag
-    emitter.instruction("str x12, [sp, #40]");                                  // preserve the value_type tag across mixed element casts
     emitter.instruction("mov x11, #0");                                         // initialize element index = 0
 
     // -- main loop: join elements with glue --
@@ -262,12 +274,55 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #48]");                                  // clear the owned mixed-cast slot; borrowed element slots release nothing
     emitter.instruction("cmp x13, #7");                                         // are elements boxed Mixed cells?
     emitter.instruction("b.eq __rt_implode_mixed_elem");                        // mixed slots must be cast to string before copying
+    // A RAW scalar payload is 8 bytes wide and carries no length, so it cannot be read through
+    // the 16-byte `{pointer, length}` string slot below: an int element's value would be
+    // dereferenced as a pointer. Reaching this helper with one is normal — the operand's
+    // declared type was `mixed` or a union (`?array`), so the element layout is only knowable
+    // here, from the tag (issues #689 and #640).
+    emitter.instruction("cmp x13, #0");                                         // value_type 0 = raw int elements
+    emitter.instruction("b.eq __rt_implode_raw_int_elem");                      // render the integer through __rt_itoa
+    emitter.instruction("cmp x13, #2");                                         // value_type 2 = raw float elements
+    emitter.instruction("b.eq __rt_implode_raw_float_elem");                    // render the double through __rt_ftoa
+    emitter.instruction("cmp x13, #3");                                         // value_type 3 = raw bool elements
+    emitter.instruction("b.eq __rt_implode_raw_bool_elem");                     // PHP renders true as "1" and false as ""
+    emitter.instruction(&format!("cmp x13, #{}", crate::codegen_support::sentinels::TAGGED_SCALAR_ARRAY_VALUE_TYPE)); // are elements inline tagged nullable ints?
+    emitter.instruction("b.eq __rt_implode_tagged_scalar_elem");                // render payload/tag slots as int or empty null
     emitter.instruction("lsl x12, x11, #4");                                    // compute byte offset: index * 16
     emitter.instruction("add x12, x3, x12");                                    // add to array base
     emitter.instruction("add x12, x12, #24");                                   // skip 24-byte array header
     emitter.instruction("ldr x1, [x12]");                                       // load element string pointer
     emitter.instruction("ldr x2, [x12, #8]");                                   // load element string length
     emitter.instruction("b __rt_implode_copy_value");                           // copy the loaded string payload into the result buffer
+
+    emitter.label("__rt_implode_tagged_scalar_elem");
+    emitter.instruction("lsl x12, x11, #4");                                    // compute byte offset: index * 16 for tagged scalar slots
+    emitter.instruction("add x12, x3, x12");                                    // add the tagged slot offset to the array base
+    emitter.instruction("add x12, x12, #24");                                   // skip the 24-byte array header
+    emitter.instruction("ldr x13, [x12, #8]");                                  // load the runtime tag beside the nullable integer payload
+    emitter.instruction(&format!("cmp x13, #{}", TAGGED_SCALAR_TAG_NULL));      // is this tagged nullable integer PHP null?
+    emitter.instruction("b.eq __rt_implode_tagged_scalar_null");                // null contributes an empty string
+    emitter.instruction(&format!("mov x15, #{}", MIXED_CAST_HEADROOM));         // reserve formatter headroom before __rt_itoa writes into scratch
+    emit_implode_ensure_room_aarch64(emitter, "tagged_scalar");
+    emitter.instruction("ldr x3, [sp, #16]");                                   // reload the array pointer after possible growth
+    emitter.instruction("lsl x12, x11, #4");                                    // recompute the tagged scalar slot offset
+    emitter.instruction("add x12, x3, x12");                                    // add the slot offset to the array base
+    emitter.instruction("add x12, x12, #24");                                   // skip the array header
+    emitter.instruction("ldr x0, [x12]");                                       // load the non-null integer payload
+    emitter.instruction("str x9, [sp, #56]");                                   // preserve the live result cursor across formatting
+    emitter.instruction("str x10, [sp, #64]");                                  // preserve array length across formatting
+    emitter.instruction("str x11, [sp, #72]");                                  // preserve the element cursor across formatting
+    emitter.instruction("mov x1, x9");                                          // format directly in the reserved implode destination window
+    emitter.instruction("bl __rt_itoa_into");                                   // write decimal digits without using concat scratch
+    emitter.instruction("mov x2, x1");                                          // move the formatted length into the copy-loop argument
+    emitter.instruction("mov x1, x0");                                          // move the formatted slice pointer into the copy-loop argument
+    emitter.instruction("ldr x9, [sp, #56]");                                   // restore the live result cursor
+    emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length
+    emitter.instruction("ldr x11, [sp, #72]");                                  // restore the element cursor
+    emitter.instruction("b __rt_implode_copy_value");                           // compact the right-aligned digits to the destination cursor
+    emitter.label("__rt_implode_tagged_scalar_null");
+    emitter.instruction("mov x1, xzr");                                         // a null element contributes no bytes
+    emitter.instruction("mov x2, xzr");                                         // publish the empty string length
+    emitter.instruction("b __rt_implode_copy_value");                           // advance past the null element without reading a slot
 
     emitter.label("__rt_implode_mixed_elem");
     // The cast FORMATS an int/float element straight into the scratch before implode can
@@ -302,6 +357,40 @@ pub fn emit_implode(emitter: &mut Emitter) {
     // heap magic marker, explicitly to let callers pass concat-buffer storage). The pointer is
     // captured BEFORE the copy loop, which post-increments x1 off the allocation base.
     emitter.instruction("str x1, [sp, #48]");                                   // record the persisted mixed-cast string to release once its bytes are copied
+    emitter.instruction("b __rt_implode_copy_value");                           // grow for the actual converted length before copying arbitrary strings
+
+    // -- raw scalar element arms: 8-byte payloads formatted in the reserved destination --
+    //
+    // Like the tagged arm above: reserve `MIXED_CAST_HEADROOM` first (growing if the join is
+    // too close to its capacity), then format with `__rt_itoa_into` / `__rt_ftoa_into` straight
+    // into that window. The formatters never touch `_concat_buf` at `_concat_off`, so a join near
+    // the end of the 64 KiB scratch cannot have them write past it. Nothing is ALLOCATED here,
+    // so the owned-temporary slot stays zero and the release below is correctly skipped.
+    emitter.label("__rt_implode_raw_int_elem");
+    emit_aarch64_scalar_reserve(emitter, "raw_int");
+    emitter.instruction("ldr x0, [x12]");                                       // load the raw integer element
+    emit_aarch64_scalar_format_into(emitter, "__rt_itoa_into");
+    emitter.instruction("b __rt_implode_copy_value");                           // compact the right-aligned digits to the destination cursor
+
+    emitter.label("__rt_implode_raw_float_elem");
+    emit_aarch64_scalar_reserve(emitter, "raw_float");
+    emitter.instruction("ldr d0, [x12]");                                       // load the raw double element into the FP argument register
+    emit_aarch64_scalar_format_into(emitter, "__rt_ftoa_into");
+    emitter.instruction("b __rt_implode_copy_value");                           // the text already sits at the destination cursor
+
+    // PHP stringifies bool as "1"/"" — NOT "1"/"0" — which is why false takes a zero-length
+    // copy instead of going through the formatter at all.
+    emitter.label("__rt_implode_raw_bool_elem");
+    emit_aarch64_scalar_slot_address(emitter);
+    emitter.instruction("ldr x0, [x12]");                                       // load the raw bool element
+    emitter.instruction("cbz x0, __rt_implode_raw_bool_false_elem");            // false renders as the empty string
+    emit_aarch64_scalar_reserve(emitter, "raw_booltrue");
+    emitter.instruction("mov x0, #1");                                          // true renders as the single character "1"
+    emit_aarch64_scalar_format_into(emitter, "__rt_itoa_into");
+    emitter.instruction("b __rt_implode_copy_value");                           // compact the single character to the destination cursor
+
+    emitter.label("__rt_implode_raw_bool_false_elem");
+    emitter.instruction("mov x2, #0");                                          // a zero-length element copies nothing and still takes its glue
 
     // -- copy element bytes to output --
     emitter.label("__rt_implode_copy_value");
@@ -347,6 +436,101 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits a typed `implode()` entry that forces the element layout and joins through
+/// `__rt_implode_typed`.
+///
+/// `__rt_implode_int`, `__rt_implode_float`, and `__rt_implode_bool` are these entries: the
+/// statically known element type picks the raw-scalar arm (`value_type` 0, 2, or 3) of the one
+/// bounded join, so every typed join formats into its own reserved destination and grows onto
+/// the heap instead of streaming into `_concat_buf` unchecked.
+pub(crate) fn emit_implode_typed_entry(emitter: &mut Emitter, label: &str, value_type: u8) {
+    emitter.blank();
+    emitter.comment(&format!("--- runtime: {} ---", label.trim_start_matches("__rt_")));
+    emitter.label_global(label);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x4, #{}", value_type));           // force the statically known element layout
+            emitter.instruction("b __rt_implode_typed");                        // join through the bounded, growable implode body
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov ecx, {}", value_type));           // force the statically known element layout
+            emitter.instruction("jmp __rt_implode_typed");                      // join through the bounded, growable implode body
+        }
+    }
+}
+
+/// Addresses the current raw 8-byte element slot on x86_64, leaving it in `rcx`.
+fn emit_x86_64_scalar_slot_address(emitter: &mut Emitter) {
+    emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a raw scalar slot offset
+    emitter.instruction("shl rcx, 3");                                          // convert the loop cursor into the 8-byte scalar slot offset
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer before addressing the current scalar slot
+    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the address of the current scalar slot after the fixed array header
+}
+
+/// Reserves `MIXED_CAST_HEADROOM` destination bytes on x86_64, then re-addresses the current
+/// raw 8-byte element slot in `rcx` and leaves the live destination cursor in `r10`.
+///
+/// The reservation may grow the join into a new block, which relocates the cursor and clobbers
+/// the scratch registers, so the slot address is computed only afterwards.
+fn emit_x86_64_scalar_reserve(emitter: &mut Emitter, site: &str) {
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // live destination cursor for the headroom check
+    emitter.instruction("xor r8d, r8d");                                        // no pending source bytes across the growth call
+    emitter.instruction(&format!("mov r9, {}", MIXED_CAST_HEADROOM));           // room the formatter may write into the destination
+    emit_implode_ensure_room_x86_64(emitter, site);
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the loop cursor after possible growth
+    emit_x86_64_scalar_slot_address(emitter);
+}
+
+/// Moves an x86_64 formatter's `rax`/`rdx` answer into the shared copy loop's registers.
+fn emit_x86_64_scalar_copy_setup(emitter: &mut Emitter) {
+    emitter.instruction("mov r8, rax");                                         // move the formatted text pointer into the copy-loop source register
+    emitter.instruction("mov r9, rdx");                                         // move the formatted text length into the copy-loop counter register
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor after formatting
+}
+
+/// Addresses the current raw 8-byte element slot on AArch64, leaving it in `x12`.
+///
+/// Raw scalar payloads are half the width of the `{pointer, length}` string slot the main path
+/// indexes, so they get their own scaling: `x3` is the array base and `x11` the loop index.
+fn emit_aarch64_scalar_slot_address(emitter: &mut Emitter) {
+    emitter.instruction("lsl x12, x11, #3");                                    // compute byte offset: index * 8 for raw scalar slots
+    emitter.instruction("add x12, x3, x12");                                    // add the scalar slot offset to the array base
+    emitter.instruction("add x12, x12, #24");                                   // skip the 24-byte array header
+}
+
+/// Reserves `MIXED_CAST_HEADROOM` destination bytes on AArch64, then re-addresses the current
+/// raw 8-byte element slot in `x12`.
+///
+/// The reservation may grow the join into a new block, which relocates the cursor in `x9` and
+/// clobbers `x3`, so the array base is reloaded and the slot address computed afterwards.
+fn emit_aarch64_scalar_reserve(emitter: &mut Emitter, site: &str) {
+    emitter.instruction(&format!("mov x15, #{}", MIXED_CAST_HEADROOM));         // room the formatter may write into the destination
+    emit_implode_ensure_room_aarch64(emitter, site);
+    emitter.instruction("ldr x3, [sp, #16]");                                   // reload the array pointer after possible growth
+    emit_aarch64_scalar_slot_address(emitter);
+}
+
+/// Formats the loaded AArch64 element straight into the reserved window at the cursor `x9`,
+/// preserving the loop registers, and leaves the text in `x1`/`x2` for the copy loop.
+///
+/// `formatter` is `__rt_itoa_into` (value in `x0`, answers `x0`=ptr, `x1`=len) or
+/// `__rt_ftoa_into` (value in `d0`, answers `x1`=ptr, `x2`=len); both write only inside the
+/// window, never into `_concat_buf` at `_concat_off`.
+fn emit_aarch64_scalar_format_into(emitter: &mut Emitter, formatter: &str) {
+    emitter.instruction("str x9, [sp, #56]");                                   // preserve the live result cursor across formatting
+    emitter.instruction("str x10, [sp, #64]");                                  // preserve array length across formatting
+    emitter.instruction("str x11, [sp, #72]");                                  // preserve the element cursor across formatting
+    emitter.instruction("mov x1, x9");                                          // format directly in the reserved implode destination window
+    emitter.instruction(&format!("bl {}", formatter));                          // write the text inside the window only
+    if formatter == "__rt_itoa_into" {
+        emitter.instruction("mov x2, x1");                                      // move the formatted length into the copy-loop argument
+        emitter.instruction("mov x1, x0");                                      // move the formatted slice pointer into the copy-loop argument
+    }
+    emitter.instruction("ldr x9, [sp, #56]");                                   // restore the live result cursor
+    emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length
+    emitter.instruction("ldr x11, [sp, #72]");                                  // restore the element cursor
+}
+
 /// Emits the x86_64 Linux variant of `__rt_implode`.
 /// Implements the same join logic as the ARM64 path but uses x86_64 System V ABI
 /// registers and x86_64 assembly conventions (r8-r11, rdx for length, rax for pointer).
@@ -356,13 +540,24 @@ pub fn emit_implode(emitter: &mut Emitter) {
 ///
 /// The result is written into the shared concat buffer and _concat_off is updated.
 fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
+    let cap = emitter.concat_capacity;
     emitter.blank();
     emitter.comment("--- runtime: implode ---");
     emitter.label_global("__rt_implode");
 
+    // -- the generic entry reads the element layout from the array header --
+    emitter.instruction("mov rcx, QWORD PTR [rdx - 8]");                        // load packed indexed-array metadata for element layout dispatch
+    emitter.instruction("shr rcx, 8");                                          // move the indexed-array value_type tag into the low bits
+    emitter.instruction("and rcx, 0x7f");                                       // isolate the indexed-array element value_type tag
+    emitter.instruction("jmp __rt_implode_typed");                              // continue in the shared join body (a separate symbol, never a fall-through)
+
+    // -- typed entry: rcx = element value_type chosen by the caller --
+    emitter.label_global("__rt_implode_typed");
+
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving implode spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for glue, array, and concat-buffer bookkeeping
     emitter.instruction("sub rsp, 112");                                        // reserve aligned spill slots for glue, array, concat destination, array length, loop index, the owned mixed-cast string, and the destination bound
+    emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // preserve the value_type tag across mixed element casts
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the glue string pointer across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the glue string length across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the indexed-array pointer across the element copy loop and concat-buffer bookkeeping
@@ -375,7 +570,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the current concat-buffer destination cursor across glue and element copy loops
     // The destination starts as the scratch tail and grows out of it on demand, so the
     // capacity it is measured against is what remains of the 64 KiB buffer, not all of it.
-    emitter.instruction(&format!("mov rcx, {}", CONCAT_BUF_CAPACITY));          // total concat scratch capacity in bytes
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "rcx", cap as i64); // total concat scratch capacity in bytes
     emitter.instruction("sub rcx, r9");                                         // room left in the scratch buffer from the entry offset
     emitter.instruction("jns __rt_implode_capacity_ready");                     // a full (or over-full) scratch starts this join at zero capacity
     emitter.instruction("xor ecx, ecx");                                        // clamp the remaining capacity at zero
@@ -384,10 +579,6 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rdx]");                            // load the indexed-array logical length once before entering the implode loop
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the indexed-array logical length for the loop termination check
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize the indexed-array loop cursor to the first element
-    emitter.instruction("mov r11, QWORD PTR [rdx - 8]");                        // load packed indexed-array metadata for element layout dispatch
-    emitter.instruction("shr r11, 8");                                          // move the indexed-array value_type tag into the low bits
-    emitter.instruction("and r11, 0x7f");                                       // isolate the indexed-array element value_type tag
-    emitter.instruction("mov QWORD PTR [rbp - 64], r11");                       // preserve the value_type tag across mixed element casts
 
     emitter.label("__rt_implode_loop");
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current indexed-array loop cursor before deciding whether implode is complete
@@ -418,6 +609,17 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current indexed-array loop cursor before locating the next string element slot
     emitter.instruction("cmp QWORD PTR [rbp - 64], 7");                         // are elements boxed Mixed cells?
     emitter.instruction("je __rt_implode_mixed_elem");                          // mixed slots must be cast to string before copying
+    // See the AArch64 dispatch: a RAW scalar payload is 8 bytes wide and carries no length, so
+    // reading it through the 16-byte `{pointer, length}` string slot below dereferences the
+    // value itself (issues #689 and #640).
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // value_type 0 = raw int elements
+    emitter.instruction("je __rt_implode_raw_int_elem");                        // render the integer through __rt_itoa
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 2");                         // value_type 2 = raw float elements
+    emitter.instruction("je __rt_implode_raw_float_elem");                      // render the double through __rt_ftoa
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 3");                         // value_type 3 = raw bool elements
+    emitter.instruction("je __rt_implode_raw_bool_elem");                       // PHP renders true as "1" and false as ""
+    emitter.instruction(&format!("cmp QWORD PTR [rbp - 64], {}", crate::codegen_support::sentinels::TAGGED_SCALAR_ARRAY_VALUE_TYPE)); // are elements inline tagged nullable ints?
+    emitter.instruction("je __rt_implode_tagged_scalar_elem");                  // render payload/tag slots as int or empty null
     emitter.instruction("mov rcx, r11");                                        // copy the indexed-array loop cursor before scaling it into a string-slot byte offset
     emitter.instruction("shl rcx, 4");                                          // convert the indexed-array loop cursor into the 16-byte offset of the current string slot
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer before addressing the current string slot
@@ -426,6 +628,34 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rcx + 8]");                         // load the current indexed-array string length before copying the element bytes
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor before copying the element bytes
     emitter.instruction("jmp __rt_implode_copy_value");                         // copy the loaded string payload into the result buffer
+
+    emitter.label("__rt_implode_tagged_scalar_elem");
+    emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a tagged slot offset
+    emitter.instruction("shl rcx, 4");                                          // convert the loop cursor into a 16-byte slot offset
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer
+    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the tagged slot address after the array header
+    emitter.instruction(&format!("cmp QWORD PTR [rcx + 8], {}", TAGGED_SCALAR_TAG_NULL)); // is the nullable integer payload PHP null?
+    emitter.instruction("je __rt_implode_tagged_scalar_null_x");                // null contributes an empty string
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // live destination cursor for the headroom check
+    emitter.instruction("xor r8d, r8d");                                        // no pending source bytes across the growth call
+    emitter.instruction(&format!("mov r9, {}", MIXED_CAST_HEADROOM));           // reserve formatter headroom before __rt_itoa writes into scratch
+    emit_implode_ensure_room_x86_64(emitter, "tagged_scalar");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the loop cursor after possible growth
+    emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a tagged slot offset
+    emitter.instruction("shl rcx, 4");                                          // convert the loop cursor into a 16-byte slot offset
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer
+    emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // recompute the tagged slot address after the array header
+    emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the non-null integer payload
+    emitter.instruction("mov rdi, rax");                                        // pass the tagged integer to the destination formatter
+    emitter.instruction("mov rsi, r10");                                        // format directly in the reserved implode destination window
+    emitter.instruction("call __rt_itoa_into");                                 // write decimal digits without using concat scratch
+    emit_x86_64_scalar_copy_setup(emitter);
+    emitter.instruction("jmp __rt_implode_copy");                               // compact the right-aligned digits to the destination cursor
+    emitter.label("__rt_implode_tagged_scalar_null_x");
+    emitter.instruction("xor r8d, r8d");                                        // a null element contributes no source bytes
+    emitter.instruction("xor r9d, r9d");                                        // publish the empty string length
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // restore the current destination cursor
+    emitter.instruction("jmp __rt_implode_copy");                               // advance past the null element without reading a slot
 
     emitter.label("__rt_implode_mixed_elem");
     // The cast FORMATS an int/float element straight into the scratch before implode can
@@ -457,6 +687,46 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, rax");                                         // move the cast string pointer into the copy-loop source register
     emitter.instruction("mov r9, rdx");                                         // move the cast string length into the copy-loop counter register
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor after casting
+    emitter.instruction("jmp __rt_implode_copy_value");                         // grow for the actual converted length before copying arbitrary strings
+
+    // -- raw scalar element arms: 8-byte payloads formatted in the reserved destination --
+    //
+    // Same scheme as the AArch64 arms: reserve `MIXED_CAST_HEADROOM`, then format with
+    // `__rt_itoa_into` / `__rt_ftoa_into` straight into that window, never through `_concat_buf`
+    // at `_concat_off`. Neither ALLOCATES, so the owned-temporary slot stays zero.
+    emitter.label("__rt_implode_raw_int_elem");
+    emit_x86_64_scalar_reserve(emitter, "raw_int");
+    emitter.instruction("mov rdi, QWORD PTR [rcx]");                            // pass the raw integer element to the destination formatter
+    emitter.instruction("mov rsi, r10");                                        // format directly in the reserved implode destination window
+    emitter.instruction("call __rt_itoa_into");                                 // write decimal digits → rax=ptr, rdx=len
+    emit_x86_64_scalar_copy_setup(emitter);
+    emitter.instruction("jmp __rt_implode_copy");                               // compact the right-aligned digits to the destination cursor
+
+    emitter.label("__rt_implode_raw_float_elem");
+    emit_x86_64_scalar_reserve(emitter, "raw_float");
+    emitter.instruction("movsd xmm0, QWORD PTR [rcx]");                         // load the raw double element into the FP argument register
+    emitter.instruction("mov rsi, r10");                                        // format directly in the reserved implode destination window
+    emitter.instruction("call __rt_ftoa_into");                                 // write PHP's precision=14 text → rax=ptr, rdx=len
+    emit_x86_64_scalar_copy_setup(emitter);
+    emitter.instruction("jmp __rt_implode_copy");                               // the text already sits at the destination cursor
+
+    // PHP stringifies bool as "1"/"" — NOT "1"/"0" — which is why false takes a zero-length
+    // copy instead of going through the formatter at all.
+    emitter.label("__rt_implode_raw_bool_elem");
+    emit_x86_64_scalar_slot_address(emitter);
+    emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the raw bool element
+    emitter.instruction("test rax, rax");                                       // false renders as the empty string
+    emitter.instruction("jz __rt_implode_raw_bool_false_elem");                 // skip the formatter entirely for false
+    emit_x86_64_scalar_reserve(emitter, "raw_booltrue");
+    emitter.instruction("mov rdi, 1");                                          // true renders as the single character "1"
+    emitter.instruction("mov rsi, r10");                                        // format directly in the reserved implode destination window
+    emitter.instruction("call __rt_itoa_into");                                 // write the digit → rax=ptr, rdx=len
+    emit_x86_64_scalar_copy_setup(emitter);
+    emitter.instruction("jmp __rt_implode_copy");                               // compact the single character to the destination cursor
+
+    emitter.label("__rt_implode_raw_bool_false_elem");
+    emitter.instruction("xor r9, r9");                                          // a zero-length element copies nothing and still takes its glue
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor
 
     emitter.label("__rt_implode_copy_value");
     emit_implode_ensure_room_x86_64(emitter, "elem");
@@ -506,6 +776,29 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
+    /// Arbitrary Mixed conversion lengths pass the full copy-capacity guard on every target.
+    #[test]
+    fn test_implode_mixed_cast_checks_full_size_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_implode(&mut emitter);
+            let assembly = emitter.output();
+            let (call, expected) = if target.arch == Arch::AArch64 {
+                ("bl __rt_implode_cast_string", "b __rt_implode_copy_value")
+            } else {
+                ("call __rt_implode_cast_string", "jmp __rt_implode_copy_value")
+            };
+            // The runtime also defines `__rt_implode_cast_string` before the implode body.
+            // Inspect the final call site, which is the Mixed-element invocation under test,
+            // rather than an internal call made by that helper's own implementation.
+            let after_cast = assembly.rsplit_once(call).unwrap().1;
+            let jump = after_cast.lines().map(str::trim).find(|line|
+                line.starts_with("b ") || line.starts_with("jmp ")).unwrap();
+            assert_eq!(jump, expected, "{name}: converted strings may exceed formatter headroom");
+        }
+    }
+
     /// Verifies the ARM64 implode emitter releases the persisted mixed-cast string:
     /// it records the cast pointer, guards borrowed slots, and frees owned temporaries
     /// with a balanced 128-byte frame.
@@ -540,6 +833,11 @@ mod tests {
         assert_eq!(asm.matches("add rsp, 112").count(), 1);
     }
 
+    /// The element arms that format through concat scratch: only boxed Mixed. Raw int, raw
+    /// float, true bool and tagged nullable ints format directly into the reserved result
+    /// destination, so they publish nothing.
+    const FORMATTING_ARMS: usize = 1;
+
     /// The owned mixed-cast slot must be cleared at the TOP of every element iteration, so a
     /// borrowed (typed-array) element can never inherit the previous iteration's owned pointer
     /// and free it a second time. This is the guard that keeps the release exactly-once.
@@ -559,14 +857,19 @@ mod tests {
     }
 
     /// Pins the ARM64 cursor discipline: the LIVE destination cursor is published as
-    /// `_concat_off` before the nested cast (so `__rt_ftoa`/`__rt_itoa` format past the bytes
-    /// already joined), and the finalizer stamps the ABSOLUTE end offset instead of adding the
+    /// `_concat_off` before the nested Mixed cast (so the cast formats past the bytes already
+    /// joined), and the finalizer stamps the ABSOLUTE end offset instead of adding the
     /// result length to whatever `_concat_off` the nested cast left behind.
     ///
-    /// Both sites now branch on where the destination lives. A scratch destination publishes
+    /// Every site branches on where the destination lives. A scratch destination publishes
     /// the live cursor as before; a GROWN one occupies no scratch at all and restores the
     /// offset the call started from, which is also what leaves the nested cast the whole
     /// buffer to format into.
+    ///
+    /// The count is one publish per FORMATTING element arm plus the finalizer, and the THREE
+    /// assertions have to agree on it: the scratch arm, the grown arm and the store are all
+    /// parts of one shared sequence, so a site that open-codes the scratch-only form shows up
+    /// here as a grown-arm count lower than the other two rather than as a missing publish.
     #[test]
     fn test_implode_arm64_publishes_live_cursor_across_mixed_cast() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
@@ -574,29 +877,53 @@ mod tests {
         let asm = emitter.output();
         assert_eq!(
             asm.matches("sub x14, x9, x14").count(),
-            2,
-            "the live cursor offset is published at the cast and at the finalizer"
+            FORMATTING_ARMS + 1,
+            "the live cursor offset is published at every cast and at the finalizer"
         );
         assert_eq!(
             asm.matches("ldr x14, [sp, #88]").count(),
-            2,
-            "and both fall back to the entry offset once the destination has grown"
+            FORMATTING_ARMS + 1,
+            "and every one of them falls back to the entry offset once the destination has grown"
         );
-        assert_eq!(asm.matches("str x14, [x13]").count(), 2);
+        assert_eq!(
+            asm.matches("str x14, [x13]").count(),
+            FORMATTING_ARMS + 1
+        );
         assert!(
             !asm.contains("add x8, x8, x2"),
             "implode must stamp the absolute concat offset, not accumulate a relative length"
         );
     }
 
+    /// Tagged nullable integers format into the reserved join destination, never into the
+    /// shared concat scratch whose remaining capacity can be smaller than 21 bytes.
+    #[test]
+    fn test_implode_tagged_scalar_uses_destination_integer_formatter() {
+        for (target, call, old_call, null_label) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), "bl __rt_itoa_into", "bl __rt_itoa\n", "\n__rt_implode_tagged_scalar_null:"),
+            (Target::new(Platform::Linux, Arch::X86_64), "call __rt_itoa_into", "call __rt_itoa\n", "\n__rt_implode_tagged_scalar_null_x:"),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_implode(&mut emitter);
+            let asm = emitter.output();
+            let tagged = asm
+                .split("__rt_implode_tagged_scalar_elem:")
+                .nth(1)
+                .expect("tagged scalar renderer must be emitted")
+                .split(null_label)
+                .next()
+                .expect("tagged scalar null case must follow its integer arm");
+            assert!(tagged.contains(call), "{tagged}");
+            assert!(!tagged.contains(old_call), "{tagged}");
+        }
+    }
+
     /// Issue #515: every destination write is preceded by a room check, so a join larger than
     /// the 64 KiB scratch grows into an owned heap block instead of running into the adjacent
     /// BSS globals.
     ///
-    /// Three sites, and all three are load-bearing: the glue, the element, and the headroom a
-    /// nested `__rt_mixed_cast_string` needs *before* it formats an int or float straight into
-    /// the scratch — that one writes before implode can measure what it produced, so it cannot
-    /// be checked afterwards like the other two.
+    /// Four sites are load-bearing: the glue, the element, mixed-cast headroom, and the
+    /// tagged-scalar destination formatter. Both formatters reserve room before writing output.
     ///
     /// Asserted per target because the bug was invisible on one of them: the CLI corrupted the
     /// result silently while a `--web` worker took SIGSEGV for the same input.
@@ -621,8 +948,9 @@ mod tests {
             let asm = emitter.output();
             assert_eq!(
                 asm.matches(grow).count(),
-                3,
-                "glue, element and mixed-cast headroom must each be able to grow on {:?}",
+                7,
+                "glue, element, mixed-cast, tagged-scalar and the raw int, float and bool \
+                 headroom must each grow on {:?}",
                 target.arch
             );
             assert!(
@@ -651,18 +979,18 @@ mod tests {
         let asm = emitter.output();
         assert_eq!(
             asm.matches("mov r9, r10").count(),
-            2,
-            "the live cursor is published at the cast and at the finalizer"
+            FORMATTING_ARMS + 1,
+            "the live cursor is published at every cast and at the finalizer"
         );
         assert_eq!(
             asm.matches("sub r9, r8").count(),
-            2,
-            "and converted to an absolute offset at both"
+            FORMATTING_ARMS + 1,
+            "and converted to an absolute offset at every one of them"
         );
         assert_eq!(
             asm.matches("mov r9, QWORD PTR [rbp - 88]").count(),
-            2,
-            "both fall back to the entry offset once the destination has grown"
+            FORMATTING_ARMS + 1,
+            "every one of them falls back to the entry offset once the destination has grown"
         );
         assert!(
             !asm.contains("add r9, rdx"),

@@ -277,7 +277,9 @@ pub(in crate::interpreter) fn eval_curl_setopt_callback(
     // failure only appeared as a silently skipped callback at transfer time. The probe is
     // `is_callable()`'s own.
     let callable_is_valid = match eval_callable(value, context, values) {
-        Ok(callable) => eval_callable_probe_exists(&callable, context, values)?,
+        Ok(callable) => callable.with_probe(context, values, |callable, context, values| {
+            eval_callable_probe_exists(callable, context, values)
+        })?,
         Err(_) => false,
     };
     if !callable_is_valid {
@@ -422,20 +424,32 @@ where
     V: RuntimeValueOps,
 {
     let mut installed = Vec::new();
-    for &table_id in handles {
-        for (slot, state) in context.stream_resources().curl_easy_callbacks(table_id) {
-            let callable = match state {
-                EvalCurlCallbackSlot::Callable(cell) => {
-                    // Normalized ONCE per transfer rather than once per callback
-                    // invocation: a write callback fires per chunk, and re-resolving a
-                    // method/closure callable thousands of times would be pure overhead.
-                    Some(eval_callable(cell, context, values)?)
-                }
-                EvalCurlCallbackSlot::Silent => None,
-                EvalCurlCallbackSlot::Empty => continue,
-            };
-            installed.push((table_id, slot, callable));
+    let mut receiver_owners = Vec::new();
+    let setup = (|| {
+        for &table_id in handles {
+            for (slot, state) in context.stream_resources().curl_easy_callbacks(table_id) {
+                let callable = match state {
+                    EvalCurlCallbackSlot::Callable(cell) => {
+                        // Normalized ONCE per transfer rather than once per callback
+                        // invocation: a write callback fires per chunk, and re-resolving a
+                        // method/closure callable thousands of times would be pure overhead.
+                        let (callable, owner) = eval_callable(cell, context, values)?.into_parts();
+                        receiver_owners.extend(owner);
+                        Some(callable)
+                    }
+                    EvalCurlCallbackSlot::Silent => None,
+                    EvalCurlCallbackSlot::Empty => continue,
+                };
+                installed.push((table_id, slot, callable));
+            }
         }
+        Ok::<(), EvalStatus>(())
+    })();
+    if let Err(status) = setup {
+        for owner in receiver_owners {
+            let _ = release_expr_result(owner, context, values);
+        }
+        return Err(status);
     }
     let mut frame = EvalCurlCallbackFrame {
         context: context as *mut ElephcEvalContext,
@@ -459,6 +473,11 @@ where
         // caller resumes it in the very next statement — it still has to consult the
         // bridge's gate to know a throw is why the transfer stopped, which is why resuming
         // is a separate call rather than an `Err` from here.
+        for owner in receiver_owners {
+            if let Err(status) = release_expr_result(owner, context, values) {
+                if frame.parked.is_none() { frame.parked = Some(status); }
+            }
+        }
         Ok((outcome, frame.parked.take()))
     }
 }
@@ -599,77 +618,75 @@ fn eval_curl_run_callback<V: RuntimeValueOps>(
     // the same reason `curl_multi_info_read()` re-boxes one — an eval curl cell owns
     // nothing.
     //
-    // THESE PER-INVOCATION CELLS ARE NOT RELEASED AFTER THE CALL, and that is a known,
-    // bounded cost rather than an oversight — but it IS a cost, so it is written down.
-    // `bind_method_scope_args` binds every argument into the callee's scope as
-    // `ScopeCellOwnership::Borrowed`, and `ElephcEvalScope::drain_owned_cells` frees only
-    // `Owned` entries, so the callback's own frame teardown does not reclaim them; nor does
-    // any other callback-taking builtin in this interpreter reclaim the cells it builds
-    // (`preg_replace_callback`'s per-match `$matches` array, `array_map`, `array_filter`,
-    // `usort`). They are reclaimed with the eval context's heap.
-    //
-    // The bound is "cells per invocation x invocations in one eval context": 2 for
-    // write/header, 3 for read and debug, 5 for progress/xferinfo. `CURLOPT_WRITEFUNCTION`
-    // is the one that matters, because it fires once per received chunk. Releasing them
-    // here would diverge from that interpreter-wide convention in exactly the direction
-    // that turns a bounded leak into a potential use-after-free if any path does take
-    // ownership, so the convention is followed and the cost is documented instead — in
-    // `docs/php/curl.md`'s eval section as well as here.
+    // This invocation owns the generated argument cells. Keep their leases until the
+    // callable returns, retaining a borrowed result before retiring those arguments.
     let mut args = vec![values.curl_handle(table_id)?];
-    let argc = usize::try_from(spec.argc).unwrap_or(0);
-    for index in 0..argc {
-        // SAFETY: the bridge guarantees `argv` points at `argc` `CallArg`s for the duration
-        // of the call (`crates/elephc-curl/src/callbacks.rs`'s trampolines build them on
-        // their own stacks).
-        let arg = unsafe { &*spec.argv.add(index) };
-        let cell = match arg.tag {
-            ffi::CALL_TAG_INT => values.int(arg.lo)?,
-            ffi::CALL_TAG_NULL => values.null()?,
-            ffi::CALL_TAG_STRING => {
-                let len = usize::try_from(arg.hi).unwrap_or(0);
-                let ptr = arg.lo as usize as *const u8;
-                if len == 0 || ptr.is_null() {
-                    values.string_bytes_value(&[])?
-                } else {
-                    // COPIED IMMEDIATELY: these bytes are libcurl's own transient receive
-                    // buffer, valid only for this call.
-                    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
-                    values.string_bytes_value(bytes)?
+    let outcome = (|| {
+        let argc = usize::try_from(spec.argc).unwrap_or(0);
+        for index in 0..argc {
+            // SAFETY: the bridge guarantees `argv` points at `argc` `CallArg`s for the duration
+            // of the call (`crates/elephc-curl/src/callbacks.rs`'s trampolines build them on
+            // their own stacks).
+            let arg = unsafe { &*spec.argv.add(index) };
+            let cell = match arg.tag {
+                ffi::CALL_TAG_INT => values.int(arg.lo)?,
+                ffi::CALL_TAG_NULL => values.null()?,
+                ffi::CALL_TAG_STRING => {
+                    let len = usize::try_from(arg.hi).unwrap_or(0);
+                    let ptr = arg.lo as usize as *const u8;
+                    if len == 0 || ptr.is_null() {
+                        values.string_bytes_value(&[])?
+                    } else {
+                        // COPIED IMMEDIATELY: these bytes are libcurl's own transient receive
+                        // buffer, valid only for this call.
+                        let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+                        values.string_bytes_value(bytes)?
+                    }
+                }
+                // Defensively, any tag a future bridge might add: the three named above are the
+                // only ones the six trampolines produce today, and PHP `null` is the least
+                // surprising stand-in for one this build does not know.
+                _ => values.null()?,
+            };
+            args.push(cell);
+        }
+        eval_evaluated_callable_with_values(callable, args.clone(), context, values)
+    })();
+    let result = crate::interpreter::operands::finish_eval_argument_values(
+        outcome, args, context, values,
+    )?;
+    let converted = (|| {
+        debug_assert!(
+            spec.result_kind == ffi::RESULT_INT || spec.result_kind == ffi::RESULT_STRING,
+            "the bridge only ever asks for an int or a string result"
+        );
+        if spec.result_kind == ffi::RESULT_STRING {
+            // php-src reads the read callback's answer as a STRING and treats anything else as
+            // end-of-data — `Z_TYPE(retval) == IS_STRING` in `curl_read`, not a cast — and
+            // truncates a longer string with `MIN(size * nmemb, len)` rather than failing
+            // (measured against 8.4.20).
+            if values.type_tag(result)? != EVAL_TAG_STRING {
+                spec.out_len = 0;
+                return Ok(0);
+            }
+            let bytes = values.string_bytes(result)?;
+            let capacity = usize::try_from(spec.out_cap).unwrap_or(0);
+            let written = bytes.len().min(capacity);
+            if written > 0 && !spec.out_buf.is_null() {
+                // SAFETY: the bridge passes libcurl's own upload buffer, writable for `out_cap`
+                // bytes, and `written` is clamped to it.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), spec.out_buf, written);
                 }
             }
-            // Defensively, any tag a future bridge might add: the three named above are the
-            // only ones the six trampolines produce today, and PHP `null` is the least
-            // surprising stand-in for one this build does not know.
-            _ => values.null()?,
-        };
-        args.push(cell);
-    }
-    let result = eval_evaluated_callable_with_values(callable, args, context, values)?;
-    debug_assert!(
-        spec.result_kind == ffi::RESULT_INT || spec.result_kind == ffi::RESULT_STRING,
-        "the bridge only ever asks for an int or a string result"
-    );
-    if spec.result_kind == ffi::RESULT_STRING {
-        // php-src reads the read callback's answer as a STRING and treats anything else as
-        // end-of-data — `Z_TYPE(retval) == IS_STRING` in `curl_read`, not a cast — and
-        // truncates a longer string with `MIN(size * nmemb, len)` rather than failing
-        // (measured against 8.4.20).
-        if values.type_tag(result)? != EVAL_TAG_STRING {
-            spec.out_len = 0;
+            spec.out_len = written as i64;
             return Ok(0);
         }
-        let bytes = values.string_bytes(result)?;
-        let capacity = usize::try_from(spec.out_cap).unwrap_or(0);
-        let written = bytes.len().min(capacity);
-        if written > 0 && !spec.out_buf.is_null() {
-            // SAFETY: the bridge passes libcurl's own upload buffer, writable for `out_cap`
-            // bytes, and `written` is clamped to it.
-            unsafe {
-                std::ptr::copy_nonoverlapping(bytes.as_ptr(), spec.out_buf, written);
-            }
-        }
-        spec.out_len = written as i64;
-        return Ok(0);
+        eval_int_value(result, values)
+    })();
+    let released = release_expr_result(result, context, values);
+    match (converted, released) {
+        (Err(status), _) | (Ok(_), Err(status)) => Err(status),
+        (Ok(value), Ok(())) => Ok(value),
     }
-    eval_int_value(result, values)
 }

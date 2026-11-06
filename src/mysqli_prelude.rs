@@ -54,7 +54,17 @@ mod statement;
 /// pipeline (and the test harnesses) can record the "mysqli" PHP surface for
 /// `extension_loaded()` reporting using the same detection that decides
 /// prelude injection.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): the scan walks the whole
+/// program, so an embedder calling it without the CLI driver's wrapper gets the same stack budget.
 pub fn program_uses_mysqli(program: &[Stmt]) -> bool {
+    crate::compiler_stack::with_compiler_stack(|| {
+        program_uses_mysqli_on_compiler_stack(program)
+    })
+}
+
+/// The body of [`program_uses_mysqli`], run on the stack `with_compiler_stack` sized.
+fn program_uses_mysqli_on_compiler_stack(program: &[Stmt]) -> bool {
     detect::program_uses_mysqli(program)
 }
 
@@ -73,7 +83,23 @@ pub fn program_uses_mysqli(program: &[Stmt]) -> bool {
 /// reachability (`forced_groups`) exactly like `--with-pdo` — without it, a
 /// program with no static mysqli reference would have the forced surface
 /// dead-code-eliminated out of the binary.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used(
+    program: Program,
+    force: bool,
+    php_version: PhpVersion,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, force, php_version, inventory)
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
     program: Program,
     force: bool,
     php_version: PhpVersion,
@@ -168,7 +194,14 @@ mod oracle_tests {
                         )
                         .expect("dump parsed");
                     }
-                    panic!("PHP {version}: built `{decl}` differs from its PHP");
+                    let at = left
+                        .chars()
+                        .zip(right.chars())
+                        .position(|(a, b)| a != b)
+                        .unwrap_or_else(|| left.chars().count().min(right.chars().count()));
+                    let built_excerpt: String = left.chars().skip(at).take(300).collect();
+                    let parsed_excerpt: String = right.chars().skip(at).take(300).collect();
+                    panic!("PHP {version}: built `{decl}` differs from its PHP at character {at}\nBuilt: {built_excerpt}\nParsed: {parsed_excerpt}");
                 }
             }
         }
@@ -213,7 +246,7 @@ mod oracle_tests {
             rest = &after[close..];
         }
         cleaned.push_str(rest);
-        cleaned
+        crate::synthetic_class::oracle::assignment_names(&cleaned)
     }
 }
 

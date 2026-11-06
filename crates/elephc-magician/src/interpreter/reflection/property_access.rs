@@ -68,6 +68,11 @@ pub(super) fn eval_reflection_instance_property_set_value(
         context,
         values,
     )?;
+    if property.requires_set_hook() && property.is_readonly() && !property.has_set_hook() {
+        return eval_inherited_abstract_setter_write(
+            declaring_class, property.name(), value, context, values,
+        );
+    }
     validate_eval_reflection_property_write(declaring_class, &property, context)?;
     if property.has_set_hook() {
         if !current_eval_property_hook_is(

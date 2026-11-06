@@ -15,7 +15,7 @@
 use crate::ir::{Immediate, Op};
 use crate::types::PhpType;
 
-/// The five supported native targets exercised by every case in this module.
+/// The five supported native targets covered by this module's cases.
 const TARGETS: [&str; 5] = [
     "macos-aarch64",
     "ios-arm64",
@@ -170,15 +170,14 @@ echo probeBorrowedInstanceof(new InstBorrowChild(), "InstBorrowBase") ? "1" : "0
     }
 }
 
-/// A post-eval dynamic class-name target releases its detached string operand on every target.
+/// Checks post-eval dynamic class-name retirement for one independently scheduled target.
 ///
 /// The target exists before opaque `eval()` widens live locals to boxed `Mixed` storage.
 /// The later `$target = get_parent_class($object)` keeps that widened slot. Reading
 /// it as the dynamic `instanceof` target detaches an owned `Str` copy that the backend entry and
 /// the eval introspection adapter only borrow, so the lowering must retire that exact copy. One
 /// such leak accrued per call in the original fixture.
-#[test]
-fn post_eval_dynamic_target_releases_detached_class_name_string_on_all_targets() {
+fn check_post_eval_dynamic_target_releases_detached_class_name_string(target: &str) {
     let source = r#"<?php
 class InstEvalBase { public int $value = 7; }
 class InstEvalChild extends InstEvalBase { public function __destruct() {} }
@@ -191,47 +190,75 @@ function probeEvalInstanceof(InstEvalChild $object, string $source): bool {
 $source = 'return null; // ' . $argc;
 echo probeEvalInstanceof(new InstEvalChild(), $source) ? "1" : "0";
 "#;
-    for target in TARGETS {
-        let module = lower_for(source, target);
-        let function = module
-            .functions
-            .iter()
-            .find(|function| function.name == "probeEvalInstanceof")
-            .unwrap_or_else(|| panic!("{target}: missing probe function"));
-        let inst = function
-            .instructions
-            .iter()
-            .find(|inst| inst.op == Op::InstanceOfDynamic)
-            .unwrap_or_else(|| panic!("{target}: missing dynamic instanceof"));
-        let target_operand = inst.operands[1];
-        let load = function
-            .instructions
-            .iter()
-            .find(|other| other.result == Some(target_operand))
-            .unwrap_or_else(|| panic!("{target}: dynamic target must be defined"));
-        assert_eq!(load.op, Op::LoadLocal, "{target}: the target reads a local slot");
-        assert_eq!(
-            load.result_php_type,
-            PhpType::Str,
-            "{target}: the class-name target reads as a string"
-        );
-        let Some(Immediate::LocalSlot(slot)) = load.immediate else {
-            panic!("{target}: the target load must identify its slot");
-        };
-        assert_eq!(
-            function.locals[slot.as_raw() as usize]
-                .php_type
-                .codegen_repr(),
-            PhpType::Mixed,
-            "{target}: the eval-widened slot backs a detached string read"
-        );
-        assert_eq!(
-            release_count(function, target_operand), 1,
-            "{target}: the detached class-name string must be retired exactly once"
-        );
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
-    }
+    let module = lower_for(source, target);
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "probeEvalInstanceof")
+        .unwrap_or_else(|| panic!("{target}: missing probe function"));
+    let inst = function
+        .instructions
+        .iter()
+        .find(|inst| inst.op == Op::InstanceOfDynamic)
+        .unwrap_or_else(|| panic!("{target}: missing dynamic instanceof"));
+    let target_operand = inst.operands[1];
+    let load = function
+        .instructions
+        .iter()
+        .find(|other| other.result == Some(target_operand))
+        .unwrap_or_else(|| panic!("{target}: dynamic target must be defined"));
+    assert_eq!(load.op, Op::LoadLocal, "{target}: the target reads a local slot");
+    assert_eq!(
+        load.result_php_type,
+        PhpType::Str,
+        "{target}: the class-name target reads as a string"
+    );
+    let Some(Immediate::LocalSlot(slot)) = load.immediate else {
+        panic!("{target}: the target load must identify its slot");
+    };
+    assert_eq!(
+        function.locals[slot.as_raw() as usize]
+            .php_type
+            .codegen_repr(),
+        PhpType::Mixed,
+        "{target}: the eval-widened slot backs a detached string read"
+    );
+    assert_eq!(
+        release_count(function, target_operand), 1,
+        "{target}: the detached class-name string must be retired exactly once"
+    );
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+}
+
+/// A post-eval dynamic target releases its detached class-name string on macOS ARM64.
+#[test]
+fn post_eval_dynamic_target_releases_detached_class_name_string_macos() {
+    check_post_eval_dynamic_target_releases_detached_class_name_string("macos-aarch64");
+}
+
+/// A post-eval dynamic target releases its detached class-name string on iOS devices.
+#[test]
+fn post_eval_dynamic_target_releases_detached_class_name_string_ios_device() {
+    check_post_eval_dynamic_target_releases_detached_class_name_string("ios-arm64");
+}
+
+/// A post-eval dynamic target releases its detached class-name string on the iOS Simulator.
+#[test]
+fn post_eval_dynamic_target_releases_detached_class_name_string_ios_simulator() {
+    check_post_eval_dynamic_target_releases_detached_class_name_string("ios-sim-arm64");
+}
+
+/// A post-eval dynamic target releases its detached class-name string on Linux ARM64.
+#[test]
+fn post_eval_dynamic_target_releases_detached_class_name_string_linux_arm64() {
+    check_post_eval_dynamic_target_releases_detached_class_name_string("linux-aarch64");
+}
+
+/// A post-eval dynamic target releases its detached class-name string on Linux x86_64.
+#[test]
+fn post_eval_dynamic_target_releases_detached_class_name_string_linux_x86_64() {
+    check_post_eval_dynamic_target_releases_detached_class_name_string("linux-x86_64");
 }
 
 /// An owned value operand is unwind-rooted across a dynamic target on every target.
@@ -308,9 +335,8 @@ echo probeOwnedInstanceof("InstOwnedBase") ? "1" : "0";
     }
 }
 
-/// A throwing target cannot strand a fresh object or a detached post-eval string.
-#[test]
-fn instanceof_value_owners_are_published_before_throwing_target_calls_on_all_targets() {
+/// Checks throwing-target owner leases and assembly within one target's test budget.
+fn check_instanceof_value_owners_before_throwing_target(target: &str) {
     let source = r#"<?php
 class InstThrowValue {}
 function throwingInstTarget(): string { throw new RuntimeException("target"); }
@@ -326,34 +352,62 @@ function detachedInstValue(string $source): bool {
 try { freshInstValue(); } catch (RuntimeException $error) {}
 try { detachedInstValue('return null; // ' . $argc); } catch (RuntimeException $error) {}
 "#;
-    for target in TARGETS {
-        let module = lower_for(source, target);
-        for name in ["freshInstValue", "detachedInstValue"] {
-            let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            let predicate = function.instructions.iter().position(|inst| inst.op == Op::InstanceOfDynamic).unwrap();
-            let value = function.instructions[predicate].operands[0];
-            let source_value = original_borrow(function, value);
-            let producer = function.instructions.iter().find(|inst| inst.result == Some(source_value)).unwrap();
-            if name == "detachedInstValue" {
-                assert_eq!(producer.op, Op::LoadLocal, "{target}: detached source is a local read");
-                assert_eq!(producer.result_php_type, PhpType::Str, "{target}: detached string representation");
-                let Some(Immediate::LocalSlot(slot)) = producer.immediate else { panic!("local read slot"); };
-                assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), PhpType::Mixed);
-            }
-            let store = function.instructions.iter().find(|inst| {
-                inst.op == Op::StoreLocal && inst.operands == [value]
-            }).expect("predicate owns a rooted value lease");
-            let push = function.instructions.iter().position(|inst| {
-                inst.op == Op::PushCallOperandOwner && inst.immediate == store.immediate
-            }).unwrap();
-            let target_call = function.instructions[..predicate].iter().rposition(|inst| inst.op == Op::Call).unwrap();
-            let pop = function.instructions.iter().position(|inst| {
-                inst.op == Op::PopCallOperandOwner && inst.immediate == store.immediate
-            }).unwrap();
-            assert!(push < target_call && target_call < predicate && predicate < pop,
-                "{target}: {name} keeps its operand rooted throughout the throwing target call");
+    let module = lower_for(source, target);
+    for name in ["freshInstValue", "detachedInstValue"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let predicate = function.instructions.iter().position(|inst| inst.op == Op::InstanceOfDynamic).unwrap();
+        let value = function.instructions[predicate].operands[0];
+        let source_value = original_borrow(function, value);
+        let producer = function.instructions.iter().find(|inst| inst.result == Some(source_value)).unwrap();
+        if name == "detachedInstValue" {
+            assert_eq!(producer.op, Op::LoadLocal, "{target}: detached source is a local read");
+            assert_eq!(producer.result_php_type, PhpType::Str, "{target}: detached string representation");
+            let Some(Immediate::LocalSlot(slot)) = producer.immediate else { panic!("local read slot"); };
+            assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), PhpType::Mixed);
         }
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        let store = function.instructions.iter().find(|inst| {
+            inst.op == Op::StoreLocal && inst.operands == [value]
+        }).expect("predicate owns a rooted value lease");
+        let push = function.instructions.iter().position(|inst| {
+            inst.op == Op::PushCallOperandOwner && inst.immediate == store.immediate
+        }).unwrap();
+        let target_call = function.instructions[..predicate].iter().rposition(|inst| inst.op == Op::Call).unwrap();
+        let pop = function.instructions.iter().position(|inst| {
+            inst.op == Op::PopCallOperandOwner && inst.immediate == store.immediate
+        }).unwrap();
+        assert!(push < target_call && target_call < predicate && predicate < pop,
+            "{target}: {name} keeps its operand rooted throughout the throwing target call");
     }
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+}
+
+/// macOS preserves fresh-object and detached-string owners across a throwing target call.
+#[test]
+fn instanceof_value_owners_before_throwing_target_macos() {
+    check_instanceof_value_owners_before_throwing_target("macos-aarch64");
+}
+
+/// iOS devices preserve both value owners across a throwing target call.
+#[test]
+fn instanceof_value_owners_before_throwing_target_ios_device() {
+    check_instanceof_value_owners_before_throwing_target("ios-arm64");
+}
+
+/// iOS Simulator preserves both value owners across a throwing target call.
+#[test]
+fn instanceof_value_owners_before_throwing_target_ios_simulator() {
+    check_instanceof_value_owners_before_throwing_target("ios-sim-arm64");
+}
+
+/// Linux ARM64 preserves both value owners across a throwing target call.
+#[test]
+fn instanceof_value_owners_before_throwing_target_linux_arm64() {
+    check_instanceof_value_owners_before_throwing_target("linux-aarch64");
+}
+
+/// Linux x86_64 preserves both value owners across a throwing target call.
+#[test]
+fn instanceof_value_owners_before_throwing_target_linux_x86_64() {
+    check_instanceof_value_owners_before_throwing_target("linux-x86_64");
 }

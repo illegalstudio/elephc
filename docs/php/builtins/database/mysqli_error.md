@@ -1,8 +1,6 @@
 ---
 title: "mysqli_error()"
 description: "Returns the error message of the last call on a connection."
-sidebar:
-  order: 110
 ---
 
 ## mysqli_error()
@@ -20,8 +18,9 @@ Returns the error message of the last call on a connection.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

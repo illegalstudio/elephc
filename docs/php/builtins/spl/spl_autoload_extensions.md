@@ -1,8 +1,6 @@
 ---
 title: "spl_autoload_extensions()"
 description: "Register and return default file extensions for spl_autoload."
-sidebar:
-  order: 770
 ---
 
 ## spl_autoload_extensions()
@@ -20,8 +18,9 @@ Register and return default file extensions for spl_autoload.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_extensions.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_extensions.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

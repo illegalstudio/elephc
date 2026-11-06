@@ -38,6 +38,11 @@ pub struct Usage {
     pub(crate) global_aliases: HashSet<String>,
     pub(crate) dynamic_global_alias: bool,
     pub(crate) variable_methods: HashMap<String, HashSet<(String, bool)>>,
+    /// Classes a literal `eval` fragment names, or declares over an existing declaration. The
+    /// interpreter resolves their members from runtime metadata (constructors, destructors,
+    /// clone hooks, static properties, abstract/final checks, duplicate-declaration checks), so
+    /// the graph keeps them whole rather than member by member.
+    pub(crate) fragment_classes: HashSet<String>,
 }
 
 /// Runtime lookup shapes that require conservative keep-set widening.
@@ -47,6 +52,10 @@ pub struct Hazards {
     pub dynamic_function: bool,
     pub dynamic_method: bool,
     pub dynamic_class: bool,
+    /// A literal `eval` fragment that parsed was scanned as inline code instead of widening the
+    /// dynamic hazards. The interpreter still runs it, so the graph roots the core classes the
+    /// interpreter can conjure without the fragment naming them.
+    pub literal_eval: bool,
 }
 
 impl Usage {
@@ -64,6 +73,7 @@ impl Usage {
         self.required_libraries.extend(other.required_libraries);
         self.global_aliases.extend(other.global_aliases);
         self.dynamic_global_alias |= other.dynamic_global_alias;
+        self.fragment_classes.extend(other.fragment_classes);
         for (variable, methods) in other.variable_methods {
             self.variable_methods
                 .entry(variable)
@@ -74,6 +84,7 @@ impl Usage {
         self.hazards.dynamic_function |= other.hazards.dynamic_function;
         self.hazards.dynamic_method |= other.hazards.dynamic_method;
         self.hazards.dynamic_class |= other.hazards.dynamic_class;
+        self.hazards.literal_eval |= other.hazards.literal_eval;
     }
 
     /// Returns whether a free function is referenced using PHP lookup semantics.
@@ -92,6 +103,17 @@ pub fn scan_program(program: &[Stmt]) -> Usage {
 #[allow(dead_code)]
 pub fn scan_stmt(stmt: &Stmt) -> Usage {
     Scanner::default().scan_program(std::slice::from_ref(stmt), true)
+}
+
+/// Scans a parsed literal `eval` fragment as the inline code it will run as, declarations
+/// included, with a runtime `include` widened to every dynamic hazard because the included
+/// file's contents are not readable here.
+pub fn scan_eval_fragment(program: &[Stmt]) -> Usage {
+    Scanner {
+        in_eval_fragment: true,
+        ..Scanner::default()
+    }
+    .scan_program(program, true)
 }
 
 /// Scans only executable roots, omitting declaration bodies until their nodes become live.
@@ -239,6 +261,9 @@ struct Scanner<'a> {
     current_method: Option<String>,
     parent_class: Option<String>,
     call_signatures: Option<&'a CallSignatureIndex>,
+    /// True while scanning the parsed source of a literal `eval`, where an `include` is a
+    /// runtime lookup rather than something the resolver already inlined.
+    in_eval_fragment: bool,
 }
 
 /// Checker-validated signatures used to recognize callable and by-reference arguments.
@@ -387,9 +412,24 @@ impl Scanner<'_> {
         }
         match &stmt.kind {
             StmtKind::Echo(e) | StmtKind::Throw(e) | StmtKind::ExprStmt(e)
-            | StmtKind::ConstDecl { value: e, .. } | StmtKind::Return(Some(e))
-            | StmtKind::Include { path: e, .. }
-            | StmtKind::StaticPropertyArrayPush { value: e, .. } => self.scan_expr(e),
+            | StmtKind::ConstDecl { value: e, .. } | StmtKind::Return(Some(e)) => self.scan_expr(e),
+            StmtKind::Include { path: e, .. } => {
+                // The resolver inlines every include it can read before this walk runs, so one
+                // that is still here resolves at runtime. Inside a literal eval fragment that is
+                // the normal case, and the included file can name anything.
+                if self.in_eval_fragment {
+                    self.widen_dynamic_hazards();
+                }
+                self.scan_expr(e)
+            }
+            StmtKind::StaticPropertyArrayPush { receiver, property, value } => {
+                let source = Expr::new(ExprKind::StaticPropertyAccess {
+                    receiver: receiver.clone(), property: property.clone(),
+                }, stmt.span);
+                self.record_protocol_methods(&source, &["offsetSet", "__elephc_append"]);
+                self.scan_receiver(receiver);
+                self.scan_expr(value);
+            }
             StmtKind::Assign { name, value } => {
                 self.scan_expr(value);
                 self.remember_assignment(name, value);
@@ -405,6 +445,9 @@ impl Scanner<'_> {
             }
             StmtKind::RefAssign { target, source } => {
                 self.scan_expr(source);
+                if let ExprKind::ArrayAccess { array, .. } = &source.kind {
+                    self.record_protocol_methods(array, &["__elephc_reference"]);
+                }
                 self.forget_variable(target);
                 if let ExprKind::Variable(source) = &source.kind {
                     self.forget_variable(source);
@@ -424,7 +467,7 @@ impl Scanner<'_> {
                 if array == "GLOBALS" {
                     self.record_globals_index(index);
                 } else {
-                    self.record_variable_protocol_methods(array, &["offsetSet"]);
+                    self.record_variable_protocol_methods(array, &["offsetSet", "__elephc_reference"]);
                 }
                 self.scan_expr(index);
                 self.scan_expr(value);
@@ -433,11 +476,16 @@ impl Scanner<'_> {
                 if array == "GLOBALS" {
                     self.usage.dynamic_global_alias = true;
                 } else {
-                    self.record_variable_protocol_methods(array, &["offsetSet"]);
+                    self.record_variable_protocol_methods(array, &["offsetSet", "__elephc_append"]);
                 }
                 self.scan_expr(value);
             }
-            StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+            StmtKind::StaticPropertyArrayAssign { receiver, property, index, value } => {
+                let source = Expr::new(ExprKind::StaticPropertyAccess {
+                    receiver: receiver.clone(), property: property.clone(),
+                }, stmt.span);
+                self.record_protocol_methods(&source, &["__elephc_reference"]);
+                self.scan_receiver(receiver);
                 self.scan_expr(index);
                 self.scan_expr(value);
             }
@@ -460,6 +508,10 @@ impl Scanner<'_> {
                 property,
                 value,
             } => {
+                let source = Expr::new(ExprKind::PropertyAccess {
+                    object: object.clone(), property: property.clone(),
+                }, stmt.span);
+                self.record_protocol_methods(&source, &["offsetSet", "__elephc_append"]);
                 self.record_instance_method(object, &property_hook_get_method(property));
                 self.record_instance_method(object, &property_hook_set_method(property));
                 self.scan_expr(object);
@@ -471,6 +523,10 @@ impl Scanner<'_> {
                 index,
                 value,
             } => {
+                let source = Expr::new(ExprKind::PropertyAccess {
+                    object: object.clone(), property: property.clone(),
+                }, stmt.span);
+                self.record_protocol_methods(&source, &["__elephc_reference"]);
                 self.record_instance_method(object, &property_hook_get_method(property));
                 self.record_instance_method(object, &property_hook_set_method(property));
                 self.scan_expr(object);
@@ -530,7 +586,15 @@ impl Scanner<'_> {
                 }
                 if let Some(body) = default { self.scan_nested(body, declarations); }
             }
-            StmtKind::Synthetic(body) | StmtKind::NamespaceBlock { body, .. }
+            StmtKind::NamespaceBlock { body, .. } => {
+                // A fragment that opens a namespace resolves its names through imports this
+                // walk does not perform, so it is read as opaque.
+                if self.in_eval_fragment {
+                    self.widen_dynamic_hazards();
+                }
+                self.scan_nested(body, declarations)
+            }
+            StmtKind::Synthetic(body)
             | StmtKind::IncludeOnceGuard { body, .. } => self.scan_nested(body, declarations),
             StmtKind::Try { try_body, catches, finally_body } => {
                 self.scan_nested(try_body, declarations);
@@ -543,7 +607,16 @@ impl Scanner<'_> {
                 }
                 if let Some(body) = finally_body { self.scan_nested(body, declarations); }
             }
-            StmtKind::FunctionDecl { params, variadic_type, return_type, body, .. } if declarations => {
+            StmtKind::FunctionDecl {
+                name, params, param_attributes, variadic_type, return_type, body, ..
+            } if declarations => {
+                if self.in_eval_fragment {
+                    // Declared at runtime: an existing function of the same name must stay so
+                    // the interpreter can refuse the duplicate as PHP does.
+                    self.record_callable(name);
+                }
+                // Parameter attributes name classes like `scan_function` records them inline.
+                self.scan_parameter_attributes(param_attributes);
                 self.scan_params(params, variadic_type.as_ref(), return_type.as_ref());
                 self.scan_nested(body, true);
             }
@@ -551,8 +624,20 @@ impl Scanner<'_> {
             | StmtKind::EnumDecl { name, methods, .. }
             | StmtKind::InterfaceDecl { name, methods, .. }
             | StmtKind::TraitDecl { name, methods, .. } if declarations => {
+                if self.in_eval_fragment {
+                    // Declared at runtime: an existing declaration of the same name must stay
+                    // whole so the interpreter can refuse the duplicate as PHP does.
+                    let key = php_symbol_key(name);
+                    self.usage.fragment_classes.insert(key);
+                }
                 let prior = self.current_class.replace(name.clone());
-                self.usage.merge(scan_class_shell(stmt));
+                let shell = scan_class_shell(stmt);
+                if self.in_eval_fragment {
+                    // The shell walk runs on its own scanner: carry the parent, interfaces and
+                    // traits it named over as fragment classes so they stay whole.
+                    self.usage.fragment_classes.extend(shell.classes.iter().cloned());
+                }
+                self.usage.merge(shell);
                 for method in methods { self.scan_method(method); }
                 self.current_class = prior;
             }
@@ -564,6 +649,10 @@ impl Scanner<'_> {
             }
             StmtKind::ExternFunctionDecl { name, .. } if declarations => {
                 self.record_callable(name);
+            }
+            StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } if self.in_eval_fragment => {
+                // Imports and namespaces inside a fragment alias names this walk cannot resolve.
+                self.widen_dynamic_hazards();
             }
             StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue(_)
             | StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. }
@@ -698,10 +787,32 @@ impl Scanner<'_> {
             TypeExpr::Named(name) => {
                 self.record_class(name.as_str());
             }
-            TypeExpr::Ptr(Some(name)) => {
+            // A signature keeps alive whatever it names: `callable(User): Order` is the only
+            // mention either class may have, and dropping them here dead-strips a class the
+            // program still needs.
+            TypeExpr::CallableSig { params, ret } => {
+                for param in params {
+                    self.scan_type(param);
+                }
+                self.scan_type(ret);
+            }
+            // `Box<User>` keeps BOTH alive: the instantiated class and whatever it holds.
+            TypeExpr::GenericClass { name, args } => {
                 self.record_class(name.as_str());
+                for arg in args {
+                    self.scan_type(arg);
+                }
+            }
+            TypeExpr::Ptr(Some(name)) => {
+                self.record_class(crate::names::pointer_target_leaf(name.as_str()));
             }
             TypeExpr::Array(inner) | TypeExpr::Buffer(inner) | TypeExpr::Nullable(inner) => self.scan_type(inner),
+            // Both halves reach the class recorder: `array<string, Foo>` keeps `Foo` alive, and
+            // scanning only the value would let reachability dead-strip a class named in a key.
+            TypeExpr::AssocArray { key, value } => {
+                self.scan_type(key);
+                self.scan_type(value);
+            }
             TypeExpr::Union(types) | TypeExpr::Intersection(types) => {
                 for ty in types { self.scan_type(ty); }
             }
@@ -715,6 +826,9 @@ impl Scanner<'_> {
 /// Returns whether a declared local type excludes every object representation.
 fn type_is_definitely_non_object(ty: &TypeExpr) -> bool {
     match ty {
+        // A callable is a descriptor address, never an object — the same answer the bare
+        // `callable` keyword gets, since a declared signature changes nothing about storage.
+        TypeExpr::CallableSig { .. } => true,
         TypeExpr::Int
         | TypeExpr::Float
         | TypeExpr::Bool
@@ -723,6 +837,7 @@ fn type_is_definitely_non_object(ty: &TypeExpr) -> bool {
         | TypeExpr::Void
         | TypeExpr::Never
         | TypeExpr::Array(_)
+        | TypeExpr::AssocArray { .. }
         | TypeExpr::Ptr(_)
         | TypeExpr::Buffer(_) => true,
         TypeExpr::Named(name) => matches!(
@@ -731,6 +846,8 @@ fn type_is_definitely_non_object(ty: &TypeExpr) -> bool {
         ),
         TypeExpr::Nullable(inner) => type_is_definitely_non_object(inner),
         TypeExpr::Union(types) => types.iter().all(type_is_definitely_non_object),
+        // A generic class is a class: whatever it holds, the value is an object.
+        TypeExpr::GenericClass { .. } => false,
         TypeExpr::Iterable | TypeExpr::Intersection(_) => false,
     }
 }

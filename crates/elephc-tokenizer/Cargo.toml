@@ -1,0 +1,14 @@
+[package]
+name = "elephc-tokenizer"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Standalone C bridge for elephc PHP tokenization"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+elephc-tokenizer-engine = { path = "../elephc-tokenizer-engine" }
+elephc-builtin-contract = { path = "../elephc-builtin-contract" }

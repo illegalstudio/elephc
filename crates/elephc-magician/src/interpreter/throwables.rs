@@ -101,6 +101,44 @@ pub(in crate::interpreter) fn eval_reject_fiber_object_switch_during_pcntl_dispa
     )
 }
 
+/// Names a value the way PHP's argument `TypeError` does (`zend_zval_value_name()`):
+/// `null`, `true` / `false`, the zend scalar names (`int`, `float`, `string`, `array`), a
+/// compiled closure's `Closure`, or an object's class — never `gettype()`'s `integer` /
+/// `double` / `boolean`. An eval-declared class is looked up in the dynamic-object registry
+/// first, since its backing runtime cell is a `stdClass`.
+pub(in crate::interpreter) fn eval_given_type_name(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    if tag == EVAL_TAG_OBJECT {
+        let identity = values.object_identity(value)?;
+        if let Some(name) = context.dynamic_object_class_name(identity) {
+            return Ok(name);
+        }
+        let class_name = values.object_class_name(value)?;
+        let copied = values.string_bytes(class_name);
+        let retired = values.release(class_name);
+        let bytes = copied?;
+        retired?;
+        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+    }
+    let name = match tag {
+        EVAL_TAG_NULL => "null",
+        EVAL_TAG_BOOL if values.truthy(value)? => "true",
+        EVAL_TAG_BOOL => "false",
+        EVAL_TAG_INT => "int",
+        EVAL_TAG_FLOAT => "float",
+        EVAL_TAG_STRING => "string",
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
+        EVAL_TAG_RESOURCE => "resource",
+        EVAL_TAG_CALLABLE => "Closure",
+        _ => "mixed",
+    };
+    Ok(name.to_string())
+}
+
 /// Creates and schedules a `TypeError` through eval's normal Throwable channel.
 pub(in crate::interpreter) fn eval_throw_type_error<T>(
     message: &str,

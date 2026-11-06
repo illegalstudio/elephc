@@ -8,6 +8,7 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 
 use super::*;
+use crate::codegen::emit::Emitter;
 
 /// Resolves method implementation class, canonical key, return type, and ABI arity.
 pub(super) fn resolve_method_call_target(
@@ -76,7 +77,15 @@ pub(super) fn resolve_method_call_target(
             impl_class, method_name
         )));
     }
-    let dynamic_slot = if class_info.final_methods.contains(&method_key) {
+    // Object-argument variance can change the instantiation without an inheritance edge.
+    // Scalar arguments cannot widen in place and retain the ordinary final-class proof.
+    let fixed_instantiation = crate::generics::dispatch::has_fixed_instantiation(normalized);
+    // A final receiver with a fixed instantiation cannot select an override.
+    // Keep the vtable fallback when this module has no directly callable EIR body.
+    let dynamic_slot = if has_direct_body
+        && fixed_instantiation
+        && (class_info.is_final || class_info.final_methods.contains(&method_key))
+    {
         None
     } else {
         dynamic_slot
@@ -95,6 +104,22 @@ pub(super) fn resolve_method_call_target(
         by_ref_return: callee_sig.by_ref_return,
         source_abi,
     })
+}
+
+/// Reports whether literal guards need a runtime signature or declaring-class diagnostic.
+///
+/// Object-only variance preserves final literal parameters, but the actual generic
+/// instantiation still supplies the class name in an argument TypeError.
+pub(super) fn method_requires_runtime_literal_guards(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    target: &MethodCallTarget,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    target.dynamic_slot.is_some()
+        && (normalized.contains('<') || ctx.module.class_infos.get(normalized).is_none_or(|class| {
+            !class.is_final && !class.final_methods.contains(&target.method_key)
+        }))
 }
 
 /// Emits an indirect instance call through either the physical or source-ABI vtable.
@@ -183,6 +208,30 @@ pub(super) fn emit_direct_resolved_method_call(
     Ok(())
 }
 
+/// Validates an instance method's declared parameters before argument coercion.
+pub(super) fn emit_method_literal_parameter_guards(
+    ctx: &mut FunctionContext<'_>,
+    target: &MethodCallTarget,
+    operands: &[ValueId],
+) -> Result<()> {
+    let signature = ctx.module.class_infos.get(&target.impl_class)
+        .and_then(|class| class.methods.get(&target.method_key))
+        .ok_or_else(|| CodegenIrError::unsupported(format!(
+            "missing declared method signature {}::{}", target.impl_class, target.method_key,
+        )))?;
+    let parameters = if target.source_abi
+        && crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(signature)
+    {
+        crate::codegen_support::source_method_adapters::source_visible_signature(signature)
+            .map_err(CodegenIrError::unsupported)?.params
+    } else {
+        signature.params.clone()
+    };
+    super::direct_calls::emit_literal_declared_parameter_guards(
+        ctx, operands, &parameters, &format!("{}::{}", target.impl_class, target.method_key),
+    )
+}
+
 /// Returns true when the current EIR module includes the target class method body.
 pub(super) fn class_method_already_emitted(
     ctx: &FunctionContext<'_>,
@@ -209,6 +258,8 @@ pub(super) fn store_call_result(
 ) -> Result<()> {
     if let Some(result) = inst.result {
         let result_ty = ctx.value_php_type(result)?;
+        // A `?ptr<T>` result boxes by its declared type, so address 0 is PHP null.
+        let box_ty = crate::types::mixed_box_php_type(return_ty);
         let return_ty = return_ty.codegen_repr();
         if return_ty == PhpType::Void || result_ty == PhpType::Void {
             abi::emit_load_int_immediate(
@@ -223,11 +274,30 @@ pub(super) fn store_call_result(
             return Ok(());
         }
         if matches!(result_ty, PhpType::Mixed | PhpType::Union(_)) && return_ty != PhpType::Mixed {
-            emit_box_current_value_as_mixed(ctx.emitter, &return_ty);
+            emit_box_call_result_as_mixed(ctx.emitter, &box_ty);
         }
         ctx.store_result_value(result)?;
     }
     Ok(())
+}
+
+/// Boxes a call's concrete result for a generic EIR slot.
+///
+/// The callee hands its caller an owned reference to a heap result, so the box takes that
+/// reference over rather than retaining a second one: a method a narrowed receiver's
+/// static type does not declare (`if ($shape instanceof Square) { $shape->grow() }`)
+/// dispatches through a `Mixed` slot, and the retained copy kept the returned object
+/// alive after the box was released, so it was never destructed. Strings keep the
+/// copying box, since a returned string may be persistent data the box must not own.
+fn emit_box_call_result_as_mixed(emitter: &mut Emitter, return_ty: &PhpType) {
+    if matches!(
+        return_ty,
+        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable
+    ) {
+        emit_box_current_owned_value_as_mixed(emitter, return_ty);
+    } else {
+        emit_box_current_value_as_mixed(emitter, return_ty);
+    }
 }
 
 /// Stores a resolved method call's result, honoring by-reference returns.

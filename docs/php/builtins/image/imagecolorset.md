@@ -1,8 +1,6 @@
 ---
 title: "imagecolorset()"
 description: "Changes the color a palette index stands for."
-sidebar:
-  order: 476
 ---
 
 ## imagecolorset()
@@ -25,8 +23,9 @@ Changes the color a palette index stands for.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

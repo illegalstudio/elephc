@@ -256,7 +256,7 @@ def resolve_lowering(
 
     Searches ``builtins.rs`` (root dispatcher) and every per-area submodule for
     ``fn <emitter_fn>(``. Returns a populated :class:`LoweringInfo` (with
-    ``codegen_file``/``codegen_line``/``notes``/``runtime_helpers``) when found, or
+    ``codegen_file``/``codegen_function``/``notes``/``runtime_helpers``) when found, or
     a bare one carrying only ``sig_file`` when not.
     """
     lowering = LoweringInfo(sig_file=sig_file)
@@ -275,7 +275,6 @@ def resolve_lowering(
         return LoweringInfo(
             sig_file=sig_file,
             codegen_file=str(candidate.relative_to(repo)),
-            codegen_line=def_line,
             codegen_function=emitter_fn,
             runtime_helpers=helpers,
             notes=notes,
@@ -289,8 +288,6 @@ def resolve_registry_lowering(repo: Path, read, entry: dict, sig_file: str) -> L
     strategy = semantics.get("target_strategy", "unknown")
     lowering_kind = semantics.get("lowering") or {}
     boundary_file = repo / "src" / "builtins" / "semantics.rs"
-    definition = find_lowering_function_def(read(boundary_file), "lower_registry_call")
-    boundary_line = definition[1] if definition else None
     notes = [
         f"Uses the `{strategy}` strategy from the single-source builtin descriptor.",
     ]
@@ -309,7 +306,6 @@ def resolve_registry_lowering(repo: Path, read, entry: dict, sig_file: str) -> L
     return LoweringInfo(
         sig_file=sig_file,
         codegen_file=str(boundary_file.relative_to(repo)),
-        codegen_line=boundary_line,
         codegen_function="lower_registry_call",
         notes=notes,
     )
@@ -550,6 +546,8 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
 PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
+    "io": ("fileinfo_prelude/build.rs", "fileinfo", "crates/elephc-builtin-contract/src/catalog_surfaces.rs"),
+    "tokenizer": ("tokenizer_prelude.rs", "tokenizer", "crates/elephc-builtin-contract/src/catalog_data.rs"),
     "curl": (
         "curl_prelude.rs",
         "curl",
@@ -584,6 +582,11 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
     "system": (
         "version_prelude.rs",
         "version",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "random": (
+        "random_prelude.rs",
+        "random",
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
     "opcache": (
@@ -635,6 +638,7 @@ def resolve_non_registry_lowering(
     canonical: str,
     aot_support: dict,
     area: str,
+    module: str | None = None,
 ) -> LoweringInfo:
     """Describe a compiler route that intentionally has no ``builtin!`` home."""
     contract_file = "crates/elephc-builtin-contract/src/catalog_surfaces.rs"
@@ -656,7 +660,7 @@ def resolve_non_registry_lowering(
     kind = aot_support.get("kind")
     if kind == "prelude":
         try:
-            source, label, sig_file = PRELUDE_SOURCES[area]
+            source, label, sig_file = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
         except KeyError:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
@@ -677,19 +681,15 @@ def resolve_non_registry_lowering(
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is not declared by src/{source}. "
                 f"Its contract area {area!r} maps there, so either the contract's area or "
-                f"PRELUDE_SOURCES is wrong; a line-1 fallback would ship a page linking to "
-                f"an unrelated place in the file."
+                f"PRELUDE_SOURCES is wrong; a fallback would ship a page linking to "
+                f"a prelude that does not implement it."
             )
         lowering.codegen_file = str(prelude.relative_to(repo))
-        lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1
         lowering.codegen_function = canonical
         lowering.notes.append(f"Implemented by the compiler-injected {label} prelude.")
     elif kind == "name-resolver-rewrite":
         rewriter = repo / "src" / "name_resolver" / "expressions.rs"
-        text = read(rewriter)
-        needle = re.search(rf'"{re.escape(canonical)}"', text)
         lowering.codegen_file = str(rewriter.relative_to(repo))
-        lowering.codegen_line = text[: needle.start()].count("\n") + 1 if needle else None
         lowering.codegen_function = "rewrite_date_procedural_call"
         lowering.notes.append(
             "Rewritten by the name resolver into a constructor or method call on the "
@@ -742,7 +742,16 @@ def build_registry(repo: Path) -> list[Builtin]:
         in_catalog = not is_internal
 
         refine = PARAM_TYPES.get(canonical)
-        signature = aot_support if aot_support.get("supported") else entry
+        # A `runtime-arity-validation` shim accepts PHP's full call shape and reports the
+        # argument count itself, so the PHP-visible contract, not the shim, is the signature
+        # to document. Other divergences (a narrower prelude subset) do change the documented
+        # compiled surface and keep using the AOT profile.
+        documented_signature = (
+            entry
+            if aot_support.get("signature_override_reason") == "runtime-arity-validation"
+            else aot_support
+        )
+        signature = documented_signature if aot_support.get("supported") else entry
         params: list[Parameter] = []
         for i, p in enumerate(signature.get("params", [])):
             php_type = _normalize_type(p["type"])
@@ -777,7 +786,7 @@ def build_registry(repo: Path) -> list[Builtin]:
             lowering = resolve_registry_lowering(repo, read, entry, home_rel)
         else:
             lowering = resolve_non_registry_lowering(
-                repo, read, dispatch, lowering_dir, canonical, aot_support, entry["area"]
+                repo, read, dispatch, lowering_dir, canonical, aot_support, entry["area"], entry.get("module")
             )
         if canonical in RUNTIME_HELPER_OVERRIDES:
             lowering.runtime_helpers = RUNTIME_HELPER_OVERRIDES[canonical]
@@ -900,12 +909,9 @@ def _builtin_to_dict(b: Builtin) -> dict:
         },
         "lowering": {
             "sig_file": b.lowering.sig_file,
-            "sig_line": b.lowering.sig_line,
             "sig_arm": b.lowering.sig_arm,
             "checker_file": b.lowering.checker_file,
-            "checker_line": b.lowering.checker_line,
             "codegen_file": b.lowering.codegen_file,
-            "codegen_line": b.lowering.codegen_line,
             "codegen_function": b.lowering.codegen_function,
             "runtime_helpers": b.lowering.runtime_helpers,
             "notes": b.lowering.notes,

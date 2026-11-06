@@ -1864,6 +1864,140 @@ echo implode(",", array_keys(call_user_func($fn, $h, 1, 2, true))), "\n";
     assert_eq!(out, "b,c:b,c:b,c\n");
 }
 
+/// A string-literal callable local naming `array_slice()` keeps an associative slice (#1347).
+///
+/// The checker does not resolve `$fn = "array_slice"`, so no checked type reaches this call, and
+/// lowering fell back to the indexed `array<mixed>` layout: the hash source was refused with
+/// `array_slice of an associative array into result PHP type Array(Mixed)`. The fallback now keeps
+/// a hash source's own layout. Expected output is verbatim PHP 8.5.10.
+#[test]
+fn test_string_callable_array_slice_keeps_an_associative_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+$fn = "array_slice";
+var_dump($fn($h, 1, 2));
+var_dump($fn($h, 1, 1, true));
+$m = [5 => "x", 7 => "y", 9 => "z"];
+var_dump($fn($m, 1));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array(2) {\n  [\"b\"]=>\n  int(2)\n  [\"c\"]=>\n  int(3)\n}\n",
+            "array(1) {\n  [\"b\"]=>\n  int(2)\n}\n",
+            "array(2) {\n  [0]=>\n  string(1) \"y\"\n  [1]=>\n  string(1) \"z\"\n}\n",
+        )
+    );
+}
+
+/// Callable dispatch of `array_slice()` over a boxed hash keeps its string keys (#1348).
+///
+/// A string callable given a `mixed` source, and a first-class callable invoked inside a loop
+/// (which goes through the descriptor wrapper with boxed arguments), both reach the boxed-source
+/// slice, which answered an empty array for a hash payload. Expected output is verbatim
+/// PHP 8.5.10.
+#[test]
+fn test_callable_array_slice_of_a_boxed_hash_keeps_string_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(mixed $v): mixed { return $v; }
+$fn = "array_slice";
+echo json_encode($fn(pick(["a" => 1, "b" => 2, "c" => 3]), 1)), "|";
+$g = array_slice(...);
+for ($i = 0; $i < 2; $i++) {
+    echo json_encode($g(pick(["x" => $i, "y" => 2, 4 => 5]), 1)), "|";
+}
+"#,
+    );
+    assert_eq!(out, r#"{"b":2,"c":3}|{"y":2,"0":5}|{"y":2,"0":5}|"#);
+}
+
+/// A first-class callable keeps accepting arguments its direct call's contract refuses by TYPE.
+///
+/// Only a compile-time literal requirement is reported at a first-class call site (#1346).
+/// `array_reverse($mixed)` is refused as a direct call, but the callable ABI takes the boxed
+/// argument and reverses it at run time, so this spelling must keep compiling.
+#[test]
+fn test_first_class_array_reverse_still_accepts_a_boxed_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(): mixed { return [3, 1, 2]; }
+$f = array_reverse(...);
+var_dump($f(pick()));
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  int(2)\n  [1]=>\n  int(1)\n  [2]=>\n  int(3)\n}\n"
+    );
+}
+
+/// A callable `array_slice()` honors a `$preserve_keys` flag the checker cannot see.
+///
+/// `call_user_func_array($f, $args)` hands its arguments over at run time, so the builtin's
+/// callable wrapper receives the flag as a runtime parameter. The wrapper used to drop it and
+/// always renumbered integer keys: `[5 => "x", 9 => "y"]` sliced at 1 with `true` answered
+/// `[0 => "y"]` instead of `[9 => "y"]`. Hashes with string keys, lists, truthy and falsy
+/// non-bool flags, an omitted flag, and a callable held in an array all keep PHP's keys.
+/// Expected output is verbatim PHP 8.5.10.
+#[test]
+fn test_callable_array_slice_honors_a_runtime_preserve_keys_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$f = array_slice(...);
+$args = [[5 => "x", 9 => "y"], 1, 1, true];
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args[3] = false;
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args = [["a" => 1, 5 => 2, 9 => 3], 1, null, "1"];
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args[3] = 0;
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args = [[10, 20, 30, 40], 1, 2, true];
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args = [[10, 20, 30, 40], -2];
+echo json_encode(call_user_func_array($f, $args)), "|";
+$fns = ["slice" => $f];
+echo json_encode($fns["slice"]([5 => "x", 9 => "y"], 0, 1, true)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"9\":\"y\"}|[\"y\"]|{\"5\":2,\"9\":3}|[2,3]|{\"1\":20,\"2\":30}|[30,40]|{\"5\":\"x\"}\n"
+    );
+}
+
+/// A callable `array_reverse()` honors a `$preserve_keys` flag the checker cannot see.
+///
+/// Like `array_slice()`, its callable wrapper dropped the flag, so `call_user_func_array($r,
+/// [[1, 2, 3], true])` through a runtime argument array answered `[3, 2, 1]` instead of keeping
+/// the keys `2, 1, 0`. The boxed reversal already reads the flag at run time; the wrapper now
+/// forwards it. Expected output is verbatim PHP 8.5.10.
+#[test]
+fn test_callable_array_reverse_honors_a_runtime_preserve_keys_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_reverse(...);
+$args = [[1, 2, 3], true];
+echo json_encode(call_user_func_array($r, $args)), "|";
+$args[1] = false;
+echo json_encode(call_user_func_array($r, $args)), "|";
+$args = [["x" => 1, 5 => [2], 9 => "three"], "1"];
+echo json_encode(call_user_func_array($r, $args)), "|";
+$args[1] = 0;
+echo json_encode(call_user_func_array($r, $args)), "|";
+$fns = ["rev" => $r];
+echo json_encode($fns["rev"]([7, 8], true)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"2\":3,\"1\":2,\"0\":1}|[3,2,1]|{\"9\":\"three\",\"5\":[2],\"x\":1}|{\"0\":\"three\",\"1\":[2],\"x\":1}|{\"1\":8,\"0\":7}\n"
+    );
+}
+
 /// A callable-builtin result map must keep same-coordinate included calls independent.
 #[test]
 fn test_first_class_builtin_result_types_do_not_collide_across_included_files() {

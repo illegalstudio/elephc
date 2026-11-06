@@ -16,6 +16,56 @@ use crate::parser::ast::{AttributeGroup, ClassProperty, Stmt, StmtKind, TypeExpr
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// AST-only consumers know the standard SPL parent tree without checker injection.
+    #[test]
+    fn ast_only_hierarchy_contains_spl_throwables() {
+        let hierarchy = ExceptionHierarchy::from_program(&[], HashSet::new());
+        for name in ["LogicException", "BadFunctionCallException", "BadMethodCallException", "DomainException", "InvalidArgumentException", "LengthException", "OutOfRangeException", "RuntimeException", "OutOfBoundsException", "OverflowException", "RangeException", "UnderflowException", "UnexpectedValueException"] {
+            assert!(hierarchy.is_subtype(name, "Exception"), "{name}");
+            assert!(hierarchy.is_subtype(name, "Throwable"), "{name}");
+            assert!(!hierarchy.is_subtype(name, "Error"), "{name}");
+        }
+        assert!(hierarchy.is_subtype("bAdMeThOdCaLlExCePtIoN", "LogicException"));
+        assert!(hierarchy.is_subtype("RangeException", "RuntimeException"));
+        assert!(!hierarchy.is_subtype("DomainException", "RuntimeException"));
+    }
+
+    /// An explicitly supplied RuntimeException declaration keeps its authoritative parent.
+    #[test]
+    fn ast_only_hierarchy_preserves_declared_runtime_exception_parent() {
+        let tokens = crate::lexer::tokenize("<?php class RuntimeException extends Error {}").unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let hierarchy = ExceptionHierarchy::from_program(&program, HashSet::new());
+        assert!(hierarchy.is_subtype("RuntimeException", "Error"));
+        assert!(!hierarchy.is_subtype("RuntimeException", "Exception"));
+    }
+
+    /// Registered builtin parents are transitive without overriding explicit source relations.
+    #[test]
+    fn test_nullable_fallback_flow_registered_exception_parents() {
+        let tokens = crate::lexer::tokenize("<?php class RuntimeException extends Error {}").unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let mut hierarchy = ExceptionHierarchy::from_program(&program, HashSet::new());
+        hierarchy.add_registered_parents(&[
+            ("TypeError".to_string(), "Error".to_string()),
+            ("ArgumentCountError".to_string(), "TypeError".to_string()),
+            ("JsonException".to_string(), "Exception".to_string()),
+            ("RuntimeException".to_string(), "Exception".to_string()),
+        ]);
+        assert!(hierarchy.is_subtype("ArgumentCountError", "TypeError"));
+        assert!(hierarchy.is_subtype("ArgumentCountError", "tHrOwAbLe"));
+        assert!(hierarchy.is_subtype("JsonException", "Exception"));
+        assert!(!hierarchy.is_subtype("JsonException", "Error"));
+        assert!(!hierarchy.is_subtype("TypeError", "Exception"));
+        assert!(hierarchy.is_subtype("RuntimeException", "Error"));
+        assert!(!hierarchy.is_subtype("RuntimeException", "Exception"));
+    }
+}
+
 /// Canonical class/interface relations used to compare thrown and caught types.
 #[derive(Clone, Debug, Default)]
 pub(super) struct ExceptionHierarchy {
@@ -85,8 +135,25 @@ impl ExceptionHierarchy {
         hierarchy
     }
 
+    /// Fills missing nominal parent edges while preserving source and checked metadata.
+    pub(super) fn add_registered_parents(&mut self, parents: &[(String, String)]) {
+        for (name, parent) in parents {
+            let key = php_symbol_key(name);
+            if self.class_names.insert(key.clone()) {
+                self.parents.insert(key, parent.clone());
+            }
+        }
+    }
+
     /// Adds the PHP root throwable relations needed even when no checker metadata is supplied.
     fn add_throwable_roots(&mut self) {
+        for &(name, parent) in crate::types::checker::SPL_EXCEPTION_HIERARCHY {
+            let key = php_symbol_key(name);
+            // Existing checker or explicit source metadata remains authoritative.
+            if self.class_names.insert(key.clone()) {
+                self.parents.insert(key, parent.to_string());
+            }
+        }
         self.interface_names.insert(php_symbol_key("Throwable"));
         for root in ["Exception", "Error"] {
             let key = php_symbol_key(root);
@@ -300,6 +367,9 @@ impl ExceptionHierarchy {
     /// term; anything unproven keeps the caller on the conservative program-wide destructor
     /// summary.
     pub(super) fn class_owns_no_destructible_storage(&self, class_name: &str) -> bool {
+        if matches!(php_symbol_key(class_name).as_str(), "fiber" | "generator") {
+            return false;
+        }
         if self.flattened_storage_proofs {
             return self
                 .scalar_only_storage_classes
@@ -356,6 +426,7 @@ fn php_type_is_non_destructible(php_type: &PhpType) -> bool {
         | PhpType::False
         | PhpType::Void
         | PhpType::Never
+        | PhpType::Narrow(_)
         | PhpType::TaggedScalar => true,
         PhpType::Union(members) => members.iter().all(php_type_is_non_destructible),
         PhpType::Object(_)
@@ -436,6 +507,9 @@ pub(super) fn type_expr_is_non_destructible(type_expr: &TypeExpr) -> bool {
         | TypeExpr::Never => true,
         TypeExpr::Nullable(inner) => type_expr_is_non_destructible(inner),
         TypeExpr::Union(members) => members.iter().all(type_expr_is_non_destructible),
+        // Containers and callables can hold an object, and a generic class IS a class — all of
+        // them answer the way `Named` does, which is the conservative side of this predicate.
+        TypeExpr::AssocArray { .. } | TypeExpr::GenericClass { .. } | TypeExpr::CallableSig { .. } => false,
         TypeExpr::Named(_)
         | TypeExpr::Iterable
         | TypeExpr::Array(_)

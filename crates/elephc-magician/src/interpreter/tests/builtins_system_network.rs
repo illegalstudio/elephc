@@ -566,6 +566,85 @@ return putenv("ELEPHC_EVAL_VALID_EMPTY_VALUE=");"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval `putenv()` hands libc the C string the compiled runtime hands it and returns
+/// libc's own status instead of a hard-coded `true`.
+///
+/// The environment only holds C strings, so a NUL byte ends the assignment exactly where
+/// `putenv(3)` stops reading: `NAME=b\0c` sets `NAME` to `b`, as PHP and the compiled program
+/// do. Eval used Rust's environment setters instead, which reported nothing (#911) and panicked
+/// on that same NUL byte, taking the whole program down. A leading NUL leaves an empty name, the
+/// one assignment `unsetenv(3)` refuses on every platform: the compiled program reports that
+/// refusal as `false` and eval now does too. (php-src answers `true` there because it ignores
+/// `unsetenv()`'s status; eval follows the compiled program, which is what this pins.)
+#[test]
+fn execute_program_putenv_reports_the_libc_status() {
+    let program = parse_fragment(
+        b"echo putenv(\"ELEPHC_EVAL_PUTENV_NUL=b\\0c\") ? \"set\" : \"bad\";
+echo \":\" . getenv(\"ELEPHC_EVAL_PUTENV_NUL\");
+echo \":\"; echo putenv(\"ELEPHC_EVAL_PUTENV_NUL\") ? \"unset\" : \"bad\";
+echo \":\"; echo getenv(\"ELEPHC_EVAL_PUTENV_NUL\") === false ? \"missing\" : \"bad\";
+echo \":\"; echo putenv(\"\\0ELEPHC_EVAL_PUTENV_EMPTY\") ? \"bad\" : \"refused\";
+return putenv(assignment: \"ELEPHC_EVAL_PUTENV_NUL=\");",
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "set:b:unset:missing:refused");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval creates the CLI superglobals a fragment names, with the contents PHP's CLI SAPI
+/// gives them, when nothing synchronized them in (#935).
+///
+/// `$_ENV` is the environment, `$_SERVER` the environment plus the CLI keys (the path-shaped
+/// ones name `argv[0]`), the request arrays are empty, and `$_SESSION` stays undefined. Like
+/// PHP's `auto_globals_jit`, the values are created when the fragment starts, so a variable the
+/// fragment itself `putenv()`s afterwards is not in `$_ENV`. Fragments that name no superglobal
+/// get none, and a value already in scope is never replaced.
+#[test]
+fn execute_program_seeds_named_cli_superglobals() {
+    let program = parse_fragment(
+        br#"putenv("ELEPHC_EVAL_SUPERGLOBAL_JIT=late");
+echo isset($_ENV["PATH"]) ? "env" : "no-env";
+echo ":", $_ENV["ELEPHC_EVAL_SUPERGLOBAL_JIT"] ?? "absent";
+echo ":", isset($_SERVER["PATH"]) ? "server-env" : "no-server-env";
+echo ":", $_SERVER["argc"] === count($_SERVER["argv"]) ? "argc" : "bad";
+echo ":", $_SERVER["PHP_SELF"] === $_SERVER["argv"][0] && $_SERVER["SCRIPT_NAME"] === $_SERVER["argv"][0]
+    && $_SERVER["SCRIPT_FILENAME"] === $_SERVER["argv"][0] && $_SERVER["PATH_TRANSLATED"] === $_SERVER["argv"][0] ? "self" : "bad";
+echo ":", $_SERVER["DOCUMENT_ROOT"] === "" ? "root" : "bad";
+echo ":", is_int($_SERVER["REQUEST_TIME"]) && is_float($_SERVER["REQUEST_TIME_FLOAT"]) ? "time" : "bad";
+echo ":", count($_GET) + count($_POST) + count($_COOKIE) + count($_FILES) + count($_REQUEST);
+echo ":", isset($_SESSION) ? "bad" : "no-session";
+return "done";"#,
+    )
+    .expect("parse eval fragment");
+    let unnamed = parse_fragment(br#"return array_key_exists("_ENV", get_defined_vars());"#)
+        .expect("parse eval fragment");
+    let kept = parse_fragment(br#"return $_ENV;"#).expect("parse eval fragment");
+    let mut values = FakeOps::default();
+
+    let mut scope = ElephcEvalScope::new();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    let mut unnamed_scope = ElephcEvalScope::new();
+    let unnamed_result =
+        execute_program(&unnamed, &mut unnamed_scope, &mut values).expect("execute eval ir");
+    let mut kept_scope = ElephcEvalScope::new();
+    let mine = values.string("mine").expect("allocate existing value");
+    kept_scope.set("_ENV", mine, ScopeCellOwnership::Owned);
+    let kept_result = execute_program(&kept, &mut kept_scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "env:absent:server-env:argc:self:root:time:0:no-session"
+    );
+    assert_eq!(values.get(result), FakeValue::String("done".to_string()));
+    assert_eq!(values.get(unnamed_result), FakeValue::Bool(false));
+    assert_eq!(values.get(kept_result), FakeValue::String("mine".to_string()));
+}
+
 /// Verifies eval `getenv()` with no name, a null name, and `local_only` answers the environment.
 #[test]
 fn execute_program_dispatches_getenv_whole_environment() {
@@ -783,6 +862,50 @@ return function_exists("inet_ntop");"#,
             "192.168.1.1:255.255.255.255:3232235777:bad-ip:01020304:bad-pton:1.2.3.4:bad-ntop:127.0.0.1:0:111"
         );
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval `inet_pton()` and `inet_ntop()` cover IPv6 the way the compiled helpers do.
+///
+/// Eval was an IPv4-only dotted-quad parser, so every IPv6 address packed to `false` and a
+/// 16-byte address rendered as `false` (#1157). The fixtures are the ones the compiled
+/// helpers pin in `tests/codegen/strings/inet.rs`: `::` compression, the embedded-IPv4 form,
+/// the canonical spelling `inet_ntop()` chooses, the invalid shapes of both families, and the
+/// 255-byte refusal. Expectations are PHP 8.5.
+#[test]
+fn execute_program_inet_builtins_handle_ipv6() {
+    let program = parse_fragment(
+        br#"foreach (["2001:4860:4860::8888", "::1", "::", "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+    "::ffff:192.0.2.128", "127.0.0.1", "256.0.0.1", "1.2.3", "", "1:2:3:4:5:6:7:8:9", "gggg::1",
+    "not an address", "2001:db8::1" . str_repeat("a", 245)] as $address) {
+    $packed = inet_pton($address);
+    echo $packed === false ? "false" : strlen($packed) . "=" . bin2hex($packed), ";";
+}
+echo "|";
+foreach (["8.8.8.8", "2001:db8::1", "::ffff:10.0.0.1", "fe80::200:5aee:feaa:20a2",
+    "2001:db8:85a3:0:0:8a2e:370:7334", "::1", "::"] as $address) {
+    echo inet_ntop(inet_pton($address)), ";";
+}
+echo "|";
+echo inet_ntop("xx") === false ? "F" : "bad";
+echo inet_ntop("123456789012345") === false ? "F" : "bad";
+echo inet_ntop(ip: str_repeat("\0", 15) . "\1");
+return call_user_func("inet_ntop", call_user_func_array("inet_pton", ["ip" => "2001:db8::dead:beef"]));"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "16=20014860486000000000000000008888;16=00000000000000000000000000000001;\
+         16=00000000000000000000000000000000;16=20010db885a3000000008a2e03707334;\
+         16=00000000000000000000ffffc0000280;4=7f000001;false;false;false;false;false;false;false;\
+         |8.8.8.8;2001:db8::1;::ffff:10.0.0.1;fe80::200:5aee:feaa:20a2;\
+         2001:db8:85a3::8a2e:370:7334;::1;::;|FF::1"
+    );
+    assert_eq!(values.get(result), FakeValue::String("2001:db8::dead:beef".to_string()));
 }
 
 /// Verifies eval `get_loaded_extensions()` returns the compile-time-known extension lists.

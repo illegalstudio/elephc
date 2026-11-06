@@ -1,8 +1,6 @@
 ---
 title: "spl_object_hash() - internals"
 description: "Compiler internals for spl_object_hash(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 775
 ---
 
 ## `spl_object_hash()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/spl_object_hash.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_object_hash.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

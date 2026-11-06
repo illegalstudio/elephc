@@ -27,33 +27,33 @@ pub(super) fn emit_reference_child_slot(emitter: &mut Emitter) {
     let name = "__rt_mbstring_reference_child_slot";
     emitter.label_global(name);
     if arm {
-        emitter.instruction(&format!("cbz x0, {name}_invalid"));             // reject a missing reference before reading its allocation header
-        emitter.instruction("ldurb w9, [x0, #-8]");                          // inspect the managed heap kind of the outer owner
-        emitter.instruction(&format!("cmp w9, #{REFERENCE_CELL_HEAP_KIND}")); // native aliases use a two-word ref-cell
-        emitter.instruction(&format!("b.eq {name}_valid"));                    // the first word is already the writable child slot
-        emitter.instruction("ldr x9, [x0]");                                  // eval references use a boxed Mixed wrapper
-        emitter.instruction("cmp x9, #7");                                    // require the nested Mixed tag
-        emitter.instruction(&format!("b.ne {name}_invalid"));                 // reject ordinary PHP values
-        emitter.instruction("ldr x9, [x0, #16]");                             // inspect eval's persistent-reference marker
-        emitter.instruction("cmp x9, #1");                                    // reject detached nested boxes
-        emitter.instruction(&format!("b.ne {name}_invalid"));
-        emitter.instruction("add x0, x0, #8");                                // return the wrapper's writable child slot
+        emitter.instruction(&format!("cbz x0, {name}_invalid"));                // reject a missing reference before reading its allocation header
+        emitter.instruction("ldurb w9, [x0, #-8]");                             // inspect the managed heap kind of the outer owner
+        emitter.instruction(&format!("cmp w9, #{REFERENCE_CELL_HEAP_KIND}"));   // native aliases use a two-word ref-cell
+        emitter.instruction(&format!("b.eq {name}_valid"));                     // the first word is already the writable child slot
+        emitter.instruction("ldr x9, [x0]");                                    // eval references use a boxed Mixed wrapper
+        emitter.instruction("cmp x9, #7");                                      // require the nested Mixed tag
+        emitter.instruction(&format!("b.ne {name}_invalid"));                   // reject ordinary PHP values
+        emitter.instruction("ldr x9, [x0, #16]");                               // inspect eval's persistent-reference marker
+        emitter.instruction("cmp x9, #1");                                      // reject detached nested boxes
+        emitter.instruction(&format!("b.ne {name}_invalid"));                   // reject detached eval wrappers
+        emitter.instruction("add x0, x0, #8");                                  // return the wrapper's writable child slot
     } else {
-        emitter.instruction("test rax, rax");                                 // reject a missing reference
-        emitter.instruction(&format!("jz {name}_invalid"));
+        emitter.instruction("test rax, rax");                                   // reject a missing reference
+        emitter.instruction(&format!("jz {name}_invalid"));                     // reject a missing reference before reading its header
         emitter.instruction(&format!("cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}")); // recognize native ref-cells
-        emitter.instruction(&format!("je {name}_valid"));
-        emitter.instruction("cmp QWORD PTR [rax], 7");                        // require an eval nested Mixed wrapper
-        emitter.instruction(&format!("jne {name}_invalid"));
-        emitter.instruction("cmp QWORD PTR [rax + 16], 1");                   // require a persistent eval reference
-        emitter.instruction(&format!("jne {name}_invalid"));
-        emitter.instruction("add rax, 8");                                    // return the wrapper's writable child slot
+        emitter.instruction(&format!("je {name}_valid"));                       // accept the native two-word reference cell
+        emitter.instruction("cmp QWORD PTR [rax], 7");                          // require an eval nested Mixed wrapper
+        emitter.instruction(&format!("jne {name}_invalid"));                    // reject an ordinary boxed PHP value
+        emitter.instruction("cmp QWORD PTR [rax + 16], 1");                     // require a persistent eval reference
+        emitter.instruction(&format!("jne {name}_invalid"));                    // reject a detached eval wrapper
+        emitter.instruction("add rax, 8");                                      // return the wrapper's writable child slot
     }
     emitter.label(&format!("{name}_valid"));
-    emitter.instruction("ret");
+    emitter.instruction("ret");                                                 // return the validated writable child slot
     emitter.label(&format!("{name}_invalid"));
-    emitter.instruction(if arm { "mov x0, #0" } else { "xor eax, eax" });      // expose an invalid reference without touching caller storage
-    emitter.instruction("ret");
+    emitter.instruction(if arm { "mov x0, #0" } else { "xor eax, eax" });       // expose an invalid reference without touching caller storage
+    emitter.instruction("ret");                                                 // return a null child slot for an invalid reference
 }
 
 /// Emits the C4 store callback accepting context, borrowed writer reference, key, and value descriptors.
@@ -91,7 +91,7 @@ pub(super) fn emit_store(emitter: &mut Emitter) {
         emitter.instruction("call __rt_mbstring_reference_child_slot");         // return the writable child slot
         emitter.instruction("add rsp, 8");                                      // restore the callback entry stack
         emitter.instruction("test rax, rax");                                   // reject malformed references
-        emitter.instruction("jz __rt_mbstring_capture_reference_invalid");
+        emitter.instruction("jz __rt_mbstring_capture_reference_invalid");      // reject malformed references before allocating a frame
         emitter.instruction("push rbp");                                        // preserve linkage and align nested calls
         emitter.instruction("mov rbp, rsp");                                    // establish a stable callback frame
         emitter.instruction("sub rsp, 32");                                     // preserve inputs across current-value resolution

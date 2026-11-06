@@ -26,6 +26,42 @@ impl Checker {
 
     /// Resolves a parameter type hint from a `TypeExpr` to a `PhpType`, validating that
     /// the type is valid for a parameter context. Rejects `void` and types containing `never`.
+    /// Builds the signature a declared `callable(A): B` promises, for typing its INVOCATION.
+    ///
+    /// A bare `callable` answers `None` and nothing changes: it carries no types, which is the
+    /// whole reason the declared form exists. Resolution of the halves goes through the ordinary
+    /// type path, so a signature naming a class resolves that class like any other mention.
+    pub(crate) fn declared_callable_signature(
+        &self,
+        type_expr: &TypeExpr,
+        span: crate::span::Span,
+    ) -> Option<crate::types::FunctionSig> {
+        let TypeExpr::CallableSig { params, ret } = type_expr else {
+            return None;
+        };
+        let mut resolved = Vec::with_capacity(params.len());
+        for (index, param) in params.iter().enumerate() {
+            resolved.push((format!("arg{}", index), self.resolve_type_expr(param, span).ok()?));
+        }
+        let return_type = self.resolve_type_expr(ret, span).ok()?;
+        Some(crate::types::FunctionSig {
+            param_type_exprs: params.iter().map(|p| Some(p.clone())).collect(),
+            param_attributes: vec![Vec::new(); resolved.len()],
+            defaults: vec![None; resolved.len()],
+            ref_params: vec![false; resolved.len()],
+            declared_params: vec![true; resolved.len()],
+            params: resolved,
+            return_type,
+            declared_return: true,
+            by_ref_return: false,
+            variadic: None,
+            deprecation: None,
+            // A declared callable type says nothing about how the callee produces its value.
+            is_generator: false,
+        })
+    }
+
+    /// Resolves a declared parameter type and rejects void or nested never types with contextual diagnostics.
     pub(crate) fn resolve_declared_param_type_hint(
         &self,
         type_expr: &TypeExpr,
@@ -33,8 +69,10 @@ impl Checker {
         context: &str,
     ) -> Result<PhpType, CompileError> {
         let ty = self.resolve_type_expr(type_expr, span)?;
+        let null_only = matches!(type_expr, TypeExpr::Named(name)
+            if name.as_str().eq_ignore_ascii_case("null"));
         match ty {
-            PhpType::Void => Err(CompileError::new(
+            PhpType::Void if !null_only => Err(CompileError::new(
                 span,
                 &format!("{} cannot use type void", context),
             )),
@@ -135,7 +173,8 @@ impl Checker {
         } else {
             self.resolve_type_expr(type_expr, span)?
         };
-        if matches!(ty, PhpType::Void) {
+        let null_only = matches!(type_expr, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("null"));
+        if matches!(ty, PhpType::Void) && !null_only {
             return Err(CompileError::new(
                 span,
                 &format!("{} cannot use type void", context),
@@ -228,12 +267,15 @@ impl Checker {
         can_widen_local: bool,
         context: &str,
     ) -> Result<(), CompileError> {
+        // Guards refine the current value, while a reference still addresses the original
+        // slot. Coalescing assignments likewise keep nullable parameter storage alive.
+        let storage_ty = self.guarded_local_storage_type(arg, env).unwrap_or(actual_ty).clone();
         let boxed_object_reference = matches!(expected_ty, PhpType::Object(_))
-            && actual_ty.codegen_repr() == PhpType::Mixed
+            && storage_ty.codegen_repr() == PhpType::Mixed
             && matches!(arg.kind, ExprKind::Variable(_));
         if expected_ty.codegen_repr() != PhpType::Mixed
             && !boxed_object_reference
-            && self.by_ref_argument_uses_mixed_or_hash_storage(actual_ty, arg, env)?
+            && self.by_ref_argument_uses_mixed_or_hash_storage(&storage_ty, arg, env)?
         {
             return Err(CompileError::new(
                 arg.span,
@@ -246,12 +288,12 @@ impl Checker {
         // The call lowering boxes PHP array locals before exposing their ref-cell address.
         // This changes storage, not the declared values accepted by the reference parameter.
         if expected_ty.is_php_array()
-            && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            && matches!(storage_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
         {
             return Ok(());
         }
         if requires_by_ref_boxed_storage(expected_ty)
-            && !supports_by_ref_boxed_storage(actual_ty)
+            && !supports_by_ref_boxed_storage(&storage_ty)
         {
             if matches!(expected_ty, PhpType::Mixed)
                 && matches!(
@@ -283,6 +325,52 @@ impl Checker {
                 ),
             ));
         }
+        // Rule 3, the mirror of rule 1: a parameter whose declared type is a CONCRETE scalar
+        // slot writes a raw value back, while a boxed caller variable goes on reading a cell.
+        // Nothing converts between them at the boundary, and `type_accepts` admits the binding
+        // — correct for a by-VALUE parameter, which is why the question has to be asked here.
+        //
+        // Measured before this rule existed: `$i = 0; $i++; byRef($i);` against
+        // `function byRef(int &$n) { $n = $n + 1; }` left `$i` reading NULL where php prints
+        // `int(2)`, and a `mixed` variable did the same. The argument was passed as the cell's
+        // VALUE with no reference at all, so the callee's write-back went nowhere.
+        //
+        // Scalars only. A container passed by reference has its own ref-cell lowering, and no
+        // wrong answer has been measured there — widening this rule on suspicion would refuse
+        // working code.
+        if matches!(
+            expected_ty.codegen_repr(),
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+        ) && supports_by_ref_boxed_storage(&storage_ty)
+        {
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{} expects {}, got {} — a by-reference parameter writes back through the \
+                     caller's variable, and a boxed variable cannot receive a raw {} write. \
+                     Pass a variable that already holds {} (an incremented counter is \
+                     `int|float`, which is boxed), or declare the parameter `mixed &$p`",
+                    context, expected_ty, storage_ty, expected_ty, expected_ty
+                ),
+            ));
+        }
+        // A pointer by-reference parameter writes a raw pointer word back through the caller's
+        // storage. Only a whole local can receive it (lowering then checks that its frame slot
+        // is a pointer word); an array element lives in boxed or null element storage.
+        if matches!(expected_ty.codegen_repr(), PhpType::Pointer(_))
+            && !matches!(by_ref_storage_place(arg).kind, ExprKind::Variable(_))
+        {
+            let shown = crate::types::pointer_param_display(expected_ty);
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{} expects {}: a pointer by-reference parameter writes a pointer word back \
+                     through its argument, so pass a variable (bind the element to a `{} $p` \
+                     variable first)",
+                    context, shown, shown
+                ),
+            ));
+        }
         if *actual_ty == PhpType::Void && !Self::declared_type_accepts_null(expected_ty) {
             return Err(CompileError::new(
                 arg.span,
@@ -292,7 +380,7 @@ impl Checker {
                 // a bare `$v = null` still fails the boxed-storage rule above. `?int $v =
                 // null` is the spelling that compiles.
                 &format!(
-                    "{} expects {:?}, got Void — a by-reference parameter writes back \
+                    "{} expects {}, got null — a by-reference parameter writes back \
                      through the caller's variable, so that variable must already hold the \
                      declared type; initialize it (for example `= 0`), or declare BOTH the \
                      parameter and the variable nullable (`?int &$p` with `?int $v = null`)",
@@ -301,6 +389,34 @@ impl Checker {
             ));
         }
         Ok(())
+    }
+
+    /// Returns the storage contract hidden by a local's current guard or coalescing view.
+    pub(crate) fn guarded_local_storage_type(&self, arg: &Expr, env: &TypeEnv) -> Option<&PhpType> {
+        let ExprKind::Variable(name) = &by_ref_storage_place(arg).kind else {
+            return None;
+        };
+        self.guarded_union_types.get(name)
+            .filter(|origin| env.get(name).is_some_and(|view|
+                self.merged_assignment_type(&origin.ty, view).as_ref() == Some(&origin.ty)))
+            .map(|origin| &origin.ty)
+            .or_else(|| self.narrowed_local_origins.get(name)
+                .filter(|origin| origin.view.as_ref().is_some_and(|view| env.get(name) == Some(view)))
+                .map(|origin| &origin.origin))
+    }
+
+    /// Returns whether checked updates must preserve an externally shared tagged integer cell.
+    pub(crate) fn has_fixed_tagged_reference_storage(&self, name: &str, env: &TypeEnv) -> bool {
+        let fixed = self.active_ref_params.contains(name)
+            || self.active_external_ref_bindings.contains(name)
+            || self.ref_assign_aliased_locals.contains(name)
+            || self.by_ref_captured_locals.contains(name);
+        if !fixed {
+            return false;
+        }
+        let Some(current) = env.get(name) else { return false; };
+        self.guarded_local_storage_type(&Expr::var(name), env).unwrap_or(current)
+            .codegen_repr() == PhpType::TaggedScalar
     }
 
     /// Returns whether a by-reference call may give one ordinary local canonical Mixed storage.
@@ -316,7 +432,7 @@ impl Checker {
             && !self.ref_aliased_locals.contains(name)
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
-            && !self.typed_local_names.contains(name)
+            && !self.typed_local_names.contains_key(name)
             && !self.name_is_seeded_program_storage(name)
             && !self.top_level_binding_is_program_global(name)
     }
@@ -351,10 +467,24 @@ impl Checker {
         context: &str,
     ) -> Result<(), CompileError> {
         if let Some(default_expr) = default_expr {
-            let default_ty = infer_expr_type_syntactic(default_expr);
+            let default_ty = self.declaration_default_type(default_expr);
             self.require_compatible_arg_type(expected_ty, &default_ty, span, context)?;
         }
         Ok(())
+    }
+
+    /// Preserves known global constant types before a declaration is specialized by a call.
+    fn declaration_default_type(&self, expression: &Expr) -> PhpType {
+        if crate::types::deferred_defaults::deferred_error_message(expression).is_some() {
+            // A normalized lexical Error has no result to constrain an untyped parameter.
+            return PhpType::Mixed;
+        }
+        if let ExprKind::ConstRef(name) = &expression.kind {
+            if let Some(ty) = self.constants.get(name.as_str()) {
+                return ty.clone();
+            }
+        }
+        infer_expr_type_syntactic(expression)
     }
 
     /// Semantically resolves a declaration default when it is a scoped constant access, then
@@ -370,11 +500,24 @@ impl Checker {
         let Some(default_expr) = default_expr else {
             return Ok(());
         };
+        // PHP permits even a scalar-typed parameter to use an unbound object factory.
+        // An explicit argument bypasses it; omission raises the scope Error before type binding.
+        if crate::types::deferred_defaults::deferred_error_message(default_expr).is_some() {
+            return Ok(());
+        }
         let default_ty = match &default_expr.kind {
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 self.infer_scoped_constant_access(receiver, name, default_expr)?
             }
-            _ => infer_expr_type_syntactic(default_expr),
+            // `K::ALL[0]` and `E::A ? E::B : E::C` select a constant's value; their syntactic
+            // type is the string guess for each scoped constant, not the selected value. An
+            // untaken branch may hold a lazy Error (`[parent::A]` without a parent), which
+            // inference reports eagerly, so a failed inference keeps the syntactic answer.
+            _ if crate::types::deferred_defaults::default_value_depends_on_scoped_constant(default_expr) => {
+                self.infer_type(default_expr, &TypeEnv::default())
+                    .unwrap_or_else(|_| self.declaration_default_type(default_expr))
+            }
+            _ => self.declaration_default_type(default_expr),
         };
         self.require_compatible_arg_type(expected_ty, &default_ty, span, context)
     }
@@ -400,12 +543,12 @@ impl Checker {
         // through: a missing case or an incompatible scalar constant is still reported, just
         // from the pass that can tell the difference.
         if default_expr
-            .is_some_and(|default| matches!(default.kind, ExprKind::ScopedConstantAccess { .. }))
+            .is_some_and(crate::types::deferred_defaults::default_value_depends_on_scoped_constant)
         {
             return Ok(());
         }
         if let Some(default_expr) = default_expr {
-            let default_ty = infer_expr_type_syntactic(default_expr);
+            let default_ty = self.declaration_default_type(default_expr);
             if matches!(expected_ty, PhpType::Object(_)) && matches!(default_ty, PhpType::Object(_))
             {
                 return Ok(());
@@ -458,7 +601,7 @@ impl Checker {
             } else if decl.ref_params.get(idx).copied().unwrap_or(false) {
                 param_types.push((param_name.clone(), PhpType::Mixed));
             } else if let Some(default_expr) = decl.defaults.get(idx).and_then(|d| d.as_ref()) {
-                param_types.push((param_name.clone(), infer_expr_type_syntactic(default_expr)));
+                param_types.push((param_name.clone(), self.declaration_default_type(default_expr)));
             } else {
                 param_types.push((param_name.clone(), PhpType::Int));
             }
@@ -558,6 +701,8 @@ impl Checker {
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
         let saved_local_binding_scope = self.enter_local_binding_scope(param_names);
+        self.definitely_bound_locals.extend(pre_bound_own_storage.keys().cloned());
+        if self.current_class.is_some() { self.definitely_bound_locals.insert("this".to_string()); }
         let saved_ref_params = self.active_ref_params.clone();
         let saved_external_ref_bindings = self.active_external_ref_bindings.clone();
         let saved_globals = self.active_globals.clone();
@@ -568,8 +713,11 @@ impl Checker {
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
         let saved_null_probe_scope_is_top_level = self.null_probe_scope_is_top_level;
 
+        self.definitely_bound_locals.extend(ref_param_names.iter().cloned());
         self.active_ref_params = ref_param_names.into_iter().collect();
         self.active_external_ref_bindings = self.active_ref_params.clone();
+        self.non_builtin_ref_aliased_locals
+            .extend(self.active_ref_params.iter().cloned());
         self.boxed_ref_aliased_locals.extend(
             self.active_ref_params.iter()
                 .filter(|name| pre_bound_own_storage.get(*name)
@@ -599,6 +747,9 @@ impl Checker {
         // name with something outside. A marked name from this map is announced only when
         // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
         self.run_mixed_storage_scan(body, &pre_bound_own_storage);
+        let (sites, dependents) = super::super::numeric_regions::find(body, &pre_bound_own_storage);
+        self.numeric_region_sites = sites;
+        self.numeric_region_dependents = dependents;
 
         let result = f(self);
 
@@ -615,6 +766,15 @@ impl Checker {
 
         result
     }
+}
+
+/// Returns the storage place a by-reference argument names, past named-argument wrappers.
+fn by_ref_storage_place(arg: &Expr) -> &Expr {
+    let mut arg = arg;
+    while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+        arg = value;
+    }
+    arg
 }
 
 /// Returns true when a by-reference parameter can write values that need boxed or nullable storage.

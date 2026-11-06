@@ -204,3 +204,17 @@ fn test_exception_get_code_default_zero() {
     );
     assert_eq!(out, "0");
 }
+
+/// Verifies a thrown decode is a JsonException and keeps the syntax code plus location.
+#[test]
+fn test_json_exception_decode_class_code_and_location() {
+    let out = compile_and_run(
+        r#"<?php
+            try { json_decode("[{", null, 512, JSON_THROW_ON_ERROR); echo "no throw"; }
+            catch (JsonException $e) {
+                echo get_class($e), "|", $e->getCode(), "|", $e->getMessage();
+            }
+        "#,
+    );
+    assert_eq!(out, "JsonException|4|Syntax error near location 1:3");
+}

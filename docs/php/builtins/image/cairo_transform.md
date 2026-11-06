@@ -1,8 +1,6 @@
 ---
 title: "cairo_transform()"
 description: "Composes the given matrix onto the context's transformation."
-sidebar:
-  order: 445
 ---
 
 ## cairo_transform()
@@ -21,8 +19,9 @@ Composes the given matrix onto the context's transformation.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

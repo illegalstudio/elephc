@@ -1,8 +1,6 @@
 ---
 title: "timezone_name_get()"
 description: "Returns a timezone's identifier."
-sidebar:
-  order: 248
 ---
 
 ## timezone_name_get()
@@ -20,8 +18,9 @@ Returns a timezone's identifier.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

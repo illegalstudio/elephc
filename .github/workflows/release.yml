@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Same release as RUST_VERSION in .github/docker/ci.Dockerfile. Not `stable`:
+  # a newer rustc must not fail the no-warnings gate unannounced.
+  RUST_TOOLCHAIN: "1.98"
+
 jobs:
   verify-ci:
     name: Verify CI for tagged commit
@@ -167,7 +172,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14  # Apple Silicon runner
+            runner: macos-15  # Apple Silicon runner
           # Linux release builds run on ubuntu-22.04 (glibc 2.35) rather than
           # the ubuntu-24.04 generation CI tests on, so the published binaries
           # also run on older distros (Ubuntu 22.04, Debian 12, RHEL 9, ...).
@@ -182,6 +187,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Build release binary
         run: cargo build --release
@@ -201,7 +208,7 @@ jobs:
       # `every_bridge_staticlib_ships_in_the_release_tarball` fails the build
       # rather than letting the two lists drift again.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-curl
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-openssl -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-curl -p elephc-zend
 
       - name: Build curl-aware Magician staticlib
         run: |
@@ -213,8 +220,23 @@ jobs:
       - name: Strip binary
         run: strip target/release/elephc
 
+      - name: Sign and notarize macOS binary
+        if: runner.os == 'macOS'
+        timeout-minutes: 40
+        uses: ./.github/actions/notarize-macos
+        with:
+          binary: target/release/elephc
+          certificate-p12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          signing-identity: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          apple-id: ${{ secrets.APPLE_ID }}
+          team-id: ${{ secrets.APPLE_TEAM_ID }}
+          app-password: ${{ secrets.APPLE_APP_PASSWORD }}
+
       - name: Copy mbstring data notices
         run: |
+          mkdir -p target/release/fileinfo-notices
+          cp crates/elephc-fileinfo/NOTICE.md target/release/fileinfo-notices/
           mkdir -p target/release/mbstring-notices
           cp crates/elephc-mbstring/NOTICE.md target/release/mbstring-notices/
           cp crates/elephc-mbstring/src/unicode/data/LICENSE-UNICODE target/release/mbstring-notices/
@@ -229,7 +251,10 @@ jobs:
             libelephc_tls.a \
             libelephc_pdo.a \
             libelephc_crypto.a \
+            libelephc_openssl.a \
             libelephc_bcmath.a \
+            libelephc_gmp.a \
+            libelephc_random.a \
             libelephc_mbstring.a \
             libelephc_iconv.a \
             libelephc_phar.a \
@@ -240,15 +265,30 @@ jobs:
             libelephc_web.a \
             libelephc_pcntl.a \
             libelephc_xml.a \
+            libelephc_fileinfo.a \
+            libelephc_tokenizer.a \
             libelephc_magician.a \
             libelephc_curl.a \
             libelephc_magician_curl.a \
-            mbstring-notices
+            libelephc_zend.a \
+            mbstring-notices \
+            fileinfo-notices
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
           else
             shasum -a 256 "$TARBALL" > "$TARBALL.sha256"
           fi
+
+      - name: Verify packaged macOS signature
+        if: runner.os == 'macOS'
+        env:
+          TARBALL: target/release/elephc-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+        run: |
+          VERIFY_DIR="$(mktemp -d "$RUNNER_TEMP/elephc-signature.XXXXXX")"
+          trap 'rm -rf "$VERIFY_DIR"' EXIT
+          tar xzf "$TARBALL" -C "$VERIFY_DIR" elephc
+          cmp target/release/elephc "$VERIFY_DIR/elephc"
+          codesign --verify --strict --verbose=2 "$VERIFY_DIR/elephc"
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
@@ -291,7 +331,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-15
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
@@ -318,15 +358,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
 
-      # The probe prepares curl, Oniguruma, PCRE2, and libxml2 in its empty
-      # WORKDIR before force-enabling their packed bridges. This cache is the
-      # default root that native add writes (`~/.cache/elephc/native`), so a
-      # warm runner skips the from-source native rebuilds.
-      - name: Cache managed native curl, mbstring, and XML dependencies
+      # The probe adds every managed native package the packaged binary names in
+      # `--print-capabilities` before force-enabling its packed bridge in an empty
+      # WORKDIR. The cache uses native add's default root
+      # (`~/.cache/elephc/native`), keyed on the catalog and every recipe, so warm
+      # runners skip the from-source native rebuilds.
+      - name: Cache managed native dependencies
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/oniguruma.rs', 'src/native_deps/recipes/oniguruma_shim.c', 'src/native_deps/recipes/oniguruma_shim.h', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/**') }}
           restore-keys: |
             verify-native-${{ matrix.target }}-
 
@@ -415,7 +456,10 @@ jobs:
               lib.install "libelephc_tls.a"
               lib.install "libelephc_pdo.a"
               lib.install "libelephc_crypto.a"
+              lib.install "libelephc_openssl.a"
               lib.install "libelephc_bcmath.a"
+              lib.install "libelephc_gmp.a"
+              lib.install "libelephc_random.a"
               lib.install "libelephc_mbstring.a"
               lib.install "libelephc_iconv.a"
               lib.install "libelephc_phar.a"
@@ -426,10 +470,14 @@ jobs:
               lib.install "libelephc_web.a"
               lib.install "libelephc_pcntl.a"
               lib.install "libelephc_xml.a"
+              lib.install "libelephc_fileinfo.a"
+              lib.install "libelephc_tokenizer.a"
               lib.install "libelephc_magician.a"
               lib.install "libelephc_curl.a"
               lib.install "libelephc_magician_curl.a"
+              lib.install "libelephc_zend.a"
               pkgshare.install "mbstring-notices"
+              pkgshare.install "fileinfo-notices"
             end
 
             test do

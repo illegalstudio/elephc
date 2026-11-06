@@ -123,7 +123,36 @@ pub(super) fn reload_eval_scope_locals(
     locals: &[EvalSyncLocal],
     pending_throw: Option<usize>,
 ) -> Result<()> {
+    reload_eval_scope_locals_with_mask(ctx, locals, pending_throw, None)
+}
+
+/// Reloads only dynamic-eval locals selected by the parsed fragment's access mask.
+pub(super) fn reload_dynamic_eval_scope_locals(
+    ctx: &mut FunctionContext<'_>,
+    locals: &[EvalSyncLocal],
+    pending_throw: Option<usize>,
+) -> Result<()> {
+    reload_eval_scope_locals_with_mask(
+        ctx,
+        locals,
+        pending_throw,
+        Some(EVAL_SCOPE_ACCESS_MASK_OFFSET),
+    )
+}
+
+/// Reloads synchronized locals, optionally guarding each name through a runtime mask.
+fn reload_eval_scope_locals_with_mask(
+    ctx: &mut FunctionContext<'_>,
+    locals: &[EvalSyncLocal],
+    pending_throw: Option<usize>,
+    access_mask_offset: Option<usize>,
+) -> Result<()> {
     for local in locals {
+        let unaccessed = access_mask_offset.map(|offset| {
+            let unaccessed = ctx.next_label("eval_scope_reload_unaccessed");
+            emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, offset, &unaccessed);
+            unaccessed
+        });
         emit_eval_scope_get(ctx, local);
         let missing = ctx.next_label("eval_scope_reload_missing");
         let done = ctx.next_label("eval_scope_reload_done");
@@ -135,17 +164,40 @@ pub(super) fn reload_eval_scope_locals(
         ctx.emitter.label(&missing);
         store_missing_scope_entry_to_local(ctx, local, pending_throw)?;
         ctx.emitter.label(&done);
+        if let Some(unaccessed) = unaccessed {
+            ctx.emitter.label(&unaccessed);
+        }
     }
     Ok(())
 }
 
-/// Reloads synchronized program globals from the eval global scope after eval.
-pub(super) fn reload_eval_global_scope(
+/// Reloads only dynamic-eval globals selected by the parsed fragment's access mask.
+pub(super) fn reload_dynamic_eval_global_scope(
     ctx: &mut FunctionContext<'_>,
     globals: &[EvalSyncGlobal],
     pending_throw: Option<usize>,
 ) -> Result<()> {
+    reload_eval_global_scope_with_mask(
+        ctx,
+        globals,
+        pending_throw,
+        Some(EVAL_SCOPE_ACCESS_MASK_OFFSET),
+    )
+}
+
+/// Reloads synchronized globals, optionally guarding each name through a runtime mask.
+fn reload_eval_global_scope_with_mask(
+    ctx: &mut FunctionContext<'_>,
+    globals: &[EvalSyncGlobal],
+    pending_throw: Option<usize>,
+    access_mask_offset: Option<usize>,
+) -> Result<()> {
     for global in globals {
+        let unaccessed = access_mask_offset.map(|offset| {
+            let unaccessed = ctx.next_label("eval_global_reload_unaccessed");
+            emit_branch_if_eval_name_unaccessed(ctx.emitter, &global.name, offset, &unaccessed);
+            unaccessed
+        });
         emit_eval_global_scope_get(ctx, global);
         let missing = ctx.next_label("eval_global_reload_missing");
         let done = ctx.next_label("eval_global_reload_done");
@@ -157,6 +209,9 @@ pub(super) fn reload_eval_global_scope(
         ctx.emitter.label(&missing);
         store_missing_scope_entry_to_global(ctx, global, pending_throw)?;
         ctx.emitter.label(&done);
+        if let Some(unaccessed) = unaccessed {
+            ctx.emitter.label(&unaccessed);
+        }
     }
     Ok(())
 }

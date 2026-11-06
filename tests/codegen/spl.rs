@@ -10,6 +10,8 @@
 
 #[path = "spl/autoload.rs"]
 mod autoload;
+#[path = "spl/autoload_span_identity.rs"]
+mod autoload_span_identity;
 #[path = "spl/classes.rs"]
 mod classes;
 #[path = "spl/decorators.rs"]
@@ -36,3 +38,6 @@ mod recursive;
 mod regex;
 #[path = "spl/storage.rs"]
 mod storage;
+
+/// Large offset TypeError message ownership regressions.
+mod offset_errors;

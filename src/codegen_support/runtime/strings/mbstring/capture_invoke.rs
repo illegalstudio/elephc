@@ -100,7 +100,7 @@ fn emit_invocation(emitter: &mut Emitter, frame: Frame, mbregex: bool) {
         ] {
             abi::emit_symbol_address(emitter, scratch, symbol);
             emitter.instruction(&if arm { format!("str x9, [sp, #{}]", context + offset) }
-                else { format!("mov QWORD PTR [rsp + {}], r10", context + offset) });
+                else { format!("mov QWORD PTR [rsp + {}], r10", context + offset) }); // publish class metadata in the wrapped host context
         }
     }
     if arm {

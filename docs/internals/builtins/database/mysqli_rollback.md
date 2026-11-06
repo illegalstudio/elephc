@@ -1,8 +1,6 @@
 ---
 title: "mysqli_rollback() - internals"
 description: "Compiler internals for mysqli_rollback(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 153
 ---
 
 ## `mysqli_rollback()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:312](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L312) (`mysqli_rollback`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_rollback`)
 - **Function symbol**: `mysqli_rollback()`
 
 

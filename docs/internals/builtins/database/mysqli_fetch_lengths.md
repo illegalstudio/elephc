@@ -1,8 +1,6 @@
 ---
 title: "mysqli_fetch_lengths() - internals"
 description: "Compiler internals for mysqli_fetch_lengths(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 122
 ---
 
 ## `mysqli_fetch_lengths()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1602](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1602) (`mysqli_fetch_lengths`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_fetch_lengths`)
 - **Function symbol**: `mysqli_fetch_lengths()`
 
 

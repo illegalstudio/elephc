@@ -19,6 +19,7 @@ use crate::eval_ir::EvalBinOp;
 use crate::value::RuntimeCellHandle;
 
 mod builtins;
+mod object_operators;
 pub(crate) use builtins::default_builtin_call;
 
 thread_local! {
@@ -29,6 +30,128 @@ thread_local! {
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Boxes a borrowed persistent native callable descriptor for Reflection default factories.
+    fn native_callable_from_raw(&mut self, _descriptor: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Invokes a reviewed static operator adapter using PHP-visible arguments.
+    /// Native implementations bind hidden physical parameters before entering the method.
+    fn operator_static_call(&mut self, class: &str, method: &str, args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.static_method_call(class, method, args)
+    }
+
+    /// Invokes a reviewed instance operator adapter using PHP-visible arguments.
+    fn operator_method_call(&mut self, object: RuntimeCellHandle, method: &str, args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.method_call(object, method, args)
+    }
+
+    /// Applies the shared internal-class handler before scalar runtime arithmetic.
+    fn add(&mut self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::arithmetic(self, elephc_builtin_contract::ObjectArithmetic::Add, left, right)? {
+            return Ok(result);
+        }
+        self.add_raw(left, right)
+    }
+
+    /// Applies the shared internal-class handler before scalar runtime arithmetic.
+    fn sub(&mut self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::arithmetic(self, elephc_builtin_contract::ObjectArithmetic::Sub, left, right)? {
+            return Ok(result);
+        }
+        self.sub_raw(left, right)
+    }
+
+    /// Applies the shared internal-class handler before scalar runtime arithmetic.
+    fn mul(&mut self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::arithmetic(self, elephc_builtin_contract::ObjectArithmetic::Mul, left, right)? {
+            return Ok(result);
+        }
+        self.mul_raw(left, right)
+    }
+
+    /// Applies the shared internal-class handler before scalar runtime arithmetic.
+    fn div(&mut self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::arithmetic(self, elephc_builtin_contract::ObjectArithmetic::Div, left, right)? {
+            return Ok(result);
+        }
+        self.div_raw(left, right)
+    }
+
+    /// Applies the shared internal-class handler before scalar runtime arithmetic.
+    fn modulo(&mut self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::arithmetic(self, elephc_builtin_contract::ObjectArithmetic::Mod, left, right)? {
+            return Ok(result);
+        }
+        self.modulo_raw(left, right)
+    }
+
+    /// Applies the shared internal-class handler before scalar runtime arithmetic.
+    fn pow(&mut self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::arithmetic(self, elephc_builtin_contract::ObjectArithmetic::Pow, left, right)? {
+            return Ok(result);
+        }
+        self.pow_raw(left, right)
+    }
+
+    /// Applies the shared internal-class handler before scalar bitwise operations.
+    fn bitwise_dispatch(
+        &mut self,
+        op: EvalBinOp,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::shift(self, op, left, right)? {
+            return Ok(result);
+        }
+        if let Some(result) = object_operators::bitwise(self, op, left, right)? {
+            return Ok(result);
+        }
+        self.bitwise(op, left, right)
+    }
+
+    /// Applies the shared internal-class handler before scalar bitwise NOT.
+    fn bit_not_dispatch(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::bit_not(self, value)? {
+            return Ok(result);
+        }
+        self.bit_not(value)
+    }
+
+    /// Materializes PHP's `_IS_NUMBER` view of an internal value object for numeric aggregates.
+    fn number_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        match object_operators::number_cast(self, value)? {
+            Some(number) => Ok(number),
+            None => Ok(value),
+        }
+    }
+
+    /// Compares internal value classes while preserving strict object identity.
+    fn compare(&mut self, op: EvalBinOp, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if !matches!(op, EvalBinOp::StrictEq | EvalBinOp::StrictNotEq) {
+            if let Some(result) = object_operators::comparison(self, op, left, right)? { return Ok(result); }
+        }
+        self.compare_raw(op, left, right)
+    }
+
+    /// Orders internal value classes through their full-precision comparison contract.
+    fn spaceship(&mut self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::comparison(self, EvalBinOp::Spaceship, left, right)? { return Ok(result); }
+        self.spaceship_raw(left, right)
+    }
+
+    /// Reads the reviewed internal boolean handler before ordinary object truthiness.
+    fn truthy(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+        if let Some(result) = object_operators::truthy(self, value)? { return Ok(result); }
+        self.truthy_raw(value)
+    }
+
+    /// Boolean casts and conditional tests consume the same internal object contract.
+    fn cast_bool(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        let truthy = self.truthy(value)?;
+        self.bool_value(truthy)
+    }
+
     /// Publishes a successful eval-owned resource close to a shared native inventory.
     fn resource_closed(&mut self, _resource: RuntimeCellHandle) -> Result<(), EvalStatus> { Ok(()) }
 
@@ -813,7 +936,7 @@ pub trait RuntimeValueOps {
     fn cast_string(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Casts one runtime cell to a boxed PHP boolean cell.
-    fn cast_bool(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+    fn cast_bool_raw(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Computes PHP `abs()` for one runtime cell while preserving integer/float result typing.
     fn abs(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
@@ -845,42 +968,42 @@ pub trait RuntimeValueOps {
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Adds two runtime cells using PHP addition semantics.
-    fn add(
+    fn add_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Subtracts two runtime cells using PHP numeric semantics.
-    fn sub(
+    fn sub_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Multiplies two runtime cells using PHP numeric semantics.
-    fn mul(
+    fn mul_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Divides two runtime cells using PHP numeric semantics.
-    fn div(
+    fn div_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Computes modulo for two runtime cells using PHP integer modulo semantics.
-    fn modulo(
+    fn modulo_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Raises one runtime cell to another using PHP exponentiation semantics.
-    fn pow(
+    fn pow_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -912,7 +1035,7 @@ pub trait RuntimeValueOps {
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Compares two runtime cells and returns a boxed PHP boolean cell.
-    fn compare(
+    fn compare_raw(
         &mut self,
         op: EvalBinOp,
         left: RuntimeCellHandle,
@@ -920,7 +1043,7 @@ pub trait RuntimeValueOps {
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Compares two runtime cells and returns a boxed PHP spaceship integer.
-    fn spaceship(
+    fn spaceship_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -940,7 +1063,7 @@ pub trait RuntimeValueOps {
     fn string_bytes(&mut self, value: RuntimeCellHandle) -> Result<Vec<u8>, EvalStatus>;
 
     /// Converts one runtime cell to PHP boolean truthiness.
-    fn truthy(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus>;
+    fn truthy_raw(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus>;
 
     /// Pushes a new output buffer with handler metadata; false when refused.
     /// `handler_id` is a magician ob-handler registry id (None = default handler),
@@ -991,15 +1114,15 @@ pub trait RuntimeValueOps {
     fn ob_implicit_flush(&mut self, enable: bool) -> Result<(), EvalStatus>;
 }
 
-pub(super) const EVAL_TAG_INT: u64 = 0;
-pub(super) const EVAL_TAG_STRING: u64 = 1;
-pub(super) const EVAL_TAG_FLOAT: u64 = 2;
-pub(super) const EVAL_TAG_BOOL: u64 = 3;
+pub(crate) const EVAL_TAG_INT: u64 = 0;
+pub(crate) const EVAL_TAG_STRING: u64 = 1;
+pub(crate) const EVAL_TAG_FLOAT: u64 = 2;
+pub(crate) const EVAL_TAG_BOOL: u64 = 3;
 pub(super) const EVAL_TAG_ARRAY: u64 = 4;
 pub(super) const EVAL_TAG_ASSOC: u64 = 5;
 pub(super) const EVAL_TAG_OBJECT: u64 = 6;
 pub(super) const EVAL_TAG_MIXED: u64 = 7;
-pub(super) const EVAL_TAG_NULL: u64 = 8;
+pub(crate) const EVAL_TAG_NULL: u64 = 8;
 pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
 pub(super) const EVAL_TAG_CALLABLE: u64 = 10;
 pub(super) const EVAL_TAG_INVOKER_REF_CELL: u64 = 11;

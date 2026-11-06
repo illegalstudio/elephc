@@ -1,14 +1,12 @@
 ---
 title: "preg_split()"
 description: "Splits a string by a regular expression."
-sidebar:
-  order: 764
 ---
 
 ## preg_split()
 
 ```php
-function preg_split(string $pattern, string $subject, int $limit = -1, int $flags = 0): array
+function preg_split(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false
 ```
 
 Splits a string by a regular expression.
@@ -19,12 +17,13 @@ Splits a string by a regular expression.
 - `$limit` (`int`), default `-1`, optional
 - `$flags` (`int`), default `0`, optional
 
-**Returns**: `array`
+**Returns**: `array|false`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_split.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_split.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

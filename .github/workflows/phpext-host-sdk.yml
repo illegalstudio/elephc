@@ -1,0 +1,168 @@
+name: PHP extension host SDK
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/phpext-host-sdk.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'src/**'
+      - 'scripts/phpext/**'
+      - 'tests/phpext/**'
+      - 'examples/php-extension/**'
+      - 'crates/elephc-zend/**'
+      - 'tests/phpext_tests.rs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phpext-host-sdk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: '4'
+  RUST_MIN_STACK: '33554432'
+
+jobs:
+  host-sdk:
+    name: Host SDK (${{ matrix.platform.target }}, ${{ matrix.phpts }})
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-24.04
+            target: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            target: linux-aarch64
+          - runner: macos-15
+            target: macos-aarch64
+        phpts: [nts, ts]
+    env:
+      ELEPHC_PHPEXT_EXPECT_ZTS: ${{ matrix.phpts == 'ts' && '1' || '0' }}
+      ELEPHC_PHPEXT_EXPECT_TARGET: ${{ matrix.platform.target }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: '1.98'
+
+      - name: Install matching PHP 8.5 SDK and CLI
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.5'
+          coverage: none
+        env:
+          phpts: ${{ matrix.phpts }}
+          fail-fast: 'true'
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        with:
+          prefix-key: rust-deps-phpext-sdk-${{ matrix.platform.target }}-${{ matrix.phpts }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: false
+          cache-on-failure: true
+
+      - name: Verify runner and selected interpreter
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -n -r 'if (PHP_VERSION_ID < 80500 || PHP_VERSION_ID >= 80600 || (int) PHP_ZTS !== (int) getenv("ELEPHC_PHPEXT_EXPECT_ZTS")) { exit(1); }'
+          echo "ELEPHC_PHPEXT_PHP_BINARY=$(command -v php)" >> "$GITHUB_ENV"
+          php-config --vernum
+          php -n -v
+
+      - name: Check SDK parsing, host build and warning cleanup
+        run: |
+          python3 -m unittest discover -s scripts/phpext -p test_embed_runner.py
+          cargo test -p elephc --lib phpext::
+          cargo test -p elephc --lib warning_dispatch_emits_every_supported_target
+          cargo test -p elephc --lib nested_boundary_reads_linked_concat_capacity_on_all_targets
+          cargo test -p elephc --lib hosted_fatal_paths_escape_before_raw_diagnostics
+          cargo test -p elephc --lib phpext_pack_rejects_non_php_tags_before_normalization
+
+      - name: Check consumer ABI after sharing value-layout facts
+        run: cargo test -p elephc-zend --test abi structures_have_the_layout_rust_gives_them
+
+      # These are explicit real-host tests. A missing SDK must fail, not skip.
+      - name: Verify real PHP SDK, compiled exports, ownership and output
+        run: cargo test -p elephc --test phpext_tests -- --include-ignored
+
+      - name: Check existing library outputs
+        run: cargo test -p elephc --test cdylib_tests test_cdylib_builds_and_host_calls_exports
+
+      - name: Check static archive output
+        run: cargo test -p elephc --test cdylib_tests test_staticlib_links_directly_into_a_host_binary
+
+      - name: Check iOS library emitter contracts
+        run: cargo test -p elephc --test cdylib_tests test_ios_aarch64_emit_asm_pins_string_return_out_parameters
+
+      - name: Install Valgrind for native and adapter memory checks
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y valgrind libc6-dbg
+
+      - name: Cache real PHP debug embed SDK
+        uses: actions/cache@v6
+        with:
+          # Keep the non-relocatable SDK outside Rust's target cache. Both the
+          # builder identity and its workflow configure flags invalidate this cache.
+          path: ${{ runner.temp }}/phpext-test-host
+          key: phpext-embed-${{ matrix.platform.target }}-${{ matrix.phpts }}-${{ hashFiles('scripts/phpext/build_host.py', '.github/workflows/phpext-host-sdk.yml') }}-v3
+
+      - name: Build real PHP debug CLI and embed SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=(--prefix "$RUNNER_TEMP/phpext-test-host" --debug)
+          if [ '${{ matrix.phpts }}' = ts ]; then
+            flags+=(--zts)
+          fi
+          if [ '${{ runner.os }}' = Linux ]; then
+            flags+=(--with-valgrind)
+          fi
+          python3 scripts/phpext/build_host.py "${flags[@]}"
+
+      - name: Verify repeated requests and concurrent ZTS requests in real PHP
+        run: python3 scripts/phpext/test_embed.py --php-config "$RUNNER_TEMP/phpext-test-host/bin/php-config"
+
+      - name: Check native and adapter leaks with Valgrind
+        if: runner.os == 'Linux'
+        run: python3 scripts/phpext/test_embed.py --php-config "$RUNNER_TEMP/phpext-test-host/bin/php-config" --valgrind
+
+      - name: Check native and adapter leaks with Apple leaks
+        if: runner.os == 'macOS'
+        run: python3 scripts/phpext/test_embed.py --php-config "$RUNNER_TEMP/phpext-test-host/bin/php-config" --leaks
+
+      - name: Check macOS lifecycle across independent module builds
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..8}; do
+            echo "macOS lifecycle build $attempt/8"
+            python3 scripts/phpext/test_embed.py --php-config "$RUNNER_TEMP/phpext-test-host/bin/php-config" --leaks
+          done
+
+      - name: Check standalone null declaration parsing
+        run: cargo test -p elephc --test parser_tests standalone_null
+
+      - name: Check standalone warning cleanup and default output
+        run: |
+          cargo test -p elephc --test codegen_tests test_core_error_regression_ordinary_warning_unwind
+          cargo test -p elephc --test codegen_tests test_core_warning_fragments_newline_key_default_output
+
+      - name: Check standalone null declarations in executable output
+        run: cargo test -p elephc --test codegen_tests test_standalone_null_parameters_and_returns
+
+      - name: Check standalone null and void diagnostics
+        run: cargo test -p elephc --test error_tests test_standalone_null_return_requirements

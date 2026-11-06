@@ -9,6 +9,8 @@
 
 #[path = "math/bcmath.rs"]
 mod bcmath;
+#[path = "math/bcmath_number.rs"]
+mod bcmath_number;
 #[path = "math/functions.rs"]
 mod functions;
 #[path = "math/php_float_to_int.rs"]

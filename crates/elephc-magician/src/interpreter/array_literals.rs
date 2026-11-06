@@ -11,6 +11,14 @@
 
 use super::*;
 
+/// Recognizes only normalized native-default metadata, not PHP-visible function calls.
+pub(super) fn native_default_array_spread(element: &EvalArrayElement) -> Option<&EvalExpr> {
+    let EvalArrayElement::Value(EvalExpr::Call { name, args }) = element else { return None; };
+    if name != "\0elephc_native_default_array_spread" { return None; }
+    let [arg] = args.as_slice() else { return None; };
+    (arg.name().is_none() && !arg.is_spread()).then(|| arg.value())
+}
+
 /// Evaluates an indexed array literal into a boxed runtime Mixed array.
 pub(super) fn eval_indexed_array(
     elements: &[EvalArrayElement],
@@ -58,6 +66,30 @@ pub(super) fn eval_assoc_array(
     let mut operands = Vec::new();
     let result = (|| {
         for element in elements {
+            if let Some(source) = native_default_array_spread(element) {
+                let source = eval_owned_expr(source, context, scope, values)?;
+                operands.push(source);
+                if !matches!(values.type_tag(source)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+                    return throwables::eval_throw_error("Only arrays can be unpacked in constant expression", context, values);
+                }
+                let len = values.array_len(source)?;
+                for position in 0..len {
+                    let source_key = values.array_iter_key(source, position)?;
+                    let source_key = if source_key.is_borrowed() { values.retain(source_key)? } else { source_key };
+                    operands.push(source_key);
+                    let value = values.array_get(source, source_key)?;
+                    if !value.is_borrowed() { operands.push(value); }
+                    let key = if values.type_tag(source_key)? == EVAL_TAG_STRING {
+                        source_key
+                    } else {
+                        let key = take_next_array_key(&mut next_key, &mut operands, values)?;
+                        validate_array_append_key(key, context, values)?;
+                        key
+                    };
+                    array = values.array_set(array, key, value)?;
+                }
+                continue;
+            }
             let (explicit_key, value, by_ref) = match element {
                 EvalArrayElement::Value(value) => (None, value, false),
                 EvalArrayElement::Reference(value) => (None, value, true),
@@ -70,20 +102,7 @@ pub(super) fn eval_assoc_array(
                 next_key = eval_array_next_key_after_explicit_key(key, next_key, &mut operands, values)?;
                 key
             } else {
-                let key = match next_key {
-                    Some(key) => key,
-                    None => {
-                        let key = values.int(0)?;
-                        operands.push(key);
-                        key
-                    }
-                };
-                let one = values.int(1)?;
-                operands.push(one);
-                let next = values.add(key, one)?;
-                operands.push(next);
-                next_key = Some(next);
-                key
+                take_next_array_key(&mut next_key, &mut operands, values)?
             };
             let (value, target) = if by_ref {
                 eval_reference_array_element_value(value, context, scope, values)?
@@ -91,6 +110,7 @@ pub(super) fn eval_assoc_array(
                 (eval_owned_expr(value, context, scope, values)?, None)
             };
             operands.push(value);
+            if explicit_key.is_none() { validate_array_append_key(key, context, values)?; }
             array = values.array_set(array, key, value)?;
             if let Some(target) = target {
                 bind_array_element_reference(context, array, key, target, values)?;
@@ -99,6 +119,36 @@ pub(super) fn eval_assoc_array(
         Ok(())
     })();
     finish_array_literal(array, result, operands, context, values)
+}
+
+/// Advances the shared next-index state for ordinary entries and unpacked integer keys.
+fn take_next_array_key(
+    next_key: &mut Option<RuntimeCellHandle>, operands: &mut Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let key = if let Some(key) = *next_key { key } else {
+        let key = values.int(0)?;
+        operands.push(key);
+        key
+    };
+    let one = values.int(1)?;
+    operands.push(one);
+    let next = values.add(key, one)?;
+    operands.push(next);
+    *next_key = Some(next);
+    Ok(key)
+}
+
+/// Raises PHP's catchable append overflow after the element's source evaluation.
+fn validate_array_append_key(
+    key: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if values.type_tag(key)? != EVAL_TAG_INT {
+        return throwables::eval_throw_error(
+            "Cannot add element to the array as the next element is already occupied", context, values,
+        );
+    }
+    Ok(())
 }
 
 /// Releases construction leases and abandons the partial array on evaluation or insertion failure.

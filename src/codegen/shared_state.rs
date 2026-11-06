@@ -33,6 +33,8 @@ pub(crate) struct SharedCodegenState {
     /// Descriptor argument adapters need the shared boxed-callable normalizer.
     pub(super) callable_argument_normalizer: bool,
     generated_runtime_features: GeneratedRuntimeFeatures,
+    /// Declared parameter contracts cached independently of emitted method bodies.
+    pub(super) literal_methods: super::literal_method_index::LiteralMethodIndex,
     runtime_string_descriptor_cases:
         Vec<(Option<PhpType>, Option<Vec<String>>, bool, Vec<RuntimeCallableCase>)>,
     runtime_static_method_descriptor_cases:
@@ -192,9 +194,11 @@ impl SharedCodegenState {
         &self.counter_registry
     }
 
-    /// Registers one instrumented function and returns its stable id (its index
-    /// in the name table `elephc_instr_init` receives).
+    /// Registers a PHP source function, reusing its id for private implementation variants.
     pub(super) fn register_instr(&mut self, display_name: String) -> usize {
+        if let Some(id) = self.instr_registry.iter().position(|registered| *registered == display_name) {
+            return id;
+        }
         let id = self.instr_registry.len();
         self.instr_registry.push(display_name);
         id
@@ -450,4 +454,20 @@ fn cache_runtime_call_wrapper(
         strict_php,
         label: label.to_string(),
     });
+}
+
+
+#[cfg(test)]
+mod numeric_closure_identity_tests {
+    use super::SharedCodegenState;
+
+    /// One source function keeps one profiling id across multiple native entry variants.
+    #[test]
+    fn numeric_closure_calls_share_instrumentation_source_id() {
+        let mut shared = SharedCodegenState::default();
+        assert_eq!(shared.register_instr("closure".into()), 0);
+        assert_eq!(shared.register_instr("other".into()), 1);
+        assert_eq!(shared.register_instr("closure".into()), 0);
+        assert_eq!(shared.instr_registry(), ["closure", "other"]);
+    }
 }

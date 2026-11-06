@@ -1,8 +1,6 @@
 ---
 title: "date_modify()"
 description: "Applies a relative modifier such as \"+1 day\" to a DateTime."
-sidebar:
-  order: 204
 ---
 
 ## date_modify()
@@ -21,8 +19,9 @@ Applies a relative modifier such as "+1 day" to a DateTime.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -10,6 +10,83 @@
 
 use super::*;
 
+/// Ordered enum registration copies every lookup and returns the final selected case.
+#[test]
+fn register_native_property_default_enum_case_preserves_read_order() {
+    use crate::eval_ir::{EvalArrayElement, EvalConst, EvalExpr};
+    let mut context = ElephcEvalContext::new();
+    let key = b"Config::level";
+    let cases = b"Level::Low\nLevel::High\nLevel::Low";
+    assert_eq!(unsafe { __elephc_eval_register_native_property_default_enum_case(
+        &mut context, key.as_ptr(), key.len() as u64, cases.as_ptr(), cases.len() as u64,
+    ) }, 1);
+    let expression = EvalExpr::ArrayGet {
+        array: Box::new(EvalExpr::Array(["Low", "High", "Low"].iter().map(|case|
+            EvalArrayElement::Value(EvalExpr::ClassConstantFetch {
+                class_name: "Level".into(), constant: (*case).into(),
+            })).collect())),
+        index: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+    };
+    assert_eq!(context.native_property_default("Config", "level"), Some(NativeCallableDefault::Expression {
+        expression: Box::new(expression), lexical_class: "Level".into(), reflection_factory: None,
+    }));
+}
+
+/// Enum property defaults own their lookup names and reject malformed ABI registrations.
+#[test]
+fn register_native_property_default_enum_case_owns_metadata() {
+    let mut context = ElephcEvalContext::new();
+    let key = b"Config::level";
+    let mut case_key = b"Level::Low".to_vec();
+    assert_eq!(unsafe { __elephc_eval_register_native_property_default_enum_case(
+        &mut context, key.as_ptr(), key.len() as u64, case_key.as_ptr(), case_key.len() as u64,
+    ) }, 1);
+    case_key.fill(0);
+    let default = context.native_property_default("Config", "level").unwrap();
+    assert_eq!(default, NativeCallableDefault::Expression {
+        expression: Box::new(crate::eval_ir::EvalExpr::ClassConstantFetch {
+            class_name: "Level".into(), constant: "Low".into(),
+        }),
+        lexical_class: "Level".into(), reflection_factory: None,
+    });
+    for invalid in ["Level", "Level::", "::Low", "\\::Low", "Level::Low\n"] {
+        assert_eq!(unsafe { __elephc_eval_register_native_property_default_enum_case(
+            &mut context, key.as_ptr(), key.len() as u64, invalid.as_ptr(), invalid.len() as u64,
+        ) }, 0);
+        assert_eq!(context.native_property_default("Config", "level"), Some(default.clone()));
+    }
+}
+
+/// Native class errors copy borrowed bytes and reject invalid registrations without replacement.
+#[test]
+fn register_native_class_default_error_owns_metadata() {
+    let mut context = ElephcEvalContext::new();
+    let mut class = b"\\Probe".to_vec();
+    let mut message = b"class initialization".to_vec();
+    assert_eq!(unsafe { __elephc_eval_register_native_class_default_error(
+        &mut context, class.as_ptr(), class.len() as u64, message.as_ptr(), message.len() as u64,
+    ) }, 1);
+    class.fill(0);
+    message.fill(0);
+    assert_eq!(context.native_class_default_error("pRoBe"), Some("class initialization"));
+    assert_eq!(context.native_property_default_error("Probe", "good"), None);
+    let class = b"Probe";
+    for (name, name_len, error, error_len) in [
+        (class.as_ptr(), 0, b"error".as_ptr(), 5),
+        (std::ptr::null(), 1, b"error".as_ptr(), 5),
+        (class.as_ptr(), 5, std::ptr::null(), 1),
+        (class.as_ptr(), 5, b"".as_ptr(), 0),
+    ] {
+        assert_eq!(unsafe { __elephc_eval_register_native_class_default_error(
+            &mut context, name, name_len, error, error_len,
+        ) }, 0);
+        assert_eq!(context.native_class_default_error("Probe"), Some("class initialization"));
+    }
+    assert_eq!(unsafe { __elephc_eval_register_native_class_default_error(
+        std::ptr::null_mut(), class.as_ptr(), 5, b"error".as_ptr(), 5,
+    ) }, 0);
+}
+
 /// Verifies native AOT parent metadata is available for eval static-scope resolution.
 #[test]
 fn register_native_class_parent_records_metadata() {
@@ -120,6 +197,47 @@ fn register_native_interface_property_records_metadata() {
         .all(|(_, property)| property.name() != "bad"));
 }
 
+/// Verifies a native `&get` contract flag survives registration for both interface and abstract
+/// class property contracts, so eval reflection can report `returnsReference()`.
+#[test]
+fn register_native_property_contracts_keep_by_ref_get() {
+    let mut ctx = ElephcEvalContext::new();
+    let property_type = b"string";
+    for (key, flags) in [
+        (&b"RefContract::RefContract::name"[..], TEST_NATIVE_PROPERTY_REQUIRES_GET | TEST_NATIVE_PROPERTY_GET_BY_REF),
+        (&b"PlainContract::PlainContract::name"[..], TEST_NATIVE_PROPERTY_REQUIRES_GET),
+    ] {
+        let interface = unsafe {
+            __elephc_eval_register_native_interface_property(
+                &mut ctx,
+                key.as_ptr(),
+                key.len() as u64,
+                property_type.as_ptr(),
+                property_type.len() as u64,
+                flags,
+            )
+        };
+        let abstract_class = unsafe {
+            __elephc_eval_register_native_abstract_property(
+                &mut ctx,
+                key.as_ptr(),
+                key.len() as u64,
+                property_type.as_ptr(),
+                property_type.len() as u64,
+                flags,
+            )
+        };
+        assert_eq!((interface, abstract_class), (1, 1));
+    }
+
+    for (owner, by_ref) in [("RefContract", true), ("PlainContract", false)] {
+        let interface = ctx.native_interface_property_requirements(owner);
+        let abstract_class = ctx.native_abstract_property_requirements(owner);
+        assert_eq!(interface[0].1.get_returns_by_ref(), by_ref, "{owner}");
+        assert_eq!(abstract_class[0].1.get_returns_by_ref(), by_ref, "{owner}");
+    }
+}
+
 /// Verifies native AOT abstract class property contracts are available to eval validation.
 #[test]
 fn register_native_abstract_property_records_metadata() {
@@ -219,6 +337,29 @@ fn register_native_property_default_records_metadata() {
     assert!(ctx
         .native_property_default("KnownClass", "invalid")
         .is_none());
+}
+
+/// Deferred default metadata is registered per slot and rejects invalid ABI input.
+#[test]
+fn register_native_property_default_error_records_metadata() {
+    let mut context = ElephcEvalContext::new();
+    let key = b"KnownClass::bad";
+    let message = b"Cannot use \"parent\" when current class scope has no parent";
+    let registered = unsafe { __elephc_eval_register_native_property_default_error(
+        &mut context, key.as_ptr(), key.len() as u64, message.as_ptr(), message.len() as u64,
+    ) };
+    assert_eq!(registered, 1);
+    assert_eq!(context.native_property_default_error("knownclass", "bad"),
+        Some(std::str::from_utf8(message).unwrap()));
+    assert_eq!(context.native_property_default_error("KnownClass", "valid"), None);
+    for (key, message) in [(b"invalid".as_slice(), message.as_slice()), (key.as_slice(), b"".as_slice())] {
+        assert_eq!(unsafe { __elephc_eval_register_native_property_default_error(
+            &mut context, key.as_ptr(), key.len() as u64, message.as_ptr(), message.len() as u64,
+        ) }, 0);
+    }
+    assert_eq!(unsafe { __elephc_eval_register_native_property_default_error(
+        std::ptr::null_mut(), key.as_ptr(), key.len() as u64, message.as_ptr(), message.len() as u64,
+    ) }, 0);
 }
 
 /// Verifies native AOT member attributes are available to eval reflection.

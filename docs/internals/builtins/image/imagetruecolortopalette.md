@@ -1,8 +1,6 @@
 ---
 title: "imagetruecolortopalette() - internals"
 description: "Compiler internals for imagetruecolortopalette(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 535
 ---
 
 ## `imagetruecolortopalette()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2547](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2547) (`imagetruecolortopalette`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagetruecolortopalette`)
 - **Function symbol**: `imagetruecolortopalette()`
 
 

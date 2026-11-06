@@ -1,8 +1,6 @@
 ---
 title: "curl_multi_remove_handle()"
 description: "Removes a multi handle from a set of cURL handles."
-sidebar:
-  order: 710
 ---
 
 ## curl_multi_remove_handle()
@@ -21,8 +19,9 @@ Removes a multi handle from a set of cURL handles.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_remove_handle.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_remove_handle.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

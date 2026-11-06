@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for scalars and regex, arrays, syntax edges, closures and refs, string memory, symbol collisions, and related suites.
+//! - Submodules group focused fixtures for scalars and regex, arrays, syntax edges, closures and refs, string memory, symbol collisions, pinned fixes for issues main already resolves, and related suites.
 
 use crate::support::*;
 
@@ -19,8 +19,12 @@ mod syntax_edges;
 mod closures_and_refs;
 #[path = "regressions/string_memory.rs"]
 mod string_memory;
+#[path = "regressions/pinned_fixed_issues.rs"]
+mod pinned_fixed_issues;
 #[path = "regressions/builtins_misc.rs"]
 mod builtins_misc;
+#[path = "regressions/php_src_parity.rs"]
+mod php_src_parity;
 #[path = "regressions/concat_buffer_args.rs"]
 mod concat_buffer_args;
 #[path = "regressions/param_inference.rs"]
@@ -33,6 +37,14 @@ mod borrowed_array_widening;
 mod mixed_method_dispatch;
 #[path = "regressions/switch_and_float_params.rs"]
 mod switch_and_float_params;
+#[path = "regressions/loose_comparison_batch.rs"]
+mod loose_comparison_batch;
+#[path = "regressions/loose_comparison_ref_cells.rs"]
+mod loose_comparison_ref_cells;
+#[path = "regressions/loose_comparison_callable_values.rs"]
+mod loose_comparison_callable_values;
+#[path = "regressions/loose_comparison_checker_flow.rs"]
+mod loose_comparison_checker_flow;
 #[path = "regressions/return_this_ownership.rs"]
 mod return_this_ownership;
 #[path = "regressions/symbol_collisions.rs"]
@@ -41,3 +53,5 @@ mod symbol_collisions;
 mod fixed_issue_behaviour;
 #[path = "regressions/fixed_issue_leaks.rs"]
 mod fixed_issue_leaks;
+#[path = "regressions/large_runtime_outputs.rs"]
+mod large_runtime_outputs;

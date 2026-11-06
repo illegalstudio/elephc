@@ -1,8 +1,6 @@
 ---
 title: "enum_exists()"
 description: "Checks if the enum has been defined."
-sidebar:
-  order: 82
 ---
 
 ## enum_exists()
@@ -21,8 +19,9 @@ Checks if the enum has been defined.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/enum_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/enum_exists.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

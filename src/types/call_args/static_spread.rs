@@ -8,6 +8,8 @@
 //! Key details:
 //! - String keys become named arguments, numeric keys remain positional, and duplicate static keys follow PHP last-wins behavior.
 
+use std::collections::HashSet;
+
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 
@@ -77,6 +79,42 @@ pub(crate) fn expand_static_assoc_spread_args_with_origins(
     }
 }
 
+/// Rejects a statically known unpack that supplies a positional entry after a named one.
+///
+/// php walks each unpacked array in order and throws "Cannot use positional argument after named
+/// argument during unpacking" at the first integer key that follows a string key IN THAT ARRAY
+/// (`...["a" => "x", 1 => 2]`). A later, separate unpack may still supply positional values:
+/// `f(...["a" => 10], ...[20])` binds `20` to the next parameter. The expansion below hoists
+/// positional entries ahead of named ones, so this has to run on the source order first; without
+/// it the call bound `$a` by name and `2` to the next free slot. Only literal keys are judged.
+pub(crate) fn validate_static_unpack_order(
+    args: &[Expr],
+) -> Result<(), super::plan::CallArgPlanError> {
+    for arg in args {
+        let ExprKind::Spread(inner) = &arg.kind else {
+            continue;
+        };
+        let ExprKind::ArrayLiteralAssoc(pairs) = &inner.kind else {
+            continue;
+        };
+        let mut seen_named = false;
+        for (key, _) in pairs {
+            match static_assoc_spread_key(key) {
+                Some(StaticAssocSpreadKey::Named(_)) => seen_named = true,
+                Some(StaticAssocSpreadKey::Positional(_)) if seen_named => {
+                    return Err(super::plan::CallArgPlanError::PositionalAfterNamedUnpack {
+                        span: arg.span,
+                    });
+                }
+                Some(StaticAssocSpreadKey::Positional(_)) => {}
+                // A key that is not a literal says nothing about this array.
+                None => break,
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Projects a planned positional call into values for builtin signature checking.
 /// Only fully static indexed unpacks are flattened; callers must validate source
 /// ordering first. General planning retains spread nodes for runtime arity guards.
@@ -106,16 +144,26 @@ pub(crate) fn expand_planned_positional_spreads(args: &[Expr]) -> Option<Vec<Exp
 /// Literal elements are flattened, but dynamic sources remain evaluated exactly once.
 pub(crate) fn coalesce_planned_indexed_spreads(
     args: &[Expr],
+    is_indexed: impl FnMut(&Expr) -> bool,
+) -> Option<Vec<Expr>> {
+    coalesce_planned_indexed_spreads_with_prefix(args, usize::MAX, is_indexed)
+}
+
+/// Includes surplus fixed arguments in a by-value variadic unpack without changing source order.
+pub(crate) fn coalesce_planned_indexed_spreads_with_prefix(
+    args: &[Expr],
+    regular_param_count: usize,
     mut is_indexed: impl FnMut(&Expr) -> bool,
 ) -> Option<Vec<Expr>> {
     if has_named_args(args) {
         return None;
     }
     let first = args.iter().position(|arg| matches!(arg.kind, ExprKind::Spread(_)))?;
-    if args.len() - first < 2 {
+    let prefix = first.min(regular_param_count);
+    if args.len() - first < 2 && prefix == first {
         return None;
     }
-    let mut items = Vec::new();
+    let mut items = args[prefix..first].to_vec();
     for arg in &args[first..] {
         let ExprKind::Spread(inner) = &arg.kind else { return None };
         if !is_indexed(inner) {
@@ -135,7 +183,7 @@ pub(crate) fn coalesce_planned_indexed_spreads(
             Expr::new(ExprKind::ArrayLiteral(items), span),
         )), span)
     };
-    let mut projected = args[..first].to_vec();
+    let mut projected = args[..prefix].to_vec();
     projected.push(tail);
     Some(projected)
 }
@@ -172,19 +220,27 @@ fn expand_static_spread(
 /// Converts an associative array literal's pairs into a flat list of expressions.
 /// String keys become `NamedArg` expressions with `ExpandedArgOrigin::StaticAssocNamed`;
 /// integer-like keys become positional expressions with `ExpandedArgOrigin::StaticAssocPositional`.
-/// Duplicate named keys follow PHP last-wins semantics.
+/// Duplicate named keys follow PHP last-wins semantics. A duplicate normalized positional key
+/// keeps the whole spread opaque so array construction can evaluate every overwritten value
+/// before the runtime binder observes the collapsed array.
 fn expand_static_assoc_spread(
     pairs: &[(Expr, Expr)],
     spread_span: Span,
 ) -> Option<Vec<(Expr, ExpandedArgOrigin)>> {
     let mut positional_args = Vec::new();
+    let mut positional_keys = HashSet::new();
     let mut named_args: Vec<(String, Expr)> = Vec::new();
     for (key, value) in pairs {
         match static_assoc_spread_key(key)? {
-            StaticAssocSpreadKey::Positional => positional_args.push((
-                Expr::new(value.kind.clone(), spread_span),
-                ExpandedArgOrigin::StaticAssocPositional,
-            )),
+            StaticAssocSpreadKey::Positional(key) => {
+                if !positional_keys.insert(key) {
+                    return None;
+                }
+                positional_args.push((
+                    Expr::new(value.kind.clone(), spread_span),
+                    ExpandedArgOrigin::StaticAssocPositional,
+                ));
+            }
             StaticAssocSpreadKey::Named(name) => {
                 if let Some((_, existing_value)) = named_args
                     .iter_mut()
@@ -216,7 +272,7 @@ fn expand_static_assoc_spread(
 /// Classifies a single array literal key as either a positional (integer-like)
 /// key or a named (string) key according to PHP array-unpack semantics.
 enum StaticAssocSpreadKey {
-    Positional,
+    Positional(i64),
     Named(String),
 }
 
@@ -225,11 +281,15 @@ enum StaticAssocSpreadKey {
 /// or `None` if the key is not a statically resolvable literal.
 fn static_assoc_spread_key(key: &Expr) -> Option<StaticAssocSpreadKey> {
     match &key.kind {
-        ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::FloatLiteral(_) => {
-            Some(StaticAssocSpreadKey::Positional)
+        ExprKind::IntLiteral(value) => Some(StaticAssocSpreadKey::Positional(*value)),
+        ExprKind::BoolLiteral(value) => {
+            Some(StaticAssocSpreadKey::Positional(i64::from(*value)))
+        }
+        ExprKind::FloatLiteral(value) => {
+            Some(StaticAssocSpreadKey::Positional(*value as i64))
         }
         ExprKind::StringLiteral(value) if crate::types::is_php_integer_array_key(value) => {
-            Some(StaticAssocSpreadKey::Positional)
+            Some(StaticAssocSpreadKey::Positional(value.parse().ok()?))
         }
         ExprKind::StringLiteral(value) => Some(StaticAssocSpreadKey::Named(value.clone())),
         _ => None,
@@ -249,6 +309,19 @@ mod tests {
             ))),
             Span::dummy(),
         )
+    }
+
+    /// Variadic projection keeps the fixed prefix and evaluates surplus sources before the unpack.
+    #[test]
+    fn coalesced_indexed_spreads_include_variadic_positionals() {
+        let tail = Expr::new(ExprKind::Spread(Box::new(Expr::var("rest"))), Span::dummy());
+        let args = vec![Expr::var("x"), Expr::var("y"), tail.clone()];
+        let projected = coalesce_planned_indexed_spreads_with_prefix(&args, 1, |_| true).unwrap();
+        assert_eq!(projected[0], args[0]);
+        assert_eq!(projected[1], indexed_spread(vec![args[1].clone(), tail]));
+        assert_eq!(args.len(), 3);
+        assert!(coalesce_planned_indexed_spreads_with_prefix(&args, 1, |_| false).is_none());
+        assert!(coalesce_planned_indexed_spreads_with_prefix(&args, 2, |_| true).is_none());
     }
 
     /// Literal unpacks remain visible to the runtime required-argument guard.
@@ -354,5 +427,27 @@ mod tests {
         assert!(has_named_args(&[arg.clone()]));
         assert!(expand_planned_positional_spreads(&[arg.clone()]).is_none());
         assert!(coalesce_planned_indexed_spreads(&[arg.clone(), arg], |_| true).is_none());
+    }
+
+    /// Duplicate PHP-normalized positional keys retain the original spread for runtime collapse.
+    #[test]
+    fn duplicate_normalized_positional_keys_keep_source_array_evaluation() {
+        let arg = Expr::new(
+            ExprKind::Spread(Box::new(Expr::new(
+                ExprKind::ArrayLiteralAssoc(vec![
+                    (Expr::int_lit(0), Expr::int_lit(1)),
+                    (
+                        Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+                        Expr::int_lit(2),
+                    ),
+                    (Expr::string_lit("0"), Expr::int_lit(3)),
+                ]),
+                Span::dummy(),
+            ))),
+            Span::dummy(),
+        );
+        let expanded = expand_static_assoc_spread_args_with_origins(&[arg.clone()]);
+        assert_eq!(expanded.args, vec![arg]);
+        assert!(expanded.origins == vec![ExpandedArgOrigin::Source]);
     }
 }

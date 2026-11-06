@@ -9,7 +9,11 @@
 
 use super::*;
 
-use super::wrapper_dispatch::{URL_STAT_FLAGS_LINK, URL_STAT_FLAGS_NOCACHE};
+use super::wrapper_dispatch::{
+    lower_stat_int_with_wrapper, URL_STAT_FIELD_ATIME, URL_STAT_FIELD_CTIME, URL_STAT_FIELD_GID,
+    URL_STAT_FIELD_INO, URL_STAT_FIELD_MODE, URL_STAT_FIELD_MTIME, URL_STAT_FIELD_SIZE,
+    URL_STAT_FIELD_UID, URL_STAT_FLAGS_LINK, URL_STAT_FLAGS_NOCACHE,
+};
 
 /// Lowers `getcwd()` through the target-aware runtime helper.
 pub(crate) fn lower_getcwd(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -39,24 +43,20 @@ pub(crate) fn lower_tmpfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
-/// Lowers `filesize(path)` through the target-aware runtime stat helper.
+/// Lowers `filesize(path)` through a registered wrapper's `url_stat()` or the native stat helper.
 pub(crate) fn lower_filesize(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_filesize_with_wrapper(ctx, inst)
+    lower_stat_int_with_wrapper(ctx, inst, "filesize", "__rt_filesize", URL_STAT_FIELD_SIZE)
 }
 
-/// Lowers `filemtime(path)` through the target-aware runtime stat helper.
+/// Lowers `filemtime(path)` through a registered wrapper's `url_stat()` or the native stat helper.
 pub(crate) fn lower_filemtime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    // Unlike `fileatime`, `filectime`, `fileinode`, `fileowner`, `filegroup` and `fileperms`, this
-    // one probes registered wrappers first, so it cannot share their composer. The wrapper
-    // composer boxes int|false itself: read as a plain integer the runtime's failure flag would
-    // have nowhere to land and php's `false` would be discarded at the boundary.
-    super::wrapper_dispatch::lower_filemtime_with_wrapper(ctx, inst)
+    lower_stat_int_with_wrapper(ctx, inst, "filemtime", "__rt_filemtime", URL_STAT_FIELD_MTIME)
 }
 
 /// Lowers `linkinfo(path)` through the target-aware runtime lstat helper.
@@ -87,52 +87,52 @@ pub(crate) fn lower_readlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     store_if_result(ctx, inst)
 }
 
-/// Lowers `fileatime(path)` and boxes the runtime integer-or-false result.
+/// Lowers `fileatime(path)` through a registered wrapper's `url_stat()` or the native stat helper.
 pub(crate) fn lower_fileatime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_stat_int_or_false(ctx, inst, "fileatime", "__rt_fileatime")
+    lower_stat_int_with_wrapper(ctx, inst, "fileatime", "__rt_fileatime", URL_STAT_FIELD_ATIME)
 }
 
-/// Lowers `filectime(path)` and boxes the runtime integer-or-false result.
+/// Lowers `filectime(path)` through a registered wrapper's `url_stat()` or the native stat helper.
 pub(crate) fn lower_filectime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_stat_int_or_false(ctx, inst, "filectime", "__rt_filectime")
+    lower_stat_int_with_wrapper(ctx, inst, "filectime", "__rt_filectime", URL_STAT_FIELD_CTIME)
 }
 
-/// Lowers `fileperms(path)` and boxes the runtime integer-or-false result.
+/// Lowers `fileperms(path)` through a registered wrapper's `url_stat()` or the native stat helper.
 pub(crate) fn lower_fileperms(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_stat_int_or_false(ctx, inst, "fileperms", "__rt_fileperms")
+    lower_stat_int_with_wrapper(ctx, inst, "fileperms", "__rt_fileperms", URL_STAT_FIELD_MODE)
 }
 
-/// Lowers `fileowner(path)` and boxes the runtime integer-or-false result.
+/// Lowers `fileowner(path)` through a registered wrapper's `url_stat()` or the native stat helper.
 pub(crate) fn lower_fileowner(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_stat_int_or_false(ctx, inst, "fileowner", "__rt_fileowner")
+    lower_stat_int_with_wrapper(ctx, inst, "fileowner", "__rt_fileowner", URL_STAT_FIELD_UID)
 }
 
-/// Lowers `filegroup(path)` and boxes the runtime integer-or-false result.
+/// Lowers `filegroup(path)` through a registered wrapper's `url_stat()` or the native stat helper.
 pub(crate) fn lower_filegroup(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_stat_int_or_false(ctx, inst, "filegroup", "__rt_filegroup")
+    lower_stat_int_with_wrapper(ctx, inst, "filegroup", "__rt_filegroup", URL_STAT_FIELD_GID)
 }
 
-/// Lowers `fileinode(path)` and boxes the runtime integer-or-false result.
+/// Lowers `fileinode(path)` through a registered wrapper's `url_stat()` or the native stat helper.
 pub(crate) fn lower_fileinode(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_stat_int_or_false(ctx, inst, "fileinode", "__rt_fileinode")
+    lower_stat_int_with_wrapper(ctx, inst, "fileinode", "__rt_fileinode", URL_STAT_FIELD_INO)
 }
 
 /// Lowers `filetype(path)` and boxes the runtime string-or-false result.

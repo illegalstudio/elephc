@@ -116,6 +116,39 @@ echo implode(",", $r), "\n";
     );
 }
 
+/// Verifies the reverse-sorted fast path reverses once for both `sort()` and `rsort()`.
+#[test]
+fn test_sort_and_rsort_reverse_sorted_fast_path() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = range(100, 1);
+sort($a);
+echo implode(',', $a), '|';
+$b = range(1, 100);
+rsort($b);
+echo implode(',', $b), '|';
+$c = [5, 5, 3, 3, 1];
+sort($c);
+echo implode(',', $c), '|';
+$d = [-3, -1, -2, 0];
+sort($d);
+echo implode(',', $d), "\n";
+"#,
+    );
+    let ascending = (1..=100).map(|n| n.to_string()).collect::<Vec<_>>().join(",");
+    let descending = (1..=100).rev().map(|n| n.to_string()).collect::<Vec<_>>().join(",");
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        format!("{ascending}|{descending}|1,3,3,5,5|-3,-2,-1,0\n")
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Verifies asort maintains key-value associations and sorts by values in ascending order.
 /// Fixture: [3, 1, 2] → sorted [1, 2, 3] → first element $a[0] should be 1.
 #[test]

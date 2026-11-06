@@ -1,8 +1,6 @@
 ---
 title: "get_resources()"
 description: "Returns currently active resources, optionally filtered by type."
-sidebar:
-  order: 631
 ---
 
 ## get_resources()
@@ -20,8 +18,9 @@ Returns currently active resources, optionally filtered by type.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/get_resources.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/get_resources.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

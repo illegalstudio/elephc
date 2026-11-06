@@ -46,6 +46,30 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 - A predefined constant can be written fully qualified too, as namespaced code often does to skip
   the namespace lookup: `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\STDERR`, `\true`, `\null`. Each
   names the same global constant as its bare spelling
+- A reserved word is an ordinary segment inside a qualified name, as in PHP 8:
+  `namespace Vendor\Default\Theme;`, `use Demo\Namespace\Subject;`, `new \Vendor\List\Item()`.
+  It can be the first segment too, in any position a name can stand, including right after a
+  `switch` case label, as a `match` arm pattern, after `else`/`endif`, and in a string's
+  `{$...}`: `Default\Palette::accent()`, `function f(Default\Palette $p)`,
+  `catch (Self\Failure $e)`, `public Static\Factory $f` (a typed property, not a static one),
+  `#[Default\Attr]`, `use Function\Registry;` (a class import). `eval()` code follows the same
+  rule. As in PHP, the word must touch the `\` (`new \Foo()` is still `new`). A reserved word
+  other than `namespace` can also be a whole namespace name (`namespace Default;`). Standing
+  alone elsewhere it is still the keyword, `namespace Namespace;` is refused, and a leading
+  `namespace\` is the relative-name prefix, never a segment spelled `namespace`
+- A relative name `namespace\helper()` names `helper` in the current namespace: inside
+  `namespace Demo;` it is exactly `\Demo\helper()`, and in the global namespace it is `\helper()`.
+  It works wherever a name does (calls, constants, `new`, static calls, `::class`, `instanceof`,
+  `extends`, `implements`, trait `use` and `insteadof`, type declarations, `catch`, attributes,
+  `instanceof namespace\Cfg::$class`) and in `eval()` code. Inside braced `namespace X { ... }`
+  blocks each block's own name applies. It is fully resolved, so it never falls back to a global
+  function or constant: `namespace\NAN` inside `Demo` is `Demo\NAN`, while in the global
+  namespace `namespace\PHP_EOL` is `\PHP_EOL`. As in PHP, a `use` import cannot name it
+  (`use namespace\Foo;` is a syntax error), and a namespace declaration is only accepted at the
+  top level of a file, never inside a function, a block or another namespace
+- Qualified names retain predefined-constant spellings as name segments: `\Demo\Math\NAN`
+  and `Math\PHP_EOL` read namespaced constants, not global predefined values. Class contexts
+  such as `new \INF`, `\INF::class`, and `\INF::method()` likewise treat the spelling as a name.
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Case sensitivity
@@ -272,14 +296,14 @@ If `$autoload` is `false`, no compile-time load is forced; the call returns whet
 | `get_class_methods($object_or_class)` | Compiled from class metadata. Accepts an object, a class-name string, or a boxed `mixed` value whose runtime tag is an object or a string; a literal name is resolved at compile time, a runtime name dispatches over the compiled class-like symbols. An unknown class name, or any other runtime tag, throws a catchable `TypeError`. Available on direct calls, literal `call_user_func()` / `call_user_func_array()`, first-class callables and argument unpacking; runtime-selected callable targets remain unsupported |
 | `get_class_vars($class)` | Same dispatch, restricted to class-name strings: a static string, or a boxed `mixed` value carrying a string tag. A statically known non-string is a compile error. Other boxed tags throw a catchable `TypeError` instead of being coerced to names, and a string naming no compiled class throws `must be a valid class name`. This AOT subset does not apply PHP weak-mode scalar-to-string coercion |
 | `get_called_class()` | Returns the late-bound class name through the same lowering as `static::class`. Calling it outside a class scope is a compile error |
-| `class_implements($object_or_class, bool $autoload = true)` | Returns an associative `interface => interface` array for a class/object, including inherited parent interfaces. When the argument names an interface, returns that interface's parent interfaces |
+| `class_implements($object_or_class, bool $autoload = true)` | Returns an associative `interface => interface` array for a class/object, including inherited parent interfaces. When the argument names an interface, returns that interface's parent interfaces. Exception: an enum declared in the compiled program lists only the interfaces of its own `implements` clause, without their parents or the implicit `UnitEnum`/`BackedEnum`; an enum declared inside `eval()` lists them all, like PHP |
 | `class_parents($object_or_class, bool $autoload = true)` | Returns an associative `parent => parent` array, starting with the immediate parent and then ancestors |
 | `class_uses($object_or_class, bool $autoload = true)` | Returns an associative `trait => trait` array for traits used directly by the class or trait declaration. Parent class traits and traits imported by those traits are not included, matching PHP |
 | `is_a($obj, "Foo")` | Compile-time fold when the second argument is a string literal: returns `true` when the object's static type equals `Foo`, descends from it, or implements it as an interface |
 | `is_subclass_of($obj, "Foo")` | Same as `is_a` but excludes the case where the static type *is* `Foo` |
 | `method_exists($object_or_class, $method): bool` | Compile-time fold from class metadata. Returns `true` when the class declares or inherits the named instance or static method (matched case-insensitively, like PHP). With an object target, inherited private methods are also found through the parent chain; with a class-name string target, inherited private methods are hidden, matching PHP. The method name must be a literal string and the target a statically-typed object or literal class-name string; an unknown class name returns `false` |
 | `property_exists($object_or_class, $property): bool` | Compile-time fold from class metadata. Returns `true` when the class declares or inherits the named instance or static property (matched case-sensitively, like PHP). Inherited private properties are visible only on the class that declares them. Same literal-argument requirements as `method_exists()`; an unknown class name returns `false` |
-| `class_alias($original, $alias)` | At compile time, top-level literal calls synthesize `class $alias extends $original {}`. The alias is realised as a *subclass* rather than a true name alias: `new $alias()`, `$obj instanceof $alias`, and `$alias::CONST` work; `(new $original()) instanceof $alias` returns `false` (it would be `true` under PHP runtime semantics). Runtime-dynamic call shapes are rejected because elephc cannot mutate the class table after compilation |
+| `class_alias($original, $alias)` | At compile time, top-level calls whose class names are compile-time constants synthesize `class $alias extends $original {}`. Each name may be a string literal, a `Name::class` constant (resolved against the current namespace and `use` imports, like PHP), or a `.` concatenation of those such as `__NAMESPACE__ . '\Alias'`; a string always names a fully qualified class. The alias is realised as a *subclass* rather than a true name alias: `new $alias()`, `$obj instanceof $alias`, and `$alias::CONST` work; `(new $original()) instanceof $alias` returns `false` and `(new $alias())::class` reports the alias name (PHP gives `true` and the original name). Runtime-dynamic call shapes (a variable, `$object::class`, a call inside a function) are rejected because elephc cannot mutate the class table after compilation |
 
 `var_dump()` prints PHP's `#N` object handle: `object(C)#1 (2) {`. The handle is
 the value `spl_object_id()` returns — both read the same runtime pool, so they
@@ -461,6 +485,8 @@ const MAX_RETRIES = 3;
 define("PI", 3.14159);
 ```
 `const` declarations are namespace-aware and resolved at compile time. `define()` string names are global unless they contain an explicit namespace separator. Values must be literals or compile-time-foldable string concatenations when used by include path resolution.
+
+One `const` statement may declare several constants separated by commas, `const MIN = 1, MAX = MIN + 9;`, at file scope and inside a namespace. Each name is declared in order, exactly as separate `const` statements would be, so a later value can read an earlier constant.
 
 A namespaced constant may reuse the name of a predefined one: `namespace Math; const NAN = …;` declares `Math\NAN`, and `constant('Math\NAN')` reads it. An unqualified `NAN` (or `INF`, `PHP_EOL`, …) inside that namespace still reads the global constant rather than the namespaced one (#1349).
 

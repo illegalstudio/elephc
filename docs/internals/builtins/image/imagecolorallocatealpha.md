@@ -1,8 +1,6 @@
 ---
 title: "imagecolorallocatealpha() - internals"
 description: "Compiler internals for imagecolorallocatealpha(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 465
 ---
 
 ## `imagecolorallocatealpha()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2237](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2237) (`imagecolorallocatealpha`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagecolorallocatealpha`)
 - **Function symbol**: `imagecolorallocatealpha()`
 
 

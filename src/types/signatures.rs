@@ -19,6 +19,7 @@ pub(crate) const COMPACT_NATIVE_DEFAULT_MAX_DEPTH: usize = 16;
 
 /// Returns whether a finite literal default exceeds compact metadata's recursion bound.
 pub(crate) fn literal_default_exceeds_compact_depth(expr: &Expr) -> bool {
+    /// Recursively checks literal-default nesting against the compact native metadata depth bound.
     fn exceeds(expr: &Expr, depth: usize) -> bool {
         if depth > COMPACT_NATIVE_DEFAULT_MAX_DEPTH {
             return true;
@@ -104,8 +105,18 @@ impl FunctionSig {
     /// Returns whether forwarding this parameter by value produces an independent result owner.
     /// Reference parameters keep caller storage, but value returns acquire or clone its payload.
     /// A callable or object returned as Mixed is boxed with its own payload retain, not transferred raw.
+    /// A raw callable descriptor can flow through only a Callable, Mixed or Union result; every
+    /// other return representation is independent from that argument owner.
     pub(crate) fn returned_parameter_has_independent_owner(&self, index: usize) -> bool {
+        let callable_cannot_alias_return = self.params.get(index).is_some_and(|(_, php_type)| {
+            php_type.codegen_repr() == PhpType::Callable
+                && !matches!(
+                    self.return_type.codegen_repr(),
+                    PhpType::Callable | PhpType::Mixed | PhpType::Union(_)
+                )
+        });
         self.param_is_callee_owned(index)
+            || callable_cannot_alias_return
             || (!self.by_ref_return
                 && self.return_type.codegen_repr() == PhpType::Mixed
                 && self.params.get(index).is_some_and(|(_, php_type)| {
@@ -438,6 +449,8 @@ mod tests {
         sig.variadic = None;
         assert!(sig.returned_parameter_has_independent_owner(0));
         assert!(!sig.returned_parameter_has_independent_owner(1));
+        sig.return_type = PhpType::Str;
+        assert!(sig.returned_parameter_has_independent_owner(0));
         sig.return_type = PhpType::Callable;
         assert!(!sig.returned_parameter_has_independent_owner(0));
         sig.return_type = PhpType::Mixed;

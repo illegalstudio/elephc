@@ -24,9 +24,12 @@ use super::{
 /// Fixed-point loop storage contracts keyed by `(function-like scope, loop span)`.
 pub(crate) type LoopStorageTypes = HashMap<(String, Span), TypeEnv>;
 
+/// Value reads keyed by body scope, source span and local name; visits join conservatively.
+pub(crate) type LocalValueReadTypes = HashMap<(String, Span, String), PhpType>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Describes a statically-known access violation that PHP raises as a catchable
-/// `Error` at runtime instead of a compile-time rejection.
+/// exception at runtime instead of a compile-time rejection.
 pub struct ThrowAccessInfo {
     /// Source span of the offending call/assignment, used as the lookup key.
     pub span: Span,
@@ -35,7 +38,7 @@ pub struct ThrowAccessInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// Categorizes statically-decided access violations lowered to runtime `Error` throws.
+/// Categorizes statically-decided access violations lowered to runtime exception throws.
 pub enum ThrowAccessKind {
     /// A private/protected method call from an inaccessible scope.
     PrivateMethod {
@@ -46,13 +49,31 @@ pub enum ThrowAccessKind {
         /// Method name without the trailing parentheses (e.g. `secret`).
         method: String,
     },
-    /// A write to a readonly property outside its declaring constructor.
+    /// A readonly write requiring a runtime initialization check.
     ReadonlyProperty {
         /// Class holding the property (e.g. `Box`).
         class_name: String,
         /// Property name without the leading `$` (e.g. `x`).
         property: String,
+        /// The setter-access Error for first initialization, or `None` when it is allowed.
+        initialization_error: Option<String>,
     },
+    /// A direct write to one of Reflection's internal public metadata mirrors.
+    ReflectionReadOnlyProperty {
+        /// Property name without the leading `$`.
+        property: String,
+    },
+}
+
+/// Checker-selected native property storage and any indirect-write refusal at one call site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArrayPushPropertyPlan {
+    /// The proven receiver class, or `None` when specialization requires dynamic property access.
+    pub class_name: Option<String>,
+    /// PHP's catchable Error at reference binding, before evaluating later arguments.
+    pub rejection: Option<String>,
+    /// Whether lowering may bind a managed live reference to this exact property slot.
+    pub live_addressable: bool,
 }
 
 #[derive(Debug)]
@@ -60,6 +81,28 @@ pub enum ThrowAccessKind {
 /// class metadata, warnings, FFI data, and required libraries forward to optimizer,
 /// codegen, and linker setup.
 pub struct CheckResult {
+    /// Every instantiation a call site asked for, as (template name, type arguments).
+    ///
+    /// The pipeline splices one declaration per entry into the program and re-checks, because
+    /// lowering walks the AST rather than the checker's tables.
+    pub requested_instantiations: Vec<(String, crate::generics::Bindings)>,
+    /// Call site -> the instantiated function that call resolved to.
+    ///
+    /// Keyed by `Span` exactly like `builtin_call_types`, and consumed by lowering the same
+    /// way. See `Checker::generic_call_sites` for why lowering cannot re-derive it.
+    pub generic_call_sites: HashMap<(String, Span), String>,
+    /// Every generic CLASS instantiation a `new` asked for, as (template key, type arguments).
+    pub requested_class_instantiations: Vec<(String, crate::generics::Bindings)>,
+    /// The generic METHOD instantiations this round asked for.
+    pub requested_method_instantiations: Vec<((String, String), crate::generics::Bindings)>,
+    /// (enclosing body scope, call site) -> the instantiated method name that site selected.
+    pub generic_method_sites: std::collections::HashMap<
+        (String, crate::span::Span),
+        std::collections::BTreeSet<String>,
+    >,
+    /// (enclosing body scope, `new` site) -> the instantiated class it resolved to, consumed by
+    /// `generics::classes` as an AST rewrite. See `Checker::generic_new_sites` for the key.
+    pub generic_new_sites: HashMap<(String, Span), std::collections::BTreeSet<String>>,
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
     pub function_attribute_names: HashMap<String, Vec<String>>,
@@ -80,11 +123,23 @@ pub struct CheckResult {
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
     pub warnings: Vec<CompileWarning>,
-    /// Statically-decided access violations lowered to runtime `Error` throws,
+    /// Statically-decided access violations lowered to runtime exception throws,
     /// keyed by the source span of the offending call/assignment.
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Closure literals whose checked source bodies contain yield, keyed by source identity.
+    pub closure_generator_spans: HashSet<Span>,
+    /// Contextual PHP parameter types inferred for closure literals passed to array callbacks,
+    /// keyed by the closure expression's span. Lowering replays these hints so the compiled
+    /// closure parameter matches the element/accumulator type the checker already proved.
+    pub closure_param_hints: HashMap<Span, Vec<PhpType>>,
+    /// Native array_push property decisions, scoped to the body and original place span.
+    pub array_push_property_plans: HashMap<(String, Span), ArrayPushPropertyPlan>,
+    /// Checked member receiver types by body scope and source node; conflicting visits are None.
+    pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Source-point value read contracts; these never change a local's reference storage.
+    pub local_value_read_types: LocalValueReadTypes,
     /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.
     pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
     /// Reads proven to use native buffers on every checker visit to the source span.
@@ -228,7 +283,20 @@ pub fn check_with_options(
     program: &Program,
     options: checker::CheckOptions,
 ) -> Result<CheckResult, CompileError> {
-    checker::check_types_with_options(program, Target::detect_host(), options)
+    check_with_options_and_bounds(program, options, &crate::generics::GenericContext::default())
+}
+
+/// Runs type checking on the host platform, answering the bound obligations that generic class
+/// instantiation left behind.
+///
+/// The host-target counterpart of [`check_with_target_and_bounds`]; see it for why the
+/// obligations travel separately from the program.
+pub fn check_with_options_and_bounds(
+    program: &Program,
+    options: checker::CheckOptions,
+    generics: &crate::generics::GenericContext,
+) -> Result<CheckResult, CompileError> {
+    checker::check_types_with_options(program, Target::detect_host(), options, generics)
 }
 
 /// Runs type checking targeting a specific platform (e.g., Linux instead of the host macOS).
@@ -240,7 +308,32 @@ pub fn check_with_options(
 /// via `check_with_target_and_options`), so this is dead code outside of tests.
 #[allow(dead_code)]
 pub fn check_with_target(program: &Program, target: Target) -> Result<CheckResult, CompileError> {
-    check_with_target_and_options(program, target, checker::CheckOptions::default())
+    check_with_target_and_options(
+        program,
+        target,
+        checker::CheckOptions::default(),
+        &crate::generics::GenericContext::default(),
+    )
+}
+
+/// Runs type checking targeting a specific platform, answering the bound obligations that
+/// generic class instantiation left behind.
+///
+/// The entry point for a caller driving [`crate::generics::monomorphize`] by hand: instantiating
+/// `Box<User>` is syntax, but deciding that `User` satisfies `T : Entity` needs this checker's
+/// class table, so the obligations travel from the one pass to the other.
+#[allow(dead_code)]
+pub fn check_with_target_and_bounds(
+    program: &Program,
+    target: Target,
+    generics: &crate::generics::GenericContext,
+) -> Result<CheckResult, CompileError> {
+    check_with_target_and_options(
+        program,
+        target,
+        checker::CheckOptions::default(),
+        generics,
+    )
 }
 
 /// Runs type checking targeting a specific platform with explicit `CheckOptions`
@@ -250,8 +343,9 @@ pub fn check_with_target_and_options(
     program: &Program,
     target: Target,
     options: checker::CheckOptions,
+    generics: &crate::generics::GenericContext,
 ) -> Result<CheckResult, CompileError> {
-    checker::check_types_with_options(program, target, options)
+    checker::check_types_with_options(program, target, options, generics)
 }
 
 #[cfg(test)]

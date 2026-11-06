@@ -1,8 +1,6 @@
 ---
 title: "mysqli_warning_count() - internals"
 description: "Compiler internals for mysqli_warning_count(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 182
 ---
 
 ## `mysqli_warning_count()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:748](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L748) (`mysqli_warning_count`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_warning_count`)
 - **Function symbol**: `mysqli_warning_count()`
 
 

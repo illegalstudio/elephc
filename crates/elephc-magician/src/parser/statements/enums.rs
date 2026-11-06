@@ -49,9 +49,9 @@ impl Parser {
             )?;
         };
         self.consume_semicolon();
-        Ok(vec![EvalStmt::EnumDecl(
+        let declaration = EvalStmt::EnumDecl(
             EvalEnum::with_members_traits_adaptations(
-                name,
+                name.clone(),
                 backing_type,
                 interfaces,
                 cases,
@@ -62,7 +62,8 @@ impl Parser {
             )
             .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
             .with_attributes(attributes),
-        )])
+        );
+        Ok(vec![declaration])
     }
 
     /// Parses an optional backed-enum scalar type after the enum name.

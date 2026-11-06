@@ -9,6 +9,13 @@
 
 use super::super::support::*;
 
+/// Attribute construction after an array dimension remains a valid expression statement.
+#[test]
+fn parse_fragment_core_attribute_instance_expression_statement() {
+    let program = parse_fragment(br#"try { $attributes[0]->newInstance(); } catch (Error $error) {}"#);
+    assert!(program.is_ok(), "{program:?}");
+}
+
 /// Verifies class attributes lower to eval class metadata with supported literal args.
 #[test]
 fn parse_fragment_accepts_class_attribute_metadata() {

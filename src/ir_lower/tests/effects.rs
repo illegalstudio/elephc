@@ -11,6 +11,37 @@
 use super::*;
 use crate::ir::{Effects, Immediate, Op};
 
+/// Static calls use the inherited implementation's summary and keep visible side effects.
+#[test]
+fn static_calls_receive_inherited_effect_summaries() {
+    let module = lower_source(r#"<?php
+class Base {
+    public static function pure(): int { return 1; }
+    public static function noisy(): int { echo "noise"; return 2; }
+    public static function relay(): int { return static::pure(); }
+}
+class Child extends Base {}
+echo Child::pure();
+echo Child::noisy();
+echo Child::relay();
+"#);
+    let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+    for (name, expected) in [
+        ("Child::pure", Effects::PURE),
+        ("Child::noisy", Effects::OUTPUT | Effects::MAY_THROW),
+    ] {
+        let call = main.instructions.iter().find(|instruction| {
+            instruction.op == Op::StaticMethodCall
+                && matches!(instruction.immediate, Some(Immediate::Data(id))
+                    if module.data.strings[id.as_raw() as usize] == name)
+        }).unwrap();
+        assert_eq!(call.effects, expected, "{name}");
+    }
+    let relay = module.class_methods.iter().find(|function| function.name == "Base::relay").unwrap();
+    let forwarding = relay.instructions.iter().find(|instruction| instruction.op == Op::StaticMethodCall).unwrap();
+    assert_eq!(forwarding.effects, Effects::PURE);
+}
+
 /// Returns the named direct-call instruction from one lowered function.
 fn named_call<'a>(
     function: &'a crate::ir::Function,
@@ -86,11 +117,8 @@ echo noisy_len("b");
     let pure = named_call(main, &module, "pure_len");
     let noisy = named_call(main, &module, "noisy_len");
 
-    assert_eq!(pure.effects, Effects::WRITES_GLOBAL);
-    assert_eq!(
-        noisy.effects,
-        Effects::WRITES_GLOBAL | Effects::OUTPUT
-    );
+    assert_eq!(pure.effects, Effects::PURE);
+    assert_eq!(noisy.effects, Effects::OUTPUT | Effects::MAY_THROW);
     assert!(!pure.effects.contains(Effects::READS_FS));
     assert!(!pure.effects.contains(Effects::MAY_THROW));
 }
@@ -186,9 +214,25 @@ function install(string $source): void { eval($source); }
     assert!(virtual_call.effects.contains(Effects::MAY_DEOPT));
     assert!(virtual_call.effects.contains(Effects::MAY_THROW));
     assert!(exact_call.effects.contains(Effects::READS_HEAP));
-    assert!(exact_call.effects.contains(Effects::WRITES_GLOBAL));
+    assert!(!exact_call.effects.contains(Effects::WRITES_GLOBAL));
     assert!(!exact_call.effects.contains(Effects::MAY_THROW));
     assert!(!exact_call.effects.contains(Effects::MAY_DEOPT));
+}
+
+/// Caller-visible summaries preserve PHP global writes while resets remain ordered in the body.
+#[test]
+fn concat_reset_is_internal_but_php_global_writes_remain_visible() {
+    let module = lower_source(r#"<?php
+$saved = 0;
+function update(): int { global $saved; $saved = 1; return 1; }
+echo update();
+"#);
+    let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+    assert!(named_call(main, &module, "update").effects.contains(Effects::WRITES_GLOBAL));
+    let update = module.functions.iter().find(|function| function.name == "update").unwrap();
+    assert!(update.instructions.iter().any(|instruction| {
+        instruction.op == Op::ConcatReset && instruction.effects == Effects::WRITES_GLOBAL
+    }));
 }
 
 /// Verifies declared slots and magic getters receive distinct property-read effects.
@@ -286,4 +330,32 @@ function relay(LockedBox $box): int { return reveal($box); }
             .any(|instruction| instruction.op == Op::ThrowException)
     );
     assert!(reveal_call.effects.contains(Effects::MAY_THROW));
+}
+
+/// Only unchanged concrete parameters make an extra receiver root non-destructing.
+#[test]
+fn receiver_root_summaries_keep_mutable_cleanup_conservative() {
+    let module = lower_source(r#"<?php
+class RootEffect {
+    public function value(int $argument): int { return $argument; }
+    public function __destruct() { echo "destroyed"; }
+}
+function stableRoot(RootEffect $value): int { return $value->value(1); }
+function mutableRoot(RootEffect $value): int {
+    return $value->value(($value = null) === null ? 1 : 0);
+}
+echo stableRoot(new RootEffect()), mutableRoot(new RootEffect());
+"#);
+    let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+    let stable = named_call(main, &module, "stableRoot");
+    let mutable = named_call(main, &module, "mutableRoot");
+    assert!(!stable.effects.contains(Effects::READS_FS));
+    assert!(!stable.effects.contains(Effects::WRITES_PROCESS));
+    assert!(mutable.effects.contains(Effects::READS_FS));
+    assert!(mutable.effects.contains(Effects::OUTPUT));
+    let function = module.functions.iter().find(|function| function.name == "stableRoot").unwrap();
+    let releases = function.instructions.iter()
+        .filter(|instruction| instruction.op == Op::ReleaseLocalSlot).collect::<Vec<_>>();
+    assert!(!releases.is_empty());
+    assert!(releases.iter().all(|instruction| instruction.effects == Effects::all()));
 }

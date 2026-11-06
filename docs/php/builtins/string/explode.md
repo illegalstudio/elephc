@@ -1,8 +1,6 @@
 ---
 title: "explode()"
 description: "Splits a string by a separator into an array of substrings."
-sidebar:
-  order: 792
 ---
 
 ## explode()
@@ -22,8 +20,9 @@ Splits a string by a separator into an array of substrings.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/explode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/explode.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

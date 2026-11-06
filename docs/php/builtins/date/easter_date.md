@@ -1,8 +1,6 @@
 ---
 title: "easter_date()"
 description: "Returns the Unix timestamp of midnight on Easter Sunday of a year."
-sidebar:
-  order: 217
 ---
 
 ## easter_date()
@@ -21,8 +19,9 @@ Returns the Unix timestamp of midnight on Easter Sunday of a year.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -8,11 +8,15 @@
 //! Key details:
 //! - Conversion transfers existing slot ownership into Mixed boxes and stamps the
 //!   indexed array with value_type tag 7.
+//! - The `POINTER_ARRAY_VALUE_TYPE` mode boxes a 0 pointer word as PHP null and any other word as
+//!   its integer address, as a `?ptr<T>` element reads.
+//! - The pending-append entry converts an already selected shared payload in place, because
+//!   a callback-retained PHP copy must observe the write that began before separation.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::{
-    emit_branch_if_null_container, TAGGED_SCALAR_ARRAY_VALUE_TYPE,
+    emit_branch_if_null_container, POINTER_ARRAY_VALUE_TYPE, TAGGED_SCALAR_ARRAY_VALUE_TYPE,
 };
 
 
@@ -28,12 +32,20 @@ pub fn emit_array_to_mixed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_to_mixed ---");
     emitter.label_global("__rt_array_to_mixed");
+    emitter.instruction("mov x9, #0");                                          // ordinary conversions preserve the normal COW boundary
+    emitter.instruction("b __rt_array_to_mixed_entry");                         // share conversion and metadata normalization
+    emitter.label_global("__rt_array_to_mixed_shared");
+    emitter.instruction("mov x9, #1");                                          // pending append owns selection and mutates the surviving payload
+    emitter.label_shared("__rt_array_to_mixed_entry");
 
     emitter.instruction("sub sp, sp, #80");                                     // reserve conversion frame slots and saved return state
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // establish a stable conversion frame
     emitter.instruction("str x1, [sp, #0]");                                    // save the source indexed-array value_type tag
+    emitter.instruction("str x9, [sp, #32]");                                   // remember whether this selected payload must remain shared
+    emitter.instruction("cbnz x9, __rt_array_to_mixed_ready");                  // a pre-callback append selection bypasses ordinary COW
     emitter.instruction("bl __rt_array_ensure_unique");                         // split shared arrays before rewriting element slots
+    emitter.label("__rt_array_to_mixed_ready");
     emitter.instruction("str x0, [sp, #8]");                                    // save the unique indexed-array pointer
     emit_branch_if_null_container(
         emitter,
@@ -64,6 +76,11 @@ pub fn emit_array_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("add x13, x11, #24");                                   // compute the pointer-sized source payload base
     emitter.instruction("ldr x1, [x13, x9, lsl #3]");                           // load the low payload word from the source slot
     emitter.instruction("mov x2, xzr");                                         // pointer-sized and scalar slots do not use a high payload word
+    emitter.instruction(&format!("cmp x12, #{}", POINTER_ARRAY_VALUE_TYPE));    // do source slots hold raw pointer words?
+    emitter.instruction("b.ne __rt_array_to_mixed_box");                        // every other slot keeps its source value tag
+    emitter.instruction("mov x14, #8");                                         // runtime tag 8 = PHP null for a null pointer word
+    emitter.instruction("cmp x1, #0");                                          // is this slot the null pointer word?
+    emitter.instruction("csel x12, x14, xzr, eq");                              // box a null word as PHP null and any address as an integer
     emitter.instruction("b __rt_array_to_mixed_box");                           // allocate a Mixed box for the loaded payload
 
     emitter.label("__rt_array_to_mixed_load_tagged_scalar");
@@ -157,12 +174,22 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_to_mixed ---");
     emitter.label_global("__rt_array_to_mixed");
+    emitter.instruction("xor r10d, r10d");                                      // ordinary conversions preserve the normal COW boundary
+    emitter.instruction("jmp __rt_array_to_mixed_x86_entry");                   // share conversion and metadata normalization
+    emitter.label_global("__rt_array_to_mixed_shared");
+    emitter.instruction("mov r10d, 1");                                         // pending append owns selection and mutates the surviving payload
+    emitter.label("__rt_array_to_mixed_x86_entry");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before converting slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable conversion frame
-    emitter.instruction("sub rsp, 32");                                         // reserve slots for tag, array pointer, length, and index
+    emitter.instruction("sub rsp, 48");                                         // reserve tag, array, length, index, and selected-payload mode
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the source indexed-array value_type tag
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // remember whether this selected payload must remain shared
+    emitter.instruction("mov rax, rdi");                                        // selected mode returns the original payload without a COW helper call
+    emitter.instruction("test r10, r10");                                       // does the pending append already own PHP's selected payload?
+    emitter.instruction("jnz __rt_array_to_mixed_x86_ready");                   // yes, convert it in place so surviving copies observe the write
     emitter.instruction("call __rt_array_ensure_unique");                       // split shared arrays before rewriting element slots
+    emitter.label("__rt_array_to_mixed_x86_ready");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the unique indexed-array pointer
     emit_branch_if_null_container(
         emitter,
@@ -192,6 +219,12 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_array_to_mixed_x86_load_string");              // string slots need a 16-byte load
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24 + r10 * 8]");             // load the low payload word from the source slot
     emitter.instruction("xor rsi, rsi");                                        // pointer-sized and scalar slots do not use a high payload word
+    emitter.instruction(&format!("cmp rax, {}", POINTER_ARRAY_VALUE_TYPE));     // do source slots hold raw pointer words?
+    emitter.instruction("jne __rt_array_to_mixed_x86_box");                     // every other slot keeps its source value tag
+    emitter.instruction("xor eax, eax");                                        // runtime tag 0 = integer for a live pointer address
+    emitter.instruction("mov r8, 8");                                           // runtime tag 8 = PHP null for a null pointer word
+    emitter.instruction("test rdi, rdi");                                       // is this slot the null pointer word?
+    emitter.instruction("cmovz rax, r8");                                       // box a null word as PHP null
     emitter.instruction("jmp __rt_array_to_mixed_x86_box");                     // allocate a Mixed box for the loaded payload
 
     emitter.label("__rt_array_to_mixed_x86_load_tagged_scalar");
@@ -229,12 +262,12 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("or r10, r11");                                         // combine stable low metadata with the heap marker
     emitter.instruction("or r10, 0x700");                                       // stamp runtime value_type 7 = boxed Mixed
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // persist the Mixed indexed-array metadata
-    emitter.instruction("add rsp, 32");                                         // release the conversion frame slots
+    emitter.instruction("add rsp, 48");                                         // release the conversion frame slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the converted array pointer
 
     emitter.label("__rt_array_to_mixed_x86_null");
-    emitter.instruction("add rsp, 32");                                         // release conversion slots without touching the sentinel
+    emitter.instruction("add rsp, 48");                                         // release conversion slots without touching the sentinel
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer for the null-like return
     emitter.instruction("ret");                                                 // return the null-like source unchanged
 

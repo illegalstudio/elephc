@@ -166,6 +166,10 @@ pub(in crate::interpreter) fn eval_empty_arg(
 }
 
 /// Evaluates `empty($object[$key])` through `ArrayAccess::offsetExists()` and `offsetGet()`.
+///
+/// The `offsetGet()` result is an owned method return, released once its truthiness is read,
+/// as `isset()` releases the `offsetExists()` answer (#1450); a destructor it triggers runs
+/// through the eval release path.
 fn eval_array_access_empty_result(
     object: RuntimeCellHandle,
     index: RuntimeCellHandle,
@@ -176,5 +180,9 @@ fn eval_array_access_empty_result(
         return Ok(true);
     }
     let value = eval_array_get_result(object, index, context, values)?;
-    Ok(!values.truthy(value)?)
+    let truthy = values.truthy(value);
+    let released = eval_release_value(context, values, value);
+    let truthy = truthy?;
+    released?;
+    Ok(!truthy)
 }

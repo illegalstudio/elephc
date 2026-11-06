@@ -10,7 +10,7 @@
 
 use super::state::Parser;
 use crate::errors::EvalParseError;
-use crate::eval_ir::{EvalBinOp, EvalConst, EvalExpr, EvalStmt};
+use crate::eval_ir::{EvalBinOp, EvalExpr, EvalStmt};
 use crate::lexer::TokenKind;
 
 impl Parser {
@@ -132,20 +132,9 @@ pub(super) fn assignment_value(name: &str, op: Option<EvalBinOp>, value: EvalExp
     }
 }
 
-/// Builds the StoreVar statement for a simple variable increment or decrement.
+/// Builds the dedicated statement for a simple variable increment or decrement.
 pub(super) fn inc_dec_store(name: String, increment: bool) -> EvalStmt {
-    EvalStmt::StoreVar {
-        value: EvalExpr::Binary {
-            op: if increment {
-                EvalBinOp::Add
-            } else {
-                EvalBinOp::Sub
-            },
-            left: Box::new(EvalExpr::LoadVar(name.clone())),
-            right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
-        },
-        name,
-    }
+    EvalStmt::IncDecVar { name, increment }
 }
 
 /// Compares a source identifier to a PHP keyword using ASCII case-insensitive rules.
@@ -154,7 +143,7 @@ pub(super) fn ident_eq(actual: &str, expected: &str) -> bool {
 }
 
 /// Returns true when PHP forbids a name for class, interface, trait, or enum declarations.
-pub(super) fn is_reserved_class_like_name(name: &str) -> bool {
+pub(crate) fn is_reserved_class_like_name(name: &str) -> bool {
     [
         "__halt_compiler",
         "abstract",

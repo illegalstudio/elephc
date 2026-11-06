@@ -1,8 +1,6 @@
 ---
 title: "exif_read_data() - internals"
 description: "Compiler internals for exif_read_data(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 448
 ---
 
 ## `exif_read_data()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3940](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3940) (`exif_read_data`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`exif_read_data`)
 - **Function symbol**: `exif_read_data()`
 
 

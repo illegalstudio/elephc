@@ -12,10 +12,12 @@
 //!   skipped whole, so a repeated by-reference foreach cannot restamp a live reference set.
 //! - The owned-box entry point is shared so `__rt_hash_set` can reuse it when writing a
 //!   non-boxed replacement through an existing reference cell.
+//! - A tag-13 entry (a raw `?ptr<T>` word) boxes as PHP null for 0 and an integer otherwise. The
+//!   owned-box helper is unchanged, so an integer 0 written through `__rt_hash_set` stays one.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use crate::codegen_support::sentinels::{emit_branch_if_null_container, POINTER_ARRAY_VALUE_TYPE};
 
 
 /// Emits the `__rt_hash_to_mixed` runtime helper.
@@ -64,10 +66,10 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("cmp x5, #7");                                          // does this entry already hold a boxed Mixed cell?
     emitter.instruction("b.eq __rt_hash_to_mixed_borrowed_box");                // a releasing owner may expose an already-boxed borrowed value
     emitter.instruction("ldr x0, [sp, #0]");                                    // identify the selected hash before replacing this entry
-    emitter.instruction("bl __rt_hash_write_guard_claim");                     // notify an active protected release that conversion publishes a new owner
+    emitter.instruction("bl __rt_hash_write_guard_claim");                      // notify an active protected release that conversion publishes a new owner
     emitter.instruction("cbnz x0, __rt_hash_to_mixed_owned_value");             // ordinary entries transfer their existing owner
     emitter.instruction("ldr x9, [sp, #32]");                                   // inspect the borrowed payload tag
-    emitter.instruction("cmp x9, #6");                                         // object storage can survive a destructor callback
+    emitter.instruction("cmp x9, #6");                                          // object storage can survive a destructor callback
     emitter.instruction("b.ne __rt_hash_to_mixed_owned_value");                 // only a borrowed object needs a new owner here
     emitter.instruction("ldr x0, [sp, #16]");                                   // recover the object exposed by the releasing entry
     emitter.instruction("bl __rt_incref");                                      // own the object independently of the active release
@@ -75,6 +77,13 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // restore the payload after key comparison
     emitter.instruction("ldr x4, [sp, #24]");                                   // restore the high payload word
     emitter.instruction("ldr x5, [sp, #32]");                                   // restore the runtime tag
+    // -- a ?ptr<T> entry boxes 0 as PHP null and any other address as an integer --
+    emitter.instruction(&format!("cmp x5, #{}", POINTER_ARRAY_VALUE_TYPE));     // is this entry a raw ?ptr<T> word?
+    emitter.instruction("b.ne __rt_hash_to_mixed_box_value");                   // every other entry keeps its stored tag
+    emitter.instruction("mov x9, #8");                                          // runtime tag 8 = PHP null for the null pointer word
+    emitter.instruction("cmp x3, #0");                                          // is this entry the null pointer word?
+    emitter.instruction("csel x5, x9, xzr, eq");                                // box 0 as PHP null and any address as an integer
+    emitter.label("__rt_hash_to_mixed_box_value");
     emitter.instruction("mov x0, x5");                                          // pass the source runtime value tag to the owned-box helper
     emitter.instruction("mov x1, x3");                                          // pass the entry low payload word to the owned-box helper
     emitter.instruction("mov x2, x4");                                          // pass the entry high payload word to the owned-box helper
@@ -83,16 +92,16 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("str x0, [x6]");                                        // store the boxed Mixed pointer in value_lo
     emitter.instruction("str xzr, [x6, #8]");                                   // new boxed entries start outside every PHP reference set
 
-    emitter.instruction("b __rt_hash_to_mixed_entry_ready");                   // stamp the new box without rechecking its borrowed predecessor
+    emitter.instruction("b __rt_hash_to_mixed_entry_ready");                    // stamp the new box without rechecking its borrowed predecessor
     emitter.label("__rt_hash_to_mixed_borrowed_box");
     emitter.instruction("ldr x0, [sp, #0]");                                    // inspect ownership of this hash entry
-    emitter.instruction("bl __rt_hash_write_guard_owns");                      // an ordinary Mixed cell already owns its payload
+    emitter.instruction("bl __rt_hash_write_guard_owns");                       // an ordinary Mixed cell already owns its payload
     emitter.instruction("cbnz x0, __rt_hash_to_mixed_entry_ready");             // preserve ordinary reference identity
     emitter.instruction("ldr x0, [sp, #0]");                                    // recover the selected hash for the owner claim
     emitter.instruction("ldr x6, [sp, #40]");                                   // recover the entry address after the inspection
     emitter.instruction("ldr x1, [x6, #-16]");                                  // pass the exact entry key
     emitter.instruction("ldr x2, [x6, #-8]");                                   // pass its normalized key length
-    emitter.instruction("bl __rt_hash_write_guard_claim");                     // tell the releasing writer that this entry now owns a replacement
+    emitter.instruction("bl __rt_hash_write_guard_claim");                      // tell the releasing writer that this entry now owns a replacement
     emitter.instruction("ldr x6, [sp, #40]");                                   // recover the still-borrowed old box
     emitter.instruction("ldr x0, [x6]");                                        // pass the old box to the recursive unbox helper
     emitter.instruction("bl __rt_mixed_unbox");                                 // peel nested boxes before any of them are freed
@@ -195,10 +204,10 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_to_mixed_x86_borrowed_box");              // a releasing owner may expose an already-boxed borrowed value
     emitter.instruction("mov rsi, rdi");                                        // pass the entry key after the hash argument
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // identify the selected hash before replacing this entry
-    emitter.instruction("call __rt_hash_write_guard_claim");                   // notify an active protected release that conversion publishes a new owner
+    emitter.instruction("call __rt_hash_write_guard_claim");                    // notify an active protected release that conversion publishes a new owner
     emitter.instruction("test rax, rax");                                       // inspect whether the previous owner belongs to a releasing writer
     emitter.instruction("jne __rt_hash_to_mixed_x86_owned_value");              // ordinary entries transfer their existing owner
-    emitter.instruction("cmp QWORD PTR [rbp - 40], 6");                        // object storage can survive a destructor callback
+    emitter.instruction("cmp QWORD PTR [rbp - 40], 6");                         // object storage can survive a destructor callback
     emitter.instruction("jne __rt_hash_to_mixed_x86_owned_value");              // only a borrowed object needs a new owner here
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // recover the object exposed by the releasing entry
     emitter.instruction("call __rt_incref");                                    // own it independently of the active release
@@ -206,6 +215,14 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // restore the payload after key comparison
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // restore the high payload word
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // restore the runtime tag
+    // -- a ?ptr<T> entry boxes 0 as PHP null and any other address as an integer --
+    emitter.instruction(&format!("cmp r9, {}", POINTER_ARRAY_VALUE_TYPE));      // is this entry a raw ?ptr<T> word?
+    emitter.instruction("jne __rt_hash_to_mixed_x86_box_value");                // every other entry keeps its stored tag
+    emitter.instruction("xor r9d, r9d");                                        // runtime tag 0 = integer for a live pointer address
+    emitter.instruction("mov r10, 8");                                          // runtime tag 8 = PHP null for the null pointer word
+    emitter.instruction("test rcx, rcx");                                       // is this entry the null pointer word?
+    emitter.instruction("cmovz r9, r10");                                       // box 0 as PHP null
+    emitter.label("__rt_hash_to_mixed_x86_box_value");
     emitter.instruction("mov rax, r9");                                         // pass the source runtime value tag to the owned-box helper
     emitter.instruction("mov rdi, rcx");                                        // pass the entry low payload word to the owned-box helper
     emitter.instruction("mov rsi, r8");                                         // pass the entry high payload word to the owned-box helper
@@ -218,14 +235,14 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_to_mixed_x86_borrowed_box");
     emitter.instruction("mov rsi, rdi");                                        // pass the key after the selected hash
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // inspect ownership of this hash entry
-    emitter.instruction("call __rt_hash_write_guard_owns");                    // an ordinary Mixed cell already owns its payload
+    emitter.instruction("call __rt_hash_write_guard_owns");                     // an ordinary Mixed cell already owns its payload
     emitter.instruction("test rax, rax");                                       // distinguish an active borrowed release
     emitter.instruction("jne __rt_hash_to_mixed_x86_entry_ready");              // preserve ordinary reference identity
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // recover the entry address after the inspection
     emitter.instruction("mov rsi, QWORD PTR [r10 - 16]");                       // pass its exact key
     emitter.instruction("mov rdx, QWORD PTR [r10 - 8]");                        // pass its normalized key length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // identify the selected hash for the owner claim
-    emitter.instruction("call __rt_hash_write_guard_claim");                   // tell the releasing writer that this entry now owns a replacement
+    emitter.instruction("call __rt_hash_write_guard_claim");                    // tell the releasing writer that this entry now owns a replacement
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // recover the still-borrowed old box
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // pass the old box to recursive unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // peel nested boxes before any of them are freed

@@ -53,8 +53,9 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     //    around each call, which is why these are cheap but not free: several are hot leaves.
     ("__rt_hash_key_hash", "frameless: calls __rt_hash_fnv1a, integer-only assembly"),
     ("__rt_hash_key_eq", "frameless: calls __rt_str_eq, integer-only assembly"),
-    ("__rt_array_rand", "frameless: calls __rt_random_uniform, integer-only assembly"),
     ("__rt_mixed_is_empty", "frameless: calls __rt_mixed_unbox, integer-only assembly"),
+    ("__rt_ftoa_repr", "frameless: calls __rt_float_window, an integer-only leaf"),
+    ("__rt_strbuf_finish_owned", "frameless: calls __rt_strbuf_finish, an integer-only leaf"),
     // The two uncaught-exception helpers deliberately have NO entry here: they live in
     // NOT_STATICALLY_ANALYZABLE because their `and rsp, -16` instructions realign every
     // call and defeat the walker. A second entry in this list would silently absorb a real
@@ -123,7 +124,6 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
 /// assertions of correctness — they are honest holes, and naming them is what keeps the
 /// audit from quietly reporting a clean sweep it never performed.
 const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
-    ("__rt_curl_version", "dynamic frame: `sub rsp, r10`"),
     ("__rt_sprintf", "dynamic frame: `lea rsp, [rsp + rcx + 16]`"),
     (
         "__rt_vsprintf",
@@ -134,10 +134,6 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
         "loads `rsp` from the target Fiber or main-thread context before restoring saved \
          registers. The signal-guard call before the hand-off is covered by \
          fiber_signal_guard_call_is_sysv_aligned",
-    ),
-    (
-        "__rt_gc_mark_reachable",
-        "shares a tail between the framed body and a frameless early-out",
     ),
 ];
 
@@ -180,7 +176,9 @@ fn functions_of(asm: &str) -> Vec<Function> {
     let mut functions: Vec<Function> = Vec::new();
     let mut inside = false;
     for (number, raw) in asm.lines().enumerate() {
-        let text = raw.trim();
+        // GC emitters attach inline intent comments to branches as well as calls.
+        // They cannot participate in operand or local-label matching.
+        let text = raw.split('#').next().unwrap_or_default().trim();
         if let Some(rest) = text.strip_prefix(".section .text.") {
             let name = rest.split(',').next().unwrap_or_default().to_string();
             functions.push(Function { name, body: Vec::new() });
@@ -249,6 +247,8 @@ fn resolve_local(body: &[(usize, String)], from: usize, target: &str) -> Option<
 /// `ret`, at a branch that leaves the helper (a tail call), or at an unmodellable construct.
 /// Reaching one instruction with two different offsets means the walk lost track, and the
 /// helper is reported as unanalyzable rather than silently half-checked.
+/// A register adjustment immediately preceded by `shl <reg>, 4` preserves the offset's
+/// residue modulo 16. Its unknown whole blocks do not affect later call alignment.
 fn walk(
     body: &[(usize, String)],
     labels: &HashMap<&str, usize>,
@@ -286,6 +286,7 @@ fn walk(
         match mnemonic {
             "push" | "pushfq" => work.push((index + 1, offset - 8)),
             "pop" | "popfq" => work.push((index + 1, offset + 8)),
+            "leave" => work.push((index + 1, 0)),
             "ret" | "hlt" | "ud2" | "iret" => {}
             "call" => {
                 if offset.rem_euclid(16) != 8 {
@@ -299,6 +300,13 @@ fn walk(
                 match (mnemonic, literal) {
                     ("sub", Some(n)) => work.push((index + 1, offset - n)),
                     ("add", Some(n)) => work.push((index + 1, offset + n)),
+                    ("sub" | "add", None)
+                        if is_register(rest)
+                            && index.checked_sub(1).and_then(|previous| body.get(previous))
+                                .is_some_and(|(_, previous)| previous == &format!("shl {rest}, 4")) =>
+                    {
+                        work.push((index + 1, offset));
+                    }
                     ("and", Some(-16)) => {
                         // Entry rsp is 8 modulo 16, so alignment has an exact relative delta.
                         work.push((index + 1, offset - (8 + offset).rem_euclid(16)));
@@ -459,6 +467,75 @@ fn explicit_stack_alignment_preserves_subsequent_call_checks() {
         assert!(analysis.unanalyzable.is_none(), "{padding}: {:?}", analysis.unanalyzable);
         assert_eq!(analysis.misaligned.len(), 1, "{padding}: {:?}", analysis.misaligned);
         assert_eq!(analysis.misaligned[0].1, "misaligned");
+    }
+}
+
+/// Inline intent comments preserve local flow while an actual misaligned call still fails.
+#[test]
+fn inline_comments_preserve_call_alignment_control_flow() {
+    let assembly = ".section .text.fixture\nfixture:\npush rbp # save frame\nmov rbp, rsp\njmp body # same frame\nbody:\ncall aligned # correctly aligned\nsub rsp, 8 # intentional fault\ncall misaligned # must still be rejected\nleave\nret\n";
+    let functions = functions_of(assembly);
+    assert_eq!(functions.len(), 1);
+    let analysis = analyze(&functions[0]);
+    assert!(analysis.unanalyzable.is_none(), "{:?}", analysis.unanalyzable);
+    assert_eq!(analysis.misaligned.len(), 1, "{:?}", analysis.misaligned);
+    assert_eq!(analysis.misaligned[0].1, "misaligned");
+}
+
+/// A frame restored by leave rejoins a frameless return without hiding a missing restore.
+#[test]
+fn leave_restores_entry_stack_offset_before_shared_return() {
+    for restore in ["leave", "nop"] {
+        let function = Function {
+            name: "fixture".into(),
+            body: [
+                "fixture:", "test rdi, rdi", "jz done", "push rbp", "mov rbp, rsp",
+                "sub rsp, 32", "call aligned", restore, "done:", "ret",
+            ].into_iter().map(str::to_string).enumerate().collect(),
+        };
+        let analysis = analyze(&function);
+        assert_eq!(analysis.unanalyzable.is_none(), restore == "leave");
+        assert!(analysis.misaligned.is_empty());
+    }
+}
+
+/// Aligned dynamic snapshots remain audited, including a later eight-byte alignment error.
+#[test]
+fn aligned_dynamic_stack_adjustments_preserve_subsequent_call_checks() {
+    for adjustment in ["sub", "add"] {
+        let function = Function {
+            name: "fixture".into(),
+            body: [
+                "fixture:".to_string(), "push rbp".into(), "mov rbp, rsp".into(),
+                "shl r9, 4".into(), format!("{adjustment} rsp, r9"),
+                "call aligned".into(), "sub rsp, 8".into(), "call misaligned".into(),
+                "mov rsp, rbp".into(), "pop rbp".into(), "ret".into(),
+            ].into_iter().enumerate().collect(),
+        };
+        let analysis = analyze(&function);
+        assert!(analysis.unanalyzable.is_none(), "{adjustment}: {:?}", analysis.unanalyzable);
+        assert_eq!(analysis.misaligned.len(), 1, "{adjustment}: {:?}", analysis.misaligned);
+        assert_eq!(analysis.misaligned[0].1, "misaligned");
+    }
+}
+
+/// A different stride, overwritten size, or alternate entry must still fail closed.
+#[test]
+fn unproven_dynamic_stack_adjustments_remain_unanalyzable() {
+    for sizing in [
+        vec!["shl r9, 3"],
+        vec!["shl r8, 4"],
+        vec!["shl r9, 4", "inc r9"],
+        vec!["shl r9, 4", "alternate:"],
+    ] {
+        let mut body = vec!["fixture:", "push rbp"];
+        body.extend(sizing);
+        body.extend(["sub rsp, r9", "call unknown", "ret"]);
+        let function = Function {
+            name: "fixture".into(),
+            body: body.into_iter().map(str::to_string).enumerate().collect(),
+        };
+        assert!(analyze(&function).unanalyzable.is_some());
     }
 }
 

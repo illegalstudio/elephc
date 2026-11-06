@@ -449,6 +449,49 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies every eval integer stat getter reads its field from wrapper `url_stat()` (issue #724).
+///
+/// Mirrors the compiled-side regression: `fileatime()`, `filectime()`, `fileperms()`,
+/// `fileowner()`, `filegroup()`, `fileinode()`, `filemtime()` and `filesize()` each ask the
+/// wrapper once, with PHP's no-cache flag (4), and answer `false` when it reports the path absent.
+#[test]
+fn execute_program_scalar_stat_getters_read_wrapper_url_stat() {
+    let program = parse_fragment(
+        br#"class EvalGetterWrapperW {
+    public function url_stat($path, $flags) {
+        echo $flags, "/";
+        if (str_contains($path, "gone")) {
+            return false;
+        }
+        return ["ino" => 4242, "mode" => 33188, "uid" => 501, "gid" => 20, "size" => 7,
+                "atime" => 1111, "mtime" => 2222, "ctime" => 3333];
+    }
+}
+stream_wrapper_register("getw", "EvalGetterWrapperW");
+echo fileatime("getw://a") === 1111 ? "atime" : "bad"; echo ":";
+echo filectime("getw://c") === 3333 ? "ctime" : "bad"; echo ":";
+echo fileperms("getw://p") === 33188 ? "perms" : "bad"; echo ":";
+echo fileowner("getw://o") === 501 ? "owner" : "bad"; echo ":";
+echo filegroup("getw://g") === 20 ? "group" : "bad"; echo ":";
+echo fileinode("getw://i") === 4242 ? "inode" : "bad"; echo ":";
+echo filemtime("getw://m") === 2222 ? "mtime" : "bad"; echo ":";
+echo filesize("getw://s") === 7 ? "size" : "bad"; echo ":";
+echo fileatime("getw://gone") === false && fileinode("getw://gone") === false ? "gone" : "bad";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "4/atime:4/ctime:4/perms:4/owner:4/group:4/inode:4/mtime:4/size:4/4/gone"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Starts a localhost HTTP server that returns one fixed body and then exits.
 fn spawn_http_once(body: &'static str) -> (u16, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind HTTP wrapper fixture");

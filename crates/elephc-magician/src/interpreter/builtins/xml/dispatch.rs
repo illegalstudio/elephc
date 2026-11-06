@@ -247,47 +247,12 @@ fn eval_xml_parser_argument(
     if values.type_tag(parser)? == EVAL_TAG_OBJECT && values.object_is_a(parser, "XMLParser", false)? {
         return Ok(parser);
     }
-    let given = eval_xml_given_type_name(parser, context, values)?;
+    let given = eval_given_type_name(parser, context, values)?;
     eval_throw_type_error(
         &format!("{function}(): Argument #1 ($parser) must be of type XMLParser, {given} given"),
         context,
         values,
     )
-}
-
-/// Names a value the way PHP's argument `TypeError` does (`zend_zval_value_name()`):
-/// `null`, `true` / `false`, the zend scalar names (`int`, `float`, `string`, `array`), a
-/// compiled closure's `Closure`, or an object's class — never `gettype()`'s `integer` /
-/// `double` / `boolean`. An eval-declared class is looked up in the dynamic-object registry
-/// first, since its backing runtime cell is a `stdClass`.
-fn eval_xml_given_type_name(
-    value: RuntimeCellHandle,
-    context: &ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<String, EvalStatus> {
-    let tag = values.type_tag(value)?;
-    if tag == EVAL_TAG_OBJECT {
-        let identity = values.object_identity(value)?;
-        if let Some(name) = context.dynamic_object_class_name(identity) {
-            return Ok(name);
-        }
-        let class_name = values.object_class_name(value)?;
-        let bytes = values.string_bytes(class_name)?;
-        return Ok(String::from_utf8_lossy(&bytes).into_owned());
-    }
-    let name = match tag {
-        EVAL_TAG_NULL => "null",
-        EVAL_TAG_BOOL if values.truthy(value)? => "true",
-        EVAL_TAG_BOOL => "false",
-        EVAL_TAG_INT => "int",
-        EVAL_TAG_FLOAT => "float",
-        EVAL_TAG_STRING => "string",
-        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
-        EVAL_TAG_RESOURCE => "resource",
-        EVAL_TAG_CALLABLE => "Closure",
-        _ => "mixed",
-    };
-    Ok(name.to_string())
 }
 
 /// Returns whether a handler value can only be resolved by this eval context — an eval

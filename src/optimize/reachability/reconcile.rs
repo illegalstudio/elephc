@@ -107,6 +107,8 @@ fn retain_class_metadata(
     }
     #[cfg(debug_assertions)]
     assert_inherited_vtable_slots_aligned(&check.classes);
+    #[cfg(debug_assertions)]
+    assert_instantiation_vtable_slots_aligned(&check.classes);
     check.interfaces.retain(|name, _| {
         let key = php_symbol_key(name);
         !matches!(
@@ -125,6 +127,58 @@ fn retain_class_metadata(
         let key = php_symbol_key(name);
         !declarations.packed_classes.contains(&key) || reachability.classes.contains(&key)
     });
+}
+
+/// Asserts two instantiations of one template number their shared methods identically.
+///
+/// Variance relates `Box<Dog>` to `Box<Animal>` with no inheritance edge between them, so the
+/// assertion above cannot see the relation and cannot fire on it. A widened call takes the slot
+/// from the EXPECTED instantiation and indexes the ACTUAL one's table, which is only sound while
+/// the two agree.
+///
+/// They agreed by construction until pruning recompacted each class independently: `Box<Animal>`,
+/// named in a parameter type but never constructed, lost the `__construct` that `Box<Dog>` kept,
+/// and `whoAmI` moved from slot 2 to slot 1 in one of them. The call then landed on `get`, whose
+/// returned object was read as a string — silently, exit code 0. `prune_class_methods` now keeps
+/// every method NAME on an instantiated class for exactly this reason; this is the guard that
+/// says so out loud if that ever stops being true.
+#[cfg(debug_assertions)]
+fn assert_instantiation_vtable_slots_aligned(classes: &HashMap<String, ClassInfo>) {
+    // `Box<int>` and `Box<string>` share the template `box`; an ordinary class has no `<` and
+    // is never grouped with anything.
+    let mut by_template: HashMap<&str, Vec<(&String, &ClassInfo)>> = HashMap::new();
+    for (name, info) in classes {
+        let Some(template) = name.split_once('<').map(|(head, _)| head) else {
+            continue;
+        };
+        by_template.entry(template).or_default().push((name, info));
+    }
+    for (template, siblings) in by_template {
+        let Some(((first_name, first), rest)) = siblings.split_first() else {
+            continue;
+        };
+        for (other_name, other) in rest {
+            for (method, slot) in &first.vtable_slots {
+                if let Some(other_slot) = other.vtable_slots.get(method) {
+                    debug_assert_eq!(
+                        slot, other_slot,
+                        "instance vtable slot for {method} diverged between {first_name} and \
+                         {other_name}, two instantiations of {template}: a widened call takes the \
+                         slot from one and indexes the other",
+                    );
+                }
+            }
+            for (method, slot) in &first.static_vtable_slots {
+                if let Some(other_slot) = other.static_vtable_slots.get(method) {
+                    debug_assert_eq!(
+                        slot, other_slot,
+                        "static vtable slot for {method} diverged between {first_name} and \
+                         {other_name}, two instantiations of {template}",
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Asserts shared virtual methods retain one slot number across each live inheritance edge.
@@ -250,12 +304,28 @@ fn prune_class_methods(
     info.method_attribute_args
         .retain(|key, _| keep_any.contains(key));
 
+    // An INSTANTIATION must number its slots exactly like its siblings, and compacting each one
+    // independently pulls them apart. A widened call site computes the slot from one
+    // instantiation and indexes ANOTHER's table: `inspect(Box<Animal> $b)` reached by a
+    // `Box<Dog>` takes `whoAmI`'s number out of `Box<Animal>`. `Box<Animal>` is never
+    // constructed, so its `__construct` is not live, so compaction moves `whoAmI` from slot 2 to
+    // slot 1 — and the call lands on `Box<Dog>::get`, whose returned object is then read as a
+    // string. Silently.
+    //
+    // Keeping the NAME keeps the number. The body is still pruned: with no entry in
+    // `method_impl_classes` the emitter writes a null into that slot, and nothing ever
+    // dispatches through the hole, because a receiver that reaches it carries the real entry.
+    // `assert_inherited_vtable_slots_aligned` guards the same property across an inheritance
+    // edge; variance relates two classes with no such edge, which is why it needs its own.
+    let instantiated = class_key.contains('<');
     info.vtable_methods.retain(|key| {
-        keep_instance.contains(key) || reachable_instance_slots.contains(key.as_str())
+        instantiated
+            || keep_instance.contains(key)
+            || reachable_instance_slots.contains(key.as_str())
     });
     info.vtable_slots = compact_slots(&info.vtable_methods);
     info.static_vtable_methods.retain(|key| {
-        keep_static.contains(key) || reachable_static_slots.contains(key.as_str())
+        instantiated || keep_static.contains(key) || reachable_static_slots.contains(key.as_str())
     });
     info.static_vtable_slots = compact_slots(&info.static_vtable_methods);
 }

@@ -1,8 +1,6 @@
 ---
 title: "mysqli_sqlstate() - internals"
 description: "Compiler internals for mysqli_sqlstate(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 158
 ---
 
 ## `mysqli_sqlstate()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:672](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L672) (`mysqli_sqlstate`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_sqlstate`)
 - **Function symbol**: `mysqli_sqlstate()`
 
 

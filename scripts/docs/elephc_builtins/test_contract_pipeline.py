@@ -52,9 +52,10 @@ class ContractPipelineTests(unittest.TestCase):
                     # Four hash_*, the thirty-four PHP-visible curl_* contracts the
                     # canonical `--features curl` docs configuration publishes (see
                     # extract.run_gen_builtins), the fifty-four xml_* / xmlwriter_*
-                    # functions of the xml prelude, and the 288 functions the other
+                    # functions of the xml prelude, the six procedural random entries
+                    # plus the one internal random helper, and the functions the other
                     # injected preludes declare.
-                    "prelude": 380,
+                    "prelude": 395,
                     # Calls rewritten from their enclosing lexical function frame.
                     "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.
@@ -78,7 +79,7 @@ class ContractPipelineTests(unittest.TestCase):
             self.assertFalse(rendered["eval_only"])
             self.assertEqual(rendered["lowering"]["sig_file"], f"src/builtins/string/{name}.rs")
             self.assertEqual(rendered["semantics"]["callable"]["kind"], "static_only")
-            page = render.render_internals(rendered, 0, REPO)
+            page = render.render_internals(rendered, REPO)
             self.assertIn(f"runtime.{name}", page)
             self.assertNotIn("No compiled lowering is available", page)
             self.assertNotIn("intentionally eval-only", page)
@@ -99,7 +100,7 @@ class ContractPipelineTests(unittest.TestCase):
             self.assertEqual(record[backend]["kind"], "registry")
         self.assertTrue(record["params"][1]["by_ref"])
         self.assertEqual([param["name"] for param in record["params"]], ["string", "result"])
-        page = render.render_internals(self.render_by_name["mb_parse_str"], 0, REPO)
+        page = render.render_internals(self.render_by_name["mb_parse_str"], REPO)
         self.assertIn("runtime.mb_parse_str", page)
         self.assertNotIn("No compiled lowering is available", page)
         self.assertEqual(self.render_by_name["mb_parse_str"]["semantics"]["callable"]["kind"], "static_only")
@@ -132,28 +133,75 @@ class ContractPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown contracts"):
                 extract.validate_presentation_overrides(REPO, self.records)
 
+    def test_availability_is_a_two_backend_table(self) -> None:
+        """Render one Available/Not available yet cell per backend and no source links."""
+        rendered = render._availability_section(self.render_by_name["array_pad"])
+        self.assertIn(
+            "| Compiled (AOT) | Magician (eval) |\n|---|---|\n| Available | Available |",
+            rendered,
+        )
+        self.assertNotIn("github.com", rendered)
+        self.assertNotIn("\n- ", rendered)  # no caveats for a plain builtin
+
+    def test_availability_marks_a_missing_backend_not_available_yet(self) -> None:
+        """A backend without the builtin reads "Not available yet" in its own column."""
+        aot_only = next(
+            b for b in self.render_by_name.values()
+            if (b.get("aot") or {}).get("supported") and not (b.get("eval") or {}).get("supported")
+        )
+        self.assertIn(
+            "| Available | Not available yet |", render._availability_section(aot_only)
+        )
+        eval_only = {**aot_only, "aot": {"supported": False}, "eval": {"supported": True}}
+        self.assertIn(
+            "| Not available yet | Available |", render._availability_section(eval_only)
+        )
+
     def test_prelude_availability_renders_both_effective_signatures(self) -> None:
         """Show the narrower AOT call and broader eval call without marking eval-only."""
         rendered = render._availability_section(self.render_by_name["hash_init"])
-        self.assertIn("compiler-injected hash prelude", rendered)
+        self.assertIn("| Available | Available |", rendered)
         self.assertIn('hash_init(string $algo, int $flags = 0, string $key = "")', rendered)
-        self.assertNotIn("Compiled (AOT)**: not available", rendered)
+
+    def test_runtime_arity_validation_documents_the_php_signature(self) -> None:
+        """Document PHP's signature, not the prelude's arity-tolerating shim."""
+        random_bytes = self.render_by_name["random_bytes"]
+        self.assertEqual(
+            random_bytes["aot"]["signature_override_reason"], "runtime-arity-validation"
+        )
+        self.assertEqual([param["name"] for param in random_bytes["sig"]["params"]], ["length"])
+        self.assertIsNone(random_bytes["sig"]["variadic"])
+        rendered = render._availability_section(random_bytes)
+        self.assertIn("accepts any argument count", rendered)
+        self.assertIn("ArgumentCountError", rendered)
+        self.assertNotIn("broader", rendered)
 
     def test_host_only_process_availability_keeps_eval_independent(self) -> None:
         """Label iOS AOT refusal without implying the Magician path is target-gated."""
         rendered = render._availability_section(self.render_by_name["system"])
+        self.assertIn("| Available | Available |", rendered)
         self.assertIn("three executable/release hosts", rendered)
         self.assertIn("refused at compile time for iOS library targets", rendered)
-        self.assertIn("`eval()` (magician interpreter)**: supported", rendered)
 
-    def test_prelude_availability_names_the_declaring_prelude(self) -> None:
-        """Each PHP-visible prelude route names its actual declaring prelude."""
-        rendered = render._availability_section(self.render_by_name["curl_init"])
-        self.assertIn("compiler-injected curl prelude", rendered)
-        self.assertNotIn("hash prelude", rendered)
-        self.assertNotIn("Compiled (AOT)**: not available", rendered)
-        rendered = render._availability_section(self.render_by_name["zend_version"])
-        self.assertIn("compiler-injected version prelude", rendered)
+    def test_prelude_route_is_named_on_the_internals_page(self) -> None:
+        """The declaring prelude moved from the user page to the internals lowering notes."""
+        for name, prelude in (("curl_init", "curl"), ("zend_version", "version")):
+            builtin = self.render_by_name[name]
+            self.assertNotIn("prelude", render._availability_section(builtin))
+            self.assertIn(
+                f"compiler-injected {prelude} prelude",
+                render.render_internals(builtin, REPO),
+            )
+
+    def test_pages_carry_no_shifting_line_numbers_or_sidebar_order(self) -> None:
+        """Keep unrelated source edits and new builtins from rewriting other pages."""
+        for name in ("strlen", "hash_init", "array_pad"):
+            builtin = self.render_by_name[name]
+            for page in (render.render_user(builtin, REPO), render.render_internals(builtin, REPO)):
+                self.assertNotRegex(page, r"#L\d+")
+                self.assertNotRegex(page, r"`:\d+\]")
+                self.assertNotIn("sidebar:", page.split("\n---\n", 1)[0])
+        self.assertNotIn("codegen_line", self.render_by_name["strlen"]["lowering"])
 
     def test_user_renderer_owns_section_spacing_once(self) -> None:
         """Join empty optional sections without accumulating blank-line runs."""
@@ -163,7 +211,7 @@ class ContractPipelineTests(unittest.TestCase):
             "notes": [],
             "see_also": [],
         }
-        rendered = render.render_user(builtin, 1, REPO)
+        rendered = render.render_user(builtin, REPO)
         self.assertNotRegex(rendered, r"\n(?:[ \t]*\n){2,}")
         self.assertIn("usage patterns._\n\n## Internals", rendered)
 

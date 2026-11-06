@@ -26,11 +26,11 @@ use crate::ir_lower::expr::{
     lower_by_ref_foreach_element_source, lower_by_ref_foreach_property_source,
     lower_callable_array_for_assignment,
     lower_array_literal_with_expected_type,
-    lower_closure_for_assignment, lower_expr,
+    lower_closure_for_assignment, lower_condition, lower_expr,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
     reflection_function_binding_for_expr, reflection_method_binding_for_expr,
     reflection_property_binding_for_expr, static_callable_binding_for_expr,
-    string_op_uses_scratch_storage, type_satisfies_array_access_for_ir,
+    persist_pending_string, string_value_needs_persistence, type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
 use crate::parser::ast::{
@@ -41,28 +41,44 @@ use crate::types::{PhpType, ThrowAccessKind};
 
 mod statement_basics;
 mod local_assignments;
+mod string_append;
 mod conditionals;
 mod loops;
 mod array_write_core;
+mod buffer_element_updates;
 mod nested_array_writes;
+mod nested_write_guards;
+mod nested_scalar_writes;
+mod static_false_parent;
 mod array_write_storage;
 mod typed_foreach;
+mod foreach_bindings;
 mod switches;
 mod includes;
 mod exceptions;
 mod control_exit;
 mod declarations;
 mod instance_property_writes;
+mod readonly_receiver_guard;
 mod static_property_writes;
 mod property_array_writes;
+pub(crate) mod property_write_receiver;
 mod metadata_control;
 mod nested_append;
+mod nested_write_sources;
+mod nested_plain_writes;
+mod nested_false_errors;
 mod return_coercions;
 mod repr_fixpoint;
 mod static_property_helpers;
+mod string_offset_writes;
 
 use statement_basics::*;
 use local_assignments::*;
+pub(super) use local_assignments::lower_ref_assign;
+pub(super) use local_assignments::retype_value_for_pointer_local;
+pub(super) use local_assignments::union_local_storage_type;
+pub(in crate::ir_lower) use conditionals::join_pointer_arm_types;
 use conditionals::*;
 pub(crate) use conditionals::ExprBranchJoin;
 use loops::*;
@@ -82,7 +98,10 @@ use metadata_control::*;
 use return_coercions::*;
 use static_property_helpers::*;
 
-pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr};
+pub(crate) use control_exit::{
+    lower_throw_access_error, lower_throw_access_error_expr, lower_throw_access_error_expr_as,
+};
+pub(crate) use control_exit::terminate_return;
 // Shared with `crate::ir_lower::expr::unset`, which needs the same runtime-subclass accessor peel
 // for `__unset` that the write path needs for `__set`.
 pub(crate) use instance_property_writes::{
@@ -92,12 +111,25 @@ pub(super) use typed_foreach::coerce_typed_assign_value;
 pub(crate) use typed_foreach::promote_by_ref_foreach_source;
 pub(super) use instance_property_writes::contextualize_property_array_value;
 pub(super) use property_array_writes::release_property_assignment_source_after_retaining_store;
+// Shared with `crate::ir_lower::expr::unset`, which removes property and static-property array
+// elements through the same storage paths the element writes use.
+pub(crate) use property_array_writes::lower_property_array_unset;
+pub(crate) use static_property_helpers::static_property_type;
+pub(crate) use static_property_writes::lower_static_property_array_unset;
 pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,
 };
 pub(crate) use array_write_core::{
-    compound_array_write_value_reads_target, lower_array_assign_with_diagnosed_key,
+    desugared_element_update, lower_array_assign_with_diagnosed_key, ElementUpdate,
 };
+pub(in crate::ir_lower) use string_offset_writes::{
+    local_is_string_offset_target, local_may_hold_boxed_string, lower_boxed_string_offset_write,
+    lower_string_offset_write, StringOffsetWriteResult,
+};
+pub(crate) use property_array_writes::lower_property_array_assign_with_diagnosed_key;
+pub(crate) use buffer_element_updates::{lower_buffer_expression_update, BufferExpressionUpdate};
+pub(crate) use static_property_writes::lower_static_property_array_assign_with_diagnosed_key;
+pub(crate) use nested_array_writes::lower_nested_array_assign_after_read;
 pub(super) use array_write_storage::{
     finish_indexed_array_local_write, load_array_local_for_write, prepare_indexed_array_local_write,
     ref_bound_mixed_indexed_array_write,
@@ -227,10 +259,18 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         // Nested appends are parser-generated read/push/write-back groups. Fuse the recognized
         // shape so a missing inner bucket is auto-vivified and a local bucket can be detached
         // before mutation; every other synthetic group keeps ordinary block lowering.
-        StmtKind::Synthetic(body) => match nested_append::recognize(ctx, body) {
-            Some(group) => nested_append::lower(ctx, &group, stmt.span),
-            None => lower_block(ctx, body),
-        },
+        StmtKind::Synthetic(body) => {
+            if !nested_append::try_lower_array_root(ctx, body, stmt.span) {
+                match nested_append::recognize(ctx, body) {
+                    Some(group) => nested_append::lower(ctx, &group, stmt.span),
+                    None => {
+                        if !lower_synthetic_readonly_coalesce(ctx, body) {
+                            lower_block(ctx, body);
+                        }
+                    }
+                }
+            }
+        }
         StmtKind::Try {
             try_body,
             catches,
@@ -313,3 +353,6 @@ fn local_slot_is_convertible_here(ctx: &LoweringContext<'_, '_>, name: &str) -> 
             .get(name)
             .is_some_and(|slot| ctx.slot_is_initialized(*slot))
 }
+
+/// Exposes captured writable parent cells to compiler-generated append expressions.
+pub(crate) use nested_array_writes::lower_nested_assign_parent;

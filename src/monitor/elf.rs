@@ -34,16 +34,19 @@ const SHT_DYNSYM: u32 = 11;
 const PT_LOAD: u32 = 1;
 const STT_FUNC: u8 = 2;
 
+/// Reads a little-endian 16-bit ELF field, returning None for truncated input.
 fn u16_at(bytes: &[u8], at: usize) -> Option<u16> {
     bytes.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))
 }
 
+/// Reads a little-endian 32-bit ELF field, returning None for truncated input.
 fn u32_at(bytes: &[u8], at: usize) -> Option<u32> {
     bytes
         .get(at..at + 4)
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
+/// Reads a little-endian 64-bit ELF field, returning None for truncated input.
 fn u64_at(bytes: &[u8], at: usize) -> Option<u64> {
     bytes.get(at..at + 8).map(|b| {
         u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
@@ -118,6 +121,7 @@ pub(crate) fn function_symbols(bytes: &[u8]) -> Vec<FuncSymbol> {
     best
 }
 
+/// Reads function symbols from matching ELF64 little-endian symbol-table sections.
 fn symbols_from_section_kind(bytes: &[u8], kind: u32) -> Vec<FuncSymbol> {
     let mut out = Vec::new();
     if !is_elf64_le(bytes) {
@@ -355,6 +359,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies ELF parsing recovers a function symbol and the first load-segment address.
     fn reads_a_function_symbol_and_the_first_load_address() {
         let bytes = image(0x1200, 0x40, "php_hot", 0x1000);
         assert_eq!(first_load_vaddr(&bytes), Some(0x1000));
@@ -410,6 +415,7 @@ ffff00000000-ffff00001000 rw-p 00000000 00:00 0 [stack]
     }
 
     #[test]
+    /// Verifies symbolization names only addresses inside a function extent.
     fn names_the_function_containing_an_address_and_nothing_past_it() {
         let symbols = vec![
             FuncSymbol { value: 0x1000, size: 0x20, name: "first".into() },

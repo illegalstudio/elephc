@@ -1,8 +1,6 @@
 ---
 title: "mb_lcfirst()"
 description: "Converts the first character to Unicode lowercase."
-sidebar:
-  order: 858
 ---
 
 ## mb_lcfirst()
@@ -21,8 +19,9 @@ Converts the first character to Unicode lowercase.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_lcfirst.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_lcfirst.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -120,15 +120,25 @@ impl PropertyHooks {
 /// Trait use.
 pub struct TraitUse {
     pub trait_names: Vec<Name>,
+    /// Type arguments written on each used trait (`use Holder<int>;`), aligned index by index
+    /// with `trait_names`; an entry is empty when that trait was written bare.
+    ///
+    /// Only ever non-empty before `crate::generics::classes` runs: it instantiates each written
+    /// mention as an ordinary trait and renames the use to it, so trait flattening never sees
+    /// a type argument.
+    pub type_args: Vec<Vec<TypeExpr>>,
     pub adaptations: Vec<TraitAdaptation>,
     // Used for trait-flattening diagnostics.
     pub span: Span,
 }
 
 impl PartialEq for TraitUse {
-    /// Compares two trait uses by trait names and adaptations; span is not compared.
+    /// Compares two trait uses by trait names, type arguments and adaptations; span is not
+    /// compared.
     fn eq(&self, other: &Self) -> bool {
-        self.trait_names == other.trait_names && self.adaptations == other.adaptations
+        self.trait_names == other.trait_names
+            && self.type_args == other.type_args
+            && self.adaptations == other.adaptations
     }
 }
 
@@ -224,6 +234,15 @@ impl PartialEq for ClassConst {
 /// Class method.
 pub struct ClassMethod {
     pub name: String,
+    /// Type parameters this method declares of its OWN (`function map<U>(…)`), empty for an
+    /// ordinary method.
+    ///
+    /// Distinct from the class's: a method of `Box<T>` may introduce a `U` that only its call
+    /// sites determine, so `T` is bound when the CLASS is instantiated and `U` when the METHOD
+    /// is called. An instantiated generic method is dispatched statically and never takes a
+    /// vtable slot — two instantiations of one class must keep identical method sets, or their
+    /// slot numbering diverges and a variance widening lands on the wrong method.
+    pub type_params: Vec<crate::parser::ast::TypeParam>,
     pub visibility: Visibility,
     pub is_static: bool,
     pub is_abstract: bool,

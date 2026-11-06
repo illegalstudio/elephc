@@ -323,6 +323,112 @@ echo count($queue);
     assert_eq!(out, "2|1|1\na|b|b|1");
 }
 
+// SplStack array offsets are LIFO: offset 0 is the TOP of the stack, so reads, writes and
+// unset() address the list in reverse storage order (issue #1659). SplQueue stays FIFO.
+/// Verifies that spl stack bracket offsets follow LIFO order.
+#[test]
+fn test_spl_stack_bracket_offsets_are_lifo() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplStack();
+$s->push("a"); $s->push("b"); $s->push("c");
+echo $s[0], $s[1], $s[2], "\n";
+echo $s->offsetGet(0), "\n";
+var_dump(isset($s[2]));
+$s[0] = "z";
+echo $s->top(), $s->bottom(), "\n";
+unset($s[0]);
+echo count($s), $s->top(), "\n";
+$q = new SplQueue();
+$q->enqueue("a"); $q->enqueue("b"); $q->enqueue("c");
+echo $q[0], $q[1], $q[2], "\n";
+$q[0] = "z";
+echo $q->bottom(), $q->top(), "\n";
+"#,
+    );
+    assert_eq!(out, "cba\nc\nbool(true)\nza\n2b\nabc\nzc\n");
+}
+
+// `getIteratorMode()` reports PHP's raw mode word: `SplStack` = 6 (FIX|LIFO), `SplQueue` = 4
+// (FIX), `SplDoublyLinkedList` = 0. `setIteratorMode()` freezes the LIFO/FIFO bit on a fixed
+// list (RuntimeException) while allowing the DELETE bit and preserving FIX (issue #1659).
+/// Verifies that spl iterator mode word and freeze.
+#[test]
+fn test_spl_iterator_mode_word_and_freeze() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplStack();
+$q = new SplQueue();
+$d = new SplDoublyLinkedList();
+echo $s->getIteratorMode(), $q->getIteratorMode(), $d->getIteratorMode(), "|";
+try { $s->setIteratorMode(SplDoublyLinkedList::IT_MODE_FIFO); echo "no-throw"; }
+catch (RuntimeException $e) { echo "frozen"; }
+$s->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO | SplDoublyLinkedList::IT_MODE_DELETE);
+echo "|", $s->getIteratorMode();
+$s->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO);
+echo "|", $s->getIteratorMode();
+$q->setIteratorMode(SplDoublyLinkedList::IT_MODE_FIFO | SplDoublyLinkedList::IT_MODE_DELETE);
+echo "|", $q->getIteratorMode();
+$d->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO);
+echo "|", $d->getIteratorMode();
+$d->setIteratorMode(4);
+echo "|", $d->getIteratorMode();
+$d->setIteratorMode(2);
+echo "|", $d->getIteratorMode();
+$s->setIteratorMode(PHP_INT_MAX);
+echo "|", $s->getIteratorMode();
+"#,
+    );
+    assert_eq!(out, "640|frozen|7|6|5|2|0|2|7");
+}
+
+// The LIFO default also drives `foreach` traversal order and `serialize()`'s flags byte; both
+// are PHP-parity wins of seeding the mode and were previously unpinned (issue #1659).
+/// Verifies that spl stack traversal and serialize follow lifo.
+#[test]
+fn test_spl_stack_traversal_and_serialize_follow_lifo() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplStack();
+$s->push("a"); $s->push("b"); $s->push("c");
+foreach ($s as $k => $v) { echo $k, ":", $v, " "; }
+echo "|", serialize($s), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2:c 1:b 0:a |O:8:\"SplStack\":3:{i:0;i:6;i:1;a:3:{i:0;s:1:\"a\";i:1;s:1:\"b\";i:2;s:1:\"c\";}i:2;a:0:{}}\n"
+    );
+}
+
+// `__debugInfo()` returns the raw mode word and the PHYSICAL storage order (first pushed first),
+// not the LIFO `offsetGet()` order, and must snapshot it WITHOUT flipping the frozen mode: the
+// old body called `setIteratorMode(0)`, which a fixed-mode list now rejects with a
+// RuntimeException (issue #1659).
+/// Verifies that spl debug info reports flags and physical order.
+#[test]
+fn test_spl_debug_info_reports_flags_and_physical_order() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplStack();
+$s->push("a"); $s->push("b"); $s->push("c");
+var_dump($s->__debugInfo());
+$q = new SplQueue();
+$q->enqueue("a"); $q->enqueue("b"); $q->enqueue("c");
+var_dump($q->__debugInfo());
+$d = new SplDoublyLinkedList();
+$d->push("a"); $d->push("b"); $d->push("c");
+var_dump($d->__debugInfo());
+"#,
+    );
+    let entry = |flags: i64| {
+        format!(
+            "array(2) {{\n  [\"\0SplDoublyLinkedList\0flags\"]=>\n  int({flags})\n  [\"\0SplDoublyLinkedList\0dllist\"]=>\n  array(3) {{\n    [0]=>\n    string(1) \"a\"\n    [1]=>\n    string(1) \"b\"\n    [2]=>\n    string(1) \"c\"\n  }}\n}}\n"
+        )
+    };
+    assert_eq!(out, format!("{}{}{}", entry(6), entry(4), entry(0)));
+}
+
 // Tests SplFixedArray getSize/setSize, direct bracket read/write, isset/unset, toArray,
 // jsonSerialize, and that resizing a fixed array preserves existing elements up to the new size.
 /// Verifies that phase4 SPL fixed array runtime methods.
@@ -583,4 +689,224 @@ echo $fixed->getSize(), ":", $fixed[1], ":", $fixed[0] === null ? "null" : "set"
 "#,
     );
     assert_eq!(out, "3:7:null");
+}
+
+/// `SplFixedArray` accepts an offset the way PHP's `spl_offset_convert_to_long` does: an int, a
+/// bool, a float (truncated) or a canonical integer string such as `"1"` is an index, and every
+/// other offset raises a TypeError naming its type or class. A numeric string that is not a
+/// canonical integer (`"01"`, `"1.0"`, `" 1"`) is rejected like any other string. Covers reads,
+/// writes, `isset()`, `unset()`, the method-call form and a `mixed` cell. Regression for #1623.
+#[test]
+fn test_spl_fixed_array_converts_integer_string_offsets() {
+    let out = compile_and_run(
+        r#"<?php
+class Foo {}
+class Holder { public mixed $bag; }
+$f = new SplFixedArray(3);
+$f["1"] = "one";
+echo $f["1"], "|", $f->offsetGet("1"), "|", var_export(isset($f["1"]), true), "|", $f[true], "|", $f[1.0], "\n";
+unset($f["1"]);
+var_dump($f[1]);
+$f->offsetSet("2", "two");
+$h = new Holder();
+$h->bag = $f;
+echo $h->bag["2"], "\n";
+foreach (["x", "01", "1.0", " 1", "", null, [1], new Foo()] as $k) {
+    try { $v = $f[$k]; echo "read\n"; }
+    catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+try { $f["-1"] = 0; } catch (OutOfBoundsException $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "one|one|true|one|one\n",
+            "NULL\n",
+            "two\n",
+            "Cannot access offset of type string on SplFixedArray\n",
+            "Cannot access offset of type string on SplFixedArray\n",
+            "Cannot access offset of type string on SplFixedArray\n",
+            "Cannot access offset of type string on SplFixedArray\n",
+            "Cannot access offset of type string on SplFixedArray\n",
+            "Cannot access offset of type null on SplFixedArray\n",
+            "Cannot access offset of type array on SplFixedArray\n",
+            "Cannot access offset of type Foo on SplFixedArray\n",
+            "OutOfBoundsException: Index invalid or out of range\n",
+        )
+    );
+}
+
+/// `SplDoublyLinkedList` declares `int $index` and takes weak-mode coercion: any fully numeric
+/// string (`" 1"`, `"1.0"`, `"+1"`) is an index, a non-numeric string is a TypeError naming
+/// `string`, and null reads as index 0 (except in `offsetSet()`, where it appends). Regression
+/// for #1623.
+#[test]
+fn test_spl_doubly_linked_list_coerces_numeric_string_offsets() {
+    let out = compile_and_run(
+        r#"<?php
+$l = new SplDoublyLinkedList();
+$l->push("a"); $l->push("b"); $l->push("c");
+echo $l["1"], $l[" 1"], $l["1.0"], $l["+1"], $l->offsetGet("2"), "\n";
+unset($l["0"]);
+$l["1"] = "C";
+$l[null] = "d";
+echo count($l), $l[0], $l[1], $l[2], "\n";
+foreach (["x", "1a", ""] as $k) {
+    try { $v = $l[$k]; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+try { $l["zz"] = 1; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { unset($l["zz"]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $v = isset($l[[1]]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$q = new SplQueue();
+$q->push(1); $q->push(2);
+echo $q["1"], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bbbbc\n",
+            "3bCd\n",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, string given\n",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, string given\n",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, string given\n",
+            "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) must be of type ?int, string given\n",
+            "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, string given\n",
+            "SplDoublyLinkedList::offsetExists(): Argument #1 ($index) must be of type int, array given\n",
+            "2\n",
+        )
+    );
+}
+
+/// Converting and rejecting SPL offsets releases every boxed offset and every thrown TypeError's
+/// message, over a loop under `--heap-debug`. Regression for #1623.
+#[test]
+fn test_spl_offset_conversion_heap_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = 0;
+for ($i = 0; $i < 40 + ($argc > 5 ? 1 : 0); $i++) {
+    $f = new SplFixedArray(3);
+    $f["1"] = "one" . $i;
+    $n += strlen($f["1"]);
+    $n += isset($f["2"]) ? 1 : 0;
+    unset($f["1"]);
+    try { $f["x" . $i] = 1; } catch (TypeError $e) { $n += 1; }
+    $n += $f[1.0] === null ? 1 : 0;
+    $l = new SplDoublyLinkedList();
+    $l->push("a"); $l->push("b" . $i);
+    $n += strlen($l[" 1"]);
+    unset($l["0"]);
+    try { $l["zz"] = 1; } catch (TypeError $e) { $n += 1; }
+    $l[null] = "c";
+    $n += count($l);
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "500\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The linked-list family's `int $index` takes a float only when it fits an int: `INF`, `-INF`
+/// and `NAN` are `TypeError(... float given)` and a numeric string spelling an out-of-range
+/// value (`"1e19"`, `"18446744073709551616"`) is `... string given`, where they used to address a
+/// wrapped slot. A lossy float or float-string truncates with PHP's deprecation, and an exact
+/// one (`"1.0"`) converts silently. `SplFixedArray` keeps the array-key float diagnostics PHP 8.4
+/// emits for it. Review follow-up for #1623.
+#[test]
+fn test_spl_offset_float_rules_follow_each_container() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $no, string $msg) { echo "[diag] ", $msg, "\n"; return true; });
+function mk(): SplDoublyLinkedList { $o = new SplDoublyLinkedList(); $o->push("zero"); $o->push("one"); $o->push("two"); return $o; }
+$l = mk();
+foreach ([INF, -INF, NAN, 1.5] as $k) {
+    try { echo $l[$k], "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+foreach (["1e19", "18446744073709551616", "2.5", "1.0"] as $k) {
+    try { echo $l[$k], "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+try { $l->offsetSet(INF, "x"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { unset($l[NAN]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo $l[0], count($l), "\n";
+$f = new SplFixedArray(3);
+$f[0] = "zero"; $f[1] = "one";
+echo $f[1.5], "|", $f[INF], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, float given\n",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, float given\n",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, float given\n",
+            "[diag] Implicit conversion from float 1.5 to int loses precision\n",
+            "one\n",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, string given\n",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, string given\n",
+            "[diag] Implicit conversion from float-string \"2.5\" to int loses precision\n",
+            "two\n",
+            "one\n",
+            "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) must be of type ?int, float given\n",
+            "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, float given\n",
+            "zero3\n",
+            "[diag] Implicit conversion from float 1.5 to int loses precision\n",
+            "one|[diag] The float INF is not representable as an int, cast occurred\n",
+            "zero\n",
+        )
+    );
+}
+
+/// A float offset's diagnostic runs the user error handler while `offsetSet()` still owns the
+/// value; a handler that throws must not strand it. The value is registered with the unwinder
+/// across the conversion, so both containers stay heap-clean over a loop. Review follow-up for
+/// #1623.
+#[test]
+fn test_spl_offset_set_with_throwing_float_diagnostic_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+set_error_handler(function (int $no, string $msg) { throw new RuntimeException($msg); });
+$n = 0;
+for ($i = 0; $i < 40 + ($argc > 5 ? 1 : 0); $i++) {
+    $f = new SplFixedArray(3);
+    try { $f[1.5] = "v" . $i; } catch (RuntimeException $e) { $n += 1; }
+    $l = new SplDoublyLinkedList();
+    $l->push("a"); $l->push("b");
+    try { $l[1.5] = "w" . $i; } catch (RuntimeException $e) { $n += 1; }
+    try { $l["1.5"] = "x" . $i; } catch (RuntimeException $e) { $n += 1; }
+    try { $v = $l["1.5"]; } catch (RuntimeException $e) { $n += 1; }
+    $n += count($l);
+}
+restore_error_handler();
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "240\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An `offsetSet()` rejection names the rejected offset's type — `resource` here, where `main`
+/// used to print the opaque `non-int`. Regression for #1623. (PHP 8.5 itself converts a resource
+/// offset with a `Resource ID#N used as offset` warning and then raises `OutOfBoundsException`
+/// for an out-of-range index; elephc's rejection of resources is the divergence recorded in
+/// docs/php/types.md.) The other `ArrayAccess` operations are pinned in
+/// `test_spl_fixed_array_converts_integer_string_offsets`; they depend on the offset-variable
+/// handling tracked separately, so they are not asserted here.
+#[test]
+fn test_spl_fixed_array_resource_offset_names_the_type() {
+    let out = compile_and_run(
+        r#"<?php
+$f = new SplFixedArray(3);
+$r = fopen("php://memory", "r+");
+try { $f[$r] = 1; } catch (TypeError $e) { echo "set: ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "set: Cannot access offset of type resource on SplFixedArray\n"
+    );
 }

@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - The invoker accepts a descriptor, a normalized boxed Mixed argument container and the
-//!   invocation-site lexical class id. It forwards the scope as a trailing hidden ABI argument.
+//!   invocation-site profile. Weak scope ids retain their legacy values; strict scope is -id-3.
+//!   It forwards that frame-owned word as a trailing hidden ABI argument.
 //! - Capture values are loaded from the callable descriptor, not caller frame state.
 //! - Argument materialization supports indexed arrays, associative arrays, defaults, variadics,
 //!   by-reference marker cells, and target-aware ABI calls without depending on `Context`.
@@ -38,6 +39,7 @@ mod public_args;
 mod reference_args;
 mod reference_return;
 mod string_return;
+mod tagged_args;
 
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
@@ -69,7 +71,7 @@ const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
 const INVOKER_CONCAT_OFFSET: usize = 16;
 /// Spill slot for the boxed argument container across the eval exception-boundary `setjmp`.
 const INVOKER_ARG_ARRAY_OFFSET: usize = 24;
-/// Invocation-site lexical class id, with `-1` representing global scope.
+/// Invocation profile: weak class id/global -1, or strict -class_id-3/global -2.
 const INVOKER_SCOPE_OFFSET: usize = 32;
 /// First frame slot of the callee-saved register save area (issue #487).
 /// Placed after descriptor/concat/arg-array so the eval boundary path can reuse those slots.
@@ -148,6 +150,8 @@ struct InvokerEmitContext {
     php_return_status: bool,
     /// Resolved parameter defaults for this body, indexed like `FunctionSig::params`.
     defaults: InvokerDefaults,
+    /// The declared literal parameter currently being decoded, before ABI coercion.
+    literal_parameter: Option<(usize, String)>,
 }
 
 impl InvokerEmitContext {
@@ -169,12 +173,21 @@ impl InvokerEmitContext {
             defaults,
             mbstring_operation: None,
             mbstring_variable_ref_warnings: false,
+            literal_parameter: None,
         }
     }
 
     /// Returns the resolved default for one parameter index, if it was materializable.
     fn resolved_default(&self, index: usize) -> Option<InvokerDefaultValue> {
         self.defaults.get(index).cloned().flatten()
+    }
+
+    /// Selects a declared false/null contract without narrowing inferred parameter defaults.
+    fn select_literal_parameter(&mut self, sig: &FunctionSig, index: usize) {
+        self.literal_parameter = sig.params.get(index)
+            .filter(|(_, ty)| sig.declared_params.get(index).copied().unwrap_or(false)
+                && matches!(ty, PhpType::False | PhpType::Void))
+            .map(|(name, _)| (index, name.clone()));
     }
 
     /// Allocates a deterministic local label for generated branches.
@@ -226,7 +239,7 @@ fn emit_runtime_callable_invoker_impl(
     catch_native_throws: bool,
 ) {
     let call_reg = abi::nested_call_reg(emitter);
-    let escape_label = format!("{}_eval_escape", invoker.label);
+    let escape_label = format!("{}_eval_escape", local_label_prefix(invoker.label, emitter.target));
     let argument_owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, invoker.sig.params.len());
     let frame_size = argument_owners.frame_size();
     let mut ctx = InvokerEmitContext::new(
@@ -332,7 +345,8 @@ fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
         | PhpType::Iterable
         | PhpType::Object(_)
         | PhpType::Callable => emit_box_current_owned_value_as_mixed(emitter, &repr),
-        _ => emit_box_current_value_as_mixed(emitter, &repr),
+        // The declared type, so a `?ptr<T>` result boxes address 0 as PHP null.
+        _ => emit_box_current_value_as_mixed(emitter, ret_ty),
     }
 }
 
@@ -367,7 +381,7 @@ fn emit_invoker_exception_boundary_push(
                 "sub x0, x29, #{}",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
             ));
-            emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
+            emitter.save_exception_handler();                                   // snapshot the bridge stack before entering the callable
             emitter.instruction(&format!("cbnz x0, {}", escape_label));         // non-zero setjmp result means a callable Throwable escaped
         }
         Arch::X86_64 => {
@@ -390,7 +404,7 @@ fn emit_invoker_exception_boundary_push(
                 "lea rdi, [rbp - {}]",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
             ));
-            emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
+            emitter.save_exception_handler();                                   // snapshot the bridge stack before entering the callable
             emitter.instruction("test eax, eax");                               // did control arrive through longjmp?
             emitter.instruction(&format!("jne {}", escape_label));              // non-zero setjmp result means a callable Throwable escaped
         }
@@ -637,6 +651,7 @@ fn emit_loaded_indexed_array_callback_call(
     let mut arg_types = Vec::new();
     // -- marshal each visible regular from the indexed container --
     for index in 0..shape.visible_regular {
+        ctx.select_literal_parameter(sig, index);
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let is_ref = sig.ref_params.get(index).copied().unwrap_or(false);
@@ -679,6 +694,8 @@ fn emit_loaded_indexed_array_callback_call(
         ctx.argument_owners.record_pushed(index, &pushed_ty, emitter);
         arg_types.push(pushed_ty);
     }
+
+    ctx.literal_parameter = None;
 
     if shape.hidden_argc {
         // The invoker synthesizes argc from the container length; it never consumes a user slot.
@@ -837,6 +854,7 @@ fn emit_loaded_assoc_array_callback_call(
 
     // -- marshal each visible regular via hash lookup --
     for index in 0..shape.visible_regular {
+        ctx.select_literal_parameter(sig, index);
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let param_name = sig.params.get(index).map(|(name, _)| name.as_str());
@@ -892,6 +910,7 @@ fn emit_loaded_assoc_array_callback_call(
         arg_types.push(pushed_ty);
     }
 
+    ctx.literal_parameter = None;
     if shape.hidden_argc {
         public_args::push_arg_count_from_reg(emitter, count_reg);
         arg_types.push(PhpType::Int);
@@ -1656,7 +1675,8 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
         | PhpType::Callable
         | PhpType::Pointer(_)
         | PhpType::Buffer(_)
-        | PhpType::Packed(_) => {
+        | PhpType::Packed(_)
+        | PhpType::Narrow(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
             abi::emit_store_zero_to_address(emitter, cell_reg, 8);
@@ -1676,7 +1696,7 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
             abi::emit_load_int_immediate(emitter, temp_reg, 2);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
         }
-        PhpType::Str => {
+        PhpType::Str | PhpType::TaggedScalar => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
             abi::emit_store_to_address(emitter, ptr_reg, cell_reg, 0);
@@ -1712,7 +1732,7 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
             abi::emit_load_int_immediate(emitter, temp_reg, 9);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
         }
-        PhpType::TaggedScalar | PhpType::Void | PhpType::Never => {
+        PhpType::Void | PhpType::Never => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
             abi::emit_store_zero_to_address(emitter, cell_reg, 8);
@@ -2469,13 +2489,22 @@ fn push_default_value_arg(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
+    let owned_runtime_string = matches!(ctx.resolved_default(index),
+        Some(InvokerDefaultValue::Scalar { kind: crate::codegen::const_default_values::CONST_DEFAULT_EXECUTABLE_PATH, .. }));
     let source_ty = emit_default_to_result(index, target_ty, emitter, ctx, data);
-    let pushed_ty = if source_ty.is_refcounted()
+    if source_ty.codegen_repr() == PhpType::Mixed {
+        // Native EIR helpers return one owned box. Reuse the same transfer path
+        // as owned hash cells when a typed slot borrows the unboxed payload.
+        return push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data);
+    }
+    let pushed_ty = if (source_ty.is_refcounted() || owned_runtime_string)
         && target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
         && source_ty.codegen_repr() != PhpType::Mixed
     {
         emit_box_current_owned_value_as_mixed(emitter, &source_ty);
         PhpType::Mixed
+    } else if owned_runtime_string && target_ty.is_none_or(|ty| ty.codegen_repr() == PhpType::Str) {
+        source_ty
     } else {
         // Heap defaults are newly allocated, not borrowed from the argument container.
         owned_value_args::coerce(emitter, ctx, data, &source_ty, target_ty).0
@@ -2610,6 +2639,10 @@ fn coerce_current_value_to_target(
     target_ty: Option<&PhpType>,
 ) -> (PhpType, bool) {
     let source_repr = source_ty.codegen_repr();
+    if target_ty.is_some_and(|target| target.codegen_repr() == PhpType::TaggedScalar) {
+        tagged_args::coerce(emitter, ctx, source_ty);
+        return (PhpType::TaggedScalar, false);
+    }
     if source_repr != PhpType::Callable
         && target_ty.is_some_and(|target| target.codegen_repr() == PhpType::Callable)
     {
@@ -2649,7 +2682,10 @@ fn coerce_result_to_type(
     }
     if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         match target_ty.codegen_repr() {
-            PhpType::Int | PhpType::Resource(_) | PhpType::Pointer(_) => {
+            // A buffer handle is boxed as an integer like a pointer word, so the integer cast
+            // recovers it for a `buffer<T>` parameter (the `buffer_len(...)` and
+            // `buffer_ptr(...)` wrappers forwarded through a `callable`).
+            PhpType::Int | PhpType::Resource(_) | PhpType::Pointer(_) | PhpType::Buffer(_) => {
                 abi::emit_call_label(emitter, "__rt_mixed_cast_int");
             }
             PhpType::Bool => {
@@ -2667,6 +2703,9 @@ fn coerce_result_to_type(
                     Arch::AArch64 => emitter.instruction("mov x0, x1"),         // move the unboxed container pointer into the integer result
                     Arch::X86_64 => emitter.instruction("mov rax, rdi"),        // move the unboxed container pointer into the integer result
                 }
+            }
+            PhpType::Void => {
+                abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
             }
             PhpType::Mixed | PhpType::Union(_) => {}
             _ => {}
@@ -2689,7 +2728,7 @@ fn coerce_result_to_type(
 
 /// Returns true if the invoker can coerce this source/target pair.
 fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
-    if target_ty.codegen_repr() == PhpType::Callable {
+    if matches!(target_ty.codegen_repr(), PhpType::Callable | PhpType::TaggedScalar) {
         return true;
     }
     if source_ty == target_ty {
@@ -2701,12 +2740,14 @@ fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
             PhpType::Int
                 | PhpType::Resource(_)
                 | PhpType::Pointer(_)
+                | PhpType::Buffer(_)
                 | PhpType::Bool
                 | PhpType::Float
                 | PhpType::Str
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
+                | PhpType::Void
                 | PhpType::Mixed
                 | PhpType::Union(_)
         );
@@ -2778,6 +2819,13 @@ fn emit_empty_string_result(emitter: &mut Emitter) {
 
 /// Releases a preserved Mixed value after coercion.
 fn release_preserved_mixed_after_arg_coercion(emitter: &mut Emitter, pushed_ty: &PhpType) {
+    if matches!(pushed_ty.codegen_repr(), PhpType::Void | PhpType::Never) {
+        // Null has no pushed result slot; the preserved source is already at the stack top.
+        abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
+        abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+        return;
+    }
     abi::emit_push_result_value(emitter, pushed_ty);
     abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
     abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
@@ -2785,13 +2833,18 @@ fn release_preserved_mixed_after_arg_coercion(emitter: &mut Emitter, pushed_ty: 
     abi::emit_release_temporary_stack(emitter, 16);
 }
 
-/// Restores a pushed result value after releasing another value.
+/// Restores a pushed result using the registers for its own ABI representation.
 fn restore_pushed_value_after_release(emitter: &mut Emitter, pushed_ty: &PhpType) {
     match pushed_ty.codegen_repr() {
         PhpType::Float => abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter)),
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
+        }
+        PhpType::TaggedScalar => {
+            let payload = abi::int_result_reg(emitter);
+            let tag = crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter);
+            abi::emit_pop_reg_pair(emitter, payload, tag);
         }
         PhpType::Void | PhpType::Never => {}
         _ => abi::emit_pop_reg(emitter, abi::int_result_reg(emitter)),
@@ -2824,7 +2877,8 @@ fn push_descriptor_captures_as_hidden_args(
                 capture_ty,
             );
             abi::emit_push_result_value(emitter, capture_ty);
-            arg_types.push(capture_ty.clone());
+            // Hidden arguments use the same physical shape as the captured result pair.
+            arg_types.push(capture_ty.codegen_repr());
         }
     }
 }
@@ -2839,7 +2893,7 @@ fn call_target_with_pushed_args(
 ) {
     // Every descriptor entry receives one trailing native argument after its complete PHP ABI
     // shape. Ordinary PHP functions ignore the extra register or stack word. The synthetic
-    // `clone()` wrapper alone declares the hidden parameter and consumes it for hook visibility.
+    // `clone()` decodes the scope; source-sensitive builtin wrappers also read its strictness.
     abi::load_at_offset(
         emitter,
         abi::int_result_reg(emitter),
@@ -2924,7 +2978,8 @@ fn restore_concat_offset_after_nested_call(
 /// such a call raises `Unknown named parameter $<name>`, which is a PHP-visible diagnostic the
 /// program can catch, instead of corrupting the collector.
 pub(crate) fn variadic_collector_accepts_named_entries(sig: &FunctionSig) -> bool {
-    crate::types::signatures::variadic_storage_accepts_named_entries(sig)
+    !crate::func_args::sig_collects_surplus_args(sig)
+        && crate::types::signatures::variadic_storage_accepts_named_entries(sig)
 }
 
 /// Returns the element type a variadic collector's storage holds, for BOTH container shapes.
@@ -3375,17 +3430,29 @@ fn widen_callback_arg_type(left: &PhpType, right: &PhpType) -> PhpType {
 
 /// Throws a catchable `ArgumentCountError` for a descriptor missing a required argument.
 fn emit_call_user_func_array_missing_arg_error(emitter: &mut Emitter, data: &mut DataSection) {
-    let (message_label, message_len) =
-        data.add_string(b"call_user_func_array(): missing required argument");
+    emit_invoker_throwable(
+        emitter, data, "_spl_argument_count_error_class_id",
+        "call_user_func_array(): missing required argument",
+    );
+}
+
+/// Throws a compact builtin throwable through the invoker's argument-owner escape boundary.
+fn emit_invoker_throwable(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    class_id_symbol: &str,
+    message: &str,
+) {
+    let (message_label, message_len) = data.add_string(message.as_bytes());
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #56");                                 // request the compact Throwable payload
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate the ArgumentCountError object
+            emitter.instruction("bl __rt_heap_alloc");                          // allocate the catchable builtin throwable
             emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
             emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation before acquiring its PHP handle
             emitter.instruction("bl __rt_object_handle_acquire");               // assign the object its runtime handle
-            abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_argument_count_error_class_id", 0);
-            emitter.instruction("str x9, [x0]");                                // identify the catchable ArgumentCountError class
+            abi::emit_load_symbol_to_reg(emitter, "x9", class_id_symbol, 0);
+            emitter.instruction("str x9, [x0]");                                // identify the requested builtin throwable class
             abi::emit_symbol_address(emitter, "x9", &message_label);
             emitter.instruction("str x9, [x0, #8]");                            // store the immutable diagnostic bytes
             abi::emit_load_int_immediate(emitter, "x9", message_len as i64);
@@ -3400,7 +3467,7 @@ fn emit_call_user_func_array_missing_arg_error(emitter: &mut Emitter, data: &mut
         }
         Arch::X86_64 => {
             emitter.instruction("mov eax, 56");                                 // request the compact Throwable payload
-            emitter.instruction("call __rt_heap_alloc");                        // allocate the ArgumentCountError object
+            emitter.instruction("call __rt_heap_alloc");                        // allocate the catchable builtin throwable
             abi::emit_load_int_immediate(
                 emitter,
                 "r10",
@@ -3411,10 +3478,10 @@ fn emit_call_user_func_array_missing_arg_error(emitter: &mut Emitter, data: &mut
             abi::emit_load_symbol_to_reg(
                 emitter,
                 "r10",
-                "_spl_argument_count_error_class_id",
+                class_id_symbol,
                 0,
             );
-            emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the catchable ArgumentCountError class
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the requested builtin throwable class
             abi::emit_symbol_address(emitter, "r10", &message_label);
             emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store the immutable diagnostic bytes
             abi::emit_load_int_immediate(emitter, "r10", message_len as i64);
@@ -3584,8 +3651,10 @@ mod tests {
                 let mut emitter = Emitter::new(target);
                 emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, eval_boundary);
                 let asm = emitter.output();
-                assert!(asm.contains(&target.extern_symbol("setjmp")), "{name}: {eval_boundary}");
-                let escape = asm.split_once("owned_invoker_eval_escape:").unwrap().1;
+                assert!(asm.contains(&target.extern_symbol("_setjmp")), "{name}: {eval_boundary}");
+                let escape_label = format!("{}_eval_escape", local_label_prefix(invoker.label, target));
+                assert!(escape_label.starts_with(target.platform.local_label_prefix()), "{name}");
+                let escape = asm.split_once(&format!("{escape_label}:")).unwrap().1;
                 assert_eq!(escape.matches("__rt_cleanup_invoke").count(), 2, "{name}: {eval_boundary}");
                 assert_eq!(escape.contains("__rt_throw_current"), !eval_boundary, "{name}: {eval_boundary}");
             }

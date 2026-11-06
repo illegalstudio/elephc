@@ -1,5 +1,5 @@
 //! Purpose:
-//! Lowers property reads for statically known and nullable object receivers.
+//! Lowers property reads and initialization probes for known and boxed object receivers.
 //!
 //! Called from:
 //! - The object lowering facade and sibling object support modules.
@@ -51,6 +51,9 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get(ctx: &mut FunctionContext<'
         return store_if_result(ctx, inst);
     }
     let property = property_name_immediate(ctx, inst)?.to_string();
+    if let Some(class_name) = extern_receiver_class(ctx, &ctx.value_php_type(object)?) {
+        return lower_extern_prop_get(ctx, inst, object, &class_name, &property);
+    }
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
         return lower_object_prop_get_with_null_guard(ctx, inst, object, &property);
     }
@@ -100,6 +103,27 @@ pub(super) fn lower_prop_get_nonnull(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
+    // `num` is GMP's virtual debug projection, not a declared property. PHP reads a real
+    // dynamic property when one was created, otherwise warns `Undefined property` and
+    // answers null. Route that name through the dynamic hash probe with its miss warning.
+    if let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() {
+        if class_name.eq_ignore_ascii_case("GMP") && property == "num" {
+            if let Some(hash_offset) =
+                dynamic_property_hash_offset_for_class(ctx, &class_name, property)?
+            {
+                let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+                ctx.load_value_to_reg(object, base_reg)?;
+                emit_scope_dynamic_property_hash_probe(
+                    ctx, &class_name, property, base_reg, hash_offset, true,
+                )?;
+                cast_loaded_mixed_pointer_to_result(
+                    ctx, &inst.result_php_type.codegen_repr(),
+                )?;
+                store_if_result(ctx, inst)?;
+                return Ok(());
+            }
+        }
+    }
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
         return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, property);
     }
@@ -118,13 +142,20 @@ pub(super) fn lower_prop_get_nonnull(
     if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
         return lower_magic_get_prop(ctx, inst, object, &class_name, property);
     }
+    let mode = property_fetch_mode(inst);
+    // An interface declares no properties, so a read the checker accepted on one went through a
+    // narrowing (`if ($answer instanceof Shape)`): dispatch on the runtime class.
+    if receiver_is_interface(ctx, object)? {
+        if let Some(candidates) = narrowed_receiver_property_candidates(ctx, property, mode, inst)? {
+            return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates, mode);
+        }
+    }
     // php does not answer this name from a declared slot on the receiver's STATIC class: it is a
     // strict ancestor's private slot, which php 7.4 made invisible here, or an undeclared name the
     // class keeps in its per-instance hash. Either way the runtime class decides what happens, and
     // it can decide something of a different KIND: a subclass that redeclares the name public
     // answers from its own slot, one that declares `__get` answers the accessor, and each class
     // lays its hash out at its own offset and reports its own name.
-    let mode = property_fetch_mode(inst);
     if let Some(plan) = dynamic_property_runtime_plan_for_object(
         ctx,
         object,
@@ -141,9 +172,18 @@ pub(super) fn lower_prop_get_nonnull(
             |ctx, arm| emit_dynamic_plan_read(ctx, inst, object, property, arm, mode),
         );
     }
+    // The static class has no slot or hash route for the name, but a subclass declares it: the
+    // checker narrowed the receiver (`if ($answer instanceof Shape)`), so dispatch on the runtime
+    // class.
+    if receiver_class_lacks_property(ctx, object, property)? {
+        if let Some(candidates) = narrowed_receiver_property_candidates(ctx, property, mode, inst)? {
+            return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates, mode);
+        }
+    }
     let slot = resolve_property_slot(ctx, object, property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
+    emit_typed_pointer_receiver_null_check(ctx, object, base_reg)?;
     let read_done = emit_property_read_state_guard(
         ctx,
         &slot,
@@ -157,6 +197,48 @@ pub(super) fn lower_prop_get_nonnull(
         ctx.emitter.label(&read_done);
     }
     store_if_result(ctx, inst)
+}
+
+/// Reports whether an object receiver's static type is an interface (which has no class layout).
+fn receiver_is_interface(ctx: &FunctionContext<'_>, object: ValueId) -> Result<bool> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(false);
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    Ok(ctx.module.interface_infos.contains_key(normalized)
+        && !ctx.module.class_infos.contains_key(normalized))
+}
+
+/// Reports whether an object receiver's static class has no property slot under `property` at
+/// all, its own or inherited.
+fn receiver_class_lacks_property(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+) -> Result<bool> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(false);
+    };
+    Ok(ctx
+        .module
+        .class_infos
+        .get(class_name.trim_start_matches('\\'))
+        .is_some_and(|class_info| class_info.properties.iter().all(|(name, _)| name != property)))
+}
+
+/// Returns the runtime-class arms for a read on a narrowed receiver, or `None` when no class
+/// declares the name or keeps it in its hash (the ordinary missing-property path then reports it).
+fn narrowed_receiver_property_candidates(
+    ctx: &FunctionContext<'_>,
+    property: &str,
+    mode: PropertyFetchMode,
+    inst: &Instruction,
+) -> Result<Option<Vec<MixedPropertyReadCandidate>>> {
+    let candidates = declared_mixed_property_candidates(ctx, property, mode, inst)?;
+    if candidates.is_empty() && mixed_class_hash_arms(ctx, property, &[])?.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(candidates))
 }
 
 /// Resolves the reference-cell slot a statically typed receiver exposes, or emits php's refusal.
@@ -465,7 +547,10 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
-        return lower_nullable_prop_initialized(ctx, inst, object, &class_name, &property);
+        return lower_boxed_prop_initialized(ctx, inst, object, &class_name, &property);
+    }
+    if let Some(class_name) = union_object_member_class(ctx, object)? {
+        return lower_boxed_prop_initialized(ctx, inst, object, &class_name, &property);
     }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     if !slot.is_declared && !slot_supports_untyped_unset_marker(&slot) {
@@ -478,19 +563,17 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
     store_if_result(ctx, inst)
 }
 
-/// Probes a typed property through a NULLABLE (`?C`) receiver.
+/// Probes a property through a boxed union carrying one known object class.
 ///
-/// Such a receiver represents as a boxed `Mixed`, so the probe above has no object pointer to
-/// read the slot from and this instruction used to be refused outright — which made
-/// `isset($c->p)` a compile error and left `$c->p ?? "d"` on the ordinary read, where it fatals
-/// on an uninitialized slot. The receiver is unboxed here the same way every other nullable
-/// receiver is, and a NULL one answers `false`: that is the answer both callers want, since
-/// `isset(null->p)` is false and `null->p ?? "d"` is the default.
+/// Nullable and factory-style `C|false` receivers have boxed `Mixed` storage. Unbox and verify
+/// the object tag before inspecting its slot; scalar and null arms answer false without touching
+/// a payload as an object pointer. Readonly writes need this probe even before an instanceof
+/// narrowing, so they can distinguish permitted initialization from an initialized overwrite.
 ///
 /// The probe and the read that follows it consume the SAME unboxed value, so nothing can
-/// re-null the receiver between them — the initialized branch is only ever entered with the
+/// re-null the receiver between them: the initialized branch is only ever entered with the
 /// object this instruction just proved present.
-fn lower_nullable_prop_initialized(
+fn lower_boxed_prop_initialized(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     object: ValueId,
@@ -498,19 +581,22 @@ fn lower_nullable_prop_initialized(
     property: &str,
 ) -> Result<()> {
     let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
-    if !slot.is_declared && !slot_supports_untyped_unset_marker(&slot) {
-        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-        return store_if_result(ctx, inst);
-    }
-    let null_label = ctx.next_label("prop_initialized_null_receiver");
+    let null_label = ctx.next_label("prop_initialized_non_object_receiver");
     let done_label = ctx.next_label("prop_initialized_done");
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
-    emit_nullable_receiver_object_payload(ctx, object, &null_label, base_reg)?;
-    emit_typed_property_initialized_bool(ctx, &slot, base_reg);
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_object_payload_or_null(ctx, &null_label);
+    abi::emit_reg_move(ctx.emitter, base_reg, abi::int_result_reg(ctx.emitter));
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(&slot) {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    } else {
+        emit_typed_property_initialized_bool(ctx, &slot, base_reg);
+    }
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0); // a null receiver has no slot to be initialized
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0); // a non-object receiver has no slot to be initialized
 
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)

@@ -9,12 +9,13 @@
 //! - Produces FQN-to-path mappings and `autoload.files` entries for compile-time inclusion.
 //! - `autoload` and `autoload-dev` are intentionally merged because compiled binaries have no Composer runtime mode.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::parser::ast::{Stmt, StmtKind};
 
 /// Compiled view of every autoload section found in the project.
+#[derive(Default)]
 pub struct AutoloadIndex {
     fqn_to_path: HashMap<String, PathBuf>,
     files_to_include: Vec<PathBuf>,
@@ -22,9 +23,11 @@ pub struct AutoloadIndex {
 
 impl AutoloadIndex {
     /// Build the index by reading `<project_root>/composer.json` and any
-    /// `<project_root>/vendor/<vendor>/<pkg>/composer.json`. Empty index
-    /// when no composer.json exists.
-    pub fn from_project_root(project_root: &Path) -> Self {
+    /// `<project_root>/vendor/<vendor>/<pkg>/composer.json`, skipping every vendor package
+    /// whose `name` is in `excluded` (an `elephc test` build leaves the installed PHPUnit
+    /// out this way; an ordinary build passes an empty set). Empty index when no
+    /// composer.json exists.
+    pub fn from_project_root_excluding(project_root: &Path, excluded: &HashSet<String>) -> Self {
         let mut builder = IndexBuilder::default();
         builder.load_composer(project_root);
         let vendor = project_root.join("vendor");
@@ -36,9 +39,15 @@ impl AutoloadIndex {
                 }
                 for sub in std::fs::read_dir(&pkg_dir).into_iter().flatten().flatten() {
                     let inner = sub.path();
-                    if inner.is_dir() {
-                        builder.load_composer(&inner);
+                    if !inner.is_dir() {
+                        continue;
                     }
+                    if !excluded.is_empty()
+                        && package_name(&inner).is_some_and(|name| excluded.contains(&name))
+                    {
+                        continue;
+                    }
+                    builder.load_composer(&inner);
                 }
             }
         }
@@ -63,6 +72,13 @@ impl AutoloadIndex {
     pub fn files(&self) -> &[PathBuf] {
         &self.files_to_include
     }
+}
+
+/// Reads the `name` of the package declared by `<dir>/composer.json`, if any.
+fn package_name(dir: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(dir.join("composer.json")).ok()?;
+    let json = serde_json::from_str::<serde_json::Value>(&content).ok()?;
+    json.get("name")?.as_str().map(str::to_owned)
 }
 
 #[derive(Default)]

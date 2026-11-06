@@ -9,6 +9,41 @@
 
 use super::*;
 
+/// Couples immutable summaries with their case-folded declaration index for scoped lookups.
+#[derive(Clone)]
+pub(super) struct FunctionEffectLookup {
+    effects: Rc<HashMap<String, Effect>>,
+    names: Rc<HashMap<String, String>>,
+    results: Rc<HashMap<String, crate::types::PhpType>>,
+}
+
+impl FunctionEffectLookup {
+    /// Builds one name index for an immutable callable-summary map.
+    pub(super) fn new(effects: Rc<HashMap<String, Effect>>, results: Rc<HashMap<String, crate::types::PhpType>>) -> Self {
+        let names = Rc::new(effects.keys().map(|name|
+            (php_symbol_key(name), name.clone())).collect());
+        Self { effects, names, results }
+    }
+
+    /// Keeps user return contracts ahead of builtin fallback, including unknown and never results.
+    pub(super) fn result_type(&self, name: &str) -> Option<crate::types::PhpType> {
+        let canonical = if self.effects.contains_key(name) { name }
+            else { self.names.get(&php_symbol_key(name))?.as_str() };
+        Some(self.results.get(canonical).cloned().unwrap_or(crate::types::PhpType::Mixed))
+    }
+
+    /// Looks up a method contract using the canonical dispatch key from the effect analysis.
+    pub(super) fn method_result_type(&self, key: &str) -> Option<crate::types::PhpType> {
+        self.results.get(key).cloned()
+    }
+
+    /// Resolves exact and case-insensitive names without scanning unrelated declarations.
+    pub(super) fn get(&self, name: &str) -> Option<&Effect> {
+        self.effects.get(name).or_else(|| self.names.get(&php_symbol_key(name))
+            .and_then(|canonical| self.effects.get(canonical)))
+    }
+}
+
 /// Computes the effect for every function, static method, and concrete instance method in the
 /// program. Uses a fixed-point iteration: effects start as PURE and are refined by examining
 /// bodies, accounting for nested calls and closed-world override sets.
@@ -49,6 +84,15 @@ pub(super) fn compute_program_callable_effects(
             .collect(),
     );
 
+    // Declaration keys stay fixed while effects converge, so every round shares this index.
+    let function_names = Rc::new(function_bodies.keys().map(|name|
+        (php_symbol_key(name), name.clone())).collect());
+    let function_results = Rc::new(function_bodies.iter().map(|(name, body)|
+        (name.clone(), body.return_boundary.declared_result()))
+        .chain(static_method_bodies.iter().map(|(name, body)|
+            (name.clone(), body.return_boundary.declared_result())))
+        .chain(instance_method_bodies.iter().map(|(name, body)|
+            (name.clone(), body.return_boundary.declared_result()))).collect());
     loop {
         let (function_updates, static_method_updates, instance_method_updates) =
             ACTIVE_FUNCTION_EFFECTS.with(|function_slot| {
@@ -56,7 +100,11 @@ pub(super) fn compute_program_callable_effects(
                     ACTIVE_INSTANCE_METHOD_EFFECTS.with(|instance_slot| {
                         ACTIVE_INSTANCE_DISPATCH_METADATA.with(|metadata_slot| {
                             let previous_functions =
-                                function_slot.replace(Some(Rc::clone(&function_effects)));
+                                function_slot.replace(Some(FunctionEffectLookup {
+                                    effects: Rc::clone(&function_effects),
+                                    names: Rc::clone(&function_names),
+                                    results: Rc::clone(&function_results),
+                                }));
                             let previous_static_methods =
                                 static_slot.replace(Some(Rc::clone(&static_method_effects)));
                             let previous_instance_methods =
@@ -71,7 +119,8 @@ pub(super) fn compute_program_callable_effects(
                             for (name, function) in &function_bodies {
                                 let effect = never_declared_effect(
                                     function.declared_never,
-                                    block_effect(&function.body),
+                                    parameter_guard_effect(function.parameter_guard_may_throw,
+                                        with_return_boundary_facts(Some(&function.return_boundary), || block_effect(function.body))),
                                 );
                                 if function_effects.get(name).copied() != Some(effect) {
                                     function_updates.push((name.clone(), effect));
@@ -81,9 +130,10 @@ pub(super) fn compute_program_callable_effects(
                             for (name, method) in &static_method_bodies {
                                 let effect = with_class_effect_context(
                                     Some(method.context.clone()),
-                                    || block_effect(&method.body),
+                                    || with_return_boundary_facts(Some(&method.return_boundary), || block_effect(method.body)),
                                 );
-                                let effect = never_declared_effect(method.declared_never, effect);
+                                let effect = never_declared_effect(method.declared_never,
+                                    parameter_guard_effect(method.parameter_guard_may_throw, effect));
                                 if static_method_effects.get(name).copied() != Some(effect) {
                                     static_method_updates.push((name.clone(), effect));
                                 }
@@ -92,9 +142,10 @@ pub(super) fn compute_program_callable_effects(
                             for (name, method) in &instance_method_bodies {
                                 let effect = with_class_effect_context(
                                     Some(method.context.clone()),
-                                    || block_effect(&method.body),
+                                    || with_return_boundary_facts(Some(&method.return_boundary), || block_effect(method.body)),
                                 );
-                                let effect = never_declared_effect(method.declared_never, effect);
+                                let effect = never_declared_effect(method.declared_never,
+                                    parameter_guard_effect(method.parameter_guard_may_throw, effect));
                                 if instance_method_effects.get(name).copied() != Some(effect) {
                                     instance_method_updates.push((name.clone(), effect));
                                 }
@@ -152,6 +203,7 @@ fn collect_program_function_bodies<'a>(
             StmtKind::FunctionDecl {
                 name,
                 body,
+                params,
                 return_type,
                 ..
             } => {
@@ -160,6 +212,9 @@ fn collect_program_function_bodies<'a>(
                     FunctionEffectBody {
                         body,
                         declared_never: is_never_return_type(return_type),
+                        parameter_guard_may_throw: params.iter().any(|(_, ty, _, _)| type_guard_may_throw(ty.as_ref())),
+                        return_boundary: ReturnBoundaryFacts::new(return_type.as_ref(),
+                            params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body),
                     },
                 );
             }
@@ -194,6 +249,9 @@ fn collect_program_static_method_bodies<'a>(
                                 context: context.clone(),
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
+                                parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| type_guard_may_throw(ty.as_ref())),
+                                return_boundary: ReturnBoundaryFacts::new(method.return_type.as_ref(),
+                                    method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body),
                             },
                         );
                     }
@@ -230,6 +288,9 @@ fn collect_program_instance_method_bodies<'a>(
                                 context: context.clone(),
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
+                                parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| type_guard_may_throw(ty.as_ref())),
+                                return_boundary: ReturnBoundaryFacts::new(method.return_type.as_ref(),
+                                    method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body),
                             },
                         );
                     }
@@ -270,6 +331,8 @@ fn collect_instance_dispatch_metadata_into(
                 methods,
                 ..
             } => {
+                metadata.has_internal_object_operators |= elephc_builtin_contract::lookup_class(name)
+                    .is_some_and(|class| class.operators.is_some());
                 let private_methods = methods
                     .iter()
                     .filter(|method| {
@@ -348,6 +411,44 @@ fn is_never_return_type(return_type: &Option<TypeExpr>) -> bool {
 fn never_declared_effect(declared_never: bool, effect: Effect) -> Effect {
     if declared_never {
         effect.with_side_effects()
+    } else {
+        effect
+    }
+}
+
+/// Returns whether binding this declared parameter can raise before the body runs.
+///
+/// A literal `false` type and a class type both run a call-boundary guard: `false` checks the
+/// literal, and a class checks that a `Class|false` / `Class|null` union argument carries the
+/// object alternative. Keep the call observable even when the body itself is pure.
+fn type_guard_may_throw(ty: Option<&TypeExpr>) -> bool {
+    let Some(ty) = ty else { return false };
+    match ty {
+        TypeExpr::False | TypeExpr::Named(_) if !type_expr_is_builtin(ty) => true,
+        TypeExpr::GenericClass { .. } | TypeExpr::Intersection(_) => true,
+        TypeExpr::Nullable(inner) => type_guard_may_throw(Some(inner)),
+        TypeExpr::Union(members) => members.iter().any(|member| type_guard_may_throw(Some(member))),
+        _ => false,
+    }
+}
+
+/// Returns whether a named type expression is a PHP builtin rather than a class.
+fn type_expr_is_builtin(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Named(name) => matches!(
+            name.as_str().trim_start_matches('\\').to_ascii_lowercase().as_str(),
+            "mixed" | "array" | "object" | "callable" | "iterable" | "string" | "int"
+                | "float" | "bool" | "null" | "false" | "true" | "static" | "self"
+                | "parent" | "void" | "never"
+        ),
+        _ => false,
+    }
+}
+
+/// Keeps call-boundary literal-type guards observable even when the callable body is pure.
+fn parameter_guard_effect(may_throw: bool, effect: Effect) -> Effect {
+    if may_throw {
+        effect.with_may_throw()
     } else {
         effect
     }

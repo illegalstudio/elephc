@@ -3,14 +3,16 @@
 //! userspace stream wrappers. Given a `scheme://...` path it scans the
 //! registered-wrapper table, instantiates the matching class, calls its
 //! `url_stat($path, $flags)` method (vtable slot 9), and returns the boxed
-//! Mixed stat array. Backs `file_exists()`/`is_file()`/`filesize()` on
-//! `scheme://` URLs.
+//! Mixed stat array. Backs the path-based stat family (`stat()`, the
+//! existence and permission predicates, and the integer getters such as
+//! `filesize()`, `filemtime()` and `fileperms()`) on `scheme://` URLs.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via
 //!   `crate::codegen_support::runtime::io`.
-//! - The file_exists/is_file/filesize builtin emitters call it before their
-//!   normal filesystem path and branch on the `_url_stat_matched` out-flag.
+//! - The stat-family builtin emitters in
+//!   `crate::codegen::lower_inst::builtins::io` call it before their normal
+//!   filesystem path and branch on the `_url_stat_matched` out-flag.
 //!
 //! Key details:
 //! - `_url_stat_matched` is set to 1 only when the path's scheme matches a
@@ -30,6 +32,26 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// Byte offset of the url_stat method pointer in the per-class user-wrapper
 /// vtable (slot 9 of `USER_WRAPPER_VTABLE_SLOTS`, 8 bytes per slot).
 const VTABLE_URL_STAT_OFFSET: usize = 9 * 8;
+
+/// The integer `url_stat()` keys `__rt_user_wrapper_url_stat_field` extracts, by
+/// selector. The first entry (`size`) is also the key for any selector this table
+/// does not list. Selectors 3..=5 are absent on purpose: they are the permission
+/// predicates, which read `mode`, `uid` and `gid` together instead of one key.
+const INT_FIELD_KEYS: [(u64, &str); 8] = [
+    (0, "size"),
+    (1, "mode"),
+    (2, "mtime"),
+    (6, "atime"),
+    (7, "ctime"),
+    (8, "uid"),
+    (9, "gid"),
+    (10, "ino"),
+];
+/// First selector of the permission-predicate range (`is_readable()`).
+const FIRST_ACCESS_SELECTOR: u64 = 3;
+/// Width of the permission-predicate range above its first selector
+/// (`is_writable()` is 4, `is_executable()` is 5).
+const ACCESS_SELECTOR_SPAN: u64 = 2;
 
 /// Emits `__rt_user_wrapper_url_stat(path_ptr, path_len, flags)`.
 ///
@@ -299,6 +321,14 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
 /// | 3   | `mode`+`uid`+`gid` | `is_readable()` as 0/1, or 0              |
 /// | 4   | `mode`+`uid`+`gid` | `is_writable()` as 0/1, or 0              |
 /// | 5   | `mode`+`uid`+`gid` | `is_executable()` as 0/1, or 0            |
+/// | 6   | `atime`            | the integer field, or `-1`                |
+/// | 7   | `ctime`            | the integer field, or `-1`                |
+/// | 8   | `uid`              | the integer field, or `-1`                |
+/// | 9   | `gid`              | the integer field, or `-1`                |
+/// | 10  | `ino`              | the integer field, or `-1`                |
+///
+/// The integer selectors live in `INT_FIELD_KEYS`; the later ones were appended
+/// after the predicates so the predicate selectors kept their numbers.
 ///
 /// Backs the whole stat family on `scheme://` URLs; the caller reads
 /// `_url_stat_matched` to choose between this result and the real-filesystem
@@ -342,24 +372,25 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_uusf_fail_box");                             // → release the false box and return the sentinel
     emitter.instruction("str x0, [sp, #24]");                                   // save the stat-array Mixed across the key lookups
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the field selector
-    emitter.instruction("cmp x10, #3");                                         // selectors 3..5 are the permission predicates
-    emitter.instruction("b.ge __rt_uusf_access");                               // → read mode, uid and gid together
+    emitter.instruction(&format!("sub x11, x10, #{}", FIRST_ACCESS_SELECTOR));  // rebase the selector onto the permission-predicate range
+    emitter.instruction(&format!("cmp x11, #{}", ACCESS_SELECTOR_SPAN));        // selectors 3..5 are the permission predicates
+    emitter.instruction("b.ls __rt_uusf_access");                               // → read mode, uid and gid together
 
     // -- single integer field: select the stat-array key string --
-    emitter.instruction("cmp x10, #1");                                         // selector 1 = 'mode'
-    emitter.instruction("b.eq __rt_uusf_mode");                                 // → load the mode key
-    emitter.instruction("cmp x10, #2");                                         // selector 2 = 'mtime'
-    emitter.instruction("b.eq __rt_uusf_mtime");                                // → load the mtime key
-    abi::emit_symbol_address(emitter, "x1", "_stat_key_size");
-    emitter.instruction("mov x2, #4");                                          // strlen("size")
-    emitter.instruction("b __rt_uusf_havekey");                                 // proceed with the size key
-    emitter.label("__rt_uusf_mode");
-    abi::emit_symbol_address(emitter, "x1", "_stat_key_mode");
-    emitter.instruction("mov x2, #4");                                          // strlen("mode")
-    emitter.instruction("b __rt_uusf_havekey");                                 // proceed with the mode key
-    emitter.label("__rt_uusf_mtime");
-    abi::emit_symbol_address(emitter, "x1", "_stat_key_mtime");
-    emitter.instruction("mov x2, #5");                                          // strlen("mtime")
+    for (selector, _) in &INT_FIELD_KEYS[1..] {
+        emitter.instruction(&format!("cmp x10, #{}", selector));                // does the caller want this selector's key?
+        emitter.instruction(&format!("b.eq __rt_uusf_key_{}", selector));       // → load that key
+    }
+    let (_, default_key) = INT_FIELD_KEYS[0];
+    abi::emit_symbol_address(emitter, "x1", &format!("_stat_key_{}", default_key));
+    emitter.instruction(&format!("mov x2, #{}", default_key.len()));            // byte length of the default 'size' key
+    emitter.instruction("b __rt_uusf_havekey");                                 // proceed with the default key
+    for (selector, key) in &INT_FIELD_KEYS[1..] {
+        emitter.label(&format!("__rt_uusf_key_{}", selector));
+        abi::emit_symbol_address(emitter, "x1", &format!("_stat_key_{}", key));
+        emitter.instruction(&format!("mov x2, #{}", key.len()));                // byte length of the selected key
+        emitter.instruction("b __rt_uusf_havekey");                             // proceed with the selected key
+    }
     emitter.label("__rt_uusf_havekey");
     emitter.instruction("ldr x0, [sp, #24]");                                   // stat-array Mixed → reader receiver
     emitter.instruction("bl __rt_uusf_read");                                   // x0 = integer field, x1 = 1 when present and integral
@@ -416,8 +447,9 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the selector to choose the sentinel
     emitter.instruction("mov x0, #-1");                                         // integer selectors report -1
     emitter.instruction("mov x10, #0");                                         // boolean selectors report false
-    emitter.instruction("cmp x9, #3");                                          // selectors 3..5 are the permission predicates
-    emitter.instruction("csel x0, x10, x0, ge");                                // a -1 stored into a PHP bool would read as true
+    emitter.instruction(&format!("sub x9, x9, #{}", FIRST_ACCESS_SELECTOR));    // rebase the selector onto the permission-predicate range
+    emitter.instruction(&format!("cmp x9, #{}", ACCESS_SELECTOR_SPAN));         // selectors 3..5 are the permission predicates
+    emitter.instruction("csel x0, x10, x0, ls");                                // a -1 stored into a PHP bool would read as true
     emitter.instruction("mov x1, #0");                                          // failure flag: `filesize()` boxes PHP false rather than -1
 
     emitter.label("__rt_uusf_ret");
@@ -481,24 +513,25 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_uusf_fail_box_x86");                           // → release the false box and return the sentinel
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the stat-array Mixed across the key lookups
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the field selector
-    emitter.instruction("cmp r10, 3");                                          // selectors 3..5 are the permission predicates
-    emitter.instruction("jge __rt_uusf_access_x86");                            // → read mode, uid and gid together
+    emitter.instruction(&format!("lea r11, [r10 - {}]", FIRST_ACCESS_SELECTOR)); // rebase the selector onto the permission-predicate range
+    emitter.instruction(&format!("cmp r11, {}", ACCESS_SELECTOR_SPAN));         // selectors 3..5 are the permission predicates
+    emitter.instruction("jbe __rt_uusf_access_x86");                            // → read mode, uid and gid together
 
     // -- single integer field: select the stat-array key string --
-    emitter.instruction("cmp r10, 1");                                          // selector 1 = 'mode'
-    emitter.instruction("je __rt_uusf_mode_x86");                               // → load the mode key
-    emitter.instruction("cmp r10, 2");                                          // selector 2 = 'mtime'
-    emitter.instruction("je __rt_uusf_mtime_x86");                              // → load the mtime key
-    abi::emit_symbol_address(emitter, "rax", "_stat_key_size");                 // size key pointer (new_by_name-style rax/rdx string ABI)
-    emitter.instruction("mov rdx, 4");                                          // strlen("size")
-    emitter.instruction("jmp __rt_uusf_havekey_x86");                           // proceed with the size key
-    emitter.label("__rt_uusf_mode_x86");
-    abi::emit_symbol_address(emitter, "rax", "_stat_key_mode");                 // mode key pointer
-    emitter.instruction("mov rdx, 4");                                          // strlen("mode")
-    emitter.instruction("jmp __rt_uusf_havekey_x86");                           // proceed with the mode key
-    emitter.label("__rt_uusf_mtime_x86");
-    abi::emit_symbol_address(emitter, "rax", "_stat_key_mtime");                // mtime key pointer
-    emitter.instruction("mov rdx, 5");                                          // strlen("mtime")
+    for (selector, _) in &INT_FIELD_KEYS[1..] {
+        emitter.instruction(&format!("cmp r10, {}", selector));                 // does the caller want this selector's key?
+        emitter.instruction(&format!("je __rt_uusf_key_{}_x86", selector));     // → load that key
+    }
+    let (_, default_key) = INT_FIELD_KEYS[0];
+    abi::emit_symbol_address(emitter, "rax", &format!("_stat_key_{}", default_key)); // default key pointer (new_by_name-style rax/rdx string ABI)
+    emitter.instruction(&format!("mov rdx, {}", default_key.len()));            // byte length of the default 'size' key
+    emitter.instruction("jmp __rt_uusf_havekey_x86");                           // proceed with the default key
+    for (selector, key) in &INT_FIELD_KEYS[1..] {
+        emitter.label(&format!("__rt_uusf_key_{}_x86", selector));
+        abi::emit_symbol_address(emitter, "rax", &format!("_stat_key_{}", key)); // selected key pointer
+        emitter.instruction(&format!("mov rdx, {}", key.len()));                // byte length of the selected key
+        emitter.instruction("jmp __rt_uusf_havekey_x86");                       // proceed with the selected key
+    }
     emitter.label("__rt_uusf_havekey_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // stat-array Mixed → reader receiver
     emitter.instruction("call __rt_uusf_read_x86");                             // rax = integer field, rdx = 1 when present and integral
@@ -556,8 +589,9 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the selector to choose the sentinel
     emitter.instruction("mov rax, -1");                                         // integer selectors report -1
     emitter.instruction("xor edx, edx");                                        // boolean selectors report false
-    emitter.instruction("cmp r9, 3");                                           // selectors 3..5 are the permission predicates
-    emitter.instruction("cmovge rax, rdx");                                     // a -1 stored into a PHP bool would read as true
+    emitter.instruction(&format!("sub r9, {}", FIRST_ACCESS_SELECTOR));         // rebase the selector onto the permission-predicate range
+    emitter.instruction(&format!("cmp r9, {}", ACCESS_SELECTOR_SPAN));          // selectors 3..5 are the permission predicates
+    emitter.instruction("cmovbe rax, rdx");                                     // a -1 stored into a PHP bool would read as true
     emitter.instruction("mov rdx, 0");                                          // failure flag: `filesize()` boxes PHP false rather than -1
 
     emitter.label("__rt_uusf_ret_x86");

@@ -31,13 +31,29 @@ pub struct Registry {
 }
 
 impl Registry {
+    /// Creates a registry without project discovery for compiler-owned hosts such as the REPL.
+    pub fn empty() -> Self {
+        Self { psr4: AutoloadIndex::default(), rules: Vec::new(),
+            extensions: DEFAULT_AUTOLOAD_EXTENSIONS.to_string(), warnings: Vec::new() }
+    }
+
     /// Build the registry by reading composer.json from `project_root` and
     /// scanning `program` for `spl_autoload_register` callsites. Returns
     /// the registry plus the program with consumed register sites stripped
     /// so the runtime stub doesn't see closure bodies containing
     /// non-foldable `require_once` statements.
     pub fn build(project_root: &Path, program: Program) -> (Self, Program) {
-        let psr4 = AutoloadIndex::from_project_root(project_root);
+        Self::build_excluding(project_root, program, &std::collections::HashSet::new())
+    }
+
+    /// Like [`Self::build`], but leaves the vendor packages named in `excluded` out of the
+    /// index: an `elephc test` build passes PHPUnit's dependency closure here.
+    pub fn build_excluding(
+        project_root: &Path,
+        program: Program,
+        excluded: &std::collections::HashSet<String>,
+    ) -> (Self, Program) {
+        let psr4 = AutoloadIndex::from_project_root_excluding(project_root, excluded);
         let (program, rules, warnings) = collect_register_calls(program);
         // Synthesise alias subclasses after closure collection so the
         // alias decls don't get confused with autoloader sources.

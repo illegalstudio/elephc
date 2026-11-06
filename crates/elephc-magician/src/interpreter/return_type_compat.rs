@@ -10,6 +10,7 @@
 //! - `self`, `parent`, and `static` are resolved relative to the declaration owner.
 //! - Parameter checks reverse the return-type relation because PHP parameters are contravariant.
 //! - Pending class declarations are checked before they are registered in the eval context.
+//! - Readonly storage over setter-only abstract contracts uses the same supertype relation.
 
 use super::*;
 
@@ -92,6 +93,19 @@ pub(super) fn property_type_signature_matches(
         ),
         _ => false,
     }
+}
+
+/// Checks whether backing storage can accept every value in an inherited setter contract.
+pub(super) fn property_setter_storage_type_accepts(
+    property_type: Option<&EvalParameterType>,
+    property_owner: &str,
+    required_type: Option<&EvalParameterType>,
+    required_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
+    eval_parameter_type_accepts(property_type, property_owner, required_type,
+        required_owner, pending_class, context)
 }
 
 /// Returns the parameter type that applies at one source-order argument position.
@@ -200,12 +214,6 @@ fn eval_property_class_type_matches(
     pending_class: Option<&EvalClass>,
     context: &ElephcEvalContext,
 ) -> bool {
-    if property_name
-        .trim_start_matches('\\')
-        .eq_ignore_ascii_case(required_name.trim_start_matches('\\'))
-    {
-        return true;
-    }
     let Some(property_resolved) =
         eval_resolve_return_class_type_name(property_name, property_owner, pending_class, context)
     else {
@@ -413,6 +421,11 @@ fn eval_return_variant_accepts_actual_variant(
     context: &ElephcEvalContext,
 ) -> bool {
     match (expected_variant, actual_variant) {
+        (EvalParameterTypeVariant::Generic(expected), EvalParameterTypeVariant::Generic(actual)) => generic_signature_accepts(actual, expected, context),
+        (EvalParameterTypeVariant::Generic(expected), EvalParameterTypeVariant::Class(actual)) => crate::parser::generics::parse_type_string(actual).is_ok_and(|actual| generic_signature_accepts(&actual, expected, context)),
+        (EvalParameterTypeVariant::Class(expected), EvalParameterTypeVariant::Generic(actual)) => generic_signature_accepts(actual, &elephc_generics::Type::atom(expected), context),
+        (EvalParameterTypeVariant::Object, EvalParameterTypeVariant::Generic(elephc_generics::Type::Apply(name, _))) if name != "array" => true,
+        (EvalParameterTypeVariant::Array, EvalParameterTypeVariant::Generic(elephc_generics::Type::Apply(name, _))) if name == "array" => true,
         (_, EvalParameterTypeVariant::Never) => true,
         (EvalParameterTypeVariant::Never, _) => false,
         (EvalParameterTypeVariant::Void, _) | (_, EvalParameterTypeVariant::Void) => false,

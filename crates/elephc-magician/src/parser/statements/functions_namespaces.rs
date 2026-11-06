@@ -20,6 +20,8 @@ impl Parser {
         &mut self,
         attributes: Vec<EvalAttribute>,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let template_start = self.pos;
+        let type_scope = self.type_parameters.len();
         let source_start_line = self.current_line();
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
@@ -27,6 +29,10 @@ impl Parser {
         };
         let name = self.qualify_name_in_current_namespace(name);
         self.advance();
+        let name_index = self.pos - 1;
+        let header_start = self.pos;
+        let generic_parameters = self.parse_generic_parameters()?;
+        let header_end = self.pos;
         self.expect(TokenKind::LParen)?;
         let ParsedMethodParams {
             params,
@@ -43,8 +49,8 @@ impl Parser {
         }
         let return_type = self.parse_optional_return_type(EvalTypePosition::FunctionReturn)?;
         let (body, source_end_line) = self.parse_block_with_end_line()?;
-        Ok(vec![EvalStmt::FunctionDecl {
-            name,
+        let declaration = EvalStmt::FunctionDecl {
+            name: name.clone(),
             source_location: Some(EvalSourceLocation::new(source_start_line, source_end_line)),
             attributes,
             params,
@@ -55,7 +61,13 @@ impl Parser {
             parameter_is_variadic,
             return_type,
             body,
-        }])
+        };
+        self.type_parameters.truncate(type_scope);
+        self.type_parameter_origins.truncate(type_scope);
+        if generic_parameters.is_empty() { return Ok(vec![declaration]); }
+        let template = self.retain_template(template_start, name_index, header_start, header_end,
+            name, generic_parameters, declaration);
+        Ok(vec![EvalStmt::GenericDecl(Box::new(template))])
     }
 
     /// Parses `namespace Name;` or `namespace Name { ... }` eval namespace blocks.
@@ -140,8 +152,12 @@ impl Parser {
     pub(in crate::parser) fn parse_use_name_or_group_start(
         &mut self,
     ) -> Result<(String, bool), EvalParseError> {
+        // PHP refuses a relative name in an import: `use namespace\Foo;` is a syntax error.
+        if self.at_relative_name() {
+            return Err(EvalParseError::UnexpectedToken);
+        }
         let _ = self.consume(TokenKind::Backslash);
-        let TokenKind::Ident(first) = self.current() else {
+        let (TokenKind::Ident(first) | TokenKind::ReservedNameHead(first)) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
         let mut name = first.clone();
@@ -150,7 +166,7 @@ impl Parser {
             if self.consume(TokenKind::LBrace) {
                 return Ok((name, true));
             }
-            let TokenKind::Ident(part) = self.current() else {
+            let (TokenKind::Ident(part) | TokenKind::ReservedNameHead(part)) = self.current() else {
                 return Err(EvalParseError::UnexpectedToken);
             };
             name.push('\\');

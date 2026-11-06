@@ -22,7 +22,9 @@ use super::plan::{
     CallArgPlan, CallArgPlanError, PlannedRegularArg, PlannedSourceValue, PlannedVariadicArg,
     SpreadBoundsCheck,
 };
-use super::static_spread::{expand_static_assoc_spread_args_with_origins, ExpandedArgOrigin};
+use super::static_spread::{
+    expand_static_assoc_spread_args_with_origins, validate_static_unpack_order, ExpandedArgOrigin,
+};
 
 /// Validates and normalizes call-site arguments against `sig`, inferring the
 /// caller-visible regular parameter count from the signature.
@@ -61,6 +63,7 @@ pub(crate) fn plan_call_args_with_regular_param_count(
 ) -> Result<CallArgPlan, CallArgPlanError> {
     validate_no_spread_after_named(args)?;
     validate_positional_spread_order(args)?;
+    validate_static_unpack_order(args)?;
     let expanded = expand_static_assoc_spread_args_with_origins(args);
     let assoc_spread_sources = vec![false; expanded.args.len()];
     let (source_args, source_origins, assoc_spread_sources) =
@@ -78,6 +81,7 @@ pub(crate) fn plan_call_args_with_regular_param_count(
         return Ok(CallArgPlan {
             passthrough_args: Some(source_args.clone()),
             source_args,
+            source_origins,
             regular_args: Vec::new(),
             variadic_args: Vec::new(),
             source_values: Vec::new(),
@@ -116,6 +120,7 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
 ) -> Result<CallArgPlan, CallArgPlanError> {
     validate_no_spread_after_named(args)?;
     validate_positional_spread_order(args)?;
+    validate_static_unpack_order(args)?;
     let expanded = expand_static_assoc_spread_args_with_origins(args);
     let expanded_assoc_spread_sources = (0..expanded.args.len())
         .map(|idx| assoc_spread_sources.get(idx).copied().unwrap_or(false))
@@ -135,6 +140,7 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
         return Ok(CallArgPlan {
             passthrough_args: Some(source_args.clone()),
             source_args,
+            source_origins,
             regular_args: Vec::new(),
             variadic_args: Vec::new(),
             source_values: Vec::new(),
@@ -503,6 +509,7 @@ fn plan_named_call_args(
 
     Ok(CallArgPlan {
         source_args,
+        source_origins: source_origins.to_vec(),
         regular_args,
         variadic_args,
         source_values: source_values.into_iter().flatten().collect(),

@@ -1,8 +1,6 @@
 ---
 title: "pcntl_setns()"
 description: "Joins one Linux namespace of the selected process."
-sidebar:
-  order: 656
 ---
 
 ## pcntl_setns()
@@ -21,8 +19,9 @@ Joins one Linux namespace of the selected process.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_setns.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_setns.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

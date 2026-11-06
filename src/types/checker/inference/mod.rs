@@ -9,6 +9,7 @@
 //! - Inference may emit diagnostics and warnings, so callers must preserve source spans and environment context.
 
 mod expr;
+pub(super) use expr::{ConditionalFlow, FlowSnapshot};
 /// Inference for operators: binary ops, instanceof, closures, pipe, and expr calls.
 mod objects;
 /// Inference for objects: property access, method calls, constructors, and class constants.
@@ -19,3 +20,4 @@ pub(super) mod syntactic;
 
 pub use syntactic::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use expr::closure_body_uses_this;
+pub(super) use expr::is_valid_string_offset_index;

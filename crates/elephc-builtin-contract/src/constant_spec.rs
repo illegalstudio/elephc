@@ -40,6 +40,8 @@ pub enum ConstValue {
 /// PHP type of a constant whose value the backend computes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ConstType {
+    /// PHP `null`.
+    Null,
     /// PHP `int`.
     Int,
     /// PHP `float`.
@@ -58,7 +60,7 @@ impl ConstValue {
             Self::Float(_) => ConstType::Float,
             Self::Str(_) => ConstType::Str,
             Self::Bool(_) => ConstType::Bool,
-            Self::Null => ConstType::Str,
+            Self::Null => ConstType::Null,
             Self::TargetDependent(ty) => ty,
         }
     }

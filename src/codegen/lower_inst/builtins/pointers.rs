@@ -8,6 +8,8 @@
 //!
 //! Key details:
 //! - Pointer values are raw machine addresses in the integer result register.
+//! - Float reads and writes move IEEE 754 singles or doubles through the float result register,
+//!   widening or rounding at the boundary so PHP always sees a double.
 //! - Numeric pointer builtins do not allocate, box, retain, or release PHP runtime values.
 //! - String pointer builtins delegate allocation/copy semantics to the existing runtime helpers.
 
@@ -286,6 +288,144 @@ pub(crate) fn lower_ptr_read32(ctx: &mut FunctionContext<'_>, inst: &Instruction
     lower_pointer_read(ctx, inst, "ptr_read32", PointerWidth::Word32)
 }
 
+/// Lowers `ptr_read_f32(pointer)` by reading one IEEE 754 single through a checked pointer as a PHP float.
+pub(crate) fn lower_ptr_read_f32(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_pointer_float_read(ctx, inst, "ptr_read_f32", FloatWidth::Single)
+}
+
+/// Lowers `ptr_read_f64(pointer)` by reading one IEEE 754 double through a checked pointer as a PHP float.
+pub(crate) fn lower_ptr_read_f64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_pointer_float_read(ctx, inst, "ptr_read_f64", FloatWidth::Double)
+}
+
+/// Lowers `ptr_write_f32(pointer, value)` by rounding the value to an IEEE 754 single and storing it.
+pub(crate) fn lower_ptr_write_f32(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_pointer_float_write(ctx, inst, "ptr_write_f32", FloatWidth::Single)
+}
+
+/// Lowers `ptr_write_f64(pointer, value)` by storing the value as an IEEE 754 double.
+pub(crate) fn lower_ptr_write_f64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_pointer_float_write(ctx, inst, "ptr_write_f64", FloatWidth::Double)
+}
+
+/// IEEE 754 width for raw pointer float reads and writes.
+#[derive(Clone, Copy)]
+enum FloatWidth {
+    Single,
+    Double,
+}
+
+/// Lowers a raw pointer float read after validating the pointer against null.
+fn lower_pointer_float_read(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    width: FloatWidth,
+) -> Result<()> {
+    ensure_arg_count(inst, name, 1)?;
+    let pointer = expect_operand(inst, 0)?;
+    load_checked_pointer(ctx, pointer, name)?;
+    emit_float_width_load(ctx, width);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a raw pointer float write after validating the destination pointer against null.
+fn lower_pointer_float_write(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    width: FloatWidth,
+) -> Result<()> {
+    ensure_arg_count(inst, name, 2)?;
+    let pointer = expect_operand(inst, 0)?;
+    let value = expect_operand(inst, 1)?;
+    load_checked_pointer(ctx, pointer, name)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    materialize_float_value(ctx, value, name)?;
+    emit_float_width_store(ctx, width);
+    emit_void_result(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Materializes an EIR value as a PHP double in the float result register for a pointer store.
+fn materialize_float_value(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    name: &str,
+) -> Result<()> {
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+            Ok(())
+        }
+        PhpType::Int | PhpType::Bool => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_int_result_to_float_result(ctx.emitter);
+            Ok(())
+        }
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+            abi::emit_int_result_to_float_result(ctx.emitter);
+            Ok(())
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            super::super::load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} value PHP type {:?}",
+            name,
+            other
+        ))),
+    }
+}
+
+/// Emits the target-specific float load for a raw pointer, widening a single to the PHP double.
+fn emit_float_width_load(ctx: &mut FunctionContext<'_>, width: FloatWidth) {
+    match (ctx.emitter.target.arch, width) {
+        (Arch::AArch64, FloatWidth::Single) => {
+            ctx.emitter.instruction("ldr s0, [x0]");                            // load one IEEE 754 single through the checked pointer
+            abi::emit_float_result_single_to_double(ctx.emitter);
+        }
+        (Arch::AArch64, FloatWidth::Double) => {
+            ctx.emitter.instruction("ldr d0, [x0]");                            // load one IEEE 754 double through the checked pointer as a PHP float
+        }
+        (Arch::X86_64, FloatWidth::Single) => {
+            ctx.emitter.instruction("movss xmm0, DWORD PTR [rax]");             // load one IEEE 754 single through the checked pointer
+            abi::emit_float_result_single_to_double(ctx.emitter);
+        }
+        (Arch::X86_64, FloatWidth::Double) => {
+            ctx.emitter.instruction("movsd xmm0, QWORD PTR [rax]");             // load one IEEE 754 double through the checked pointer as a PHP float
+        }
+    }
+}
+
+/// Emits the target-specific float store for a raw pointer; the pointer is popped from the stack.
+fn emit_float_width_store(ctx: &mut FunctionContext<'_>, width: FloatWidth) {
+    match (ctx.emitter.target.arch, width) {
+        (Arch::AArch64, FloatWidth::Single) => {
+            abi::emit_float_result_double_to_single(ctx.emitter);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("str s0, [x0]");                            // store the rounded IEEE 754 single through the checked pointer
+        }
+        (Arch::AArch64, FloatWidth::Double) => {
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("str d0, [x0]");                            // store the PHP double as an IEEE 754 double through the checked pointer
+        }
+        (Arch::X86_64, FloatWidth::Single) => {
+            abi::emit_float_result_double_to_single(ctx.emitter);
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("movss DWORD PTR [rax], xmm0");             // store the rounded IEEE 754 single through the checked pointer
+        }
+        (Arch::X86_64, FloatWidth::Double) => {
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("movsd QWORD PTR [rax], xmm0");             // store the PHP double as an IEEE 754 double through the checked pointer
+        }
+    }
+}
+
 /// Lowers `ptr_read_string(pointer, length)` by copying raw bytes into an owned PHP string.
 pub(crate) fn lower_ptr_read_string(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "ptr_read_string", 2)?;
@@ -374,6 +514,7 @@ fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Str
         .strings
         .get(data.as_raw() as usize)
         .cloned()
+        .map(|value| crate::names::literal_symbol_name(&value).unwrap_or(value))
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }
 
@@ -597,7 +738,8 @@ fn materialize_word_value(
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             Ok(())
         }
-        PhpType::Pointer(_) if matches!(policy, WordValuePolicy::Word) => {
+        // A packed record address (a buffer element or nested record read) is one pointer word.
+        PhpType::Pointer(_) | PhpType::Packed(_) if matches!(policy, WordValuePolicy::Word) => {
             ctx.load_value_to_result(value)?;
             Ok(())
         }

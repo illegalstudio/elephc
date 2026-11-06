@@ -1,8 +1,6 @@
 ---
 title: "xmlwriter_open_memory() - internals"
 description: "Compiler internals for xmlwriter_open_memory(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1037
 ---
 
 ## `xmlwriter_open_memory()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:971](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L971) (`xmlwriter_open_memory`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs) (`xmlwriter_open_memory`)
 - **Function symbol**: `xmlwriter_open_memory()`
 
 

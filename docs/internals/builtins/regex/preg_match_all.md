@@ -1,8 +1,6 @@
 ---
 title: "preg_match_all() - internals"
 description: "Compiler internals for preg_match_all(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 761
 ---
 
 ## `preg_match_all()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_match_all.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -23,9 +21,9 @@ sidebar:
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
-- **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
@@ -39,19 +37,19 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_match_all(string $pattern, string $subject): int
+function preg_match_all(string $pattern, string $subject, mixed $matches = null, int $flags = 0): int|false
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes 2–4 arguments (2 optional).
+- **By-reference parameters**: `$matches`.
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
 - **Adapter reason**: `by-reference-or-lvalue`.
-- **Eval signature compatibility**: `additional-by-reference-output`.
 - **Dispatch hooks**: `direct`, `values`
 - **By-reference parameters**: `$matches`.
 

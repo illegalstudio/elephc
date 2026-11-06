@@ -244,3 +244,56 @@ echo $value->name;
     );
     assert_eq!(out, "Laravel");
 }
+
+/// Regression: `get_object_vars()` and the `(array)` cast boxed a Mixed-tagged property slot
+/// that holds no cell (an untyped property that is implicitly or explicitly `null`) as a
+/// dangling Mixed pointer, so reading the projected `null` crashed. It now projects PHP null.
+#[test]
+fn test_object_projection_of_null_untyped_property_is_null() {
+    let out = crate::support::compile_and_run_with_heap_debug(
+        r#"<?php
+class Implicit { public $n; public $s = "x"; }
+class Explicit { public $n = null; }
+function run(int $i): string {
+    $vars = get_object_vars(new Implicit());
+    $out = count($vars) . ":" . ($vars["n"] === null ? "null" : "set") . ":" . $vars["s"];
+    $cast = (array)new Explicit();
+    $out .= "|" . count($cast) . ":" . (array_key_exists("n", $cast) && $cast["n"] === null ? "null" : "set");
+    foreach (get_object_vars(new Explicit()) as $key => $value) {
+        $out .= "|" . $key . "=" . ($value === null ? "null" : "set");
+    }
+    return $out . $i;
+}
+$out = "";
+for ($i = 0; $i < 20; $i++) { $out = run($i); }
+echo $out;
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:null:x|1:null|n=null19", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The pristine-main reproduction of the same defect: `var_dump()` of the projection of an
+/// object whose untyped properties are null (explicit default and no default) segfaulted
+/// while printing the first null value, for both `get_object_vars()` and `(array)`.
+#[test]
+fn test_var_dump_of_projected_null_untyped_properties() {
+    let out = crate::support::compile_and_run_with_heap_debug(
+        r#"<?php
+class P { public $n = null; public $m; }
+$v = get_object_vars(new P);
+echo count($v), "\n";
+var_dump($v);
+var_dump((array)new P);
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "2\narray(2) {\n  [\"n\"]=>\n  NULL\n  [\"m\"]=>\n  NULL\n}\narray(2) {\n  [\"n\"]=>\n  NULL\n  [\"m\"]=>\n  NULL\n}\n",
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

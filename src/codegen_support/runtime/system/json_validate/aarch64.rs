@@ -11,7 +11,7 @@
 use crate::codegen_support::emit::Emitter;
 
 /// Emits the `__rt_json_validate` entry point and all JSON validator helper
-/// routines. On entry `x0` holds the source pointer and `x1` holds the source
+/// routines. On entry `x1` holds the source pointer and `x2` holds the source
 /// length; on exit `x0` is 1 on success or 0 on failure. Syntax errors and UTF-16
 /// surrogate errors are recorded in `_json_last_error` and thrown via
 /// `__rt_json_throw_error` when `JSON_THROW_ON_ERROR` is set.
@@ -57,6 +57,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_syntax_error");
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov x0, #4");                                          // JSON_ERROR_SYNTAX
     emitter.instruction("bl __rt_json_throw_error");                            // record + throw if requested
     emitter.instruction("mov x0, #0");                                          // report failure (only reached on the no-throw path)
@@ -146,6 +147,7 @@ fn emit_value_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.le __rt_json_validate_value_number");                // branch on the current JSON validator condition
 
     emitter.label("__rt_json_validate_value_syntax");
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov x0, #4");                                          // JSON_ERROR_SYNTAX
     emitter.instruction("bl __rt_json_throw_error");                            // call the json throw error helper
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON validator state
@@ -216,6 +218,7 @@ fn emit_match_literal_aarch64(emitter: &mut Emitter, suffix: &str, lit: &[char])
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label(&fail_label);
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov x0, #4");                                          // JSON_ERROR_SYNTAX
     emitter.instruction("bl __rt_json_throw_error");                            // call the json throw error helper
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON validator state
@@ -230,16 +233,19 @@ fn emit_match_literal_aarch64(emitter: &mut Emitter, suffix: &str, lit: &[char])
 /// On syntax/UTF-16 error commits the failure index to `_json_validate_idx`,
 /// sets `_json_last_error` to JSON_ERROR_SYNTAX (4) or JSON_ERROR_UTF16 (10),
 /// and returns 0.
+/// The 32-byte frame saves the opening quote index at sp+16 for encoding errors.
 fn emit_string_parser_aarch64(emitter: &mut Emitter) {
     // `bl`-called from both `__rt_json_validate` and `__rt_json_decode_mixed`:
     // `.alt_entry` under macOS dead stripping keeps it a real symbol (so a
     // cross-helper `bl` keeps the validator atom alive) without splitting the
     // atom — which would orphan `__rt_json_validate`'s own internal branches.
     emitter.label_shared("__rt_json_validate_string");
-    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // store updated JSON validator state
+    // -- retain the opening quote across string validation --
+    emitter.instruction("stp x29, x30, [sp, #-32]!");                           // store updated JSON validator state
     emitter.instruction("mov x29, sp");                                         // load or prepare JSON validator state
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_validate_idx");
     emitter.instruction("ldr x12, [x9]");                                       // load or prepare JSON validator state
+    emitter.instruction("str x12, [sp, #16]");                                  // save the opening quote index for encoding errors
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_json_validate_len");
     emitter.instruction("ldr x10, [x10]");                                      // load or prepare JSON validator state
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_json_validate_ptr");
@@ -335,7 +341,7 @@ fn emit_string_parser_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x12, x12, #1");                                    // consume the closing quote
     emitter.instruction("str x12, [x9]");                                       // republish the post-string index
     emitter.instruction("mov x0, #1");                                          // load or prepare JSON validator state
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // load or prepare JSON validator state
+    emitter.instruction("ldp x29, x30, [sp], #32");                             // load or prepare JSON validator state
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_string_escape");
@@ -422,42 +428,46 @@ fn emit_string_parser_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_validate_string_utf16");
     emitter.instruction("str x12, [x9]");                                       // commit the failure index for diagnostics
-    emitter.instruction("add x0, x11, x12");                                    // convert validator index to an absolute source pointer
-    emitter.instruction("bl __rt_json_set_error_location");                     // store one-based line/column metadata for the JSON error
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the opening quote index for this token
+    emitter.instruction("add x0, x11, x0");                                     // report the string token start without changing the failure cursor
+    emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
     emitter.instruction("mov x0, #10");                                         // JSON_ERROR_UTF16
     emitter.instruction("bl __rt_json_throw_error");                            // record the error and throw on JSON_THROW_ON_ERROR
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON validator state
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // load or prepare JSON validator state
+    emitter.instruction("ldp x29, x30, [sp], #32");                             // load or prepare JSON validator state
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_string_ctrl_char");
     emitter.instruction("str x12, [x9]");                                       // commit the control-character failure index
-    emitter.instruction("add x0, x11, x12");                                    // convert validator index to an absolute source pointer
-    emitter.instruction("bl __rt_json_set_error_location");                     // store one-based line/column metadata for the JSON error
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the opening quote index for this token
+    emitter.instruction("add x0, x11, x0");                                     // report the string token start without changing the failure cursor
+    emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
     emitter.instruction("mov x0, #3");                                          // JSON_ERROR_CTRL_CHAR
     emitter.instruction("bl __rt_json_throw_error");                            // record the control-character error and throw when requested
     emitter.instruction("mov x0, #0");                                          // report validation failure to the caller
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
+    emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame pointer and return address
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_string_utf8");
     emitter.instruction("str x12, [x9]");                                       // commit the malformed-UTF-8 failure index
-    emitter.instruction("add x0, x11, x12");                                    // convert validator index to an absolute source pointer
-    emitter.instruction("bl __rt_json_set_error_location");                     // store one-based line/column metadata for the JSON error
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the opening quote index for this token
+    emitter.instruction("add x0, x11, x0");                                     // report the string token start without changing the failure cursor
+    emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
     emitter.instruction("mov x0, #5");                                          // JSON_ERROR_UTF8
     emitter.instruction("bl __rt_json_throw_error");                            // record the malformed-UTF-8 error and throw when requested
     emitter.instruction("mov x0, #0");                                          // report validation failure to the caller
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
+    emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame pointer and return address
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_string_syntax");
     emitter.instruction("str x12, [x9]");                                       // commit the failure index for downstream diagnostics
-    emitter.instruction("add x0, x11, x12");                                    // convert validator index to an absolute source pointer
-    emitter.instruction("bl __rt_json_set_error_location");                     // store one-based line/column metadata for the JSON error
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the failing string token opener
+    emitter.instruction("add x0, x11, x0");                                     // convert validator index to an absolute source pointer
+    emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
     emitter.instruction("mov x0, #4");                                          // JSON_ERROR_SYNTAX
     emitter.instruction("bl __rt_json_throw_error");                            // call the json throw error helper
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON validator state
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // load or prepare JSON validator state
+    emitter.instruction("ldp x29, x30, [sp], #32");                             // load or prepare JSON validator state
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 }
 
@@ -533,7 +543,7 @@ fn emit_number_parser_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_json_validate_number_int_start");            // branch on the current JSON validator condition
     emitter.instruction("add x12, x12, #1");                                    // consume the minus sign
     emitter.instruction("cmp x12, x10");                                        // bare '-' is invalid
-    emitter.instruction("b.ge __rt_json_validate_number_syntax");               // branch on the current JSON validator condition
+    emitter.instruction("b.ge __rt_json_validate_number_sign_error");           // a lone minus reports the sign byte
 
     emitter.label("__rt_json_validate_number_int_start");
     emitter.instruction("ldrb w13, [x11, x12]");                                // load the first digit of the integer part
@@ -631,10 +641,18 @@ fn emit_number_parser_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp], #16");                             // load or prepare JSON validator state
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
+    // -- report a missing integer after its leading minus --
+    emitter.label("__rt_json_validate_number_sign_error");
+    emitter.instruction("str x12, [x9]");                                       // keep the parser failure cursor at the exclusive end
+    emitter.instruction("sub x0, x12, #1");                                     // point the diagnostic at the minus sign
+    emitter.instruction("add x0, x11, x0");                                     // convert the sign index to an absolute source pointer
+    emitter.instruction("b __rt_json_validate_number_record_error");            // share error recording without replacing the sign candidate
+
     emitter.label("__rt_json_validate_number_syntax");
     emitter.instruction("str x12, [x9]");                                       // store updated JSON validator state
     emitter.instruction("add x0, x11, x12");                                    // convert validator index to an absolute source pointer
-    emitter.instruction("bl __rt_json_set_error_location");                     // store one-based line/column metadata for the JSON error
+    emitter.label("__rt_json_validate_number_record_error");
+    emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
     emitter.instruction("mov x0, #4");                                          // JSON_ERROR_SYNTAX
     emitter.instruction("bl __rt_json_throw_error");                            // call the json throw error helper
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON validator state
@@ -720,6 +738,7 @@ fn emit_array_parser_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_array_syntax");
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov x0, #4");                                          // load or prepare JSON validator state
     emitter.instruction("bl __rt_json_throw_error");                            // call the json throw error helper
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON validator state
@@ -727,6 +746,7 @@ fn emit_array_parser_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_array_depth");
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov x0, #1");                                          // JSON_ERROR_DEPTH
     emitter.instruction("bl __rt_json_throw_error");                            // call the json throw error helper
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON validator state
@@ -828,6 +848,7 @@ fn emit_object_parser_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_object_syntax");
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov x0, #4");                                          // load or prepare JSON validator state
     emitter.instruction("bl __rt_json_throw_error");                            // call the json throw error helper
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON validator state
@@ -835,6 +856,7 @@ fn emit_object_parser_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_object_depth");
+    super::diagnostics::note_cursor(emitter);
     emitter.instruction("mov x0, #1");                                          // JSON_ERROR_DEPTH
     emitter.instruction("bl __rt_json_throw_error");                            // call the json throw error helper
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON validator state

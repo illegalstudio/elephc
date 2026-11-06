@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `crate::types::checker::schema::classes`
+//! - `crate::types::checker::schema::enums` for shared method shape validation.
 //!
 //! Key details:
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
@@ -30,7 +31,14 @@ pub(super) fn apply_methods(
     checker: &Checker,
 ) -> Result<(), CompileError> {
     for method in &class.methods {
-        validate_method_shape(class, method)?;
+        validate_method_shape(&class.name, method)?;
+        // A generic method is a TEMPLATE and has no signature of its own: its parameter types
+        // name type parameters that only a call site can bind, so resolving it here would report
+        // `Unknown type: U`. Its instantiations are ordinary methods on this same class and go
+        // through this same loop. Mirrors `resolve_unchecked_functions` for generic functions.
+        if !method.type_params.is_empty() {
+            continue;
+        }
         if method.is_static {
             apply_static_method(state, class, checker, method)?;
         } else {
@@ -43,8 +51,8 @@ pub(super) fn apply_methods(
 /// Validates shape constraints on a single method: abstract+final conflict,
 /// abstract method with a body, non-abstract method without a body, and
 /// private abstract methods are all rejected.
-fn validate_method_shape(
-    class: &FlattenedClass,
+pub(in crate::types::checker::schema) fn validate_method_shape(
+    class_name: &str,
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     if method.is_abstract && method.is_final {
@@ -52,7 +60,7 @@ fn validate_method_shape(
             method.span,
             &format!(
                 "Cannot use the final modifier on an abstract method: {}::{}",
-                class.name, method.name
+                class_name, method.name
             ),
         ));
     }
@@ -61,7 +69,7 @@ fn validate_method_shape(
             method.span,
             &format!(
                 "Abstract method cannot have a body: {}::{}",
-                class.name, method.name
+                class_name, method.name
             ),
         ));
     }
@@ -70,7 +78,7 @@ fn validate_method_shape(
             method.span,
             &format!(
                 "Non-abstract method must have a body: {}::{}",
-                class.name, method.name
+                class_name, method.name
             ),
         ));
     }
@@ -79,7 +87,7 @@ fn validate_method_shape(
             method.span,
             &format!(
                 "Private abstract methods are not supported: {}::{}",
-                class.name, method.name
+                class_name, method.name
             ),
         ));
     }
@@ -97,7 +105,11 @@ fn apply_static_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
-    let sig = build_method_sig(checker, method, &class.name)?;
+    let mut sig = build_method_sig(checker, method, &class.name)?;
+    if class.name == "WeakReference" && method_key == "create" && method.span == crate::span::Span::dummy() {
+        // Box the generic object boundary so native Closure descriptors keep their runtime tag.
+        sig.params[0].1 = crate::types::PhpType::Mixed;
+    }
     if state.final_methods.contains(&method_key) {
         return Err(final_method_error(
             state
@@ -203,8 +215,12 @@ fn apply_static_method(
         state.abstract_static_methods.remove(&method_key);
     }
     if method.visibility != Visibility::Private
+        && !method_key.contains('<')
         && !state.static_vtable_slots.contains_key(&method_key)
     {
+        // Same rule as the instance path, and for the same reason: an instantiated generic
+        // static method is named exactly by its call site, so it needs no slot — and giving it
+        // one lets two instantiations of a class number their statics differently.
         let slot = state.static_vtable_methods.len();
         state.static_vtable_slots.insert(method_key.clone(), slot);
         state.static_vtable_methods.push(method_key);
@@ -225,7 +241,14 @@ fn apply_instance_method(
     let method_key = php_symbol_key(&method.name);
     let internal_exception_override = injected_exception_final_override(class, method, &method_key);
     let inherited_declaring_class = state.method_declaring_classes.get(&method_key).cloned();
-    let sig = build_method_sig(checker, method, &class.name)?;
+    let mut sig = build_method_sig(checker, method, &class.name)?;
+    let serializable = state.interfaces.iter().chain(class.implements.iter()).any(|name|
+        name.eq_ignore_ascii_case("Serializable") || checker.interface_extends_interface(name, "Serializable"));
+    if serializable && method_key == "unserialize"
+        && method.params.first().is_some_and(|(_, ty, _, _)| ty.is_none())
+    {
+        if let Some((_, ty)) = sig.params.first_mut() { *ty = crate::types::PhpType::Mixed; }
+    }
     if state.final_static_methods.contains(&method_key) {
         return Err(final_method_error(
             state
@@ -339,7 +362,18 @@ fn apply_instance_method(
             .insert(method_key.clone(), class.name.clone());
         state.abstract_methods.remove(&method_key);
     }
-    if method.visibility != Visibility::Private && !state.vtable_slots.contains_key(&method_key) {
+    // An INSTANTIATED generic method takes no slot, and that is a soundness rule rather than an
+    // optimization. Its call site names it exactly — that is what instantiation means — so there
+    // is nothing to dispatch on. And giving it one breaks the invariant two instantiations of a
+    // class must keep: `Pair<int>` may be called with `withRight<string>` where `Pair<string>`
+    // never is, so the slot after it lands at a different number in each, and a variance
+    // widening takes the slot from one class and indexes the other's table.
+    // `assert_instantiation_vtable_slots_aligned` fails loudly if this ever stops holding.
+    let is_instantiation = method_key.contains('<');
+    if method.visibility != Visibility::Private
+        && !is_instantiation
+        && !state.vtable_slots.contains_key(&method_key)
+    {
         let slot = state.vtable_methods.len();
         state.vtable_slots.insert(method_key.clone(), slot);
         state.vtable_methods.push(method_key);
@@ -364,6 +398,7 @@ fn injected_exception_final_override(
         && method_key == "getcode"
 }
 
+/// Builds the diagnostic for an attempt to override the selected final method.
 fn final_method_error(declaring_class: String, method: &ClassMethod) -> CompileError {
     CompileError::new(
         method.span,

@@ -22,6 +22,7 @@ sidebar:
 | [`is_array()`](./type/is_array.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_bool()`](./type/is_bool.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_callable()`](./type/is_callable.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`is_countable()`](./type/is_countable.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_double()`](./type/is_double.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_float()`](./type/is_float.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_int()`](./type/is_int.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |

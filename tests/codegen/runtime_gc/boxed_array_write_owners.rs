@@ -10,6 +10,53 @@
 
 use crate::support::*;
 
+/// A nested append probe must not retire the concrete array still stored in a property.
+#[test]
+fn test_static_receiver_grok_concrete_property_append_probe() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box { public array $items = [[1]]; }
+$box = new Box();
+$box->items[0][] = 2;
+echo $box->items[0][0], ',', $box->items[0][1];
+unset($box);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1,2", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Probe ownership does not depend on EIR optimization.
+#[test]
+fn test_static_receiver_grok_concrete_property_append_probe_no_ir_opt() {
+    without_ir_opt(test_static_receiver_grok_concrete_property_append_probe);
+}
+
+/// A fallback ArrayAccess probe does not consume the object stored in its property.
+#[test]
+fn test_static_receiver_grok_object_property_append_probe() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Box {
+    public ArrayObject $items;
+    public function __construct() { $this->items = new ArrayObject([[1]]); }
+}
+$box = new Box();
+$box->items[0][] = 2;
+echo json_encode($box->items[0]);
+unset($box);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "[1,2]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Fallback property probes preserve ownership without EIR optimization.
+#[test]
+fn test_static_receiver_grok_property_append_probe_without_ir_opt() {
+    without_ir_opt(|| {
+        test_static_receiver_grok_object_property_append_probe();
+    });
+}
+
 /// Replacing a callable in a boxed COW array retires the producer without losing either array owner.
 #[test]
 fn test_core_boxed_array_callable_replacement_retires_temporary() {

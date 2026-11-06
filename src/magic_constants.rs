@@ -24,14 +24,19 @@
 mod file_pass;
 mod scope_pass;
 mod trait_binding;
-mod walker;
+pub(crate) mod walker;
 
 use std::path::Path;
 
 use crate::names::Name;
-use crate::parser::ast::{ClassMethod, ClassProperty, Program, Stmt};
+use crate::parser::ast::{ClassConst, ClassMethod, ClassProperty, Program, Stmt};
 
 const TRAIT_CLASS_PLACEHOLDER: &str = "\x1F__ELEPHC_TRAIT_CLASS__\x1F";
+
+/// Binds only trait-origin `__CLASS__` placeholders in flattened declaration constants.
+pub fn bind_trait_constant_values(constants: Vec<ClassConst>, class_name: &str) -> Vec<ClassConst> {
+    trait_binding::bind_trait_constant_values(constants, class_name)
+}
 
 /// Replaces `MagicConstant::File` and `MagicConstant::Dir` with string
 /// literals derived from `file_path`. Other magic constants are left untouched

@@ -6,7 +6,7 @@
 //! - `crate::main()` before invoking `crate::pipeline::compile()`.
 //!
 //! Key details:
-//! - Only an exact `args[1] == "native"` selects native dependency commands.
+//! - Only an exact `args[1]` of `native`, `repl`, `monitor`, or `test` selects a subcommand.
 //! - Exits immediately on invalid CLI state so later stages receive normalized options.
 
 use std::collections::HashSet;
@@ -120,6 +120,9 @@ Arguments:
 
 Subcommands:
   native <COMMAND>        Native dependency management (see `elephc native --help`)
+  repl                    Interactive PHP through eval (see `elephc repl --help`)
+  test [PATH]             Compile and run the test suite under PATH, default `tests`
+                          (see `elephc test --help`)
   monitor <TARGET>        Profile a program built with --with-monitoring: a .php
                           source, a binary, or a running service's address
                           (see `elephc monitor --help`)
@@ -127,6 +130,7 @@ Subcommands:
 Modes:
   --web                   Compile as a prefork HTTP server
   --web-isolation MODE    worker (default) | pool | request; requires --web
+  --web-lifecycle MODE    request (default) | application; application requires worker isolation
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
   --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
 
@@ -134,8 +138,9 @@ Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
   --emit-ir               Emit EIR text instead of compiling
   --emit-asm              Emit assembly (.s) instead of linking
-  --emit KIND             Output kind: executable (default) | cdylib | staticlib
+  --emit KIND             Output kind: executable (default) | cdylib | staticlib | phpext
                           Aliases: exe/bin | dylib/shared | static/lib (`lib` is staticlib)
+  --export-constant NAME  Export a declared constant in phpext output (repeatable)
 
 Target:
   --target TARGET         macos-aarch64 | ios-arm64 | ios-sim-arm64 |
@@ -143,7 +148,7 @@ Target:
   --php-version VERSION   8.0 through 8.6 (detected; fallback: 8.5)
 
 Codegen:
-  --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
+  --heap-size=BYTES       Fixed heap size in bytes (default: 134217728)
   --null-repr=MODE        tagged (default) | sentinel
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
@@ -173,6 +178,8 @@ Linking:
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
+  --report-generics       Summarize monomorphized generic instantiations per
+                          template on stderr
   --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug-info            Embed DWARF line info for debuggers
@@ -210,9 +217,13 @@ pub(crate) struct CliConfig {
     pub(crate) null_repr: crate::codegen::NullRepr,
     pub(crate) emit_asm: bool,
     pub(crate) emit: Emit,
+    /// Case-sensitive source constants explicitly selected for a PHP extension.
+    pub(crate) export_constants: Vec<String>,
     pub(crate) check_only: bool,
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
+    /// Print a per-template summary of monomorphized generic instantiations on stderr.
+    pub(crate) report_generics: bool,
     pub(crate) emit_debug_info: bool,
     /// Keep the symbol table in the linked executable; it is stripped by default.
     pub(crate) keep_symbols: bool,
@@ -238,6 +249,8 @@ pub(crate) struct CliConfig {
     pub(crate) web: bool,
     /// Process-isolation architecture baked into a `--web` executable.
     pub(crate) web_isolation: WebIsolation,
+    /// Retain a typed application between requests in worker isolation.
+    pub(crate) web_application: bool,
     /// Optional capabilities the user force-enabled with `--with-<name>` (short
     /// names such as `"pdo"` or `"regex"`). Bridge names force-link their
     /// staticlib; runtime capabilities enable their helper/native requirements.
@@ -256,23 +269,61 @@ pub(crate) struct CliConfig {
     pub(crate) ini_overrides: Vec<(String, String)>,
 }
 
-/// A fully parsed top-level invocation of either the compiler or native package manager.
+/// A fully parsed compiler, REPL, monitoring, or native package invocation.
 pub(crate) enum Command {
+    /// One interactive eval session, or its isolated host build subprocess.
+    Repl(crate::repl::ReplCommand),
     /// The existing PHP compilation command and all of its normalized options.
     Compile(CliConfig),
     /// One validated `elephc native` subcommand.
     Native(NativeCommand),
+    /// One validated `elephc extension` hosted-extension command.
+    PhpExt(crate::php_ext::cli::PhpExtCommand),
     /// One validated `elephc monitor` sampling invocation.
     Monitor(crate::monitor::MonitorCommand),
+    /// One `elephc test` run: compile the suite under a path and run it.
+    Test(crate::test_command::TestCommand),
 }
 
-/// Parses the exact top-level `native` selector before falling back to legacy compilation.
+/// Dispatches exact top-level subcommand selectors before falling back to compilation.
 pub(crate) fn parse_args(args: &[String]) -> Command {
+    if args.get(1).map(String::as_str) == Some("repl") {
+        return match crate::repl::parse_args(&args[2..]) {
+            Ok(command) => Command::Repl(command),
+            Err(error) => {
+                eprintln!("{error}\n\n{}", crate::repl::HELP);
+                process::exit(1);
+            }
+        };
+    }
+    if args.get(1).map(String::as_str) == Some("test") {
+        return match crate::test_command::parse_args(&args[2..]) {
+            Ok(command) => Command::Test(command),
+            Err(error) => {
+                eprintln!("{error}\n\n{}", crate::test_command::HELP);
+                process::exit(1);
+            }
+        };
+    }
     if args.get(1).map(String::as_str) == Some("monitor") {
         return match crate::monitor::parse_monitor_args(&args[2..]) {
             Ok(command) => Command::Monitor(command),
             Err(error) => {
                 eprintln!("{error}\n\n{}", crate::monitor::MONITOR_USAGE);
+                process::exit(1);
+            }
+        };
+    }
+    if args.get(1).map(String::as_str) == Some("extension") {
+        use crate::php_ext::cli::{parse_php_ext_args, php_ext_help, PhpExtParseOutcome};
+        return match parse_php_ext_args(&args[2..]) {
+            Ok(PhpExtParseOutcome::Command(command)) => Command::PhpExt(command),
+            Ok(PhpExtParseOutcome::Help(help)) => {
+                print!("{help}");
+                process::exit(0);
+            }
+            Err(error) => {
+                eprintln!("{error}\n\n{}", php_ext_help());
                 process::exit(1);
             }
         };
@@ -295,7 +346,7 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
 }
 
 /// Parses legacy compilation arguments into a normalized configuration.
-fn parse_compile_args(args: &[String]) -> CliConfig {
+pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     if args.len() < 2 {
         fail("no source file given");
     }
@@ -312,7 +363,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         process::exit(0);
     }
 
-    let mut heap_size: usize = 8_388_608; // 8MB default
+    let mut heap_size: usize = 134_217_728; // 128 MB, PHP's default memory_limit
     let mut gc_stats = false;
     let mut counters = false;
     let mut instrument = crate::codegen::Instrumentation::Off;
@@ -321,9 +372,11 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut emit_ir = false;
     let mut emit_asm = false;
     let mut emit = Emit::Executable;
+    let mut export_constants = Vec::new();
     let mut check_only = false;
     let mut emit_timings = false;
     let mut emit_source_map = false;
+    let mut report_generics = false;
     let mut emit_debug_info = false;
     let mut keep_symbols = false;
     let mut filename_arg = None;
@@ -339,6 +392,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut web = false;
     let mut web_isolation = WebIsolation::default();
     let mut web_isolation_explicit = false;
+    let mut web_application = false;
+    let mut web_lifecycle_explicit = false;
     let mut quiet = false;
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut ini_overrides: Vec<(String, String)> = Vec::new();
@@ -423,12 +478,22 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             emit = parse_required_emit(args, i);
         } else if let Some(value) = arg.strip_prefix("--emit=") {
             emit = parse_emit(value);
+        } else if arg == "--export-constant" {
+            i += 1;
+            let name = args.get(i).filter(|name| !name.is_empty() && !name.starts_with('-'))
+                .unwrap_or_else(|| fail("--export-constant requires a constant name"));
+            export_constants.push(name.clone());
+        } else if let Some(name) = arg.strip_prefix("--export-constant=") {
+            if name.is_empty() { fail("--export-constant requires a constant name"); }
+            export_constants.push(name.to_string());
         } else if arg == "--check" {
             check_only = true;
         } else if arg == "--timings" {
             emit_timings = true;
         } else if arg == "--source-map" {
             emit_source_map = true;
+        } else if arg == "--report-generics" {
+            report_generics = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
         } else if arg == "--keep-symbols" {
@@ -498,6 +563,15 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             strict_locals = true;
         } else if arg == "--web" {
             web = true;
+        } else if arg == "--web-lifecycle" {
+            i += 1;
+            web_application = parse_web_lifecycle(&required_value(
+                &args, i, "Missing mode after --web-lifecycle (expected request|application)",
+            ));
+            web_lifecycle_explicit = true;
+        } else if let Some(value) = arg.strip_prefix("--web-lifecycle=") {
+            web_application = parse_web_lifecycle(value);
+            web_lifecycle_explicit = true;
         } else if arg == "--web-isolation" {
             i += 1;
             web_isolation = parse_web_isolation(&required_value(
@@ -553,13 +627,16 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     if let Err(message) = validate_target_output(target, emit, check_only, emit_ir) {
         fail(message);
     }
+    if !export_constants.is_empty() && emit != Emit::Phpext {
+        fail("--export-constant requires --emit phpext");
+    }
     if web && check_only {
         fail("--web cannot be combined with --check");
     }
     // --web restructures the process entry point, which a library artifact does
     // not have: both library kinds are incompatible with it for the same reason.
     if web && emit.is_library() {
-        fail("--web cannot be combined with a library --emit kind (cdylib, staticlib)");
+        fail("--web cannot be combined with a library --emit kind (cdylib, staticlib, phpext)");
     }
     // A library has no `main`, and `main` is where the profiling runtimes are
     // initialized. Accepting this produced a library carrying an enter/exit hook
@@ -581,6 +658,12 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     }
     if web_isolation_explicit && !web {
         fail("--web-isolation requires --web (or --with-web)");
+    }
+    if web_lifecycle_explicit && !web {
+        fail("--web-lifecycle requires --web (or --with-web)");
+    }
+    if web_application && web_isolation != WebIsolation::Worker {
+        fail("--web-lifecycle=application requires --web-isolation=worker");
     }
 
     // With no explicit `--php-version`, take the profile the project already declares. Every
@@ -610,9 +693,11 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         null_repr,
         emit_asm,
         emit,
+        export_constants,
         check_only,
         emit_timings,
         emit_source_map,
+        report_generics,
         emit_debug_info,
         keep_symbols,
         regalloc_linear,
@@ -628,6 +713,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         strict_locals,
         web,
         web_isolation,
+        web_application,
         with_crates,
         quiet,
         ini_overrides,
@@ -638,7 +724,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
 ///
 /// The monitoring bridges are excluded: they are how `--with-monitoring` is
 /// built, not something to ask for by mechanism.
-fn with_flag_is_known(name: &str) -> bool {
+pub(crate) fn with_flag_is_known(name: &str) -> bool {
     if MONITORING_BRIDGES.contains(&name) {
         return false;
     }
@@ -679,30 +765,71 @@ pub(crate) fn help_text() -> String {
 /// thirteenth bridge is carried into that check by the edit that declares it
 /// and there is no second list for anyone to forget.
 ///
-/// Each line is `<kind>\t<name>[\t<archive>...]`: `bridge` for a capability
-/// backed by one archive of its own, `capability` for one that is not — either
-/// because it needs no archive (`regex`, whose provider is a managed native
-/// package) or because it is built out of several (`monitoring`). A capability
-/// listed with no archive is still a capability the binary must be able to
-/// link; the archives are what can be checked without compiling anything.
+/// Each line is `<kind>\t<name>[\t<archive>...][\tnative:<package>...]`:
+/// `bridge` for a capability backed by one archive of its own, `capability` for
+/// one that is not — either because it needs no archive (`regex`, whose provider
+/// is a managed native package) or because it is built out of several
+/// (`monitoring`). A capability listed with no archive is still a capability the
+/// binary must be able to link; the archives are what can be checked without
+/// compiling anything. Each `native:` field names a managed native package the
+/// project must declare (`elephc native add <package>`) before `--with-<name>`
+/// links, so the release probe prepares exactly what the binary will ask for.
 pub(crate) fn capability_report() -> String {
     let mut report = String::new();
     for name in with_flag_names() {
         if let Some(archive) = crate::linker::archive_filename_for_flag(name) {
-            report.push_str(&format!("bridge\t{name}\t{archive}\n"));
-            continue;
-        }
-        report.push_str(&format!("capability\t{name}"));
-        if name == "monitoring" {
-            for mechanism in MONITORING_BRIDGES {
-                if let Some(archive) = crate::linker::archive_filename_for_flag(mechanism) {
-                    report.push_str(&format!("\t{archive}"));
+            report.push_str(&format!("bridge\t{name}\t{archive}"));
+        } else {
+            report.push_str(&format!("capability\t{name}"));
+            if name == "monitoring" {
+                for mechanism in MONITORING_BRIDGES {
+                    if let Some(archive) = crate::linker::archive_filename_for_flag(mechanism) {
+                        report.push_str(&format!("\t{archive}"));
+                    }
                 }
             }
+        }
+        for package in native_packages_for_flag(name) {
+            report.push_str(&format!("\tnative:{package}"));
         }
         report.push('\n');
     }
     report
+}
+
+/// Returns the managed native packages a project must declare before `--with-<name>` links.
+///
+/// Mirrors what the backend asks the native resolver for when the flag is the
+/// only reason a capability is linked: the packages of the runtime features the
+/// flag forces first, then those of every bridge it plans, in the linker table's
+/// link order.
+fn native_packages_for_flag(name: &str) -> Vec<&'static str> {
+    use crate::codegen_support::LinkRequirement;
+
+    let mut forced = crate::codegen_support::RuntimeFeatures::none();
+    crate::codegen_support::force_runtime_features_for_flag(&mut forced, name);
+    let mut packages = Vec::new();
+    let mut libraries = Vec::new();
+    for requirement in crate::codegen_support::link_requirements_for_runtime_features(forced) {
+        match requirement {
+            LinkRequirement::NativePackage(package) => packages.push(package),
+            LinkRequirement::Bridge(library) => libraries.push(library.to_string()),
+            LinkRequirement::SystemLibrary(_) => {}
+        }
+    }
+    let flags: Vec<&str> = if name == "monitoring" { MONITORING_BRIDGES.to_vec() } else { vec![name] };
+    libraries.extend(
+        flags
+            .into_iter()
+            .filter_map(crate::linker::bridge_lib_for_flag)
+            .map(str::to_string),
+    );
+    for package in crate::linker::native_packages_for_libraries(&libraries) {
+        if !packages.contains(&package) {
+            packages.push(package);
+        }
+    }
+    packages
 }
 
 /// Parses a single `--ini KEY=VALUE` assignment into a `(key, value)` pair, splitting on the
@@ -749,7 +876,7 @@ fn parse_required_emit(args: &[String], index: usize) -> Emit {
     if index < args.len() {
         parse_emit(&args[index])
     } else {
-        fail("Missing emit kind after --emit (expected: executable, cdylib, staticlib)")
+        fail("Missing emit kind after --emit (expected: executable, cdylib, staticlib, phpext)")
     }
 }
 
@@ -759,8 +886,9 @@ fn parse_emit(value: &str) -> Emit {
         "executable" | "exe" | "bin" => Emit::Executable,
         "cdylib" | "dylib" | "shared" => Emit::Cdylib,
         "staticlib" | "static" | "lib" => Emit::Staticlib,
+        "phpext" => Emit::Phpext,
         other => fail(&format!(
-            "Invalid --emit kind '{}': expected one of: executable, cdylib, staticlib",
+            "Invalid --emit kind '{}': expected one of: executable, cdylib, staticlib, phpext",
             other
         )),
     }
@@ -823,6 +951,15 @@ fn parse_web_isolation(value: &str) -> WebIsolation {
     }
 }
 
+/// Parses the independent PHP application lifetime selection.
+fn parse_web_lifecycle(value: &str) -> bool {
+    match value {
+        "request" => false,
+        "application" => true,
+        _ => fail("Unknown --web-lifecycle value (expected request|application)"),
+    }
+}
+
 /// Parse a target string to a Target enum, or fail with an error message.
 fn parse_target(value: &str) -> Target {
     match Target::parse(value) {
@@ -842,6 +979,9 @@ fn validate_target_output(
     check_only: bool,
     emit_ir: bool,
 ) -> Result<(), &'static str> {
+    if emit == Emit::Phpext && target.is_ios() {
+        return Err("PHP extension output is unsupported for iOS targets");
+    }
     if target.is_ios() && emit == Emit::Executable && !check_only && !emit_ir {
         return Err(
             "iOS targets do not emit standalone executables; use --emit staticlib (or --emit \
@@ -923,6 +1063,16 @@ mod tests {
     use super::*;
     use crate::codegen::platform::{AppleVariant, Arch, Platform};
 
+    /// Preserves repeated constant names and both CLI spellings for producer selection.
+    #[test]
+    fn phpext_constant_selection_accepts_repeated_flags() {
+        let args = ["elephc", "--emit", "phpext", "--export-constant", "Demo\\VERSION",
+            "--export-constant=LIMIT", "module.php"].map(str::to_string);
+        let config = compile_config(&args);
+        assert_eq!(config.export_constants, ["Demo\\VERSION", "LIMIT"]);
+        assert_eq!(config.emit, Emit::Phpext);
+    }
+
     /// Extracts the compile configuration returned for a legacy invocation.
     fn compile_config(args: &[String]) -> CliConfig {
         let Command::Compile(config) = parse_args(args) else {
@@ -1000,6 +1150,7 @@ mod tests {
         assert_eq!(parse_emit("executable"), Emit::Executable);
         assert_eq!(parse_emit("cdylib"), Emit::Cdylib);
         assert_eq!(parse_emit("staticlib"), Emit::Staticlib);
+        assert_eq!(parse_emit("phpext"), Emit::Phpext);
     }
 
     /// Verifies the accepted aliases map to their canonical variants so users coming
@@ -1032,6 +1183,7 @@ mod tests {
             assert!(validate_target_output(target, Emit::Executable, false, false).is_err());
             assert!(validate_target_output(target, Emit::Staticlib, false, false).is_ok());
             assert!(validate_target_output(target, Emit::Cdylib, false, false).is_ok());
+            assert!(validate_target_output(target, Emit::Phpext, false, false).is_err());
             assert!(validate_target_output(target, Emit::Executable, true, false).is_ok());
             assert!(validate_target_output(target, Emit::Executable, false, true).is_ok());
         }
@@ -1068,6 +1220,20 @@ mod tests {
         let config = compile_config(&args);
         assert!(config.web);
         assert_eq!(config.web_isolation, WebIsolation::Worker);
+        assert!(!config.web_application);
+    }
+
+    /// Both lifecycle spellings retain request semantics unless application is explicit.
+    #[test]
+    fn web_lifecycle_selects_application_explicitly() {
+        for (value, expected) in [("request", false), ("application", true)] {
+            for flags in [vec![format!("--web-lifecycle={value}")], vec!["--web-lifecycle".into(), value.into()]] {
+                let mut args = vec!["elephc".into(), "--web".into()];
+                args.extend(flags);
+                args.push("app.php".into());
+                assert_eq!(compile_config(&args).web_application, expected);
+            }
+        }
     }
 
     /// Verifies all explicit web-isolation spellings select their compile-time model.
@@ -1418,6 +1584,55 @@ mod tests {
                  probe cannot check that it was packed beside the binary"
             );
         }
+    }
+
+    /// Returns the tab-separated fields after `<kind>\t<name>` for one capability line.
+    fn capability_fields(report: &str, name: &str) -> Vec<String> {
+        report
+            .lines()
+            .map(|line| line.split('\t').collect::<Vec<_>>())
+            .find(|fields| fields.get(1) == Some(&name))
+            .unwrap_or_else(|| panic!("no capability line for {name} in:\n{report}"))
+            .into_iter()
+            .skip(2)
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Every bridge's managed native packages appear as `native:` fields on its line.
+    ///
+    /// The release probe adds exactly these packages before `--with-<name>`, so a
+    /// bridge that gains a package in the linker table is prepared by the probe
+    /// without anyone editing the script.
+    #[test]
+    fn the_capability_report_names_every_bridge_native_package() {
+        let report = super::capability_report();
+        for flag in super::with_flag_names() {
+            let Some(library) = crate::linker::bridge_lib_for_flag(flag) else { continue };
+            let fields = capability_fields(&report, flag);
+            for package in crate::linker::native_packages_for_libraries(&[library.to_string()]) {
+                assert!(
+                    fields.contains(&format!("native:{package}")),
+                    "--print-capabilities omits native:{package} for {flag}; fields: {fields:?}"
+                );
+            }
+        }
+        assert!(capability_fields(&report, "openssl").contains(&"native:openssl-crypto".to_string()));
+        assert!(!capability_fields(&report, "tls").iter().any(|field| field.starts_with("native:")));
+    }
+
+    /// Packages from the runtime features a flag forces are reported, after archives.
+    #[test]
+    fn the_capability_report_names_forced_feature_native_packages() {
+        let report = super::capability_report();
+        let mbstring = capability_fields(&report, "mbstring");
+        assert_eq!(
+            mbstring,
+            ["libelephc_mbstring.a", "native:pcre2", "native:oniguruma"],
+            "mbstring line: {mbstring:?}"
+        );
+        assert_eq!(capability_fields(&report, "regex"), ["native:pcre2"]);
+        assert!(capability_fields(&report, "mysqli").is_empty());
     }
 
     /// Every accepted `--with-<name>` must be advertised on the `--help` line.

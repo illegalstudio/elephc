@@ -1,8 +1,6 @@
 ---
 title: "pdo_drivers()"
 description: "Returns the names of the PDO drivers this build provides."
-sidebar:
-  order: 183
 ---
 
 ## pdo_drivers()
@@ -19,8 +17,9 @@ Returns the names of the PDO drivers this build provides.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -40,6 +40,73 @@ fn execute_stub_returns_unsupported_and_clears_result() {
     assert!(result.error.is_null());
 }
 
+/// Verifies the exported scope preflight returns selective and conservative masks.
+#[test]
+fn scope_access_mask_matches_parsed_fragment_metadata() {
+    let mut context = ElephcEvalContext::new();
+    let selective = b"$sum = $sum + $step;";
+    let selective_mask = unsafe {
+        __elephc_eval_scope_access_mask(
+            &mut context,
+            selective.as_ptr(),
+            selective.len() as u64,
+        )
+    };
+    assert_eq!(
+        selective_mask,
+        crate::eval_ir::eval_scope_name_mask("sum")
+            | crate::eval_ir::eval_scope_name_mask("step")
+    );
+
+    let introspective = b"return get_defined_vars();";
+    let introspective_mask = unsafe {
+        __elephc_eval_scope_access_mask(
+            &mut context,
+            introspective.as_ptr(),
+            introspective.len() as u64,
+        )
+    };
+    assert_eq!(
+        introspective_mask,
+        crate::eval_ir::EVAL_SCOPE_ACCESS_ALL
+    );
+    assert_eq!(
+        unsafe {
+            __elephc_eval_scope_access_mask(
+                &mut context,
+                selective.as_ptr(),
+                selective.len() as u64,
+            )
+        },
+        crate::eval_ir::EVAL_SCOPE_ACCESS_ALL,
+        "one complex fragment must keep future calls on full synchronization"
+    );
+}
+
+/// Verifies invalid pointers and uncached oversized fragments retain full-scope fallback.
+#[test]
+fn scope_access_mask_falls_back_for_unbounded_inputs() {
+    let mut context = ElephcEvalContext::new();
+    assert_eq!(
+        unsafe {
+            __elephc_eval_scope_access_mask(&mut context, std::ptr::null(), 1)
+        },
+        crate::eval_ir::EVAL_SCOPE_ACCESS_ALL
+    );
+    let mut context = ElephcEvalContext::new();
+    let oversized = vec![b' '; 64 * 1024 + 1];
+    assert_eq!(
+        unsafe {
+            __elephc_eval_scope_access_mask(
+                &mut context,
+                oversized.as_ptr(),
+                oversized.len() as u64,
+            )
+        },
+        crate::eval_ir::EVAL_SCOPE_ACCESS_ALL
+    );
+}
+
 /// Verifies context allocation returns a current-version opaque handle.
 #[test]
 fn context_new_returns_current_version_handle() {

@@ -34,8 +34,8 @@
 
 use crate::parser::ast::{BinOp, CastType, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_binop, e_bool, e_call, e_cast, e_float, e_index, e_int, e_neg, e_null,
-    e_post_inc, e_str, e_ternary, e_var, function, internal_declarations, s_assign, s_break,
+    e_array, e_binop, e_bool, e_call, e_cast, e_float, e_index, e_int, e_neg, e_null,
+    e_post_inc, e_str, e_ternary, e_var, function, internal_declarations, s_array_push, s_assign, s_break,
     s_continue, s_echo, s_expr, s_for, s_foreach, s_if, s_return, t_mixed,
 };
 
@@ -92,18 +92,58 @@ fn decl_fn_elephc_var_export_float() -> Stmt {
                 vec![],
                 None,
             ),
-            s_assign("s", e_str("")),
-            s_for(Some(s_assign("p", e_int(0))), Some(e_binop(e_var("p"), BinOp::LtEq, e_int(16))), Some(s_expr(e_post_inc("p"))), vec![
-                s_assign("s", e_call("sprintf", vec![e_binop(e_binop(e_str("%."), BinOp::Concat, e_var("p")), BinOp::Concat, e_str("e")), e_var("f")])),
+
+            // The seventeen probe formats as LITERALS, indexed by precision, rather than
+            // `"%." . $p . "e"` built per iteration.
+            //
+            // A concatenation result lives in the shared 64 KiB `_concat_buf` scratch, and
+            // handing a scratch pointer to `sprintf` as its FORMAT is not safe: sprintf stages
+            // its own packed arguments through that same arena, and the statement-boundary
+            // concat reset rewinds it to the frame base. Whether the format survives long
+            // enough to be read therefore depends on where the frame base happens to sit —
+            // i.e. on how much output the caller has already accumulated. That is why the
+            // failure looked like a size threshold rather than a type bug: `var_export()` of
+            // an array containing floats returned a nine-byte string once the result passed
+            // roughly a kilobyte, and fatalled with `Unknown format specifier` or
+            // `sprintf(): formatted result exceeds the 65536-byte string buffer` past that.
+            // `opcache_get_configuration()`, whose directives array carries two floats among
+            // fifty-four entries, hit it exactly.
+            //
+            // A literal never moves: these live in rodata and the array holds pointers to
+            // them, so the format sprintf reads is the format that was written.
+            s_assign("fmts", e_array((0..=16).map(|p| e_str(&format!("%.{p}e"))).collect())),
+            // The probe keeps only the winning PRECISION, and formats once afterwards.
+            //
+            // Assigning the candidate string to `$s` inside the loop kept every one of the up
+            // to seventeen attempts alive: `$s` is read after the loop, so the
+            // statement-boundary reset can never rewind `_concat_off` below the newest one,
+            // and each attempt sits above the last. That is about 2 KB of the shared 64 KiB
+            // arena per float — two dozen floats in one `var_export()` exhausted it and the
+            // next `sprintf` fatalled with `formatted result exceeds the 65536-byte string
+            // buffer`, which reads as an absurd error for a 1 KB result.
+            //
+            // A candidate consumed by `(float)` in the same statement is dead at the end of
+            // it, so the reset reclaims each attempt and only the final result survives.
+            s_assign("p", e_int(16)),
+            s_for(Some(s_assign("q", e_int(0))), Some(e_binop(e_var("q"), BinOp::LtEq, e_int(16))), Some(s_expr(e_post_inc("q"))), vec![
                 s_if(
-                    e_binop(e_cast(CastType::Float, e_var("s")), BinOp::StrictEq, e_var("f")),
+                    e_binop(
+                        e_cast(
+                            CastType::Float,
+                            e_call("sprintf", vec![e_index(e_var("fmts"), e_var("q")), e_var("f")]),
+                        ),
+                        BinOp::StrictEq,
+                        e_var("f"),
+                    ),
                     vec![
+                        s_assign("p", e_var("q")),
                         s_break(1),
                     ],
                     vec![],
                     None,
                 ),
             ]),
+            s_assign("s", e_call("sprintf", vec![e_index(e_var("fmts"), e_var("p")), e_var("f")])),
             s_assign("start", e_ternary(e_binop(e_index(e_var("s"), e_int(0)), BinOp::StrictEq, e_str("-")), e_int(1), e_int(0))),
             s_assign("neg", e_binop(e_var("start"), BinOp::StrictEq, e_int(1))),
             s_assign("epos", e_call("strpos", vec![e_var("s"), e_str("e")])),
@@ -222,7 +262,12 @@ fn decl_fn_elephc_var_export_str() -> Stmt {
                 e_call("is_array", vec![e_var("value")]),
                 vec![
                     s_assign("pad", e_call("str_repeat", vec![e_str(" "), e_var("indent")])),
-                    s_assign("out", e_str("array (\n")),
+                    // One PART per entry, joined once at the end. Growing a single `$out` with
+                    // `$out = $out . …` copied the whole rendering for every entry: quadratic
+                    // work, and each superseded copy a block the fixed heap could not reuse for
+                    // the next, larger one, so `var_export(range(1, 50000))` died with "heap
+                    // memory exhausted" at the default 128 MB while PHP prints its 877 KB.
+                    s_assign("parts", e_array(vec![e_str("array (\n")])),
                     s_foreach(e_var("value"), Some("k"), "v", vec![
                         s_if(
                             e_call("is_int", vec![e_var("k")]),
@@ -235,21 +280,20 @@ fn decl_fn_elephc_var_export_str() -> Stmt {
                             s_assign("key", e_binop(e_binop(e_str("'"), BinOp::Concat, e_call("__elephc_var_export_escape", vec![e_var("keytext")])), BinOp::Concat, e_str("'"))),
                         ]),
                         ),
-                        s_assign("out", e_binop(e_binop(e_binop(e_binop(e_var("out"), BinOp::Concat, e_var("pad")), BinOp::Concat, e_str("  ")), BinOp::Concat, e_var("key")), BinOp::Concat, e_str(" => "))),
+                        s_assign("head", e_binop(e_binop(e_binop(e_var("pad"), BinOp::Concat, e_str("  ")), BinOp::Concat, e_var("key")), BinOp::Concat, e_str(" => "))),
                         s_if(
                             e_binop(e_call("is_array", vec![e_var("v")]), BinOp::Or, e_call("is_object", vec![e_var("v")])),
                             vec![
-                                s_assign("out", e_binop(e_binop(e_binop(e_binop(e_var("out"), BinOp::Concat, e_str("\n")), BinOp::Concat, e_var("pad")), BinOp::Concat, e_str("  ")), BinOp::Concat, e_call("__elephc_var_export_str", vec![e_var("v"), e_binop(e_var("indent"), BinOp::Add, e_int(2))]))),
+                                s_array_push("parts", e_binop(e_binop(e_binop(e_binop(e_binop(e_var("head"), BinOp::Concat, e_str("\n")), BinOp::Concat, e_var("pad")), BinOp::Concat, e_str("  ")), BinOp::Concat, e_call("__elephc_var_export_str", vec![e_var("v"), e_binop(e_var("indent"), BinOp::Add, e_int(2))])), BinOp::Concat, e_str(",\n"))),
                             ],
                             vec![],
                             Some(vec![
-                            s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_call("__elephc_var_export_str", vec![e_var("v"), e_binop(e_var("indent"), BinOp::Add, e_int(2))]))),
+                            s_array_push("parts", e_binop(e_binop(e_var("head"), BinOp::Concat, e_call("__elephc_var_export_str", vec![e_var("v"), e_binop(e_var("indent"), BinOp::Add, e_int(2))])), BinOp::Concat, e_str(",\n"))),
                         ]),
                         ),
-                        s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_str(",\n"))),
                     ]),
-                    s_assign("out", e_binop(e_binop(e_var("out"), BinOp::Concat, e_var("pad")), BinOp::Concat, e_str(")"))),
-                    s_return(e_var("out")),
+                    s_array_push("parts", e_binop(e_var("pad"), BinOp::Concat, e_str(")"))),
+                    s_return(e_call("implode", vec![e_str(""), e_var("parts")])),
                 ],
                 vec![],
                 None,
@@ -380,11 +424,43 @@ pub const ECHO_HELPER: &str = "__elephc_var_export_echo";
 /// not declare its own, so unrelated binaries pay nothing and a user definition is not
 /// clobbered. The prelude is hoisted function declarations only, so prepending does not
 /// change top-level execution order.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
+#[allow(dead_code)] // The CLI calls the `_or_referenced_elsewhere` form; embedders and tests call this.
 pub fn inject_if_used(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
-    if !detect::program_references_var_export(&program)
+    inject_if_used_or_referenced_elsewhere(program, false, inventory)
+}
+
+/// [`inject_if_used`], also injecting when `referenced_elsewhere` says a file the autoload pass
+/// loads later calls `var_export` (`crate::autoload::prelude_probe`). A program that declares
+/// its own `var_export` still gets nothing.
+pub fn inject_if_used_or_referenced_elsewhere(
+    program: Program,
+    referenced_elsewhere: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, referenced_elsewhere, inventory)
+    })
+}
+
+/// Whether `program` calls `var_export` without declaring its own.
+pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool {
+    detect::program_references_var_export(program) && !detect::program_declares_var_export(program)
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
+    program: Program,
+    referenced_elsewhere: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    if !(referenced_elsewhere || detect::program_references_var_export(&program))
         || detect::program_declares_var_export(&program)
     {
         return program;

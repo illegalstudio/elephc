@@ -17,13 +17,19 @@ mod magic_set_guard;
 mod mixed_array_append;
 mod mixed_array_fetch_for_write;
 mod mixed_array_get;
+mod mixed_object_offset_unset;
 mod object_not_array;
 mod mixed_array_set;
 mod mixed_cell_autovivify;
 mod new_by_name;
+mod debug_info;
 mod object_vars;
 mod print_r_object;
 mod stdclass;
+mod weak_reference;
+mod weak_map;
+pub(crate) use weak_map::emit_weak_map;
+pub(crate) use weak_reference::emit_weak_reference;
 
 pub(crate) use call_destructor::emit_call_object_destructor;
 pub(crate) use dump_dynamic_props::{
@@ -34,6 +40,9 @@ pub(crate) use enum_debug::{
     emit_var_dump_emit_enum_line,
 };
 pub(crate) use export_props::{emit_obj_prop_count, emit_obj_prop_name, emit_obj_prop_value};
+pub(crate) use debug_info::{
+    emit_obj_debuginfo_fetch, emit_pr_debuginfo_object, emit_vd_debuginfo_object,
+};
 pub(crate) use print_r_object::{emit_pr_obj_desc, emit_print_r_object};
 pub(crate) use handles::{
     emit_acquire_object_handle, emit_object_handles, object_handle_free_slots,
@@ -43,7 +52,10 @@ pub(crate) use mixed_array_append::emit_mixed_array_append;
 pub(crate) use magic_set_guard::emit_magic_set_guard;
 pub(crate) use mixed_array_fetch_for_write::emit_mixed_array_fetch_for_write;
 pub(crate) use mixed_array_get::emit_mixed_array_get;
-pub(crate) use object_not_array::{emit_throw_object_not_array, emit_throw_serialization_denied};
+pub(crate) use mixed_object_offset_unset::emit_mixed_object_offset_unset;
+pub(crate) use object_not_array::{
+    emit_throw_object_not_array, emit_throw_serialization_denied, emit_throw_unserialization_denied,
+};
 pub(crate) use mixed_array_set::emit_mixed_array_set;
 pub(crate) use mixed_cell_autovivify::emit_mixed_cell_autovivify_array;
 pub(crate) use new_by_name::emit_new_by_name;

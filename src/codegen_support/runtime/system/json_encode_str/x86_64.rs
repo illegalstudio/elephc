@@ -64,10 +64,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- numeric raw-copy path --
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source length
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base
-    emitter.instruction("add r11, r10");                                        // compute the write pointer
+    emitter.instruction("mov rax, rdx");                                        // the copy needs exactly the source length
+    emitter.instruction("call __rt_strbuf_reserve_temp");                       // scratch when it fits, a transient heap block otherwise
+    emitter.instruction("mov r11, rax");                                        // write pointer = the reservation
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the output start pointer for the return slice
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source pointer after the reservation
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source length after the reservation
     emitter.instruction("xor rcx, rcx");                                        // initialize the copy index
     emitter.label("__rt_json_str_numeric_copy_x");
     emitter.instruction("cmp rcx, rdx");                                        // have we copied every byte?
@@ -77,9 +79,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add rcx, 1");                                          // advance the copy index
     emitter.instruction("jmp __rt_json_str_numeric_copy_x");                    // continue copying
     emitter.label("__rt_json_str_numeric_done_x");
-    emitter.instruction("add r10, rdx");                                        // advance the concat-buffer offset by the copied length
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // republish the concat-buffer offset
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // rax = output start (the copied slice)
+    emitter.instruction("call __rt_concat_publish");                            // advance _concat_off past a scratch-backed slice (rax/rdx preserved)
     // rdx already holds the source length; reuse it as the result length.
     emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
     emitter.instruction("mov rsp, rbp");                                        // unwind the scratch frame
@@ -87,9 +88,101 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the unquoted numeric slice
 
     emitter.label("__rt_json_str_quoted_x");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer absolute offset before appending the JSON string
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base pointer for the current JSON append
-    emitter.instruction("add r11, r10");                                        // compute the current concat-buffer write pointer from the base plus offset
+    // -- short plain-ASCII fast path --
+    // With no active flags, a short string made only of printable ASCII (excluding quote and
+    // backslash) has an exact output length of len + 2. Writing it directly skips the sizing
+    // pass and the per-byte escape dispatch, which is what JSON object keys and short scalar
+    // values pay on every encode.
+    emitter.instruction("test r15, r15");                                       // any active flag needs the escaping pass
+    emitter.instruction("jnz __rt_json_str_size_slow_x");                       // fall back when a flag is active
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source length for the fast-path bound
+    emitter.instruction("cmp rdx, 16");                                         // only short strings use the direct copy
+    emitter.instruction("ja __rt_json_str_size_slow_x");                        // longer strings keep the general encoder
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the source pointer for the plain-ASCII scan
+    emitter.instruction("xor ecx, ecx");                                        // initialize the fast-path scan index
+    emitter.label("__rt_json_str_fast_scan_x");
+    emitter.instruction("cmp rcx, rdx");                                        // has every source byte been classified?
+    emitter.instruction("jge __rt_json_str_fast_write_x");                      // yes: the whole slice is plain ASCII
+    emitter.instruction("movzx r8d, BYTE PTR [rsi + rcx]");                     // load the next source byte
+    emitter.instruction("lea r9d, [r8 - 32]");                                  // rebase printable ASCII 0x20..0x7E onto 0..94
+    emitter.instruction("cmp r9d, 95");                                         // control bytes, DEL and UTF-8 bytes need the general path
+    emitter.instruction("jae __rt_json_str_size_slow_x");                       // escape or validate with the full encoder
+    emitter.instruction("cmp r8d, 34");                                         // double quotes need escaping
+    emitter.instruction("je __rt_json_str_size_slow_x");                        // fall back for the quote byte
+    emitter.instruction("cmp r8d, 92");                                         // backslashes need escaping
+    emitter.instruction("je __rt_json_str_size_slow_x");                        // fall back for the backslash byte
+    emitter.instruction("cmp r8d, 47");                                         // PHP escapes slashes by default
+    emitter.instruction("je __rt_json_str_size_slow_x");                        // fall back for the slash byte
+    emitter.instruction("add rcx, 1");                                          // advance the plain-ASCII scan
+    emitter.instruction("jmp __rt_json_str_fast_scan_x");                       // inspect the next source byte
+
+    emitter.label("__rt_json_str_fast_write_x");
+    emitter.instruction("lea rax, [rdx + 2]");                                  // reserve the two quotes and the copied bytes
+    emitter.instruction("call __rt_strbuf_reserve_temp");                       // scratch when it fits, a transient heap block otherwise
+    emitter.instruction("mov r11, rax");                                        // output position = the reservation
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save output start
+    emitter.instruction("mov BYTE PTR [r11], 34");                              // write opening "
+    emitter.instruction("add r11, 1");                                          // advance past the opening quote
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the source pointer after the reservation
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source length after the reservation
+    emitter.instruction("xor ecx, ecx");                                        // initialize the copy index
+    emitter.label("__rt_json_str_fast_copy_x");
+    emitter.instruction("cmp rcx, rdx");                                        // have we copied every source byte?
+    emitter.instruction("jge __rt_json_str_fast_close_x");                      // finish with the closing quote
+    emitter.instruction("mov r9b, BYTE PTR [rsi + rcx]");                       // load the next source byte
+    emitter.instruction("mov BYTE PTR [r11 + rcx], r9b");                       // copy it directly to the reserved slice
+    emitter.instruction("add rcx, 1");                                          // advance the copy index
+    emitter.instruction("jmp __rt_json_str_fast_copy_x");                       // copy the remaining bytes
+    emitter.label("__rt_json_str_fast_close_x");
+    emitter.instruction("add r11, rdx");                                        // address the byte after the copied slice
+    emitter.instruction("mov BYTE PTR [r11], 34");                              // write closing "
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // rax = output start (the copied slice)
+    emitter.instruction("add rdx, 2");                                          // result length includes both quotes
+    emitter.instruction("call __rt_concat_publish");                            // advance _concat_off past a scratch-backed slice (rax/rdx preserved)
+    emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
+    emitter.instruction("mov rsp, rbp");                                        // unwind the scratch frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the quoted plain-ASCII slice
+
+    emitter.label("__rt_json_str_size_slow_x");
+    // Size the output in a first pass: plain printable ASCII copies as one byte.
+    // Every other byte (an escapable ASCII character, a control byte, DEL, or
+    // any UTF-8 byte) is budgeted at the 6-byte worst case of a \u00XX escape,
+    // so the reservation never overruns while a long plain string reserves
+    // its own length instead of six times it.
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the source pointer for the sizing pass
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source length for the sizing pass
+    emitter.instruction("mov rax, 2");                                          // start the budget with the two quotes
+    emitter.instruction("xor ecx, ecx");                                        // initialize the sizing index
+    emitter.label("__rt_json_str_size_loop_x");
+    emitter.instruction("cmp rcx, rdx");                                        // has every source byte been sized?
+    emitter.instruction("jge __rt_json_str_size_done_x");                       // yes: reserve the computed budget
+    emitter.instruction("movzx r8d, BYTE PTR [rsi + rcx]");                     // load the next source byte
+    emitter.instruction("add rcx, 1");                                          // advance the sizing index
+    emitter.instruction("add rax, 1");                                          // every byte costs at least one output byte
+    emitter.instruction("lea r9d, [r8 - 32]");                                  // rebase printable ASCII 0x20..0x7E onto 0..94
+    emitter.instruction("cmp r9d, 95");                                         // control bytes wrap high, DEL and UTF-8 bytes land above 94
+    emitter.instruction("jae __rt_json_str_size_wide_x");                       // budget the worst-case escape for them
+    emitter.instruction("cmp r8d, 34");                                         // double quote escapes
+    emitter.instruction("je __rt_json_str_size_wide_x");                        // budget the worst-case escape
+    emitter.instruction("cmp r8d, 92");                                         // backslash escapes
+    emitter.instruction("je __rt_json_str_size_wide_x");                        // budget the worst-case escape
+    emitter.instruction("cmp r8d, 47");                                         // slash may escape
+    emitter.instruction("je __rt_json_str_size_wide_x");                        // budget the worst-case escape
+    emitter.instruction("cmp r8d, 60");                                         // '<' may become a hex escape
+    emitter.instruction("je __rt_json_str_size_wide_x");                        // budget the worst-case escape
+    emitter.instruction("cmp r8d, 62");                                         // '>' may become a hex escape
+    emitter.instruction("je __rt_json_str_size_wide_x");                        // budget the worst-case escape
+    emitter.instruction("cmp r8d, 38");                                         // '&' may become a hex escape
+    emitter.instruction("je __rt_json_str_size_wide_x");                        // budget the worst-case escape
+    emitter.instruction("cmp r8d, 39");                                         // '\'' may become a hex escape
+    emitter.instruction("jne __rt_json_str_size_loop_x");                       // any other printable byte copies as one byte
+    emitter.label("__rt_json_str_size_wide_x");
+    emitter.instruction("add rax, 5");                                          // raise this byte's budget to the 6-byte worst case
+    emitter.instruction("jmp __rt_json_str_size_loop_x");                       // size the next byte
+    emitter.label("__rt_json_str_size_done_x");
+    emitter.instruction("call __rt_strbuf_reserve_temp");                       // scratch when it fits, a transient heap block otherwise
+    emitter.instruction("mov r11, rax");                                        // output position = the reservation
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the encoded-string start pointer for the final result slice
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the current concat-buffer write pointer for the escape loop
     emitter.instruction("mov BYTE PTR [r11], 34");                              // write the opening JSON quote before any escaped payload bytes
@@ -148,15 +241,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_json_str_check_unicode_x");
     emitter.instruction("cmp r14b, 128");                                       // is the source byte ASCII (< 0x80)?
     emitter.instruction("jb __rt_json_str_check_done");                         // ASCII bytes copy as-is
-    // JSON_INVALID_UTF8_IGNORE (0x100000) and JSON_INVALID_UTF8_SUBSTITUTE
-    // (0x200000) require validating every multibyte byte through the UTF-8
-    // dispatcher, even when JSON_UNESCAPED_UNICODE is set, so malformed
-    // sequences are observed instead of being copied verbatim.
-    emitter.instruction("test r15, 0x300000");                                  // any UTF-8 sanitization flag set? (cached flag)
-    emitter.instruction("jne __rt_json_str_utf8_dispatch_x");                   // always validate when sanitization is requested
-    emitter.instruction("test r15, 256");                                       // is JSON_UNESCAPED_UNICODE (bit 256) set? (cached flag)
-    emitter.instruction("jne __rt_json_str_check_done");                        // flag set → copy the multibyte sequence verbatim
-    emitter.instruction("jmp __rt_json_str_utf8_dispatch_x");                   // route to the UTF-8 length-class dispatcher
+    // Decode multibyte sequences before choosing raw UTF-8 or an escape.
+    // U+2028 and U+2029 require both unescaped flags, even when other Unicode
+    // characters can be copied literally.
+    emitter.instruction("jmp __rt_json_str_utf8_dispatch_x");                   // validate and decode the next UTF-8 sequence
 
     emitter.label("__rt_json_str_check_done");
     emitter.instruction("mov BYTE PTR [r11], r14b");                            // copy ordinary bytes directly into the concat buffer without any escape expansion
@@ -312,8 +400,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // malformed handler so JSON_INVALID_UTF8_* and JSON_ERROR_UTF8 see
     // the same input each implementation observes on ARM64.
     emitter.instruction("cmp r14b, 0xC2");                                      // is the lead byte below the smallest valid 2-byte start (0xC2)?
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // route to the malformed handler
     emitter.instruction("cmp r14b, 0xF5");                                      // is the lead byte at/above the first invalid 4+ byte range (0xF5)?
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // route to the malformed handler
 
     emitter.instruction("cmp r14b, 0xE0");                                      // lead byte 0xE0+ → 3- or 4-byte sequence
@@ -329,13 +419,16 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // malformed handler instead of reading past the buffer.
     emitter.instruction("lea r8, [r13 + 1]");                                   // index of the continuation byte
     emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is the continuation byte within the input?
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated 2-byte sequence → malformed
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source pointer
     emitter.instruction("movzx r8, BYTE PTR [r10 + r13 + 1]");                  // load b2 without disturbing the cached flag register
     // Validate b2 is a continuation byte (0x80..0xBF).
     emitter.instruction("cmp r8, 0x80");                                        // continuation bytes start at 0x80
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
     emitter.instruction("cmp r8, 0xC0");                                        // continuation bytes end at 0xBF
+    emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
     emitter.instruction("movzx rax, r14b");                                     // widen the lead byte for arithmetic
     emitter.instruction("and rax, 0x1F");                                       // b1 & 0x1F → top 5 bits
@@ -348,24 +441,29 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
     // -- 3-byte UTF-8 (codepoint 0x800..0xFFFF) --
     emitter.label("__rt_json_str_utf8_3_x");
-    // Bounds check the final byte of the 3-byte sequence; if r13+2 fits,
-    // both r13+1 and r13+2 fit too.
-    emitter.instruction("lea r8, [r13 + 2]");                                   // index of byte 3 (last byte of the sequence)
-    emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is the last byte within the input?
-    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated 3-byte sequence → malformed
+    emitter.instruction("lea rax, [r13 + 1]");                                  // index of byte 2
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // is byte 2 within the input?
+    emitter.instruction("mov r12, 1");                                          // only the lead byte is known consumed when byte 2 is missing
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated after the lead byte -> malformed
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source pointer
-    emitter.instruction("movzx r8, BYTE PTR [r10 + r13 + 1]");                  // load b2 without disturbing the cached flag register
-    // Validate b2 is a continuation byte.
+    emitter.instruction("movzx r8, BYTE PTR [r10 + r13 + 1]");                  // load b2
     emitter.instruction("cmp r8, 0x80");                                        // continuation bytes start at 0x80
-    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
+    emitter.instruction("mov r12, 1");                                          // an invalid b2 consumes only the lead byte
+    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range -> malformed
     emitter.instruction("cmp r8, 0xC0");                                        // continuation bytes end at 0xBF
-    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
+    emitter.instruction("mov r12, 1");                                          // an invalid b2 consumes only the lead byte
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 -> malformed
+    emitter.instruction("lea rax, [r13 + 2]");                                  // index of byte 3
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // is byte 3 within the input?
+    emitter.instruction("mov r12, 2");                                          // the lead byte and b2 are valid when byte 3 is missing
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated after b2 -> malformed
     emitter.instruction("movzx rcx, BYTE PTR [r10 + r13 + 2]");                 // load b3
-    // Validate b3 is a continuation byte.
     emitter.instruction("cmp rcx, 0x80");                                       // continuation bytes start at 0x80
-    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
+    emitter.instruction("mov r12, 2");                                          // an invalid b3 consumes the lead byte and b2
+    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range -> malformed
     emitter.instruction("cmp rcx, 0xC0");                                       // continuation bytes end at 0xBF
-    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
+    emitter.instruction("mov r12, 2");                                          // an invalid b3 consumes the lead byte and b2
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 -> malformed
     emitter.instruction("movzx rax, r14b");                                     // widen the lead byte
     emitter.instruction("and rax, 0x0F");                                       // b1 & 0x0F → top 4 bits
     emitter.instruction("shl rax, 12");                                         // shift into bits 12..15
@@ -374,35 +472,54 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("or rax, r8");                                          // merge middle bits
     emitter.instruction("and rcx, 0x3F");                                       // b3 & 0x3F → low 6 bits
     emitter.instruction("or rax, rcx");                                         // assemble the codepoint in rax
+    emitter.instruction("cmp rax, 0x800");                                      // reject overlong 3-byte sequences (codepoint < 0x800)
+    emitter.instruction("mov r12, 3");                                          // bytes consumed before this malformed sequence
+    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // PHP rejects overlong UTF-8 encodings
+    emitter.instruction("mov r8, rax");                                         // copy the codepoint for the surrogate-range test
+    emitter.instruction("sub r8, 0xD800");                                      // offset into the surrogate range, if any
+    emitter.instruction("cmp r8, 0x800");                                       // does the codepoint fall in 0xD800..0xDFFF?
+    emitter.instruction("mov r12, 3");                                          // bytes consumed before this malformed sequence
+    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // PHP rejects surrogate code points in UTF-8
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // park the codepoint for the emit helper
     emitter.instruction("mov r12, 3");                                          // 3 source bytes consumed
     emitter.instruction("jmp __rt_json_str_utf8_emit_bmp_x");                   // emit a single \uXXXX
 
     // -- 4-byte UTF-8 (codepoint 0x10000..0x10FFFF) → emit a surrogate pair --
     emitter.label("__rt_json_str_utf8_4_x");
-    // Bounds check the final byte of the 4-byte sequence.
-    emitter.instruction("lea r8, [r13 + 3]");                                   // index of byte 4 (last byte of the sequence)
-    emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is the last byte within the input?
-    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated 4-byte sequence → malformed
+    emitter.instruction("lea rax, [r13 + 1]");                                  // index of byte 2
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // is byte 2 within the input?
+    emitter.instruction("mov r12, 1");                                          // only the lead byte is known consumed when byte 2 is missing
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated after the lead byte -> malformed
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source pointer
-    emitter.instruction("movzx r8, BYTE PTR [r10 + r13 + 1]");                  // load b2 without disturbing the cached flag register
-    // Validate b2 is a continuation byte.
+    emitter.instruction("movzx r8, BYTE PTR [r10 + r13 + 1]");                  // load b2
     emitter.instruction("cmp r8, 0x80");                                        // continuation bytes start at 0x80
-    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
+    emitter.instruction("mov r12, 1");                                          // an invalid b2 consumes only the lead byte
+    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range -> malformed
     emitter.instruction("cmp r8, 0xC0");                                        // continuation bytes end at 0xBF
-    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
+    emitter.instruction("mov r12, 1");                                          // an invalid b2 consumes only the lead byte
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 -> malformed
+    emitter.instruction("lea rax, [r13 + 2]");                                  // index of byte 3
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // is byte 3 within the input?
+    emitter.instruction("mov r12, 2");                                          // the lead byte and b2 are valid when byte 3 is missing
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated after b2 -> malformed
     emitter.instruction("movzx rcx, BYTE PTR [r10 + r13 + 2]");                 // load b3
-    // Validate b3 is a continuation byte.
     emitter.instruction("cmp rcx, 0x80");                                       // continuation bytes start at 0x80
-    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
+    emitter.instruction("mov r12, 2");                                          // an invalid b3 consumes the lead byte and b2
+    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range -> malformed
     emitter.instruction("cmp rcx, 0xC0");                                       // continuation bytes end at 0xBF
-    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
+    emitter.instruction("mov r12, 2");                                          // an invalid b3 consumes the lead byte and b2
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 -> malformed
+    emitter.instruction("lea rax, [r13 + 3]");                                  // index of byte 4
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // is byte 4 within the input?
+    emitter.instruction("mov r12, 3");                                          // the lead byte, b2 and b3 are valid when byte 4 is missing
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated after b3 -> malformed
     emitter.instruction("movzx r9, BYTE PTR [r10 + r13 + 3]");                  // load b4
-    // Validate b4 is a continuation byte.
     emitter.instruction("cmp r9, 0x80");                                        // continuation bytes start at 0x80
-    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
+    emitter.instruction("mov r12, 3");                                          // an invalid b4 consumes the lead byte, b2 and b3
+    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range -> malformed
     emitter.instruction("cmp r9, 0xC0");                                        // continuation bytes end at 0xBF
-    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
+    emitter.instruction("mov r12, 3");                                          // an invalid b4 consumes the lead byte, b2 and b3
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 -> malformed
     emitter.instruction("movzx rax, r14b");                                     // widen the lead byte
     emitter.instruction("and rax, 0x07");                                       // b1 & 0x07 → top 3 bits
     emitter.instruction("shl rax, 18");                                         // shift into bits 18..20
@@ -414,6 +531,15 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("or rax, rcx");                                         // merge bits 6..11
     emitter.instruction("and r9, 0x3F");                                        // b4 & 0x3F → low 6 bits
     emitter.instruction("or rax, r9");                                          // full 21-bit codepoint
+    emitter.instruction("cmp rax, 0x10000");                                    // reject overlong 4-byte sequences (codepoint < 0x10000)
+    emitter.instruction("mov r12, 4");                                          // bytes consumed before this malformed sequence
+    emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // PHP rejects overlong UTF-8 encodings
+    emitter.instruction("cmp rax, 0x110000");                                   // is the codepoint above U+10FFFF?
+    emitter.instruction("mov r12, 4");                                          // bytes consumed before this malformed sequence
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // PHP rejects out-of-range UTF-8
+    emitter.instruction("mov r12, 4");                                          // four source bytes belong to this Unicode scalar
+    emitter.instruction("test r15, 256");                                       // does JSON_UNESCAPED_UNICODE permit a literal scalar?
+    emitter.instruction("jne __rt_json_str_utf8_copy_x");                       // copy the validated four-byte scalar literally
     // Compute the surrogate pair: cp -= 0x10000; high = 0xD800 + (cp >> 10);
     // low = 0xDC00 + (cp & 0x3FF).
     emitter.instruction("sub rax, 0x10000");                                    // cp -= 0x10000
@@ -437,6 +563,16 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
     // -- emit a BMP codepoint as a single \uXXXX --
     emitter.label("__rt_json_str_utf8_emit_bmp_x");
+    emitter.instruction("test r15, 256");                                       // does JSON_UNESCAPED_UNICODE permit literal Unicode?
+    emitter.instruction("je __rt_json_str_utf8_escape_bmp_x");                  // default encoding escapes all non-ASCII scalars
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0x2028");                    // is this the line separator?
+    emitter.instruction("je __rt_json_str_utf8_line_separator_x");              // line separators need the additional flag
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0x2029");                    // is this the paragraph separator?
+    emitter.instruction("jne __rt_json_str_utf8_copy_x");                       // ordinary Unicode scalars can be copied literally
+    emitter.label("__rt_json_str_utf8_line_separator_x");
+    emitter.instruction("test r15, 2048");                                      // is JSON_UNESCAPED_LINE_TERMINATORS also enabled?
+    emitter.instruction("jne __rt_json_str_utf8_copy_x");                       // both flags allow the separator to remain literal
+    emitter.label("__rt_json_str_utf8_escape_bmp_x");
     emitter.instruction("mov QWORD PTR [rbp - 48], r13");                       // checkpoint the source index across the helper call
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // pass the codepoint to the emit helper
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the running write pointer
@@ -445,6 +581,22 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add r13, r12");                                        // advance past the consumed source bytes
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // save the updated source index
     emitter.instruction("jmp __rt_json_str_loop");                              // continue scanning the remaining source bytes
+
+    // -- copy a validated UTF-8 scalar without escaping it --
+    emitter.label("__rt_json_str_utf8_copy_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source slice pointer
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the output cursor
+    emitter.instruction("lea r8, [r13 + r12]");                                 // compute the source index after this scalar
+    emitter.label("__rt_json_str_utf8_copy_loop_x");
+    emitter.instruction("mov r9b, BYTE PTR [r10 + r13]");                       // load the next validated UTF-8 byte
+    emitter.instruction("mov BYTE PTR [r11], r9b");                             // append the validated byte
+    emitter.instruction("add r11, 1");                                          // advance the output cursor
+    emitter.instruction("add r13, 1");                                          // advance the source cursor
+    emitter.instruction("cmp r13, r8");                                         // has the complete scalar been copied?
+    emitter.instruction("jb __rt_json_str_utf8_copy_loop_x");                   // copy every byte of the scalar
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // publish the updated output cursor
+    emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // publish the updated source cursor
+    emitter.instruction("jmp __rt_json_str_loop");                              // continue encoding after the scalar
 
     // -- malformed UTF-8 handler (x86_64) --
     // Reached from any UTF-8 dispatch site that detected an invalid lead
@@ -457,6 +609,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     //     JsonException is raised when JSON_THROW_ON_ERROR is set, and
     //     fall through to the IGNORE recovery on the no-throw path.
     emitter.label("__rt_json_str_utf8_malformed_x");
+    emitter.instruction("mov QWORD PTR [rbp - 72], r12");                       // preserve the malformed-sequence skip count
     emitter.instruction("mov QWORD PTR [rbp - 48], r13");                       // park the source index across the helper-call sequence
     emitter.instruction("test r15, 0x100000");                                  // JSON_INVALID_UTF8_IGNORE bit (cached flag)
     emitter.instruction("jne __rt_json_str_utf8_skip_byte_x");                  // skip the byte and keep encoding
@@ -480,7 +633,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- malformed UTF-8: skip a single byte and resume the main loop --
     emitter.label("__rt_json_str_utf8_skip_byte_x");
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // restore the source index parked above
-    emitter.instruction("add r13, 1");                                          // advance past exactly one malformed byte (PHP-faithful recovery)
+    emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // reload the bytes this malformed sequence consumed
+    emitter.instruction("add r13, r12");                                        // skip the whole invalid sequence, matching PHP's recovery
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source index for the next loop iteration
     emitter.instruction("jmp __rt_json_str_loop");                              // resume scanning the remaining source bytes
 
@@ -650,10 +804,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the encoded-string start pointer in the leading x86_64 string result register
     emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer write pointer before turning it into a slice length
     emitter.instruction("sub rdx, rax");                                        // compute the final encoded-string length from write_end - write_start
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base pointer for the global offset update
-    emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
-    emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON string
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the updated concat-buffer offset so nested writers append after this JSON string
+    emitter.instruction("call __rt_concat_publish");                            // advance _concat_off past a scratch-backed result (rax/rdx preserved)
     emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
     emitter.instruction("add rsp, 80");                                         // release the local JSON-string scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code

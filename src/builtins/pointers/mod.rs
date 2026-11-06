@@ -12,11 +12,16 @@
 //!   which `TypeSpec` cannot express statically.
 //! - Add `pub mod <name>;` here for every new pointer builtin home.
 
+pub mod __elephc_ptr_get;
 pub mod __elephc_ptr_is_null;
 pub mod __elephc_ptr_read_string;
 pub mod __elephc_ptr_write_string;
+pub mod __elephc_zval_free;
+pub mod __elephc_zval_pack;
+pub mod __elephc_zval_unpack;
 pub mod buffer_free;
 pub mod buffer_len;
+pub mod buffer_ptr;
 pub mod elephc_callable_ptr;
 pub mod elephc_normalize_callable;
 pub mod elephc_pdo_adapter_addr;
@@ -28,12 +33,16 @@ pub mod ptr_offset;
 pub mod ptr_read16;
 pub mod ptr_read32;
 pub mod ptr_read8;
+pub mod ptr_read_f32;
+pub mod ptr_read_f64;
 pub mod ptr_read_string;
 pub mod ptr_set;
 pub mod ptr_sizeof;
 pub mod ptr_write16;
 pub mod ptr_write32;
 pub mod ptr_write8;
+pub mod ptr_write_f32;
+pub mod ptr_write_f64;
 pub mod ptr_write_string;
 pub mod zval_free;
 pub mod zval_pack;

@@ -10,8 +10,10 @@
 use super::*;
 
 /// Dynamic eval statements that operate on a materialized activation scope.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalStmt {
+    GenericDecl(Box<EvalGenericTemplate>),
+    TypedVar { name: String, declared: EvalParameterType, value: EvalExpr },
     ArrayAppendVar {
         name: String,
         value: EvalExpr,
@@ -225,6 +227,14 @@ pub enum EvalStmt {
         name: String,
         value: EvalExpr,
     },
+    /// `$name++`, `$name--`, `++$name`, or `--$name` as a statement.
+    ///
+    /// Kept distinct from `StoreVar` because PHP leaves a null local unchanged on
+    /// decrement instead of evaluating `null - 1`.
+    IncDecVar {
+        name: String,
+        increment: bool,
+    },
     Switch {
         expr: EvalExpr,
         cases: Vec<EvalSwitchCase>,
@@ -272,7 +282,7 @@ pub enum EvalStmt {
 }
 
 /// One `catch` block attached to an eval `try` statement.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalCatch {
     pub class_names: Vec<String>,
     pub var_name: Option<String>,

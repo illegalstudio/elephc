@@ -1,8 +1,6 @@
 ---
 title: "session_create_id()"
 description: "Generates a new session id, optionally with a prefix."
-sidebar:
-  order: 982
 ---
 
 ## session_create_id()
@@ -20,8 +18,9 @@ Generates a new session id, optionally with a prefix.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

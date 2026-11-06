@@ -146,6 +146,7 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #96");                                         // include the hidden 16-byte called-class capture
     emitter.label("__rt_closure_bind_allocate");
     emitter.instruction("bl __rt_heap_alloc");                                  // x0 = fresh descriptor block
+    crate::codegen_support::callable_descriptor::emit_initialize_runtime_descriptor(emitter, "x0");
     emitter.instruction("bl __rt_object_handle_acquire");                       // Closure::bind creates a NEW Closure in PHP, so it takes a new object handle
     emitter.instruction("str x0, [sp, #16]");                                   // save the new descriptor pointer
 
@@ -315,6 +316,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 96");                                         // include the hidden 16-byte called-class capture
     emitter.label("__rt_closure_bind_allocate");
     emitter.instruction("call __rt_heap_alloc");                                // rax = fresh descriptor block
+    crate::codegen_support::callable_descriptor::emit_initialize_runtime_descriptor(emitter, "rax");
     emitter.instruction("call __rt_object_handle_acquire");                     // Closure::bind creates a NEW Closure in PHP, so it takes a new object handle
     emitter.instruction("mov [rsp+16], rax");                                   // save the new descriptor pointer
 
@@ -337,7 +339,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, [rsp+16]");                                   // rax = new descriptor
     emitter.instruction("mov rdx, [rsp+8]");                                    // rdx = new $this receiver
     emitter.instruction("mov [rax+64], rdx");                                   // replace the captured object with the new receiver
-    emitter.instruction("mov rdi, rdx");                                        // pass the new receiver to the incref helper
+    emitter.instruction("mov rax, rdx");                                        // pass the new receiver in the incref helper's input register
     emitter.instruction("call __rt_incref");                                    // the bound descriptor now owns a reference to $this
     emitter.instruction("jmp __rt_closure_bind_return");                        // skip the Mixed boxing path
 
@@ -371,6 +373,33 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::{AppleVariant, Platform, Target};
+
+    /// Heap payload retains use the runtime helper's result-register ABI on every target.
+    #[test]
+    fn test_runtime_heap_payload_retains_use_incref_input_register() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut binding = Emitter::new(target);
+            emit_closure_bind(&mut binding);
+            let mut unique = Emitter::new(target);
+            crate::codegen_support::runtime::arrays::emit_hash_to_hash_unique(&mut unique);
+            let instructions = |assembly: String| -> Vec<String> {
+                assembly.lines().map(|line| line.split("//").next().unwrap().trim().to_string())
+                    .filter(|line| !line.is_empty()).collect()
+            };
+            let binding = instructions(binding.output());
+            let unique = instructions(unique.output());
+            let (bind_load, hash_load, call) = if target.arch == Arch::X86_64 {
+                ("mov rax, rdx", "mov rax, QWORD PTR [rbp - 56]", "call __rt_incref")
+            } else {
+                ("mov x0, x2", "ldr x0, [sp, #48]", "bl __rt_incref")
+            };
+            for (assembly, load) in [(&binding, bind_load), (&unique, hash_load)] {
+                assert!(assembly.windows(2).any(|pair| pair[0] == load && pair[1] == call),
+                    "{name}: missing helper input materialization {load} before {call}");
+            }
+        }
+    }
 
     /// Verifies every supported target validates and copies the optional
     /// called-class capture while retaining the top-level `$this`-only size.

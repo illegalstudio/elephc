@@ -22,6 +22,7 @@ pub(crate) fn emit_magic_set_guard(emitter: &mut Emitter) {
     }
 }
 
+/// Emits AArch64 receiver/property reentrancy-guard push and pop helpers.
 fn emit_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: magic __set reentrancy guard ---");
@@ -89,6 +90,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // emit the guarded operation
 }
 
+/// Emits x86_64 receiver/property reentrancy-guard push and pop helpers.
 fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: magic __set reentrancy guard ---");
@@ -167,6 +169,7 @@ mod tests {
     use crate::codegen_support::platform::Target;
 
     #[test]
+    /// Verifies magic-setter guards include receiver identity and property name on every target.
     fn emits_receiver_name_guard_on_all_targets() {
         for name in [
             "macos-aarch64",

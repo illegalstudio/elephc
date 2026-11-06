@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **980 / 2169** (45%), classes **142 / 329** (43%), constants **1114 / 3180** (35%).
+Overall coverage: functions **1053 / 2169** (49%), classes **185 / 329** (56%), constants **1349 / 3180** (42%).
 
 ## Coverage by PHP module
 
@@ -18,30 +18,30 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 
 | PHP module | Functions | Classes | Constants |
 |---|---|---|---|
-| [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | - |
+| [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 1 / 1 · 100% | - |
 | `bz2` | 0 / 10 · 0% | - | - |
 | [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | - | 21 / 21 · 100% |
-| `core` | 62 / 62 · 100% | 21 / 40 · 52% | 37 / 89 · 42% |
+| `core` | 62 / 62 · 100% | 40 / 40 · 100% | 89 / 89 · 100% |
 | `ctype` | 4 / 11 · 36% | - | - |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
 | `dba` | 0 / 15 · 0% | 0 / 1 · 0% | - |
-| `dom` | 0 / 2 · 0% | 0 / 50 · 0% | 0 / 61 · 0% |
+| [`dom`](./dom-html.md#functions) | 0 / 2 · 0% | 8 / 50 · 16% | 0 / 61 · 0% |
 | `enchant` | 0 / 25 · 0% | 0 / 2 · 0% | 0 / 3 · 0% |
 | [`exif`](./image.md#functions) | 4 / 4 · 100% | - | 1 / 1 · 100% |
 | `ffi` | - | 0 / 5 · 0% | - |
-| `fileinfo` | 0 / 6 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
+| [`fileinfo`](./fileinfo.md#functions) | 6 / 6 · 100% | 1 / 1 · 100% | 11 / 11 · 100% |
 | `filter` | 0 / 7 · 0% | 0 / 2 · 0% | 0 / 56 · 0% |
 | `ftp` | 0 / 36 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
 | [`gd`](./image.md#functions) | 83 / 106 · 78% | 1 / 2 · 50% | 67 / 89 · 75% |
 | `gettext` | 0 / 10 · 0% | - | - |
-| `gmp` | 0 / 51 · 0% | 0 / 1 · 0% | 0 / 9 · 0% |
+| `gmp` | 51 / 51 · 100% | 1 / 1 · 100% | 9 / 9 · 100% |
 | `hash` | 9 / 20 · 45% | 1 / 1 · 100% | 0 / 40 · 0% |
 | [`iconv`](./iconv.md#functions) | 10 / 10 · 100% | - | 4 / 4 · 100% |
 | `intl` | 0 / 187 · 0% | 0 / 22 · 0% | 0 / 170 · 0% |
-| `json` | 5 / 5 · 100% | 2 / 2 · 100% | 27 / 29 · 93% |
+| `json` | 5 / 5 · 100% | 2 / 2 · 100% | 29 / 29 · 100% |
 | `ldap` | 0 / 55 · 0% | 0 / 3 · 0% | 0 / 92 · 0% |
-| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 0 / 28 · 0% |
+| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 5 / 28 · 18% |
 | `mbstring` | 65 / 65 · 100% | - | 9 / 9 · 100% |
 | [`mysqli`](./mysqli.md#functions) | 84 / 106 · 79% | 4 / 6 · 67% | 52 / 110 · 47% |
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |
@@ -58,7 +58,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `pgsql` | 0 / 123 · 0% | 0 / 3 · 0% | 0 / 76 · 0% |
 | `phar` | - | 3 / 4 · 75% | - |
 | [`posix`](./pcntl.md#functions) | 2 / 41 · 5% | - | 0 / 43 · 0% |
-| `random` | 3 / 9 · 33% | 0 / 11 · 0% | 0 / 2 · 0% |
+| `random` | 9 / 9 · 100% | 11 / 11 · 100% | 2 / 2 · 100% |
 | `readline` | 1 / 13 · 8% | - | 0 / 1 · 0% |
 | `reflection` | - | 16 / 26 · 62% | - |
 | [`session`](./sessions.md#functions) | 23 / 23 · 100% | 4 / 4 · 100% | 3 / 3 · 100% |
@@ -70,12 +70,12 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
 | `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 382 / 545 · 70% | 2 / 6 · 33% | 163 / 400 · 41% |
+| `standard` | 390 / 545 · 72% | 3 / 6 · 50% | 163 / 400 · 41% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
 | `tidy` | 0 / 24 · 0% | 0 / 2 · 0% | 0 / 161 · 0% |
-| `tokenizer` | 0 / 2 · 0% | 0 / 1 · 0% | 0 / 154 · 0% |
+| [`tokenizer`](./tokenizer.md#functions) | 2 / 2 · 100% | 1 / 1 · 100% | 154 / 154 · 100% |
 | `uri` | - | 0 / 9 · 0% | - |
 | [`xml`](./xml.md#functions) | 22 / 22 · 100% | 1 / 1 · 100% | 28 / 28 · 100% |
 | `xmlreader` | - | 0 / 1 · 0% | - |
@@ -85,22 +85,23 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `zip` | 0 / 10 · 0% | 0 / 1 · 0% | - |
 | `zlib` | 4 / 30 · 13% | 0 / 2 · 0% | 0 / 27 · 0% |
 
-The counts above are what a compiled program has. Code run through `eval()` sees a different set in these modules (compiled / eval()):
+The counts above are what a compiled program has. Exported backend support differs in these modules (compiled / eval()):
 
-- `core` constants: 37 / 34
+- `core` constants: 89 / 86
 - `exif` functions: 4 / 0
 - `exif` constants: 1 / 0
 - `gd` functions: 83 / 0
 - `gd` constants: 67 / 0
+- `gmp` constants: 9 / 0
 - `mysqli` functions: 84 / 0
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0
+- `random` functions: 9 / 3
 - `session` functions: 23 / 0
-- `standard` functions: 382 / 342
+- `standard` functions: 390 / 350
 - `standard` constants: 163 / 142
-- `zend opcache` functions: 8 / 0
 
-Most of that is one gap rather than several. 203 of those functions — every one missing from `exif`, `gd`, `mysqli`, `pdo`, `session`, `zend opcache` — are implemented by a PHP prelude the compiler injects into the program it is compiling. The interpreter dispatches through the shared builtin registry, and a prelude function has no registry binding there, so it is not that these surfaces were skipped one by one: none of them has an entry point `eval()` can reach. Closing it means an `eval_builtin!` binding per surface; see **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
+Of those functions, 201 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
 
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
 
@@ -158,7 +159,8 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [XML](./xml.md) ([PHP](https://www.php.net/manual/en/book.xml.php)) | ✅ Supported | ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost |
 | [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 34 shared-contract functions; curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract and is the one function the row does not count. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
-| [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compatibility surface; programs are AOT-compiled, there is no opcode cache |
+| [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compiled-script manifest plus a runtime parsed-script cache for dynamic include/require through eval(), with optional persistent file caching; ordinary code remains AOT-compiled and there is no tracing JIT |
+| [File information](./fileinfo.md) ([PHP](https://www.php.net/manual/en/book.fileinfo.php)) | ✅ Supported | Six functions, finfo and eleven constants, backed by pinned static libmagic 5.46 with an embedded database; native and eval use the same declarations. Declare the libmagic native package; --with-fileinfo enables opaque dynamic use. |
 
 ## Beyond PHP
 
@@ -168,12 +170,15 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 |---|---|---|
 | `buffer_free()` | Buffer | Frees a buffer<T> and nulls the local variable that held it. |
 | `buffer_len()` | Buffer | Returns the logical element count of a buffer<T>. |
+| `buffer_ptr()` | Buffer | Returns the payload address of a buffer<T>, valid until the buffer is freed. |
 | `class_attribute_args()` | Class | Returns the constructor arguments of a named attribute applied to a class. |
 | `class_attribute_names()` | Class | Returns the list of attribute names applied to a class. |
 | `class_get_attributes()` | Class | Returns an array of ReflectionAttribute objects for all attributes of a class. |
 | `read_exif_data()` | Image | Alias of exif_read_data(). |
 | `clamp()` | Math | Clamps a value to be within a specified range. *(No PHP equivalent (not in PHP 8.4/8.5))* |
 | `log2()` | Math | Returns the base-2 logarithm of a number. *(No PHP equivalent (PHP has log(), log10(), log1p()))* |
+| `memory_get_allocations()` | Misc | Returns the cumulative number of successful native heap allocations, including reused blocks. Direct native reads do not allocate; eval boxes the sampled count. |
+| `memory_get_frees()` | Misc | Returns the cumulative number of native heap blocks released. Direct native reads do not allocate; eval boxes the sampled count. |
 | `pcntl_daemon()` | Misc | Detaches the surviving child into a background daemon process. |
 | `buffer_new()` | Pointer | Allocates a raw byte buffer. |
 | `ptr()` | Pointer | Returns a raw pointer to the given variable. |
@@ -184,12 +189,16 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `ptr_read16()` | Pointer | Reads one unsigned 16-bit word through a raw pointer and returns it as an integer. |
 | `ptr_read32()` | Pointer | Reads one unsigned 32-bit word through a raw pointer and returns it as an integer. |
 | `ptr_read8()` | Pointer | Reads one unsigned byte through a raw pointer and returns it as an integer. |
+| `ptr_read_f32()` | Pointer | Reads one IEEE 754 single-precision value through a raw pointer and returns it as a float. |
+| `ptr_read_f64()` | Pointer | Reads one IEEE 754 double-precision value through a raw pointer and returns it as a float. |
 | `ptr_read_string()` | Pointer | Copies raw bytes from a pointer into a PHP string of the given length. |
 | `ptr_set()` | Pointer | Writes one machine word through a raw pointer. |
 | `ptr_sizeof()` | Pointer | Returns the byte size of the named pointer target type. |
 | `ptr_write16()` | Pointer | Writes one 16-bit word through a raw pointer. |
 | `ptr_write32()` | Pointer | Writes one 32-bit word through a raw pointer. |
 | `ptr_write8()` | Pointer | Writes one byte through a raw pointer. |
+| `ptr_write_f32()` | Pointer | Writes one IEEE 754 single-precision value through a raw pointer, rounding the float to 32 bits. |
+| `ptr_write_f64()` | Pointer | Writes one IEEE 754 double-precision value through a raw pointer. |
 | `ptr_write_string()` | Pointer | Copies PHP string bytes into raw memory at the given pointer. |
 | `zval_free()` | Pointer | Frees a PHP zval pointer allocated by `zval_pack`. |
 | `zval_pack()` | Pointer | Packs an elephc runtime value into a heap-allocated PHP zval pointer. |
@@ -198,13 +207,13 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `grapheme_strrev()` | String | Reverses a string by grapheme cluster, returning false on failure. *(No PHP equivalent (not in PHP 8.4/8.5 intl))* |
 | `is_real()` | Type | Alias of is_float(). *(Removed in PHP 8.0; kept as a compatibility alias of is_float())* |
 
-Classes: `DateUnknownException` (`date`), `ImageException` (`gd`).
+Classes: `DateUnknownException` (`date`), `Elephc\Testing\AssertionFailedError`, `Elephc\Testing\IncompleteTestError`, `Elephc\Testing\Runner`, `Elephc\Testing\SkippedTestError`, `Elephc\Testing\TestCase`, `Elephc\Web\Request`, `Elephc\Web\Worker`, `Elephc\Web\WorkerApplication`, `ImageException` (`gd`), `PHPUnit\Framework\TestCase`.
 
 Constants: `ARRAY_FILTER_USE_VALUE` (`standard`), `MYSQLI_TYPE_VARCHAR` (`mysqli`).
 
 ## Known limitations
 
-**eval() coverage of the prelude-implemented modules.** The modules whose eval() column is zero — gd, exif, mysqli, PDO, session, OPcache — are all implemented by a PHP prelude the compiler injects, and the interpreter dispatches through the shared builtin registry, where a prelude function has no binding. Closing it is one `eval_builtin!` surface at a time, tracked per module: mysqli #746, PDO #748, session #1211, gd and exif #1212, OPcache #1213, with #906 as the umbrella. Until then, call those functions from compiled code and pass the results into the fragment.
+**eval() coverage of the prelude-implemented modules.** The generated eval() counts are zero for gd, exif, mysqli, PDO, and session because their functions use injected PHP preludes without interpreter bindings. OPcache has a separate supported route through native prelude declarations or dedicated interpreter handlers, including the live script cache and API restrictions. The remaining module gaps are tracked by mysqli #746, PDO #748, session #1211, gd and exif #1212, with #906 as the umbrella; call those functions from compiled code and pass the results into the fragment until their eval() surfaces are implemented.
 
 **Static subset, AOT only.** Ordinary source is compiled ahead of time with no opcode fallback; runtime code loading exists only through the experimental eval() interpreter bridge.
 
@@ -212,4 +221,4 @@ Constants: `ARRAY_FILTER_USE_VALUE` (`standard`), `MYSQLI_TYPE_VARCHAR` (`mysqli
 
 **Five native compile targets.** Standalone binaries target macOS ARM64, Linux ARM64, and Linux x86_64; macOS also cross-compiles libraries for iOS ARM64 devices and the iOS ARM64 Simulator. PHP itself runs on many more platforms.
 
-**A Mixed-sourced object needs explicit narrowing before a typed object parameter.** An object pulled out of an array, an array property, or other `mixed`-typed storage is rejected at a class-typed call parameter until an `instanceof` guard narrows it; PHP would defer that check to runtime. Once narrowed, elephc unboxes the object and passes it correctly. The curl multi wrappers accept `mixed` plus a runtime guard because `curl_multi_info_read()` returns its handle inside an array and canonical callers do not add a separate narrowing guard. Pinned by `test_mixed_sourced_object_through_typed_param_is_unboxed`.
+**A Mixed-sourced object usually needs explicit narrowing before a typed object parameter.** An object pulled out of an array, an array property, or other `mixed`-typed storage is rejected at a class-typed by-value parameter until an `instanceof` guard narrows it; PHP would defer that check to runtime. Once narrowed, elephc unboxes the object and passes it correctly. A variable passed by reference is the exception: when it already uses a shared boxed cell, elephc emits a runtime class guard and preserves the cell so callee writes remain visible to aliases. The curl multi wrappers accept `mixed` plus a runtime guard because `curl_multi_info_read()` returns its handle inside an array and canonical callers do not add a separate narrowing guard. Pinned by `test_mixed_sourced_object_through_typed_param_is_unboxed` and the object-reference entry-guard regressions.

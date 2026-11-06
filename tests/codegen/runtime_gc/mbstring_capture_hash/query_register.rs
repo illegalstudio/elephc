@@ -5,7 +5,7 @@
 //! - Runtime-GC codegen tests using compiled PHP callers and the actual mbstring Rust bridge.
 //!
 //! Key details:
-//! - Test shims supply normalized plans before the public mb_parse_str lvalue adapter is enabled.
+//! - Test shims isolate normalized plan registration beneath the public mb_parse_str lvalue adapter.
 //! - Binary writes, nested COW, append history, root removal, and PHP throws use real storage.
 //! - Registration metadata crosses the seventh C argument, which resides on the x86_64 stack.
 

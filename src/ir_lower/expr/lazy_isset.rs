@@ -103,14 +103,14 @@ pub(super) fn lower_lazy_isset_operand(
                 return None;
             }
             let object = lower_expr(ctx, object);
-            let probed = lower_property_probe_from_value(ctx, object, property, arg);
+            let probed = lower_property_isset_probe_from_value(ctx, object, property, arg);
             Some(probe_value_is_set(ctx, probed, arg))
         }
         ExprKind::DynamicPropertyAccess { object, property } => {
             // `isset($o->{$k})` must not raise for a name php refuses, and must not warn for one
             // it has never created, so the read carries php's probe fetch mode.
             let probed =
-                lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Probe, arg);
+                lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Isset, arg);
             Some(probe_value_is_set(ctx, probed, arg))
         }
         // `$o?->{$k}` is a nullsafe CHAIN, so its short-circuit belongs to the chain lowering.
@@ -168,41 +168,45 @@ pub(super) fn lower_lazy_empty(
         return None;
     }
     if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
-        if array_access_expr_satisfies_array_access(ctx, array) {
-            let object = evaluate_once(ctx, array, &args[0]);
-            return Some(lower_array_access_object_empty(
-                ctx, &object, index, name, expr, &args[0],
-            ));
-        }
-        // A call or `new` result has no syntactic type, so it is lowered once and judged by
-        // the type it lowers to; that value is then the receiver on either path.
-        if receiver_is_computed_value(array) {
-            let object = super::pipe::lower_pipe_value_temp(ctx, array, &args[0]);
-            if array_access_expr_satisfies_array_access(ctx, &object) {
-                return Some(lower_array_access_object_empty(
-                    ctx, &object, index, name, expr, &args[0],
-                ));
+        // The receiver is read ONCE and judged by the type it lowers to. `$this`, a property
+        // and a call or `new` result only get that type by being lowered (#1448), and even a
+        // variable is not named again: `offsetExists` may reassign it, and `offsetGet` must
+        // still ask the object that answered (#1449). An `ArrayAccess` object is kept in a
+        // hidden temp for the two calls and released as soon as `empty()` has decided, so it
+        // lives no longer than PHP holds the container: a later `unset()` or reassignment
+        // still runs the destructor at that point. Any other value continues as the plain read.
+        if array_access_expr_satisfies_array_access(ctx, array)
+            || receiver_is_computed_value(array)
+            || receiver_is_typed_once_lowered(array)
+        {
+            let receiver = lower_subscript_receiver_silently(ctx, array);
+            let receiver_type = ctx.builder.value_php_type(receiver.value);
+            if type_satisfies_array_access_for_ir(ctx, &receiver_type) {
+                let nullable = value_is_nullable(ctx, receiver.value);
+                let temp_name = ctx.declare_hidden_temp(receiver_type.clone());
+                store_value_into_temp(ctx, &temp_name, receiver_type, receiver, args[0].span);
+                let object = Expr::new(ExprKind::Variable(temp_name.clone()), args[0].span);
+                let result = lower_array_access_object_empty(
+                    ctx, &object, nullable, index, name, expr, &args[0],
+                );
+                release_evaluated_once(ctx, Some(temp_name), args[0].span);
+                return Some(result);
             }
-            let value =
-                lower_array_access_with_missing_warning(ctx, &object, index, &args[0], false);
-            return Some(emit_builtin_call_value(
-                ctx,
-                name,
-                vec![value.value],
-                PhpType::Bool,
-                expr.span,
-                None,
-            ));
+            // Keep a computed native receiver in the same hidden-local form used by the
+            // ArrayAccess route, through both the silent read and the empty test.
+            // Retire the local immediately after the decision instead of at function exit.
+            let temp_name = ctx.declare_hidden_temp(receiver_type.clone());
+            store_value_into_temp(ctx, &temp_name, receiver_type, receiver, args[0].span);
+            let staged = Expr::new(ExprKind::Variable(temp_name.clone()), args[0].span);
+            let value = lower_array_access_with_missing_warning(
+                ctx, &staged, index, &args[0], false,
+            );
+            let result = lower_empty_of_probed_value(ctx, value, name, expr);
+            release_evaluated_once(ctx, Some(temp_name), args[0].span);
+            return Some(result);
         }
         let value = lower_array_access_with_missing_warning(ctx, array, index, &args[0], false);
-        return Some(emit_builtin_call_value(
-            ctx,
-            name,
-            vec![value.value],
-            PhpType::Bool,
-            expr.span,
-            None,
-        ));
+        return Some(lower_empty_of_probed_value(ctx, value, name, expr));
     }
     // A typed static property that is still uninitialized is EMPTY in PHP, and reading it the
     // ordinary way to find that out is fatal — the same reason `isset()` and `??` need the
@@ -220,10 +224,10 @@ pub(super) fn lower_lazy_empty(
     // re-derived so the two constructs cannot drift on which properties they consider declared.
     if let ExprKind::PropertyAccess { object, property } = &args[0].kind {
         if matches!(
-            property_isset_action(ctx, object, property),
+            property_isset_action(ctx, object, property, &args[0]),
             Some(IssetPropertyAction::Initialized)
         ) {
-            let object = lower_expr(ctx, object);
+            let object = lower_member_receiver(ctx, object, &args[0]);
             return Some(lower_initialized_property_empty(
                 ctx, object, property, name, &args[0],
             ));
@@ -232,13 +236,22 @@ pub(super) fn lower_lazy_empty(
         // never-created name answers `true` instead of raising.
         if property_probe_needs_runtime_name_form(ctx, object) {
             let object = lower_expr(ctx, object);
-            let probed = lower_property_probe_from_value(ctx, object, property, &args[0]);
+            let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
+            return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
+        }
+        // A class with `__get` but no `__isset`: php finds no property and never calls
+        // `__get`, so the probe below answers from the dynamic hash or null.
+        if property_existence_magic_class(ctx, object, property, "__get").is_some()
+            && property_existence_magic_class(ctx, object, property, "__isset").is_none()
+        {
+            let object = lower_expr(ctx, object);
+            let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }
     }
     if let ExprKind::DynamicPropertyAccess { object, property } = &args[0].kind {
         let probed =
-            lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Probe, &args[0]);
+            lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Empty, &args[0]);
         return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
     }
     // A `?->` operand is a nullsafe CHAIN. Its segments only learn they are in a silent probe
@@ -248,6 +261,21 @@ pub(super) fn lower_lazy_empty(
         if let Some(probed) = nullsafe_chain::lower_with_missing_warning(ctx, &args[0], false) {
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }
+    }
+    let ordinary_value = match &args[0].kind {
+        ExprKind::Variable(name) => ctx.has_local_slot(name),
+        ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }
+        | ExprKind::StaticPropertyAccess { .. } | ExprKind::NullsafePropertyAccess { .. }
+        | ExprKind::NullsafeDynamicPropertyAccess { .. } => false,
+        _ => true,
+    };
+    let ty = materialized_expr_type_for_merge(ctx, &args[0]);
+    let may_have_handler = crate::types::object_operators::operator_class(&ty).is_some()
+        || (matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_))
+            && ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())));
+    if ordinary_value && may_have_handler {
+        let value = lower_expr(ctx, &args[0]);
+        return Some(lower_empty_of_probed_value(ctx, value, name, expr));
     }
     let (exists_call, get_call) = lazy_empty_magic_property_calls(ctx, &args[0])?;
     Some(lower_empty_through_exists_then_get(
@@ -261,24 +289,91 @@ pub(super) fn lower_lazy_empty(
 
 /// Lowers `empty($object[$index])` on an `ArrayAccess` receiver the way PHP does:
 /// `offsetExists` decides first, and `offsetGet` is read only when it said yes. `object` is
-/// already evaluated; the offset is evaluated here, once, before either call names it.
+/// already evaluated into a hidden temp, so both calls reach the same object; the offset is
+/// evaluated here, once, before either call names it.
+///
+/// A `nullable` receiver that holds null is empty without either call, as a null container
+/// is in PHP; its offset is still evaluated first, as PHP evaluates it. A computed offset is
+/// released once the decision is made, on every path.
 fn lower_array_access_object_empty(
     ctx: &mut LoweringContext<'_, '_>,
     object: &Expr,
+    nullable: bool,
     index: &Expr,
     name: &str,
     expr: &Expr,
     arg: &Expr,
 ) -> LoweredValue {
-    let key = evaluate_once(ctx, index, arg);
+    let (key, key_temp) = evaluate_once(ctx, index, arg);
     let exists_call = synthetic_method_call(object, "offsetExists", &key, arg.span);
     let get_call = synthetic_method_call(object, "offsetGet", &key, arg.span);
-    lower_empty_through_exists_then_get(ctx, &exists_call, &get_call, name, expr)
+    let result = if nullable {
+        lower_nullable_receiver_empty(ctx, object, &exists_call, &get_call, name, expr, arg)
+    } else {
+        lower_empty_through_exists_then_get(ctx, &exists_call, &get_call, name, expr)
+    };
+    release_evaluated_once(ctx, key_temp, arg.span);
+    result
 }
 
-/// Returns an expression that can be named twice with the effects of evaluating `expr` once.
-/// A variable or a literal already is one; anything else is lowered into a hidden temp.
-fn evaluate_once(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, arg: &Expr) -> Expr {
+/// Lowers the gated `empty()` for a receiver that may hold null: null is empty without either
+/// `ArrayAccess` call, an object takes the `offsetExists` then `offsetGet` route.
+fn lower_nullable_receiver_empty(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    exists_call: &Expr,
+    get_call: &Expr,
+    name: &str,
+    expr: &Expr,
+    arg: &Expr,
+) -> LoweredValue {
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let null_block = ctx.builder.create_named_block("empty.null_receiver", Vec::new());
+    let object_block = ctx.builder.create_named_block("empty.object_receiver", Vec::new());
+    let merge = ctx.builder.create_named_block("empty.receiver_merge", Vec::new());
+    let receiver = lower_expr(ctx, object);
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![receiver.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(arg.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: object_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    let true_value = lower_bool_literal(ctx, true, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, true_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(object_block);
+    let empty_value = lower_empty_through_exists_then_get(ctx, exists_call, get_call, name, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Returns an expression that can be named twice with the effects of evaluating `expr` once,
+/// plus the hidden temp holding the value when one was needed.
+///
+/// A variable or a literal already is one; anything else is lowered once into a hidden temp,
+/// which the caller hands to `release_evaluated_once` as soon as both reads are done. A hidden
+/// temp, not a one-shot owned temp: its loads borrow from the slot, so the `offsetExists` and
+/// `offsetGet` calls can both name it without consuming its reference.
+pub(super) fn evaluate_once(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    arg: &Expr,
+) -> (Expr, Option<String>) {
     match expr.kind {
         ExprKind::Variable(_)
         | ExprKind::This
@@ -286,9 +381,46 @@ fn evaluate_once(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, arg: &Expr) -> 
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
-        | ExprKind::Null => expr.clone(),
-        _ => super::pipe::lower_pipe_value_temp(ctx, expr, arg),
+        | ExprKind::Null => (expr.clone(), None),
+        _ => {
+            let value = lower_expr(ctx, expr);
+            let temp_type = ctx.builder.value_php_type(value.value);
+            let temp_name = ctx.declare_hidden_temp(temp_type.clone());
+            store_value_into_temp(ctx, &temp_name, temp_type, value, arg.span);
+            (Expr::new(ExprKind::Variable(temp_name.clone()), arg.span), Some(temp_name))
+        }
     }
+}
+
+/// Releases the hidden temp that held an `empty()` receiver or offset for its two
+/// `ArrayAccess` calls, once neither call needs it.
+///
+/// The value's lifetime then ends with the `empty()` expression, as in PHP, instead of at
+/// function exit, where the frame cleanup would otherwise release the slot: until then the
+/// extra reference kept an object alive past its last `unset()` and delayed `__destruct()`.
+/// `ReleaseLocalSlot` clears the slot before releasing its occupant, so the epilogue finds it
+/// empty and a throwing destructor cannot revisit it.
+pub(super) fn release_evaluated_once(ctx: &mut LoweringContext<'_, '_>, temp: Option<String>, span: Span) {
+    let Some(temp_name) = temp else {
+        return;
+    };
+    let slot = ctx.declare_local(&temp_name, ctx.local_type(&temp_name));
+    ctx.emit_void(
+        Op::ReleaseLocalSlot,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(),
+        Some(span),
+    );
+}
+
+/// Returns true for `$this` and property receivers, whose type is known only once they are
+/// lowered: nothing types them syntactically.
+fn receiver_is_typed_once_lowered(receiver: &Expr) -> bool {
+    matches!(
+        receiver.kind,
+        ExprKind::This | ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+    )
 }
 
 /// Returns true for a receiver that is a call or `new` result: evaluating it has effects, and
@@ -345,13 +477,12 @@ fn lower_empty_through_exists_then_get(
         else_args: Vec::new(),
     });
 
-    // Set: empty is the emptiness of the `__get` value (reuses the eager builtin).
+    // Set: apply the fetched value's own boolean contract.
     ctx.builder.position_at_end(present_block);
     // The read value is a fresh call result nothing else owns, so the builtin path, which
     // releases owned operands once the test has consumed them, is the one to take.
     let get_value = lower_expr(ctx, get_call);
-    let empty_value =
-        emit_builtin_call_value(ctx, name, vec![get_value.value], PhpType::Bool, expr.span, None);
+    let empty_value = lower_empty_of_probed_value(ctx, get_value, name, expr);
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty_value, expr.span);
     branch_to(ctx, merge);
 
@@ -366,21 +497,29 @@ fn lower_empty_through_exists_then_get(
 }
 
 /// Applies php's `empty()` emptiness test to an already probed property value.
-fn lower_empty_of_probed_value(
+pub(super) fn lower_empty_of_probed_value(
     ctx: &mut LoweringContext<'_, '_>,
     probed: LoweredValue,
     name: &str,
     expr: &Expr,
 ) -> LoweredValue {
-    let empty_name = ctx.intern_function_name(name);
-    ctx.emit_value(
-        Op::LanguageConstructCall,
-        vec![probed.value],
-        Some(Immediate::Data(empty_name)),
-        PhpType::Bool,
-        effects_lookup::language_construct_effects(name),
-        Some(expr.span),
-    )
+    if ctx.builder.value_php_type(probed.value).codegen_repr() == PhpType::Str {
+        // A string offset can be the byte "0", which PHP considers empty despite its length.
+        let truthy = ctx.truthy_consuming(probed, Some(expr.span));
+        let zero = lower_int_literal(ctx, 0, expr);
+        return ctx.emit_value(Op::ICmp, vec![truthy.value, zero.value],
+            Some(Immediate::CmpPredicate(CmpPredicate::Eq)), PhpType::Bool,
+            Op::ICmp.default_effects(), Some(expr.span));
+    }
+    if let Some(truthy) = object_operators::lower_object_truthy(ctx, probed, Some(expr.span)) {
+        let zero = lower_int_literal(ctx, 0, expr);
+        let result = ctx.emit_value(Op::ICmp, vec![truthy.value, zero.value],
+            Some(Immediate::CmpPredicate(CmpPredicate::Eq)), PhpType::Bool,
+            Op::ICmp.default_effects(), Some(expr.span));
+        release_binary_operand_temporary(ctx, probed, expr.span);
+        return result;
+    }
+    emit_builtin_call_value(ctx, name, vec![probed.value], PhpType::Bool, expr.span, None)
 }
 
 /// For an `empty()` operand that is an overloaded (magic) property access,
@@ -454,4 +593,3 @@ pub(super) fn property_existence_magic_class(
     }
     class_method_signature(ctx, &class_name, &php_symbol_key(magic)).map(|_| class_name)
 }
-

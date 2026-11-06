@@ -1,8 +1,6 @@
 ---
 title: "mysqli_character_set_name()"
 description: "Returns the connection's current character set."
-sidebar:
-  order: 102
 ---
 
 ## mysqli_character_set_name()
@@ -20,8 +18,9 @@ Returns the connection's current character set.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -103,6 +103,7 @@ pub(super) fn builtin_reflection_class_implements_interface_method() -> ClassMet
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: "implementsInterface".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -236,6 +237,7 @@ pub(super) fn builtin_reflection_class_is_subclass_of_method() -> ClassMethod {
         dummy_span,
     );
     ClassMethod {
+        type_params: Vec::new(),
         name: "isSubclassOf".to_string(),
         visibility: Visibility::Public,
         is_static: false,
@@ -305,6 +307,7 @@ pub(super) fn builtin_reflection_class_is_subclass_of_method() -> ClassMethod {
 pub(super) fn builtin_reflection_class_is_instance_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
+        type_params: Vec::new(),
         name: "isInstance".to_string(),
         visibility: Visibility::Public,
         is_static: false,

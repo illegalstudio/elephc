@@ -16,7 +16,10 @@ use crate::names::canonical_name_for_decl;
 use crate::parser::ast::{CatchClause, ClassMethod, ExprKind, Stmt, StmtKind};
 
 use super::discovery::FunctionVariantRegistry;
-use super::engine_includes::{expand_value_include, resolve_include_stmt, IncludeValueCapture};
+use super::engine_includes::{
+    discard_first_include_return, expand_value_include, resolve_include_stmt,
+    IncludeValueCapture,
+};
 use super::include_path::fold_include_path;
 use super::state::{
     is_define_call_name, namespace_string, normalize_defined_constant_name,
@@ -114,7 +117,7 @@ pub(super) fn resolve_stmts(
         )?;
         match &stmt.kind {
             StmtKind::Include { path, once, required } => {
-                if let Some(resolved) = resolve_include_stmt(
+                if let Some(mut resolved) = resolve_include_stmt(
                     &stmt,
                     path,
                     *once,
@@ -125,6 +128,8 @@ pub(super) fn resolve_stmts(
                     state,
                     function_variants,
                 )? {
+                    // A top-level `return` in the included file ends the FILE, not the caller.
+                    discard_first_include_return(&mut resolved);
                     result.extend(resolved);
                 }
             }
@@ -364,6 +369,7 @@ pub(super) fn resolve_stmts(
                     .iter()
                     .map(|catch_clause| {
                         Ok(CatchClause {
+                            exception_type_args: catch_clause.exception_type_args.clone(),
                             exception_types: catch_clause.exception_types.clone(),
                             variable: catch_clause.variable.clone(),
                             body: resolve_isolated(
@@ -401,6 +407,7 @@ pub(super) fn resolve_stmts(
             }
             StmtKind::FunctionDecl {
                 name,
+                type_params,
                 params,
                 param_attributes,
                 variadic,
@@ -421,6 +428,7 @@ pub(super) fn resolve_stmts(
                 result.push(Stmt::with_attributes(
                     StmtKind::FunctionDecl {
                         name: name.clone(),
+                        type_params: type_params.clone(),
                         params: params.clone(),
                         param_attributes: param_attributes.clone(),
                         variadic: variadic.clone(),
@@ -435,6 +443,7 @@ pub(super) fn resolve_stmts(
                 ));
             }
             StmtKind::ClassDecl {
+                generics,
                 name,
                 extends,
                 implements,
@@ -456,6 +465,7 @@ pub(super) fn resolve_stmts(
                 )?;
                 result.push(Stmt::with_attributes(
                     StmtKind::ClassDecl {
+                        generics: generics.clone(),
                         name: name.clone(),
                         extends: extends.clone(),
                         implements: implements.clone(),
@@ -471,7 +481,7 @@ pub(super) fn resolve_stmts(
                     stmt.attributes.clone(),
                 ));
             }
-            StmtKind::InterfaceDecl { name, extends, properties, methods,
+            StmtKind::InterfaceDecl { generics, name, extends, properties, methods,
             constants,
             } => {
                 let methods = resolve_methods(
@@ -484,6 +494,7 @@ pub(super) fn resolve_stmts(
                 )?;
                 result.push(Stmt::with_attributes(
                     StmtKind::InterfaceDecl {
+                        generics: generics.clone(),
                         name: name.clone(),
                         extends: extends.clone(),
                         properties: properties.clone(),
@@ -496,6 +507,7 @@ pub(super) fn resolve_stmts(
             }
             StmtKind::TraitDecl {
                 name,
+                generics,
                 trait_uses,
                 properties,
                 methods,
@@ -512,6 +524,7 @@ pub(super) fn resolve_stmts(
                 result.push(Stmt::with_attributes(
                     StmtKind::TraitDecl {
                         name: name.clone(),
+                        generics: generics.clone(),
                         trait_uses: trait_uses.clone(),
                         properties: properties.clone(),
                         methods,

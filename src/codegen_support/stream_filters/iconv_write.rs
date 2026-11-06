@@ -25,20 +25,61 @@
 //! - The init block is spliced INLINE (entered with rsp 16-aligned), so on
 //!   x86_64 it reserves `sub rsp, 24` (push rbp + 24 ≡ 0 mod 16) to keep rsp
 //!   16-aligned at the libc calls; the call-entered helpers use `sub rsp, 64`.
+//! - Apple's iconv (Citrus-based since macOS 14) keeps the `//TRANSLIT` and
+//!   `//IGNORE` options on the converter it shares between every descriptor of
+//!   one charset pair, and any `iconv_open()` or `iconvctl()` for that pair,
+//!   the iconv bridge's included, rewrites them. On Apple targets the attach
+//!   records this filter's own options in `_iconv_write_options[fd]`, and the
+//!   fwrite helper re-applies them through `iconvctl()` before it converts, the
+//!   same protocol the bridge follows (#811). Generated PHP code runs its filters
+//!   and bridge calls on one thread, so nothing can land between the restore and
+//!   the conversion. glibc keeps options per descriptor; Linux code is unchanged,
+//!   and Apple targets are AArch64-only in the supported matrix.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform};
 
 /// Capacity of the shared `_stream_grow_scratch` window used as the iconv output buffer.
 const ICONV_SCRATCH: i64 = 65536;
 
+/// `iconvctl()` request that sets a descriptor's transliteration (GNU libiconv numbering,
+/// which Apple's iconv keeps).
+const ICONV_SET_TRANSLITERATE: i64 = 2;
+
+/// `iconvctl()` request that sets whether a descriptor discards illegal sequences.
+const ICONV_SET_DISCARD_ILSEQ: i64 = 4;
+
+/// Option bit recorded for a `//TRANSLIT` target charset.
+const OPTION_TRANSLIT: u8 = 1;
+
+/// Option bit recorded for an `//IGNORE` target charset.
+const OPTION_IGNORE: u8 = 2;
+
+/// Returns the option bits Apple's `iconv_open()` reads from a target charset name: a
+/// case-insensitive `//TRANSLIT` or `//IGNORE` anywhere in the name enables that option.
+pub(crate) fn iconv_target_option_bits(to_charset: &str) -> u8 {
+    let upper = to_charset.to_ascii_uppercase();
+    let mut bits = 0;
+    if upper.contains("//TRANSLIT") {
+        bits |= OPTION_TRANSLIT;
+    }
+    if upper.contains("//IGNORE") {
+        bits |= OPTION_IGNORE;
+    }
+    bits
+}
+
 /// Emits the iconv WRITE-filter attachment. The descriptor is in the int result
 /// register at entry; on return the stream is re-boxed as a resource Mixed cell.
+///
+/// `option_bits` are this filter's `iconv_target_option_bits()`, recorded per descriptor on
+/// Apple targets so the fwrite helper can restore them before each conversion.
 pub(crate) fn emit_iconv_write_attach_with_labels<F>(
     emitter: &mut Emitter,
     from_sym: &str,
     to_sym: &str,
+    option_bits: u8,
     mut next_label: F,
 ) where
     F: FnMut(&str) -> String,
@@ -51,6 +92,7 @@ pub(crate) fn emit_iconv_write_attach_with_labels<F>(
             emitter,
             from_sym,
             to_sym,
+            option_bits,
             &fwrite_label,
             &close_label,
             &skip_label,
@@ -68,11 +110,36 @@ pub(crate) fn emit_iconv_write_attach_with_labels<F>(
     }
 }
 
+/// Emits the Apple-only restore of this descriptor's own `//TRANSLIT` and `//IGNORE` options.
+///
+/// Reads the bits the attach recorded in `_iconv_write_options[fd]` and hands each to
+/// `iconvctl()` for this descriptor's `iconv_t`, undoing whatever another descriptor of the
+/// same charset pair left in Apple's shared converter. Expects the fd at `[sp, #0]` and uses
+/// `[sp, #32]`, the outbuf slot the caller fills afterwards, for the `int` `iconvctl()` reads.
+fn emit_apple_option_restore_arm64(emitter: &mut Emitter) {
+    // -- restore each of this descriptor's own options on the pair Apple iconv shares --
+    for (request, bit) in [(ICONV_SET_TRANSLITERATE, 0), (ICONV_SET_DISCARD_ILSEQ, 1)] {
+        let flag = if bit == 0 { "//TRANSLIT" } else { "//IGNORE" };
+        emitter.comment(&format!("restore this descriptor's own {flag} on the shared pair"));
+        emitter.instruction("ldr x9, [sp, #0]");                                // reload the file descriptor
+        abi::emit_symbol_address(emitter, "x10", "_iconv_write_options");
+        emitter.instruction("ldrb w11, [x10, x9]");                             // this descriptor's recorded option bits
+        emitter.instruction(&format!("ubfx w11, w11, #{bit}, #1"));             // isolate this option's on/off flag
+        emitter.instruction("str w11, [sp, #32]");                              // iconvctl reads the flag through a pointer
+        abi::emit_symbol_address(emitter, "x10", "_iconv_handles");
+        emitter.instruction("ldr x0, [x10, x9, lsl #3]");                       // arg 0 = the iconv_t for this descriptor
+        emitter.instruction(&format!("mov w1, #{request}"));                    // arg 1 = the ICONV_SET_* request for this option
+        emitter.instruction("add x2, sp, #32");                                 // arg 2 = &flag
+        emitter.bl_c("iconvctl"); // write the flag back onto the pair Apple iconv shares
+    }
+}
+
 /// ARM64 helpers + inline init.
 fn emit_arm64<F>(
     emitter: &mut Emitter,
     from_sym: &str,
     to_sym: &str,
+    option_bits: u8,
     fwrite_label: &str,
     close_label: &str,
     skip_label: &str,
@@ -100,6 +167,9 @@ fn emit_arm64<F>(
     emitter.instruction("str x2, [sp, #8]");                                    // save the payload length as the return value
     emitter.instruction("str x1, [sp, #16]");                                   // iconv inbuf = payload pointer
     emitter.instruction("str x2, [sp, #24]");                                   // iconv inbytesleft = payload length
+    if emitter.target.platform == Platform::MacOS {
+        emit_apple_option_restore_arm64(emitter);
+    }
 
     emitter.label(&loop_label);
     abi::emit_symbol_address(emitter, "x9", "_stream_grow_scratch");
@@ -171,6 +241,12 @@ fn emit_arm64<F>(
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the file descriptor
     abi::emit_symbol_address(emitter, "x9", "_iconv_handles");
     emitter.instruction("str x0, [x9, x1, lsl #3]");                            // store the iconv_t for this descriptor
+    if emitter.target.platform == Platform::MacOS {
+        // -- record this filter's own //TRANSLIT and //IGNORE for the fwrite helper to restore --
+        abi::emit_symbol_address(emitter, "x9", "_iconv_write_options");
+        emitter.instruction(&format!("mov w10, #{option_bits}"));               // this filter's option bits (1 = //TRANSLIT, 2 = //IGNORE)
+        emitter.instruction("strb w10, [x9, x1]");                              // record them for this descriptor
+    }
     abi::emit_symbol_address(emitter, "x9", "_stream_write_filters");
     emitter.instruction("mov w10, #12");                                        // write-filter id 12 = convert.iconv write
     emitter.instruction("strb w10, [x9, x1]");                                  // record the iconv write filter for this descriptor
@@ -310,4 +386,71 @@ fn emit_x86_64<F>(
     emitter.instruction("xor esi, esi");                                        // resource mixed payloads have no high word
     emitter.instruction("mov eax, 9");                                          // runtime tag 9 = resource
     abi::emit_call_label(emitter, "__rt_mixed_from_value"); // re-box the stream as the filter resource
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{AppleVariant, Target};
+
+    /// Emits one write-filter attachment with the given option bits and returns its assembly.
+    fn assembly_for(target: Target, option_bits: u8) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_iconv_write_attach_with_labels(&mut emitter, "_from", "_to", option_bits, |name| {
+            name.to_string()
+        });
+        emitter.output()
+    }
+
+    /// The option bits follow Apple's own reading of a target charset: a case-insensitive
+    /// `//TRANSLIT` or `//IGNORE` anywhere in the name.
+    #[test]
+    fn iconv_target_option_bits_read_the_suffixes_like_apple_iconv_open() {
+        assert_eq!(iconv_target_option_bits("ASCII"), 0);
+        assert_eq!(iconv_target_option_bits("ASCII//TRANSLIT"), OPTION_TRANSLIT);
+        assert_eq!(iconv_target_option_bits("ascii//Translit"), OPTION_TRANSLIT);
+        assert_eq!(iconv_target_option_bits("ASCII//IGNORE"), OPTION_IGNORE);
+        assert_eq!(
+            iconv_target_option_bits("ASCII//IGNORE//TRANSLIT"),
+            OPTION_TRANSLIT | OPTION_IGNORE
+        );
+        assert_eq!(
+            iconv_target_option_bits("ASCII//TRANSLIT//IGNORE"),
+            OPTION_TRANSLIT | OPTION_IGNORE
+        );
+    }
+
+    /// Apple targets record the filter's option bits at attach and restore both options
+    /// through `iconvctl()` before converting (#811): the Citrus-based iconv shares them
+    /// between every descriptor of the charset pair.
+    #[test]
+    fn apple_targets_restore_the_filters_own_options_before_converting() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+        ] {
+            let asm = assembly_for(target, OPTION_TRANSLIT | OPTION_IGNORE);
+            assert_eq!(asm.matches("bl _iconvctl").count(), 2, "{target:?}: {asm}");
+            assert!(asm.contains("mov w1, #2") && asm.contains("mov w1, #4"), "{target:?}: {asm}");
+            assert!(asm.contains("mov w10, #3"), "{target:?} must record the bits: {asm}");
+            let restore = asm.find("bl _iconvctl").expect("restore call");
+            let convert = asm.find("bl _iconv\n").expect("conversion call");
+            assert!(restore < convert, "{target:?} must restore before converting: {asm}");
+        }
+    }
+
+    /// glibc keeps `//TRANSLIT` and `//IGNORE` on each descriptor, so Linux code neither
+    /// calls `iconvctl()` (which glibc does not provide) nor touches the Apple options table.
+    #[test]
+    fn linux_targets_emit_no_option_restore() {
+        for target in [
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = assembly_for(target, OPTION_TRANSLIT | OPTION_IGNORE);
+            assert!(!asm.contains("iconvctl"), "{target:?}: {asm}");
+            assert!(!asm.contains("_iconv_write_options"), "{target:?}: {asm}");
+        }
+    }
 }

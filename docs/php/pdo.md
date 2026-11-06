@@ -1073,9 +1073,17 @@ exposing a non-PHP constructor shape:
   error (so `$e->errorInfo[0]` works — which is what frameworks read) and `null` when
   there is no structured info, matching PHP.
 - **`getCode()`** returns PDO's SQLSTATE string when structured driver information exists;
-  the driver-specific integer remains available in `errorInfo[1]`.
+  the driver-specific integer remains available in `errorInfo[1]`. The SQLSTATE form needs a
+  receiver the compiler knows is a `PDOException` (a `catch (PDOException $e)` block or a
+  `PDOException`-typed value): called through a `Throwable`, `Exception`, or
+  `RuntimeException` receiver, `getCode()` currently returns the driver's integer code instead,
+  a known incompatibility listed in [Types](./types.md#known-incompatibilities-with-php).
 - **`getPrevious()`** returns the stored previous Throwable. The same value is also exposed
   as `$e->previous` because elephc's base Throwable layout has no private previous slot.
+- **Subclasses** (`class DriverError extends PDOException {}`, as Doctrine DBAL and many
+  applications declare) inherit this `getCode()`. Like PHP, they cannot override it:
+  `Exception::getCode()` is final, and reflection reports `Exception` as its declaring class,
+  in compiled code and inside `eval()` alike.
 
 ## Under `--web`
 
@@ -1228,8 +1236,8 @@ $pg->exec("DO $$ BEGIN RAISE NOTICE 'migrated'; END $$");   // callback fires wi
 ```
 
 Passing `null` unregisters delivery. Delivery is **boundary-dispatched**: the driver buffers notices as they arrive and
-dispatches them right after each `exec()` / `query()` on the connection, so a `NOTICE`
-raised by a prepared-statement `execute()` is delivered on the next `exec()`/`query()`.
+dispatches them after the connection's `exec()` / `query()` or the prepared
+statement's `execute()` completes, through the owning connection's callback.
 
 ## Divergences from php-src
 
@@ -1309,9 +1317,9 @@ preserve source SQL evaluation order, and retain the rendered text for
   supported TLS key/cert/CA/verification settings. A disabled local-infile handler rejects
   the server request instead of returning a successful empty upload.
 - `Pdo\Mysql::ATTR_SSL_CAPATH` is adapted to rustls by building a deterministic
-  multi-certificate PEM bundle. The pinned mysql 28 patch adds `ATTR_SSL_CIPHER` and
-  `ATTR_SERVER_PUBLIC_KEY`, the two controls absent from its public API. No security option
-  is accepted inertly.
+  multi-certificate PEM bundle. `ATTR_SSL_CIPHER` and `ATTR_SERVER_PUBLIC_KEY`
+  use upstream mysql 28.0.4's public cipher-suite and server-key configuration APIs.
+  No security option is accepted inertly.
 - `Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE` reports the bytes owned by the native
   result and returns `null` with HY000 before statement execution. `ATTR_PREFETCH` is
   supported at connection and prepare-option scope.

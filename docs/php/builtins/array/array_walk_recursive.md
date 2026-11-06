@@ -1,14 +1,12 @@
 ---
 title: "array_walk_recursive()"
 description: "Applies a user function recursively to array leaf values. AOT boxed arrays pass a writable leaf reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported."
-sidebar:
-  order: 47
 ---
 
 ## array_walk_recursive()
 
 ```php
-function array_walk_recursive(array $array, callable $callback): void
+function array_walk_recursive(array $array, callable $callback): bool
 ```
 
 Applies a user function recursively to array leaf values. AOT boxed arrays pass a writable leaf reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.
@@ -17,12 +15,13 @@ Applies a user function recursively to array leaf values. AOT boxed arrays pass 
 - `$array` (`array`), passed by reference
 - `$callback` (`callable`)
 
-**Returns**: `void`
+**Returns**: `bool`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

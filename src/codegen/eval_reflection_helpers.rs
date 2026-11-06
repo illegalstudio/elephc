@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - `ReflectionAttribute` stores private implementation slots that eval cannot
-//!   populate through public property writes.
+//!   populate through public property writes, plus its PHP-visible `name` mirror.
 //! - Eval-declared attributes do not have compile-time factories, so the helper
 //!   writes factory id 0; `ReflectionAttribute::newInstance()` then returns null.
 //! - Target and repetition metadata are passed by the Rust eval bridge and
@@ -16,7 +16,7 @@
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::Module;
 use crate::types::ClassInfo;
 
 
@@ -24,6 +24,8 @@ use crate::types::ClassInfo;
 struct ReflectionAttributeLayout {
     class_id: u64,
     property_count: usize,
+    public_name_lo: usize,
+    public_name_hi: usize,
     name_lo: usize,
     name_hi: usize,
     args_lo: usize,
@@ -54,37 +56,31 @@ pub(super) fn emit_eval_reflection_helpers(module: &Module, emitter: &mut Emitte
     }
 }
 
-/// Returns true when the EIR module contains a function that can call eval.
+/// Returns whether this binary links the eval bridge, and therefore needs these helpers.
+///
+/// THE INVARIANT IS "LINKED", NOT "USES EVAL". `libelephc_magician.a` references the
+/// `__elephc_eval_*` callbacks unconditionally, so any binary that links it must define
+/// them or fail to link — `__elephc_eval_reflection_attribute_new` undefined and a dozen
+/// like it. This used to scan for functions carrying an eval local instead, which is a
+/// different question that happened to give the same answer while the ONLY reason to link
+/// the archive was an `eval()` in the program.
+///
+/// That stopped being the only reason. `opcache_compile_file()` populates the runtime script
+/// cache, which lives in the archive, so a program calling it needs the archive whether or
+/// not it ever evaluates a string. Keeping the narrower scan here made that combination
+/// unlinkable, which is what kept the fold in place and left the function answering `false`
+/// where reference answers `true`.
+///
+/// The call sites are all inside a block already gated on the same flag, so for a program
+/// that does use `eval()` nothing changes.
 fn module_uses_eval(module: &Module) -> bool {
-    all_module_functions(module).any(function_uses_eval)
-}
-
-/// Iterates every EIR function body emitted or inspected by the backend.
-fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
-    module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .chain(module.closures.iter())
-        .chain(module.fiber_wrappers.iter())
-        .chain(module.callback_wrappers.iter())
-        .chain(module.extern_callback_trampolines.iter())
-        .chain(module.runtime_callable_invokers.iter())
-}
-
-/// Returns true when a function has hidden eval state locals.
-fn function_uses_eval(function: &Function) -> bool {
-    function.locals.iter().any(|local| {
-        matches!(
-            local.kind,
-            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
-        )
-    })
+    module.required_runtime_features.eval_bridge
 }
 
 /// Returns the synthetic `ReflectionAttribute` object layout from class metadata.
 fn reflection_attribute_layout(module: &Module) -> Option<ReflectionAttributeLayout> {
     let info = module.class_infos.get("ReflectionAttribute")?;
+    let public_name_lo = reflection_property_offset(info, "name")?;
     let name_lo = reflection_property_offset(info, "__name")?;
     let args_lo = reflection_property_offset(info, "__args")?;
     let factory_lo = reflection_property_offset(info, "__factory")?;
@@ -93,6 +89,8 @@ fn reflection_attribute_layout(module: &Module) -> Option<ReflectionAttributeLay
     Some(ReflectionAttributeLayout {
         class_id: info.class_id,
         property_count: info.properties.len(),
+        public_name_lo,
+        public_name_hi: public_name_lo + 8,
         name_lo,
         name_hi: name_lo + 8,
         args_lo,
@@ -235,7 +233,7 @@ fn emit_alloc_reflection_attribute_object_x86_64(
     }
 }
 
-/// Stores the incoming ARM64 attribute name into the object private slot.
+/// Stores the incoming ARM64 attribute name into the private slot and public mirror.
 fn emit_set_name_property_aarch64(emitter: &mut Emitter, layout: &ReflectionAttributeLayout) {
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the attribute-name pointer for persistence
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the attribute-name length for persistence
@@ -243,9 +241,15 @@ fn emit_set_name_property_aarch64(emitter: &mut Emitter, layout: &ReflectionAttr
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", layout.name_lo);
     abi::emit_store_to_address(emitter, "x2", "x9", layout.name_hi);
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the original name pointer for the public mirror copy
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the original name length for the public mirror copy
+    emitter.instruction("bl __rt_str_persist");                                 // give the mutable public mirror independent string storage
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the ReflectionAttribute object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", layout.public_name_lo);
+    abi::emit_store_to_address(emitter, "x2", "x9", layout.public_name_hi);
 }
 
-/// Stores the incoming x86_64 attribute name into the object private slot.
+/// Stores the incoming x86_64 attribute name into the private slot and public mirror.
 fn emit_set_name_property_x86_64(emitter: &mut Emitter, layout: &ReflectionAttributeLayout) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the attribute-name pointer for persistence
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the attribute-name length for persistence
@@ -253,6 +257,12 @@ fn emit_set_name_property_x86_64(emitter: &mut Emitter, layout: &ReflectionAttri
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", layout.name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", layout.name_hi);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the original name pointer for the public mirror copy
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the original name length for the public mirror copy
+    emitter.instruction("call __rt_str_persist");                               // give the mutable public mirror independent string storage
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the ReflectionAttribute object pointer
+    abi::emit_store_to_address(emitter, "rax", "r10", layout.public_name_lo);
+    abi::emit_store_to_address(emitter, "rdx", "r10", layout.public_name_hi);
 }
 
 /// Stores a retained ARM64 argument-array payload into the object private slot.

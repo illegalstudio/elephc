@@ -117,7 +117,18 @@ impl IntrospectionCall {
 /// Returns the rewritten program, or the combined diagnostics for every unsupported use.
 /// A program that declares its own function named after one of the three constructs is
 /// returned untouched, so the user's declaration keeps winning exactly as it does in PHP.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): both the detector and the
+/// rewriter walk the whole program, so an embedder calling it without the CLI driver's wrapper gets
+/// the same stack budget.
 pub fn desugar(program: Program) -> Result<Program, CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        desugar_on_compiler_stack(program)
+    })
+}
+
+/// The body of [`desugar`], run on the stack `with_compiler_stack` sized.
+fn desugar_on_compiler_stack(program: Program) -> Result<Program, CompileError> {
     let mut program = program;
     // The gate walks the program in place: its detector mode performs no rewrite, so there is
     // no reason to hand it a full copy of the AST.
@@ -297,5 +308,20 @@ mod tests {
     fn a_user_variable_spelled_like_a_hidden_local_is_not_generated() {
         assert!(!is_generated_local_name("__elephc_func_arg_value"));
         assert!(!is_generated_local_name("__elephc_func_args"));
+    }
+
+    /// Compiler-owned collectors remain stable when eval forces another frame-capture pass.
+    #[test]
+    fn existing_hidden_collector_is_not_reinterpreted_as_a_source_variadic() {
+        let tokens = crate::lexer::tokenize("<?php function countArguments(int $value = 1): int { return func_num_args(); } eval($source);").unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let once = super::desugar(program).unwrap();
+        let twice = super::desugar(once).unwrap();
+        let crate::parser::ast::StmtKind::FunctionDecl { params, variadic, body, .. } = &twice[0].kind else {
+            panic!("the fixture function must remain first");
+        };
+        assert_eq!(params.len(), 1, "a hidden count parameter must not be added on the second pass");
+        assert_eq!(variadic.as_deref(), Some(HIDDEN_ARGS_PARAM));
+        assert_eq!(body.len(), 1, "the existing collector must not receive a new snapshot loop");
     }
 }

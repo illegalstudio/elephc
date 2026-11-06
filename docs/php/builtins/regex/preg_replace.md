@@ -1,14 +1,12 @@
 ---
 title: "preg_replace()"
 description: "Performs a regular expression search and replace."
-sidebar:
-  order: 762
 ---
 
 ## preg_replace()
 
 ```php
-function preg_replace(string $pattern, string $replacement, string $subject): string
+function preg_replace(string $pattern, string $replacement, string $subject): mixed
 ```
 
 Performs a regular expression search and replace.
@@ -18,12 +16,13 @@ Performs a regular expression search and replace.
 - `$replacement` (`string`)
 - `$subject` (`string`)
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_replace.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

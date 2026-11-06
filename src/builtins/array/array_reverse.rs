@@ -54,7 +54,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ExprKind::BoolLiteral(value) => value,
         ExprKind::IntLiteral(value) => value != 0,
         _ => {
-            return Err(CompileError::new(
+            return Err(CompileError::aot_literal_required(
                 cx.span,
                 "array_reverse() preserve_keys argument must be a literal bool in AOT mode",
             ))

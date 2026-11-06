@@ -10,6 +10,7 @@
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
+use std::collections::HashSet;
 
 use crate::types::checker::Checker;
 
@@ -58,7 +59,7 @@ impl Checker {
     /// argument count was out of range, so report a precise arity error — matching
     /// `function_exists()`, which already recognizes these names — instead of the misleading
     /// "Undefined function". Non-alias names keep the plain "Undefined function" diagnostic.
-    pub(super) fn unresolved_function_call_error(&self, name: &str, span: crate::span::Span) -> CompileError {
+    pub(in crate::types::checker) fn unresolved_function_call_error(&self, name: &str, span: crate::span::Span) -> CompileError {
         if let Some((min, max)) = crate::name_resolver::date_procedural_alias_arity(name) {
             let bare = name.rsplit('\\').next().unwrap_or(name);
             let message = if min == max {
@@ -121,6 +122,51 @@ impl Checker {
         // parameters and not others — it marks on any argument rather than per parameter.
         if !args.is_empty() {
             self.functions_called_directly.insert(canonical_name.clone());
+        }
+
+        // A generic declaration is a template and never has a signature of its own. Resolve
+        // the call against the instantiation its arguments select, creating that instantiation
+        // on first use; from there it is an ordinary monomorphic function and every existing
+        // path below applies to it unchanged.
+        if self
+            .fn_decls
+            .get(name)
+            .is_some_and(|decl| !decl.type_params.is_empty())
+        {
+            let instantiated = self.instantiate_generic_call(name, args, span, caller_env)?;
+            return self.check_function_call(&instantiated, args, span, caller_env);
+        }
+
+        // `identity<int>(41)` — the type arguments were WRITTEN, and the parser put them in the
+        // name. Decoding them back out of the name is what keeps one spelling: the same string
+        // the inferred path builds with `instantiated_name`, and the same one every diagnostic
+        // prints. The request is recorded on every call, exactly as the inferred path does, so
+        // the splice fixpoint and the reachability pruner both see it.
+        if let Some((base, written)) = written_generic_call(name) {
+            if self
+                .fn_decls
+                .get(base.as_str())
+                .is_some_and(|decl| !decl.type_params.is_empty())
+            {
+                let instantiated =
+                    self.instantiate_written_generic_call(&base, &written, span)?;
+                // Unlike the inferred path, the name that arrived here IS the instantiated one,
+                // so resolving it again would re-enter this branch forever. Falling through
+                // instead lands on the declaration this call just created, which is ordinary and
+                // monomorphic. A differing spelling — the arguments normalized to something the
+                // programmer did not write — is the only case with somewhere else to go.
+                if instantiated != name {
+                    return self.check_function_call(&instantiated, args, span, caller_env);
+                }
+            }
+        }
+
+        self.refresh_completed_inferred_callee(name);
+        if self.rewalk_failed_body_at_next_call.contains(name)
+            && !self.resolving_functions.contains(name)
+            && self.fn_decls.contains_key(name)
+        {
+            return self.rewalk_failed_function_body_at_call(name, args, span, caller_env);
         }
 
         if let Some(mut sig) = self.functions.get(name).cloned() {
@@ -412,16 +458,34 @@ impl Checker {
                         );
                     }
                 }
+                let param_name = decl
+                    .params
+                    .get(arg_idx)
+                    .map(String::as_str)
+                    .unwrap_or("arg");
+                let declared_ty = decl
+                    .param_types
+                    .get(arg_idx)
+                    .and_then(|annotation| annotation.as_ref())
+                    .map(|annotation| {
+                        self.resolve_declared_param_type_hint(
+                            annotation,
+                            decl.span,
+                            &format!("Function '{}' parameter ${}", name, param_name),
+                        )
+                    })
+                    .transpose()?;
                 if supplied_reference {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
-                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
-                        let param_name = decl
-                            .params
-                            .get(arg_idx)
-                            .map(String::as_str)
-                            .unwrap_or("arg");
+                    let property_place = match declared_ty.as_ref() {
+                        Some(expected_ty) => {
+                            self.by_ref_property_place(arg, expected_ty, caller_env)?
+                        }
+                        None => false,
+                    };
+                    if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
                         return Err(CompileError::new(
                             arg.span,
                             &format!(
@@ -431,17 +495,7 @@ impl Checker {
                         ));
                     }
                 }
-                if let Some(type_ann) = decl.param_types.get(arg_idx).and_then(|t| t.as_ref()) {
-                    let param_name = decl
-                        .params
-                        .get(arg_idx)
-                        .map(String::as_str)
-                        .unwrap_or("arg");
-                    let declared_ty = self.resolve_declared_param_type_hint(
-                        type_ann,
-                        decl.span,
-                        &format!("Function '{}' parameter ${}", name, param_name),
-                    )?;
+                if let Some(declared_ty) = declared_ty {
                     // A tracked two-slot callable array crosses a declared `callable` boundary
                     // as the descriptor EIR lowering materializes for this exact argument. The
                     // already-resolved call validator applies the same exception; the first call
@@ -567,13 +621,19 @@ impl Checker {
 
         for i in arg_idx..decl.params.len() {
             if let Some(default_expr) = &decl.defaults[i] {
+                let deferred_scope_error =
+                    crate::types::deferred_defaults::deferred_error_message(default_expr).is_some();
                 if let Some(type_ann) = decl.param_types.get(i).and_then(|t| t.as_ref()) {
                     let declared_ty = self.resolve_declared_param_type_hint(
                         type_ann,
                         decl.span,
                         &format!("Function '{}' parameter ${}", name, decl.params[i]),
                     )?;
-                    let default_ty = self.infer_type(default_expr, caller_env)?;
+                    let default_ty = if deferred_scope_error {
+                        declared_ty.clone()
+                    } else {
+                        self.infer_type(default_expr, caller_env)?
+                    };
                     self.require_compatible_arg_type(
                         &declared_ty,
                         &default_ty,
@@ -582,7 +642,11 @@ impl Checker {
                     )?;
                     param_types.push((decl.params[i].clone(), declared_ty));
                 } else {
-                    let ty = self.infer_type(default_expr, caller_env)?;
+                    let ty = if deferred_scope_error {
+                        PhpType::Mixed
+                    } else {
+                        self.infer_type(default_expr, caller_env)?
+                    };
                     param_types.push((decl.params[i].clone(), ty));
                 }
             }
@@ -615,6 +679,101 @@ impl Checker {
         }
 
         self.resolve_function_signature(name, &decl, param_types)
+    }
+}
+
+impl Checker {
+    /// Walks the body of a failed untyped-parameter function again from this call's settled
+    /// argument types, as the first call did, instead of reusing its provisional signature.
+    ///
+    /// The driver marks the function (`recheck_failed_function_bodies`) when its failed walk
+    /// raised an initial top-level error the final pass may drop as stale. The provisional
+    /// signature is set aside so the call resolves through the first-call path, which binds
+    /// every untyped parameter to its argument type; a clean walk publishes the full
+    /// signature, and a failed one leaves its own provisional signature and returns the body
+    /// errors to the calling statement. The previous signature comes back only when the walk
+    /// published none.
+    fn rewalk_failed_function_body_at_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        self.rewalk_failed_body_at_next_call.remove(name);
+        let provisional = self.remove_function_signature(name);
+        let outer_walk = self.refreshed_inferred_callees.is_none();
+        if outer_walk {
+            self.refreshed_inferred_callees = Some(HashSet::new());
+        }
+        let result = self.check_function_call(name, args, span, caller_env);
+        if outer_walk {
+            self.refreshed_inferred_callees = None;
+        }
+        if !self.functions.contains_key(name) {
+            if let Some(sig) = provisional {
+                self.publish_function_signature(name.to_string(), sig);
+            }
+        }
+        result
+    }
+
+    /// Walks a completed callee with an inferred return once more, from its stored parameter
+    /// types, when a failed body is being walked again, so the caller reads a return type built
+    /// from the settled property types.
+    ///
+    /// `function b(int $n) { return C::$v; }` completes with a `void` return when the first
+    /// pass reaches it before `C::$v = [9]`, and a caller indexing `b($n)[0]` would fail again
+    /// on that stale return although the final pass drops its error. A clean walk keeps the
+    /// refreshed signature; a failed one restores the previous signature and completion, so a
+    /// function that already checked is never failed by a later assignment. Each callee is
+    /// refreshed once per re-walk, and outside one this does nothing.
+    fn refresh_completed_inferred_callee(&mut self, name: &str) {
+        let Some(refreshed) = self.refreshed_inferred_callees.as_ref() else {
+            return;
+        };
+        if refreshed.contains(name)
+            || !self.completed_function_signatures.contains(name)
+            || self.resolving_functions.contains(name)
+        {
+            return;
+        }
+        let (Some(decl), Some(sig)) =
+            (self.fn_decls.get(name).cloned(), self.functions.get(name).cloned())
+        else {
+            return;
+        };
+        if sig.declared_return {
+            return;
+        }
+        if let Some(refreshed) = self.refreshed_inferred_callees.as_mut() {
+            refreshed.insert(name.to_string());
+        }
+        if self.resolve_function_signature(name, &decl, sig.params.clone()).is_err() {
+            self.failed_function_body_errors.remove(name);
+            self.publish_function_signature(name.to_string(), sig);
+            self.completed_function_signatures.insert(name.to_string());
+        }
+    }
+}
+
+/// Splits a call name that carries WRITTEN type arguments into its template and its arguments.
+///
+/// `identity<int>` is what the parser produces for `identity<int>(41)`, and it is the same
+/// spelling `generics::instantiated_name` produces for the inferred form — so decoding it with
+/// the language's own type grammar (`generics::instantiated_type`) is exact, including for
+/// nested arguments like `wrap<Box<int>>`.
+///
+/// Returns `None` for an ordinary name, which costs one `contains` on the common path.
+fn written_generic_call(name: &str) -> Option<(String, Vec<crate::parser::ast::TypeExpr>)> {
+    if !name.contains('<') {
+        return None;
+    }
+    match crate::generics::instantiated_type(name)? {
+        crate::parser::ast::TypeExpr::GenericClass { name, args } => {
+            Some((name.as_str().to_string(), args))
+        }
+        _ => None,
     }
 }
 

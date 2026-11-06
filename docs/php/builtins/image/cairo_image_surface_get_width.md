@@ -1,8 +1,6 @@
 ---
 title: "cairo_image_surface_get_width()"
 description: "Returns an image surface's width in pixels."
-sidebar:
-  order: 411
 ---
 
 ## cairo_image_surface_get_width()
@@ -20,8 +18,9 @@ Returns an image surface's width in pixels.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

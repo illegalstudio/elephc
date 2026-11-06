@@ -10,6 +10,72 @@
 
 use super::*;
 
+/// Nested writes retain their addressable root and the store-time variable index.
+#[test]
+fn test_propagate_nested_write_keeps_array_storage_root() {
+    let span = Span::dummy();
+    let parent = Expr::new(ExprKind::ArrayAccess {
+        array: Box::new(Expr::var("items")), index: Box::new(Expr::var("key")),
+    }, span);
+    let target = Expr::new(ExprKind::ArrayAccess {
+        array: Box::new(parent), index: Box::new(Expr::string_lit("1abc")),
+    }, span);
+    let program = vec![
+        Stmt::assign("items", Expr::new(ExprKind::ArrayLiteral(vec![Expr::string_lit("AB")]), span)),
+        Stmt::assign("key", Expr::int_lit(0)),
+        Stmt::new(StmtKind::NestedArrayAssign { target, value: Expr::string_lit("Z") }, span),
+    ];
+    let propagated = propagate_constants(program);
+    let StmtKind::NestedArrayAssign { target, .. } = &propagated[2].kind else { panic!("missing write"); };
+    let ExprKind::ArrayAccess { array: parent, .. } = &target.kind else { panic!("missing leaf"); };
+    let ExprKind::ArrayAccess { array: root, index } = &parent.kind else { panic!("parent was folded into a detached scalar"); };
+    assert_eq!(root.as_ref(), &Expr::var("items"));
+    assert_eq!(index.as_ref(), &Expr::var("key"));
+}
+
+/// A nested write keeps a false array element addressable after constant propagation.
+#[test]
+fn test_propagate_nested_write_keeps_false_array_storage_root() {
+    let span = Span::dummy();
+    let parent = Expr::new(ExprKind::ArrayAccess {
+        array: Box::new(Expr::var("items")),
+        index: Box::new(Expr::var("key")),
+    }, span);
+    let target = Expr::new(ExprKind::ArrayAccess {
+        array: Box::new(parent),
+        index: Box::new(Expr::int_lit(1)),
+    }, span);
+    let program = vec![
+        Stmt::assign(
+            "items",
+            Expr::new(
+                ExprKind::ArrayLiteral(vec![Expr::new(ExprKind::BoolLiteral(false), span)]),
+                span,
+            ),
+        ),
+        Stmt::assign("key", Expr::int_lit(0)),
+        Stmt::new(
+            StmtKind::NestedArrayAssign {
+                target,
+                value: Expr::int_lit(9),
+            },
+            span,
+        ),
+    ];
+    let propagated = propagate_constants(program);
+    let StmtKind::NestedArrayAssign { target, .. } = &propagated[2].kind else {
+        panic!("missing write");
+    };
+    let ExprKind::ArrayAccess { array: parent, .. } = &target.kind else {
+        panic!("missing leaf");
+    };
+    let ExprKind::ArrayAccess { array: root, index } = &parent.kind else {
+        panic!("detached parent");
+    };
+    assert_eq!(root.as_ref(), &Expr::var("items"));
+    assert_eq!(index.as_ref(), &Expr::var("key"));
+}
+
 /// Tests that constant propagation tracks scalar values unpacked from a `list()` assignment.
 /// The `base` and `exp` variables are initialized from a fixed array literal `[2, 3]`.
 /// After propagation, the subsequent `echo $base ** $exp` expression is folded to `8`.
@@ -347,6 +413,7 @@ fn test_array_fact_survives_by_value_user_call() {
         Stmt::new(
             StmtKind::FunctionDecl {
                 name: "reader".to_string(),
+                type_params: Vec::new(),
                 params: vec![("arr".to_string(), None, None, false)],
                 param_attributes: Vec::new(),
                 variadic: None,

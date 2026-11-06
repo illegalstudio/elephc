@@ -34,6 +34,8 @@
 //!   would release the same source owner twice.
 //! - The alternate entry point skips a float-key diagnostic after the read half
 //!   of a compound update has already reported it.
+//! - Overwriting a boxed invoker marker promotes to hash storage, where the shared
+//!   hash setter preserves caller identity and balances the consumed replacement.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -105,6 +107,18 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0]");                                        // load the current logical length of the indexed array
     emitter.instruction("cmp x1, x9");                                          // a key past the end would create a sparse gap
     emitter.instruction("b.hi __rt_array_set_mixed_key_int_promote");           // promote to a hash so a sparse key survives like PHP
+    emitter.instruction("b.eq __rt_array_set_mixed_key_int_plain");             // a contiguous append has no existing reference slot
+    emitter.instruction("ldr x10, [x0, #-8]");                                  // inspect the existing slot representation
+    emitter.instruction("ubfx x10, x10, #8, #7");                               // isolate the indexed element tag
+    emitter.instruction("cmp x10, #7");                                         // only boxed slots can hold invoker markers
+    emitter.instruction("b.ne __rt_array_set_mixed_key_int_plain");             // typed slots use ordinary widening and replacement
+    emitter.instruction("add x10, x0, #24");                                    // locate the packed data area
+    emitter.instruction("ldr x10, [x10, x1, lsl #3]");                          // inspect the overwritten boxed slot
+    emitter.instruction("cbz x10, __rt_array_set_mixed_key_int_plain");         // absent slots have no write-through identity
+    emitter.instruction("ldr x10, [x10]");                                      // inspect the inner boxed tag
+    emitter.instruction("cmp x10, #11");                                        // invoker markers retain the caller storage address
+    emitter.instruction("b.eq __rt_array_set_mixed_key_int_promote");           // reuse hash_set's ownership-safe invoker writeback
+    emitter.label("__rt_array_set_mixed_key_int_plain");
 
     // -- widen typed slots to boxed Mixed BEFORE dropping a Mixed cell into one --
     // `__rt_array_set_mixed` re-stamps the destination's value_type to 7 (boxed Mixed) but never
@@ -276,6 +290,18 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load the current logical length of the indexed array
     emitter.instruction("cmp rdi, rcx");                                        // a key past the end would create a sparse gap
     emitter.instruction("ja __rt_array_set_mixed_key_int_promote");             // promote to a hash so a sparse key survives like PHP
+    emitter.instruction("je __rt_array_set_mixed_key_int_plain");               // a contiguous append has no existing reference slot
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // inspect the existing slot representation
+    emitter.instruction("shr r10, 8");                                          // move the indexed element tag into the low bits
+    emitter.instruction("and r10, 0x7f");                                       // isolate the indexed element tag
+    emitter.instruction("cmp r10, 7");                                          // only boxed slots can hold invoker markers
+    emitter.instruction("jne __rt_array_set_mixed_key_int_plain");              // typed slots use ordinary widening and replacement
+    emitter.instruction("mov r10, QWORD PTR [rax + 24 + rdi * 8]");             // inspect the overwritten boxed slot
+    emitter.instruction("test r10, r10");                                       // absent slots have no write-through identity
+    emitter.instruction("jz __rt_array_set_mixed_key_int_plain");               // avoid inspecting an absent boxed slot
+    emitter.instruction("cmp QWORD PTR [r10], 11");                             // invoker markers retain the caller storage address
+    emitter.instruction("je __rt_array_set_mixed_key_int_promote");             // reuse hash_set's ownership-safe invoker writeback
+    emitter.label("__rt_array_set_mixed_key_int_plain");
 
     // -- widen typed slots to boxed Mixed BEFORE dropping a Mixed cell into one --
     // See the AArch64 twin: `__rt_array_set_mixed` re-stamps the destination Mixed but never
@@ -386,4 +412,39 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the final array/hash pointer in rax
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Every supported target routes packed invoker slots to ownership-safe hash writeback.
+    #[test]
+    fn append_latest_invoker_promotion_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_array_set_mixed_key(&mut emitter);
+            super::super::super::objects::emit_mixed_array_set(&mut emitter);
+            super::super::super::system::emit_json_encode_mixed(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_json_encode_mixed_invoker:"), "{name}");
+            assert!(asm.contains("__rt_json_encode_mixed_nested:"), "{name}");
+            match target.arch {
+                Arch::AArch64 => {
+                    assert!(asm.contains("cmp x10, #11"), "{name}");
+                    assert!(asm.contains("b.eq __rt_array_set_mixed_key_int_promote"), "{name}");
+                    assert!(asm.contains("cmp x9, #11\n"), "{name}");
+                    assert!(asm.contains("b.eq __rt_mixed_array_set_promote"), "{name}");
+                }
+                Arch::X86_64 => {
+                    assert!(asm.contains("cmp QWORD PTR [r10], 11"), "{name}");
+                    assert!(asm.contains("je __rt_array_set_mixed_key_int_promote"), "{name}");
+                    assert!(asm.contains("cmp QWORD PTR [rax], 11"), "{name}");
+                    assert!(asm.contains("je __rt_mixed_array_set_promote"), "{name}");
+                }
+            }
+        }
+    }
 }

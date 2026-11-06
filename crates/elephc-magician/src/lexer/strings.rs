@@ -48,7 +48,7 @@ impl Lexer<'_> {
                         return Err(EvalParseError::UnterminatedString);
                     };
                     self.bump_char();
-                    self.push_double_quoted_escape(escaped, &mut current);
+                    self.push_double_quoted_escape(escaped, &mut current)?;
                 }
                 // Complex interpolation: `{` is only special when a `$` follows it.
                 '{' if self.peek_next_char() == Some('$') => {
@@ -228,9 +228,69 @@ impl Lexer<'_> {
                     inner.push(quote);
                     self.capture_braced_string(quote, &mut inner)?;
                 }
+                '/' if self.peek_char() == Some('*') => {
+                    inner.push('/');
+                    self.bump_char();
+                    self.capture_braced_block_comment(&mut inner)?;
+                }
+                '/' if self.peek_char() == Some('/') => {
+                    // BOTH slashes are copied: the capture is lexed again as a whole, and a lone
+                    // `/` there is a division — `"{$a[ // " }⏎"k"]}"` then read `" }…` as an
+                    // unterminated string.
+                    inner.push_str("//");
+                    self.bump_char();
+                    self.capture_braced_line_comment(&mut inner)?;
+                }
+                '#' if self.peek_char() != Some('[') => {
+                    inner.push('#');
+                    self.capture_braced_line_comment(&mut inner)?;
+                }
                 other => inner.push(other),
             }
         }
+    }
+
+    /// Copies a block comment verbatim so its braces and quotes do not affect nesting.
+    ///
+    /// The caller has already consumed the opening `/*`; only the `*` is still to be copied.
+    /// This used to consume one more character as well, which dropped the first byte of the
+    /// body: harmless for `/*x*/`, fatal for `/**/`, whose first body byte is the closing star,
+    /// so the scan ran past `*/` and `"{$a[/**/"k"]}"` was "eval() fragment is invalid"
+    /// (MEASURED on PHP 8.5.10: reference prints `v`).
+    fn capture_braced_block_comment(&mut self, inner: &mut String) -> Result<(), EvalParseError> {
+        inner.push('*');
+        while let Some(ch) = self.peek_char() {
+            self.bump_char();
+            inner.push(ch);
+            if ch == '*' && self.peek_char() == Some('/') {
+                inner.push('/');
+                self.bump_char();
+                return Ok(());
+            }
+        }
+        Err(EvalParseError::UnterminatedString)
+    }
+
+    /// Copies a line comment through its newline, leaving braces and quotes inert.
+    ///
+    /// A `?>` ends a PHP line comment too, and inside `{$…}` it then ends PHP mode in the middle
+    /// of the expression, which reference PHP always rejects. The copy used to run to the
+    /// newline, hiding the `?>`: `"{$a[// ?>⏎"k"]}"` evaluated to `v` in eval'd code, where
+    /// PHP 8.5.10 raises a parse error (MEASURED; reported by two reviewers of PR #968). The
+    /// capture refuses it itself rather than stopping before it, because the captured text is
+    /// lexed again, and that pass's line-comment skip would swallow the `?>` a second time.
+    fn capture_braced_line_comment(&mut self, inner: &mut String) -> Result<(), EvalParseError> {
+        while let Some(ch) = self.peek_char() {
+            if ch == '?' && self.peek_next_char() == Some('>') {
+                return Err(EvalParseError::UnexpectedToken);
+            }
+            self.bump_char();
+            inner.push(ch);
+            if ch == '\n' {
+                break;
+            }
+        }
+        Ok(())
     }
 
     /// Copies a nested string literal inside a `{$expr}` capture verbatim, including its
@@ -261,9 +321,14 @@ impl Lexer<'_> {
         }
     }
 
-    /// Appends one PHP double-quoted escape, consuming any hexadecimal or octal tail.
-    fn push_double_quoted_escape(&mut self, escaped: char, out: &mut String) {
+    /// Appends one PHP double-quoted escape, consuming any hexadecimal, octal or `\u{…}` tail.
+    fn push_double_quoted_escape(
+        &mut self,
+        escaped: char,
+        out: &mut String,
+    ) -> Result<(), EvalParseError> {
         match escaped {
+            'u' => return self.push_unicode_escape(out),
             'n' => out.push('\n'),
             'r' => out.push('\r'),
             't' => out.push('\t'),
@@ -305,6 +370,58 @@ impl Lexer<'_> {
             other => {
                 out.push('\\');
                 push_literal_char(other, out);
+            }
+        }
+        Ok(())
+    }
+
+    /// Appends a `\u{…}` escape as the UTF-8 bytes of its codepoint, as the compiler's
+    /// `scan_unicode_escape` does.
+    ///
+    /// The eval lexer had no `\u` arm, so `"\u{e9}"` stayed the six characters `\u{e9}`
+    /// where reference PHP 8.5.10 gives the two bytes `c3 a9` (MEASURED). As in PHP: `\u`
+    /// without a `{` is literal text; an empty, non-hex or above-U+10FFFF body is a parse
+    /// error ("Invalid UTF-8 codepoint escape sequence"); a surrogate is encoded on three
+    /// bytes, which a Rust `char` cannot hold.
+    fn push_unicode_escape(&mut self, out: &mut String) -> Result<(), EvalParseError> {
+        if self.peek_char() != Some('{') {
+            out.push_str("\\u");
+            return Ok(());
+        }
+        self.bump_char();
+        let mut value = 0u32;
+        let mut digits = 0;
+        loop {
+            let Some(ch) = self.peek_char() else {
+                return Err(EvalParseError::InvalidUtf8);
+            };
+            self.bump_char();
+            if ch == '}' {
+                if digits == 0 {
+                    return Err(EvalParseError::InvalidUtf8);
+                }
+                if let Some(scalar) = char::from_u32(value) {
+                    push_literal_char(scalar, out);
+                } else if (0xd800..=0xdfff).contains(&value) {
+                    for byte in [
+                        0xe0 | ((value >> 12) as u8),
+                        0x80 | (((value >> 6) & 0x3f) as u8),
+                        0x80 | ((value & 0x3f) as u8),
+                    ] {
+                        push_escaped_byte(byte, out);
+                    }
+                } else {
+                    return Err(EvalParseError::InvalidUtf8);
+                }
+                return Ok(());
+            }
+            let Some(digit) = ch.to_digit(16) else {
+                return Err(EvalParseError::InvalidUtf8);
+            };
+            value = value.saturating_mul(16).saturating_add(digit);
+            digits += 1;
+            if value > 0x10ffff {
+                return Err(EvalParseError::InvalidUtf8);
             }
         }
     }
@@ -351,7 +468,7 @@ fn tokenize_interpolated_fragment(
     part.extend(
         fragment
             .into_iter()
-            .filter(|token| *token.kind() != TokenKind::Eof)
+            .filter(|token| !matches!(token.kind(), TokenKind::Eof | TokenKind::DocComment(_)))
             .map(|token| Token::new(token.into_kind(), line)),
     );
     part.push(Token::new(TokenKind::RParen, line));

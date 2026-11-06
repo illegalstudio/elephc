@@ -42,4 +42,21 @@ unsafe extern "C" {
 
     /// Sets the process file-creation mask and returns the previous mask.
     pub(super) fn umask(mask: u32) -> u32;
+
+    /// Packs one NUL-terminated textual IPv4 or IPv6 address into network-order bytes.
+    #[link_name = "inet_pton"]
+    pub(super) fn libc_inet_pton(
+        af: libc::c_int,
+        src: *const libc::c_char,
+        dst: *mut libc::c_void,
+    ) -> libc::c_int;
+
+    /// Renders network-order IPv4 or IPv6 address bytes as NUL-terminated presentation text.
+    #[link_name = "inet_ntop"]
+    pub(super) fn libc_inet_ntop(
+        af: libc::c_int,
+        src: *const libc::c_void,
+        dst: *mut libc::c_char,
+        size: libc::socklen_t,
+    ) -> *const libc::c_char;
 }

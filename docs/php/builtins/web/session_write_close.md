@@ -1,8 +1,6 @@
 ---
 title: "session_write_close()"
 description: "Writes the session data and releases the session lock."
-sidebar:
-  order: 1000
 ---
 
 ## session_write_close()
@@ -19,8 +17,9 @@ Writes the session data and releases the session lock.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "cairo_matrix_transform_point()"
 description: "Applies a matrix to a point and returns the transformed [x, y] pair."
-sidebar:
-  order: 418
 ---
 
 ## cairo_matrix_transform_point()
@@ -22,8 +20,9 @@ Applies a matrix to a point and returns the transformed [x, y] pair.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

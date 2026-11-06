@@ -83,6 +83,69 @@ pub(crate) const TAGGED_SCALAR_TAG_NULL: i64 = 8;
 /// This is an internal array-storage tag, not a boxed Mixed runtime value tag.
 pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
 
+/// Runtime value tag of a raw `?ptr<T>` word stored in an array or hash.
+///
+/// Pointer arrays carry it in their header value_type and pointer hash entries in their entry
+/// tag, so readers that see only the container (`json_encode`, `var_dump`, mixed reads) show a 0
+/// word as PHP null and any other word as its integer address. Boxing normalizes it, so a mixed
+/// cell never carries it; typed pointer reads ignore it and load the raw word.
+pub(crate) const POINTER_ARRAY_VALUE_TYPE: i64 = 13;
+
+/// Rewrites a `POINTER_ARRAY_VALUE_TYPE` tag in `tag_reg` to the PHP value its word stands for.
+///
+/// A 0 word in `lo_reg` becomes tag 8 (PHP null) and any other word tag 0 (an integer address);
+/// every other tag is left alone. Value walkers (`var_dump`, `print_r`, `serialize`) call it on
+/// entry so a raw `?ptr<T>` element from a pointer container renders like the value it boxes to.
+/// `scratch_reg` is clobbered, and `done_label` must be unique in the emitted runtime.
+pub(crate) fn emit_normalize_pointer_word_tag(
+    emitter: &mut Emitter,
+    tag_reg: &str,
+    lo_reg: &str,
+    scratch_reg: &str,
+    done_label: &str,
+) {
+    // -- a raw ?ptr<T> word renders as PHP null for 0 and as an integer address otherwise --
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, POINTER_ARRAY_VALUE_TYPE)); // is this a raw ?ptr<T> word?
+            emitter.instruction(&format!("b.ne {}", done_label));               // every other tag keeps its meaning
+            emitter.instruction(&format!("mov {}, #8", scratch_reg));           // runtime tag 8 = PHP null for the null pointer word
+            emitter.instruction(&format!("cmp {}, #0", lo_reg));                // is this the null pointer word?
+            emitter.instruction(&format!("csel {}, {}, xzr, eq", tag_reg, scratch_reg)); // 0 renders as null, any address as an integer
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, {}", tag_reg, POINTER_ARRAY_VALUE_TYPE)); // is this a raw ?ptr<T> word?
+            emitter.instruction(&format!("jne {}", done_label));                // every other tag keeps its meaning
+            emitter.instruction(&format!("mov {}, 0", tag_reg));                // runtime tag 0 = integer for a live pointer address
+            emitter.instruction(&format!("mov {}, 8", scratch_reg));            // runtime tag 8 = PHP null for the null pointer word
+            emitter.instruction(&format!("test {}, {}", lo_reg, lo_reg));       // is this the null pointer word?
+            emitter.instruction(&format!("cmovz {}, {}", tag_reg, scratch_reg)); // 0 renders as null
+        }
+    }
+    emitter.label(done_label);
+}
+
+/// Value tag a class property descriptor (`_class_vd_desc_*`, `_class_prop_desc_*`,
+/// `_class_json_desc_*`, `_class_serprop_*`) carries for an inline `{payload, tag}` slot.
+///
+/// A `?int` property stores its runtime tag in the slot's HIGH word, so no single static tag
+/// describes it: `0` would render a null as the sentinel integer, and `7` (the tag every other
+/// union gets) makes the walker dereference the integer payload as a Mixed cell pointer — the
+/// segfault `var_dump($objectWithNullableInt)` hit (#1503). Walkers replace this marker with
+/// the slot's high word before dispatching, via [`emit_resolve_tagged_scalar_property_tag`].
+/// It is deliberately outside the runtime value tag range (0-10), and the GC descriptor never
+/// carries it: there a tagged slot is `0`, since it owns no heap reference.
+pub(crate) const TAGGED_SCALAR_PROPERTY_TAG: u64 = 12;
+
+/// Accepted-tag mask bit that admits a `false` member's boxed tag-3 payload only when it is zero.
+///
+/// `true` and `false` share runtime value tag 3, so a declared `false` (or `int|false`) member
+/// cannot be expressed by a tag bit alone. `serprop_accepted_mask` sets this bit instead of tag
+/// bit 3 for a `False` member, and the unserialize hydration check additionally requires a zero
+/// payload when it is set. It sits above the runtime value tag range (0-10) so it never collides
+/// with a tag bit.
+pub(crate) const SERPROP_FALSE_ONLY_BIT: u64 = 1 << 11;
+
 /// Uniform low-byte heap kinds shared by allocation producers, ownership dispatchers and GC.
 ///
 /// These values describe top-level managed allocations. They are unrelated to Mixed runtime
@@ -98,8 +161,18 @@ pub(crate) const CONCAT_TEMP_HEAP_KIND: u32 = 7;
 /// Independently owned reference cell whose payload descriptor occupies bits 8 through 14.
 pub(crate) const REFERENCE_CELL_HEAP_KIND: u32 = 8;
 
+/// Heap-header flag marking a string whose native identity is registered with mbstring.
+///
+/// Heap identity registration hooks (bind, copy, fresh, and persist) set this bit.
+/// Collector passes preserve it on non-graph string headers, and `__rt_heap_free()` uses it
+/// to skip the full bridge callback for strings without native identity metadata.
+pub(crate) const MBSTRING_IDENTITY_TRACKED: u32 = 1 << 24;
+
+/// Heap-owned callable descriptor with typed capture metadata.
+pub(crate) const CALLABLE_HEAP_KIND: u32 = 9;
+
 /// The complete registered top-level heap-kind namespace.
-const MANAGED_HEAP_KINDS: [u32; 8] = [
+const MANAGED_HEAP_KINDS: [u32; 9] = [
     STRING_HEAP_KIND,
     ARRAY_HEAP_KIND,
     HASH_HEAP_KIND,
@@ -108,6 +181,7 @@ const MANAGED_HEAP_KINDS: [u32; 8] = [
     THROWABLE_HEAP_KIND,
     CONCAT_TEMP_HEAP_KIND,
     REFERENCE_CELL_HEAP_KIND,
+    CALLABLE_HEAP_KIND,
 ];
 
 /// Reject duplicate heap-kind registrations at compile time. The reference-cell allocator
@@ -232,6 +306,27 @@ pub(crate) fn emit_branch_if_tagged_scalar_null(emitter: &mut Emitter, label: &s
     }
 }
 
+/// Replaces a property descriptor's [`TAGGED_SCALAR_PROPERTY_TAG`] in `tag_reg` with the
+/// runtime tag the slot itself carries in its high word, already loaded into `high_word_reg`.
+/// Every other descriptor tag passes through unchanged, so a walker can run this right after
+/// loading a row's tag and keep its existing `(tag, low word, high word)` dispatch.
+pub(crate) fn emit_resolve_tagged_scalar_property_tag(
+    emitter: &mut Emitter,
+    tag_reg: &str,
+    high_word_reg: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, TAGGED_SCALAR_PROPERTY_TAG)); // is this an inline tagged-scalar property slot?
+            emitter.instruction(&format!("csel {}, {}, {}, eq", tag_reg, high_word_reg, tag_reg)); // such a slot carries its runtime tag in its high word
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, {}", tag_reg, TAGGED_SCALAR_PROPERTY_TAG)); // is this an inline tagged-scalar property slot?
+            emitter.instruction(&format!("cmove {}, {}", tag_reg, high_word_reg)); // such a slot carries its runtime tag in its high word
+        }
+    }
+}
+
 /// Narrows the tagged scalar in the result registers to a plain int, coercing null to zero
 /// (PHP `(int)null === 0`). Leaves the int payload in the integer result register.
 pub(crate) fn emit_tagged_scalar_to_int_null_as_zero(emitter: &mut Emitter) {
@@ -323,6 +418,11 @@ pub(crate) fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
 /// Read by `Throwable::getLine()` in `lower_inst.rs` and by `__rt_report_uncaught_exception`.
 pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = 32;
 
+/// Marks a creation line as belonging to tokenizer input with an explicitly empty filename.
+/// Normal source spans are u32, so their creation-line values never set this bit.
+/// Keeping this flag in the metadata word also preserves it through object cloning.
+pub(crate) const THROWABLE_SCANNED_LOCATION_FLAG: u64 = 1 << 63;
+
 /// Clears the creation-line slot of a freshly allocated Throwable payload in `payload_reg`.
 ///
 /// For the emitters that synthesize a Throwable with no user `new` behind it — an
@@ -335,11 +435,11 @@ pub(crate) fn emit_throwable_creation_line_unknown(emitter: &mut Emitter, payloa
         Arch::AArch64 => emitter.instruction(&format!(
             "str xzr, [{}, #{}]",
             payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )), // no user `new` behind this Throwable: the creation line is unknown
+        )),                                                                     // no user `new` behind this Throwable: the creation line is unknown
         Arch::X86_64 => emitter.instruction(&format!(
             "mov QWORD PTR [{} + {}], 0",
             payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )), // no user `new` behind this Throwable: the creation line is unknown
+        )),                                                                     // no user `new` behind this Throwable: the creation line is unknown
     }
 }
 

@@ -42,8 +42,8 @@ pub(super) fn stage_live_reference(ctx: &mut FunctionContext<'_>, value: ValueId
     }
     ctx.materialize_local_storage_address(slot, abi::int_result_reg(ctx.emitter))?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("str x0, [sp, #{pointer}]")),
-        Arch::X86_64 => ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {pointer}], rax")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("str x0, [sp, #{pointer}]")), // preserve the live reference address in the bridge pointer table
+        Arch::X86_64 => ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {pointer}], rax")), // preserve the live reference address in the bridge pointer table
     }
     Ok(())
 }

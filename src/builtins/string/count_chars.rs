@@ -43,7 +43,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         return Ok(tally);
     };
     let ExprKind::IntLiteral(mode) = mode.kind else {
-        return Err(CompileError::new(
+        return Err(CompileError::aot_literal_required(
             cx.span,
             "count_chars() mode argument must be an integer literal in AOT mode",
         ));
