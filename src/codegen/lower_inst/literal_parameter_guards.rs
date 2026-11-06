@@ -217,8 +217,9 @@ fn throw_type_error(emitter: &mut Emitter) {
     // -- construct a managed Throwable while preserving the diagnostic --
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #56");                                 // allocate the compact Throwable payload
-            emitter.instruction("bl __rt_heap_alloc");                          // acquire the exception's owned block
+            crate::codegen_support::throwable_layout::emit_allocate(
+                emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE,
+            );
             emitter.instruction("mov x9, #6");                                  // classify the allocation as a Throwable
             emitter.instruction("str x9, [x0, #-8]");                           // stamp the object heap kind
             emitter.instruction("bl __rt_object_handle_acquire");               // acquire its PHP object handle
@@ -229,13 +230,16 @@ fn throw_type_error(emitter: &mut Emitter) {
             emitter.instruction("str x2, [x0, #16]");                           // store the diagnostic byte length
             emitter.instruction("str xzr, [x0, #24]");                          // initialize the exception code
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
-            emitter.instruction("str xzr, [x0, #40]");                          // initialize the previous exception
+            emitter.instruction(&format!(
+                "str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET
+            ));
             abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
             emitter.instruction("b __rt_throw_current");                        // unwind argument owners before the PHP catch
         }
         Arch::X86_64 => {
-            emitter.instruction("mov eax, 56");                                 // allocate the compact Throwable payload
-            emitter.instruction("call __rt_heap_alloc");                        // acquire the exception's owned block
+            crate::codegen_support::throwable_layout::emit_allocate(
+                emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE,
+            );
             abi::emit_load_int_immediate(
                 emitter, "r10",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(6) as i64,
@@ -255,7 +259,9 @@ fn throw_type_error(emitter: &mut Emitter) {
             ));                                                                 // store the diagnostic byte length
             emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // initialize the exception code
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // initialize the previous exception
+            emitter.instruction(&format!(
+                "mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET
+            ));
             abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
             emitter.instruction("jmp __rt_throw_current");                      // unwind argument owners before the PHP catch
         }
