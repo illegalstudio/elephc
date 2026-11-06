@@ -329,6 +329,39 @@ pub(super) fn optional_const_string_operand(
     ))
 }
 
+/// Emits a fresh implicit stream-context payload below the reserved default.
+///
+/// Every `stream_context_create()` call gets its own payload so resource ids and
+/// per-context option maps can distinguish two live contexts. The window is reserved
+/// by `resource_type_name`, which still reports `stream-context` for every payload in it.
+pub(super) fn emit_unique_context_payload(ctx: &mut FunctionContext<'_>) {
+    let symbol = "_context_payload_next";
+    ctx.data.add_comm(symbol.to_string(), 8);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", symbol);
+            ctx.emitter.instruction("ldr x10, [x9]");                           // current context-payload cursor
+            ctx.emitter.instruction("cbnz x10, 1f");                            // a started cursor keeps its value
+            abi::emit_load_int_immediate(ctx.emitter, "x10", crate::codegen_support::runtime::DEFAULT_CONTEXT_PAYLOAD);
+            ctx.emitter.label("1");
+            ctx.emitter.instruction("sub x10, x10, #1");                        // take the next payload below the default
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the advanced cursor
+            ctx.emitter.instruction("mov x0, x10");                             // return the unique context payload
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", symbol);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                 // current context-payload cursor
+            ctx.emitter.instruction("test r10, r10");                           // is the cursor initialized?
+            ctx.emitter.instruction("jnz 1f");                                  // a started cursor keeps its value
+            abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen_support::runtime::DEFAULT_CONTEXT_PAYLOAD);
+            ctx.emitter.label("1");
+            ctx.emitter.instruction("dec r10");                                 // take the next payload below the default
+            ctx.emitter.instruction("mov QWORD PTR [r9], r10");                 // publish the advanced cursor
+            ctx.emitter.instruction("mov rax, r10");                            // return the unique context payload
+        }
+    }
+}
+
 /// Maps statically-known `php://` standard-stream URLs to native descriptors.
 pub(super) fn php_standard_stream_fd(path: &str) -> Option<i64> {
     match path {

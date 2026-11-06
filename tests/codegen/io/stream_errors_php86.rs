@@ -507,7 +507,7 @@ var_dump(count(stream_last_errors()));
 fclose($stream);
 "#,
     );
-    assert_eq!(out, "handler: 2\nint(8192)\nint(2)\n");
+    assert_eq!(out, "handler: 2\nint(16384)\nint(2)\n");
 }
 
 /// A user wrapper without `stream_cast()` reports the two terminating cast errors
@@ -551,4 +551,41 @@ CastNotSupported:yes\n\
 int(0)\n\
 int(2)\n"
     );
+}
+
+/// Each wrapper stream dispatches through the context it was opened with, even when
+/// another context was created later.
+#[test]
+fn test_user_wrapper_read_uses_its_own_context_php86() {
+    let out = run86(
+        r#"<?php
+class ContextStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_read(int $count): string { return str_repeat('A', $count + 1); }
+    public function stream_eof(): bool { return true; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('context-stream', ContextStream::class);
+$first = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_handler' => static function (array $errors): void {
+        echo "first handler\n";
+    },
+]]);
+$second = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_handler' => static function (array $errors): void {
+        echo "second handler\n";
+    },
+]]);
+$one = fopen('context-stream://one', 'r', false, $first);
+$two = fopen('context-stream://two', 'r', false, $second);
+fread($one, 1);
+fread($two, 1);
+fclose($one);
+fclose($two);
+"#,
+    );
+    assert_eq!(out, "first handler\nsecond handler\n");
 }

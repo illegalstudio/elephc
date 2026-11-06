@@ -16,9 +16,9 @@
 use crate::parser::ast::{BinOp, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_binop, e_bool, e_call, e_class_const, e_concat, e_concat_all, e_const, e_int,
-    e_instance_of, e_new, e_not, e_null, e_null_coalesce, e_post_inc, e_prop, e_str, e_var,
-    function, s_array_push, s_assign, s_expr, s_foreach, s_global, s_if, s_return, s_return_void,
-    s_static_prop_assign, s_throw, s_while, t_array, t_mixed, t_nullable,
+    e_index, e_instance_of, e_new, e_not, e_null, e_null_coalesce, e_post_inc, e_prop, e_static_prop,
+    e_str, e_var, function, s_array_push, s_assign, s_expr, s_foreach, s_global, s_if, s_return,
+    s_return_void, s_static_prop_array_assign, s_static_prop_assign, s_throw, s_while, t_array, t_mixed, t_nullable,
 };
 
 /// Builds the read-time and select-time error wrappers.
@@ -30,6 +30,8 @@ pub(super) fn declarations() -> Program {
         fread_wrapper(),
         stream_get_contents_wrapper(),
         stream_select_wrapper(),
+        context_create_wrapper(),
+        context_get_options_wrapper(),
     ]
 }
 
@@ -43,14 +45,26 @@ fn apply_errors_helper() -> Stmt {
     function("__elephc_stream_apply_errors")
         .param("errors", t_array())
         .param("prefix", TypeExpr::Str)
+        .param_default("context", t_mixed(), e_null())
         .returns(TypeExpr::Void)
         .body(vec![
-            s_assign(
-                "options",
-                e_call(
-                    "stream_context_get_options",
-                    vec![e_call("stream_context_get_default", vec![])],
-                ),
+            s_if(
+                e_binop(e_var("context"), BinOp::StrictNotEq, e_null()),
+                vec![s_assign(
+                    "options",
+                    e_call(
+                        "__elephc_stream_context_get_options",
+                        vec![e_var("context")],
+                    ),
+                )],
+                Vec::new(),
+                Some(vec![s_assign(
+                    "options",
+                    e_call(
+                        "stream_context_get_options",
+                        vec![e_call("stream_context_get_default", vec![])],
+                    ),
+                )]),
             ),
             s_assign(
                 "stream",
@@ -250,6 +264,7 @@ fn stream_read_flush_helper() -> Stmt {
         e_str(" read, 8192 max) - excess data will be lost"),
     ]);
     function("__elephc_stream_read_flush")
+        .param("stream", t_mixed())
         .returns(TypeExpr::Void)
         .body(vec![
             s_global(tracking_globals()),
@@ -295,9 +310,19 @@ fn stream_read_flush_helper() -> Stmt {
                     s_expr(e_post_inc("i")),
                 ],
             ),
+            s_assign(
+                "context",
+                e_null_coalesce(
+                    e_index(
+                        e_static_prop("__ElephcStreamContexts", "byStream"),
+                        e_call("get_resource_id", vec![e_var("stream")]),
+                    ),
+                    e_null(),
+                ),
+            ),
             s_expr(e_call(
                 "__elephc_stream_apply_errors",
-                vec![e_var("errors"), e_str("fread(): ")],
+                vec![e_var("errors"), e_str("fread(): "), e_var("context")],
             )),
             s_return_void(),
         ])
@@ -366,7 +391,7 @@ fn stream_select_flush_helper() -> Stmt {
             ),
             s_expr(e_call(
                 "__elephc_stream_apply_errors",
-                vec![e_var("errors"), e_str("stream_select(): ")],
+                vec![e_var("errors"), e_str("stream_select(): "), e_null()],
             )),
             s_return_void(),
         ])
@@ -389,7 +414,7 @@ fn fread_wrapper() -> Stmt {
                 "data",
                 e_call("fread", vec![e_var("stream"), e_var("length")]),
             ),
-            s_expr(e_call("__elephc_stream_read_flush", vec![])),
+            s_expr(e_call("__elephc_stream_read_flush", vec![e_var("stream")])),
             s_assign("__elephc_stream_read_count", e_var("prevCount")),
             s_assign("__elephc_stream_read_excess", e_var("prevExcess")),
             s_assign("__elephc_stream_read_class", e_var("prevClass")),
@@ -443,7 +468,7 @@ fn stream_get_contents_wrapper() -> Stmt {
                     ),
                 )]),
             ),
-            s_expr(e_call("__elephc_stream_read_flush", vec![])),
+            s_expr(e_call("__elephc_stream_read_flush", vec![e_var("stream")])),
             s_assign("__elephc_stream_read_count", e_var("prevCount")),
             s_assign("__elephc_stream_read_excess", e_var("prevExcess")),
             s_assign("__elephc_stream_read_class", e_var("prevClass")),
@@ -488,6 +513,73 @@ fn stream_select_wrapper() -> Stmt {
         ])
         .build()
 }
+
+/// Builds the `stream_context_create()` wrapper that records each context's options.
+fn context_create_wrapper() -> Stmt {
+    function("__elephc_stream_context_create")
+        .param_default("options", t_mixed(), e_null())
+        .param_default("params", t_mixed(), e_null())
+        .returns(t_mixed())
+        .body(vec![
+            s_assign(
+                "context",
+                e_call(
+                    "stream_context_create",
+                    vec![e_var("options"), e_var("params")],
+                ),
+            ),
+            s_if(
+                e_call("is_array", vec![e_var("options")]),
+                vec![s_assign(
+                    "stored",
+                    e_var("options"),
+                )],
+                Vec::new(),
+                Some(vec![s_assign("stored", e_array(vec![]))]),
+            ),
+            s_assign(
+                "id",
+                e_call("get_resource_id", vec![e_var("context")]),
+            ),
+            s_static_prop_array_assign(
+                "__ElephcStreamContexts",
+                "optionsById",
+                e_var("id"),
+                e_var("stored"),
+            ),
+            s_return(e_var("context")),
+        ])
+        .build()
+}
+
+/// Builds the `stream_context_get_options()` wrapper that reads the per-context map.
+fn context_get_options_wrapper() -> Stmt {
+    function("__elephc_stream_context_get_options")
+        .param("context", t_mixed())
+        .returns(t_mixed())
+        .body(vec![
+            s_assign(
+                "id",
+                e_call("get_resource_id", vec![e_var("context")]),
+            ),
+            s_assign(
+                "optionsById",
+                e_static_prop("__ElephcStreamContexts", "optionsById"),
+            ),
+            s_if(
+                e_call("isset", vec![e_index(e_var("optionsById"), e_var("id"))]),
+                vec![s_return(e_index(e_var("optionsById"), e_var("id")))],
+                Vec::new(),
+                Some(vec![s_return(e_call(
+                    "stream_context_get_options",
+                    vec![e_var("context")],
+                ))]),
+            ),
+            s_return(e_array(vec![])),
+        ])
+        .build()
+}
+
 
 /// Returns the three program globals the runtime uses to publish excess reads.
 fn tracking_globals() -> Vec<String> {

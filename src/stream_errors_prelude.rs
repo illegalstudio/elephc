@@ -21,8 +21,9 @@ use crate::span::Span;
 use crate::synthetic_class::{
     class, e_array, e_binop, e_bool, e_call, e_class_const, e_const, e_index, e_int, e_instance_of,
     e_new, e_not, e_null, e_null_coalesce, e_parent_call, e_static_prop, e_str, e_this, e_this_prop, e_var,
-    method, s_assign, s_expr, s_if, s_prop_assign, s_return, s_return_void, s_static_prop_assign,
-    s_throw, t_array, t_class, t_mixed, t_nullable,
+    method, s_assign, s_expr, s_if, s_prop_assign, s_return, s_return_void,
+    s_static_prop_array_assign, s_static_prop_assign, s_throw, t_array, t_class, t_mixed,
+    t_nullable,
 };
 
 /// Builds the complete PHP 8.6 stream-error surface.
@@ -39,6 +40,7 @@ pub(crate) fn declarations() -> Program {
         stream_last_errors_function(),
         stream_clear_errors_function(),
         stream_error_store_class(),
+        stream_context_registry_class(),
         stream_failure_helper(),
         fopen_wrapper(),
         stream_context_set_default_wrapper(),
@@ -224,6 +226,14 @@ fn stream_exception_class() -> Stmt {
 fn stream_error_store_class() -> Stmt {
     class("__ElephcStreamErrors")
         .static_prop("errors", t_array(), Some(e_array(vec![])))
+        .build()
+}
+
+/// Builds the per-context option and per-stream context registries.
+fn stream_context_registry_class() -> Stmt {
+    class("__ElephcStreamContexts")
+        .static_prop("optionsById", t_array(), Some(e_array(vec![])))
+        .static_prop("byStream", t_array(), Some(e_array(vec![])))
         .build()
 }
 
@@ -478,6 +488,17 @@ fn fopen_wrapper() -> Stmt {
             s_if(
                 e_binop(e_var("stream"), BinOp::StrictEq, e_bool(false)),
                 vec![s_expr(e_call("__elephc_stream_failure", vec![]))],
+                Vec::new(),
+                None,
+            ),
+            s_if(
+                e_binop(e_var("stream"), BinOp::StrictNotEq, e_bool(false)),
+                vec![s_static_prop_array_assign(
+                    "__ElephcStreamContexts",
+                    "byStream",
+                    e_call("get_resource_id", vec![e_var("stream")]),
+                    e_var("context"),
+                )],
                 Vec::new(),
                 None,
             ),

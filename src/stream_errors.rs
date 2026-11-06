@@ -28,6 +28,8 @@ pub(crate) fn rewrite(program: Program, version: crate::php_version::PhpVersion)
         && !wrappers.fread
         && !wrappers.stream_get_contents
         && !wrappers.stream_select
+        && !wrappers.context_create
+        && !wrappers.context_get_options
     {
         return program;
     }
@@ -46,6 +48,8 @@ struct Wrappers {
     fread: bool,
     stream_get_contents: bool,
     stream_select: bool,
+    context_create: bool,
+    context_get_options: bool,
 }
 
 /// Scans the top-level declarations for the two wrapper functions.
@@ -59,6 +63,8 @@ fn wrappers_present(program: &[Stmt]) -> Wrappers {
                 "__elephc_fread" => wrappers.fread = true,
                 "__elephc_stream_get_contents" => wrappers.stream_get_contents = true,
                 "__elephc_stream_select" => wrappers.stream_select = true,
+                "__elephc_stream_context_create" => wrappers.context_create = true,
+                "__elephc_stream_context_get_options" => wrappers.context_get_options = true,
                 _ => {}
             }
         }
@@ -97,6 +103,12 @@ impl Pass for Rewriter {
                 Some("__elephc_stream_get_contents")
             }
             "stream_select" if self.wrappers.stream_select => Some("__elephc_stream_select"),
+            "stream_context_create" if self.wrappers.context_create => {
+                Some("__elephc_stream_context_create")
+            }
+            "stream_context_get_options" if self.wrappers.context_get_options => {
+                Some("__elephc_stream_context_get_options")
+            }
             _ => None,
         };
         let name = replacement.map_or(name, |replacement| {
@@ -114,6 +126,12 @@ impl Pass for Rewriter {
                 | "__elephc_fread"
                 | "__elephc_stream_get_contents"
                 | "__elephc_stream_select"
+                | "__elephc_stream_context_create"
+                | "__elephc_stream_context_get_options"
+                | "__elephc_stream_failure"
+                | "__elephc_stream_apply_errors"
+                | "__elephc_stream_read_flush"
+                | "__elephc_stream_select_flush"
         ) {
             self.wrapper_depth += 1;
         }

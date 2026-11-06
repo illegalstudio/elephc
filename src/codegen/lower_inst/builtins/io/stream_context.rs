@@ -86,7 +86,7 @@ pub(crate) fn lower_stream_context_create(
         store_stream_context_options(ctx, options, true)?;
     }
     capture_stream_notification_callback(ctx, inst.operands.get(1).copied())?;
-    emit_fd_result(ctx, crate::codegen_support::runtime::DEFAULT_CONTEXT_PAYLOAD);
+    emit_unique_context_payload(ctx);
     store_if_result(ctx, inst)
 }
 

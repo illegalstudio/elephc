@@ -19,7 +19,7 @@ use std::path::Path;
 use crate::support::*;
 
 /// Fixtures that still exercise unimplemented stream-error store/handler plumbing.
-const KNOWN_NON_PASSING: &[&str] = &["stream_errors_wrapper_nested_operation"];
+const KNOWN_NON_PASSING: &[&str] = &[];
 
 /// Fixtures whose `--SKIPIF--` section requires a harness feature elephc does not emulate.
 const HARNESS_SKIPS: &[&str] = &[
@@ -89,8 +89,8 @@ fn test_stream_errors_corpus_php86() {
         failed.len(),
         HARNESS_SKIPS.len()
     );
-    assert_eq!(passed.len(), 13, "passing fixtures: {passed:?}");
-    assert_eq!(failed.len(), 1, "known non-passing fixtures: {failed:?}");
+    assert_eq!(passed.len(), 14, "passing fixtures: {passed:?}");
+    assert_eq!(failed.len(), 0, "known non-passing fixtures: {failed:?}");
 }
 
 /// Splits one PHPT fixture into its FILE source and EXPECT/EXPECTF expectation.
