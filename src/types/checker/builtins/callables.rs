@@ -1336,16 +1336,19 @@ fn validate_static_cufa_reference_arguments(
 }
 
 
-/// Returns the type a variable `call_user_func_array` argument list (or a spread source) binds
-/// each parameter to, or `None` when the source is no array storage (an iterator or an object
-/// the call refuses or iterates at run time).
+/// Returns the type the final-pass re-walk of a marked failed body binds each untyped
+/// parameter to for a variable `call_user_func_array` argument list (or a sole spread source),
+/// or `None` when the source is no array storage (an iterator or an object the call refuses or
+/// iterates at run time).
 ///
 /// The rules follow the spread binder (`spread_source_element_type`): a packed or keyed list
 /// binds its value type, and a declared `array` or a `mixed` value binds `mixed`. A union of
 /// array shapes binds the union of its members' value types (`mixed` when one of them is
 /// `mixed`), so `array<int>|array<float>` binds `int|float` as a packed `array<int|float>`
-/// does. An empty list
-/// (`never`) binds `mixed` as well, so a body error that no argument decides is still reported.
+/// does. An empty list (`never`) binds `mixed` as well, so a body error that no argument
+/// decides is still reported. Only a body whose first walk already ran is re-walked here: a
+/// string `call_user_func_array` callee without a by-reference parameter first walks through
+/// a spread of the list, which refuses a union of array shapes as on main.
 fn variable_list_value_type(list_ty: &PhpType) -> Option<PhpType> {
     let value_ty = array_storage_value_type(list_ty)?;
     Some(if value_ty == PhpType::Never { PhpType::Mixed } else { value_ty })
@@ -1655,25 +1658,7 @@ pub(crate) fn check_call_user_func_array(
             let ret_ty = checker.check_function_call(&cb_name, elems, span, env)?;
             return Ok(ret_ty);
         }
-        if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
-            // A union of array shapes is array storage the spread binder refuses, so the
-            // first walk binds the untyped parameters to the union's value type directly, as
-            // the final-pass re-walk does (`rewalk_marked_function_over_variable_list`). Under
-            // the eval barrier a call without a signature is `mixed` and walks nothing, and a
-            // spread of the union would still be refused, so the call returns `mixed` here. A
-            // generic template is instantiated per call from its argument expressions, which a
-            // variable list does not provide, so it keeps the spread path.
-            let list_ty = checker.infer_type(&args[1], env)?;
-            if decl.type_params.is_empty() && !spread_binder_accepts_source(&list_ty) {
-                if let Some(value_ty) = variable_list_value_type(&list_ty) {
-                    if checker.eval_barrier_active {
-                        return Ok(PhpType::Mixed);
-                    }
-                    let param_types =
-                        checker.list_value_param_types(&cb_name, &decl, &value_ty)?;
-                    return checker.resolve_function_signature(&cb_name, &decl, param_types);
-                }
-            }
+        if checker.fn_decls.contains_key(cb_name.as_str()) {
             let spread_args = vec![Expr::new(
                 ExprKind::Spread(Box::new(args[1].clone())),
                 args[1].span,

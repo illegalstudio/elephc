@@ -542,27 +542,12 @@ fn test_failed_body_rewalk_survives_calls_under_eval_barrier() {
     }
 }
 
-/// A string `call_user_func_array` callee without a signature over a union of array shapes,
-/// reached under the eval barrier, resolves to `mixed` without walking the body: a spread of
-/// the union, which the spread binder refuses, was synthesized there and reported "Spread
-/// operator requires an array" for a valid program whose function is never called.
-#[test]
-fn test_call_user_func_array_union_list_under_eval_barrier_is_accepted() {
-    expect_no_error(
-        "<?php function f($n) { return $n + 1; } \
-         function src(): array<int>|array<float> { return [1]; } \
-         function outer() { eval(\"\"); $a = src(); var_dump(call_user_func_array('f', $a)); }",
-    );
-}
-
 /// `call_user_func_array` over a variable list binds every untyped by-value parameter, the
 /// variadic tail included, to the list's value type, so a body that indexes it stays accepted
 /// when the re-walk runs from it: beside a by-reference parameter (whose first walk bound the
 /// by-value one to `int`), for a `mixed` list, for an empty list, and for a variadic tail that
 /// a spread of the list would have typed `array<int>`; a `call_user_func` spread of a union of
-/// array shapes, which the spread binder refuses, is accepted as well, and so is a string
-/// `call_user_func_array` callee over such a list, whose first walk binds the union's value
-/// type instead of spreading the list.
+/// array shapes, which the spread binder refuses, is accepted as well.
 #[test]
 fn test_call_user_func_array_variable_list_rewalk_accepts_valid_body() {
     for program in [
@@ -589,26 +574,15 @@ fn test_call_user_func_array_variable_list_rewalk_accepts_valid_body() {
         "<?php function f($n) { return $n[0]; } \
          function src(): array<int>|array<string> { return [1]; } $a = src(); \
          var_dump(call_user_func('f', ...$a));",
-        "<?php function f($n) { return $n + 1; } \
-         function src(): array<int>|array<float> { return [1]; } $a = src(); \
-         var_dump(call_user_func_array('f', $a));",
-        "<?php function f($n) { return $n[0]; } \
-         function src(): array<int>|array<string> { return [1]; } $a = src(); \
-         var_dump(call_user_func_array('f', $a));",
-        "<?php function f($n, ...$rest) { return $n + $rest[0]; } \
-         function src(): array<int>|array<string, int> { return [1, 2]; } $a = src(); \
-         var_dump(call_user_func_array('f', $a));",
     ] {
         expect_no_error(program);
     }
 }
 
-/// A `call_user_func` spread or a `call_user_func_array` list typed as a union of array shapes
-/// whose value types differ binds the untyped parameter to the union of those value types, as
-/// a packed `array<int|float>` does, so indexing an `int|float` parameter is reported once.
-/// Joining the differing value types to `mixed` accepted the body, and the final pass then
-/// dropped the first walk's error; a string `call_user_func_array` callee was refused with
-/// "Spread operator requires an array" instead, because its first walk spread the list.
+/// A `call_user_func` spread of a union of array shapes whose value types differ binds the
+/// untyped parameter to the union of those value types, as a packed `array<int|float>` does,
+/// so indexing an `int|float` parameter is reported once. Joining the differing value types
+/// to `mixed` accepted the body, and the final pass then dropped the first walk's error.
 #[test]
 fn test_union_spread_rewalk_binds_union_of_differing_value_types() {
     let f = "function f($n) { return $n[0]; } \
@@ -617,7 +591,6 @@ fn test_union_spread_rewalk_binds_union_of_differing_value_types() {
         "var_dump(call_user_func('f', ...$a));",
         "var_dump(call_user_func(f(...), ...$a));",
         "$h = f(...); var_dump(call_user_func($h, ...$a));",
-        "var_dump(call_user_func_array('f', $a));",
     ] {
         let program = format!("<?php {f} {call}");
         let messages = checker_error_messages(&program);
