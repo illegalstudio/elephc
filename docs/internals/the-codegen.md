@@ -336,10 +336,12 @@ counter). A guarded entry's tag test reads its seed in the same block as the
 payload copy. Nested loops with field-seeded counters therefore allocate nothing
 per loop entry.
 Private slots in the executable main frame use the same lifetime proof; globals
-retain heap storage. A string cast of the final value is an observation, not an
-escape: the formatter reads the tag and payload and numeric tags render into concat
-scratch without adopting the cell. Delayed reads, escaping consumers, aliases,
-references, `eval` and suspension fail the proof.
+retain heap storage. A string cast or a direct `echo`/`print` of the final value is
+an observation, not an escape: the formatter reads the tag and payload and numeric
+tags render into concat scratch without adopting the cell. This is why a loop
+accumulator echoed after the loop keeps its frame cell instead of falling back to
+`__rt_mixed_numeric_add`. Delayed reads, escaping consumers, aliases, references,
+`eval` and suspension fail the proof.
 
 Independent frame cells do not invalidate each other's borrowed reads. A same-block
 read must be consumed before its owning slot is stored or released, or before any

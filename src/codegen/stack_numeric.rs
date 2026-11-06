@@ -585,6 +585,11 @@ impl Proof<'_> {
                 if inst.op == Op::Release {
                     return true;
                 }
+                // Output consumes the scalar payload by value: it formats the current numeric
+                // tag into scratch without retaining or freeing the frame cell.
+                if matches!(inst.op, Op::EchoValue | Op::PrintValue) {
+                    return self.stable_read(load, user);
+                }
                 // Strict identity copies the tag and payload like an ordered comparison.
                 if domain::identity(inst) && self.numeric_inputs(&inst.operands) {
                     return self.stable_read(load, user);

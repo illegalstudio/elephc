@@ -200,8 +200,9 @@ final retirement. Their cleanup records remain intact when a property read can
 throw, and the dispatcher rejects frame addresses. Returns of the cell,
 pointer-valued block arguments, a second
 local, container stores and unknown consumers retain heap storage. A string
-conversion of the final scalar is an observation: the formatter reads the tag and
-payload and numeric tags render into concat scratch without adopting the cell.
+conversion or a direct `echo`/`print` of the final scalar is an observation: the
+formatter reads the tag and payload and numeric tags render into concat scratch
+without adopting the cell.
 Parameters, globals, statics, references, eval storage and suspended activations
 do not receive this local storage optimization. Private slots in the executable
 main frame use the same complete lifetime proof; global-visible values still retain

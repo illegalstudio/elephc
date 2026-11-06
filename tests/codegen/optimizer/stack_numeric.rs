@@ -195,9 +195,9 @@ local_sum_text($argc * 1000);
     }
 }
 
-/// A scalarized counter feeds a boxed accumulator without allocating a rhs Mixed box.
+/// A scalarized counter feeds a frame-cell accumulator without allocating a rhs Mixed box.
 #[test]
-fn test_stack_numeric_scalar_rhs_avoids_boxing_in_boxed_accumulator() {
+fn test_stack_numeric_scalar_rhs_uses_frame_accumulator() {
     let source = r#"<?php
 function sum_echo(int $n): void {
     $sum = 0;
@@ -236,13 +236,66 @@ sum_echo($argc + 1000);
         .split("@block name=while.exit")
         .next()
         .unwrap();
-    assert!(body.contains("__rt_mixed_numeric_add"), "{body}");
+    assert!(
+        !body.contains("__rt_mixed_numeric_add"),
+        "the accumulator must use its frame cell:\n{body}"
+    );
     assert!(
         !body.contains("__rt_mixed_from_value"),
         "the scalar rhs must not be boxed:\n{body}"
     );
     assert_eq!(run(source, true).0, "500500|");
     fs::remove_dir_all(dir).unwrap();
+}
+
+
+/// A direct `echo $sum` observation keeps the frame cell instead of falling back to the
+/// allocating runtime numeric helper.
+#[test]
+fn test_stack_numeric_direct_echo_keeps_frame_cell() {
+    let source = r#"<?php
+function local_sum_direct_echo(int $n): void {
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $sum += $i;
+    }
+    echo $sum, "|";
+}
+local_sum_direct_echo($argc * 1000);
+"#;
+    let large = run(source, true);
+    assert_eq!(large.0, "499500|");
+    let (large_allocs, large_frees) = parse_gc_stats(&large.1);
+    assert_eq!(large_allocs, large_frees, "every numeric owner is retired");
+    let small = run(&source.replace("* 1000", "* 10"), true);
+    assert_eq!(small.0, "45|");
+    let (small_allocs, _) = parse_gc_stats(&small.1);
+    assert!(
+        large_allocs.abs_diff(small_allocs) <= 8,
+        "the loop must not allocate per iteration: small={small_allocs}, large={large_allocs}"
+    );
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized).0, "499500|");
+    }
+}
+
+
+/// Once a direct-echo accumulator overflows to float, later iterations keep the float tag.
+#[test]
+fn test_stack_numeric_direct_echo_keeps_float_after_overflow() {
+    let source = r#"<?php
+function local_overflow_echo(int $n): void {
+    $sum = PHP_INT_MAX;
+    for ($i = 0; $i < $n; $i++) {
+        $sum += 1;
+        echo gettype($sum), "|";
+    }
+}
+local_overflow_echo(2 + $argc);
+"#;
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized).0, "double|double|double|");
+    }
 }
 
 /// A TaggedScalar array element narrows to null-as-zero int and keeps the accumulator cell.
