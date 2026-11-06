@@ -685,7 +685,7 @@ fn lower_native_dimension_read(
     take_owned_temp(ctx, &temp, expr.span)
 }
 
-/// Calls a native dimension adapter with captured operands and the shared hidden argument plan.
+/// Calls a native dimension adapter while protecting its hidden argument owners during unwind.
 fn emit_native_dimension_read(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: LoweredValue,
     method: &str, result_type: PhpType, expr: &Expr,
@@ -695,9 +695,13 @@ fn emit_native_dimension_read(
         .and_then(|class| class.methods.get(method)).cloned();
     let extra = object_operators::append_hidden_arguments(ctx, signature.as_ref(),
         &mut operands, 1, expr);
+    // Array lowering already protects the receiver; the new collectors need their own pins.
+    let extra_values = extra.iter().map(|argument| argument.value).collect::<Vec<_>>();
+    let pins = pin_in_flight_owners(ctx, &extra_values, expr.span);
     let name = ctx.intern_string(method);
     let result = ctx.emit_value(Op::MethodCall, operands, Some(Immediate::Data(name)),
         result_type, Op::MethodCall.default_effects(), Some(expr.span));
+    unpin_in_flight_owners(ctx, pins, expr.span);
     for argument in extra {
         crate::ir_lower::ownership::release_if_owned(ctx, argument, Some(expr.span));
     }
