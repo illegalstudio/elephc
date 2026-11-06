@@ -563,3 +563,36 @@ run();
     );
     assert_clean(out, "1:1|2,3|2,3|STE\n");
 }
+
+/// A declared-type local's writeback cell is a managed reference cell: a closure that captures
+/// the reference and outlives the call keeps it alive and works on it (detached from the local
+/// once the call wrote it back, as documented), and a destructor that throws while the
+/// writeback releases the previous object (or an array holding it) leaves the local holding
+/// the new value, with nothing freed twice or leaked.
+#[test]
+fn test_declared_reference_cells_survive_captures_and_throwing_destructors() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {
+    public function __construct(public int $id) {}
+    public function __destruct() { if ($this->id === 1) { throw new RuntimeException("d"); } }
+}
+function keep(?float &$x): Closure { return function () use (&$x) { $x = $x + 1; return $x; }; }
+function replace(?C &$c): void { $c = new C(2); }
+function replaceAll(?array &$a): void { $a = [new C(2)]; }
+function run(): void {
+    float $v = 1.0;
+    $inc = keep($v);
+    echo $inc(), ":", $v, "|";
+    C $x = new C(1);
+    try { replace($x); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $x->id; }
+    echo "|";
+    array<C> $arr = [new C(1)];
+    try { replaceAll($arr); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", count($arr), $arr[0]->id; }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "2:1|caught:2|caught:12\n");
+}

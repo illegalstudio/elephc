@@ -446,7 +446,9 @@ element of another class, or a nested array of another element kind) stops the p
 diagnostic, as a direct assignment of that value would be rejected; PHP has no declared local
 types. While the declared local keeps its typed slot, the write-back runs when the call
 returns: if the callee throws after writing through the reference, the local keeps its
-previous value (PHP would already have applied the write), and nothing leaks. Two references to the same declared local (`f($v, $v)`) share one cell. A `mixed`
+previous value (PHP would already have applied the write), and nothing leaks. A closure
+the callee returns with the reference captured (`use (&$x)`) keeps working on that reference
+after the call, but no longer reaches the declared local once the call has written it back. Two references to the same declared local (`f($v, $v)`) share one cell. A `mixed`
 local bound to a by-reference union of `null`, arrays and objects is checked against that
 union when the callee starts, after every argument was evaluated, and anything else raises
 `TypeError` like PHP.

@@ -533,11 +533,25 @@ pub(super) fn emit_ref_arg_cell_block(
     let total_bytes = writeback_bytes + temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     abi::emit_reserve_temporary_stack(ctx.emitter, total_bytes);
     for (index, writeback) in writebacks.iter_mut().enumerate() {
+        // A managed Mixed reference cell holding the boxed value: the callee may capture the
+        // reference in a closure that outlives the call (`__rt_reference_cell_owner` then
+        // takes its own lease), which a stack slot could not survive.
         ctx.load_value_to_result(writeback.source_value)?;
         emit_box_current_value_as_mixed(ctx.emitter, &writeback.source_ty);
+        abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            crate::codegen_support::runtime::reference_cells::payload_tag(&PhpType::Mixed),
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
+        let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_pop_reg(ctx.emitter, cell_reg);
+        store_pushed_value_to_ref_cell(ctx, cell_reg, &PhpType::Mixed);
         writeback.cell_offset = index * CALL_ARG_TEMP_CLEANUP_BYTES;
-        abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), writeback.cell_offset);
-        // A throwing callee leaves no writeback: the unwind releases the boxed cell instead.
+        abi::emit_store_to_sp(ctx.emitter, cell_reg, writeback.cell_offset);
+        // A throwing callee leaves no writeback: the unwind releases the cell lease instead.
         let owner_address = abi::tertiary_scratch_reg(ctx.emitter);
         abi::emit_temporary_stack_address(ctx.emitter, owner_address, writeback.cell_offset);
         abi::emit_link_call_operand_owner_at_stack(
@@ -624,7 +638,7 @@ pub(super) fn materialize_ref_arg_address(
         .find(|writeback| writeback.covers(param_index))
     {
         let cell_offset = arg_temp_bytes + ref_cell_base_offset + writeback.cell_offset;
-        abi::emit_temporary_stack_address(
+        abi::emit_load_temporary_stack_slot(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
             cell_offset,
@@ -737,7 +751,11 @@ pub(super) fn emit_ref_arg_writebacks(
             abi::int_result_reg(ctx.emitter),
             writeback.cell_offset,
         );
+        // The cell stays on the stack until its lease is released below (a heap writeback
+        // releases it itself, before the old value, and leaves 0 there).
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        let cell = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_from_address(ctx.emitter, cell, cell, 0);
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         match writeback.source_ty.codegen_repr() {
             PhpType::Float => {
@@ -754,7 +772,10 @@ pub(super) fn emit_ref_arg_writebacks(
             }
         }
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        let released = ctx.next_label("ref_writeback_cell_released");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &released);
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+        ctx.emitter.label(&released);
     }
     let block_bytes = call_args.ref_writebacks.len() * CALL_ARG_TEMP_CLEANUP_BYTES
         + call_args.ref_temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
@@ -917,11 +938,24 @@ fn emit_heap_ref_writeback(ctx: &mut FunctionContext<'_>, writeback: &RefArgWrit
         }
         _ => abi::emit_incref_if_refcounted(ctx.emitter, &source_ty),
     }
+    // The result register holds an owned reference to the new value, and the caller pushed
+    // the cell. Release the cell lease first (nothing of the old value runs yet), publish the
+    // new value in the local, and only then release the old one: its destructor may throw,
+    // and the local must not point to freed storage, nor the cell leak, when it does.
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+    let zero = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, zero, 0);
+    abi::emit_store_to_sp(ctx.emitter, zero, 16);
     ctx.load_local_to_result(writeback.source_slot)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    store_current_scalar_result_to_ref_source(ctx, writeback)?;
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_decref_if_refcounted(ctx.emitter, &source_ty);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    store_current_scalar_result_to_ref_source(ctx, writeback)
+    Ok(())
 }
 
 /// The fatal raised when a callee replaced a typed object argument (or an element of a typed
