@@ -279,9 +279,19 @@ pub(super) fn reflection_parameter_type_metadata(
     ty: &PhpType,
 ) -> Option<ReflectionParameterTypeMetadata> {
     if *ty == PhpType::Mixed {
-        if let Some(TypeExpr::Named(name)) = type_expr {
-            if name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("object") {
-                return reflection_declared_type_metadata(type_expr.expect("declared object type"));
+        if let Some(type_expr) = type_expr {
+            // A widened `mixed` ABI slot can still carry the source declaration in
+            // `param_type_exprs`; reflection must report the declared syntax, not the
+            // storage representation. A genuine `mixed` annotation falls through.
+            let declared_mixed = matches!(
+                type_expr,
+                TypeExpr::Named(name)
+                    if name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("mixed")
+            );
+            if !declared_mixed {
+                if let Some(metadata) = reflection_declared_type_metadata(type_expr) {
+                    return Some(metadata);
+                }
             }
         }
     }

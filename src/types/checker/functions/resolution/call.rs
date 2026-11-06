@@ -479,13 +479,22 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
+                    let lvalue = self.is_by_ref_argument_lvalue(arg, caller_env)?;
                     let property_place = match declared_ty.as_ref() {
                         Some(expected_ty) => {
                             self.by_ref_property_place(arg, expected_ty, caller_env)?
+                                || (matches!(
+                                    arg.kind,
+                                    ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
+                                ) && self.property_ref_argument_supported(
+                                    arg,
+                                    expected_ty,
+                                    caller_env,
+                                )?)
                         }
                         None => false,
                     };
-                    if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    if !property_place && !lvalue {
                         return Err(CompileError::new(
                             arg.span,
                             &format!(

@@ -1118,6 +1118,7 @@ mod tests {
             &crate::version_prelude::version_declarations(
                 &["phpversion", "php_uname", "php_sapi_name"],
                 PhpVersion::Php85,
+                true,
             ),
         );
         round_trip("list_id", &crate::list_id_prelude::list_id_declarations());

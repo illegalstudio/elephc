@@ -48,6 +48,7 @@ pub mod bcmath_prelude;
 /// PHP ext/gmp standard-library prelude injection.
 pub mod gmp_prelude;
 pub mod random_prelude;
+pub mod uri_prelude;
 /// Incremental hashing standard-library prelude injection.
 pub mod hash_prelude;
 /// Core attribute and sensitive-value class declarations.

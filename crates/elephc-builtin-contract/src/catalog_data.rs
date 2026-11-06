@@ -2914,6 +2914,37 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         internal: true,
         requirements: &[],
     },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_set_memory_limit"),
+        name: "__elephc_set_memory_limit",
+        area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "bytes",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Void,
+        by_ref_return: false,
+        summary: "Internal: lower or raise the live memory_limit ceiling, clamped to the reserved heap arena.",
+        examples: &[
+        ],
+        php_manual: None,
+        deprecation: None,
+        extension: false,
+        internal: true,
+        requirements: &[],
+    },
 
     BuiltinContract {
         id: BuiltinId::from_canonical_name("__elephc_opcache_rt_reset"),

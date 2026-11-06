@@ -138,11 +138,16 @@ pub(super) fn rewrite_typed_property_ref_args(
             || matches!(
                 value_type.codegen_repr(),
                 PhpType::Object(_) | PhpType::Mixed
+            )
+            || matches!(
+                expected_ty.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
             );
         // A variadic collector transports reference markers in a boxed array, so its property
-        // places always travel as boxed Mixed cells. Fixed scalar/string/array slots are passed
-        // by address and must stay unboxed; fixed object/mixed slots need the same boxed cell.
-        let temp_type = if variadic_tail { PhpType::Mixed } else { value_type.clone() };
+        // places always travel as boxed Mixed cells. A `mixed`/union parameter boxes the
+        // property too: the callee's ABI cell is Mixed, and the write-back narrows it back to
+        // the declared property type. Fixed concrete scalar/array slots stay unboxed.
+        let temp_type = if promoted { PhpType::Mixed } else { value_type.clone() };
         let temp = ctx.declare_synthetic_php_local(temp_type.clone());
         if promoted {
             ctx.promote_local_mixed_ref_cell(&temp, Some(place_arg.span));
@@ -991,7 +996,7 @@ fn place_object_class_name(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Opti
 /// `static_place_type` already resolved, and that resolver matches exactly the variants below.
 /// An unmatched shape is returned unchanged, which is the conservative identity — it cannot be
 /// reached without emitting IR for a place this module then refuses to write back.
-fn stabilize_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr) -> Expr {
+pub(super) fn stabilize_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr) -> Expr {
     match &place.kind {
         ExprKind::PropertyAccess { object, property } => {
             let object = stabilize_place(ctx, object);

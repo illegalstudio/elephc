@@ -16,7 +16,7 @@
 //! - `__rt_concat_publish` derives the storage class from the pointer itself: only pointers
 //!   inside `[_concat_buf, _concat_buf + capacity)` move `_concat_off`, so heap-backed results
 //!   leave the shared scratch offset untouched with no extra flag register.
-//! - Requests larger than the configured heap capacity (`_heap_max`), including the wrapped
+//! - Requests larger than the reserved arena (`_heap_max`), including the wrapped
 //!   or negative sizes produced by an overflowing size computation, reach
 //!   `__rt_alloc_overflow`; an active cdylib boundary recovers with allocation
 //!   status, while executables retain PHP's fatal behavior.
@@ -53,7 +53,9 @@ pub(crate) fn scratch_capacity(heap_size: usize) -> usize {
 /// - Input: `x0` (AArch64) / `rax` (x86_64) = required payload bytes, interpreted as unsigned.
 /// - Output: `x0` / `rax` = destination pointer with room for at least that many bytes.
 /// - Clobbers every caller-saved register: callers must spill their live state first.
-/// - Fatals through `__rt_alloc_overflow` when the request exceeds `_heap_max`.
+/// - Fatals through `__rt_alloc_overflow` when the request exceeds the reserved arena
+///   `_heap_max`; a request between the runtime `_heap_limit` and the arena reaches
+///   `__rt_heap_alloc` and reports php-src's Allowed-memory fatal.
 ///
 /// # `__rt_concat_publish`
 /// - Input/output: `x1`/`x2` (AArch64) or `rax`/`rdx` (x86_64) = result pointer and length,

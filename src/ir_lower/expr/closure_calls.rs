@@ -83,6 +83,7 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         &result_type,
         expr.span,
     );
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
     let mut arg_values = lower_args_with_signature(ctx, instance_signature.as_ref(), args);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
@@ -105,6 +106,11 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         Some(expr.span),
     );
     stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &arg_values,

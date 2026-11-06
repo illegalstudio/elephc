@@ -1438,7 +1438,8 @@ pub(crate) fn emit_runtime_data_user(
             .iter()
             .enumerate()
             .filter_map(|(prop_index, (prop_name, prop_ty))| {
-                (!class_property_is_hidden(class_name, prop_name))
+                (!class_property_is_hidden(class_name, prop_name)
+                    && !is_uri_opaque_handle(class_name, prop_name))
                     .then_some((prop_index, prop_name, prop_ty))
             })
             .collect();
@@ -1475,7 +1476,7 @@ pub(crate) fn emit_runtime_data_user(
                 .property_offsets
                 .get(*prop_name)
                 .copied()
-                .unwrap_or(8 + prop_index * 16);
+                .unwrap_or(8 + *prop_index * 16);
             let tag = prop_value_tag(metadata, prop_name, prop_ty);
             out.push_str(&format!(
                 "    .quad _class_serpname_{}_{}\n",
@@ -3900,6 +3901,7 @@ fn var_dump_descriptor_rows(
         .properties
         .iter()
         .enumerate()
+        .filter(|(_, (prop_name, _))| !is_uri_opaque_handle(class_name, prop_name))
         .filter_map(|(layout_index, (prop_name, prop_ty))| {
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, layout_index, prop_name,
@@ -3921,6 +3923,20 @@ fn var_dump_descriptor_rows(
             })
         })
         .collect()
+}
+
+/// Returns whether `declaring_class::$prop_name` is the URI prelude's opaque native handle slot.
+///
+/// PHP's internal `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url` expose no properties. The prelude
+/// keeps the bridge handle in this private slot, so every property walker omits it while the
+/// prelude itself can still read and write it. The check is gated on the DECLARING class:
+/// a user class may legitimately declare its own property with that name.
+pub(crate) fn is_uri_opaque_handle(declaring_class: &str, prop_name: &str) -> bool {
+    prop_name == "__elephc_uri_handle"
+        && matches!(
+            php_symbol_key(declaring_class.trim_start_matches('\\')).as_str(),
+            "uri\\rfc3986\\uri" | "uri\\whatwg\\url"
+        )
 }
 
 /// Returns whether `prop_name` is one of the compiler-only private backing slots elephc
@@ -3945,6 +3961,9 @@ fn var_dump_descriptor_rows(
 /// too; PHP's object has no such property, so no renderer shows it.
 fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> bool {
     if prop_name == crate::php_ext::prelude::HANDLE_PROPERTY && is_hosted_extension_class(class_info) {
+        return true;
+    }
+    if is_uri_opaque_handle(class_name, prop_name) {
         return true;
     }
     if !prop_name.starts_with("__")

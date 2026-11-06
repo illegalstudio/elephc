@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use crate::ir_lower::context::ReferencePropertyGuard;
 
 /// Lowers positional/named/spread call arguments in source order.
 pub(super) fn lower_args(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) -> Vec<crate::ir::ValueId> {
@@ -31,61 +32,121 @@ pub(super) fn lower_arg_with_signature(
     index: usize,
     arg: &Expr,
 ) -> crate::ir::ValueId {
+    // Named-argument wrappers are planner metadata, and `@` only changes diagnostics: the
+    // storage place underneath is what the by-reference property and array-element rewrites
+    // must see, while the argument itself still has to be lowered with suppression intact.
+    let (place_arg, suppressed) = ref_argument_place(arg);
     if sig.ref_params.get(index).copied().unwrap_or(false)
-        && matches!(&arg.kind, ExprKind::ArrayAccess { array, .. }
+        && matches!(&place_arg.kind, ExprKind::ArrayAccess { array, .. }
             if instance_object_class_for_ir(ctx, array)
                 .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap")))
     {
         let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
-        lower_ref_assign_array_elem(ctx, &alias, arg, arg.span);
-        publish_scoped_ref_receiver_alias(ctx, &alias, arg.span);
-        let variable = Expr::new(ExprKind::Variable(alias), arg.span);
+        lower_ref_assign_array_elem(ctx, &alias, place_arg, place_arg.span);
+        publish_scoped_ref_receiver_alias(ctx, &alias, place_arg.span);
+        let variable = Expr::new(ExprKind::Variable(alias), place_arg.span);
         return lower_arg_with_signature(ctx, sig, index, &variable);
     }
     if sig.ref_params.get(index).copied().unwrap_or(false)
         && matches!(
-            &arg.kind,
+            &place_arg.kind,
             ExprKind::ArrayAccess { array, .. }
                 if !matches!(&array.kind, ExprKind::Variable(_))
         )
     {
-        if let Some((alias, aliases)) = prepare_scoped_addressable_ref_array_receiver(ctx, arg) {
+        if let Some((alias, aliases)) = prepare_scoped_addressable_ref_array_receiver(ctx, place_arg) {
             let value = lower_arg_with_signature(ctx, sig, index, &alias);
             retire_scoped_ref_receiver_aliases(ctx, &aliases);
             return value;
         }
     }
-    if let Some(value) = lower_by_ref_array_element_arg_with_signature(ctx, sig, index, arg) {
+    if sig.ref_params.get(index).copied().unwrap_or(false)
+        && property_argument_is_declared(ctx, place_arg)
+    {
+        // A property's slot stores the property's own representation, so the cell cannot be
+        // shared with a `mixed` parameter. Evaluate the receiver once, hand the callee a
+        // temporary whose storage matches the parameter (boxed `Mixed` for mixed/union
+        // parameters), and write the temporary back through the typed property store.
+        let place = super::ref_place_args::stabilize_place(ctx, place_arg);
+        let read_target = if suppressed {
+            Expr::new(ExprKind::ErrorSuppress(Box::new(place.clone())), arg.span)
+        } else {
+            place.clone()
+        };
+        let read = lower_expr(ctx, &read_target);
+        // An untyped parameter is represented as the argument's inferred type in
+        // `sig.params`, but PHP gives the callee a boxed Mixed cell for it. Use Mixed so a
+        // concrete property is staged through the boxed-temporary write-back path.
+        let param_ty = if sig.declared_params.get(index).copied().unwrap_or(true) {
+            sig.params
+                .get(index)
+                .map(|(_, ty)| ty.codegen_repr())
+                .unwrap_or(PhpType::Mixed)
+        } else {
+            PhpType::Mixed
+        };
+        let temp_ty = match param_ty {
+            PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
+            concrete => concrete,
+        };
+        let temp = ctx.declare_synthetic_php_local(temp_ty.clone());
+        ctx.store_local(&temp, read, temp_ty, Some(place_arg.span));
+        let variable = Expr::new(ExprKind::Variable(temp.clone()), place_arg.span);
+        let value = lower_arg_with_signature(ctx, sig, index, &variable);
+        let details = match &place.kind {
+            ExprKind::PropertyAccess { object, property } => receiver_class_name(ctx, object)
+                .map(|class| {
+                    let (class_name, declared) =
+                        match declared_property_type(ctx, &class, property) {
+                            Some((declaring, ty)) => (declaring, Some(ty)),
+                            None => (class, None),
+                        };
+                    (class_name, property.clone(), declared)
+                }),
+            _ => None,
+        };
+        if let Some((class_name, property, declared)) = details {
+            ctx.reference_property_guards.push(ReferencePropertyGuard {
+                temp,
+                place,
+                class_name,
+                property,
+                declared,
+            });
+        }
         return value;
     }
-    if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
+    if let Some(value) = lower_by_ref_array_element_arg_with_signature(ctx, sig, index, place_arg) {
         return value;
     }
-    guard_boxed_object_reference_argument(ctx, sig, index, arg);
-    promote_boxed_reference_local_argument(ctx, sig, index, arg);
-    promote_reference_return_local_argument(ctx, sig, index, arg);
+    if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, place_arg) {
+        return value;
+    }
+    guard_boxed_object_reference_argument(ctx, sig, index, place_arg);
+    promote_boxed_reference_local_argument(ctx, sig, index, place_arg);
+    promote_reference_return_local_argument(ctx, sig, index, place_arg);
     // A property by-reference rewrite stages `$temp = <place>` as the argument so the read
     // happens at this argument's source position. Execute that assignment now, then pass the
     // hidden local's storage exactly like an ordinary variable argument.
     if sig.ref_params.get(index).copied().unwrap_or(false) {
-        if let ExprKind::Assignment { target, .. } = &arg.kind {
+        if let ExprKind::Assignment { target, .. } = &place_arg.kind {
             if let ExprKind::Variable(name) = &target.kind {
                 if name.starts_with(crate::names::SYNTHETIC_PLACE_LOCAL_STEM) {
                     let assigned = lower_expr(ctx, arg);
                     if ctx.value_is_owning_temporary(assigned) {
                         crate::ir_lower::ownership::release_if_owned(ctx, assigned, Some(arg.span));
                     }
-                    let variable = Expr::new(ExprKind::Variable(name.clone()), arg.span);
+                    let variable = Expr::new(ExprKind::Variable(name.clone()), place_arg.span);
                     return lower_arg_with_signature(ctx, sig, index, &variable);
                 }
             }
         }
     }
-    if let Some(lowered) = lower_tracked_callable_array_param(ctx, sig, index, arg) {
+    if let Some(lowered) = lower_tracked_callable_array_param(ctx, sig, index, place_arg) {
         return lowered.value;
     }
     let reference_local = sig.ref_params.get(index).copied().unwrap_or(false)
-        .then(|| local_values::lower_reference_local(ctx, arg)).flatten();
+        .then(|| local_values::lower_reference_local(ctx, place_arg)).flatten();
     let lowered = reference_local.unwrap_or_else(|| match sig.params.get(index) {
         Some((_, param_ty)) => lower_expr_for_parameter(
             ctx, arg, param_ty, super::integer_destinations::parameter_is_source_typed(sig, index),
@@ -94,6 +155,23 @@ pub(super) fn lower_arg_with_signature(
     });
     record_pointer_reference_argument(ctx, sig, index, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Strips planner named-argument wrappers and `@` from a by-reference argument, reporting
+/// whether the original expression was error-suppressed.
+fn ref_argument_place(arg: &Expr) -> (&Expr, bool) {
+    let mut current = arg;
+    let mut suppressed = false;
+    loop {
+        match &current.kind {
+            ExprKind::NamedArg { value, .. } => current = value,
+            ExprKind::ErrorSuppress(value) => {
+                suppressed = true;
+                current = value;
+            }
+            _ => return (current, suppressed),
+        }
+    }
 }
 
 /// Records a local passed to a pointer by-reference parameter for the final storage check.
@@ -1238,4 +1316,75 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         operands.push(lower_variadic_tail_array(ctx, sig, tail, args.len()).value);
     }
     coerce_operands_to_params(ctx, sig, operands)
+}
+
+/// Returns the declaring class and declared type of `property` on `class_name`.
+///
+/// Untyped properties accept every PHP value regardless of the storage type elephc inferred
+/// from their default, so only a declared slot may be re-validated after a by-reference call.
+/// The declaring class is what PHP names in the reference-held diagnostic, which can be a
+/// parent of the receiver's static class.
+fn declared_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+) -> Option<(String, PhpType)> {
+    let class_name = class_name.trim_start_matches('\\');
+    let info = ctx.classes.get(class_name)?;
+    let index = info.visible_property_index(property)?;
+    if !info.property_slot_is_declared(index, property) {
+        return None;
+    }
+    let (_, (_, ty)) = info.visible_property(property)?;
+    let declaring = info
+        .property_declaring_classes
+        .get(property)
+        .cloned()
+        .unwrap_or_else(|| class_name.to_string());
+    Some((declaring, ty.clone()))
+}
+
+/// Resolves the statically known receiver class for a property argument.
+///
+/// Mirrors the checker's `single_object_class_name`: a nullable property or parameter narrows
+/// to its object member, and a nested property read is resolved through the declaring class's
+/// visible property type. Shapes the checker would not accept (calls, array elements) answer
+/// `None` here as well.
+fn receiver_class_name(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<String> {
+    let ty = match &object.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        ExprKind::This => ctx
+            .current_class
+            .as_ref()
+            .map(|class| PhpType::Object(class.clone()))
+            .unwrap_or(PhpType::Mixed),
+        ExprKind::PropertyAccess { object: parent, property } => {
+            let parent_class = receiver_class_name(ctx, parent)?;
+            let info = ctx.classes.get(parent_class.trim_start_matches('\\'))?;
+            info.visible_property(property)?.1.1.clone()
+        }
+        _ => infer_expr_type_syntactic(object),
+    };
+    crate::types::checker::single_object_class_name(&ty)
+}
+
+/// Returns whether `arg` is a property slot a boxed by-reference temporary can be stored into.
+///
+/// Declared slots always qualify. An untyped slot qualifies once the checker widened it to
+/// boxed `Mixed` storage for this call; a narrow inferred slot keeps the compile-time refusal.
+fn property_argument_is_declared(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+    let ExprKind::PropertyAccess { object, property } = &arg.kind else {
+        return false;
+    };
+    let Some(class) = receiver_class_name(ctx, object) else {
+        return false;
+    };
+    ctx.classes
+        .get(class.trim_start_matches('\\'))
+        .is_some_and(|info| {
+            info.visible_property_is_declared(property)
+                || info.visible_property(property).is_some_and(|(_, (_, ty))| {
+                    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+                })
+        })
 }

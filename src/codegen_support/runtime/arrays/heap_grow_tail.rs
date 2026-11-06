@@ -51,7 +51,7 @@ pub fn emit_heap_grow_tail(emitter: &mut Emitter) {
     emitter.instruction("sub x10, x1, x9");                                     // compute the extra payload bytes needed by this extension
     emitter.instruction("adds x14, x13, x10");                                  // compute the tentative new bump offset with overflow detection
     emitter.instruction("b.cs __rt_heap_grow_tail_fail");                       // a wrapped bump offset cannot fit the configured heap
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_max");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_limit");
     emitter.instruction("ldr x15, [x15]");                                      // load the configured heap capacity for the extension check
     emitter.instruction("cmp x14, x15");                                        // does the extended tail remain inside the configured heap?
     emitter.instruction("b.hi __rt_heap_grow_tail_fail");                       // preserve fallback allocation when the tail has insufficient room
@@ -109,7 +109,7 @@ fn emit_heap_grow_tail_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, r10");                                        // compute the extra payload bytes needed by this extension
     emitter.instruction("add rcx, rdx");                                        // compute the tentative new bump offset with overflow detection
     emitter.instruction("jc __rt_heap_grow_tail_fail");                         // a wrapped bump offset cannot fit the configured heap
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_max");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_limit");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity for the extension check
     emitter.instruction("cmp rcx, r8");                                         // does the extended tail remain inside the configured heap?
     emitter.instruction("ja __rt_heap_grow_tail_fail");                         // preserve fallback allocation when the tail has insufficient room
@@ -200,7 +200,7 @@ mod tests {
                 let assembly = emitter.output();
 
                 assert!(assembly.contains("_heap_off"), "{name}, pic={pic}");
-                assert!(assembly.contains("_heap_max"), "{name}, pic={pic}");
+                assert!(assembly.contains("_heap_limit"), "{name}, pic={pic}");
                 assert!(assembly.contains("_gc_live"), "{name}, pic={pic}");
                 assert!(assembly.contains("_gc_peak"), "{name}, pic={pic}");
                 assert!(!assembly.contains("_gc_allocs"), "{name}, pic={pic}");
