@@ -22,6 +22,33 @@ use crate::ir::types::{IrHeapKind, IrType};
 use crate::ir::value::{Ownership, ValueDef, ValueId};
 use crate::types::PhpType;
 
+/// Dense dominance membership retained from the validator's fixed-point analysis.
+struct DominatorSets {
+    by_block: Vec<Vec<u64>>,
+    singleton: Vec<bool>,
+}
+
+impl DominatorSets {
+    /// Retains bitsets and the exact singleton property used for unreachable continuations.
+    fn new(by_block: Vec<Vec<u64>>) -> Self {
+        let singleton = by_block.iter().map(|bits| {
+            bits.iter().map(|word| word.count_ones() as usize).sum::<usize>() == 1
+        }).collect();
+        Self { by_block, singleton }
+    }
+
+    /// Tests the same block membership as the former materialized hash sets.
+    fn contains(&self, block: BlockId, candidate: BlockId) -> bool {
+        self.by_block.get(block.as_raw() as usize)
+            .is_some_and(|bits| block_bit_is_set(bits, candidate.as_raw() as usize))
+    }
+
+    /// Reports a one-element dominator set without rescanning its words for every use.
+    fn is_singleton(&self, block: BlockId) -> bool {
+        self.singleton.get(block.as_raw() as usize).copied().unwrap_or(false)
+    }
+}
+
 /// Validation error reported for malformed EIR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
@@ -248,7 +275,7 @@ fn validate_instruction_placement(function: &Function) -> Result<(), ValidationE
 /// Validates instruction operands, result metadata, immediates, effects, and dominance.
 fn validate_instructions(
     function: &Function,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     for block in &function.blocks {
         for (index, inst_id) in block.instructions.iter().enumerate() {
@@ -256,7 +283,12 @@ fn validate_instructions(
                 .instruction(*inst_id)
                 .ok_or(ValidationError::UnknownInstruction(*inst_id))?;
             validate_instruction_result(function, block.id, index as u32, *inst_id, inst)?;
-            validate_instruction_effects(*inst_id, inst)?;
+            let operand_type = inst
+                .operands
+                .first()
+                .and_then(|value| function.value(*value))
+                .map(|value| value.php_type.clone());
+            validate_instruction_effects_with_operand(*inst_id, inst, operand_type)?;
             validate_instruction_immediate(*inst_id, inst)?;
             validate_instruction_operands(
                 function,
@@ -316,11 +348,31 @@ fn validate_instruction_result(
 /// the immutable-local pass proves that the named scalar slot cannot change.
 /// Physical property initialization additionally allocates owned reference cells.
 /// A named `prop_set` additionally admits exactly the packed field store effects.
+#[cfg(test)]
 fn validate_instruction_effects(
     inst_id: InstId,
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
-    let expected = if inst.op == Op::MixedUnbox {
+    validate_instruction_effects_with_operand(inst_id, inst, None)
+}
+
+/// Validates one instruction's effects against its canonical contract and an optional
+/// operand PHP type used for type-proven refinements.
+fn validate_instruction_effects_with_operand(
+    inst_id: InstId,
+    inst: &Instruction,
+    operand_type: Option<PhpType>,
+) -> Result<(), ValidationError> {
+    // `(int)` over an int or bool is a representation re-stamp: it cannot warn,
+    // fail, allocate, or observe heap state. The operand may already have been
+    // folded from bool to int, so both types admit the pure refinement.
+    let pure_int_restamp = inst.op == Op::Cast
+        && inst.result_php_type == PhpType::Int
+        && inst.effects.is_pure()
+        && operand_type.is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool));
+    let expected = if pure_int_restamp {
+        Effects::PURE
+    } else if inst.op == Op::MixedUnbox {
         Op::mixed_unbox_effects(&inst.result_php_type)
     } else if inst.op == Op::FToI
         && matches!(
@@ -333,6 +385,14 @@ fn validate_instruction_effects(
         && matches!(inst.immediate, Some(Immediate::PropertyRef { .. }))
     {
         inst.op.default_effects() | Effects::ALLOC_HEAP
+    } else if matches!(
+        inst.op,
+        Op::ICheckedAddToInt | Op::ICheckedSubToInt | Op::ICheckedMulToInt
+    ) && matches!(inst.immediate, Some(Immediate::Data(_)))
+    {
+        // A declared-int return boundary turns the checked arithmetic overflow into PHP's
+        // catchable TypeError, so the specialized producer carries throw/fatal effects.
+        inst.op.default_effects() | Effects::MAY_THROW | Effects::MAY_FATAL
     } else {
         inst.op.default_effects()
     };
@@ -398,6 +458,36 @@ mod instruction_effect_tests {
             instruction.effects = effects | Effects::OUTPUT;
             assert!(validate_instruction_effects(id, &instruction).is_err());
         }
+    }
+
+    /// A pure int re-stamp cast is valid over int or bool operands only.
+    #[test]
+    fn int_restamp_cast_admits_pure_effects_only_for_scalar_operands() {
+        let mut instruction = Instruction::new(
+            Op::Cast,
+            Vec::new(),
+            Some(Immediate::CastTarget(IrType::I64)),
+            None,
+            IrType::I64,
+            PhpType::Int,
+            Ownership::NonHeap,
+            Effects::PURE,
+            None,
+        );
+        let id = InstId::from_raw(0);
+        for ty in [PhpType::Int, PhpType::Bool] {
+            assert_eq!(
+                validate_instruction_effects_with_operand(id, &instruction, Some(ty)),
+                Ok(())
+            );
+        }
+        for ty in [PhpType::Float, PhpType::Str, PhpType::Mixed] {
+            assert!(validate_instruction_effects_with_operand(id, &instruction, Some(ty)).is_err());
+        }
+        instruction.effects = Effects::MAY_WARN;
+        assert!(
+            validate_instruction_effects_with_operand(id, &instruction, Some(PhpType::Bool)).is_err()
+        );
     }
 
     /// Physical initializer writes require allocation effects without weakening ordinary writes.
@@ -582,6 +672,7 @@ fn validate_instruction_immediate(
         | PackedFieldMixedToFloat
         | PackedFieldMixedToBool
         | ReturnBoundaryMixedToInt
+        | PropertyBoundaryCheckedToInt
         | PropInitialized
         | StaticPropInitialized
         | ReflectionStaticPropertyInitialized => {
@@ -730,7 +821,7 @@ fn validate_instruction_operands(
     inst_index: u32,
     _inst_id: InstId,
     inst: &Instruction,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     for operand in &inst.operands {
         validate_use(function, *operand, block, Some(inst_index), dominators)?;
@@ -793,7 +884,7 @@ fn validate_opcode_rules(
                 _ => Err(ValidationError::UnexpectedImmediate(inst_id)),
             }
         }
-        FirstClassCallableNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
+        FirstClassCallableNew | CallableValueNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         ObjectNew => Ok(()),
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
@@ -899,6 +990,59 @@ fn validate_opcode_rules(
         | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey | ArrayGetMixedKey
         | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
+        }
+        // The producer proved the receiver is a private, int-shaped array with reserved capacity.
+        ArrayPushReserved => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            Ok(())
+        }
+        // The producer pass proved the receiver is a private int-shaped packed array and the
+        // requested range is in bounds; the helper returns an owned Mixed int/float cell.
+        ArraySumInt => {
+            check_count(inst_id, inst, 4, "4")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            check_operand_type(function, inst_id, inst, 2, IrType::I64, "I64")?;
+            check_operand_type(function, inst_id, inst, 3, IrType::Heap(IrHeapKind::Mixed), "Heap(Mixed)")?;
+            let result = inst
+                .result
+                .ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::Heap(IrHeapKind::Mixed) {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            if function
+                .value(result)
+                .ok_or(ValidationError::UnknownValue(result))?
+                .php_type
+                != PhpType::Mixed
+            {
+                return Err(ValidationError::PhpTypeMismatch(result));
+            }
+            Ok(())
+        }
+        // The producer pass proved the receiver is a private int-shaped packed array and the
+        // index is in `[0, length)`; the result is a raw PHP int, never PHP null.
+        ArrayGetUnchecked => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            let result = inst
+                .result
+                .ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::I64 {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            if function
+                .value(result)
+                .ok_or(ValidationError::UnknownValue(result))?
+                .php_type
+                != PhpType::Int
+            {
+                return Err(ValidationError::PhpTypeMismatch(result));
+            }
+            Ok(())
         }
         // Typed fetch-for-write reads require an already integer-coerced key. Mixed-result
         // nested parents instead use the storage-aware runtime reader, which accepts string
@@ -1494,7 +1638,7 @@ fn check_first_heap(
 /// Validates all block terminators and their CFG edge argument contracts.
 fn validate_terminators(
     function: &Function,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     for block in &function.blocks {
         let Some(term) = &block.terminator else {
@@ -1565,7 +1709,7 @@ fn validate_switch_case(
     function: &Function,
     source_block: BlockId,
     case: &SwitchCase,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     validate_branch_args(function, case.target, &case.args)?;
     validate_terminator_uses(function, source_block, &case.args, dominators)
@@ -1582,7 +1726,7 @@ fn validate_return(
     function: &Function,
     block: BlockId,
     value: Option<ValueId>,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     if matches!(function.return_php_type, PhpType::Never) {
         return Err(ValidationError::NeverFunctionReturns);
@@ -1631,7 +1775,7 @@ fn validate_terminator_uses(
     function: &Function,
     block: BlockId,
     values: &[ValueId],
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     for value in values {
         validate_use(function, *value, block, None, dominators)?;
@@ -1708,7 +1852,7 @@ fn validate_use(
     value: ValueId,
     use_block: BlockId,
     use_inst_index: Option<u32>,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     let Some(value_ref) = function.value(value) else {
         return Err(ValidationError::UnknownValue(value));
@@ -1721,9 +1865,8 @@ fn validate_use(
     // including when the definition also belongs to a dead continuation. Keep checking IDs, types,
     // and same-block ordering so malformed instructions still fail validation.
     let use_is_unreachable = use_block != function.entry
-        && dominators
-            .get(&use_block)
-            .is_some_and(|set| set.len() == 1 && set.contains(&use_block));
+        && dominators.is_singleton(use_block)
+        && dominators.contains(use_block, use_block);
     let definition_block = match value_ref.def {
         ValueDef::BlockParam { block, .. } | ValueDef::Instruction { block, .. } => block,
     };
@@ -1745,23 +1888,17 @@ fn definition_dominates_use(
     def: ValueDef,
     use_block: BlockId,
     use_inst_index: Option<u32>,
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
+    dominators: &DominatorSets,
 ) -> bool {
     match def {
         ValueDef::BlockParam { block, .. } => {
             block == use_block
-                || dominators
-                    .get(&use_block)
-                    .map(|set| set.contains(&block))
-                    .unwrap_or(false)
+                || dominators.contains(use_block, block)
         }
         ValueDef::Instruction { block, index, .. } if block == use_block => use_inst_index
             .map(|use_index| index < use_index)
             .unwrap_or(true),
-        ValueDef::Instruction { block, .. } => dominators
-            .get(&use_block)
-            .map(|set| set.contains(&block))
-            .unwrap_or(false),
+        ValueDef::Instruction { block, .. } => dominators.contains(use_block, block),
     }
 }
 
@@ -1776,8 +1913,9 @@ fn definition_dominates_use(
 /// produce spurious `UseNotDominated` errors for any value the entry defines and
 /// a later pass forwards into the loop. Unreachable blocks themselves resolve
 /// to `{self}`. Validation skips cross-block dominance for their uses while
-/// still rejecting same-block use-before-definition.
-fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
+/// still rejecting same-block use-before-definition. Dense membership stays in bitsets,
+/// avoiding hash-set construction during repeated numeric-storage trial validation.
+fn compute_dominators(function: &Function) -> DominatorSets {
     let predecessors = compute_predecessors(function);
     let reachable = reachable_from_entry(function, &predecessors);
     let block_count = function.blocks.len();
@@ -1810,7 +1948,7 @@ fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>>
             }
         }
     }
-    dominator_bitsets_to_map(function, &dominators)
+    DominatorSets::new(dominators)
 }
 
 /// Converts reachable predecessor block ids into dense block indices for bitset dominator scans.
@@ -1871,24 +2009,6 @@ fn bitset_and_assign(left: &mut [u64], right: &[u64]) {
     for (left_word, right_word) in left.iter_mut().zip(right.iter()) {
         *left_word &= *right_word;
     }
-}
-
-/// Converts dense dominator bitsets back to the validator's public block-id map.
-fn dominator_bitsets_to_map(
-    function: &Function,
-    dominators: &[Vec<u64>],
-) -> HashMap<BlockId, HashSet<BlockId>> {
-    let mut map = HashMap::with_capacity(function.blocks.len());
-    for (block_index, block) in function.blocks.iter().enumerate() {
-        let mut set = HashSet::new();
-        for (candidate_index, candidate) in function.blocks.iter().enumerate() {
-            if block_bit_is_set(&dominators[block_index], candidate_index) {
-                set.insert(candidate.id);
-            }
-        }
-        map.insert(block.id, set);
-    }
-    map
 }
 
 /// Returns whether a block index is present in a dominator bitset.

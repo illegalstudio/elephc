@@ -521,6 +521,7 @@ impl Checker {
                     let mut entries = Vec::new();
                     for value in values {
                         self.infer_type_with_assignment_effects(value, env)?;
+                        self.record_switch_comparison_exception_flow(subject, value, env);
                         entries.push(self.snapshot_flow_exit(env));
                     }
                     // Only this label's evaluated prefix reaches its matching arm. Later

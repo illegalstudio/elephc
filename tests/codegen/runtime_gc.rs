@@ -9,7 +9,12 @@
 //! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, and the ownership of an array literal whose element is an array-returning builtin call.
 //! - The `assoc_chunk` submodule checks heap balance when `array_chunk()` copies an associative receiver.
 //! - The `mixed_receiver_property_writes` submodule checks the ownership of a property write whose receiver is statically `mixed`.
+//! - The `property_hook_set_owners` submodule checks that a throwing set-hook accessor releases the caller's owning RHS temporary.
 
+#[path = "runtime_gc/mixed_inc_dec_in_place.rs"]
+mod mixed_inc_dec_in_place;
+#[path = "runtime_gc/case_transform_owners.rs"]
+mod case_transform_owners;
 #[path = "runtime_gc/borrowed_numeric.rs"]
 mod borrowed_numeric;
 #[path = "runtime_gc/borrowed_string_reads.rs"]
@@ -147,6 +152,7 @@ mod destructor_catch_cleanup;
 mod callback_argument_cleanup;
 mod argument_evaluation_owners;
 mod codegen_guard_operand_owners;
+mod property_hook_set_owners;
 mod offset_unset_key_guards;
 mod array_edge_type_errors;
 mod call_coercion_owners;
@@ -257,6 +263,8 @@ mod coroutine_debuginfo;
 mod coroutine_slot_set;
 #[path = "runtime_gc/counter_regions.rs"]
 mod counter_regions;
+#[path = "runtime_gc/numeric_seed_cells.rs"]
+mod numeric_seed_cells;
 #[path = "runtime_gc/static_object_exports.rs"]
 mod static_object_exports;
 #[path = "runtime_gc/gmp_exception_operands.rs"]

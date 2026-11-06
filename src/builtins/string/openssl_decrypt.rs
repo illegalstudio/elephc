@@ -5,7 +5,7 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through the builtin registry.
 //!
 //! Key details:
-//! - The checked result is `string|false`; GCM consumes the by-value tag and optional AAD.
+//! - The checked result is `string|false`; AEAD modes consume the tag and optional AAD.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;

@@ -35,6 +35,8 @@ impl Checker {
         param_types: Vec<(String, PhpType)>,
     ) -> Result<PhpType, CompileError> {
         self.completed_function_signatures.remove(name);
+        // This walk replaces whatever a previous failed walk of the body recorded.
+        self.failed_function_body_errors.remove(name);
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());
@@ -209,6 +211,9 @@ impl Checker {
             }
         }
         if !errors.is_empty() {
+            // Kept so the driver can find the bodies whose errors it may drop as stale initial
+            // top-level errors, and walk them again (`recheck_failed_function_bodies`).
+            self.failed_function_body_errors.insert(name.to_string(), errors.clone());
             return Err(CompileError::from_many(errors));
         }
 

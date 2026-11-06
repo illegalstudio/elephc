@@ -108,6 +108,14 @@ pub(crate) struct Checker {
     pub failed_variant_contracts: HashMap<String, CompileError>,
     /// Signatures whose body and return validation completed, rather than mere placeholders.
     pub completed_function_signatures: HashSet<String>,
+    /// Body errors of each function's latest failed walk, cleared when the body is walked again.
+    pub failed_function_body_errors: HashMap<String, Vec<CompileError>>,
+    /// Failed untyped-parameter functions the final top-level pass walks again at their next
+    /// direct call, with the argument types that call settles on.
+    pub rewalk_failed_body_at_next_call: HashSet<String>,
+    /// While a failed body is walked again, the completed callees with an inferred return
+    /// already refreshed from the settled property types; `None` outside such a walk.
+    pub refreshed_inferred_callees: Option<HashSet<String>>,
     /// Canonical function signatures indexed by fully-qualified name.
     pub functions: HashMap<String, FunctionSig>,
     function_name_indices: function_names::FunctionNameIndices,
@@ -128,6 +136,8 @@ pub(crate) struct Checker {
     pub constants: HashMap<String, PhpType>,
     /// Tracks the return type of closures assigned to variables, keyed by variable name.
     pub closure_return_types: HashMap<String, PhpType>,
+    /// Contextual parameter types inferred for inline array-callback closures, keyed by span.
+    pub closure_param_hints: HashMap<Span, Vec<PhpType>>,
     /// Tracks known callable signatures for variables holding first-class callables,
     /// keyed by variable name.
     pub callable_sigs: HashMap<String, FunctionSig>,
@@ -1599,6 +1609,7 @@ fn check_types_on_compiler_stack(
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
         closure_generator_spans: checker.closure_generator_spans,
+        closure_param_hints: checker.closure_param_hints,
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
         local_value_read_types: checker.local_value_read_types,

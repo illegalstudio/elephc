@@ -198,7 +198,20 @@ pub(super) fn assoc_array_literal_type_for_ir(
 }
 
 /// Returns the best EIR storage value type for one associative-array literal value.
+///
+/// A value whose own storage is the inline tagged scalar (`int|null`) is boxed: a hash entry has
+/// no tagged representation (see `box_tagged_scalar_element`).
 pub(super) fn assoc_array_literal_value_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    value: &Expr,
+) -> PhpType {
+    super::indexed_array_literals::box_tagged_scalar_element(
+        assoc_array_literal_value_type_for_ir_unboxed(ctx, value),
+    )
+}
+
+/// Types one associative literal value by its own storage, before boxing a tagged scalar.
+fn assoc_array_literal_value_type_for_ir_unboxed(
     ctx: &LoweringContext<'_, '_>,
     value: &Expr,
 ) -> PhpType {

@@ -25,6 +25,12 @@ pub(super) fn lower(
         RuntimeFnId::Sqrt => Some({
             crate::codegen::lower_inst::builtins::math::lower_sqrt(ctx, inst)
         }),
+        RuntimeFnId::SqrtAddInt => Some({
+            crate::codegen::lower_inst::builtins::math::lower_sqrt_add_int(ctx, inst)
+        }),
+        RuntimeFnId::SqrtSumRange => Some({
+            crate::codegen::lower_inst::builtins::math::lower_sqrt_sum_range(ctx, inst)
+        }),
         RuntimeFnId::Tan => Some({
             crate::codegen::lower_inst::builtins::math::lower_unary_libm(ctx, inst, "tan")
         }),

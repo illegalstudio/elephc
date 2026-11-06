@@ -434,6 +434,11 @@ scratch, throw, or leave the function.
 Calls, output, `eval`, exception-handler entries, and stores or releases that
 may run a destructor stay barriers. Arithmetic-only and concrete-array loops
 can lose redundant resets inside the body while keeping one before the loop.
+A post-fixed-point finalizer (`ConcatResetHoist`) additionally inserts one
+marked reset in a unique preheader when the preheader inherits a dirty cursor,
+so the body's per-iteration reset can be dropped. The mark keeps both analyses
+from removing the inserted reset, which makes the finalizer idempotent; it is
+limited to non-internal, non-synthetic functions of at most 2,000 instructions.
 
 ### Small-function inlining
 

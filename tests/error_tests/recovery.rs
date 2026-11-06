@@ -1,7 +1,8 @@
 //! Purpose:
 //! Integration or regression tests for diagnostic coverage of recovery, including parser recovery
 //! collects multiple errors, parser block recovery collects multiple errors, type checker recovery
-//! collects multiple errors, and failed-assignment targets not cascading into `Undefined variable`.
+//! collects multiple errors, failed-assignment targets not cascading into `Undefined variable`, and
+//! function-body errors raised from a top-level call surviving the stale initial-error filter.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -347,5 +348,65 @@ fn test_method_global_declaration_uses_final_top_level_environment() {
         )
         .is_ok(),
         "explicit global declarations must resolve final top-level bindings",
+    );
+}
+
+/// A body error raised while a top-level call resolves the function is reported once, although
+/// the driver drops `Cannot index non-array` as stale when the final top-level pass is clean:
+/// no later pass walks the failed body again, and the program compiled into a binary that
+/// crashed at run time.
+#[test]
+fn test_function_body_index_error_from_top_level_call_is_reported() {
+    let messages = checker_error_messages(
+        "<?php function h(int $n) { $x = 5; return $x[0]; } var_dump(h(1));",
+    );
+    assert_eq!(
+        messages.iter().filter(|message| *message == "Cannot index non-array").count(),
+        1,
+        "{:?}",
+        messages
+    );
+}
+
+/// An undefined property read inside a function called from the top level is refused like the
+/// same read at the top level, instead of being dropped as a stale initial error and reaching
+/// the backend.
+#[test]
+fn test_function_body_undefined_property_from_top_level_call_is_reported() {
+    expect_error(
+        "<?php class P { public $a = 1; } function f(P $p) { return $p->nope; } echo f(new P);",
+        "Undefined property: P::nope",
+    );
+}
+
+/// The same body errors are reported when the function declares no parameter types: its body
+/// is walked again at its next call in the final pass, from that call's argument types.
+#[test]
+fn test_untyped_function_body_errors_from_top_level_call_are_reported() {
+    let messages = checker_error_messages(
+        "<?php function h($n) { $x = 5; return $x[0] + $n; } var_dump(h(1));",
+    );
+    assert_eq!(
+        messages.iter().filter(|message| *message == "Cannot index non-array").count(),
+        1,
+        "{:?}",
+        messages
+    );
+    expect_error(
+        "<?php class P { public $a = 1; } function f($p) { return $p->nope; } echo f(new P);",
+        "Undefined property: P::nope",
+    );
+}
+
+/// A function that indexes the return of a helper is accepted when the helper's return was
+/// stale in the first pass: the helper returns a static property that a later top-level
+/// statement assigns an array, and the re-walk refreshes the helper before reading its return.
+#[test]
+fn test_rewalk_refreshes_helper_return_built_from_late_static_property() {
+    expect_no_error(
+        "<?php function a(int $n) { return b($n)[0]; } function b(int $n) { return C::$v; } class C { public static $v; } echo a(1); C::$v = [9];",
+    );
+    expect_no_error(
+        "<?php function a($n) { return b($n)[0]; } function b($n) { return C::$v; } class C { public static $v; } echo a(1); C::$v = [9];",
     );
 }

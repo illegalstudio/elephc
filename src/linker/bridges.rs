@@ -137,6 +137,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_openssl",
+        env_var: "ELEPHC_OPENSSL_BRIDGE_LIB_DIR",
+        crate_name: "elephc-openssl",
+        flag_name: "openssl",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The cipher bridge implements PHP's OpenSSL cipher catalog and EVP path.
+        php_extensions: &["openssl"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_bcmath",
         env_var: "ELEPHC_BCMATH_LIB_DIR",
         crate_name: "elephc-bcmath",
@@ -1677,16 +1690,26 @@ mod tests {
         }
         let script = std::fs::read_to_string(root.join(probe))
             .unwrap_or_else(|_| panic!("cannot read {probe}"));
-        let curl_case = script.find("curl) native_packages=\"curl\" ;;")
-            .unwrap_or_else(|| panic!("{probe} must map curl to its managed native package"));
+        // The packages come from the packaged binary's own `native:` fields
+        // (`crate::linker::native_packages`), never from a list in the script.
+        let native_fields = script.find("native:*) native_packages=")
+            .unwrap_or_else(|| panic!("{probe} must read native packages from --print-capabilities"));
         let native_loop = script.find("for native_package in $native_packages")
-            .unwrap_or_else(|| panic!("{probe} must iterate selected managed native packages"));
+            .unwrap_or_else(|| panic!("{probe} must iterate the reported managed native packages"));
         let native_add = script.find("native add \"$native_package\"")
-            .unwrap_or_else(|| panic!("{probe} must install the selected managed native package"));
+            .unwrap_or_else(|| panic!("{probe} must install each reported managed native package"));
         let bridge_compile = script.find("\"--with-$name\" probe.php")
             .unwrap_or_else(|| panic!("{probe} must compile each packed bridge probe"));
-        assert!(curl_case < native_loop && native_loop < native_add && native_add < bridge_compile,
-            "{probe} must select, install, then compile curl in that order");
+        assert!(native_fields < native_loop && native_loop < native_add && native_add < bridge_compile,
+            "{probe} must read, install, then compile each bridge's packages in that order");
+        for (bridge, package) in [("curl", "curl"), ("xml", "libxml2"), ("openssl", "openssl-crypto")] {
+            assert!(
+                !script.contains(&format!("{bridge}) native_packages="))
+                    && !script.contains(&format!("native add {package}"))
+                    && !script.contains(&format!("[ \"$name\" = \"{bridge}\" ]")),
+                "{probe} hard-codes {bridge}'s native package again; the binary reports it"
+            );
+        }
         assert!(
             !script.contains("missing_native_package")
                 && !script.contains("requires managed native package")
@@ -1696,27 +1719,6 @@ mod tests {
         assert!(
             script.contains("needs no archive from this tarball"),
             "{probe} must keep the empty-archive skip for regex/mysqli"
-        );
-        // xml is the second packed-archive capability that also needs a catalog
-        // package (`libxml2`: the bridge's parser is libxml2 itself, reached through
-        // the package's shim), and gets the identical add-first branch.
-        assert!(
-            script.contains("[ \"$name\" = \"xml\" ]") && script.contains("native add libxml2"),
-            "{probe} must run native add libxml2 before --with-xml; xml is a \
-             packed-archive capability that also needs a catalog package"
-        );
-        assert!(
-            script.contains("adding managed native package libxml2 before --with-xml"),
-            "{probe} must native-add libxml2 first, not after a failed compile"
-        );
-        let after_xml = script
-            .split_once("[ \"$name\" = \"xml\" ]")
-            .map(|(_, rest)| rest)
-            .unwrap_or("");
-        assert!(
-            after_xml.contains("native add libxml2")
-                && !after_xml.contains("needs no archive from this tarball"),
-            "{probe} must not skip xml the way regex is skipped"
         );
     }
 

@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Composite results require guarantees for every returning arm, not inferred array types.
+//! - Packed record field reads are raw memory and prove non-null from the declared field type.
 //! - Loop callers filter variable dependencies whose entry facts a body write can invalidate.
 
 use crate::parser::ast::{BinOp, Expr, ExprKind};
@@ -106,6 +107,12 @@ impl Checker {
                 .and_then(Clone::clone),
         };
         let Some(receiver) = receiver else { return false; };
+        // A packed record field is raw memory at a fixed offset: its read yields the declared
+        // scalar (or the embedded record's address) and never PHP null. A null address faults
+        // instead of producing a value, so the proof needs only the field's declared type.
+        if let PhpType::Pointer(Some(owner)) | PhpType::Packed(owner) = &receiver {
+            return self.packed_field_type(owner, property).is_some_and(|ty| !type_admits_null(&ty));
+        }
         let classes: Vec<_> = super::null_coalesce::union_members(&receiver).filter_map(|member| match member {
             PhpType::Object(owner) => Some(owner), _ => None,
         }).collect();

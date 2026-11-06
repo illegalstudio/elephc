@@ -583,6 +583,7 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
         retired_type: Option<&PhpType>,
     ) -> ThrownTypes {
+        // The checker publishes switch comparison throws at each evaluated label prefix.
         if !include_operands && !matches!(stmt.kind,
             StmtKind::Echo(_) | StmtKind::ExprStmt(_) | StmtKind::StaticVar { .. }
             | StmtKind::ListUnpack { .. } | StmtKind::Assign { .. } | StmtKind::TypedAssign { .. }
@@ -744,6 +745,9 @@ impl ExceptionFlowAnalysis {
                 for (patterns, body) in cases {
                     for pattern in patterns {
                         thrown = thrown.combined(operand(pattern));
+                        if binary_op_has_dynamic_throw(subject, &BinOp::Eq, pattern) {
+                            thrown = thrown.combined(ThrownTypes::unknown());
+                        }
                     }
                     thrown = thrown.combined(block(body));
                 }
@@ -1396,6 +1400,9 @@ fn binary_op_exact_throw_type(
 /// Returns whether an operator may fail but runtime operand types prevent an exact class claim.
 fn binary_op_has_dynamic_throw(left: &Expr, op: &BinOp, right: &Expr) -> bool {
     match op {
+        BinOp::Eq | BinOp::NotEq => {
+            !effects::literal_scalar_operand(left) || !effects::literal_scalar_operand(right)
+        }
         BinOp::Div | BinOp::Mod => !matches!(
             &right.kind,
             ExprKind::IntLiteral(value) if *value != 0

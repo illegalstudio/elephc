@@ -13,7 +13,8 @@ use crate::parser::ast::{BinOp, Expr, ExprKind, NESTED_APPEND_TEMP_PREFIX};
 use crate::span::Span;
 use crate::types::{
     array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type,
-    static_array_key_forces_hash_storage, PhpType, TypeEnv,
+    nonempty_array_key_forces_hash_storage, static_array_key_forces_hash_storage, PhpType,
+    TypeEnv,
 };
 
 use super::super::super::{Checker, GuardedLocalStorage};
@@ -95,6 +96,12 @@ pub(super) fn check_array_assign(
         // slot per iteration — so `for ($i = 0; …; $i++) { $a[$i] = … }` keeps packed storage.
         let forces_hash = matches!(normalized_idx_ty, PhpType::Str)
             || (matches!(idx_ty, PhpType::Str) && !index_is_foreach_key)
+            || (!matches!(elem_ty.as_ref(), PhpType::Never)
+                && (nonempty_array_key_forces_hash_storage(index)
+                    || (matches!(normalized_idx_ty, PhpType::Int)
+                        && !index_is_foreach_key
+                        && !checker.index_is_packed_loop_counter(array, index)
+                        && array_key_contiguity_is_unproven(index))))
             || (matches!(elem_ty.as_ref(), PhpType::Never)
                 && (static_array_key_forces_hash_storage(index)
                     || (matches!(normalized_idx_ty, PhpType::Int)

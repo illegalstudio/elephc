@@ -50,7 +50,7 @@ pub(crate) enum ParamBinding {
     /// PHP coerces a compile-time constant exactly. The argument is replaced by this literal.
     Const(ExprKind),
     /// The argument is a compile-time callable-name string bound to a `callable` parameter.
-    /// The argument is replaced by the equivalent first-class callable expression.
+    /// Lowering materializes an invocation descriptor without creating a PHP Closure object.
     Callable(CallableTarget),
     /// PHP binds the argument but emits a runtime `Deprecated:` notice first. elephc has no
     /// runtime deprecation channel, so this is reported at compile time instead.
@@ -430,9 +430,9 @@ fn php_float_text(value: f64) -> String {
 /// Rewrites an argument whose parameter binding is decidable from its literal spelling alone,
 /// before EIR lowering evaluates it.
 ///
-/// This covers the two bindings that must not lower the original argument at all: a
-/// callable-name string becomes the equivalent first-class callable, and a constant bound to
-/// `int`/`float` becomes the already-coerced literal. Scalar `(string)`/`(bool)` bindings are
+/// A constant bound to `int`/`float` becomes the already-coerced literal. Callable-name strings
+/// retain their spelling until argument lowering can preserve their non-object identity.
+/// Scalar `(string)`/`(bool)` bindings are
 /// applied to the lowered *value* instead (see `coerce_scalar_arg_to_param_storage`), because
 /// they must also fire for runtime values whose type is only known after lowering.
 ///
@@ -443,9 +443,6 @@ pub(crate) fn rewrite_literal_param_binding(expected: &PhpType, arg: &Expr) -> O
     let actual = literal_php_type(&arg.kind)?;
     match classify_param_binding(expected, &actual, arg) {
         ParamBinding::Const(kind) => Some(Expr::new(kind, arg.span)),
-        ParamBinding::Callable(target) => {
-            Some(Expr::new(ExprKind::FirstClassCallable(target), arg.span))
-        }
         _ => None,
     }
 }

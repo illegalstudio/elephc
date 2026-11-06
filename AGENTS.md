@@ -208,7 +208,8 @@ at runtime.
 `curl` is the first ordinary bridge crate that ALSO needs a managed native
 package: `--with-curl` (or ordinary detection
 of a `curl_*` call, via `src/curl_prelude/detect.rs`) force-links `elephc_curl`, and `src/pipeline/backend.rs`
-mirrors that into `NativeRequirement::package("curl")` so the final link also
+mirrors that into `NativeRequirement::package("curl")` (from the
+`BRIDGE_NATIVE_PACKAGES` table in `src/linker/native_packages.rs`) so the final link also
 resolves the managed `curl` package's `libcurl.a`, plus the `openssl`/`zlib`
 archives it declares as dependencies, in the fixed order
 `libcurl.a -> libssl.a -> libcrypto.a -> libz.a`. There is no system fallback:
@@ -229,6 +230,12 @@ for libxml2's encoding handlers through the entry's
 `BridgeStaticlib.apple_libraries`; glibc provides iconv from libc. `libxml2`
 has no catalog dependencies, and a missing package fails closed with the
 `elephc native add libxml2` recovery, never a `-lxml2`.
+
+`gmp`, `fileinfo` (`libmagic`) and `openssl` (`openssl-crypto`) follow the same
+shape. Every bridge-to-package pairing lives only in `BRIDGE_NATIVE_PACKAGES`,
+whose order is the final link order; `--print-capabilities` reports each pairing
+as a `native:<package>` field, and the release probe adds exactly those packages,
+so a new pairing needs no edit in `scripts/verify-release-artifact.sh`.
 
 ### Codegen layout
 

@@ -2583,6 +2583,26 @@ echo $a, "|", $b, "|", strlen($a), strlen($b);
     let _ = fs::remove_dir_all(dir);
 }
 
+/// A capture-free arrow closure passed to `array_map()` uses the direct callback entry path,
+/// while a capturing closure and an explicitly typed closure keep the descriptor path. All
+/// three must produce identical elements.
+#[test]
+fn test_array_map_capture_free_and_capturing_callbacks_match() {
+    let out = compile_and_run(
+        r#"<?php
+$a = range(1, 10);
+$k = 5;
+echo implode(",", array_map(fn($x) => $x + 1, $a)), "|",
+     implode(",", array_map(fn($x) => $x + $k, $a)), "|",
+     implode(",", array_map(fn(int $x): int => $x * 2, $a)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2,3,4,5,6,7,8,9,10,11|6,7,8,9,10,11,12,13,14,15|2,4,6,8,10,12,14,16,18,20\n"
+    );
+}
+
 /// Verifies an untyped arrow fn passed to a `callable` parameter accepts a string argument and
 /// feeds it to a string builtin: an untyped parameter is `mixed`, never an `int` placeholder.
 #[test]

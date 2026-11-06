@@ -13,6 +13,7 @@
 mod archive_dedup;
 mod bridges;
 mod command;
+mod native_packages;
 mod pdo;
 mod sdk;
 
@@ -150,6 +151,11 @@ pub(crate) fn crate_flag_names() -> Vec<&'static str> {
 /// Maps a `--with-<flag>` suffix to the archive filename it resolves to.
 pub(crate) fn archive_filename_for_flag(flag: &str) -> Option<String> {
     bridges::archive_filename_for_flag(flag)
+}
+
+/// Returns the managed native packages a planned library set needs, in link order.
+pub(crate) fn native_packages_for_libraries(link_libraries: &[String]) -> Vec<&'static str> {
+    native_packages::native_packages_for_libraries(link_libraries)
 }
 
 /// Returns bridge library/flag pairs present in one planned named-library set.

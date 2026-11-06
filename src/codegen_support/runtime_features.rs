@@ -5,6 +5,7 @@
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` before runtime-cache preparation.
+//! - `crate::cli::capability_report` for the native packages a forced capability needs.
 //!
 //! Key details:
 //! - Direct `preg_*` calls and emitted regex iterator classes both enable regex
@@ -203,6 +204,26 @@ pub fn runtime_features_for_program_and_classes(
     classes: &HashMap<String, ClassInfo>,
 ) -> RuntimeFeatures {
     runtime_features_for_program_and_classes_opt(program, Some(classes))
+}
+
+/// Turns on the runtime features a `--with-<flag>` capability forces.
+///
+/// Dynamic source is opaque to AOT feature detection, so these flags enable the
+/// runtime families and their native requirements explicitly: `regex` the PCRE2
+/// runtime (which eval setup then registers with Magician), and `mbstring` the
+/// multibyte, `mb_ereg*`, and MIME families. Bridge-only flags change nothing
+/// here. The backend applies this to compiled programs and `--print-capabilities`
+/// applies it to report each flag's managed native packages.
+pub fn force_runtime_features_for_flag(features: &mut RuntimeFeatures, flag: &str) {
+    match flag {
+        "regex" => features.regex = true,
+        "mbstring" => {
+            features.mbstring = true;
+            features.mbregex = true;
+            features.mbstring_mime = true;
+        }
+        _ => {}
+    }
 }
 
 /// Returns typed final-link requirements for the selected optional runtime features.

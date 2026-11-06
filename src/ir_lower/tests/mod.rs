@@ -15,8 +15,10 @@ use crate::codegen::platform::Target;
 use crate::ir::{print_module, Terminator};
 
 mod aggregate_operand_owners;
+mod loose_comparison_batch;
 mod argument_evaluation_owners;
 mod borrowed_string_reads;
+mod mbstring_fast_semantics;
 mod buffer_element_updates;
 mod ref_local_append;
 mod string_offset_lifetime;
@@ -78,6 +80,7 @@ mod branch_conditions;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
+mod keyed_array_kernels;
 mod boxed_array_multisort;
 mod builtin_datetime_methods;
 mod eval_demand;

@@ -130,6 +130,10 @@ pub struct CheckResult {
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Closure literals whose checked source bodies contain yield, keyed by source identity.
     pub closure_generator_spans: HashSet<Span>,
+    /// Contextual PHP parameter types inferred for closure literals passed to array callbacks,
+    /// keyed by the closure expression's span. Lowering replays these hints so the compiled
+    /// closure parameter matches the element/accumulator type the checker already proved.
+    pub closure_param_hints: HashMap<Span, Vec<PhpType>>,
     /// Native array_push property decisions, scoped to the body and original place span.
     pub array_push_property_plans: HashMap<(String, Span), ArrayPushPropertyPlan>,
     /// Checked member receiver types by body scope and source node; conflicting visits are None.

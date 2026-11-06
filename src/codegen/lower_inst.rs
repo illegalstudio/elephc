@@ -312,6 +312,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayNew => arrays::lower_array_new(ctx, &inst),
         Op::ArrayLen => arrays::lower_array_len(ctx, &inst),
         Op::ArrayGet => arrays::lower_array_get(ctx, &inst, true),
+        Op::ArrayGetUnchecked => arrays::lower_array_get_unchecked(ctx, &inst),
+        Op::ArraySumInt => arrays::lower_array_sum_int(ctx, &inst),
+        Op::ArrayPushReserved => arrays::lower_array_push_reserved(ctx, &inst),
         Op::ArrayGetSilent => arrays::lower_array_get(ctx, &inst, false),
         Op::ArrayGetForWrite => arrays::lower_array_get_for_write(ctx, &inst),
         Op::ArrayIsset => builtins::lower_array_isset(ctx, &inst),
@@ -450,6 +453,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ReturnBoundaryMixedToInt => {
             mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, &inst)
         }
+        Op::PropertyBoundaryCheckedToInt => {
+            mixed_narrowing::lower_property_boundary_checked_to_int(ctx, &inst)
+        }
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, &inst),
         Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),
@@ -464,7 +470,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EvalConstantFetch => builtins::lower_eval_constant_fetch(ctx, &inst),
         Op::ClosureCapture => lower_closure_capture(ctx, &inst),
         Op::ClosureNew => lower_closure_new(ctx, &inst),
-        Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
+        Op::FirstClassCallableNew | Op::CallableValueNew => lower_first_class_callable_new(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),
         Op::ReleaseUnlessAliases => ownership::lower_release_unless_aliases(ctx, &inst),

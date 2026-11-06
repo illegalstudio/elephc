@@ -35,6 +35,32 @@ env:
   ELEPHC_PDO_LIVE_REQUIRED: '1'
 
 jobs:
+  cancel-rebuilt-queue-runs:
+    name: Cancel rebuilt merge queue runs
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The only write this job makes: cancelling the earlier merge_group runs of this workflow
+    # for the same pull request; see scripts/ci/cancel_rebuilt_queue_runs.sh.
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          sparse-checkout-cone-mode: true
+          persist-credentials: false
+
+      - name: Cancel the runs of this pull request's earlier merge groups
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_FILE: pdo-live.yml
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          RUN_ID: ${{ github.run_id }}
+        run: bash scripts/ci/cancel_rebuilt_queue_runs.sh
+
   # Chooses whether the live suites run (scripts/ci/plan_tiers.sh): `run` gates the core
   # suites and `extended` the optional-driver suites. The push to main that the merge queue
   # produces skips both, because the queue already ran them on that commit.

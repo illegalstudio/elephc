@@ -204,6 +204,8 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         } => expr_effect(subject).combine(combine_effects(cases.iter().map(|(patterns, body)| {
             combine_effects(patterns.iter().map(expr_effect)).combine(block_effect(body))
         })))
+        // Case comparison can convert an object and run a PHP warning handler.
+        .with_side_effects().with_may_throw().with_writes_globals()
         .combine(
             default
                 .as_ref()
@@ -304,7 +306,12 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             .with_may_throw(),
         ExprKind::BinaryOp { left, op, right } => {
             let operands = expr_effect(left).combine(expr_effect(right));
-            if binary_op_may_throw(op, right)
+            if matches!(op, BinOp::Eq | BinOp::NotEq)
+                && (!literal_scalar_operand(left) || !literal_scalar_operand(right))
+            {
+                // Object-to-number warnings can call a handler that mutates globals or throws.
+                operands.with_side_effects().with_may_throw().with_writes_globals()
+            } else if binary_op_may_throw(op, right)
                 || (internal_object_operators_available() && internal_arithmetic_candidate(left, op, right)) {
                 operands.with_may_throw()
             } else {

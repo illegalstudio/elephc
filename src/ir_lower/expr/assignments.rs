@@ -609,6 +609,29 @@ fn runtime_name_value_needs_boxing(
     })
 }
 
+/// Emits PHP's warning for a decrement that leaves a null local unchanged.
+fn emit_null_decrement_warning(ctx: &mut LoweringContext<'_, '_>, span: Span) {
+    let message = lower_expr(
+        ctx,
+        &Expr::new(
+            ExprKind::StringLiteral(
+                "Warning: Decrement on type null has no effect, this will change in the next major version of PHP\n"
+                    .into(),
+            ),
+            span,
+        ),
+    );
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![message.value],
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::WriteDiagnostic,
+        )),
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+}
+
 /// Lowers pre/post increment and decrement expressions.
 ///
 /// Three paths, all of which can retype the local, so all of them store a boxed Mixed:
@@ -620,7 +643,7 @@ fn runtime_name_value_needs_boxing(
 ///   (`PHP_INT_MAX + 1` becomes float).
 ///
 /// The post-forms return the value the local held before the store; the pre-forms re-read
-/// the local afterwards.
+/// the local afterwards. A null decrement warns and leaves the local unchanged.
 pub(super) fn lower_inc_dec(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -641,6 +664,15 @@ pub(super) fn lower_inc_dec(
             ctx.store_local(name, new, existing_type, Some(expr.span));
             return if post { return_old } else { ctx.load_local(name, Some(expr.span)) };
         }
+    }
+    if matches!(existing_type.codegen_repr(), PhpType::Void) {
+        if increment {
+            let one = lower_int_literal(ctx, 1, expr);
+            ctx.store_local(name, one, PhpType::Int, Some(expr.span));
+            return if post { old } else { ctx.load_local(name, Some(expr.span)) };
+        }
+        emit_null_decrement_warning(ctx, expr.span);
+        return old;
     }
     if matches!(existing_type.codegen_repr(), PhpType::Mixed | PhpType::Str) {
         let return_old = if post {

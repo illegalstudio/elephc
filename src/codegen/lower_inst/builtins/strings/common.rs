@@ -69,6 +69,27 @@ pub(super) fn lower_trim_mask_arg(
     Ok(())
 }
 
+/// Loads the PHP-visible trim function name and warning-enable flag for the mask helper.
+pub(super) fn load_trim_warning_args(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+) -> Result<()> {
+    let (label, len) = ctx.data.add_string(name.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x5", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x6", len as i64);
+            ctx.emitter.instruction("mov x7, #1");                              // enable invalid-range warnings on the mask scan
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r8", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "r9", len as i64);
+            ctx.emitter.instruction("mov r10, 1");                              // enable invalid-range warnings on the mask scan
+        }
+    }
+    Ok(())
+}
+
 /// Materializes two string operands into the runtime helper's target ABI registers.
 pub(super) fn load_binary_string_args(
     ctx: &mut FunctionContext<'_>,

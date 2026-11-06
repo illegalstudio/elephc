@@ -74,7 +74,7 @@ echo $a[0];
 echo $b[4];
 "#,
     );
-    assert_eq!(out, "1515");
+    assert_eq!(out, "1215");
 }
 
 /// Verifies that `array_push` on a COW alias does not mutate the source array.

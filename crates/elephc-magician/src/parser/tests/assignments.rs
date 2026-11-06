@@ -246,7 +246,7 @@ fn parse_fragment_accepts_bitwise_compound_assignment_source() {
         ]
     );
 }
-/// Verifies simple variable increment and decrement statements lower to StoreVar.
+/// Verifies simple variable increment and decrement statements lower to IncDecVar.
 #[test]
 fn parse_fragment_accepts_inc_dec_statement_source() {
     let program = parse_fragment(br#"$i++; ++$j; $k--; --$m;"#).expect("fragment should parse");

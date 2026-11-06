@@ -241,3 +241,20 @@ eval($code);
     assert_eq!(out.stderr.matches("Implicit conversion from float-string \"\u{b}1.5\u{b}\" to int loses precision").count(), 3, "{}", out.stderr);
     assert_eq!(out.stderr.matches("Passing null to parameter").count(), 4, "{}", out.stderr);
 }
+
+/// Verifies the literal loop-invariant token_get_all count hoist and a dynamic fallback.
+#[test]
+fn test_token_get_all_literal_count_hoist() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = "<?php echo 1;";
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= count(token_get_all($s)) + $i; }
+echo $n, "|";
+$dynamic = "<?php echo " . $argc . ";";
+echo count(token_get_all($dynamic)), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "4|5|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -119,6 +119,7 @@ fn normalize_invoker_default(
     value: ConstDefaultValue,
 ) -> Option<InvokerDefaultValue> {
     match value {
+        ConstDefaultValue::EnumCase { .. } | ConstDefaultValue::Evaluated { .. } => None,
         ConstDefaultValue::Scalar { kind, payload } => {
             Some(InvokerDefaultValue::Scalar { kind, payload })
         }

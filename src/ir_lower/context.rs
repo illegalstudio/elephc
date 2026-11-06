@@ -1065,7 +1065,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         while let Some(name) = current {
             if let Some(info) = self.classes.get(name) {
                 if let Some(value) = info.constants.get(const_name) {
-                    return Some(value.clone());
+                    return self.constant_value_in_scope(value, name);
                 }
                 current = info.parent.as_deref();
             } else {
@@ -1096,12 +1096,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             }
             if let Some(info) = self.interfaces.get(&name) {
                 if let Some(value) = info.constants.get(const_name) {
-                    return Some(value.clone());
+                    let owner = info.constant_declaring_interfaces.get(const_name)
+                        .map(String::as_str).unwrap_or(name.as_str());
+                    return self.constant_value_in_scope(value, owner);
                 }
                 queue.extend(info.parents.iter().cloned());
             }
         }
         None
+    }
+
+    /// Binds relative constant receivers before an initializer is lowered in another class.
+    fn constant_value_in_scope(&self, value: &crate::parser::ast::Expr, owner: &str) -> Option<crate::parser::ast::Expr> {
+        let parent = self.classes.get(owner).and_then(|class| class.parent.as_deref());
+        crate::types::checker::normalize_lexical_callable_default(
+            &Some(value.clone()), Some(owner), parent,
+        ).ok().flatten()
     }
 
     /// Records a constant discovered while lowering source-order `define()` calls.
@@ -3842,6 +3852,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     // Binding creates a fresh descriptor that owns its receiver capture.
                     | Op::ClosureBind
                     | Op::FirstClassCallableNew
+                    | Op::CallableValueNew
                     | Op::CallableArrayNew
                     | Op::BufferNew
                     | Op::GeneratorNew
@@ -4946,6 +4957,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Finishes capture registration while keeping emitted guards active through invocation.
     pub(crate) fn end_argument_guard_scope(&mut self) {
         self.argument_guard_scopes.pop().expect("balanced argument capture scope");
+    }
+
+    /// Guards provisional owning local views without consuming a live variable's reference.
+    /// Finalization removes these guards when the final slot lends the payload instead.
+    pub(crate) fn guard_owned_local_views(&mut self, values: &[LoweredValue], span: Span) -> Vec<ValueId> {
+        let mut guarded = Vec::new();
+        self.begin_argument_guard_scope();
+        for (index, value) in values.iter().enumerate() {
+            if self.value_is_owned_unboxed_local_load(value.value)
+                && !self.has_call_argument_guard(value.value)
+            {
+                self.guard_call_argument(*value, index, span);
+                guarded.push(value.value);
+            }
+        }
+        self.end_argument_guard_scope();
+        guarded
     }
 
     /// Protects a captured argument in PHP parameter order until normal release or unwinding.
