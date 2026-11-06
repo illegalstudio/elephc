@@ -240,7 +240,8 @@ fn lower_array_access_offset_exists(
     index: &Expr,
     arg: &Expr,
 ) -> LoweredValue {
-    let receiver = lower_expr(ctx, array);
+    // `isset()` reads the container quietly too: an uninitialized typed property is not set.
+    let receiver = lower_subscript_receiver_silently(ctx, array);
     let args = vec![index.clone()];
     if !value_is_nullable(ctx, receiver.value) {
         return lower_method_call_with_receiver(

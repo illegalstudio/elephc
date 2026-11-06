@@ -1187,3 +1187,31 @@ echo $sum, "\n";
     );
     assert_ran_clean(&out, "1800\n");
 }
+
+/// `isset($this->p[$k])` over a typed property still uninitialized is false, not php's read error,
+/// and the same holds when the property would hold an `ArrayAccess` object. Symfony's
+/// `FormValidator::$resolvedGroups` is that shape: every form submission reached it.
+#[test]
+fn isset_of_an_offset_on_an_uninitialized_property_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+class V {
+    private \SplObjectStorage $groups;
+    private array $list;
+    public function probe(object $o): array {
+        return [isset($this->groups[$o]), isset($this->list['k'])];
+    }
+    public function fill(object $o): void {
+        $this->groups = new \SplObjectStorage();
+        $this->groups[$o] = 1;
+    }
+}
+$v = new V;
+$o = new stdClass;
+echo json_encode($v->probe($o));
+$v->fill($o);
+echo json_encode($v->probe($o));
+"#,
+    );
+    assert_eq!(out, "[false,false][true,false]");
+}
