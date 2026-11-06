@@ -5,7 +5,7 @@ The process suites use one runner and the same versioned JSON format:
 
 | Suite | Workload | Variants |
 |---|---|---|
-| `native` | Integer sum, array reads, string concatenation | elephc, PHP, equivalent C (`-O2`) |
+| `native` | Integer sum, array reads, string concatenation, substring counting | elephc, PHP, PHP+JIT, equivalent C (`-O2`) |
 | `magician` | Literal/dynamic eval, arithmetic, arrays, builtins, callables, includes | elephc native/eval, PHP native/eval |
 | `hot-path` | Equivalent position updates through different storage | elephc buffer, indexed array, associative array |
 

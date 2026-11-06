@@ -124,7 +124,7 @@ def run_case(case: dict, compiler: Path, iterations: int, warmup: int,
         cwd = Path(temporary) / directory.name
         shutil.copytree(directory, cwd)
         for label, kind, source in case["variants"]:
-            if kind == "php":
+            if kind in ("php", "php-jit"):
                 php = shutil.which("php")
                 problem = php_jit_problem(php) if php else "PHP interpreter unavailable"
                 if problem:

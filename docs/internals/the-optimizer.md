@@ -1428,7 +1428,13 @@ non-empty literal needle or `mb_ord` subject where an empty argument would
 throw, and a loop with no other global writer except the concatenation scratch
 reset. An owned `mb_substr`/`mb_strcut` result observed only by `strlen` moves
 as one group with its length observer and single release, so the loop body reads
-only the scalar length and no per-iteration allocation survives. An extra
+only the scalar length and no per-iteration allocation survives. Plain
+`substr_count()` joins the same set when both arguments are strings and the
+needle is a non-empty literal: it is byte-oriented, cannot raise, and reads no
+mbstring state, so the loop-writer restriction does not apply. Its string
+argument must consume the loaded local by value; the shared by-reference escape
+analysis records `substr_count` as such a value consumer so the local can be
+proven immutable and hoisted with the call. An extra
 observer keeps the producer and release in the loop. A numeric-entity length call
 whose map operand is the literal full decimal packed array
 `[0x80, 0x10FFFF, 0, 0x1FFFFF]` moves with the subject and map loads; the proof

@@ -194,3 +194,28 @@ echo $n;
         "a nonstandard map must keep the call in the loop:\n{body}"
     );
 }
+
+/// `substr_count()` over a single-assignment haystack and a literal non-empty
+/// needle is total and reads no mutable state, so it moves to the preheader even
+/// when the loop updates a mixed accumulator whose release conservatively writes
+/// globals.
+#[test]
+fn test_licm_hoists_invariant_substr_count_call() {
+    let source = r#"<?php
+$haystack = str_repeat("abc", 699 + $argc);
+$total = 0;
+for ($i = 0; $i < 10; $i++) { $total += substr_count($haystack, "abc"); }
+echo $total;
+"#;
+    let ir = emit_main_ir(source);
+    let (preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    assert!(
+        preheader.contains("runtime.substr_count") && preheader.contains("origin: licm"),
+        "the invariant call must be hoisted into the preheader:\n{preheader}"
+    );
+    assert!(
+        !body.contains("runtime.substr_count"),
+        "the loop body must not call substr_count:\n{body}"
+    );
+    assert_eq!(compile_and_run(source), "7000");
+}

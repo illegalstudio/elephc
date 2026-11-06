@@ -71,6 +71,7 @@ pub(super) fn is_whitelisted_target(target: RuntimeFnId) -> bool {
             | RuntimeFnId::MbConvertKana
             | RuntimeFnId::MbEncodeNumericentityLen
             | RuntimeFnId::MbDecodeNumericentityLen
+            | RuntimeFnId::SubstrCount
     )
 }
 
@@ -95,7 +96,9 @@ pub(super) fn is_hoistable_mbstring_call(
     {
         return false;
     }
-    if !loop_writes_no_mbstring_state(function, inst_id, loop_ref) {
+    if target != RuntimeFnId::SubstrCount
+        && !loop_writes_no_mbstring_state(function, inst_id, loop_ref)
+    {
         return false;
     }
     let string_arg = |index: usize| string_arg(function, inst, index);
@@ -146,6 +149,9 @@ pub(super) fn is_hoistable_mbstring_call(
         | RuntimeFnId::MbStrwidth
         | RuntimeFnId::MbCheckEncoding => {
             inst.operands.len() == 2 && string_arg(0) && encoding_arg(1)
+        }
+        RuntimeFnId::SubstrCount => {
+            inst.operands.len() == 2 && string_arg(0) && nonempty_literal(1)
         }
         RuntimeFnId::MbSubstrCount => {
             inst.operands.len() == 3
