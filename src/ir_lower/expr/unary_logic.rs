@@ -209,17 +209,38 @@ pub(super) fn lower_logical_binary(
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 
-/// Lowers non-short-circuiting PHP logical `xor`.
+/// Lowers eager PHP logical `xor`, preserving native boolean handlers and operand owners.
 pub(super) fn lower_logical_xor(
     ctx: &mut LoweringContext<'_, '_>,
     left: &Expr,
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let lhs = lower_expr(ctx, left);
-    let lhs = lower_truthy_bool(ctx, lhs, Some(left.span));
-    let rhs = lower_expr(ctx, right);
-    let rhs = lower_truthy_bool(ctx, rhs, Some(right.span));
+    let native_boolean = ctx.classes.keys().any(|name|
+        elephc_builtin_contract::lookup_class(name)
+            .and_then(|class| class.operators).and_then(|operators| operators.boolean).is_some());
+    let (lhs, rhs) = if native_boolean {
+        // XOR evaluates both operands before either native conversion can throw.
+        let lhs = lower_expr(ctx, left);
+        let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, right, left.span);
+        let rhs = lower_expr(ctx, right);
+        let (rhs, right_pins) = object_operators::capture_left_operand(ctx, rhs, expr, right.span);
+        let left_input = pinned_transfer_owner(ctx, &left_pins, left.span).unwrap_or(lhs);
+        let right_input = pinned_transfer_owner(ctx, &right_pins, right.span).unwrap_or(rhs);
+        let lhs = ctx.truthy(left_input, Some(left.span));
+        let lhs = lower_truthy_bool(ctx, lhs, Some(left.span));
+        let rhs = ctx.truthy(right_input, Some(right.span));
+        let rhs = lower_truthy_bool(ctx, rhs, Some(right.span));
+        release_pinned_in_flight_owners(ctx, right_pins, right.span);
+        release_pinned_in_flight_owners(ctx, left_pins, left.span);
+        (lhs, rhs)
+    } else {
+        let lhs = lower_expr(ctx, left);
+        let lhs = lower_truthy_bool(ctx, lhs, Some(left.span));
+        let rhs = lower_expr(ctx, right);
+        let rhs = lower_truthy_bool(ctx, rhs, Some(right.span));
+        (lhs, rhs)
+    };
     ctx.emit_value(
         Op::ICmp,
         vec![lhs.value, rhs.value],
