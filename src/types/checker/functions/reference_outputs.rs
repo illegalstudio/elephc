@@ -222,16 +222,17 @@ impl Checker {
         actual: &PhpType,
         call_span: Span,
         env: &TypeEnv,
-    ) {
+    ) -> Result<(), crate::errors::CompileError> {
         // A narrowed value can still occupy a nullable or union slot. Use that slot for
         // layout decisions and restore its full view after a callee can write through it.
         let array_value = actual.is_php_array()
             || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. });
         let guarded_storage = self.guarded_local_storage_type(arg, env).cloned();
-        if guarded_storage.is_none()
-            && self.nullable_reference_keeps_concrete_storage(expected, actual, arg)
-        {
-            return;
+        let keeps_concrete = guarded_storage.is_none()
+            && self.nullable_reference_keeps_concrete_storage(expected, actual, arg);
+        self.record_declared_reference_binding(arg, expected, keeps_concrete, call_span)?;
+        if keeps_concrete {
+            return Ok(());
         }
         let actual = guarded_storage.as_ref().unwrap_or(actual);
         let output_ty = if expected.is_php_array()
@@ -251,10 +252,10 @@ impl Checker {
         } else if let Some(storage) = guarded_storage {
             storage
         } else {
-            return;
+            return Ok(());
         };
         if !call_span.identifies_a_node() {
-            return;
+            return Ok(());
         }
         let mut arg = arg;
         while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
@@ -276,10 +277,10 @@ impl Checker {
                     root = array;
                 }
                 let ExprKind::Variable(name) = &root.kind else {
-                    return;
+                    return Ok(());
                 };
                 let Some(root_ty) = env.get(name) else {
-                    return;
+                    return Ok(());
                 };
                 let widened = match root_ty.codegen_repr() {
                     PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
@@ -287,16 +288,60 @@ impl Checker {
                         key,
                         value: Box::new(PhpType::Mixed),
                     },
-                    _ => return,
+                    _ => return Ok(()),
                 };
                 (name, widened)
             }
-            _ => return,
+            _ => return Ok(()),
         };
         self.boxed_reference_outputs
             .entry((self.current_loop_storage_scope.clone(), call_span))
             .or_default()
             .insert(name.clone(), output_ty);
+        Ok(())
+    }
+
+    /// Records how a declared-type local is bound to by-reference parameter `expected` in the
+    /// call at `call_span`, and rejects the call once the same local is bound both through a
+    /// boxed writeback cell (a nullable parameter keeping its typed slot) and by its direct
+    /// typed address (a concrete parameter): the two cannot alias, so a write through one
+    /// would be lost to the other, where php shares one reference.
+    fn record_declared_reference_binding(
+        &mut self,
+        arg: &Expr,
+        expected: &PhpType,
+        through_cell: bool,
+        call_span: Span,
+    ) -> Result<(), crate::errors::CompileError> {
+        let mut bare = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &bare.kind {
+            bare = value;
+        }
+        let ExprKind::Variable(name) = &bare.kind else {
+            return Ok(());
+        };
+        if !call_span.identifies_a_node() || !self.typed_local_names.contains_key(name) {
+            return Ok(());
+        }
+        let direct = !through_cell
+            && !matches!(expected.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar);
+        let entry = self
+            .declared_reference_bindings
+            .entry((self.current_loop_storage_scope.clone(), call_span))
+            .or_default()
+            .entry(name.clone())
+            .or_insert((false, false));
+        entry.0 |= through_cell;
+        entry.1 |= direct;
+        if entry.0 && entry.1 {
+            return Err(crate::errors::CompileError::new(
+                arg.span,
+                &format!(
+                    "${name} is passed by reference to a nullable parameter and to a typed parameter of the same call; elephc cannot share one reference between them, pass a separate variable to one of them"
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// Returns whether this call has already approved boxing the same local for an earlier slot.

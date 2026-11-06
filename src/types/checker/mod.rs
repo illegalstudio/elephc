@@ -476,6 +476,10 @@ pub(crate) struct Checker {
     /// Caller locals converted to canonical boxed storage by a validated by-reference call.
     /// Scoped call sites keep recursive signature checking from changing another body's env.
     pub boxed_reference_outputs: HashMap<(String, Span), HashMap<String, PhpType>>,
+    /// Per scoped call site: how each declared-type local passed by reference is bound, as
+    /// (through a boxed writeback cell, by its direct typed address). Both in one call cannot
+    /// alias, so `record_boxed_reference_output` rejects that combination.
+    pub declared_reference_bindings: HashMap<(String, Span), HashMap<String, (bool, bool)>>,
     /// Argument sites where the checker authorized widening an ordinary local to a Mixed cell.
     /// EIR lowering consumes this instead of inferring permission from a broad builtin signature.
     pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,

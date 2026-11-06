@@ -514,7 +514,7 @@ impl Checker {
                             &ty,
                             span,
                             caller_env,
-                        );
+                        )?;
                     }
                     if !proven_callable_array {
                         self.require_bound_param_arg_type(
@@ -561,7 +561,7 @@ impl Checker {
                         &ty,
                         span,
                         caller_env,
-                    );
+                    )?;
                 }
                 param_types.push((decl.params[arg_idx].clone(), storage_ty));
                 arg_idx += 1;

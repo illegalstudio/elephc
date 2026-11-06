@@ -270,7 +270,7 @@ impl Checker {
                             &output, &actual, arg, env, can_widen_local,
                             &format!("Builtin '{}'", name),
                         )?;
-                        self.record_boxed_reference_output(arg, &output, &actual, span, env);
+                        self.record_boxed_reference_output(arg, &output, &actual, span, env)?;
                     }
                     continue;
                 }

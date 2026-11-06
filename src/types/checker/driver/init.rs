@@ -144,6 +144,7 @@ impl Checker {
             local_value_read_types: HashMap::new(),
             member_receiver_analysis_scopes: Vec::new(),
             boxed_reference_outputs: HashMap::new(),
+            declared_reference_bindings: HashMap::new(),
             boxed_reference_promotion_sites: HashMap::new(),
             first_class_builtin_call_types: HashMap::new(),
             loop_storage_types: HashMap::new(),

@@ -593,6 +593,17 @@ fn test_error_declared_typed_hash_array_by_ref_requires_boxed_storage() {
     );
 }
 
+/// A declared-type local passed by reference both to a nullable parameter (through a boxed
+/// writeback cell) and to a typed parameter (by its direct address) in one call cannot share
+/// one reference, so the call is rejected instead of silently losing a write.
+#[test]
+fn test_error_declared_local_split_across_nullable_and_typed_by_ref_params() {
+    expect_error(
+        "<?php function f(?float &$a, float &$b): void { $a = 2.0; $b = 3.0; } function run(): void { float $v = 1.0; f($v, $v); echo $v; } run();",
+        "is passed by reference to a nullable parameter and to a typed parameter of the same call",
+    );
+}
+
 /// Mixed-local widening does not relabel an existing concrete reference set.
 #[test]
 fn test_error_mixed_by_ref_shared_scalar_cell_still_requires_boxed_storage() {

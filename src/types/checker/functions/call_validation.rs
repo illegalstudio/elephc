@@ -296,7 +296,7 @@ impl Checker {
             actual_ty,
             call_span,
             caller_env,
-        );
+        )?;
         self.record_reference_alias_root(arg);
         Ok(())
     }
@@ -932,7 +932,7 @@ impl Checker {
                             &actual_ty,
                             span,
                             caller_env,
-                        );
+                        )?;
                     }
                     // `strict_types` applies to every declared parameter type, including the
                     // closure and first-class-callable surfaces that stay off the coercive
