@@ -160,7 +160,7 @@ pub(super) fn lower_static_switch_dispatch(
 /// Only pairs of PHP integers use `ICmp`. All other pairs use `Op::LooseEq` so
 /// bool, null, array, object and numeric-string comparisons retain their PHP rules.
 ///
-/// Each label that matches branches to its own `switch.match` block, whose edge records the
+/// Each label that matches branches to its own `switch.matched` block, whose edge records the
 /// facts as of that label: a label's expression may assign a local that a later label changes.
 pub(super) fn lower_dynamic_switch_dispatch(
     ctx: &mut LoweringContext<'_, '_>,
@@ -222,7 +222,7 @@ pub(super) fn lower_dynamic_switch_dispatch(
                     Op::StrictEq.default_effects(),
                     Some(case_expr.span),
                 );
-                let matched_block = ctx.builder.create_named_block("switch.match", Vec::new());
+                let matched_block = ctx.builder.create_named_block("switch.matched", Vec::new());
                 let miss_block = ctx.builder.create_named_block("switch.next", Vec::new());
                 ctx.builder.terminate(Terminator::CondBr {
                     cond: matched.value,
@@ -298,7 +298,7 @@ pub(super) fn lower_dynamic_switch_dispatch(
                 // and keeps it when widening makes the reload an owning conversion.
                 crate::ir_lower::ownership::release_if_owned(ctx, subject, Some(case_expr.span));
             }
-            let matched_block = ctx.builder.create_named_block("switch.match", Vec::new());
+            let matched_block = ctx.builder.create_named_block("switch.matched", Vec::new());
             let miss_block = ctx.builder.create_named_block("switch.next", Vec::new());
             ctx.builder.terminate(Terminator::CondBr {
                 cond: matched.value,
