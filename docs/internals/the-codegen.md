@@ -244,7 +244,9 @@ store writes the tag and payload into that cell instead of boxing on the heap.
 Re-entering the loop rewrites the same cell, because every read of the slot copies its
 payload before the next store. An explicit `mixed_box` of a raw integer or float,
 such as a guarded counter's exit publication, is a cell producer when the local is
-its only owner. A guarded entry's tag test reads its seed in the same block as the
+its only owner. So is an `acquire` that boxes a raw scalar, which appears when range
+analysis narrows a checked producer it retained (`$j = $i - 1` into an `int|float`
+counter). A guarded entry's tag test reads its seed in the same block as the
 payload copy. Nested loops with field-seeded counters therefore allocate nothing
 per loop entry.
 Private slots in the executable main frame use the same lifetime proof; globals

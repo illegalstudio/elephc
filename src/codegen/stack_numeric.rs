@@ -377,6 +377,7 @@ impl Proof<'_> {
                 return false;
             };
             match inst.op {
+                Op::Acquire if numeric_box(self.function, inst) => return true,
                 Op::Acquire if inst.immediate.is_none() => {
                     let Some(&source) = inst.operands.first() else {
                         return false;
@@ -490,9 +491,15 @@ fn checked(op: Op) -> bool {
     matches!(op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
 }
 
-/// Recognizes an explicit Mixed box of a raw integer or float, such as a guarded exit seed.
+/// Recognizes a Mixed box of a raw integer or float, such as a guarded exit seed.
+///
+/// An `acquire` boxes too when range analysis has narrowed the checked producer it retained to a
+/// raw scalar (`$j = $i - 1` into an `int|float` local): its lowering allocates the same cell.
 pub(super) fn numeric_box(function: &Function, inst: &crate::ir::Instruction) -> bool {
-    inst.op == Op::MixedBox
+    (inst.op == Op::MixedBox
+        || (inst.op == Op::Acquire
+            && inst.immediate.is_none()
+            && inst.result_type == IrType::Heap(IrHeapKind::Mixed)))
         && inst.operands.len() == 1
         && function
             .value(inst.operands[0])
