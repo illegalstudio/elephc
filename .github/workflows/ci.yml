@@ -267,6 +267,17 @@ jobs:
           restore-keys: |
             libxml2-native-macos-aarch64-
 
+      - name: Cache managed native ICU
+        # tests/codegen/intl fixtures link the elephc_intl bridge against the
+        # managed ICU package (see tests/codegen/support/intl_native.rs). Keyed on
+        # the committed lock plus the recipe and shim sources that decide what is built.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: icu-native-macos-aarch64-${{ hashFiles('examples/intl/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/icu.rs', 'src/native_deps/recipes/elephc_icu_intl_shim.cpp', 'src/native_deps/recipes/elephc_icu_intl_shim.h', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            icu-native-macos-aarch64-
+
       - name: Cache managed native gmp
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
         # committed lock plus the recipe sources that decide what gets built.
@@ -285,6 +296,14 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native ICU
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/intl/elephc.lock build from source.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/intl/elephc.toml
 
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this
@@ -483,6 +502,17 @@ jobs:
           restore-keys: |
             libxml2-native-linux-x86_64-
 
+      - name: Cache managed native ICU
+        # tests/codegen/intl fixtures link the elephc_intl bridge against the
+        # managed ICU package (see tests/codegen/support/intl_native.rs). Keyed on
+        # the committed lock plus the recipe and shim sources that decide what is built.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: icu-native-linux-x86_64-${{ hashFiles('examples/intl/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/icu.rs', 'src/native_deps/recipes/elephc_icu_intl_shim.cpp', 'src/native_deps/recipes/elephc_icu_intl_shim.h', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            icu-native-linux-x86_64-
+
       - name: Cache managed native gmp
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
         # committed lock plus the recipe sources that decide what gets built.
@@ -501,6 +531,14 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native ICU
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/intl/elephc.lock build from source.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/intl/elephc.toml
 
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this
@@ -691,6 +729,17 @@ jobs:
           restore-keys: |
             libxml2-native-linux-aarch64-
 
+      - name: Cache managed native ICU
+        # tests/codegen/intl fixtures link the elephc_intl bridge against the
+        # managed ICU package (see tests/codegen/support/intl_native.rs). Keyed on
+        # the committed lock plus the recipe and shim sources that decide what is built.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: icu-native-linux-aarch64-${{ hashFiles('examples/intl/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/icu.rs', 'src/native_deps/recipes/elephc_icu_intl_shim.cpp', 'src/native_deps/recipes/elephc_icu_intl_shim.h', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            icu-native-linux-aarch64-
+
       - name: Cache managed native gmp
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
         # committed lock plus the recipe sources that decide what gets built.
@@ -709,6 +758,14 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native ICU
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/intl/elephc.lock build from source.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/intl/elephc.toml
 
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this
@@ -1372,6 +1429,17 @@ jobs:
           restore-keys: |
             libxml2-native-macos-aarch64-
 
+      - name: Cache managed native ICU
+        # tests/codegen/intl fixtures link the elephc_intl bridge against the
+        # managed ICU package (see tests/codegen/support/intl_native.rs). Keyed on
+        # the committed lock plus the recipe and shim sources that decide what is built.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: icu-native-macos-aarch64-${{ hashFiles('examples/intl/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/icu.rs', 'src/native_deps/recipes/elephc_icu_intl_shim.cpp', 'src/native_deps/recipes/elephc_icu_intl_shim.h', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            icu-native-macos-aarch64-
+
       - name: Extract test archive
         # The same nextest archive that carries the codegen_tests binary also carries
         # target/debug/elephc (see the archive notes in .config/nextest.toml); the
@@ -1392,6 +1460,14 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native ICU
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/intl/elephc.lock build from source.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/intl/elephc.toml
 
       - name: Cache managed native gmp
         # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
@@ -1437,6 +1513,7 @@ jobs:
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_INTL_NATIVE: "1"
         run: |
           "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -1495,6 +1572,17 @@ jobs:
           restore-keys: |
             libxml2-native-linux-x86_64-
 
+      - name: Cache managed native ICU
+        # tests/codegen/intl fixtures link the elephc_intl bridge against the
+        # managed ICU package (see tests/codegen/support/intl_native.rs). Keyed on
+        # the committed lock plus the recipe and shim sources that decide what is built.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: icu-native-linux-x86_64-${{ hashFiles('examples/intl/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/icu.rs', 'src/native_deps/recipes/elephc_icu_intl_shim.cpp', 'src/native_deps/recipes/elephc_icu_intl_shim.h', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            icu-native-linux-x86_64-
+
       - name: Extract test archive
         # The same nextest archive that carries the codegen_tests binary also carries
         # target/debug/elephc (see the archive notes in .config/nextest.toml); the
@@ -1515,6 +1603,14 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native ICU
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/intl/elephc.lock build from source.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/intl/elephc.toml
 
       - name: Cache managed native gmp
         # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
@@ -1560,6 +1656,7 @@ jobs:
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_INTL_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -1618,6 +1715,17 @@ jobs:
           restore-keys: |
             libxml2-native-linux-aarch64-
 
+      - name: Cache managed native ICU
+        # tests/codegen/intl fixtures link the elephc_intl bridge against the
+        # managed ICU package (see tests/codegen/support/intl_native.rs). Keyed on
+        # the committed lock plus the recipe and shim sources that decide what is built.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: icu-native-linux-aarch64-${{ hashFiles('examples/intl/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/icu.rs', 'src/native_deps/recipes/elephc_icu_intl_shim.cpp', 'src/native_deps/recipes/elephc_icu_intl_shim.h', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            icu-native-linux-aarch64-
+
       - name: Extract test archive
         # The same nextest archive that carries the codegen_tests binary also carries
         # target/debug/elephc (see the archive notes in .config/nextest.toml); the
@@ -1638,6 +1746,14 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native ICU
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/intl/elephc.lock build from source.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/intl/elephc.toml
 
       - name: Cache managed native gmp
         # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
@@ -1683,6 +1799,7 @@ jobs:
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_INTL_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
