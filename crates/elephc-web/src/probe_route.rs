@@ -42,6 +42,15 @@ type TraceFn = unsafe extern "C" fn(*const u8, usize, *const u8, usize);
 type RequestFn = unsafe extern "C" fn(u32);
 type VerifyFn = unsafe extern "C" fn(*const u8, usize) -> u32;
 
+/// Whether the sampling probe is linked into this binary.
+///
+/// Callers use this to skip building a route label at all: shaping the path is
+/// pure overhead when no probe will consume it, and a production binary has no
+/// probe.
+pub fn active() -> bool {
+    resolve().is_some()
+}
+
 /// The route-tagging function, or `None` when the slot is empty because the
 /// binary was built without the probe.
 fn resolve() -> Option<SetRouteFn> {

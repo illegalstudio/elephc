@@ -75,13 +75,18 @@ fn inject_on_compiler_stack(
 ) -> Program {
     let program = super::lift_preload_to_startup(program, preload);
     let usage = super::usage::collect_environment(&program);
-    let populate_environment = autoload_observes_environment
-        || super::environment::is_observable(&program, &usage);
+    let superglobals = super::superglobal_needs(&program, &usage);
+    let populate_environment = autoload_observes_environment || superglobals.env;
     let needs_callable_session_handler = usage.references("session_set_save_handler")
         || usage.dynamic_function_call;
     let mut declarations_only = Vec::new();
     let mut prepare = Vec::new();
-    for statement in super::build::web_declarations_with_environment(version, ini, populate_environment) {
+    for statement in super::build::web_declarations_with_environment(
+        version,
+        ini,
+        populate_environment,
+        superglobals.request,
+    ) {
         if !needs_callable_session_handler && super::is_callable_session_handler_decl(&statement.kind) {
             continue;
         }
