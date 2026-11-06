@@ -2,7 +2,7 @@
 title: "vprintf()"
 description: "Outputs a formatted string using an array of values."
 sidebar:
-  order: 1083
+  order: 1090
 ---
 
 ## vprintf()

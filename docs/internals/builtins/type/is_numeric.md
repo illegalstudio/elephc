@@ -2,7 +2,7 @@
 title: "is_numeric() - internals"
 description: "Compiler internals for is_numeric(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1108
+  order: 1115
 ---
 
 ## `is_numeric()` - internals

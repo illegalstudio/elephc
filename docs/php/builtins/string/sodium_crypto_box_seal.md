@@ -2,7 +2,7 @@
 title: "sodium_crypto_box_seal()"
 description: "Encrypts a message anonymously to a public key (sealed box)."
 sidebar:
-  order: 1036
+  order: 1043
 ---
 
 ## sodium_crypto_box_seal()

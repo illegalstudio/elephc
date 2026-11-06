@@ -2,7 +2,7 @@
 title: "__elephc_last_error_int() - internals"
 description: "Compiler internals for __elephc_last_error_int(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1286
+  order: 1293
 ---
 
 ## `__elephc_last_error_int()` - internals

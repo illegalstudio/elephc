@@ -2,7 +2,7 @@
 title: "mb_ereg_search_regs() - internals"
 description: "Compiler internals for mb_ereg_search_regs(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 968
+  order: 975
 ---
 
 ## `mb_ereg_search_regs()` - internals

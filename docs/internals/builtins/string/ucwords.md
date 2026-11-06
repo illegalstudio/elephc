@@ -2,7 +2,7 @@
 title: "ucwords() - internals"
 description: "Compiler internals for ucwords(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1078
+  order: 1085
 ---
 
 ## `ucwords()` - internals

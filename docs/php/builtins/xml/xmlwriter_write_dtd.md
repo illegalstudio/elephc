@@ -2,7 +2,7 @@
 title: "xmlwriter_write_dtd()"
 description: "Writes a complete DTD."
 sidebar:
-  order: 1203
+  order: 1210
 ---
 
 ## xmlwriter_write_dtd()

@@ -2,7 +2,7 @@
 title: "__elephc_reflection_materialize() - internals"
 description: "Compiler internals for __elephc_reflection_materialize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1335
+  order: 1342
 ---
 
 ## `__elephc_reflection_materialize()` - internals

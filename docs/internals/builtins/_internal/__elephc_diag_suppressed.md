@@ -2,7 +2,7 @@
 title: "__elephc_diag_suppressed() - internals"
 description: "Compiler internals for __elephc_diag_suppressed(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1276
+  order: 1283
 ---
 
 ## `__elephc_diag_suppressed()` - internals

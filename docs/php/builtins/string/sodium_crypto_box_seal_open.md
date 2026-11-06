@@ -2,7 +2,7 @@
 title: "sodium_crypto_box_seal_open()"
 description: "Opens a sealed box with a keypair, returning false when it does not authenticate."
 sidebar:
-  order: 1037
+  order: 1044
 ---
 
 ## sodium_crypto_box_seal_open()

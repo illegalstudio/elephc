@@ -2,7 +2,7 @@
 title: "preg_quote() - internals"
 description: "Compiler internals for preg_quote(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1026
+  order: 1033
 ---
 
 ## `preg_quote()` - internals

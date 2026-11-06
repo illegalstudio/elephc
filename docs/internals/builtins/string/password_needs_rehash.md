@@ -2,7 +2,7 @@
 title: "password_needs_rehash() - internals"
 description: "Compiler internals for password_needs_rehash(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1024
+  order: 1031
 ---
 
 ## `password_needs_rehash()` - internals

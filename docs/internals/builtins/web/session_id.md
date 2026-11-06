@@ -2,7 +2,7 @@
 title: "session_id() - internals"
 description: "Compiler internals for session_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1132
+  order: 1139
 ---
 
 ## `session_id()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3064](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3064) (`session_id`)
+- **Lowering**: [`src/web_prelude/build.rs`:3118](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3118) (`session_id`)
 - **Function symbol**: `session_id()`
 
 

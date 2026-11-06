@@ -2,7 +2,7 @@
 title: "mb_preferred_mime_name() - internals"
 description: "Compiler internals for mb_preferred_mime_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 983
+  order: 990
 ---
 
 ## `mb_preferred_mime_name()` - internals

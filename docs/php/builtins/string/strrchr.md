@@ -2,7 +2,7 @@
 title: "strrchr()"
 description: "Returns the suffix starting at the final occurrence of the needle's first byte, or false."
 sidebar:
-  order: 1060
+  order: 1067
 ---
 
 ## strrchr()

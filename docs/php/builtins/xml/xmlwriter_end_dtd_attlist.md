@@ -2,7 +2,7 @@
 title: "xmlwriter_end_dtd_attlist()"
 description: "Ends the current DTD attribute list declaration."
 sidebar:
-  order: 1174
+  order: 1181
 ---
 
 ## xmlwriter_end_dtd_attlist()

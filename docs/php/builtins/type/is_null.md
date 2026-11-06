@@ -2,7 +2,7 @@
 title: "is_null()"
 description: "Checks whether a variable is null."
 sidebar:
-  order: 1107
+  order: 1114
 ---
 
 ## is_null()

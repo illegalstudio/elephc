@@ -2,7 +2,7 @@
 title: "password_verify()"
 description: "Verifies that a password matches a bcrypt hash."
 sidebar:
-  order: 1025
+  order: 1032
 ---
 
 ## password_verify()

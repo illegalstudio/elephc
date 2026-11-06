@@ -2,7 +2,7 @@
 title: "session_write_close()"
 description: "Writes the session data and releases the session lock."
 sidebar:
-  order: 1144
+  order: 1151
 ---
 
 ## session_write_close()

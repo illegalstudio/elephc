@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/pdo_prelude/build.rs`:7670](https://github.com/illegalstudio/elephc/blob/main/src/pdo_prelude/build.rs#L7670) (`pdo_drivers`)
+- **Lowering**: [`src/pdo_prelude/build.rs`:7680](https://github.com/illegalstudio/elephc/blob/main/src/pdo_prelude/build.rs#L7680) (`pdo_drivers`)
 - **Function symbol**: `pdo_drivers()`
 
 

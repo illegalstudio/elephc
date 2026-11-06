@@ -427,7 +427,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`stream_socket_pair()`](./builtins/io/stream_socket_pair.md) | `(int $domain, int $type, int $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_recvfrom()`](./builtins/io/stream_socket_recvfrom.md) | `(resource $socket, int $length, int $flags = 0, string $address = ''): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_sendto()`](./builtins/io/stream_socket_sendto.md) | `(resource $socket, string $data, int $flags = 0, string $address = ''): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_server()`](./builtins/io/stream_socket_server.md) | `(string $address): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_server()`](./builtins/io/stream_socket_server.md) | `(string $address, mixed $error_code = null, mixed $error_message = null, int $flags = 12, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_shutdown()`](./builtins/io/stream_socket_shutdown.md) | `(resource $stream, int $mode): bool` | `bool` | ✓ | ✓ |
 | [`stream_supports_lock()`](./builtins/io/stream_supports_lock.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_wrapper_register()`](./builtins/io/stream_wrapper_register.md) | `(string $protocol, string $class, int $flags = 0): bool` | `bool` | ✓ | ✓ |
@@ -917,6 +917,13 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`chunk_split()`](./builtins/string/chunk_split.md) | `(string $string, int $length = 76, string $separator = "\r\n"): string` | `string` | ✓ | ✓ |
 | [`count_chars()`](./builtins/string/count_chars.md) | `(string $string, int $mode = 0): array|string` | `array|string` | ✓ | ✓ |
 | [`crc32()`](./builtins/string/crc32.md) | `(string $string): int` | `int` | ✓ | ✓ |
+| [`ctype_cntrl()`](./builtins/string/ctype_cntrl.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_graph()`](./builtins/string/ctype_graph.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_lower()`](./builtins/string/ctype_lower.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_print()`](./builtins/string/ctype_print.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_punct()`](./builtins/string/ctype_punct.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_upper()`](./builtins/string/ctype_upper.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_xdigit()`](./builtins/string/ctype_xdigit.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
 | [`explode()`](./builtins/string/explode.md) | `(string $separator, string $string, int $limit = PHP_INT_MAX): array` | `array` | ✓ | ✓ |
 | [`grapheme_strrev()`](./builtins/string/grapheme_strrev.md) | `(string $string): mixed` | `mixed` | ✓ | ✓ |
 | [`gzcompress()`](./builtins/string/gzcompress.md) | `(string $data, int $level = -1): string` | `string` | ✓ | ✓ |

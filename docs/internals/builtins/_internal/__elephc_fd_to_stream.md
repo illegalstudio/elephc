@@ -2,7 +2,7 @@
 title: "__elephc_fd_to_stream() - internals"
 description: "Compiler internals for __elephc_fd_to_stream(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1277
+  order: 1284
 ---
 
 ## `__elephc_fd_to_stream()` - internals

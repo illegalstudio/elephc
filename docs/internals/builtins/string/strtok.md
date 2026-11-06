@@ -2,7 +2,7 @@
 title: "strtok() - internals"
 description: "Compiler internals for strtok(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1066
+  order: 1073
 ---
 
 ## `strtok()` - internals

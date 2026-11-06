@@ -2,7 +2,7 @@
 title: "session_destroy() - internals"
 description: "Compiler internals for session_destroy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1128
+  order: 1135
 ---
 
 ## `session_destroy()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3028](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3028) (`session_destroy`)
+- **Lowering**: [`src/web_prelude/build.rs`:3082](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3082) (`session_destroy`)
 - **Function symbol**: `session_destroy()`
 
 

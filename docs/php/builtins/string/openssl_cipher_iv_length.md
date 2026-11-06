@@ -2,7 +2,7 @@
 title: "openssl_cipher_iv_length()"
 description: "Returns the IV length for a supported cipher."
 sidebar:
-  order: 1014
+  order: 1021
 ---
 
 ## openssl_cipher_iv_length()

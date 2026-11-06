@@ -2,7 +2,7 @@
 title: "session_reset() - internals"
 description: "Compiler internals for session_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1137
+  order: 1144
 ---
 
 ## `session_reset()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3519](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3519) (`session_reset`)
+- **Lowering**: [`src/web_prelude/build.rs`:3573](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3573) (`session_reset`)
 - **Function symbol**: `session_reset()`
 
 

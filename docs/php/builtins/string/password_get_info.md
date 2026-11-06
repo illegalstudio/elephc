@@ -2,7 +2,7 @@
 title: "password_get_info()"
 description: "Returns the algorithm and options a password hash was made with."
 sidebar:
-  order: 1022
+  order: 1029
 ---
 
 ## password_get_info()

@@ -2,7 +2,7 @@
 title: "version_compare()"
 description: "Compares two PHP-standardized version number strings."
 sidebar:
-  order: 1082
+  order: 1089
 ---
 
 ## version_compare()

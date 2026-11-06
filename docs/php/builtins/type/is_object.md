@@ -2,7 +2,7 @@
 title: "is_object()"
 description: "Checks whether a variable is an object."
 sidebar:
-  order: 1109
+  order: 1116
 ---
 
 ## is_object()

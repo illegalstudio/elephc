@@ -2,7 +2,7 @@
 title: "__elephc_refl_callable_name() - internals"
 description: "Compiler internals for __elephc_refl_callable_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1330
+  order: 1337
 ---
 
 ## `__elephc_refl_callable_name()` - internals

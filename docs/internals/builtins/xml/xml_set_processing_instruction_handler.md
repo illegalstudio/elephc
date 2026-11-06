@@ -2,7 +2,7 @@
 title: "xml_set_processing_instruction_handler() - internals"
 description: "Compiler internals for xml_set_processing_instruction_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1166
+  order: 1173
 ---
 
 ## `xml_set_processing_instruction_handler()` - internals

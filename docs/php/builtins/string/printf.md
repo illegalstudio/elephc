@@ -2,7 +2,7 @@
 title: "printf()"
 description: "Outputs a formatted string."
 sidebar:
-  order: 1027
+  order: 1034
 ---
 
 ## printf()

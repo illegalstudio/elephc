@@ -2,7 +2,7 @@
 title: "str_ireplace()"
 description: "Case-insensitive version of str_replace()."
 sidebar:
-  order: 1042
+  order: 1049
 ---
 
 ## str_ireplace()

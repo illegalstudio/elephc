@@ -2,7 +2,7 @@
 title: "ini_set() - internals"
 description: "Compiler internals for ini_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1120
+  order: 1127
 ---
 
 ## `ini_set()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:4981](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L4981) (`ini_set`)
+- **Lowering**: [`src/web_prelude/build.rs`:5037](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L5037) (`ini_set`)
 - **Function symbol**: `ini_set()`
 
 

@@ -2,7 +2,7 @@
 title: "session_register_shutdown()"
 description: "Registers session_write_close() as a shutdown function."
 sidebar:
-  order: 1136
+  order: 1143
 ---
 
 ## session_register_shutdown()

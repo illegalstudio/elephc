@@ -2,7 +2,7 @@
 title: "mb_convert_kana()"
 description: "Converts Japanese width and kana according to the requested mode flags."
 sidebar:
-  order: 951
+  order: 958
 ---
 
 ## mb_convert_kana()

@@ -2,7 +2,7 @@
 title: "session_save_path() - internals"
 description: "Compiler internals for session_save_path(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1138
+  order: 1145
 ---
 
 ## `session_save_path()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3198](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3198) (`session_save_path`)
+- **Lowering**: [`src/web_prelude/build.rs`:3252](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3252) (`session_save_path`)
 - **Function symbol**: `session_save_path()`
 
 

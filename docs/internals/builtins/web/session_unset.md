@@ -2,7 +2,7 @@
 title: "session_unset() - internals"
 description: "Compiler internals for session_unset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1143
+  order: 1150
 ---
 
 ## `session_unset()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3141](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3141) (`session_unset`)
+- **Lowering**: [`src/web_prelude/build.rs`:3195](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3195) (`session_unset`)
 - **Function symbol**: `session_unset()`
 
 

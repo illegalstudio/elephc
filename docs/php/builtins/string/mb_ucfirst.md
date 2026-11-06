@@ -2,7 +2,7 @@
 title: "mb_ucfirst()"
 description: "Converts the first character to Unicode title case."
 sidebar:
-  order: 1010
+  order: 1017
 ---
 
 ## mb_ucfirst()

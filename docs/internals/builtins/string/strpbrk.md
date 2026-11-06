@@ -2,7 +2,7 @@
 title: "strpbrk() - internals"
 description: "Compiler internals for strpbrk(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1058
+  order: 1065
 ---
 
 ## `strpbrk()` - internals

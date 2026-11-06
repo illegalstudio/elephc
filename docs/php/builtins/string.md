@@ -19,6 +19,13 @@ sidebar:
 | [`chunk_split()`](./string/chunk_split.md) | `(string $string, int $length = 76, string $separator = "\r\n"): string` | `string` | ✓ | ✓ |
 | [`count_chars()`](./string/count_chars.md) | `(string $string, int $mode = 0): array|string` | `array|string` | ✓ | ✓ |
 | [`crc32()`](./string/crc32.md) | `(string $string): int` | `int` | ✓ | ✓ |
+| [`ctype_cntrl()`](./string/ctype_cntrl.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_graph()`](./string/ctype_graph.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_lower()`](./string/ctype_lower.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_print()`](./string/ctype_print.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_punct()`](./string/ctype_punct.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_upper()`](./string/ctype_upper.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_xdigit()`](./string/ctype_xdigit.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
 | [`explode()`](./string/explode.md) | `(string $separator, string $string, int $limit = PHP_INT_MAX): array` | `array` | ✓ | ✓ |
 | [`grapheme_strrev()`](./string/grapheme_strrev.md) | `(string $string): mixed` | `mixed` | ✓ | ✓ |
 | [`gzcompress()`](./string/gzcompress.md) | `(string $data, int $level = -1): string` | `string` | ✓ | ✓ |

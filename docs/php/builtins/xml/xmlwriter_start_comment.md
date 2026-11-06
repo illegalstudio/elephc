@@ -2,7 +2,7 @@
 title: "xmlwriter_start_comment()"
 description: "Starts a comment."
 sidebar:
-  order: 1189
+  order: 1196
 ---
 
 ## xmlwriter_start_comment()

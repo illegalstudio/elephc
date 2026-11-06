@@ -2,7 +2,7 @@
 title: "levenshtein() - internals"
 description: "Compiler internals for levenshtein(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 944
+  order: 951
 ---
 
 ## `levenshtein()` - internals
