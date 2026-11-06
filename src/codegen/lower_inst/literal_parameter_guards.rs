@@ -101,8 +101,9 @@ fn branch_tag(emitter: &mut Emitter, register: &str, tag: i64, label: &str) {
 #[derive(Clone, Copy)]
 enum ArgumentPrefix<'a> {
     Static(&'a str),
-    /// The invoker's name table at this frame offset, for the index the refusal pushed.
-    Table(usize),
+    /// The invoker's name table at this frame offset, for the index the refusal pushed, and
+    /// whether this module's frames can fill the Throwable's trace.
+    Table(usize, bool),
 }
 
 /// Loads the pushed parameter's prefix from `[count, mask, (name)*, (prefix)*]`.
@@ -167,7 +168,7 @@ fn refuse_loaded_type(
             abi::emit_symbol_address(emitter, ptr, &prefix_label);
             abi::emit_load_int_immediate(emitter, len, prefix_len as i64);
         }
-        ArgumentPrefix::Table(table_offset) => emit_table_prefix(emitter, table_offset),
+        ArgumentPrefix::Table(table_offset, _) => emit_table_prefix(emitter, table_offset),
     }
     abi::emit_call_label(emitter, "__rt_concat");
 
@@ -207,11 +208,11 @@ fn refuse_loaded_type(
     }
     abi::emit_call_label(emitter, "__rt_concat");
     abi::emit_call_label(emitter, "__rt_str_persist");
-    throw_type_error(emitter);
+    throw_type_error(emitter, matches!(prefix, ArgumentPrefix::Table(_, true)));
 }
 
 /// Transfers the persisted diagnostic to a compact TypeError and the standard unwinder.
-fn throw_type_error(emitter: &mut Emitter) {
+fn throw_type_error(emitter: &mut Emitter, capture_trace: bool) {
     let (ptr, len) = abi::string_result_regs(emitter);
     abi::emit_push_reg_pair(emitter, ptr, len);
     // -- construct a managed Throwable while preserving the diagnostic --
@@ -233,6 +234,12 @@ fn throw_type_error(emitter: &mut Emitter) {
             emitter.instruction(&format!(
                 "str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET
             ));
+            if capture_trace {
+                // php fills the trace at creation: Symfony's `PropertyAccessor` reads it.
+                abi::emit_push_reg(emitter, "x0");
+                abi::emit_call_label(emitter, "__rt_throwable_capture_trace");
+                abi::emit_pop_reg(emitter, "x0");
+            }
             abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
             emitter.instruction("b __rt_throw_current");                        // unwind argument owners before the PHP catch
         }
@@ -262,6 +269,11 @@ fn throw_type_error(emitter: &mut Emitter) {
             emitter.instruction(&format!(
                 "mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET
             ));
+            if capture_trace {
+                abi::emit_push_reg(emitter, "rax");
+                abi::emit_call_label(emitter, "__rt_throwable_capture_trace");
+                abi::emit_pop_reg(emitter, "rax");
+            }
             abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
             emitter.instruction("jmp __rt_throw_current");                      // unwind argument owners before the PHP catch
         }
@@ -330,10 +342,11 @@ pub(in crate::codegen) fn emit_declared_parameter_refusal(
     descriptor_offset: usize,
     table_offset: usize,
     table_reg: &str,
+    capture_trace: bool,
 ) {
     let tag_reg = abi::int_result_reg(emitter);
     let payload = crate::codegen_support::mixed_unbox_payload_reg(emitter.target);
-    let prefix = ArgumentPrefix::Table(table_offset);
+    let prefix = ArgumentPrefix::Table(table_offset, capture_trace);
     emitter.blank();
     emitter.comment("shared declared-parameter refusal");
     emitter.label_global(DECLARED_PARAMETER_REFUSAL);

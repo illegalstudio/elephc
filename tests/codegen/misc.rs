@@ -1475,3 +1475,24 @@ try {
     );
     assert_eq!(out, "NULL\nTypeError 0\n");
 }
+
+/// A call by name's `TypeError` has a trace, which Symfony's `PropertyAccessor` needs to turn it
+/// into the error the form reports.
+#[test]
+fn a_call_by_name_type_error_records_its_trace() {
+    let out = compile_and_run(
+        r#"<?php
+class D {}
+class P { public function set(D $d): void {} }
+function write(object $o, string $m): void {
+    try {
+        $o->$m(null);
+    } catch (TypeError $e) {
+        echo count($e->getTrace()) > 0 ? "trace" : "empty";
+    }
+}
+write(new P, 'set');
+"#,
+    );
+    assert_eq!(out, "trace");
+}
