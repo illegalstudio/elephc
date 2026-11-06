@@ -1433,3 +1433,45 @@ echo json_encode((array) make());
     );
     assert_eq!(out, "{\"set\":\"x\"}");
 }
+
+/// An `ArrayAccess` read answers `offsetGet()`'s value in an associative literal too: the literal
+/// was typed by the syntactic guess, `int`, and every string read back as `0`.
+#[test]
+fn an_assoc_literal_keeps_the_value_offset_get_answers() {
+    let out = compile_and_run(
+        r#"<?php
+class Opt implements ArrayAccess {
+    private array $d = ['name' => 'first', 'n' => 5];
+    public function offsetExists(mixed $o): bool { return isset($this->d[$o]); }
+    public function offsetGet(mixed $o): mixed { return $this->d[$o]; }
+    public function offsetSet(mixed $o, mixed $v): void {}
+    public function offsetUnset(mixed $o): void {}
+}
+function typed(Opt $o): array { return ['k' => $o['name'], 'n' => $o['n']]; }
+$map = static fn (ArrayAccess $o) => ['.' => $o['name']];
+echo json_encode([typed(new Opt), $map(new Opt)]);
+"#,
+    );
+    assert_eq!(out, "[{\"k\":\"first\",\"n\":5},{\".\":\"first\"}]");
+}
+
+/// A `TypeError` a call by name raises is an ordinary Throwable: `getPrevious()` answers null,
+/// where a stale layout made the chain Symfony's listeners walk fault on a wild pointer.
+#[test]
+fn a_call_by_name_type_error_is_a_complete_throwable() {
+    let out = compile_and_run(
+        r#"<?php
+class D {}
+class P { public function set(D $d): void {} }
+$p = new P;
+$m = 'set';
+try {
+    $p->$m(null);
+} catch (TypeError $e) {
+    var_dump($e->getPrevious());
+    echo get_class(new RuntimeException('wrapped', 0, $e)->getPrevious()), ' ', $e->getCode(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "NULL\nTypeError 0\n");
+}

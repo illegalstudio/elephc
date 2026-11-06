@@ -522,7 +522,10 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
             nullable_aware_branch_merge_type(&normalize_value_php_type(*element), &PhpType::Void),
         ),
         PhpType::Str => Some(PhpType::Str),
-        PhpType::Mixed | PhpType::Union(_) => Some(PhpType::Mixed),
+        // An `ArrayAccess` object answers through `offsetGet()`, of any type. The syntactic guess
+        // is `int`: `['.' => $options['first_name']]` kept `0`, the rule Symfony's repeated field
+        // maps its errors with.
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_) => Some(PhpType::Mixed),
         // A packed buffer element reads as its record address, which the checker types `ptr<T>`.
         // A scalar element keeps its own type: the syntactic fallback answers `int`, which
         // truncated a `buffer<float>` element in merges and literals.
