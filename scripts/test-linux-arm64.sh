@@ -47,7 +47,13 @@ TARGET_VOLUME="${ELEPHC_DOCKER_TARGET_VOLUME:-elephc-target-linux-arm64-$WORKTRE
 KEEP_TARGET_VOLUME="${ELEPHC_KEEP_DOCKER_TARGET_VOLUME:-0}"
 DOCKERFILE="$PROJECT_DIR/Dockerfile.test-linux-arm64"
 DOCKER_ROOT="$(docker info -f '{{.DockerRootDir}}')"
-AVAILABLE_KIB="$(df -Pk "$DOCKER_ROOT" | awk 'NR == 2 {print $4}')"
+# Docker Desktop reports a VM path (for example /var/lib/docker) that is not visible on the
+# host. Fall back to the project filesystem for the disk guard in that case.
+DOCKER_DF_ROOT="$DOCKER_ROOT"
+if ! df -Pk "$DOCKER_DF_ROOT" >/dev/null 2>&1; then
+    DOCKER_DF_ROOT="$PROJECT_DIR"
+fi
+AVAILABLE_KIB="$(df -Pk "$DOCKER_DF_ROOT" | awk 'NR == 2 {print $4}')"
 if (( AVAILABLE_KIB < MIN_FREE_KIB )); then
     echo "Docker has less than $MIN_FREE_GIB GiB free; refusing to start the test." >&2
     exit 1
