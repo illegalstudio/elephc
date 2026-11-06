@@ -1127,6 +1127,7 @@ pub(super) fn updated_array_property_assign_type(
                 checker,
                 &nonnull,
                 true,
+                instance_slot,
                 element_label,
                 index,
                 normalized_idx_ty,

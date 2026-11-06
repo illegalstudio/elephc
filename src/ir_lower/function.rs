@@ -1845,7 +1845,8 @@ fn lower_body_into_function(
             array_push_property_plans, member_receiver_types, local_value_read_types,
             boxed_reference_promotion_sites, first_class_builtin_call_types, generic_call_sites,
             loop_storage_types, string_incdec_locals, bind_kill_sites, ref_detach_sites,
-            retype_sites, mixed_storage_store_sites, loop_storage_scope.clone(), constants,
+            retype_sites, mixed_storage_store_sites, sparse_key_write_sites, promotable_arrays,
+            loop_storage_scope.clone(), constants,
             current_class.clone(), PhpType::Void, false, params, None, false,
             all_global_var_names.clone(), None, source_path.clone(), None, web,
         ));
