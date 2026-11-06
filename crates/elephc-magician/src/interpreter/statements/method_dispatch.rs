@@ -56,10 +56,12 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
             if !evaluated_args.is_empty() {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            if let Some(flags) = elephc_builtin_contract::core_attribute_flags(attribute_metadata.attribute().name()) {
+            let php_version = crate::eval_php_profile::eval_php_version();
+            if let Some(flags) = elephc_builtin_contract::core_attribute_flags(attribute_metadata.attribute().name(), php_version) {
                 let name = attribute_metadata.attribute().name();
                 if (flags as u64) & attribute_metadata.target() == 0 {
-                    return eval_throw_error(&format!("Attribute \"{name}\" cannot target this declaration"), context, values);
+                    let message = elephc_builtin_contract::core_attribute_target_error(name, attribute_metadata.target() as i64, flags);
+                    return eval_throw_error(&message, context, values);
                 }
                 if flags & elephc_builtin_contract::CORE_ATTRIBUTE_IS_REPEATABLE == 0 && attribute_metadata.is_repeated() {
                     return eval_throw_error(&format!("Attribute \"{name}\" must not be repeated"), context, values);

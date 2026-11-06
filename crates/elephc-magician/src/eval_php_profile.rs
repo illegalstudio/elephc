@@ -66,6 +66,11 @@ pub(crate) fn eval_php_version_id() -> u32 {
     EVAL_PHP_VERSION_ID.with(Cell::get)
 }
 
+/// Returns the typed profile active on the current thread.
+pub(crate) fn eval_php_version() -> elephc_builtin_contract::PhpVersion {
+    elephc_builtin_contract::PhpVersion::from_version_id(eval_php_version_id()).unwrap_or_default()
+}
+
 /// Returns `PHP_VERSION` for the profile active on the current thread.
 pub(crate) fn eval_php_version_string() -> &'static str {
     let id = eval_php_version_id();

@@ -61,7 +61,12 @@ pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;
 pub use core_functions::CORE_FUNCTION_NAMES;
 pub use core_constants::{core_environment_constant, EXECUTABLE_PATH_DEFAULT_KIND};
-pub use core_attributes::{core_attribute_flags, CORE_ATTRIBUTE_CONSTANTS, CORE_ATTRIBUTE_IS_REPEATABLE, CORE_ATTRIBUTE_TARGET_ALL};
+pub use core_attributes::{
+    core_attribute_flags, core_attribute_target_error, CORE_ATTRIBUTE_CONSTANTS, CORE_ATTRIBUTE_IS_REPEATABLE,
+    CORE_ATTRIBUTE_TARGET_ALL, CORE_ATTRIBUTE_TARGET_CLASS, CORE_ATTRIBUTE_TARGET_CLASS_CONSTANT,
+    CORE_ATTRIBUTE_TARGET_CONSTANT, CORE_ATTRIBUTE_TARGET_FUNCTION, CORE_ATTRIBUTE_TARGET_METHOD,
+    CORE_ATTRIBUTE_TARGET_NAMES, CORE_ATTRIBUTE_TARGET_PARAMETER, CORE_ATTRIBUTE_TARGET_PROPERTY,
+};
 pub use module::PhpModule;
 pub use object_operators::{
     ClassCasts, ClassOperators, ObjectArithmetic, ObjectBitwise, ObjectOrdering, ObjectShift,
