@@ -645,6 +645,22 @@ result, and the cast/release scaffolding is retired. The raw kernel shares the
 existing vector/scalar body but skips the Mixed box; a promoted map or running sum
 terminates in PHP's warned float-to-int conversion.
 
+`src/ir_lower/stmt/map_foreach_fusion.rs`, called by the same pre-lowering pass, fuses
+a value-`foreach` over the same pure map: it iterates the source with an
+unforgeable generated value local and prepends `$value = <substituted callback
+body>` to the loop body. The original loop
+variable keeps its Mixed storage, final value after exhaustion, and by-reference
+uses, so the fused loop remains a normal PHP assignment per iteration. The source
+must not be mentioned or mutated in the body, and a reference alias disqualifies it
+because PHP iterates a detached map snapshot. The callback has no side effects,
+warnings, or throws (`+`/`-`/`*` overflow promotes to float), so evaluating it at the
+top of each iteration is unobservable. The generated local is typed `int` from the
+source, and the body's checked arithmetic and accumulator stay in frame cells
+instead of allocating one heap Mixed cell per element. Array writes in the body
+must target a definitely initialized local; this keeps the fused shape from
+exposing the existing per-iteration reinitialization of `$array[] = ...` on an
+unbound name.
+
 `src/ir_lower/stmt/map_read_fusion.rs` observes a materialized `array_map()` temporary
 whose only consumers are constant-indexed reads: `$mapped = array_map(fn($v) =>
 <pure arithmetic>, $ints); echo $mapped[$k];` lowers each read to

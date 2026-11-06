@@ -40,6 +40,7 @@ use crate::span::Span;
 use crate::types::{PhpType, ThrowAccessKind};
 
 pub(crate) mod map_read_fusion;
+mod map_foreach_fusion;
 mod statement_basics;
 mod local_assignments;
 mod string_append;

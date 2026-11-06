@@ -16,6 +16,9 @@
 //!   or expression shapes fail closed instead of risking a missed use.
 //! - The same guarded substitution also rewrites a direct `array_map(...)[$key]` read, which
 //!   never materializes the temporary in the first place.
+//! - A value-`foreach` over the same pure map is delegated to the sibling
+//!   `map_foreach_fusion` module, which iterates the source with an unforgeable generated value
+//!   local and assigns the substituted callback expression to the original loop variable.
 
 use crate::names::Name;
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
@@ -37,7 +40,9 @@ pub(crate) fn fuse_map_reads(
     by_ref_params: &std::collections::HashSet<String>,
 ) {
     let aliased = aliased_locals(body, by_ref_params);
-    fuse_direct_stmts(body, env);
+    let mut fresh_foreach = 0usize;
+    let initialized = by_ref_params.clone();
+    fuse_direct_stmts(body, env, &aliased, &mut fresh_foreach, &initialized);
     fuse_block(body, env, &aliased);
 }
 
@@ -133,7 +138,7 @@ fn aliased_locals(
 }
 
 /// Returns the simple local at the root of a reference source, if any.
-fn root_local(expr: &Expr) -> Option<&str> {
+pub(super) fn root_local(expr: &Expr) -> Option<&str> {
     match &expr.kind {
         ExprKind::Variable(name) => Some(name),
         ExprKind::ArrayAccess { array, .. } => root_local(array),
@@ -144,46 +149,126 @@ fn root_local(expr: &Expr) -> Option<&str> {
     }
 }
 
+/// Marks locals this statement definitely binds when it completes.
+///
+/// Only straight-line assignments, ref assignments, array writes, and static declarations are
+/// tracked. Branches and loops may leave a name unbound, so they deliberately add nothing.
+pub(super) fn mark_definite_assignments(
+    stmt: &Stmt,
+    initialized: &mut std::collections::HashSet<String>,
+) {
+    match &stmt.kind {
+        StmtKind::Assign { name, .. } | StmtKind::TypedAssign { name, .. } => {
+            initialized.insert(name.clone());
+        }
+        StmtKind::RefAssign { target, .. } => {
+            initialized.insert(target.clone());
+        }
+        StmtKind::ArrayAssign { index, value, array } => {
+            initialized.insert(array.clone());
+            let _ = (index, value);
+        }
+        StmtKind::ArrayPush { array, value } => {
+            initialized.insert(array.clone());
+            let _ = value;
+        }
+        StmtKind::NestedArrayAssign { target, .. } => {
+            if let Some(root) = root_local(target) {
+                initialized.insert(root.to_string());
+            }
+        }
+        StmtKind::StaticVar { name, .. } => {
+            initialized.insert(name.clone());
+        }
+        StmtKind::Synthetic(body) => {
+            for stmt in body {
+                mark_definite_assignments(stmt, initialized);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Rewrites direct `array_map(...)[$key]` reads throughout the statement tree.
-fn fuse_direct_stmts(stmts: &mut [Stmt], env: &TypeEnv) {
+fn fuse_direct_stmts(
+    stmts: &mut [Stmt],
+    env: &TypeEnv,
+    aliased: &std::collections::HashSet<String>,
+    fresh_foreach: &mut usize,
+    outer_initialized: &std::collections::HashSet<String>,
+) {
+    let mut initialized = outer_initialized.clone();
     for stmt in stmts {
-        fuse_direct_stmt(stmt, env);
+        fuse_direct_stmt(stmt, env, aliased, fresh_foreach, &initialized);
+        mark_definite_assignments(stmt, &mut initialized);
     }
 }
 
 /// Rewrites direct map reads inside one statement and recurses into nested bodies.
-fn fuse_direct_stmt(stmt: &mut Stmt, env: &TypeEnv) {
+fn fuse_direct_stmt(
+    stmt: &mut Stmt,
+    env: &TypeEnv,
+    aliased: &std::collections::HashSet<String>,
+    fresh_foreach: &mut usize,
+    initialized: &std::collections::HashSet<String>,
+) {
+    let span = stmt.span;
+    let source_mode = stmt.source_mode;
+    let strict_types = stmt.strict_types;
     match &mut stmt.kind {
+        StmtKind::Foreach {
+            array,
+            key_var,
+            value_var,
+            value_by_ref,
+            body,
+        } => {
+            if !*value_by_ref {
+                super::map_foreach_fusion::try_fuse_foreach_map(
+                    array,
+                    key_var.as_deref(),
+                    value_var,
+                    body,
+                    env,
+                    aliased,
+                    span,
+                    source_mode,
+                    strict_types,
+                    fresh_foreach,
+                    initialized,
+                );
+            }
+            fuse_direct_stmts(body, env, aliased, fresh_foreach, initialized);
+        }
         StmtKind::For { body, .. }
         | StmtKind::While { body, .. }
         | StmtKind::DoWhile { body, .. }
-        | StmtKind::Foreach { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. }
-        | StmtKind::NamespaceBlock { body, .. } => fuse_direct_stmts(body, env),
+        | StmtKind::NamespaceBlock { body, .. } => fuse_direct_stmts(body, env, aliased, fresh_foreach, initialized),
         StmtKind::If {
             then_body,
             elseif_clauses,
             else_body,
             ..
         } => {
-            fuse_direct_stmts(then_body, env);
+            fuse_direct_stmts(then_body, env, aliased, fresh_foreach, initialized);
             for (_, body) in elseif_clauses {
-                fuse_direct_stmts(body, env);
+                fuse_direct_stmts(body, env, aliased, fresh_foreach, initialized);
             }
             if let Some(body) = else_body {
-                fuse_direct_stmts(body, env);
+                fuse_direct_stmts(body, env, aliased, fresh_foreach, initialized);
             }
         }
         StmtKind::Switch { subject, cases, default } => {
-            fuse_direct_expr(subject, env);
+            fuse_direct_expr(subject, env, aliased, fresh_foreach);
             for (conditions, body) in cases {
                 for condition in conditions {
-                    fuse_direct_expr(condition, env);
+                    fuse_direct_expr(condition, env, aliased, fresh_foreach);
                 }
-                fuse_direct_stmts(body, env);
+                fuse_direct_stmts(body, env, aliased, fresh_foreach, initialized);
             }
             if let Some(body) = default {
-                fuse_direct_stmts(body, env);
+                fuse_direct_stmts(body, env, aliased, fresh_foreach, initialized);
             }
         }
         StmtKind::Try {
@@ -191,12 +276,12 @@ fn fuse_direct_stmt(stmt: &mut Stmt, env: &TypeEnv) {
             catches,
             finally_body,
         } => {
-            fuse_direct_stmts(try_body, env);
+            fuse_direct_stmts(try_body, env, aliased, fresh_foreach, initialized);
             for catch in catches {
-                fuse_direct_stmts(&mut catch.body, env);
+                fuse_direct_stmts(&mut catch.body, env, aliased, fresh_foreach, initialized);
             }
             if let Some(body) = finally_body {
-                fuse_direct_stmts(body, env);
+                fuse_direct_stmts(body, env, aliased, fresh_foreach, initialized);
             }
         }
         StmtKind::Echo(value)
@@ -212,28 +297,28 @@ fn fuse_direct_stmt(stmt: &mut Stmt, env: &TypeEnv) {
         | StmtKind::ListUnpack { value, .. }
         | StmtKind::StaticVar { init: value, .. }
         | StmtKind::StaticPropertyAssign { value, .. }
-        | StmtKind::StaticPropertyArrayPush { value, .. } => fuse_direct_expr(value, env),
+        | StmtKind::StaticPropertyArrayPush { value, .. } => fuse_direct_expr(value, env, aliased, fresh_foreach),
         StmtKind::ArrayAssign { index: first, value: second, .. }
         | StmtKind::NestedArrayAssign { target: first, value: second }
         | StmtKind::StaticPropertyArrayAssign { index: first, value: second, .. } => {
-            fuse_direct_expr(first, env);
-            fuse_direct_expr(second, env);
+            fuse_direct_expr(first, env, aliased, fresh_foreach);
+            fuse_direct_expr(second, env, aliased, fresh_foreach);
         }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
-            fuse_direct_expr(object, env);
-            fuse_direct_expr(value, env);
+            fuse_direct_expr(object, env, aliased, fresh_foreach);
+            fuse_direct_expr(value, env, aliased, fresh_foreach);
         }
         StmtKind::PropertyArrayAssign { object, index, value, .. } => {
-            fuse_direct_expr(object, env);
-            fuse_direct_expr(index, env);
-            fuse_direct_expr(value, env);
+            fuse_direct_expr(object, env, aliased, fresh_foreach);
+            fuse_direct_expr(index, env, aliased, fresh_foreach);
+            fuse_direct_expr(value, env, aliased, fresh_foreach);
         }
-        StmtKind::Synthetic(body) => fuse_direct_stmts(body, env),
+        StmtKind::Synthetic(body) => fuse_direct_stmts(body, env, aliased, fresh_foreach, initialized),
         StmtKind::IfDef { then_body, else_body, .. } => {
-            fuse_direct_stmts(then_body, env);
+            fuse_direct_stmts(then_body, env, aliased, fresh_foreach, initialized);
             if let Some(body) = else_body {
-                fuse_direct_stmts(body, env);
+                fuse_direct_stmts(body, env, aliased, fresh_foreach, initialized);
             }
         }
         StmtKind::Return(None)
@@ -258,7 +343,12 @@ fn fuse_direct_stmt(stmt: &mut Stmt, env: &TypeEnv) {
 }
 
 /// Rewrites a direct map read in one expression and recurses into its subexpressions.
-fn fuse_direct_expr(expr: &mut Expr, env: &TypeEnv) {
+fn fuse_direct_expr(
+    expr: &mut Expr,
+    env: &TypeEnv,
+    aliased: &std::collections::HashSet<String>,
+    fresh_foreach: &mut usize,
+) {
     if let Some(replacement) = direct_map_read(expr, env) {
         *expr = replacement;
         return;
@@ -271,13 +361,13 @@ fn fuse_direct_expr(expr: &mut Expr, env: &TypeEnv) {
         | ExprKind::ArrayAccess { array: left, index: right }
         | ExprKind::DynamicPropertyAccess { object: left, property: right }
         | ExprKind::NullsafeDynamicPropertyAccess { object: left, property: right } => {
-            fuse_direct_expr(left, env);
-            fuse_direct_expr(right, env);
+            fuse_direct_expr(left, env, aliased, fresh_foreach);
+            fuse_direct_expr(right, env, aliased, fresh_foreach);
         }
         ExprKind::Ternary { condition, then_expr, else_expr } => {
-            fuse_direct_expr(condition, env);
-            fuse_direct_expr(then_expr, env);
-            fuse_direct_expr(else_expr, env);
+            fuse_direct_expr(condition, env, aliased, fresh_foreach);
+            fuse_direct_expr(then_expr, env, aliased, fresh_foreach);
+            fuse_direct_expr(else_expr, env, aliased, fresh_foreach);
         }
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
@@ -292,7 +382,7 @@ fn fuse_direct_expr(expr: &mut Expr, env: &TypeEnv) {
         | ExprKind::IncludeValue { path: inner, .. }
         | ExprKind::PropertyAccess { object: inner, .. }
         | ExprKind::NullsafePropertyAccess { object: inner, .. }
-        | ExprKind::InstanceOf { value: inner, .. } => fuse_direct_expr(inner, env),
+        | ExprKind::InstanceOf { value: inner, .. } => fuse_direct_expr(inner, env, aliased, fresh_foreach),
         ExprKind::FunctionCall { args, .. }
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::NewObject { args, .. }
@@ -301,7 +391,7 @@ fn fuse_direct_expr(expr: &mut Expr, env: &TypeEnv) {
         | ExprKind::NewScopedObject { args, .. }
         | ExprKind::ArrayLiteral(args) => {
             for arg in args {
-                fuse_direct_expr(arg, env);
+                fuse_direct_expr(arg, env, aliased, fresh_foreach);
             }
         }
         ExprKind::ExprCall { callee, args }
@@ -309,40 +399,42 @@ fn fuse_direct_expr(expr: &mut Expr, env: &TypeEnv) {
         | ExprKind::NewDynamicObject { class_name: callee, args, .. }
         | ExprKind::MethodCall { object: callee, args, .. }
         | ExprKind::NullsafeMethodCall { object: callee, args, .. } => {
-            fuse_direct_expr(callee, env);
+            fuse_direct_expr(callee, env, aliased, fresh_foreach);
             for arg in args {
-                fuse_direct_expr(arg, env);
+                fuse_direct_expr(arg, env, aliased, fresh_foreach);
             }
         }
         ExprKind::NullsafeDynamicMethodCall { object, method, args } => {
-            fuse_direct_expr(object, env);
-            fuse_direct_expr(method, env);
+            fuse_direct_expr(object, env, aliased, fresh_foreach);
+            fuse_direct_expr(method, env, aliased, fresh_foreach);
             for arg in args {
-                fuse_direct_expr(arg, env);
+                fuse_direct_expr(arg, env, aliased, fresh_foreach);
             }
         }
         ExprKind::ArrayLiteralAssoc(entries) => {
             for (key, value) in entries {
-                fuse_direct_expr(key, env);
-                fuse_direct_expr(value, env);
+                fuse_direct_expr(key, env, aliased, fresh_foreach);
+                fuse_direct_expr(value, env, aliased, fresh_foreach);
             }
         }
         ExprKind::Match { subject, arms, default } => {
-            fuse_direct_expr(subject, env);
+            fuse_direct_expr(subject, env, aliased, fresh_foreach);
             for (conditions, value) in arms {
                 for condition in conditions {
-                    fuse_direct_expr(condition, env);
+                    fuse_direct_expr(condition, env, aliased, fresh_foreach);
                 }
-                fuse_direct_expr(value, env);
+                fuse_direct_expr(value, env, aliased, fresh_foreach);
             }
             if let Some(default) = default {
-                fuse_direct_expr(default, env);
+                fuse_direct_expr(default, env, aliased, fresh_foreach);
             }
         }
         ExprKind::Assignment { target, value, prelude, .. } => {
-            fuse_direct_stmts(prelude, env);
-            fuse_direct_expr(target, env);
-            fuse_direct_expr(value, env);
+            // Prelude statements are a nested block whose definite-initialization state is not
+            // visible here; their direct map reads keep the ordinary lowering.
+            let _ = prelude;
+            fuse_direct_expr(target, env, aliased, fresh_foreach);
+            fuse_direct_expr(value, env, aliased, fresh_foreach);
         }
         // Closure bodies run in a nested scope whose locals are not in this environment; a
         // direct read there can still be fused by the closure's own lowering pass.
@@ -497,7 +589,7 @@ fn map_candidate(
 }
 
 /// Returns the parameter and return expression of a pure untyped single-parameter closure.
-fn closure_arithmetic(expr: &Expr) -> Option<(&str, &Expr)> {
+pub(super) fn closure_arithmetic(expr: &Expr) -> Option<(&str, &Expr)> {
     let ExprKind::Closure {
         params,
         variadic: None,
@@ -546,7 +638,7 @@ fn pure_arithmetic(expr: &Expr, param: &str) -> bool {
 }
 
 /// Copies a pure arithmetic body, replacing its parameter with the source read.
-fn substitute(expr: &Expr, param: &str, replacement: &Expr) -> Expr {
+pub(super) fn substitute(expr: &Expr, param: &str, replacement: &Expr) -> Expr {
     match &expr.kind {
         ExprKind::Variable(name) if name == param => replacement.clone(),
         ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) => expr.clone(),
@@ -791,7 +883,7 @@ fn rewrite_expr(expr: &mut Expr, candidate: &Candidate) -> Result<(), ()> {
 }
 
 /// Reports whether a statement may mention one local, conservatively.
-fn stmt_mentions(stmt: &Stmt, name: &str) -> bool {
+pub(super) fn stmt_mentions(stmt: &Stmt, name: &str) -> bool {
     match &stmt.kind {
         StmtKind::Assign { name: target, value } | StmtKind::TypedAssign { name: target, value, .. } => {
             target == name || expr_mentions(value, name)

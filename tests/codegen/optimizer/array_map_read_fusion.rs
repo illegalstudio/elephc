@@ -228,3 +228,246 @@ echo $mapped[0];
     let main = main_ir(source);
     assert_eq!(main.matches("runtime.array_map").count(), 1, "{main}");
 }
+
+/// A value-`foreach` over a pure `array_map()` iterates the source with a generated value local
+/// and assigns the substituted callback expression to the original loop variable, preserving
+/// keys without materializing the mapped array.
+#[test]
+fn test_foreach_map_pure_closure_fuses() {
+    let source = r#"<?php
+$values = range(1, 5);
+$sum = 0;
+foreach (array_map(fn($v) => $v * 2, $values) as $x) {
+    $sum += $x;
+}
+echo $sum, "|";
+$keys = [];
+$more = [7, 8];
+foreach (array_map(fn($v) => $v + 10, $more) as $k => $x) {
+    $keys[] = $k . ":" . $x;
+}
+echo implode(",", $keys);
+"#;
+    assert_eq!(compile_and_run(source), "30|0:17,1:18");
+    let main = main_ir(source);
+    assert!(!main.contains("runtime.array_map"), "{main}");
+}
+
+/// The original loop variable keeps its final mapped value and an exhausted empty source leaves
+/// it unchanged, exactly like PHP's `foreach`.
+#[test]
+fn test_foreach_map_preserves_final_value_and_empty_source() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+$x = "before";
+foreach (array_map(fn($v) => $v * 2, $values) as $x) {}
+echo $x, "|";
+$empty = [];
+$x = "kept";
+foreach (array_map(fn($v) => $v * 2, $empty) as $x) {}
+echo $x;
+"#;
+    assert_eq!(compile_and_run(source), "6|kept");
+}
+
+/// A body that writes the loop variable or passes it by reference keeps the exact per-iteration
+/// assignment semantics because the loop variable remains a real Mixed local.
+#[test]
+fn test_foreach_map_body_value_writes_and_by_reference_use() {
+    let source = r#"<?php
+function bump(&$n): void { $n += 10; }
+$values = [1, 2, 3];
+$sum = 0;
+foreach (array_map(fn($v) => $v + 1, $values) as $x) {
+    $x = $x + 100;
+    $sum += $x;
+}
+echo $sum, "|", $x, "|";
+$sum = 0;
+foreach (array_map(fn($v) => $v * 2, $values) as $x) {
+    bump($x);
+    $sum += $x;
+}
+echo $sum, "|", $x;
+"#;
+    assert_eq!(compile_and_run(source), "309|104|42|16");
+    let main = main_ir(source);
+    assert!(!main.contains("runtime.array_map"), "{main}");
+}
+
+/// An overflowing mapped value is still promoted to float before the loop body observes it.
+#[test]
+fn test_foreach_map_overflow_promotes_to_float() {
+    let source = r#"<?php
+$big = [PHP_INT_MAX];
+foreach (array_map(fn($v) => $v + 1, $big) as $x) {
+    echo gettype($x), "|", $x;
+}
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "double|9.2233720368548E+18"
+    );
+    let main = main_ir(source);
+    assert!(!main.contains("runtime.array_map"), "{main}");
+}
+
+/// An array push into a local initialized before the loop preserves the accumulated elements and
+/// still fuses the map; the destination remains a real array across iterations.
+#[test]
+fn test_foreach_map_initialized_array_push_fuses() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+$seen = [];
+foreach (array_map(fn($v) => $v * 2, $values) as $x) {
+    $seen[] = $x;
+}
+echo implode(",", $seen);
+"#;
+    assert_eq!(compile_and_run(source), "2,4,6");
+    let main = main_ir(source);
+    assert!(!main.contains("runtime.array_map"), "{main}");
+}
+
+/// A loop body that mutates the map source keeps the generic map because PHP iterates the
+/// detached mapped snapshot.
+#[test]
+fn test_foreach_map_body_source_write_keeps_generic_map() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+$sum = 0;
+foreach (array_map(fn($v) => $v * 2, $values) as $x) {
+    $values[0] = 99;
+    $sum += $x;
+}
+echo $sum;
+"#;
+    assert_eq!(compile_and_run(source), "12");
+    let main = main_ir(source);
+    assert_eq!(main.matches("runtime.array_map").count(), 1, "{main}");
+}
+
+/// A reference alias to the source keeps the generic map: a write through the alias during the
+/// body must not change later mapped values.
+#[test]
+fn test_foreach_map_aliased_source_keeps_generic_map() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+$alias = &$values;
+$sum = 0;
+foreach (array_map(fn($v) => $v * 2, $values) as $x) {
+    $alias[0] = 99;
+    $sum += $x;
+}
+echo $sum;
+"#;
+    assert_eq!(compile_and_run(source), "12");
+    let main = main_ir(source);
+    assert_eq!(main.matches("runtime.array_map").count(), 1, "{main}");
+}
+
+/// Iterating the mapped temporary by reference and a typed callback return both keep the
+/// generic map.
+#[test]
+fn test_foreach_map_by_reference_and_typed_return_keep_generic_map() {
+    let source = r#"<?php
+$values = [1, 2];
+$out = [];
+foreach (array_map(fn($v) => $v * 2, $values) as &$x) {
+    $out[] = $x;
+}
+unset($x);
+echo implode(",", $out), "|";
+foreach (array_map(fn(int $v): int => $v * 2, $values) as $x) {
+    echo $x;
+}
+"#;
+    assert_eq!(compile_and_run(source), "2,4|24");
+    let main = main_ir(source);
+    assert_eq!(main.matches("runtime.array_map").count(), 2, "{main}");
+}
+
+/// The generated iteration local never leaks into `get_defined_vars()`.
+#[test]
+fn test_foreach_map_generated_iteration_local_is_hidden() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+$sum = 0;
+foreach (array_map(fn($v) => $v * 2, $values) as $x) {
+    $sum += $x;
+}
+$keys = implode(",", array_keys(get_defined_vars()));
+echo $keys;
+"#;
+    let out = compile_and_run(source);
+    assert!(out.contains("values"), "{out}");
+    assert!(out.contains("sum"), "{out}");
+    assert!(out.contains("x"), "{out}");
+    assert!(!out.contains("foreach_map_value"), "{out}");
+}
+
+/// Compiles and runs one fixture through the CLI with an explicit EIR optimizer mode.
+fn run_with_ir_opt(source: &str, mode: &str) -> String {
+    let dir = make_cli_test_dir("elephc_map_foreach_ir_opt");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).expect("write map foreach IR-opt fixture");
+    let compiled = elephc_cli_command(&dir)
+        .arg(mode)
+        .arg(&php_path)
+        .output()
+        .expect("compile map foreach IR-opt fixture");
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let output = std::process::Command::new(dir.join("main"))
+        .output()
+        .expect("run map foreach IR-opt fixture");
+    let _ = fs::remove_dir_all(dir);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("map foreach output is UTF-8")
+}
+
+/// The fused loop produces the same output with the EIR optimizer on and off.
+#[test]
+fn test_foreach_map_ir_opt_parity() {
+    let source = r#"<?php
+$values = range(1, 100);
+$sum = 0;
+for ($i = 0; $i < 2; $i++) {
+    foreach (array_map(fn($v) => $v * 3, $values) as $x) {
+        $sum += $x;
+    }
+}
+echo $sum;
+"#;
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "30300");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "30300");
+}
+
+/// The fused loop retires its generated iteration local and every mapped value without leaks.
+#[test]
+fn test_foreach_map_heap_debug_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = range(1, 10);
+$sum = 0;
+foreach (array_map(fn($v) => $v * 3, $values) as $x) {
+    $sum += $x;
+}
+echo $sum;
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "165");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
