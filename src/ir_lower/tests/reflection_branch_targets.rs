@@ -38,6 +38,12 @@ function siblingReflectionTargets(bool $flag): void {
     if ($flag) { $class = new ReflectionClass(BranchReflectedB::class); }
     else { $class->setStaticPropertyValue('value', 'sibling'); }
 }
+function lazyReflectionTargets(bool $flag): void {
+    $class = new ReflectionClass(BranchReflectedA::class);
+    $flag ? ($class = new ReflectionClass(BranchReflectedB::class)) : $class;
+    $class->setStaticPropertyValue('value', 'lazy');
+}
+lazyReflectionTargets($argc > 1);
 unchangedReflectionTarget($argc > 1);
 equalReflectionTargets($argc > 1);
 conflictingReflectionTargets($argc > 1);
@@ -53,6 +59,7 @@ siblingReflectionTargets($argc > 1);
             ("equalReflectionTargets", vec!["BranchReflectedB::value"]),
             ("conflictingReflectionTargets", vec!["BranchReflectedA::value", "BranchReflectedB::value"]),
             ("siblingReflectionTargets", vec!["BranchReflectedA::value"]),
+            ("lazyReflectionTargets", vec!["BranchReflectedA::value", "BranchReflectedB::value"]),
         ] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
             let writes: std::collections::BTreeSet<_> = function.instructions.iter().filter(|inst|

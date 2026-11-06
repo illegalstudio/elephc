@@ -37,6 +37,24 @@ pub(crate) struct LoweredValue {
     pub ir_type: IrType,
 }
 
+/// One reachable edge into a control-flow join, deferred so the join can convert it later.
+///
+/// `if` chains, lazily evaluated expressions and `switch` statements record one per edge and
+/// reconcile them in `stmt::conditionals::finish_if_type_join`.
+#[derive(Clone)]
+pub(crate) struct IfArmExit {
+    /// Empty block filled after every sibling edge has been lowered.
+    pub tail: BlockId,
+    /// Flow-sensitive local types at the end of this edge.
+    pub types: TypeEnv,
+    /// Definitely-initialized slots at the end of this edge.
+    pub initialized: HashSet<LocalSlotId>,
+    /// Compile-time callable targets that remain valid at the end of this edge.
+    pub static_callables: HashMap<String, StaticCallableBinding>,
+    /// Reflection targets that remain valid at the end of this edge.
+    pub reflection: ReflectionBindings,
+}
+
 /// Loop-control target pair for `break` and `continue`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LoopFrame {
@@ -193,6 +211,7 @@ pub(crate) struct LoweringSnapshot {
     assigned_php_local_slots: HashSet<LocalSlotId>,
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
+    join_edge_arms: Vec<(BlockId, Vec<IfArmExit>)>,
     loop_carried_missing_strings: Vec<HashSet<String>>,
     finally_stack: Vec<FinallyFrame>,
     try_loop_depths: Vec<usize>,
@@ -429,6 +448,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
+    /// The deferred `break`/`continue` edges into each enclosing join point, innermost last,
+    /// keyed by the join block: a `switch` exit, and the exit and latch of a loop whose body
+    /// jumps (see `stmt::conditionals::LoopJumpJoins`). Each join reconciles every edge's facts
+    /// instead of keeping whichever path was lowered last.
+    pub(crate) join_edge_arms: Vec<(BlockId, Vec<IfArmExit>)>,
     /// Locals each enclosing loop assigns a value that may still be the missing-string
     /// sentinel. A cast inside the loop must see those stores even when they are lowered
     /// later in the body, because the back-edge runs them before the next iteration.
@@ -672,6 +696,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
+            join_edge_arms: Vec::new(),
             loop_carried_missing_strings: Vec::new(),
             finally_stack: Vec::new(),
             try_loop_depths: Vec::new(),
@@ -758,6 +783,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             assigned_php_local_slots: self.assigned_php_local_slots.clone(),
             constants: self.constants.clone(),
             loop_stack: self.loop_stack.clone(),
+            join_edge_arms: self.join_edge_arms.clone(),
             loop_carried_missing_strings: self.loop_carried_missing_strings.clone(),
             finally_stack: self.finally_stack.clone(),
             try_loop_depths: self.try_loop_depths.clone(),
@@ -872,6 +898,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.assigned_php_local_slots = snapshot.assigned_php_local_slots;
         self.constants = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
+        self.join_edge_arms = snapshot.join_edge_arms;
         self.loop_carried_missing_strings = snapshot.loop_carried_missing_strings;
         self.finally_stack = snapshot.finally_stack;
         self.try_loop_depths = snapshot.try_loop_depths;
@@ -1012,6 +1039,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Interns a class-name metadata string in the module data pool.
     pub(crate) fn intern_class_name(&mut self, value: &str) -> DataId {
         self.data.intern_class_name(value)
+    }
+
+    /// Returns the flow-sensitive type fact recorded for a local, if lowering has one.
+    pub(crate) fn local_type_fact(&self, name: &str) -> Option<&PhpType> {
+        self.local_types.get(name)
     }
 
     /// Returns the current known PHP type for a local or `Mixed` when unknown.
@@ -2584,6 +2616,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// BOX. Retiring the slot at its final storage type frees the box and the payload it pins,
     /// in and out of loops alike, which is why no loop or widenability guard is needed here.
     ///
+    /// A PHP local's untracked storage is not final outside loops either: an `if` join whose
+    /// arms disagree on a scalar representation boxes the local on every merge edge
+    /// (`stmt::conditionals::scalar_divergence_join`), widening the slot to `Mixed` AFTER stores
+    /// that were lowered against a scalar slot. The backend then boxes those earlier stores too,
+    /// so `$v = null; if ($c) { $v = $n; }` overwrote the boxed `null` with a boxed int and leaked
+    /// the first cell once per call (issue #771). Every overwrite of an initialized PHP local
+    /// therefore gets the deferred op, and the prune erases it wherever the slot stayed scalar.
+    /// The op cannot run user code at the point it is emitted: an untracked slot holds a scalar
+    /// on every path that reaches here, so at most the box of a scalar is freed — which is also
+    /// why `instruction_has_opaque_user_code_boundary` keeps callable facts across it.
+    ///
     /// Returns whether a `release_local_slot` was emitted. Its backend retirement stores zero
     /// over a boxed `Mixed` slot before dropping the reference, which is what lets an abandoned
     /// numeric binding skip its separate `zero_local_slot` (see
@@ -2627,6 +2670,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Replaces a call argument's representation without resetting its PHP internal array pointer.
     /// Unlike consuming array conversions, boxing retains the old payload and needs normal cleanup.
     pub(crate) fn store_call_argument_local(
+        &mut self,
+        name: &str,
+        value: LoweredValue,
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        self.store_local_impl(name, value, php_type, span, false)
+    }
+
+    /// Re-stores a local's CURRENT value in a new representation without rebinding it.
+    ///
+    /// Boxing a value into a `Mixed` cell (an `if` arm's value on its merge edge, say) keeps the
+    /// variable bound to the same array or hash, so PHP's internal pointer must survive it:
+    /// `$a = [1, 2]; next($a); if ($c) { $a = null; } current($a);` still reads `2` on the arm
+    /// that kept the array. The store otherwise follows `store_local`'s retaining contract.
+    pub(crate) fn store_local_representation(
         &mut self,
         name: &str,
         value: LoweredValue,

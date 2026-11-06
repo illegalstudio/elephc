@@ -44,8 +44,38 @@ pub(super) fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction
     // The slot's box type, so a `?ptr<T>` slot boxed for a `mixed` result reads null for 0.
     let source_ty = ctx.local_mixed_box_type(slot)?;
     let result_ty = ctx.value_php_type(result)?;
+    if pointer_slot_read_as_null(&source_ty, &result_ty)
+        && ctx.current_load_reads_stored_null(slot)
+    {
+        // A pointer slot keeps its storage when `null` is stored into it, so it now holds a zero
+        // pointer: `$o = new C; if ($c) { $o = null; }` followed by a tail DCE copied into both
+        // arms reads it back typed `null`. The null store provably reaches this load, so it
+        // materializes PHP's null sentinel. Without that proof the `null` view may be a stale
+        // fact over a live pointer, and the coercion below keeps refusing it.
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            crate::codegen::NULL_SENTINEL,
+        );
+        return ctx.store_result_value(result);
+    }
     coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
     ctx.store_result_value(result)
+}
+
+/// Returns whether a load reads pointer storage that can hold a zero pointer through a `null` view.
+fn pointer_slot_read_as_null(source_ty: &PhpType, result_ty: &PhpType) -> bool {
+    result_ty.codegen_repr() == PhpType::Void
+        && matches!(
+            source_ty.codegen_repr(),
+            PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+                | PhpType::Callable
+                | PhpType::Iterable
+                | PhpType::Packed(_)
+                | PhpType::Buffer(_)
+        )
 }
 
 /// Lowers an explicit local ref-cell load into the result register and SSA slot.

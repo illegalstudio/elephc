@@ -138,6 +138,8 @@ mod eval_demand;
 mod instanceof_operand_owners;
 mod guarded_interface_receivers;
 mod guarded_interface_mutations;
+mod if_join_divergent_locals;
+mod switch_initialization;
 mod iter_start_origin;
 mod iterator_cleanup;
 mod iterator_aggregate_owners;
