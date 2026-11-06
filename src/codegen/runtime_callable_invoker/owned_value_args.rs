@@ -41,6 +41,17 @@ pub(super) fn coerce(
             return (target.codegen_repr(), false);
         }
     }
+    if let (Some((index, _)), Some(target)) = (ctx.declared_parameter.clone(), target_ty) {
+        if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            if let Some((tags, _)) = crate::codegen::lower_inst::declared_parameter_contract(target) {
+                let labels = ctx.next_label("declared_parameter");
+                let table_reg = super::invoker_table_reg(emitter.target.arch);
+                crate::codegen::lower_inst::emit_boxed_declared_parameter_guard(
+                    emitter, index, tags, table_reg, &labels,
+                );
+            }
+        }
+    }
     if source_ty.codegen_repr() == PhpType::Mixed
         && target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Str)
     {

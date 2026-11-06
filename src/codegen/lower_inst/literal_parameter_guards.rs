@@ -48,7 +48,7 @@ pub(in crate::codegen) fn emit_boxed_literal_parameter_guard(
     for (tag, _, label) in &refusals {
         branch_tag(emitter, tag_reg, i64::from(*tag), label);
     }
-    refuse_static(emitter, data, descriptor_offset, &prefix, "mixed");
+    refuse_static(emitter, data, descriptor_offset, ArgumentPrefix::Static(&prefix), "mixed");
 
     for (tag, name, label) in refusals {
         emitter.label(&label);
@@ -59,9 +59,9 @@ pub(in crate::codegen) fn emit_boxed_literal_parameter_guard(
                 &format!("{label_prefix}_object_fallback"),
                 &format!("{label_prefix}_object_done"),
             );
-            refuse_loaded_type(emitter, data, descriptor_offset, &prefix);
+            refuse_loaded_type(emitter, data, descriptor_offset, ArgumentPrefix::Static(&prefix));
         } else {
-            refuse_static(emitter, data, descriptor_offset, &prefix, name);
+            refuse_static(emitter, data, descriptor_offset, ArgumentPrefix::Static(&prefix), name);
         }
     }
 
@@ -71,12 +71,12 @@ pub(in crate::codegen) fn emit_boxed_literal_parameter_guard(
     if null_only {
         let false_value = format!("{label_prefix}_false");
         abi::emit_branch_if_int_result_zero(emitter, &false_value);
-        refuse_static(emitter, data, descriptor_offset, &prefix, "true");
+        refuse_static(emitter, data, descriptor_offset, ArgumentPrefix::Static(&prefix), "true");
         emitter.label(&false_value);
-        refuse_static(emitter, data, descriptor_offset, &prefix, "false");
+        refuse_static(emitter, data, descriptor_offset, ArgumentPrefix::Static(&prefix), "false");
     } else {
         abi::emit_branch_if_int_result_zero(emitter, &accepted);
-        refuse_static(emitter, data, descriptor_offset, &prefix, "true");
+        refuse_static(emitter, data, descriptor_offset, ArgumentPrefix::Static(&prefix), "true");
     }
     emitter.label(&accepted);
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
@@ -97,12 +97,45 @@ fn branch_tag(emitter: &mut Emitter, register: &str, tag: i64, label: &str) {
     }
 }
 
+/// Where an argument error's `(): Argument #1 ($name) must be of type T, ` comes from.
+#[derive(Clone, Copy)]
+enum ArgumentPrefix<'a> {
+    Static(&'a str),
+    /// The invoker's name table at this frame offset, for the index the refusal pushed.
+    Table(usize),
+}
+
+/// Loads the pushed parameter's prefix from `[count, mask, (name)*, (prefix)*]`.
+fn emit_table_prefix(emitter: &mut Emitter, table_offset: usize) {
+    let (ptr, len) = abi::string_result_regs(emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(emitter, "x10", table_offset);
+            emitter.instruction("ldr x9, [sp]");                                // load the pushed parameter index
+            emitter.instruction("ldr x11, [x10]");                              // load the table's name count
+            emitter.instruction("add x9, x9, x11");                             // skip the name rows
+            emitter.instruction("add x10, x10, x9, lsl #4");                    // address this parameter's prefix row
+            emitter.instruction(&format!("ldr {ptr}, [x10, #16]"));             // load the prefix pointer
+            emitter.instruction(&format!("ldr {len}, [x10, #24]"));             // load the prefix length
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(emitter, "r10", table_offset);
+            emitter.instruction("mov r8, QWORD PTR [rsp]");                     // load the pushed parameter index
+            emitter.instruction("add r8, QWORD PTR [r10]");                     // skip the name rows
+            emitter.instruction("shl r8, 4");                                   // scale to a table row
+            emitter.instruction("add r10, r8");                                 // address this parameter's prefix row
+            emitter.instruction(&format!("mov {ptr}, QWORD PTR [r10 + 16]"));   // load the prefix pointer
+            emitter.instruction(&format!("mov {len}, QWORD PTR [r10 + 24]"));   // load the prefix length
+        }
+    }
+}
+
 /// Starts an argument error with a statically known PHP type name.
 fn refuse_static(
     emitter: &mut Emitter,
     data: &mut DataSection,
     descriptor_offset: usize,
-    prefix: &str,
+    prefix: ArgumentPrefix<'_>,
     type_name: &str,
 ) {
     let (label, len) = data.add_string(type_name.as_bytes());
@@ -117,7 +150,7 @@ fn refuse_loaded_type(
     emitter: &mut Emitter,
     data: &mut DataSection,
     descriptor_offset: usize,
-    prefix: &str,
+    prefix: ArgumentPrefix<'_>,
 ) {
     let (ptr, len) = abi::string_result_regs(emitter);
     let (right_ptr, right_len) = super::runtime_class_messages::concat_right_operand_regs(emitter);
@@ -126,11 +159,16 @@ fn refuse_loaded_type(
     abi::emit_load_int_immediate(emitter, right_len, given_len as i64);
     abi::emit_call_label(emitter, "__rt_concat");
 
-    let (prefix_label, prefix_len) = data.add_string(prefix.as_bytes());
     abi::emit_reg_move(emitter, right_ptr, ptr);
     abi::emit_reg_move(emitter, right_len, len);
-    abi::emit_symbol_address(emitter, ptr, &prefix_label);
-    abi::emit_load_int_immediate(emitter, len, prefix_len as i64);
+    match prefix {
+        ArgumentPrefix::Static(prefix) => {
+            let (prefix_label, prefix_len) = data.add_string(prefix.as_bytes());
+            abi::emit_symbol_address(emitter, ptr, &prefix_label);
+            abi::emit_load_int_immediate(emitter, len, prefix_len as i64);
+        }
+        ArgumentPrefix::Table(table_offset) => emit_table_prefix(emitter, table_offset),
+    }
     abi::emit_call_label(emitter, "__rt_concat");
 
     abi::emit_reg_move(emitter, right_ptr, ptr);
@@ -220,6 +258,99 @@ fn throw_type_error(emitter: &mut Emitter) {
             emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // initialize the previous exception
             abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
             emitter.instruction("jmp __rt_throw_current");                      // unwind argument owners before the PHP catch
+        }
+    }
+}
+
+/// The runtime tags a declared parameter takes from a boxed argument, and the name php gives it.
+///
+/// `None` leaves the declaration to the ordinary coercion: a nullable or union type accepts more
+/// than one shape, and a non-numeric string is refused where the scalar is converted.
+pub(in crate::codegen) fn declared_parameter_contract(
+    target: &crate::types::PhpType,
+) -> Option<(&'static [u8], String)> {
+    use crate::types::PhpType;
+    match target {
+        PhpType::Object(class) => {
+            let name = class.trim_start_matches('\\');
+            Some((&[6, 10], if name.is_empty() { "object".to_string() } else { name.to_string() }))
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Some((&[4, 5], "array".to_string())),
+        PhpType::Int => Some((&[0, 1, 2, 3], "int".to_string())),
+        PhpType::Float => Some((&[0, 1, 2, 3], "float".to_string())),
+        PhpType::Bool => Some((&[0, 1, 2, 3], "bool".to_string())),
+        PhpType::Str => Some((&[0, 1, 2, 3, 6], "string".to_string())),
+        _ => None,
+    }
+}
+
+/// Refuses a boxed argument its declared parameter cannot take, and leaves the box in place.
+///
+/// A direct call is checked where it is written. A call by name reaches the callee through its
+/// invoker, which only converts, so `$o->$setter(null)` used to enter the setter: Symfony's
+/// `PropertyAccessor` turns the `TypeError` php raises there into the error the form reports.
+///
+/// Bodies are shared between signatures that differ only in parameter names, so a body holds the
+/// tag test alone: the message prefix sits in the invoker's name table and the refusal is one
+/// routine for the whole program.
+pub(in crate::codegen) fn emit_boxed_declared_parameter_guard(
+    emitter: &mut Emitter,
+    index: usize,
+    accepted_tags: &[u8],
+    table_reg: &str,
+    label_prefix: &str,
+) {
+    let accepted = format!("{label_prefix}_accepted");
+    let tag_reg = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    for tag in accepted_tags {
+        branch_tag(emitter, tag_reg, i64::from(*tag), &accepted);
+    }
+    abi::emit_load_int_immediate(emitter, table_reg, index as i64);
+    abi::emit_call_label(emitter, DECLARED_PARAMETER_REFUSAL);
+    emitter.label(&accepted);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
+}
+
+/// Shared refusal: the unboxed tag and payload in their registers, the parameter index in
+/// `table_reg`, the invoker's frame still current.
+pub(in crate::codegen) const DECLARED_PARAMETER_REFUSAL: &str = "_eir_declared_parameter_refusal";
+
+/// Emits [`DECLARED_PARAMETER_REFUSAL`], once per program.
+pub(in crate::codegen) fn emit_declared_parameter_refusal(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    descriptor_offset: usize,
+    table_offset: usize,
+    table_reg: &str,
+) {
+    let tag_reg = abi::int_result_reg(emitter);
+    let payload = crate::codegen_support::mixed_unbox_payload_reg(emitter.target);
+    let prefix = ArgumentPrefix::Table(table_offset);
+    emitter.blank();
+    emitter.comment("shared declared-parameter refusal");
+    emitter.label_global(DECLARED_PARAMETER_REFUSAL);
+    abi::emit_push_reg(emitter, table_reg);
+    let arms = super::objects::RUNTIME_TAGS.iter()
+        .map(|(tag, name)| (*tag, *name, format!("{DECLARED_PARAMETER_REFUSAL}_tag_{tag}")))
+        .collect::<Vec<_>>();
+    for (tag, _, label) in &arms {
+        branch_tag(emitter, tag_reg, i64::from(*tag), label);
+    }
+    refuse_static(emitter, data, descriptor_offset, prefix, "mixed");
+    for (tag, name, label) in arms {
+        emitter.label(&label);
+        if tag == super::objects::OBJECT_TAG {
+            let fallback = data.add_string(b"object");
+            super::runtime_class_messages::emit_class_name_lookup(
+                emitter, payload, &fallback,
+                &format!("{DECLARED_PARAMETER_REFUSAL}_object_fallback"),
+                &format!("{DECLARED_PARAMETER_REFUSAL}_object_done"),
+            );
+            refuse_loaded_type(emitter, data, descriptor_offset, prefix);
+        } else {
+            refuse_static(emitter, data, descriptor_offset, prefix, name);
         }
     }
 }

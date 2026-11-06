@@ -75,7 +75,10 @@ mod runtime_array_liveness;
 mod string_write_offsets;
 mod runtime_class_messages;
 mod literal_parameter_guards;
-pub(in crate::codegen) use literal_parameter_guards::emit_boxed_literal_parameter_guard;
+pub(in crate::codegen) use literal_parameter_guards::{
+    declared_parameter_contract, emit_boxed_declared_parameter_guard, emit_boxed_literal_parameter_guard,
+    emit_declared_parameter_refusal,
+};
 mod scoped_constants;
 mod static_locals;
 mod static_properties;

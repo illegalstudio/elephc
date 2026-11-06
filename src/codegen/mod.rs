@@ -612,6 +612,14 @@ fn finalize_user_asm(
         eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
         eval_reflection_owner_helpers::emit_eval_reflection_owner_helpers(module, &mut emitter);
     }
+    let table_reg = runtime_callable_invoker::invoker_table_reg(emitter.target.arch);
+    lower_inst::emit_declared_parameter_refusal(
+        &mut emitter,
+        &mut data,
+        runtime_callable_invoker::INVOKER_DESCRIPTOR_OFFSET,
+        runtime_callable_invoker::INVOKER_TABLE_OFFSET,
+        table_reg,
+    );
     if shared.callable_argument_normalizer || eval_callable_support.argument_normalizer_needed {
         lower_inst::emit_callable_argument_normalizer(module, &mut emitter, &mut data, &mut shared)?;
     }

@@ -69,7 +69,7 @@ use crate::codegen_support::try_handlers::{
 };
 use crate::types::{FunctionSig, PhpType};
 
-const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
+pub(in crate::codegen) const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
 const INVOKER_CONCAT_OFFSET: usize = 16;
 /// Spill slot for the boxed argument container across the eval exception-boundary `setjmp`.
 const INVOKER_ARG_ARRAY_OFFSET: usize = 24;
@@ -80,7 +80,7 @@ const INVOKER_SCOPE_OFFSET: usize = 32;
 /// The stub that jumps to a shared body leaves it in [`invoker_table_reg`]; the body parks it
 /// here so the by-name argument helpers can reach it. Keeping names OUT of the body's text is
 /// what lets signatures that differ only in parameter names share one body.
-const INVOKER_TABLE_OFFSET: usize = 40;
+pub(in crate::codegen) const INVOKER_TABLE_OFFSET: usize = 40;
 /// First frame slot of the callee-saved register save area (issue #487).
 /// Placed after descriptor/concat/arg-array so the eval boundary path can reuse those slots.
 const INVOKER_SAVED_REGS_OFFSET: usize = 48;
@@ -169,6 +169,8 @@ struct InvokerEmitContext {
     defaults: InvokerDefaults,
     /// The declared literal parameter currently being decoded, before ABI coercion.
     literal_parameter: Option<(usize, String)>,
+    /// The declared parameter being bound, for the refusal php raises on a boxed argument.
+    declared_parameter: Option<(usize, String)>,
 }
 
 impl InvokerEmitContext {
@@ -191,6 +193,7 @@ impl InvokerEmitContext {
             mbstring_operation: None,
             mbstring_variable_ref_warnings: false,
             literal_parameter: None,
+            declared_parameter: None,
             normalizes_assoc: false,
         }
     }
@@ -205,6 +208,9 @@ impl InvokerEmitContext {
         self.literal_parameter = sig.params.get(index)
             .filter(|(_, ty)| sig.declared_params.get(index).copied().unwrap_or(false)
                 && matches!(ty, PhpType::False | PhpType::Void))
+            .map(|(name, _)| (index, name.clone()));
+        self.declared_parameter = sig.params.get(index)
+            .filter(|_| sig.declared_params.get(index).copied().unwrap_or(false))
             .map(|(name, _)| (index, name.clone()));
     }
 
@@ -348,7 +354,7 @@ fn print_invoker_stats(invoker: &RuntimeCallableInvoker<'_>, catch_native_throws
 ///
 /// A scratch register that neither the prologue nor a linker veneer uses: AArch64 `x16`/`x17`
 /// are the veneer registers, and the prologue builds large frame addresses in `x9`.
-fn invoker_table_reg(arch: Arch) -> &'static str {
+pub(in crate::codegen) fn invoker_table_reg(arch: Arch) -> &'static str {
     match arch {
         Arch::AArch64 => "x15",
         Arch::X86_64 => "r11",
@@ -375,6 +381,26 @@ fn emit_invoker_name_table(data: &mut DataSection, sig: &FunctionSig) -> Option<
     for (name, _) in sig.params.iter().take(visible) {
         let (label, len) = data.add_string(name.as_bytes());
         words.push(crate::codegen_support::data_section::DataWord::Symbol(label));
+        words.push(crate::codegen_support::data_section::DataWord::U64(len as u64));
+    }
+    // One prefix row per name, after them: what a boxed argument's refusal says about this
+    // parameter. Here and not in the body, which signatures differing in names share.
+    for (index, (name, ty)) in sig.params.iter().take(visible).enumerate() {
+        let declared = sig.declared_params.get(index).copied().unwrap_or(false);
+        let prefix = declared
+            .then(|| crate::codegen::lower_inst::declared_parameter_contract(ty))
+            .flatten()
+            .map(|(_, type_name)| {
+                data.add_string(
+                    format!("(): Argument #{} (${name}) must be of type {type_name}, ", index + 1)
+                        .as_bytes(),
+                )
+            });
+        let (label, len) = prefix.map_or((None, 0), |(label, len)| (Some(label), len));
+        words.push(label.map_or(
+            crate::codegen_support::data_section::DataWord::U64(0),
+            crate::codegen_support::data_section::DataWord::Symbol,
+        ));
         words.push(crate::codegen_support::data_section::DataWord::U64(len as u64));
     }
     Some(data.add_words(words))
@@ -1025,6 +1051,7 @@ fn emit_loaded_indexed_array_callback_call(
     }
 
     ctx.literal_parameter = None;
+    ctx.declared_parameter = None;
 
     if shape.hidden_argc {
         // The invoker synthesizes argc from the container length; it never consumes a user slot.
@@ -1279,6 +1306,7 @@ fn emit_loaded_assoc_array_callback_call(
     }
 
     ctx.literal_parameter = None;
+    ctx.declared_parameter = None;
     if shape.hidden_argc {
         public_args::push_arg_count_from_reg(emitter, count_reg);
         arg_types.push(PhpType::Int);

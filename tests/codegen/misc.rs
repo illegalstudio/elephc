@@ -1380,3 +1380,56 @@ echo json_encode(get_object_vars($it)), serialize($it), count((array) $it);
          []O:2:\"It\":1:{s:10:\"\0It\0errors\";a:1:{s:1:\"x\";i:1;}}1"
     );
 }
+
+/// A call by name is checked like a direct one: null into a non-nullable declared parameter is
+/// php's `TypeError`, which Symfony's `PropertyAccessor` turns into the form's error.
+#[test]
+fn a_call_by_name_refuses_null_for_a_declared_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class D {}
+class P {
+    public function setD(D $d): void { echo "entered\n"; }
+    public function setS(string $s): void { echo "entered\n"; }
+    public function setN(?D $d): void { echo "nullable\n"; }
+}
+$p = new P;
+foreach (['setD', 'setS', 'setN'] as $m) {
+    try {
+        $p->$m(null);
+    } catch (TypeError $e) {
+        echo strstr($e->getMessage(), 'Argument'), "\n";
+    }
+}
+$p->setD(new D);
+"#,
+    );
+    let refusals: Vec<&str> = out.lines().map(|line| line.split(", called in").next().unwrap()).collect();
+    assert_eq!(
+        refusals,
+        [
+            "Argument #1 ($d) must be of type D, null given",
+            "Argument #1 ($s) must be of type string, null given",
+            "nullable",
+            "entered",
+        ]
+    );
+}
+
+/// `(array)` skips an uninitialized property whose slot is a reference cell, where the marker
+/// lives in the cell: Symfony's deep clone reaches it on every entity the form rejects.
+#[test]
+fn an_object_cast_skips_an_uninitialized_reference_slot() {
+    let out = compile_and_run(
+        r#"<?php
+class R {
+    public array $list;
+    public string $set = 'x';
+    public function refs(): array { return [&$this->list]; }
+}
+function make(): R { return new R; }
+echo json_encode((array) make());
+"#,
+    );
+    assert_eq!(out, "{\"set\":\"x\"}");
+}
