@@ -18,6 +18,7 @@ use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
 use crate::types::call_args;
+use crate::types::checker::type_compat::unions::normalize_union_members;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::canonical_builtin_function_name;
@@ -1341,7 +1342,9 @@ fn validate_static_cufa_reference_arguments(
 ///
 /// The rules follow the spread binder (`spread_source_element_type`): a packed or keyed list
 /// binds its value type, and a declared `array` or a `mixed` value binds `mixed`. A union of
-/// array shapes binds the value its members share, or `mixed` when they differ. An empty list
+/// array shapes binds the union of its members' value types (`mixed` when one of them is
+/// `mixed`), so `array<int>|array<float>` binds `int|float` as a packed `array<int|float>`
+/// does. An empty list
 /// (`never`) binds `mixed` as well, so a body error that no argument decides is still reported.
 fn variable_list_value_type(list_ty: &PhpType) -> Option<PhpType> {
     let value_ty = array_storage_value_type(list_ty)?;
@@ -1357,15 +1360,18 @@ fn array_storage_value_type(list_ty: &PhpType) -> Option<PhpType> {
         PhpType::Mixed => Some(PhpType::Mixed),
         ty if ty.is_php_array() => Some(PhpType::Mixed),
         PhpType::Union(members) => {
-            let mut joined = PhpType::Never;
+            let mut value_tys = Vec::new();
             for member in members {
                 let value_ty = array_storage_value_type(member)?;
-                if value_ty == PhpType::Never || value_ty == joined {
-                    continue;
+                if value_ty != PhpType::Never {
+                    value_tys.push(value_ty);
                 }
-                joined = if joined == PhpType::Never { value_ty } else { PhpType::Mixed };
             }
-            Some(joined)
+            Some(if value_tys.is_empty() {
+                PhpType::Never
+            } else {
+                normalize_union_members(value_tys)
+            })
         }
         _ => None,
     }

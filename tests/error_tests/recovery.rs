@@ -568,8 +568,39 @@ fn test_call_user_func_array_variable_list_rewalk_accepts_valid_body() {
         "<?php function f($n) { return $n + 1; } \
          function src(): array<int>|array<string, int> { return [1]; } $a = src(); \
          var_dump(call_user_func('f', ...$a));",
+        "<?php function f($n) { return $n + 1; } \
+         function src(): array<int>|array<float> { return [1]; } $a = src(); \
+         var_dump(call_user_func('f', ...$a));",
+        "<?php function f($n) { return $n[0]; } \
+         function src(): array<int>|array<string> { return [1]; } $a = src(); \
+         var_dump(call_user_func('f', ...$a));",
     ] {
         expect_no_error(program);
+    }
+}
+
+/// A `call_user_func` spread of a union of array shapes whose value types differ binds the
+/// untyped parameter to the union of those value types, as a packed `array<int|float>` does,
+/// so indexing an `int|float` parameter is reported once. Joining the differing value types
+/// to `mixed` accepted the body, and the final pass then dropped the first walk's error.
+#[test]
+fn test_union_spread_rewalk_binds_union_of_differing_value_types() {
+    let f = "function f($n) { return $n[0]; } \
+        function src(): array<int>|array<float> { return [1]; } $a = src();";
+    for call in [
+        "var_dump(call_user_func('f', ...$a));",
+        "var_dump(call_user_func(f(...), ...$a));",
+        "$h = f(...); var_dump(call_user_func($h, ...$a));",
+    ] {
+        let program = format!("<?php {f} {call}");
+        let messages = checker_error_messages(&program);
+        assert_eq!(
+            messages.iter().filter(|message| *message == "Cannot index non-array").count(),
+            1,
+            "{}: {:?}",
+            program,
+            messages
+        );
     }
 }
 
