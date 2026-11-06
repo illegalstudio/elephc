@@ -29,6 +29,7 @@ use super::NOT_SERIALIZABLE_BUILTIN_CLASSES;
 
 /// Returns whether a declared property is compiler storage hidden from PHP enumeration.
 fn class_property_is_hidden(class_name: &str, property: &str) -> bool {
+    property.starts_with("__elephc_cursor_") ||
     elephc_builtin_contract::lookup_class(class_name)
         .is_some_and(|class| class.property_is_hidden(property))
 }
@@ -1724,6 +1725,7 @@ pub(crate) fn emit_runtime_data_user(
         // renderer that consults `__debugInfo` AND the only elephc renderer that
         // enumerates object properties at all.
         let mut vd_rows = var_dump_descriptor_rows(classes, class_info, class_name);
+        vd_rows.retain(|row| !row.plain_key.contains("__elephc_cursor_"));
         if enums.contains_key(class_name.as_str()) {
             hoist_enum_name_row(&mut vd_rows);
         }

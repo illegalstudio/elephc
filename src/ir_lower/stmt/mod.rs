@@ -345,7 +345,21 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             object,
             property,
             value,
-        } => lower_property_assign(ctx, object, property, value, stmt.span),
+        } => {
+            lower_property_assign(ctx, object, property, value, stmt.span);
+            // A new array starts at its first element: php keeps the pointer in the array.
+            let cursor = crate::parser::ast::array_pointer_cursor_property(property);
+            let has_cursor = matches!(object.kind, ExprKind::This)
+                && ctx.current_class.as_deref().is_some_and(|class| {
+                    ctx.classes
+                        .get(class)
+                        .is_some_and(|info| info.properties.iter().any(|(name, _)| *name == cursor))
+                });
+            if has_cursor {
+                let zero = Expr::new(ExprKind::IntLiteral(0), stmt.span);
+                lower_property_assign(ctx, object, &cursor, &zero, stmt.span);
+            }
+        }
         StmtKind::PropertyRefAssign {
             object,
             property,

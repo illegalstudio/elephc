@@ -590,6 +590,10 @@ pub(super) fn lower_ref_place_function_call(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let canonical = name.as_str();
+    // A property with a cursor moves its pointer in place: a temporary would move a copy's.
+    if super::array_pointer_call_has_property_cursor(ctx, canonical, args) {
+        return None;
+    }
     let prefer_extension = source_prefers_extension_builtin(canonical);
     let sig = call_signature(ctx, canonical, prefer_extension)?;
     // A builtin's by-reference container mutators (`sort`, `array_pop`, ...) take the array VALUE

@@ -1201,6 +1201,30 @@ fn rewrite_literal_param_bindings(sig: &FunctionSig, args: &[Expr]) -> Option<Ve
 /// Read-only expression receivers and fresh call results need no persistent cursor, so a
 /// call-local zero cursor preserves their temporary-value semantics.
 ///
+/// Whether this is an internal-pointer call on a `$this` property whose class keeps its cursor.
+fn array_pointer_call_has_property_cursor(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+) -> bool {
+    let is_pointer_call = matches!(
+        crate::builtins::registry::lookup(&php_symbol_key(name.trim_start_matches('\\')))
+            .map(|def| def.spec.semantics.argument_lowering),
+        Some(crate::builtins::semantics::BuiltinArgumentLowering::ArrayInternalPointer(_))
+    );
+    let [Expr { kind: ExprKind::PropertyAccess { object, property }, .. }] = args else {
+        return false;
+    };
+    let cursor = crate::parser::ast::array_pointer_cursor_property(property);
+    is_pointer_call
+        && matches!(object.kind, ExprKind::This)
+        && ctx.current_class.as_deref().is_some_and(|class| {
+            ctx.classes
+                .get(class)
+                .is_some_and(|info| info.properties.iter().any(|(name, _)| *name == cursor))
+        })
+}
+
 /// Returns `None` only for named/spread arguments or a wrong argument count, leaving those
 /// shapes to the ordinary call diagnostics.
 fn lower_array_internal_pointer(
@@ -1222,6 +1246,7 @@ fn lower_array_internal_pointer(
     {
         return None;
     }
+    let mut cursor_property = None;
     let (container, cursor_slot, cursor) = match &args[0].kind {
         ExprKind::Variable(variable) => {
             let container = ctx.load_local(variable, Some(args[0].span));
@@ -1230,6 +1255,19 @@ fn lower_array_internal_pointer(
                 .builder
                 .emit_load_local(cursor_slot, IrType::I64, PhpType::Int);
             (container, Some(cursor_slot), cursor)
+        }
+        ExprKind::PropertyAccess { object, property }
+            if array_pointer_call_has_property_cursor(ctx, &canonical, args) =>
+        {
+            let name = crate::parser::ast::array_pointer_cursor_property(property);
+            let cursor_read = Expr::new(
+                ExprKind::PropertyAccess { object: object.clone(), property: name.clone() },
+                args[0].span,
+            );
+            let container = lower_expr(ctx, &args[0]);
+            let cursor = lower_expr(ctx, &cursor_read).value;
+            cursor_property = Some((object.clone(), name));
+            (container, None, cursor)
         }
         _ => {
             let container = lower_expr(ctx, &args[0]);
@@ -1253,6 +1291,18 @@ fn lower_array_internal_pointer(
             );
             if let Some(cursor_slot) = cursor_slot {
                 ctx.builder.emit_store_local(cursor_slot, moved.value);
+            }
+            if let Some((object, property)) = cursor_property {
+                let temp_name = ctx.declare_hidden_temp(PhpType::Int);
+                store_value_into_temp(ctx, &temp_name, PhpType::Int, moved, expr.span);
+                let value = Expr::new(ExprKind::Variable(temp_name), expr.span);
+                crate::ir_lower::stmt::lower_stmt(
+                    ctx,
+                    &crate::parser::ast::Stmt::new(
+                        crate::parser::ast::StmtKind::PropertyAssign { object, property, value },
+                        expr.span,
+                    ),
+                );
             }
             moved.value
         }

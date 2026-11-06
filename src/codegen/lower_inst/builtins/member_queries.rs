@@ -740,6 +740,9 @@ pub(in crate::codegen::lower_inst) fn static_property_exists_on_class_info(
     property_name: &str,
     _target_is_object: bool,
 ) -> bool {
+    if property_name.starts_with("__elephc_cursor_") {
+        return false;
+    }
     if elephc_builtin_contract::lookup_class(resolved_class)
         .is_some_and(|class| class.property_is_hidden(property_name))
     {

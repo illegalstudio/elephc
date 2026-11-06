@@ -359,7 +359,8 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     {
         return value;
     }
-    if let Some(value) = lower_array_internal_pointer(ctx, canonical, args, expr) {
+    // The internal pointer family, property cursors included, before any by-reference adapter.
+    if let Some(value) = lower_array_internal_pointer(ctx, canonical,args, expr) {
         return value;
     }
     if let Some(value) = lower_static_is_callable(ctx, canonical, args, expr) {

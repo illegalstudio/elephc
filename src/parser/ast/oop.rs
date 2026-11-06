@@ -309,3 +309,8 @@ impl PartialEq for ClassMethod {
             && self.attributes == other.attributes
     }
 }
+
+/// The hidden property keeping `$this->property`'s internal array pointer between calls.
+pub(crate) fn array_pointer_cursor_property(property: &str) -> String {
+    format!("__elephc_cursor_{property}")
+}

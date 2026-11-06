@@ -145,6 +145,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
     ),
     CompileError,
 > {
+    let body_start = *pos;
     let mut trait_uses = Vec::new();
     let mut properties = Vec::new();
     let mut methods = Vec::new();
@@ -444,7 +445,50 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
         ));
     }
 
+    if matches!(owner_kind, "class" | "trait") {
+        declare_array_pointer_cursors(&tokens[body_start..*pos], &mut properties);
+    }
     Ok((trait_uses, properties, methods, constants, cases))
+}
+
+
+/// Declares a cursor for every property the body moves with `next`/`prev`/`reset`/`end`.
+///
+/// php keeps the pointer in the array, so it survives between calls on a property: Symfony's
+/// `FormErrorIterator` is a `next($this->errors)` loop. A local's cursor lives in the frame, which
+/// a property outlives, so the object carries it, as compiler storage no dump ever shows.
+fn declare_array_pointer_cursors(body: &[SpannedToken], properties: &mut Vec<ClassProperty>) {
+    for window in body.windows(6) {
+        let (Token::Identifier(function), Token::LParen, Token::This, Token::Arrow, Token::Identifier(property), Token::RParen) = (
+            &window[0].0, &window[1].0, &window[2].0, &window[3].0, &window[4].0, &window[5].0,
+        ) else {
+            continue;
+        };
+        if !["next", "prev", "reset", "end"].iter().any(|name| function.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        let name = crate::parser::ast::array_pointer_cursor_property(property);
+        if properties.iter().any(|declared| declared.name == name) {
+            continue;
+        }
+        let span = window[0].1.span;
+        properties.push(ClassProperty {
+            name,
+            visibility: Visibility::Protected,
+            set_visibility: None,
+            type_expr: Some(TypeExpr::Int),
+            hooks: PropertyHooks::none(),
+            readonly: false,
+            is_final: false,
+            is_static: false,
+            is_abstract: false,
+            by_ref: false,
+            is_promoted: false,
+            default: Some(Expr::new(ExprKind::IntLiteral(0), span)),
+            span,
+            attributes: Vec::new(),
+        });
+    }
 }
 
 /// Appends promoted constructor properties to the class properties list.

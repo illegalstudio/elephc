@@ -1320,3 +1320,63 @@ echo json_encode([
          [true,false,\"default\",true]\n[true,true,false,\"default\",true]\n"
     );
 }
+
+/// `foreach` and `count()` over a value typed by an interface that inherits `Traversable` and
+/// `Countable` ask the run-time object. A property walk found nothing there, so every violation
+/// of Symfony's `ConstraintViolationListInterface` vanished and every form validated.
+#[test]
+fn an_interface_inheriting_traversable_iterates_and_counts_the_object() {
+    let out = compile_and_run(
+        r#"<?php
+interface Lst extends Traversable, Countable {}
+class L implements IteratorAggregate, Lst {
+    private array $v = [1, 2];
+    public function count(): int { return count($this->v); }
+    public function getIterator(): Iterator { return new ArrayIterator($this->v); }
+}
+function make(): Lst { return new L; }
+function viaObject(object $o): int { return count($o); }
+$list = make();
+echo count($list), viaObject($list), ':';
+foreach ($list as $x) { echo $x; }
+"#,
+    );
+    assert_eq!(out, "22:12");
+}
+
+/// php keeps the internal pointer in the array, so it moves across calls on a `$this` property:
+/// Symfony's `FormErrorIterator` is a `next($this->errors)` loop, which never ended here. The
+/// cursor stays compiler storage, and a new array starts over.
+#[test]
+fn the_array_pointer_of_a_property_survives_between_calls() {
+    let out = compile_and_run(
+        r#"<?php
+class It implements Iterator {
+    private array $errors;
+    public function __construct(array $errors) { $this->errors = $errors; }
+    public function current(): mixed { return current($this->errors); }
+    public function next(): void { next($this->errors); }
+    public function key(): mixed { return key($this->errors); }
+    public function valid(): bool { return null !== key($this->errors); }
+    public function rewind(): void { reset($this->errors); }
+    public function replace(array $with): mixed { $this->errors = $with; return key($this->errors); }
+}
+$it = new It(['a', 'b']);
+$seen = 0;
+foreach ($it as $k => $v) {
+    echo $k, $v, ' ';
+    if (++$seen > 3) { echo 'RUNAWAY'; break; }
+}
+$it->rewind();
+$it->next();
+echo $it->replace(['x' => 1]), ' ';
+print_r($it);
+echo json_encode(get_object_vars($it)), serialize($it), count((array) $it);
+"#,
+    );
+    assert_eq!(
+        out,
+        "0a 1b x It Object\n(\n    [errors:It:private] => Array\n        (\n            [x] => 1\n        )\n\n)\n\
+         []O:2:\"It\":1:{s:10:\"\0It\0errors\";a:1:{s:1:\"x\";i:1;}}1"
+    );
+}

@@ -12,6 +12,7 @@ mod expr;
 mod ffi;
 mod operators;
 mod oop;
+pub(crate) use oop::array_pointer_cursor_property;
 mod stmt;
 mod types;
 pub(crate) mod visit;

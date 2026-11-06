@@ -153,7 +153,7 @@ impl ClassBuildState {
             .iter()
             .map(|property| &property.name)
             .chain(self.inherited_reflection_properties.iter())
-            .filter(|name| seen.insert(name.as_str()))
+            .filter(|name| !name.starts_with("__elephc_cursor_") && seen.insert(name.as_str()))
             .cloned()
             .collect()
     }
