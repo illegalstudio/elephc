@@ -8,6 +8,7 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 
 use super::*;
+use crate::ir::RuntimeCallTarget;
 
 /// Lowers a global storage load into the result register and SSA destination slot.
 pub(super) fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -55,12 +56,38 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
         PhpType::Mixed
     };
     if ctx.shared.uses_shared_ref_cell(ctx.module, &name) {
+        // `ArrayFetchForWrite` consumed the container it was given and returned its replacement,
+        // so a nested write's storeback only publishes. Releasing the previous pointer again
+        // freed a `--web` superglobal's hash twice on `$_SESSION['bag']['k'] = 1`.
+        if value_is_consuming_container_fetch(ctx, value)? {
+            return store_shared_global(ctx, &symbol, &store_ty, SharedGlobalPrevious::Keep);
+        }
         return lower_store_shared_global(ctx, &symbol, &store_ty);
     }
     ctx.data
         .add_comm(symbol.clone(), store_ty.codegen_repr().stack_size().max(8));
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, true);
+    let release_previous = !value_is_consuming_container_fetch(ctx, value)?;
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, release_previous);
     Ok(())
+}
+
+/// Whether `value` is a nested write's parent fetch on a concrete array, which consumes it.
+fn value_is_consuming_container_fetch(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    let Some(fetch) = super::local_stores::instruction_for_value(ctx, value)? else {
+        return Ok(false);
+    };
+    Ok(fetch.op == Op::RuntimeCall
+        && matches!(
+            fetch.immediate,
+            Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::ArrayFetchForWrite
+                    | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+            ))
+        )
+        && matches!(
+            fetch.result_php_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ))
 }
 
 /// Removes the name's global owner while existing aliases retain their cells.

@@ -4751,3 +4751,40 @@ fn web_session_cookie_samesite_takes_php_spellings() {
     let _ = child.wait();
     assert!(raw_response_body(&resp).ends_with("lax"), "response: {resp:?}");
 }
+
+/// `ob_start()` left open at the end of a request is flushed into the response, as php does.
+#[test]
+fn web_an_open_output_buffer_reaches_the_response() {
+    let dir = make_test_dir("web_open_output_buffer");
+    let bin = compile_web(&dir, "<?php ob_start(); echo 'kept';", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(raw_response_body(&resp), "kept", "response: {resp:?}");
+}
+
+/// A nested write into a superglobal hands its hash to the parent fetch, which consumes it: the
+/// storeback released it again, and Symfony's session died on `$_SESSION[$bag][$key] = $value`.
+#[test]
+fn web_a_nested_superglobal_write_keeps_the_hash_alive() {
+    let dir = make_test_dir("web_nested_superglobal_write");
+    let src = "<?php\n\
+        $_SESSION = [];\n\
+        $_SESSION['bag'] = [];\n\
+        $_SESSION['bag']['a'] = 1;\n\
+        $bound = &$_SESSION['bag'];\n\
+        $bound['b'] = 2;\n\
+        $_SESSION['bag']['c'] = 3;\n\
+        echo json_encode($_SESSION);\n";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(raw_response_body(&resp), "{\"bag\":{\"a\":1,\"b\":2,\"c\":3}}", "response: {resp:?}");
+}
