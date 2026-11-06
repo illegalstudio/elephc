@@ -100,6 +100,7 @@ mod stream_context_get_options;
 mod stream_context_get_params;
 mod stream_context_set_default;
 mod stream_context_set_option;
+mod stream_context_set_options;
 mod stream_context_set_params;
 mod stream_copy_to_stream;
 mod stream_filter_append;

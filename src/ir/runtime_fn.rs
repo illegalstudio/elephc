@@ -306,6 +306,7 @@ pub enum RuntimeFnId {
     StreamContextGetParams,
     StreamContextSetDefault,
     StreamContextSetOption,
+    StreamContextSetOptions,
     StreamContextSetParams,
     StreamCopyToStream,
     StreamFilterAppend,
@@ -1185,7 +1186,9 @@ impl RuntimeFnId {
             // Persistent web requests retire the preceding ambient context owner on replacement.
             // Captured objects can run destructors, mutate globals, and throw during that release.
             RuntimeFnId::StreamContextCreate | RuntimeFnId::StreamContextSetDefault
-            | RuntimeFnId::StreamContextSetParams | RuntimeFnId::StreamContextSetOption
+            | RuntimeFnId::StreamContextSetParams
+            | RuntimeFnId::StreamContextSetOption
+            | RuntimeFnId::StreamContextSetOptions
             => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::BLOCKING_IO.bits()
@@ -3070,6 +3073,7 @@ impl RuntimeFnId {
             RuntimeFnId::StreamContextGetParams => "stream_context_get_params",
             RuntimeFnId::StreamContextSetDefault => "stream_context_set_default",
             RuntimeFnId::StreamContextSetOption => "stream_context_set_option",
+            RuntimeFnId::StreamContextSetOptions => "stream_context_set_options",
             RuntimeFnId::StreamContextSetParams => "stream_context_set_params",
             RuntimeFnId::StreamCopyToStream => "stream_copy_to_stream",
             RuntimeFnId::StreamFilterAppend => "stream_filter_append",

@@ -386,6 +386,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`stream_context_get_params()`](./builtins/io/stream_context_get_params.md) | `(resource $context): array` | `array` | ✓ | ✓ |
 | [`stream_context_set_default()`](./builtins/io/stream_context_set_default.md) | `(array $options): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_context_set_option()`](./builtins/io/stream_context_set_option.md) | `(resource $context, string $wrapper_or_options, ?string $option_name = null, mixed $value = null): bool` | `bool` | ✓ | ✓ |
+| [`stream_context_set_options()`](./builtins/io/stream_context_set_options.md) | `(mixed $context, mixed $options): bool` | `bool` | ✓ | ✓ |
 | [`stream_context_set_params()`](./builtins/io/stream_context_set_params.md) | `(resource $context, array $params): bool` | `bool` | ✓ | ✓ |
 | [`stream_copy_to_stream()`](./builtins/io/stream_copy_to_stream.md) | `(resource $from, resource $to, ?int $length = null, int $offset = -1, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_filter_register()`](./builtins/io/stream_filter_register.md) | `(string $filter_name, string $class): bool` | `bool` | ✓ | ✓ |

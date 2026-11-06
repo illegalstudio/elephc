@@ -923,3 +923,40 @@ int(8)\n\
 int(2)\n"
     );
 }
+
+/// `stream_context_set_options()` refreshes the per-context dispatch options used by
+/// later stream-error handling.
+#[test]
+fn test_stream_context_set_options_refreshes_dispatch_php86() {
+    let out = run86(
+        r#"<?php
+class SetOptionsReadStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_read(int $count): string { return str_repeat('A', $count + 1); }
+    public function stream_eof(): bool { return false; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('set-options-read', SetOptionsReadStream::class);
+$context = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Error,
+]]);
+$handler = static function (array $errors): void {
+    echo 'handler: ', count($errors), ':', $errors[0]->code->name, "\n";
+};
+var_dump(stream_context_set_options($context, ['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_store' => StreamErrorStore::All,
+    'error_handler' => $handler,
+]]));
+$stream = fopen('set-options-read://x', 'r', false, $context);
+var_dump(strlen(fread($stream, 4)));
+var_dump(count(stream_last_errors()));
+fclose($stream);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nhandler: 1:UserspaceInvalidReturn\nint(4)\nint(1)\n"
+    );
+}

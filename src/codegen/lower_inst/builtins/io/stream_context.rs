@@ -130,6 +130,18 @@ pub(crate) fn lower_stream_context_set_option(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `stream_context_set_options(context, options)` into the shared option store.
+pub(crate) fn lower_stream_context_set_options(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "stream_context_set_options", 2)?;
+    let options = expect_operand(inst, 1)?;
+    store_stream_context_options(ctx, options, false)?;
+    emit_bool_result(ctx, true);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `stream_context_set_params(context, params)` as an accepted parameter update.
 pub(crate) fn lower_stream_context_set_params(
     ctx: &mut FunctionContext<'_>,

@@ -100,7 +100,7 @@ pub(crate) use fopen_core::{
 };
 pub(crate) use stream_context::{
     lower_stream_wrapper_register, lower_stream_wrapper_unregister, lower_stream_wrapper_restore, lower_stream_context_create,
-    lower_stream_context_get_default, lower_stream_context_set_default, lower_stream_context_set_option, lower_stream_context_set_params,
+    lower_stream_context_get_default, lower_stream_context_set_default, lower_stream_context_set_option, lower_stream_context_set_options, lower_stream_context_set_params,
     lower_stream_context_get_options, lower_stream_context_get_params, lower_stream_get_contents,
 };
 pub(crate) use stream_copy_queries::{

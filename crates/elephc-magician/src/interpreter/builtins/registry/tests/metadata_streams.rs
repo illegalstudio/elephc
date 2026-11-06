@@ -133,6 +133,15 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
             Some(2)
         );
         assert_eq!(
+            eval_declared_builtin_param_names("stream_context_set_options"),
+            Some(["context", "options"].as_slice())
+        );
+        assert_eq!(
+            eval_builtin_signature_shape("stream_context_set_options")
+                .map(|shape| shape.required_param_count),
+            Some(2)
+        );
+        assert_eq!(
             eval_declared_builtin_param_names("stream_get_line"),
             Some(["stream", "length", "ending"].as_slice())
         );

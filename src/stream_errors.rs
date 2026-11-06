@@ -131,6 +131,9 @@ impl Pass for Rewriter {
             "stream_context_set_option" if self.wrappers.context_set_option => {
                 Some("__elephc_stream_context_set_option")
             }
+            "stream_context_set_options" if self.wrappers.context_set_option => {
+                Some("__elephc_stream_context_set_option")
+            }
             _ => None,
         };
         let name = replacement.map_or(name, |replacement| {

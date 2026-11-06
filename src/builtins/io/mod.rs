@@ -159,6 +159,7 @@ pub mod stream_context_get_options;
 pub mod stream_context_get_params;
 pub mod stream_context_set_default;
 pub mod stream_context_set_option;
+pub mod stream_context_set_options;
 pub mod stream_context_set_params;
 pub mod stream_copy_to_stream;
 pub mod stream_filter_append;

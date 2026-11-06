@@ -430,6 +430,14 @@ fn test_error_stream_context_and_bucket_wrong_args() {
             "stream_context_set_option() takes 2 to 4 arguments",
         ),
         (
+            "<?php stream_context_set_options(STDIN);",
+            "stream_context_set_options() takes exactly 2 arguments",
+        ),
+        (
+            "<?php stream_context_set_options(STDIN, [], 1);",
+            "stream_context_set_options() takes exactly 2 arguments",
+        ),
+        (
             "<?php stream_context_set_params(STDIN);",
             "stream_context_set_params() takes exactly 2 arguments",
         ),

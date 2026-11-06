@@ -108,6 +108,7 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call(
         "stream_context_get_params" => super::stream_context_get_params::eval_stream_context_get_params_declared_call(args, context, scope, values),
         "stream_context_set_default" => super::stream_context_set_default::eval_stream_context_set_default_declared_call(args, context, scope, values),
         "stream_context_set_option" => super::stream_context_set_option::eval_stream_context_set_option_declared_call(args, context, scope, values),
+        "stream_context_set_options" => super::stream_context_set_options::eval_stream_context_set_options_declared_call(args, context, scope, values),
         "stream_context_set_params" => super::stream_context_set_params::eval_stream_context_set_params_declared_call(args, context, scope, values),
         "stream_copy_to_stream" => super::stream_copy_to_stream::eval_stream_copy_to_stream_declared_call(args, context, scope, values),
         "stream_filter_append" => super::stream_filter_append::eval_stream_filter_append_declared_call(args, context, scope, values),
