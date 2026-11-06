@@ -100,6 +100,13 @@ pub(super) fn try_lower(
         }
         RuntimeBuiltinId::MbEncodeMimeheader => try_lower_mimeheader(ctx, inst),
         RuntimeBuiltinId::MbConvertKana => try_lower_convert_kana(ctx, inst),
+        RuntimeBuiltinId::MbChr => try_lower_chr(ctx, inst),
+        RuntimeBuiltinId::MbEncodeNumericentity => {
+            try_lower_encode_numericentity(ctx, inst, operation)
+        }
+        RuntimeBuiltinId::MbDecodeNumericentity => {
+            try_lower_decode_numericentity(ctx, inst, operation)
+        }
         RuntimeBuiltinId::MbOutputHandler => try_lower_output_handler(ctx, inst),
         RuntimeBuiltinId::MbInternalEncoding => try_lower_string_setting_bool(
             ctx,
@@ -1098,17 +1105,21 @@ fn try_lower_convert_kana(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     {
         return Ok(false);
     }
-    let Some(mode) =
-        crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(ctx, inst.operands[1])?
+    let Some(mode) = crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(
+        ctx,
+        peel_acquire_value(ctx, inst.operands[1]),
+    )?
     else {
         return Ok(false);
     };
-    if mode != "K" {
-        return Ok(false);
-    }
+    let helper = match mode.as_str() {
+        "K" => "__rt_mb_convert_kana_k_utf8",
+        "a" => "__rt_mb_convert_kana_a_utf8",
+        _ => return Ok(false),
+    };
     let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
     load_string_arg_to_regs(ctx, inst, 0, "mb_convert_kana", pointer, length)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mb_convert_kana_k_utf8");
+    abi::emit_call_label(ctx.emitter, helper);
     let fallback = ctx.next_label("mb_convert_kana_fallback");
     let done = ctx.next_label("mb_convert_kana_done");
     match ctx.emitter.target.arch {
@@ -1360,6 +1371,175 @@ pub(super) fn lower_detect_encoding_len(
     }
     store_if_result(ctx, inst)?;
     Ok(())
+}
+
+/// Lowers explicit-UTF-8 `mb_encode_numericentity()` for the full decimal Unicode map.
+///
+/// `__rt_mb_encode_numericentity_utf8` returns one owned string, or a null pointer when
+/// the input is not valid UTF-8. The runtime map checks come from the shared length sink
+/// verifier; a different map, `hex: true`, or a non-UTF-8 encoding keeps the bridge so
+/// PHP's exact table ordering and substitution behaviour are preserved.
+fn try_lower_encode_numericentity(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operation: RuntimeBuiltinId,
+) -> Result<bool> {
+    if !matches!(inst.operands.len(), 3 | 4)
+        || !super::explicit_utf8_encoding(ctx, inst.operands[2])?
+        || ctx.value_php_type(inst.operands[0])?.codegen_repr() != PhpType::Str
+        || inst.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Ok(false);
+    }
+    if inst.operands.len() == 4 && !const_false_operand(ctx, inst.operands[3]) {
+        return Ok(false);
+    }
+    let fallback = ctx.next_label("mb_encode_numericentity_fallback");
+    if !verify_full_decimal_map(ctx, inst.operands[1], &fallback)? {
+        return Ok(false);
+    }
+    let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+    load_string_arg_to_regs(ctx, inst, 0, "mb_encode_numericentity", pointer, length)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mb_encode_numericentity_utf8");
+    let done = ctx.next_label("mb_encode_numericentity_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {fallback}"));            // a null result means invalid UTF-8
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the encoder accept the input?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                 // a null result means invalid UTF-8
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, operation, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Lowers explicit-UTF-8 `mb_decode_numericentity()` for the full decimal Unicode map.
+///
+/// The shared decoder-length pre-scan accepts only well-formed decimal references whose
+/// codepoint lies in U+0080..U+10FFFF without surrogates; every other shape returns a null
+/// pointer from the string helper and keeps the bridge, so plain `&`, unmapped references,
+/// and non-UTF-8 encodings retain PHP's exact output.
+fn try_lower_decode_numericentity(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operation: RuntimeBuiltinId,
+) -> Result<bool> {
+    if inst.operands.len() != 3
+        || !super::explicit_utf8_encoding(ctx, inst.operands[2])?
+        || ctx.value_php_type(inst.operands[0])?.codegen_repr() != PhpType::Str
+        || inst.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Ok(false);
+    }
+    let fallback = ctx.next_label("mb_decode_numericentity_fallback");
+    if !verify_full_decimal_map(ctx, inst.operands[1], &fallback)? {
+        return Ok(false);
+    }
+    let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+    load_string_arg_to_regs(ctx, inst, 0, "mb_decode_numericentity", pointer, length)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mb_decode_numericentity_utf8");
+    let done = ctx.next_label("mb_decode_numericentity_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {fallback}"));            // a null result means a rejected reference
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the decoder accept every reference?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                 // a null result means a rejected reference
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, operation, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Reports whether a call operand is the literal boolean `false`.
+fn const_false_operand(ctx: &FunctionContext<'_>, value: ValueId) -> bool {
+    let value = peel_acquire_value(ctx, value);
+    let Some(definition) = ctx.function.value(value) else {
+        return false;
+    };
+    let crate::ir::ValueDef::Instruction { inst, .. } = definition.def else {
+        return false;
+    };
+    let Some(instruction) = ctx.function.instruction(inst) else {
+        return false;
+    };
+    instruction.op == Op::ConstBool
+        && matches!(instruction.immediate, Some(crate::ir::Immediate::Bool(false)))
+}
+
+/// Peels the ownership-acquiring wrappers a call argument may carry around a constant.
+fn peel_acquire_value(ctx: &FunctionContext<'_>, value: ValueId) -> ValueId {
+    let mut value = value;
+    for _ in 0..4 {
+        let Some(definition) = ctx.function.value(value) else { break };
+        let crate::ir::ValueDef::Instruction { inst, .. } = definition.def else { break };
+        let Some(instruction) = ctx.function.instruction(inst) else { break };
+        if instruction.op == Op::Acquire && instruction.operands.len() == 1 {
+            value = instruction.operands[0];
+            continue;
+        }
+        break;
+    }
+    value
+}
+
+/// Lowers explicit-UTF-8 `mb_chr()` to the native UTF-8 encoder and boxes string/false.
+fn try_lower_chr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    if inst.operands.len() != 2
+        || !super::explicit_utf8_encoding(ctx, inst.operands[1])?
+        || !matches!(
+            inst.result_php_type.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+    {
+        return Ok(false);
+    }
+    load_as_int(ctx, inst.operands[0], "mb_chr codepoint")?;
+    abi::emit_call_label(ctx.emitter, "__rt_mb_chr_utf8");
+    let invalid = ctx.next_label("mb_chr_invalid");
+    let done = ctx.next_label("mb_chr_fast_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {invalid}"));             // a null pointer means PHP's false result
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+            abi::emit_jump(ctx.emitter, &done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the encoder produce a string?
+            ctx.emitter.instruction(&format!("jz {invalid}"));                  // a null pointer means PHP's false result
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+            abi::emit_jump(ctx.emitter, &done);
+        }
+    }
+    ctx.emitter.label(&invalid);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean
+            ctx.emitter.instruction("mov x1, #0");                              // false payload
+            ctx.emitter.instruction("mov x2, #0");                              // no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = boolean
+            ctx.emitter.instruction("xor edi, edi");                            // false payload
+            ctx.emitter.instruction("xor esi, esi");                            // no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
 }
 
 /// Lowers `strlen(mb_chr(...))` to the UTF-8 byte length of one explicit-UTF-8 codepoint.

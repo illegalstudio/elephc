@@ -803,3 +803,68 @@ supported_target_lowering_test!(test_mbstring_supported_target_lowering_ios_arm6
 supported_target_lowering_test!(test_mbstring_supported_target_lowering_ios_sim_arm64, "ios-sim-arm64");
 supported_target_lowering_test!(test_mbstring_supported_target_lowering_linux_aarch64, "linux-aarch64");
 supported_target_lowering_test!(test_mbstring_supported_target_lowering_linux_x86_64, "linux-x86_64");
+
+/// Verifies the UTF-8 scalar encoder boundaries, false results, and UTF-16 bridge fallback.
+#[test]
+fn test_mb_chr_utf8_fast_path_boundaries() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$codepoints = [0x41, 0xA9, 0x20AC, 0x1F600, 0, 0x7F, 0x80, 0x7FF, 0x800,
+    0xFFFF, 0x10000, 0x10FFFF, 0xD800, 0xDFFF, 0x110000, -1];
+foreach ($codepoints as $codepoint) {
+    $encoded = mb_chr($codepoint, "UTF-8");
+    echo $encoded === false ? "false" : bin2hex($encoded), "|";
+}
+echo bin2hex(mb_chr(0x41, "UTF-16")), "|", bin2hex(mb_chr(0x1F600, "UTF-16")), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "41|c2a9|e282ac|f09f9880|00|7f|c280|dfbf|e0a080|efbfbf|f0908080|f48fbfbf|false|false|false|false|0041|d83dde00\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies the `a` full-width-alphanumeric converter and its bridge fallback boundaries.
+#[test]
+fn test_mb_convert_kana_ascii_fast_path() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$inputs = ["ＡＢＣ", "ABC", "ＡBＣ1", "", "！＂＃＄％＆＇（）", "－", "〜",
+    "あいう", "ＡＢＣ\n", "ｱｲｳ", "－ＡＢ", "ＡＢＣ１２３ａｂｃ"];
+foreach ($inputs as $s) {
+    $r = mb_convert_kana($s, "a", "UTF-8");
+    echo bin2hex($r), "|", strlen($r), "|";
+}
+echo "\n", mb_convert_kana("ｱｲｳ", "K", "UTF-8"), "|", mb_convert_kana("ABC", "a", "UTF-8"), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "414243|3|414243|3|41424331|4||0|21efbc8223242526efbc872829|13|2d|1|e3809c|3|e38182e38184e38186|9|4142430a|4|efbdb1efbdb2efbdb3|9|2d4142|3|414243313233616263|9|\nアイウ|ABC\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies the numeric-entity encode/decode fast paths across 2-, 3-, and 4-byte scalars,
+/// including plain ampersands, embedded NULs, the ten-digit decimal bound, and map fallbacks.
+#[test]
+fn test_mb_numericentity_utf8_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$map = [128, 1114111, 0, 2097151];
+$text = "café 猫 😀 <&>";
+$encoded = mb_encode_numericentity($text, $map, "UTF-8");
+echo $encoded, "|";
+echo mb_decode_numericentity($encoded, $map, "UTF-8"), "|";
+echo bin2hex(mb_encode_numericentity("A\0B", $map, "UTF-8")), "|";
+echo bin2hex(mb_decode_numericentity("&#233;&#29483;&#128512;&#0;", $map, "UTF-8")), "|";
+echo bin2hex(mb_decode_numericentity("&amp; &#233;", $map, "UTF-8")), "|";
+echo mb_decode_numericentity("&#00000000233;", $map, "UTF-8"), "|";
+echo mb_encode_numericentity("plain", $map, "UTF-8", false), "|";
+echo bin2hex(mb_decode_numericentity("&#233;", [128, 1114111, 0, 4294967295], "UTF-8"));
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "caf&#233; &#29483; &#128512; <&>|café 猫 😀 <&>|410042|c3a9e78cabf09f98802623303b|26616d703b20c3a9|&#00000000233;|plain|c3a9"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

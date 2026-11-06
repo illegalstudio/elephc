@@ -77,7 +77,16 @@ pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     }
     match ty {
         PhpType::Str => {
-            persist_loaded_string(ctx, value)?;
+            // A data-section literal is immutable and never owned by the managed heap, so
+            // persisting it is a no-op that would otherwise run once per loop iteration when
+            // the optimizer hoists the literal but not its acquire.
+            let persistent_literal = matches!(
+                super::local_stores::instruction_for_value(ctx, value)?,
+                Some(instruction) if instruction.op == crate::ir::Op::ConstStr
+            );
+            if !persistent_literal {
+                persist_loaded_string(ctx, value)?;
+            }
         }
         PhpType::Callable => {
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
