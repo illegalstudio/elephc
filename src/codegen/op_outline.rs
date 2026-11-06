@@ -104,7 +104,17 @@ fn shape_of(text: &str) -> Option<Shape> {
 
 /// The routine for a sequence: its labels made its own, its return address kept when it calls.
 fn routine_text(label: &str, hash: u64, normalized: &str, calls: bool) -> String {
-    let body = normalized.replace('@', &format!("L_outl_{hash:016x}_"));
+    // Only `@<n>` is a renamed label: `@PAGE` and `@PAGEOFF` stay relocations.
+    let prefix = format!("L_outl_{hash:016x}_");
+    let mut body = String::with_capacity(normalized.len());
+    let mut rest = normalized;
+    while let Some(at) = rest.find('@') {
+        body.push_str(&rest[..at]);
+        let digit = rest[at + 1..].starts_with(|c: char| c.is_ascii_digit());
+        body.push_str(if digit { prefix.as_str() } else { "@" });
+        rest = &rest[at + 1..];
+    }
+    body.push_str(rest);
     let mut out = format!(".align 2\n.globl {label}\n{label}:\n");
     if calls {
         out.push_str("str x30, [sp, #-16]!\n");
@@ -203,5 +213,14 @@ mod tests {
         let routine = routine_text("_r", 1, "bl __rt_x\n", true);
         assert!(routine.contains("str x30, [sp, #-16]!\nbl __rt_x\nldr x30, [sp], #16\nret\n"));
         assert!(!routine_text("_r", 1, "add x9, x9, #1\n", false).contains("x30"));
+    }
+
+    /// Verifies labels are renamed and relocation operators are left alone.
+    #[test]
+    fn a_routine_renames_labels_and_keeps_relocations() {
+        let routine = routine_text("_r", 1, "adrp x9, _s@PAGE\nb @0\n@0:\n", false);
+        assert!(routine.contains("adrp x9, _s@PAGE\n"));
+        assert!(routine.contains("b L_outl_0000000000000001_0\n"));
+        assert!(routine.contains("L_outl_0000000000000001_0:\n"));
     }
 }
