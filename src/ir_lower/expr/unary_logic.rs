@@ -225,8 +225,14 @@ pub(super) fn lower_logical_xor(
         let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, right, left.span);
         let rhs = lower_expr(ctx, right);
         let (rhs, right_pins) = object_operators::capture_left_operand(ctx, rhs, expr, right.span);
-        let left_input = pinned_transfer_owner(ctx, &left_pins, left.span).unwrap_or(lhs);
-        let right_input = pinned_transfer_owner(ctx, &right_pins, right.span).unwrap_or(rhs);
+        let left_input = LoweredValue {
+            value: pinned_transfer_owner(ctx, &left_pins, left.span).unwrap_or(lhs.value),
+            ..lhs
+        };
+        let right_input = LoweredValue {
+            value: pinned_transfer_owner(ctx, &right_pins, right.span).unwrap_or(rhs.value),
+            ..rhs
+        };
         let lhs = ctx.truthy(left_input, Some(left.span));
         let lhs = lower_truthy_bool(ctx, lhs, Some(left.span));
         let rhs = ctx.truthy(right_input, Some(right.span));
