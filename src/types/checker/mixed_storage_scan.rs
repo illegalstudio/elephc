@@ -1125,39 +1125,48 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
         }
         // Every other call shape resolves its callee from a value, not from a name the scan can
         // look up, so its arguments are disqualified conservatively: a by-reference parameter
-        // anywhere behind them would alias the local for the rest of the body.
-        ExprKind::MethodCall { object, method: _, args }
-        | ExprKind::NullsafeMethodCall { object, method: _, args } => {
-            disqualify_call_arguments(facts, args);
+        // anywhere behind them would alias the local for the rest of the body. A named method
+        // may still take a null-only local as boxed storage (`mysqli::poll($links, $errors, …)`),
+        // unless some class declares that method with a `?ptr<T> &` parameter, whose null local
+        // needs pointer storage instead (see `record_boxed_reference_output`).
+        ExprKind::MethodCall { object, method, args }
+        | ExprKind::NullsafeMethodCall { object, method, args } => {
+            disqualify_named_method_arguments(checker, method, facts, args);
             collect_expr(checker, object, depth, facts);
             collect_exprs(checker, args, depth, facts);
         }
+        ExprKind::StaticMethodCall { receiver: _, method, args } => {
+            disqualify_named_method_arguments(checker, method, facts, args);
+            collect_exprs(checker, args, depth, facts);
+        }
+        // A callee resolved from a value (a closure, a dynamic method or class name, a
+        // constructor) can declare any parameter type, a `?ptr<T> &` one included, so a
+        // null-only local passed to it keeps its natural storage.
         ExprKind::NullsafeDynamicMethodCall { object, method, args } => {
-            disqualify_call_arguments(facts, args);
+            disqualify_args(facts, args);
             collect_expr(checker, object, depth, facts);
             collect_expr(checker, method, depth, facts);
             collect_exprs(checker, args, depth, facts);
         }
-        ExprKind::StaticMethodCall { receiver: _, method: _, args }
-        | ExprKind::NewScopedObject { receiver: _, args }
+        ExprKind::NewScopedObject { receiver: _, args }
         | ExprKind::NewObject { class_name: _, args }
         | ExprKind::NewGeneric { class_type: _, args }
         | ExprKind::ClosureCall { var: _, args } => {
-            disqualify_call_arguments(facts, args);
+            disqualify_args(facts, args);
             collect_exprs(checker, args, depth, facts);
         }
         ExprKind::ExprCall { callee, args } => {
-            disqualify_call_arguments(facts, args);
+            disqualify_args(facts, args);
             collect_expr(checker, callee, depth, facts);
             collect_exprs(checker, args, depth, facts);
         }
         ExprKind::NewDynamic { name_expr, args } => {
-            disqualify_call_arguments(facts, args);
+            disqualify_args(facts, args);
             collect_expr(checker, name_expr, depth, facts);
             collect_exprs(checker, args, depth, facts);
         }
         ExprKind::NewDynamicObject { class_name, fallback_class: _, required_parent: _, args } => {
-            disqualify_call_arguments(facts, args);
+            disqualify_args(facts, args);
             collect_expr(checker, class_name, depth, facts);
             collect_exprs(checker, args, depth, facts);
         }
@@ -1358,6 +1367,61 @@ fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
         return def.ref_params.iter().any(|by_ref| *by_ref);
     }
     true
+}
+
+/// Disqualifies every argument root, with no null-only promotion: the arguments of a call
+/// whose callee, and so its parameter storage, the scan cannot resolve.
+fn disqualify_args(facts: &mut Facts, args: &[Expr]) {
+    for arg in args {
+        disqualify_root(facts, arg);
+    }
+}
+
+/// Handles the arguments of a call to a method named `method` on a receiver the scan cannot
+/// resolve. When any class declares a method of that name with a `?ptr<T> &` parameter, the
+/// arguments are disqualified without null-only promotion (that parameter needs pointer
+/// storage); otherwise they take the generic by-reference handling.
+fn disqualify_named_method_arguments(checker: &Checker, method: &str, facts: &mut Facts, args: &[Expr]) {
+    if any_method_binds_pointer_by_ref(checker, method) {
+        disqualify_args(facts, args);
+    } else {
+        disqualify_call_arguments(facts, args);
+    }
+}
+
+/// Whether any class declares an instance or static method named `method` (case-insensitive,
+/// as php resolves method names) with a by-reference parameter of pointer type.
+fn any_method_binds_pointer_by_ref(checker: &Checker, method: &str) -> bool {
+    checker.classes.values().any(|class| {
+        class
+            .methods
+            .iter()
+            .chain(class.static_methods.iter())
+            .filter(|(name, _)| name.eq_ignore_ascii_case(method))
+            .any(|(_, sig)| sig_binds_pointer_by_ref(sig))
+    })
+}
+
+/// Whether a resolved signature has a by-reference parameter of pointer type (`?ptr<T> &$p`).
+fn sig_binds_pointer_by_ref(sig: &crate::types::FunctionSig) -> bool {
+    sig.ref_params.iter().enumerate().any(|(index, by_ref)| {
+        *by_ref
+            && (sig
+                .param_type_exprs
+                .get(index)
+                .and_then(|ty| ty.as_ref())
+                .is_some_and(type_expr_mentions_pointer)
+                || sig.params.get(index).is_some_and(|(_, ty)| php_type_mentions_pointer(ty)))
+    })
+}
+
+/// Whether a resolved parameter type is, or contains, a pointer.
+fn php_type_mentions_pointer(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Pointer(_) => true,
+        PhpType::Union(members) => members.iter().any(php_type_mentions_pointer),
+        _ => false,
+    }
 }
 
 /// For a call to a declared function with plain positional arguments, returns per argument

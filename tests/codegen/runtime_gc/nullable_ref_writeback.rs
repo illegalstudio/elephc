@@ -15,7 +15,7 @@
 //!   release of the previous occupant, the converted copy, or the parameter cell shows up.
 //! - Expected stdout values follow php 8.5 for the same programs.
 
-use crate::support::{compile_and_run_capture, compile_and_run_with_heap_debug};
+use crate::support::{compile_and_run_capture, compile_and_run_with_heap_debug, without_ir_opt};
 
 /// Asserts the program printed `expected` and left a clean heap under heap debug.
 fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
@@ -733,4 +733,72 @@ run();
 "#,
     );
     assert_clean(out, "[42]1|[[7],[3]]\n");
+}
+
+/// A declared local passed to a nullable by-reference parameter starts the callee's cell from
+/// its value AFTER every argument ran: a later argument that writes the local through its own
+/// reference (`take($v, bump($v))`) is seen by the callee, like php's by-reference binding of
+/// the variable itself. Scalars, arrays and objects, with and without the EIR optimizer.
+/// Output matches php 8.5.
+#[test]
+fn test_declared_reference_cells_start_from_the_current_local() {
+    let run = || {
+        compile_and_run_with_heap_debug(
+            r#"<?php
+class Box { public function __construct(public int $n) {} }
+function bump(float &$x): float { $x = 2.0; return 0.0; }
+function take(?float &$v, float $ignored): void { echo $v, "|"; $v = 3.5; }
+function bumpa(array &$x): int { $x = [str_repeat("y", 3), 2]; return 0; }
+function takea(?array &$v, int $ignored): void { echo json_encode($v), "|"; $v = [9]; }
+function bumpo(Box &$x): int { $x = new Box(2); return 0; }
+function takeo(?Box &$v, int $ignored): void { echo $v->n, "|"; $v = new Box(9); }
+function run(): void {
+    float $v = 1.0;
+    take($v, bump($v));
+    echo $v, "|";
+    array $a = [str_repeat("x", 3), 1];
+    takea($a, bumpa($a));
+    echo json_encode($a), "|";
+    Box $b = new Box(1);
+    takeo($b, bumpo($b));
+    echo $b->n, "\n";
+}
+run();
+"#,
+        )
+    };
+    assert_clean(run(), "2|3.5|[\"yyy\",2]|[9]|2|9\n");
+    assert_clean(without_ir_opt(run), "2|3.5|[\"yyy\",2]|[9]|2|9\n");
+}
+
+/// A null-only local passed to a `?ptr<T> &` parameter of a method, a static method or a
+/// closure keeps pointer storage (no boxed null-output promotion), so the binding compiles and
+/// the callee's `null` reaches the local, like the plain-function case.
+#[test]
+fn test_null_locals_bind_nullable_pointer_references_through_methods() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+packed class Vec2 { public int $x; }
+class W {
+    public function clear(?ptr<Vec2> &$p): void { $p = null; }
+    public static function sclear(?ptr<Vec2> &$p): void { $p = null; }
+}
+function fclear(?ptr<Vec2> &$p): void { $p = null; }
+function run(): void {
+    $w = new W();
+    $p = null;
+    $w->clear($p);
+    $q = null;
+    W::sclear($q);
+    $r = null;
+    fclear($r);
+    $f = function (?ptr<Vec2> &$p): void { $p = null; };
+    $s = null;
+    $f($s);
+    echo var_export($p === null, true), var_export($q === null, true), var_export($r === null, true), var_export($s === null, true), "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "truetruetruetrue\n");
 }
