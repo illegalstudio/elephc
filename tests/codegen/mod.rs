@@ -148,3 +148,4 @@ mod fileinfo_validation;
 mod fileinfo_stream_diagnostics;
 mod fileinfo_wrapper_stat;
 mod fileinfo_stream_magic;
+mod ffi_php_src;

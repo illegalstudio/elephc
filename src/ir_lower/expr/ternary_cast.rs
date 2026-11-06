@@ -164,6 +164,30 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         }
         return normalize_missing_string_value(ctx, value, expr);
     }
+    let source_type = ctx.builder.value_php_type(value.value);
+    // php-src's CData cast handler supports string and bool only; int/float casts go through
+    // PHP's generic object conversion (warning + 1). Box the CData so `Op::Cast` reaches the
+    // mixed conversion helpers, which implement that warning and PHP's `__toString` dispatch.
+    let value = if matches!(source_type.codegen_repr(), PhpType::Object(name)
+        if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData"))
+        && matches!(target, CastType::Int | CastType::Float | CastType::String)
+    {
+        let boxed = ctx.emit_owned_value(
+            Op::MixedBox,
+            vec![value.value],
+            None,
+            PhpType::Mixed,
+            Op::MixedBox.default_effects(),
+            Some(expr.span),
+        );
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+        }
+        boxed
+    } else {
+        value
+    };
+    let source_type = ctx.builder.value_php_type(value.value);
     let php_type = cast_php_type(target, &source_type);
     let result = ctx.emit_value(
         Op::Cast,

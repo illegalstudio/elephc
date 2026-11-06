@@ -39,6 +39,17 @@ impl Checker {
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
+            // php-src's CData object has no PHP methods at all: every method call raises
+            // `Error: Object of type FFI\CData does not support method calls` when it
+            // executes, so the call type is left open and EIR lowering emits the throw.
+            // The prelude's internal dispatch is checked under the Internal source mode and
+            // stays exempt.
+            let ffi_cdata = class_name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData");
+            if ffi_cdata
+                && crate::strict_php::current_source_mode() != crate::source::SourceMode::Internal
+            {
+                return Ok(PhpType::Mixed);
+            }
             if self.interfaces.contains_key(class_name) {
                 return self
                     .infer_method_call_on_interface_type(class_name, method, args, expr, env);
@@ -231,6 +242,16 @@ impl Checker {
         else {
             return Ok(PhpType::Void);
         };
+        if class_name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData")
+            && crate::strict_php::current_source_mode() != crate::source::SourceMode::Internal
+        {
+            let return_ty = if nullable {
+                self.normalize_union_type(vec![PhpType::Mixed, PhpType::Void])
+            } else {
+                PhpType::Mixed
+            };
+            return Ok(return_ty);
+        }
         let return_ty = if self.interfaces.contains_key(&class_name) {
             self.infer_method_call_on_interface_type(&class_name, method, args, expr, env)?
         } else {
@@ -476,6 +497,20 @@ impl Checker {
         let mut normalized_args = args.to_vec();
         let mut magic_return_ty = None;
         let mut magic_original_args = None;
+        // Static methods called through `->` are only safe when the static type IS the runtime
+        // class (FFI is final). For ordinary classes the callee must dispatch on the runtime
+        // class, which this path cannot do; rejecting it preserves the old diagnostic instead
+        // of silently choosing the parent method.
+        let static_via_instance = if class_name
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("FFI")
+        {
+            self.classes
+                .get(class_name)
+                .and_then(|class_info| class_info.static_methods.get(&method_key).cloned())
+        } else {
+            None
+        };
         if let Some(class_info) = self.classes.get(class_name) {
             if let Some(sig) = class_info.methods.get(&method_key) {
                 if let Some(reason) = sig.deprecation.clone() {
@@ -563,6 +598,52 @@ impl Checker {
                         class_name,
                     )?;
                 }
+            } else if let Some(static_sig) = static_via_instance {
+                // PHP evaluates the receiver and then dispatches a static method called through
+                // `->` to the class, so `$ffi->new(...)` has the declared static signature.
+                let visibility = class_info
+                    .static_method_visibilities
+                    .get(&method_key)
+                    .cloned();
+                let declaring_class = class_info
+                    .static_method_declaring_classes
+                    .get(&method_key)
+                    .cloned()
+                    .unwrap_or_else(|| class_name.to_string());
+                let declared_flags =
+                    Self::declared_method_param_flags(class_info, &method_key, true);
+                if let Some(visibility) = visibility {
+                    if !self.can_access_member(&declaring_class, &visibility) {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!(
+                                "Cannot access {} method: {}::{}",
+                                Checker::visibility_label(&visibility),
+                                class_name,
+                                method
+                            ),
+                        ));
+                    }
+                }
+                let effective_sig =
+                    Self::callable_sig_for_declared_params(&static_sig, &declared_flags);
+                self.normalize_method_call_args_with_options(
+                    &effective_sig,
+                    args,
+                    expr.span,
+                    &format!("Method {}::{}", class_name, method),
+                    env,
+                    allow_by_ref_spread,
+                )?;
+                self.check_user_declared_call(
+                    &effective_sig,
+                    args,
+                    expr.span,
+                    env,
+                    &format!("Method {}::{}", class_name, method),
+                    class_name,
+                )?;
+                return Ok(effective_sig.return_type);
             } else if let Some(sig) = class_info.methods.get("__call") {
                 let magic_args = Self::magic_call_args(method, args, expr.span);
                 let declared_flags = Self::declared_method_param_flags(class_info, "__call", false);

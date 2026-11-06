@@ -1465,9 +1465,10 @@ fn class_interfaces_contain(
     target_key: &str,
 ) -> bool {
     lookup_class(ctx, object_class).is_some_and(|info| {
-        info.interfaces
-            .iter()
-            .any(|name| php_symbol_key(name.trim_start_matches('\\')) == target_key)
+        info.interfaces.iter().any(|name| {
+            elephc_builtin_contract::interface_is_php_visible(object_class, name)
+                && php_symbol_key(name.trim_start_matches('\\')) == target_key
+        })
     })
 }
 

@@ -97,13 +97,21 @@ pub(super) fn reflection_class_metadata_for_name(
         let is_instantiable =
             reflection_class_is_instantiable(info, is_enum, constructor_member.as_ref());
         let is_cloneable = reflection_class_is_cloneable(class_name, info, is_enum, &ctx.module.class_infos);
-        let is_iterable = reflection_class_is_iterable(info, is_enum);
+        let is_iterable = !class_name.eq_ignore_ascii_case("FFI\\CData")
+            && reflection_class_is_iterable(info, is_enum);
         return Ok(ReflectionOwnerMetadata {
             rendered_to_string: None,
             reflected_name: Some(class_name.to_string()),
             attr_names: info.attribute_names.clone(),
             attr_args: info.attribute_args.clone(),
-            interface_names: info.interfaces.clone(),
+            interface_names: info
+                .interfaces
+                .iter()
+                .filter(|interface| {
+                    elephc_builtin_contract::interface_is_php_visible(class_name, interface)
+                })
+                .cloned()
+                .collect(),
             trait_names: info.used_traits.clone(),
             trait_aliases: info.trait_aliases.clone(),
             parent_names: reflection_parent_class_names(ctx, info),

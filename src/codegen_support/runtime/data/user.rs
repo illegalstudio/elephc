@@ -174,6 +174,7 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".p2align 3\n");
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
     emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id);
+    emit_ffi_dump_name_data(&mut out, classes);
     super::throwable_previous::emit_previous_slots(&mut out, max_class_id, &class_info_by_id);
     let weak_map_retire = classes.get("WeakMap")
         .filter(|class| class.is_internal)
@@ -280,6 +281,21 @@ pub(crate) fn emit_runtime_data_user(
         for class_id in 0..=max_class_id {
             if class_info_by_id.contains_key(&class_id) {
                 out.push_str(&format!("    .quad _class_interfaces_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_interfaces_missing\n");
+            }
+        }
+    }
+
+    // PHP-visible interface metadata. FFI\CData keeps its ArrayAccess/Countable/Iterator
+    // interfaces for the compiler's own dispatch, but php-src uses internal handlers there:
+    // `instanceof` and reflection must not see them. The full `_class_interfaces` tables above
+    // stay authoritative for count/foreach/offset dispatch.
+    out.push_str(".globl _class_php_interface_ptrs\n_class_php_interface_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_php_interfaces_{}\n", class_id));
             } else {
                 out.push_str("    .quad _class_interfaces_missing\n");
             }
@@ -622,7 +638,7 @@ pub(crate) fn emit_runtime_data_user(
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
             let (entry, returns_nothing) = match class_info_by_id.get(&class_id) {
-                Some(class_info) => runtime_debug_info_entry(class_info, classes)?,
+                Some(class_info) => runtime_debug_info_entry(class_info, class_name_by_id.get(&class_id).map(|name| name.as_str()).unwrap_or(""), classes)?,
                 None => ("0".to_string(), false),
             };
             any_runtime_debug_info |= entry != "0";
@@ -1255,6 +1271,29 @@ pub(crate) fn emit_runtime_data_user(
             ));
         }
 
+        let visible_interfaces: Vec<&String> = class_info
+            .interfaces
+            .iter()
+            .filter(|interface_name| {
+                elephc_builtin_contract::interface_is_php_visible(class_name, interface_name)
+            })
+            .collect();
+        out.push_str(&format!(
+            ".globl _class_php_interfaces_{}\n_class_php_interfaces_{}:\n",
+            class_info.class_id, class_info.class_id
+        ));
+        out.push_str(&format!("    .quad {}\n", visible_interfaces.len()));
+        for interface_name in visible_interfaces {
+            let interface_info = interfaces
+                .get(interface_name)
+                .expect("codegen bug: missing interface metadata for class");
+            out.push_str(&format!("    .quad {}\n", interface_info.interface_id));
+            out.push_str(&format!(
+                "    .quad _class_interface_impl_{}_{}\n",
+                class_info.class_id, interface_info.interface_id
+            ));
+        }
+
         for interface_name in &class_info.interfaces {
             let interface_info = interfaces
                 .get(interface_name)
@@ -1718,7 +1757,7 @@ pub(crate) fn emit_runtime_data_user(
             }
         }
 
-        emit_class_callable_methods(&mut out, class_info);
+        emit_class_callable_methods(&mut out, class_name, class_info);
         emit_user_wrapper_vtable(&mut out, class_info, classes)?;
         emit_user_filter_vtable(&mut out, class_info, classes)?;
     }
@@ -1891,6 +1930,44 @@ fn emit_class_name_lookup_data(
         }
     }
     out.push_str("    .p2align 3\n");
+}
+
+/// Emits the two globals the var_dump header uses to display `FFI\CData` as
+/// `FFI\CData:<C type>`: the CData class id and the byte offset of its hidden
+/// `__elephc_type_name` string slot. A program without FFI gets `(-1, 0)`, so the
+/// header's compare can never match a real class id.
+fn emit_ffi_dump_name_data(out: &mut String, classes: &HashMap<String, ClassInfo>) {
+    emit_one_ffi_dump_name(out, classes, "FFI\\CData", "_ffi_cdata");
+    emit_one_ffi_dump_name(out, classes, "FFI\\CType", "_ffi_ctype");
+}
+
+fn emit_one_ffi_dump_name(
+    out: &mut String,
+    classes: &HashMap<String, ClassInfo>,
+    class_name: &str,
+    symbol_prefix: &str,
+) {
+    let mut class_id: i64 = -1;
+    let mut offset: u64 = 0;
+    if let Some((_, info)) = classes
+        .iter()
+        .find(|(name, _)| name.trim_start_matches('\\').eq_ignore_ascii_case(class_name))
+    {
+        class_id = info.class_id as i64;
+        if let Some(index) = info
+            .properties
+            .iter()
+            .position(|(name, _)| name == "__elephc_type_name")
+        {
+            offset = (8 + index * 16) as u64;
+        }
+    }
+    out.push_str(&format!(".globl {symbol_prefix}_class_id\n{symbol_prefix}_class_id:\n"));
+    out.push_str(&format!("    .quad {}\n", class_id));
+    out.push_str(&format!(
+        ".globl {symbol_prefix}_type_name_offset\n{symbol_prefix}_type_name_offset:\n"
+    ));
+    out.push_str(&format!("    .quad {}\n", offset));
 }
 
 /// Emits a compact `(name_ptr, name_len)` table for runtime class-like name probes.
@@ -2633,6 +2710,9 @@ fn emit_eval_reflection_class_interface_lookup_data(
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
         for interface_name in &class_info.interfaces {
+            if !elephc_builtin_contract::interface_is_php_visible(class_name, interface_name) {
+                continue;
+            }
             push_eval_reflection_class_interface_row(
                 out,
                 &mut entries,
@@ -3355,7 +3435,7 @@ fn emit_user_wrapper_vtable(
 /// Emits the per-class callable-method name table and count for __invoke support.
 /// Only public instance methods are included. Each method name is emitted as an
 /// ASCII label; the table is indexed by class_id at runtime.
-fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
+fn emit_class_callable_methods(out: &mut String, class_name: &str, class_info: &ClassInfo) {
     let mut public_methods: Vec<&String> = class_info
         .methods
         .keys()
@@ -3364,6 +3444,8 @@ fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
                 .method_visibilities
                 .get(*method_name)
                 .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+                && elephc_builtin_contract::lookup_class(class_name)
+                    .is_none_or(|class| class.method_is_php_visible(method_name))
         })
         .collect();
     public_methods.sort();
@@ -3604,6 +3686,16 @@ fn is_hosted_extension_class(class_info: &ClassInfo) -> bool {
     })
 }
 
+/// Returns whether a class is PHP's dynamic `FFI\CData` surface.
+///
+/// `FFI\CData` is compiler-internal (the prelude declares it), but its fields, array length,
+/// union members, and pointee type are known only at run time. Unlike the synthetic SPL
+/// containers, whose debug bodies build keys the walkers cannot decode, its `__debugInfo()`
+/// returns ordinary PHP values, so the run-time fetch is the only correct path.
+fn is_ffi_cdata_class(class_name: &str) -> bool {
+    class_name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData")
+}
+
 /// Returns the `_class_debuginfo_ptrs` entry for a class: the `__debugInfo()` symbol the
 /// var_dump / print_r walkers call at run time, or `"0"` when they should keep walking the
 /// descriptor rows.
@@ -3627,6 +3719,7 @@ fn is_hosted_extension_class(class_info: &ClassInfo) -> bool {
 ///   raise `__debuginfo() must return an array` there).
 fn runtime_debug_info_entry(
     class_info: &ClassInfo,
+    class_name: &str,
     classes: &HashMap<String, ClassInfo>,
 ) -> Result<(String, bool), String> {
     let none = Ok(("0".to_string(), false));
@@ -3643,13 +3736,17 @@ fn runtime_debug_info_entry(
     } else {
         "__debugInfo"
     });
-    if (class_info.is_internal && !hosted) || var_dump_debug_info_projection(class_info).is_some() {
+    if (class_info.is_internal && !hosted && !is_ffi_cdata_class(class_name))
+        || var_dump_debug_info_projection(class_info).is_some()
+    {
         return none;
     }
     let Some(impl_class) = class_info.method_impl_classes.get(&key) else {
         return none;
     };
-    if classes.get(impl_class).map_or(true, |owner| owner.is_internal && !is_hosted_extension_class(owner)) {
+    if classes.get(impl_class).map_or(true, |owner| {
+        owner.is_internal && !is_hosted_extension_class(owner) && !is_ffi_cdata_class(impl_class)
+    }) {
         return none;
     }
     let Some(return_type) = class_info.methods.get(&key).map(|sig| sig.return_type.codegen_repr()) else {

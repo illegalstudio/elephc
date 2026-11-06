@@ -160,7 +160,15 @@ pub(super) fn lower_invokable_object_expr_call(
     if !is_invokable_object_expr(ctx, callee) {
         return None;
     }
-    Some(lower_method_call(ctx, callee, "__invoke", args, Op::MethodCall, expr))
+    Some(lower_method_call(
+        ctx,
+        callee,
+        "__invoke",
+        args,
+        Op::MethodCall,
+        expr,
+        true,
+    ))
 }
 
 /// Returns true when an expression is known to evaluate to an object with `__invoke`.
@@ -278,12 +286,36 @@ pub(super) fn lower_dynamic_method_expr_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let object = lower_expr(ctx, object);
+    let object_expr = object;
+    let cdata_receiver = super::callable_probes::is_ffi_cdata_expr(ctx, object_expr);
+    let may_hold_cdata = super::callable_probes::may_hold_ffi_cdata(ctx, object_expr);
+    let object = lower_expr(ctx, object_expr);
     let method = lower_expr(ctx, method);
     let method_type = ctx.builder.value_php_type(method.value);
     let method_name = ctx.declare_hidden_temp(method_type.clone());
     store_value_into_temp(ctx, &method_name, method_type, method, expr.span);
+    if cdata_receiver
+        && crate::strict_php::current_source_mode() != crate::source::SourceMode::Internal
+    {
+        crate::ir_lower::expr::nullable_method_calls::release_owning_receiver_temporary(
+            ctx,
+            object,
+            expr.span,
+        );
+        return crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+            ctx,
+            "Object of type FFI\\CData does not support method calls",
+            expr.span,
+            PhpType::Mixed,
+        );
+    }
     let method_expr = Expr::new(ExprKind::Variable(method_name), expr.span);
+    if may_hold_cdata
+        && ctx.classes.contains_key("FFI\\CData")
+        && crate::strict_php::current_source_mode() != crate::source::SourceMode::Internal
+    {
+        return lower_mixed_cdata_dynamic_method_call(ctx, object, &method_expr, args, expr);
+    }
     let object_type = ctx.builder.value_php_type(object.value).codegen_repr();
     if !matches!(object_type, PhpType::Object(_))
         && !value_is_nullable(ctx, object.value)
@@ -292,6 +324,64 @@ pub(super) fn lower_dynamic_method_expr_call(
         return lower_dynamic_method_call_with_receiver(ctx, object, &method_expr, args, expr);
     }
     lower_nullable_dynamic_method_expr_call(ctx, object, &method_expr, args, expr)
+}
+
+/// Branches a dynamic method call whose `mixed` receiver may hold CData.
+///
+/// The receiver and method name are already evaluated. A CData receiver raises php-src's
+/// method-call Error; every other value keeps the ordinary callable-array dispatch.
+fn lower_mixed_cdata_dynamic_method_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &Expr,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let object_ty = ctx.builder.value_php_type(object.value).codegen_repr();
+    let object_local = ctx.declare_owned_hidden_temp(object_ty.clone());
+    ctx.store_local(&object_local, object, object_ty, Some(expr.span));
+    let class = ctx.intern_class_name("FFI\\CData");
+    let probe = ctx.load_local(&object_local, Some(expr.span));
+    let is_cdata = ctx.emit_value(
+        Op::InstanceOf,
+        vec![probe.value],
+        Some(Immediate::Data(class)),
+        PhpType::Bool,
+        Op::InstanceOf.default_effects(),
+        Some(expr.span),
+    );
+    let cdata_block = ctx.builder.create_named_block("dynamic_method.cdata", Vec::new());
+    let call_block = ctx.builder.create_named_block("dynamic_method.call", Vec::new());
+    let merge = ctx.builder.create_named_block("dynamic_method.merge", Vec::new());
+    let temp = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_cdata.value,
+        then_target: cdata_block,
+        then_args: Vec::new(),
+        else_target: call_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(cdata_block);
+    let thrown = crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+        ctx,
+        "Object of type FFI\\CData does not support method calls",
+        expr.span,
+        PhpType::Mixed,
+    );
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, thrown, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(call_block);
+    let receiver = ctx.load_local(&object_local, Some(expr.span));
+    let call = super::nullable_method_calls::lower_dynamic_method_call_with_receiver(
+        ctx, receiver, method, args, expr,
+    );
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, call, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp, expr.span)
 }
 
 /// Splits a dynamic method call so a null receiver throws before lowering any

@@ -44,6 +44,8 @@ pub fn emit_mixed_cast_float(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_cast_float_from_float");               // floats reuse their stored payload directly
     emitter.instruction("cmp x0, #3");                                          // does the mixed payload hold a bool?
     emitter.instruction("b.eq __rt_mixed_cast_float_from_bool");                // bools widen from their 0/1 payloads
+    emitter.instruction("cmp x0, #6");                                          // does the mixed payload hold an object?
+    emitter.instruction("b.eq __rt_mixed_cast_float_from_object");              // objects warn and cast to 1.0 like PHP
     emitter.instruction("mov x0, #0");                                          // null and unsupported payloads cast to 0.0 for now
     abi::emit_int_result_to_float_result(emitter);                              // convert the normalized zero integer payload into the floating-point result register
     emitter.instruction("b __rt_mixed_cast_float_done");                        // return the normalized 0.0 result
@@ -64,6 +66,16 @@ pub fn emit_mixed_cast_float(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_cast_float_from_bool");
     emitter.instruction("mov x0, x1");                                          // move the unboxed bool payload into the canonical integer result register
     abi::emit_int_result_to_float_result(emitter);                              // widen the 0/1 bool payload into the floating-point result register
+    emitter.instruction("b __rt_mixed_cast_float_done");                        // return the converted bool payload
+
+    emitter.label("__rt_mixed_cast_float_from_object");
+    emitter.instruction("mov x0, x1");                                          // pass the object payload to the warning helper
+    emitter.instruction("mov x1, #1");                                          // select the float warning wording
+    emitter.instruction("mov x2, #0");                                          // no eval context is available from this cast helper
+    emitter.instruction("mov x3, #0");                                          // native object, not a callable descriptor
+    emitter.instruction("bl __rt_sprintf_warn_object_numeric");                 // emit PHP's object-to-float warning
+    emitter.instruction("mov x0, #1");                                          // PHP casts a non-numeric object to 1.0
+    abi::emit_int_result_to_float_result(emitter);                              // widen the normalized integer payload
 
     emitter.label("__rt_mixed_cast_float_done");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -94,6 +106,8 @@ fn emit_mixed_cast_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_cast_float_from_float_linux_x86_64");    // floats reuse their stored payload directly
     emitter.instruction("cmp rax, 3");                                          // does the mixed payload hold a bool?
     emitter.instruction("je __rt_mixed_cast_float_from_bool_linux_x86_64");     // bools widen from their 0/1 payloads
+    emitter.instruction("cmp rax, 6");                                          // does the mixed payload hold an object?
+    emitter.instruction("je __rt_mixed_cast_float_from_object_linux_x86_64");   // objects warn and cast to 1.0 like PHP
     emitter.instruction("xor rax, rax");                                        // null and unsupported payloads cast to 0 before widening to 0.0
     abi::emit_int_result_to_float_result(emitter);                              // convert the normalized zero integer payload into the floating-point result register
     emitter.instruction("jmp __rt_mixed_cast_float_done_linux_x86_64");         // return the normalized 0.0 result
@@ -115,6 +129,16 @@ fn emit_mixed_cast_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_cast_float_from_bool_linux_x86_64");
     emitter.instruction("mov rax, rdi");                                        // move the unboxed bool payload into the canonical integer result register
     abi::emit_int_result_to_float_result(emitter);                              // widen the 0/1 bool payload into the floating-point result register
+    emitter.instruction("jmp __rt_mixed_cast_float_done_linux_x86_64");         // return the converted bool payload
+
+    emitter.label("__rt_mixed_cast_float_from_object_linux_x86_64");
+    emitter.instruction("mov rdi, rdi");                                        // object payload is already in the first argument register
+    emitter.instruction("mov esi, 1");                                          // select the float warning wording
+    emitter.instruction("xor edx, edx");                                        // no eval context is available from this cast helper
+    emitter.instruction("xor ecx, ecx");                                        // native object, not a callable descriptor
+    abi::emit_call_label(emitter, "__rt_sprintf_warn_object_numeric_x64");      // emit PHP's object-to-float warning
+    emitter.instruction("mov rax, 1");                                          // PHP casts a non-numeric object to 1.0
+    abi::emit_int_result_to_float_result(emitter);                              // widen the normalized integer payload
 
     emitter.label("__rt_mixed_cast_float_done_linux_x86_64");
     emitter.instruction("add rsp, 16");                                         // release the aligned temporary slot reserved for nested calls

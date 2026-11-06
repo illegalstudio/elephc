@@ -473,11 +473,14 @@ pub(in crate::ir_lower) fn property_access_expr_type_for_ir(
         return Some(normalize_value_php_type(property_ty));
     }
     let class_info = ctx.classes.get(normalized)?;
-    class_info
-        .properties
-        .iter()
-        .find(|(name, _)| name == property)
-        .map(|(_, ty)| normalize_value_php_type(ty.codegen_repr()))
+    if let Some((_, ty)) = class_info.properties.iter().find(|(name, _)| name == property) {
+        return Some(normalize_value_php_type(ty.codegen_repr()));
+    }
+    // A magic getter's result is whatever `__get()` returns. Without this fallback a property
+    // read inside a literal fell back to the syntactic `int` stamp, which cast a CData/object
+    // payload to int and truncated it (the `FFI` context's dynamic globals hit this through
+    // magic `__call` argument arrays).
+    magic_get_result_type(ctx, normalized).map(normalize_value_php_type)
 }
 
 /// Returns the declared property result type plus `null` when a nullsafe receiver may be null.

@@ -931,7 +931,7 @@ pub(super) fn callable_target_name(target: &CallableTarget) -> String {
 }
 
 /// Returns a syntactic fallback PHP type for an expression.
-pub(super) fn fallback_expr_type(expr: &Expr) -> PhpType {
+pub(crate) fn fallback_expr_type(expr: &Expr) -> PhpType {
     normalize_value_php_type(infer_expr_type_syntactic(expr))
 }
 

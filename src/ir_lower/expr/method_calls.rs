@@ -17,6 +17,7 @@ pub(super) fn lower_method_call(
     args: &[Expr],
     op: Op,
     expr: &Expr,
+    allow_cdata_invoke: bool,
 ) -> LoweredValue {
     // A statically-decided private/protected method access from an inaccessible
     // scope raises a catchable `Error` in PHP rather than a compile-time error,
@@ -42,6 +43,28 @@ pub(super) fn lower_method_call(
     };
     let object_expr = object;
     let object = lower_member_receiver(ctx, object_expr, expr);
+    if !allow_cdata_invoke {
+        let guard = super::nullable_method_calls::reject_ffi_cdata_method_call(ctx, object, op, expr);
+        if let Some(value) = guard {
+            return value;
+        }
+    }
+    // `$ffi->new(...)` selects the type in the receiver's own cdef context, which the
+    // static `FFI::new` signature cannot express; the prelude exposes that form as an
+    // instance helper with the same signature.
+    let method = match (&ctx.builder.value_php_type(object.value), php_symbol_key(method).as_str()) {
+        (PhpType::Object(name), "new")
+            if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI") =>
+        {
+            "__elephc_instance_new"
+        }
+        _ => method,
+    };
+    if op == Op::MethodCall {
+        if let Some(value) = lower_static_method_via_instance(ctx, object, method, args, expr) {
+            return value;
+        }
+    }
     if op == Op::MethodCall && args.is_empty()
         && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
         && matches!(php_symbol_key(method).as_str(),
@@ -253,6 +276,38 @@ pub(super) fn lower_method_call(
     }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
+}
+
+/// Lowers `$object->staticMethod(...)`, which PHP dispatches to the class's static method.
+///
+/// The receiver has already been evaluated for its side effects; it is released after the
+/// static call. Returns `None` when the class declares an instance method with that name.
+fn lower_static_method_via_instance(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let object_ty = ctx.builder.value_php_type(object.value);
+    let (class_name, _) = singular_object_class(&object_ty)?;
+    let normalized = class_name.trim_start_matches('\\');
+    // Only `FFI` is final and has the static-through-instance shape the prelude exposes.
+    // Ordinary classes need runtime-class late static binding, which this helper cannot do.
+    if !normalized.eq_ignore_ascii_case("FFI") {
+        return None;
+    }
+    let class_info = ctx.classes.get(normalized)?;
+    let method_key = php_symbol_key(method);
+    if class_info.methods.contains_key(&method_key)
+        || !class_info.static_methods.contains_key(&method_key)
+    {
+        return None;
+    }
+    let receiver = StaticReceiver::Named(crate::names::Name::from(normalized));
+    let result = lower_static_method_call(ctx, &receiver, method, args, expr);
+    release_owning_receiver_temporary(ctx, object, expr.span);
+    Some(result)
 }
 
 /// Builds synthetic `__call` arguments when a class lacks the requested method.

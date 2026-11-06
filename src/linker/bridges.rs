@@ -382,6 +382,20 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         php_extensions: &[],
         monitoring: MonitoringPolicy::GenericTiming,
     },
+    BridgeStaticlib {
+        lib_name: "elephc_ffi",
+        env_var: "ELEPHC_FFI_LIB_DIR",
+        crate_name: "elephc-ffi",
+        flag_name: "ffi",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The bridge implements PHP's ext/ffi declaration parser, CData/CType model,
+        // and dynamic C calls; the libffi sources are compiled into the archive.
+        php_extensions: &["ffi"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
 ];
 
 /// Locates (auto-building in a source checkout) the archive of the bridge

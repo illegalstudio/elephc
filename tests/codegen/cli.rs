@@ -1010,6 +1010,34 @@ fn test_with_pdo_keeps_unreferenced_pdo_function() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `--with-ffi` roots the injected FFI prelude without source-level FFI use.
+#[test]
+fn test_with_ffi_keeps_unreferenced_ffi_surface() {
+    let dir = make_cli_test_dir("elephc_cli_with_ffi_reachability");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-ffi")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile forced FFI assembly");
+    assert!(
+        output.status.success(),
+        "elephc --with-ffi --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read FFI assembly");
+    assert!(
+        asm.contains("FFI::__elephc_wrap"),
+        "--with-ffi must keep unreferenced FFI declarations"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--with-crypto` force-links the bridge without force-injecting the hash prelude.
 #[test]
 fn test_with_crypto_does_not_force_hash_prelude() {

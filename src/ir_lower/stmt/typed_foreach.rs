@@ -205,6 +205,37 @@ pub(super) fn lower_foreach(
     body: &[Stmt],
     loop_span: Span,
 ) {
+    // FFI CData iteration yields CData view objects: mutating `$value->cdata` writes through
+    // to the underlying memory, so the loop does not need an engine reference binding.
+    let ffi_receiver = match &array.kind {
+        ExprKind::Variable(name) => match ctx.local_type(name) {
+            PhpType::Object(class) if class.eq_ignore_ascii_case("FFI\\CData") => Some(true),
+            PhpType::Object(class) if class.eq_ignore_ascii_case("FFI") => Some(false),
+            _ => None,
+        },
+        _ => None,
+    };
+    let ffi_cdata_source = ffi_receiver.is_some();
+    let by_ref_requested = value_by_ref;
+    // php-src's iterator keeps a writable CData wrapper for `foreach ($array as &$value)` but
+    // converts scalar elements to PHP scalars for a value loop. The prelude needs the mode
+    // before `rewind()` so `current()` can return the right representation. An `FFI` context
+    // object is iterable but has no C array storage, so only CData receives the flag.
+    if ffi_receiver == Some(true) && by_ref_requested {
+        let set_mode = Expr::new(
+            ExprKind::StaticMethodCall {
+                receiver: StaticReceiver::Named(crate::names::Name::unqualified("FFI")),
+                method: "__elephc_set_iter_by_ref".to_string(),
+                args: vec![
+                    array.clone(),
+                    Expr::new(ExprKind::BoolLiteral(true), array.span),
+                ],
+            },
+            array.span,
+        );
+        let _ = lower_expr(ctx, &set_mode);
+    }
+    let value_by_ref = value_by_ref && !ffi_cdata_source;
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
@@ -332,8 +363,10 @@ pub(super) fn lower_foreach(
                 value_needs_null_init,
                 array.span,
             );
-        } else if value_needs_null_init {
-            ctx.declare_local(value_var, value_ty.clone());
+        } else {
+            if value_needs_null_init {
+                ctx.declare_local(value_var, value_ty.clone());
+            }
             ctx.set_local_type(value_var, value_ty);
         }
     }

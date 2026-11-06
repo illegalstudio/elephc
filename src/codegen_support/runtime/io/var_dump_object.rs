@@ -471,6 +471,34 @@ pub fn emit_var_dump_open_object(emitter: &mut Emitter) {
     // -- class name from the shared class-id → (name ptr, name len) table --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("ldr x9, [x9]");                                        // load the runtime class id from the object header
+    abi::emit_symbol_address(emitter, "x12", "_ffi_cdata_class_id");             // resolve the FFI CData class id
+    emitter.instruction("ldr x12, [x12]");                                      // load the FFI CData class id (or -1)
+    emitter.instruction("cmp x9, x12");                                        // is this object an FFI CData?
+    emitter.instruction("b.eq __rt_vd_open_obj_cdata");                        // render the CData type name
+    abi::emit_symbol_address(emitter, "x12", "_ffi_ctype_class_id");             // resolve the FFI CType class id
+    emitter.instruction("ldr x12, [x12]");                                      // load the FFI CType class id (or -1)
+    emitter.instruction("cmp x9, x12");                                        // is this object an FFI CType?
+    emitter.instruction("b.eq __rt_vd_open_obj_ctype");                        // render the CType type name
+    emitter.instruction("b __rt_vd_open_obj_regular");                         // ordinary classes keep their name
+    emitter.label("__rt_vd_open_obj_cdata");
+    abi::emit_symbol_address(emitter, "x12", "_ffi_cdata_type_name_offset");   // resolve the CData type-name slot offset
+    emitter.instruction("ldr x12, [x12]");                                      // load the slot offset (0 without FFI)
+    emitter.instruction("cbz x12, __rt_vd_open_obj_regular");                  // no FFI surface: ordinary name
+    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the object pointer
+    emitter.instruction("add x11, x11, x12");                                   // address this object's type-name slot
+    emitter.instruction("ldr x1, [x11]");                                       // load the type-name string pointer
+    emitter.instruction("ldr x2, [x11, #8]");                                   // load the type-name string length
+    emitter.instruction("b __rt_vd_open_obj_name");                            // write `FFI\\CData:<type>`
+    emitter.label("__rt_vd_open_obj_ctype");
+    abi::emit_symbol_address(emitter, "x12", "_ffi_ctype_type_name_offset");   // resolve the CType type-name slot offset
+    emitter.instruction("ldr x12, [x12]");                                      // load the slot offset (0 without FFI)
+    emitter.instruction("cbz x12, __rt_vd_open_obj_regular");                  // no FFI surface: ordinary name
+    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the object pointer
+    emitter.instruction("add x11, x11, x12");                                   // address this object's type-name slot
+    emitter.instruction("ldr x1, [x11]");                                       // load the type-name string pointer
+    emitter.instruction("ldr x2, [x11, #8]");                                   // load the type-name string length
+    emitter.instruction("b __rt_vd_open_obj_name");                            // write `FFI\\CType:<type>`
+    emitter.label("__rt_vd_open_obj_regular");
     emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
     emitter.instruction("b.eq __rt_vd_open_obj_incomplete");                    // render the synthetic internal class name
     abi::emit_local_symbol_address(emitter, "x10", "_class_name_count");              // resolve the class-name table extent
@@ -555,6 +583,36 @@ fn emit_var_dump_open_object_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the object pointer
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the runtime class id from the object header
+    abi::emit_symbol_address(emitter, "r10", "_ffi_cdata_class_id");            // resolve the FFI CData class id
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the FFI CData class id (or -1)
+    emitter.instruction("cmp r9, r10");                                        // is this object an FFI CData?
+    emitter.instruction("je __rt_vd_open_obj_cdata_x86");                      // render the CData type name
+    abi::emit_symbol_address(emitter, "r10", "_ffi_ctype_class_id");            // resolve the FFI CType class id
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the FFI CType class id (or -1)
+    emitter.instruction("cmp r9, r10");                                        // is this object an FFI CType?
+    emitter.instruction("je __rt_vd_open_obj_ctype_x86");                      // render the CType type name
+    emitter.instruction("jmp __rt_vd_open_obj_regular_x86");                   // ordinary classes keep their name
+    emitter.label("__rt_vd_open_obj_cdata_x86");
+    abi::emit_symbol_address(emitter, "r10", "_ffi_cdata_type_name_offset");   // resolve the CData type-name slot offset
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the slot offset (0 without FFI)
+    emitter.instruction("test r10, r10");                                      // is there a type-name slot?
+    emitter.instruction("je __rt_vd_open_obj_regular_x86");                    // no FFI surface: ordinary name
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("add r11, r10");                                       // address this object's type-name slot
+    emitter.instruction("mov rsi, QWORD PTR [r11]");                            // load the type-name string pointer
+    emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // load the type-name string length
+    emitter.instruction("jmp __rt_vd_open_obj_name_x86");                       // write `FFI\\CData:<type>`
+    emitter.label("__rt_vd_open_obj_ctype_x86");
+    abi::emit_symbol_address(emitter, "r10", "_ffi_ctype_type_name_offset");   // resolve the CType type-name slot offset
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the slot offset (0 without FFI)
+    emitter.instruction("test r10, r10");                                      // is there a type-name slot?
+    emitter.instruction("je __rt_vd_open_obj_regular_x86");                    // no FFI surface: ordinary name
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("add r11, r10");                                       // address this object's type-name slot
+    emitter.instruction("mov rsi, QWORD PTR [r11]");                            // load the type-name string pointer
+    emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // load the type-name string length
+    emitter.instruction("jmp __rt_vd_open_obj_name_x86");                       // write `FFI\\CType:<type>`
+    emitter.label("__rt_vd_open_obj_regular_x86");
     emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
     emitter.instruction("je __rt_vd_open_obj_incomplete_x86");                  // render the synthetic internal class name
     abi::emit_local_symbol_address(emitter, "r10", "_class_name_count");              // resolve the class-name table extent

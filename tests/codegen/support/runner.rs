@@ -168,6 +168,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         package: "elephc-xml",
         php_extensions: &["xml", "xmlwriter"],
     },
+    TestBridgeStaticlib {
+        lib_name: "elephc_ffi",
+        package: "elephc-ffi",
+        php_extensions: &["ffi"],
+    },
 ];
 
 /// Default timeout for executing one compiled codegen fixture binary.
@@ -468,13 +473,21 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
         let requires_cubrid_profile = bridge.lib_name == "elephc_pdo"
             && pdo_cubrid_enabled()
             && CUBRID_BRIDGE_BUILT.get().is_none();
+        // The FFI corpus expects the php-src test-extension symbols (`bug79096`,
+        // `bug_gh9090`, …). They live behind `php-src-fixtures`, so this harness always asks
+        // cargo for that feature profile; an already-fresh archive is a no-op build.
+        let requires_ffi_fixture_profile = bridge.lib_name == "elephc_ffi"
+            && (std::env::var_os("ELEPHC_TEST_PREBUILT_BRIDGES").is_none()
+                || !archive_path.exists());
         if !requires_libpq_profile
             && !requires_dblib_profile
             && !requires_firebird_profile
             && !requires_odbc_profile
             && !requires_oci_profile
             && !requires_cubrid_profile
-            && !bridge_staticlib_needs_build(&archive_path, bridge.package)
+            && !requires_ffi_fixture_profile
+            && (std::env::var_os("ELEPHC_TEST_PREBUILT_BRIDGES").is_some()
+                || !bridge_staticlib_needs_build(&archive_path, bridge.package))
         {
             continue;
         }
@@ -513,6 +526,8 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
             if !features.is_empty() {
                 command.args(["--features", &features.join(",")]);
             }
+        } else if bridge.package == "elephc-ffi" {
+            command.args(["--features", "php-src-fixtures"]);
         }
         let status = command
             .current_dir(env!("CARGO_MANIFEST_DIR"))

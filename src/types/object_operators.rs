@@ -234,6 +234,11 @@ impl ObjectOperatorPlan {
     /// Returns the PHP-facing result, distinct from a comparison adapter's signed integer.
     pub(crate) fn result_type(&self, op: &BinOp) -> PhpType {
         if !self.comparison {
+            // `FFI\CData` pointer subtraction can yield an integer element difference or a
+            // new pointer, so its result is dynamically tagged.
+            if self.class.name.eq_ignore_ascii_case("FFI\\CData") && matches!(op, BinOp::Sub) {
+                return PhpType::Mixed;
+            }
             PhpType::Object(self.class.name.to_string())
         } else if matches!(op, BinOp::Spaceship) {
             PhpType::Int

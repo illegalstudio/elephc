@@ -15,6 +15,23 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
     super::super::ensure_arg_count(inst, "array_walk", 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
+    let source_ty = ctx.value_php_type(array)?.codegen_repr();
+    if !matches!(
+        source_ty,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Iterable
+    ) {
+        // FFI objects expose no PHP-visible properties, so php silently walks nothing.
+        // Other objects keep the ordinary unsupported-type diagnostic.
+        let ffi_object = matches!(
+            &source_ty,
+            PhpType::Object(name)
+                if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI")
+                    || name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData")
+        );
+        if ffi_object {
+            return Ok(());
+        }
+    }
     if super::boxed_walk::lower_boxed_array_walk(
         ctx,
         inst,

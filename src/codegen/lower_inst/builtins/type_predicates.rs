@@ -106,7 +106,7 @@ pub(crate) fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let ty = ctx.value_php_type(value)?;
     let result = match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => true,
-        PhpType::Object(name) => object_type_implements_iterable(ctx, &name),
+        PhpType::Object(name) => object_type_is_php_iterable(ctx, &name),
         PhpType::Int
         | PhpType::Float
         | PhpType::Str
@@ -128,6 +128,12 @@ pub(crate) fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instructio
     };
     emit_static_bool(ctx, result);
     store_if_result(ctx, inst)
+}
+
+/// Returns whether a statically known class satisfies PHP's `is_iterable()` surface.
+fn object_type_is_php_iterable(ctx: &FunctionContext<'_>, type_name: &str) -> bool {
+    object_type_implements_iterable(ctx, type_name)
+        && elephc_builtin_contract::interface_is_php_visible(type_name, "Traversable")
 }
 
 /// Emits runtime `is_iterable()` checks for a boxed Mixed or Union value.

@@ -381,6 +381,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::fileinfo_prelude::inject_if_used_for_version(
         resolved, false, php_version, &mut prelude_inventory,
     );
+    let resolved = elephc::ffi_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
@@ -408,6 +409,14 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
             elephc::types::check_with_target_and_bounds(program, target(), bounds)
         })
         .expect("type check failed");
+    // An eval/introspection-only FFI surface injects the prelude without a statically visible
+    // extern call in the main program; the bridge still has to be linked for the generated
+    // eval function's `elephc_ffi_*` references.
+    if prelude_inventory.groups.contains_key("ffi")
+        && !check_result.required_libraries.iter().any(|library| library == "elephc_ffi")
+    {
+        check_result.required_libraries.push("elephc_ffi".to_string());
+    }
     set_fixture_linked_extensions(&check_result.required_libraries);
     let optimized =
         elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
@@ -800,6 +809,41 @@ pub(crate) fn compile_and_run_capture_merged_with_heap(
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options_and_regex(
             source, &dir, heap_size, false, false, false, false,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture_merged(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
+/// Compiles and runs a fixture with an explicit PHP compatibility version and merged output.
+pub(crate) fn compile_and_run_capture_merged_with_php_version(
+    source: &str,
+    php_version: elephc::php_version::PhpVersion,
+) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_defines_repr_and_php_version(
+            source,
+            &dir,
+            &HashSet::new(),
+            8_388_608,
+            false,
+            false,
+            default_null_repr(),
+            php_version,
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture_merged(

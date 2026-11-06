@@ -237,7 +237,7 @@ pub(super) fn lower_static_callable_call(
             method,
             direct_call: true,
             ..
-        } => Some(lower_method_call(ctx, &object, &method, callback_args, Op::MethodCall, expr)),
+        } => Some(lower_method_call(ctx, &object, &method, callback_args, Op::MethodCall, expr, false)),
         StaticCallableBinding::InstanceMethod { .. } => None,
     }
 }

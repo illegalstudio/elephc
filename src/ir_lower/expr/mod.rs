@@ -46,6 +46,7 @@ mod integer_destinations;
 pub(crate) use integer_destinations::{
     coerce_integer_arithmetic, narrow_checked_integer_for_int_property,
 };
+pub(crate) use merge_temps::fallback_expr_type;
 use integer_destinations::lower_expr_for_parameter;
 pub(crate) mod object_operators;
 mod string_concat;
@@ -412,7 +413,7 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
             object,
             method,
             args,
-        } => lower_method_call(ctx, object, method, args, Op::MethodCall, expr),
+        } => lower_method_call(ctx, object, method, args, Op::MethodCall, expr, false),
         ExprKind::NullsafeMethodCall {
             object,
             method,
