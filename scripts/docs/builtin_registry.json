@@ -89781,7 +89781,7 @@
           "default": null,
           "name": "isSystemId",
           "optional": true,
-          "type": "bool"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -89830,7 +89830,7 @@
           "default": "null",
           "name": "isSystemId",
           "optional": true,
-          "type": "bool"
+          "type": "mixed"
         }
       ],
       "return_type": "string|false",
@@ -90651,14 +90651,14 @@
           "default": null,
           "name": "rawOffset",
           "optional": false,
-          "type": "int"
+          "type": "mixed"
         },
         {
           "by_ref": true,
           "default": null,
           "name": "dstOffset",
           "optional": false,
-          "type": "int"
+          "type": "mixed"
         }
       ],
       "required_param_count": 5,
@@ -90721,14 +90721,14 @@
           "default": null,
           "name": "rawOffset",
           "optional": false,
-          "type": "int"
+          "type": "mixed"
         },
         {
           "by_ref": true,
           "default": null,
           "name": "dstOffset",
           "optional": false,
-          "type": "int"
+          "type": "mixed"
         }
       ],
       "return_type": "bool",

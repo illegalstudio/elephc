@@ -6,7 +6,7 @@ description: "PHP ext/intl `intltz_get_offset()` backed by the managed ICU bridg
 ## intltz_get_offset()
 
 ```php
-function intltz_get_offset(object $timezone, float $timestamp, bool $local, int $rawOffset, int $dstOffset): bool
+function intltz_get_offset(object $timezone, float $timestamp, bool $local, mixed $rawOffset, mixed $dstOffset): bool
 ```
 
 PHP ext/intl `intltz_get_offset()` backed by the managed ICU bridge.
@@ -15,8 +15,8 @@ PHP ext/intl `intltz_get_offset()` backed by the managed ICU bridge.
 - `$timezone` (`object`)
 - `$timestamp` (`float`)
 - `$local` (`bool`)
-- `$rawOffset` (`int`), passed by reference
-- `$dstOffset` (`int`), passed by reference
+- `$rawOffset` (`mixed`), passed by reference
+- `$dstOffset` (`mixed`), passed by reference
 
 **Returns**: `bool`
 

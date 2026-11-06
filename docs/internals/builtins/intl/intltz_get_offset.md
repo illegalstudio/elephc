@@ -27,7 +27,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function intltz_get_offset(object $timezone, float $timestamp, bool $local, int $rawOffset, int $dstOffset): bool
+function intltz_get_offset(object $timezone, float $timestamp, bool $local, mixed $rawOffset, mixed $dstOffset): bool
 ```
 
 ## What the type checker enforces

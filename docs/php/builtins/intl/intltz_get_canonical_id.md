@@ -6,14 +6,14 @@ description: "PHP ext/intl `intltz_get_canonical_id()` backed by the managed ICU
 ## intltz_get_canonical_id()
 
 ```php
-function intltz_get_canonical_id(string $timezoneId, bool $isSystemId = null): string|false
+function intltz_get_canonical_id(string $timezoneId, mixed $isSystemId = null): string|false
 ```
 
 PHP ext/intl `intltz_get_canonical_id()` backed by the managed ICU bridge.
 
 **Parameters**:
 - `$timezoneId` (`string`)
-- `$isSystemId` (`bool`), passed by reference, default `null`, optional
+- `$isSystemId` (`mixed`), passed by reference, default `null`, optional
 
 **Returns**: `string|false`
 

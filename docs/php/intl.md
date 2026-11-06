@@ -190,7 +190,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`intltz_create_time_zone()`](./builtins/intl/intltz_create_time_zone.md) | `(string $timezoneId): ?object` | `?object` | ✓ | - |
 | [`intltz_create_time_zone_id_enumeration()`](./builtins/intl/intltz_create_time_zone_id_enumeration.md) | `(int $type, ?string $region = null, ?int $rawOffset = null): object|false` | `object|false` | ✓ | - |
 | [`intltz_from_date_time_zone()`](./builtins/intl/intltz_from_date_time_zone.md) | `(object $timezone): ?object` | `?object` | ✓ | - |
-| [`intltz_get_canonical_id()`](./builtins/intl/intltz_get_canonical_id.md) | `(string $timezoneId, bool $isSystemId = null): string|false` | `string|false` | ✓ | - |
+| [`intltz_get_canonical_id()`](./builtins/intl/intltz_get_canonical_id.md) | `(string $timezoneId, mixed $isSystemId = null): string|false` | `string|false` | ✓ | - |
 | [`intltz_get_display_name()`](./builtins/intl/intltz_get_display_name.md) | `(object $timezone, bool $dst = false, int $style = IntlTimeZone::DISPLAY_LONG, ?string $locale = null): string|false` | `string|false` | ✓ | - |
 | [`intltz_get_dst_savings()`](./builtins/intl/intltz_get_dst_savings.md) | `(object $timezone): int` | `int` | ✓ | - |
 | [`intltz_get_equivalent_id()`](./builtins/intl/intltz_get_equivalent_id.md) | `(string $timezoneId, int $offset): string|false` | `string|false` | ✓ | - |
@@ -200,7 +200,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`intltz_get_iana_id()`](./builtins/intl/intltz_get_iana_id.md) | `(string $timezoneId): string|false` | `string|false` | ✓ | - |
 | [`intltz_get_id()`](./builtins/intl/intltz_get_id.md) | `(object $timezone): string|false` | `string|false` | ✓ | - |
 | [`intltz_get_id_for_windows_id()`](./builtins/intl/intltz_get_id_for_windows_id.md) | `(string $timezoneId, ?string $region = null): string|false` | `string|false` | ✓ | - |
-| [`intltz_get_offset()`](./builtins/intl/intltz_get_offset.md) | `(object $timezone, float $timestamp, bool $local, int $rawOffset, int $dstOffset): bool` | `bool` | ✓ | - |
+| [`intltz_get_offset()`](./builtins/intl/intltz_get_offset.md) | `(object $timezone, float $timestamp, bool $local, mixed $rawOffset, mixed $dstOffset): bool` | `bool` | ✓ | - |
 | [`intltz_get_raw_offset()`](./builtins/intl/intltz_get_raw_offset.md) | `(object $timezone): int` | `int` | ✓ | - |
 | [`intltz_get_region()`](./builtins/intl/intltz_get_region.md) | `(string $timezoneId): string|false` | `string|false` | ✓ | - |
 | [`intltz_get_tz_data_version()`](./builtins/intl/intltz_get_tz_data_version.md) | `(): string|false` | `string|false` | ✓ | - |

@@ -27,7 +27,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function intltz_get_canonical_id(string $timezoneId, bool $isSystemId = null): string|false
+function intltz_get_canonical_id(string $timezoneId, mixed $isSystemId = null): string|false
 ```
 
 ## What the type checker enforces
