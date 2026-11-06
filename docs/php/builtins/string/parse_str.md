@@ -1,8 +1,6 @@
 ---
 title: "parse_str()"
 description: "Parses a URL-encoded query string into variables."
-sidebar:
-  order: 926
 ---
 
 ## parse_str()
@@ -21,8 +19,9 @@ Parses a URL-encoded query string into variables.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected parse_str prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
