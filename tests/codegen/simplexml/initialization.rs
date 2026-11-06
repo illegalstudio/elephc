@@ -20,9 +20,9 @@ class StateXmlNoParent extends SimpleXMLElement { public function __construct() 
 function StateXmlStringKey(int $copies): string { return str_repeat('id', $copies); }
 function StateXmlMixedKey(int $copies): mixed { return str_repeat('id', $copies); }
 function StateXmlDiscarded(SimpleXMLElement $xml): void {
-    (bool)$xml; (array)$xml; !$xml;
-    $xml && true; true && $xml; $xml || false; false || $xml;
-    $xml xor true; true xor $xml; $xml ? 1 : 2; $xml ?: 1;
+    (bool)$xml; (array)$xml; (!$xml);
+    ($xml && true); (true && $xml); ($xml || false); (false || $xml);
+    ($xml xor true); (true xor $xml); ($xml ? 1 : 2); ($xml ?: 1);
     if ($xml) {}
     if ($xml) { echo 'same|'; } else { echo 'same|'; }
     if (false) {} elseif ($xml) {}
@@ -63,15 +63,15 @@ function StateXmlMissingNode(SimpleXMLElement $xml): void {
             elseif ($operation === 24) { $xml['id'] = 'v'; }
             elseif ($operation === 25) { (bool)$xml; }
             elseif ($operation === 26) { (array)$xml; }
-            elseif ($operation === 27) { !$xml; }
-            elseif ($operation === 28) { $xml && true; }
-            elseif ($operation === 29) { true && $xml; }
-            elseif ($operation === 30) { $xml || false; }
-            elseif ($operation === 31) { false || $xml; }
-            elseif ($operation === 32) { $xml xor true; }
-            elseif ($operation === 33) { true xor $xml; }
-            elseif ($operation === 34) { $xml ? 1 : 2; }
-            elseif ($operation === 35) { $xml ?: 1; }
+            elseif ($operation === 27) { (!$xml); }
+            elseif ($operation === 28) { ($xml && true); }
+            elseif ($operation === 29) { (true && $xml); }
+            elseif ($operation === 30) { ($xml || false); }
+            elseif ($operation === 31) { (false || $xml); }
+            elseif ($operation === 32) { ($xml xor true); }
+            elseif ($operation === 33) { (true xor $xml); }
+            elseif ($operation === 34) { ($xml ? 1 : 2); }
+            elseif ($operation === 35) { ($xml ?: 1); }
             elseif ($operation === 36) { if ($xml) {} }
             elseif ($operation === 37) { if ($xml) { echo 'same|'; } else { echo 'same|'; } }
             elseif ($operation === 38) { if (false) {} elseif ($xml) {} }
