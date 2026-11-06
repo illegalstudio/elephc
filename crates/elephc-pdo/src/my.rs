@@ -539,7 +539,10 @@ enum MyStreamCommand {
 
 /// Responses emitted by a MySQL row-stream worker.
 enum MyStreamResponse {
-    Rowset(MyRowset),
+    /// A result set's header and metadata. For a column-less set (an OK packet) the
+    /// worker also sends whether the server announced more sets and the packet's info
+    /// string, since no row exchange will follow to carry them.
+    Rowset(MyRowset, Option<bool>, String),
     Row(Vec<Cell>),
     /// The current set ended; `true` when the server announced more result sets.
     RowsetEnd(bool),
@@ -555,6 +558,9 @@ struct MyActiveStream {
     worker: Option<JoinHandle<()>>,
     /// Whether the set that last ended announced further result sets.
     more_sets: bool,
+    /// Info string of the current set's OK packet (empty for a row-returning set),
+    /// readable while the worker owns the client.
+    info: String,
 }
 
 /// One fully materialized MySQL protocol result set.
@@ -2213,7 +2219,7 @@ impl MyConn {
                     self.errmsg = message;
                     break;
                 }
-                MyStreamResponse::Rowset(_)
+                MyStreamResponse::Rowset(..)
                 | MyStreamResponse::Row(_)
                 | MyStreamResponse::RowsetEnd(_) => {}
             }
@@ -2246,9 +2252,12 @@ impl MyConn {
             responses,
             worker: Some(worker),
             more_sets: false,
+            info: String::new(),
         };
         match active.responses.recv() {
-            Ok(MyStreamResponse::Rowset(rowset)) => {
+            Ok(MyStreamResponse::Rowset(rowset, more, info)) => {
+                active.more_sets = more.unwrap_or(false);
+                active.info = info;
                 self.active_stream = Some(active);
                 self.unbuffered_active = true;
                 Ok((id, rowset))
@@ -2382,7 +2391,7 @@ impl MyConn {
                 self.unbuffered_active = false;
                 Ok(None)
             }
-            Ok(MyStreamResponse::Rowset(_)) | Err(_) => Err(-1),
+            Ok(MyStreamResponse::Rowset(..)) | Err(_) => Err(-1),
         }
     }
 
@@ -2400,7 +2409,11 @@ impl MyConn {
             return Err(-1);
         }
         match active.responses.recv() {
-            Ok(MyStreamResponse::Rowset(rowset)) => Ok(Some(rowset)),
+            Ok(MyStreamResponse::Rowset(rowset, more, info)) => {
+                active.more_sets = more.unwrap_or(false);
+                active.info = info;
+                Ok(Some(rowset))
+            }
             Ok(MyStreamResponse::Finished(conn, warnings)) => {
                 self.restore_stream_client(conn, warnings);
                 let mut active = self.active_stream.take().expect("active stream disappeared");
@@ -2972,13 +2985,17 @@ impl MyConn {
 
     /// Returns the info string of the last OK packet ("Records: 3  Duplicates: 0
     /// Warnings: 0", "Rows matched: …"), backing `mysqli::$info` / `mysqli_info()`.
-    /// Empty when the server sent none or the client is owned by a stream worker.
+    /// Empty when the server sent none. While a stream worker owns the client, the
+    /// current set's OK-packet info that worker reported.
     pub fn info(&self) -> String {
-        self.conn
-            .0
-            .as_ref()
-            .map(|c| c.info_str().into_owned())
-            .unwrap_or_default()
+        match self.conn.0.as_ref() {
+            Some(client) => client.info_str().into_owned(),
+            None => self
+                .active_stream
+                .as_ref()
+                .map(|active| active.info.clone())
+                .unwrap_or_default(),
+        }
     }
 
     /// Records a client error from the `mysql` crate as the connection's last error.
@@ -3382,7 +3399,17 @@ fn drive_mysql_stream_signalled<T: mysql::prelude::Protocol>(
             set.last_insert_id(),
             fetch_table_names,
         );
-        if responses.send(MyStreamResponse::Rowset(rowset)).is_err() {
+        // A column-less set is its OK packet, the last packet read: its status flags
+        // and info are known now (mysqlnd's next_result() sees them without a fetch).
+        let (more, info) = if columns.is_empty() {
+            (
+                Some(counters.last_status() & 0x0008 != 0),
+                set.info_str().into_owned(),
+            )
+        } else {
+            (None, String::new())
+        };
+        if responses.send(MyStreamResponse::Rowset(rowset, more, info)).is_err() {
             return Ok(());
         }
         if let Some(ready) = ready {

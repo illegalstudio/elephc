@@ -1726,6 +1726,39 @@ echo "|", $db->affected_rows, "|", $db->info, "\n";
     assert_eq!(out, "true|2|Rows matched: 2  Changed: 2  Warnings: 0|3|Rows matched: 3  Changed: 3  Warnings: 0\n");
 }
 
+/// A multi_query() batch whose set is column-less (an OK packet) still announces the sets that
+/// follow, and exposes that OK packet's `info`, while the batch owns the link: a DML-first batch
+/// reaches its SELECT, a later statement's error waits for next_result(), and a trailing DML set
+/// ends the batch. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_multi_query_column_less_sets_keep_the_batch() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS mdf");
+$db->query("CREATE TABLE mdf (v INT)");
+$db->query("INSERT INTO mdf VALUES (1), (2)");
+$db->multi_query("SET @v = 1; SELECT 7");
+do {
+    $r = $db->store_result();
+    echo $r ? $r->fetch_row()[0] : "ok", ",";
+} while ($db->more_results() && $db->next_result());
+$db->multi_query("UPDATE mdf SET v = v + 1; SELECT * FROM missing_mdf");
+echo "|", var_export($db->info, true), ",", var_export($db->more_results(), true);
+echo ",", var_export($db->next_result(), true), ":", $db->errno;
+echo "|", $db->query("SELECT 8")->fetch_row()[0];
+$db->multi_query("SELECT 1; UPDATE mdf SET v = v + 1");
+$db->store_result();
+echo "|", var_export($db->next_result(), true), ",", $db->info, ",", var_export($db->more_results(), true), "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "ok,7,|'Rows matched: 2  Changed: 2  Warnings: 0',true,false:1146|8|true,Rows matched: 2  Changed: 2  Warnings: 0,false\n"
+    );
+}
+
 /// mysqli sends query text exactly as written: `?` and `:name` are not PDO placeholders, so
 /// a malformed `SELECT :a, ?` is the server's syntax error (1064) for both a sync and an async
 /// query, the async reap gives the client back to the link, and a literal '?' is just data.
