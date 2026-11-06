@@ -1382,6 +1382,9 @@ fn emit_opcache_restart_boundary(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
+    // php flushes what `ob_start()` still holds at the end of the request, before destructors,
+    // as `emit_main_epilogue` does at the end of the script. The response lost it otherwise.
+    abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
     emit_main_local_epilogue_cleanup(ctx);
     // Per-request local teardown may run PHP destructors, so it belongs inside
     // the request's `{main}` frame just like process-exit teardown does.
