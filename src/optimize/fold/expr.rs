@@ -218,7 +218,14 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                                 .trim_start_matches('\\')
                                 .eq_ignore_ascii_case("array_values")
                     );
-                    if inner_is_intersect && inner_args.len() >= 2 && !first_is_values {
+                    if inner_is_intersect && inner_args.len() >= 2 && !first_is_values
+                        && inner_args.iter().all(|arg| {
+                            !matches!(
+                                arg.kind,
+                                ExprKind::Spread(_) | ExprKind::NamedArg { .. }
+                            )
+                        })
+                    {
                         let mut rewritten = inner_args.clone();
                         for operand in &mut rewritten {
                             if !matches!(
