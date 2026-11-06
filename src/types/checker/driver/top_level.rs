@@ -24,10 +24,29 @@ impl Checker {
     /// declarations across the entire program. Each statement is checked in a fresh `top_level_env`
     /// cloned from the current global state. Returns the final `TypeEnv` and a vector of error
     /// vectors (one per statement) for structured diagnostics.
+    ///
+    /// The pass is repeated while it denies a top-level local the promotable `?int` read view
+    /// (`Checker::end_promotable_walk`), so its environment and errors come from the walk whose
+    /// views match its promotions. Denials only grow, which bounds the repetition.
     pub(super) fn check_top_level_program(
         &mut self,
         program: &Program,
     ) -> (TypeEnv, Vec<Vec<CompileError>>) {
+        loop {
+            let denials = self.promotable_view_denials_within("main");
+            let result = self.check_top_level_program_walk(program);
+            if self.promotable_view_denials_within("main") == denials {
+                return result;
+            }
+        }
+    }
+
+    /// Walks the top-level program once for `check_top_level_program`.
+    fn check_top_level_program_walk(
+        &mut self,
+        program: &Program,
+    ) -> (TypeEnv, Vec<Vec<CompileError>>) {
+        self.begin_promotable_walk("main");
         let saved_eval_barrier_active = self.eval_barrier_active;
         self.eval_barrier_active = false;
         let saved_null_probe_scope = self.null_probe_scope_is_top_level;
@@ -87,6 +106,7 @@ impl Checker {
         self.active_ref_params = saved_ref_params;
         self.active_external_ref_bindings = saved_external_ref_bindings;
         self.exit_local_binding_scope(saved_local_binding_scope);
+        self.end_promotable_walk("main");
         (global_env, all_errors)
     }
 

@@ -112,9 +112,9 @@ impl Checker {
 
     /// Records a promotable local of the current function-like scope.
     pub(crate) fn record_promotable_array_local(&mut self, array: &str) {
-        self.promotable_arrays
-            .locals
-            .insert((self.current_loop_storage_scope.clone(), array.to_string()));
+        let key = (self.current_loop_storage_scope.clone(), array.to_string());
+        self.promotable_walk_locals.insert(key.clone());
+        self.promotable_arrays.locals.insert(key);
     }
 
     /// Returns whether `name` is a promotable local of the current function-like scope.
@@ -125,18 +125,61 @@ impl Checker {
     }
 
     /// Returns whether an element read of the candidate `array` reads as `?int` under a boxed or
-    /// counter key, which would otherwise read as `mixed`.
+    /// counter key, which would otherwise read as `mixed`, and records the reads that do.
     ///
-    /// Only a local that can really hold a promotable array takes that view: one the body writes
-    /// under a key that may skip a slot (`PromotableCandidates::keyed`), or one already recorded
-    /// promotable (an activated parameter, a promotable value
-    /// assigned to it). A packed local nothing writes keeps the `mixed` read it has without this
-    /// pass, so a buffer index, an `int` local it is reassigned into, and every other consumer
-    /// that accepts `mixed` but not `?int` keeps compiling.
-    pub(crate) fn promotable_array_element_read(&self, array: &str, elem_ty: &PhpType, idx_ty: &PhpType) -> bool {
-        (self.promotable_array_candidates.keyed(array) || self.is_promotable_array_local(array))
-            && promotable_element(elem_ty)
-            && promotable_read_key(idx_ty)
+    /// The view is optimistic for a local with a write that may promote it
+    /// (`PromotableCandidates::keyed`, which is syntactic so a read checked before that write
+    /// gets the same answer), and given to a local this walk already made promotable (an
+    /// activated parameter, a promotable value assigned to it). A local a walk gave the view to
+    /// without promoting it is denied the view for good (`end_promotable_walk`), and its body is
+    /// walked again, so the last walk keeps the `mixed` read (and every consumer that accepts
+    /// `mixed` but not `?int`) for each local it does not promote.
+    pub(crate) fn promotable_array_element_read(&mut self, array: &str, elem_ty: &PhpType, idx_ty: &PhpType) -> bool {
+        if !promotable_element(elem_ty) || !promotable_read_key(idx_ty) {
+            return false;
+        }
+        let key = (self.current_loop_storage_scope.clone(), array.to_string());
+        let view = !self.promotable_view_denied.contains(&key)
+            && (self.promotable_array_candidates.keyed(array)
+                || (self.promotable_array_candidates.contains(array)
+                    && self.promotable_walk_locals.contains(&key)));
+        if view {
+            self.promotable_view_reads.insert(key);
+        }
+        view
+    }
+
+    /// Starts a walk of `scope` (a body and its lexical closures): forgets what an earlier walk
+    /// of it read under the view and promoted, keeping only the denials.
+    pub(crate) fn begin_promotable_walk(&mut self, scope: &str) {
+        let within = |(walked, _): &(String, String)| crate::types::loop_storage_scope_is_within(walked, scope);
+        self.promotable_view_reads.retain(|key| !within(key));
+        self.promotable_walk_locals.retain(|key| !within(key));
+    }
+
+    /// Ends a walk of `scope`: every local of it whose reads took the view while nothing promoted
+    /// it is denied the view, and the denials of `scope` are returned so the caller can tell
+    /// whether the body needs another walk.
+    pub(crate) fn end_promotable_walk(&mut self, scope: &str) -> usize {
+        let denied: Vec<(String, String)> = self
+            .promotable_view_reads
+            .iter()
+            .filter(|key| {
+                crate::types::loop_storage_scope_is_within(&key.0, scope)
+                    && !self.promotable_walk_locals.contains(*key)
+            })
+            .cloned()
+            .collect();
+        self.promotable_view_denied.extend(denied);
+        self.promotable_view_denials_within(scope)
+    }
+
+    /// Counts the view denials of `scope` and its lexical closures.
+    pub(crate) fn promotable_view_denials_within(&self, scope: &str) -> usize {
+        self.promotable_view_denied
+            .iter()
+            .filter(|(walked, _)| crate::types::loop_storage_scope_is_within(walked, scope))
+            .count()
     }
 
     /// Returns the type a whole-value read of `name` has: a promotable `array<int>` local may be

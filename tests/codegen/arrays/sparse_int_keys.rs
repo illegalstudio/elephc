@@ -417,3 +417,26 @@ echo after_cast($argc), after_concat($argc), after_foreach($argc), after_string_
 "#);
     assert_eq!(out, "11111\n");
 }
+
+/// A later write the checker does not promote, whatever its syntax (arithmetic typed `mixed`, a
+/// division, a comparison, a negation, a `::class` or suppressed string key, a bool, `null`, array
+/// or concatenated value), denies the view its walk gave: the body is walked again and the read
+/// checked before that write keeps the `mixed` view.
+#[test]
+fn test_unpromoted_writes_deny_the_view_and_rewalk_the_body() {
+    let out = compile_and_run(r#"<?php
+class Box {}
+function plus(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[$n] = $n + 1; return (string)($y ?? -1); }
+function half(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[$n] = $n / 2; return (string)($y ?? -1); }
+function cmp(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[$n] = $n > 0; return (string)($y ?? -1); }
+function neg(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[$n] = -$n; return (string)($y ?? -1); }
+function klass(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[Box::class] = 1; return (string)($y ?? -1); }
+function quiet(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[@((string)$n)] = 1; return (string)($y ?? -1); }
+function flag(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[$n] = false; return (string)($y ?? -1); }
+function nothing(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[$n] = null; return (string)($y ?? -1); }
+function nested(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[$n] = []; return (string)($y ?? -1); }
+function joined(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[$n] = "a" . "b"; return (string)($y ?? -1); }
+echo plus($argc), half($argc), cmp($argc), neg($argc), klass($argc), quiet($argc), flag($argc), nothing($argc), nested($argc), joined($argc), "\n";
+"#);
+    assert_eq!(out, "1111111111\n");
+}

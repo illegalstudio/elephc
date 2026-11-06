@@ -571,6 +571,7 @@ impl Checker {
             expr.span,
         );
         self.clear_loop_storage_scope(&loop_storage_scope);
+        self.begin_promotable_walk(&loop_storage_scope);
         self.current_loop_storage_scope = loop_storage_scope;
         // The storage this closure's frame ALREADY holds on entry: its by-VALUE captures, each
         // with the type it arrives with, read from the ENCLOSING environment. Deliberately not
@@ -603,6 +604,9 @@ impl Checker {
                 Ok(())
             },
         ));
+        // The enclosing body's walk repeats when this closure denies a view.
+        let closure_scope = self.current_loop_storage_scope.clone();
+        self.end_promotable_walk(&closure_scope);
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;

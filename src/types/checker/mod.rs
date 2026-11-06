@@ -654,6 +654,15 @@ pub(crate) struct Checker {
     pub pending_promotable_call_args: Vec<(String, String, Expr)>,
     /// Candidate sets of callee bodies, computed once per function.
     pub promotable_callee_candidates: HashMap<String, promotable_arrays::PromotableCandidates>,
+    /// `(scope, local)` pairs whose boxed or counter-key element reads took the `?int` view in the
+    /// current walk of `scope`.
+    pub promotable_view_reads: HashSet<(String, String)>,
+    /// `(scope, local)` pairs some write or entry made promotable in the current walk of `scope`.
+    pub promotable_walk_locals: HashSet<(String, String)>,
+    /// `(scope, local)` pairs denied the `?int` view because a walk gave it to them and nothing in
+    /// that walk made them promotable. It only grows, so re-walking a body until it stops growing
+    /// terminates, and the last walk gives the view exactly to the locals it promotes.
+    pub promotable_view_denied: HashSet<(String, String)>,
     /// AST address of the expression that forms the ENTIRE expression-statement currently being
     /// checked, or `None` outside one.
     ///
