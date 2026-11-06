@@ -154,3 +154,61 @@ if ($argc > 0) { echo $mapped[1]; }
     let main = main_ir(source);
     assert_eq!(main.matches("runtime.array_map").count(), 1, "{main}");
 }
+
+/// A direct `array_map(...)[$key]` read rewrites to a guarded source read without materializing
+/// the temporary, for both literal and simple variable indices.
+#[test]
+fn test_direct_map_read_literal_and_variable_index_fuse() {
+    let source = r#"<?php
+$values = range(1, 10);
+echo array_map(fn($v) => $v * 3, $values)[2], '|';
+echo array_map(fn($v) => ($v + 1) * 2, $values)[9], '|';
+$index = 4;
+echo array_map(fn($v) => $v - 1, $values)[$index], '|';
+echo implode(',', [array_map(fn($v) => $v + 2, $values)[0], array_map(fn($v) => $v + 2, $values)[1]]);
+"#;
+    assert_eq!(compile_and_run(source), "9|22|4|3,4");
+    let main = main_ir(source);
+    assert!(!main.contains("runtime.array_map"), "{main}");
+    assert_eq!(main.matches("array_isset").count(), 5, "{main}");
+}
+
+/// A missing direct-read key keeps PHP's warning and null result without invoking the callback.
+#[test]
+fn test_direct_map_read_missing_key_warns_and_returns_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$values = range(1, 3);
+var_dump(array_map(fn($v) => $v * 2, $values)[5]);
+"#,
+    );
+    assert_eq!(out.stdout, "NULL\n");
+    assert!(out.stderr.contains("Undefined array key 5"), "{}", out.stderr);
+}
+
+/// A source write before the direct read is observed because the fusion evaluates the source at
+/// the original expression position.
+#[test]
+fn test_direct_map_read_observes_earlier_source_write() {
+    let out = compile_and_run(
+        r#"<?php
+$values = [1, 2];
+$values[0] = 9;
+echo array_map(fn($v) => $v * 2, $values)[0];
+"#,
+    );
+    assert_eq!(out, "18");
+}
+
+/// Typed and effectful direct callbacks keep the generic map because an overflow must throw.
+#[test]
+fn test_direct_map_read_typed_and_division_callbacks_keep_generic_map() {
+    let source = r#"<?php
+$values = range(1, 8);
+echo array_map(fn($v): int => $v * 2, $values)[1], '|';
+echo array_map(fn($v) => intdiv($v, 2), $values)[1];
+"#;
+    assert_eq!(compile_and_run(source), "4|1");
+    let main = main_ir(source);
+    assert_eq!(main.matches("runtime.array_map").count(), 2, "{main}");
+}

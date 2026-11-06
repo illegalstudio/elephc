@@ -14,6 +14,8 @@
 //!   guarded by `isset($source[$index])` and falls back to a normal source read.
 //! - The temporary must not be observed anywhere else in the block. Unsupported statement
 //!   or expression shapes fail closed instead of risking a missed use.
+//! - The same guarded substitution also rewrites a direct `array_map(...)[$key]` read, which
+//!   never materializes the temporary in the first place.
 
 use crate::names::Name;
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
@@ -30,7 +32,242 @@ struct Candidate {
 
 /// Rewrites every straight-line block in `body` that contains one safe map temporary.
 pub(crate) fn fuse_map_reads(body: &mut Vec<Stmt>, env: &TypeEnv) {
+    fuse_direct_stmts(body, env);
     fuse_block(body, env);
+}
+
+/// Rewrites direct `array_map(...)[$key]` reads throughout the statement tree.
+fn fuse_direct_stmts(stmts: &mut [Stmt], env: &TypeEnv) {
+    for stmt in stmts {
+        fuse_direct_stmt(stmt, env);
+    }
+}
+
+/// Rewrites direct map reads inside one statement and recurses into nested bodies.
+fn fuse_direct_stmt(stmt: &mut Stmt, env: &TypeEnv) {
+    match &mut stmt.kind {
+        StmtKind::For { body, .. }
+        | StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::NamespaceBlock { body, .. } => fuse_direct_stmts(body, env),
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            fuse_direct_stmts(then_body, env);
+            for (_, body) in elseif_clauses {
+                fuse_direct_stmts(body, env);
+            }
+            if let Some(body) = else_body {
+                fuse_direct_stmts(body, env);
+            }
+        }
+        StmtKind::Switch { subject, cases, default } => {
+            fuse_direct_expr(subject, env);
+            for (conditions, body) in cases {
+                for condition in conditions {
+                    fuse_direct_expr(condition, env);
+                }
+                fuse_direct_stmts(body, env);
+            }
+            if let Some(body) = default {
+                fuse_direct_stmts(body, env);
+            }
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            fuse_direct_stmts(try_body, env);
+            for catch in catches {
+                fuse_direct_stmts(&mut catch.body, env);
+            }
+            if let Some(body) = finally_body {
+                fuse_direct_stmts(body, env);
+            }
+        }
+        StmtKind::Echo(value)
+        | StmtKind::Throw(value)
+        | StmtKind::ExprStmt(value)
+        | StmtKind::Return(Some(value))
+        | StmtKind::Assign { value, .. }
+        | StmtKind::RefAssign { source: value, .. }
+        | StmtKind::ArrayPush { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::Include { path: value, .. }
+        | StmtKind::ConstDecl { value, .. }
+        | StmtKind::ListUnpack { value, .. }
+        | StmtKind::StaticVar { init: value, .. }
+        | StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. } => fuse_direct_expr(value, env),
+        StmtKind::ArrayAssign { index: first, value: second, .. }
+        | StmtKind::NestedArrayAssign { target: first, value: second }
+        | StmtKind::StaticPropertyArrayAssign { index: first, value: second, .. } => {
+            fuse_direct_expr(first, env);
+            fuse_direct_expr(second, env);
+        }
+        StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyArrayPush { object, value, .. } => {
+            fuse_direct_expr(object, env);
+            fuse_direct_expr(value, env);
+        }
+        StmtKind::PropertyArrayAssign { object, index, value, .. } => {
+            fuse_direct_expr(object, env);
+            fuse_direct_expr(index, env);
+            fuse_direct_expr(value, env);
+        }
+        StmtKind::Synthetic(body) => fuse_direct_stmts(body, env),
+        StmtKind::IfDef { then_body, else_body, .. } => {
+            fuse_direct_stmts(then_body, env);
+            if let Some(body) = else_body {
+                fuse_direct_stmts(body, env);
+            }
+        }
+        StmtKind::Return(None)
+        | StmtKind::IncludeOnceMark { .. }
+        | StmtKind::Break(_)
+        | StmtKind::Continue(_)
+        | StmtKind::NamespaceDecl { .. }
+        | StmtKind::UseDecl { .. }
+        | StmtKind::FunctionVariantGroup { .. }
+        | StmtKind::FunctionVariantMark { .. }
+        | StmtKind::Global { .. }
+        | StmtKind::PackedClassDecl { .. }
+        | StmtKind::ExternFunctionDecl { .. }
+        | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ExternGlobalDecl { .. }
+        | StmtKind::FunctionDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::EnumDecl { .. }
+        | StmtKind::InterfaceDecl { .. }
+        | StmtKind::TraitDecl { .. } => {}
+    }
+}
+
+/// Rewrites a direct map read in one expression and recurses into its subexpressions.
+fn fuse_direct_expr(expr: &mut Expr, env: &TypeEnv) {
+    if let Some(replacement) = direct_map_read(expr, env) {
+        *expr = replacement;
+        return;
+    }
+    match &mut expr.kind {
+        ExprKind::BinaryOp { left, right, .. }
+        | ExprKind::NullCoalesce { value: left, default: right }
+        | ExprKind::ShortTernary { value: left, default: right }
+        | ExprKind::Pipe { value: left, callable: right }
+        | ExprKind::ArrayAccess { array: left, index: right }
+        | ExprKind::DynamicPropertyAccess { object: left, property: right }
+        | ExprKind::NullsafeDynamicPropertyAccess { object: left, property: right } => {
+            fuse_direct_expr(left, env);
+            fuse_direct_expr(right, env);
+        }
+        ExprKind::Ternary { condition, then_expr, else_expr } => {
+            fuse_direct_expr(condition, env);
+            fuse_direct_expr(then_expr, env);
+            fuse_direct_expr(else_expr, env);
+        }
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Throw(inner)
+        | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
+        | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::NamedArg { value: inner, .. }
+        | ExprKind::IncludeValue { path: inner, .. }
+        | ExprKind::PropertyAccess { object: inner, .. }
+        | ExprKind::NullsafePropertyAccess { object: inner, .. }
+        | ExprKind::InstanceOf { value: inner, .. } => fuse_direct_expr(inner, env),
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::ClosureCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::NewScopedObject { args, .. }
+        | ExprKind::ArrayLiteral(args) => {
+            for arg in args {
+                fuse_direct_expr(arg, env);
+            }
+        }
+        ExprKind::ExprCall { callee, args }
+        | ExprKind::NewDynamic { name_expr: callee, args }
+        | ExprKind::NewDynamicObject { class_name: callee, args, .. }
+        | ExprKind::MethodCall { object: callee, args, .. }
+        | ExprKind::NullsafeMethodCall { object: callee, args, .. } => {
+            fuse_direct_expr(callee, env);
+            for arg in args {
+                fuse_direct_expr(arg, env);
+            }
+        }
+        ExprKind::NullsafeDynamicMethodCall { object, method, args } => {
+            fuse_direct_expr(object, env);
+            fuse_direct_expr(method, env);
+            for arg in args {
+                fuse_direct_expr(arg, env);
+            }
+        }
+        ExprKind::ArrayLiteralAssoc(entries) => {
+            for (key, value) in entries {
+                fuse_direct_expr(key, env);
+                fuse_direct_expr(value, env);
+            }
+        }
+        ExprKind::Match { subject, arms, default } => {
+            fuse_direct_expr(subject, env);
+            for (conditions, value) in arms {
+                for condition in conditions {
+                    fuse_direct_expr(condition, env);
+                }
+                fuse_direct_expr(value, env);
+            }
+            if let Some(default) = default {
+                fuse_direct_expr(default, env);
+            }
+        }
+        ExprKind::Assignment { target, value, prelude, .. } => {
+            fuse_direct_stmts(prelude, env);
+            fuse_direct_expr(target, env);
+            fuse_direct_expr(value, env);
+        }
+        // Closure bodies run in a nested scope whose locals are not in this environment; a
+        // direct read there can still be fused by the closure's own lowering pass.
+        ExprKind::Closure { .. } | ExprKind::ArrayLiteralMixed(_) => {}
+        _ => {}
+    }
+}
+
+/// Builds the guarded source read for a direct `array_map(...)[$key]`, if it is safe.
+fn direct_map_read(expr: &Expr, env: &TypeEnv) -> Option<Expr> {
+    let ExprKind::ArrayAccess { array, index } = &expr.kind else {
+        return None;
+    };
+    let ExprKind::FunctionCall { name, args } = &array.kind else {
+        return None;
+    };
+    if name.as_str().trim_start_matches('\\') != "array_map" || args.len() != 2 {
+        return None;
+    }
+    let ExprKind::Variable(source) = &args[1].kind else {
+        return None;
+    };
+    if env.get(source).map(PhpType::codegen_repr)
+        != Some(PhpType::Array(Box::new(PhpType::Int)))
+    {
+        return None;
+    }
+    let (param, body) = closure_arithmetic(&args[0])?;
+    if !matches!(index.kind, ExprKind::IntLiteral(_) | ExprKind::Variable(_)) {
+        return None;
+    }
+    let read = source_read_expr(source, index, expr.span);
+    Some(guarded_map_read(body, param, read, expr.span))
 }
 
 /// Recurses into nested scopes and then fuses candidates in this block.
@@ -218,16 +455,48 @@ fn substitute(expr: &Expr, param: &str, replacement: &Expr) -> Expr {
 
 /// Builds one `$source[$index]` read at the original span.
 fn source_read(source: &str, index: i64, span: Span) -> Expr {
+    source_read_expr(
+        source,
+        &Expr {
+            kind: ExprKind::IntLiteral(index),
+            span,
+        },
+        span,
+    )
+}
+
+/// Builds one `$source[$index]` read from an already-validated index expression.
+fn source_read_expr(source: &str, index: &Expr, span: Span) -> Expr {
     Expr {
         kind: ExprKind::ArrayAccess {
             array: Box::new(Expr {
                 kind: ExprKind::Variable(source.to_string()),
                 span,
             }),
-            index: Box::new(Expr {
-                kind: ExprKind::IntLiteral(index),
-                span,
-            }),
+            index: Box::new(index.clone()),
+        },
+        span,
+    }
+}
+
+/// Builds `isset($source[$index]) ? <mapped body> : $source[$index]`.
+///
+/// The else arm is the ordinary source read, so a missing key keeps PHP's warning and null
+/// result without invoking the callback.
+fn guarded_map_read(body: &Expr, param: &str, read: Expr, span: Span) -> Expr {
+    let condition = Expr {
+        kind: ExprKind::FunctionCall {
+            name: Name::from("isset"),
+            args: vec![read.clone()],
+        },
+        span,
+    };
+    let then_expr = substitute(body, param, &read);
+    Expr {
+        kind: ExprKind::Ternary {
+            condition: Box::new(condition),
+            then_expr: Box::new(then_expr),
+            else_expr: Box::new(read),
         },
         span,
     }
@@ -277,22 +546,7 @@ fn rewrite_expr(expr: &mut Expr, candidate: &Candidate) -> Result<(), ()> {
                     return Err(());
                 };
                 let read = source_read(&candidate.source, *index, expr.span);
-                let condition = Expr {
-                    kind: ExprKind::FunctionCall {
-                        name: Name::from("isset"),
-                        args: vec![read.clone()],
-                    },
-                    span: expr.span,
-                };
-                let then_expr = substitute(&candidate.body, &candidate.param, &read);
-                *expr = Expr {
-                    kind: ExprKind::Ternary {
-                        condition: Box::new(condition),
-                        then_expr: Box::new(then_expr),
-                        else_expr: Box::new(read),
-                    },
-                    span: expr.span,
-                };
+                *expr = guarded_map_read(&candidate.body, &candidate.param, read, expr.span);
                 return Ok(());
             }
         }
