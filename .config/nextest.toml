@@ -122,12 +122,15 @@ slow-timeout = { period = "60s", terminate-after = 6 }
 # These opaque-eval families compile the whole builtin catalog and run under heap
 # diagnostics; measured 76-196s on a local macOS host and 100-170s on loaded Linux
 # shards. Give the families a bounded 300s allowance.
+# Native XML factory/accessor eval probes compile the same catalog. The constructorless
+# factory probe generated 249 MB of assembly and reached 180s before linking finished.
+# Include that workload here rather than giving each probe a separate timeout override.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::instanceof_operand_owners::/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(/^codegen::io::output_handler_exceptions::/))'
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::instanceof_operand_owners::/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(/^codegen::io::output_handler_exceptions::/) or test(/^codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_/) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval))'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::instanceof_operand_owners::/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(/^codegen::io::output_handler_exceptions::/))'
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::instanceof_operand_owners::/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(/^codegen::io::output_handler_exceptions::/) or test(/^codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_/) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval))'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 # `retries = 1`: a test that fails once is run again on its own before the shard reports, and
