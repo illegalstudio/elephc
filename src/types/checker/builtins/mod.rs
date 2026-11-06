@@ -12,6 +12,7 @@ pub(crate) mod arrays;
 mod callables;
 pub(crate) use callables::callback_dummy_arg_for_type;
 pub(super) use callables::is_callback_argument_placeholder;
+pub(super) use callables::callback_args_have_opaque_placeholder;
 pub(crate) mod catalog;
 pub(crate) mod io;
 mod language_constructs;
