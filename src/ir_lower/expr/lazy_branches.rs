@@ -128,6 +128,11 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         }
         return lower_array_access_with_missing_warning(ctx, array, index, value, false);
     }
+    if let ExprKind::PropertyAccess { object, property } = &value.kind {
+        if super::lazy_isset::object_chain_reads_an_element(object) {
+            return super::array_access::lower_quiet_element_property(ctx, object, property, value);
+        }
+    }
     if let Some(value) = lower_known_missing_property_probe(ctx, value) {
         return value;
     }
@@ -224,6 +229,9 @@ pub(super) fn lower_initialized_property_null_coalesce_probe(
         Some(super::native_isset::IssetPropertyAction::Initialized)
     ) {
         return None;
+    }
+    if matches!(object.kind, ExprKind::ArrayAccess { .. }) {
+        return Some(super::array_access::lower_quiet_element_property(ctx, object, property, value));
     }
 
     let result_type = property_access_expr_type_for_ir(ctx, object, property)

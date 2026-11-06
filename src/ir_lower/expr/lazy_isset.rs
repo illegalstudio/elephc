@@ -301,8 +301,17 @@ fn lower_array_access_offset_exists(
     take_owned_temp(ctx, &temp_name, arg.span)
 }
 
+/// Whether a property chain's receiver reads through an array element (`$list[$k]->a->b`).
+pub(super) fn object_chain_reads_an_element(object: &Expr) -> bool {
+    match &object.kind {
+        ExprKind::ArrayAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => object_chain_reads_an_element(object),
+        _ => false,
+    }
+}
+
 /// Reduces a probed property value to php's `isset()` answer: set means "not null".
-fn probe_value_is_set(
+pub(super) fn probe_value_is_set(
     ctx: &mut LoweringContext<'_, '_>,
     probed: LoweredValue,
     arg: &Expr,
@@ -397,6 +406,14 @@ pub(super) fn lower_lazy_empty(
     // slot is a declared one worth probing — the same decision `isset()` makes, reused rather than
     // re-derived so the two constructs cannot drift on which properties they consider declared.
     if let ExprKind::PropertyAccess { object, property } = &args[0].kind {
+        // The element may not exist: `empty($mappings[$name]->type)` is quiet at every link, and
+        // the probe answers for a null receiver where a slot read would dereference it.
+        if object_chain_reads_an_element(object) {
+            let probed = lower_operand_in_quiet_property_fetch(ctx, &args[0], |ctx| {
+                lower_quiet_element_property(ctx, object, property, &args[0])
+            });
+            return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
+        }
         // A property this scope cannot reach on a class without `__isset`: `isset()` answers
         // false, so `empty()` answers true -- without the read, which would touch a slot the
         // scope has no right to (`empty($o->private)` from outside crashed once the checker

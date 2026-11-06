@@ -270,6 +270,76 @@ pub(super) fn lower_array_access_from_receiver(
     lower_array_access_from_value(ctx, array_value, index, expr, warn_on_missing)
 }
 
+/// Fetches `$list[$key]->property` for `isset()`, `empty()` and `??`, boxed: null past a missing
+/// element.
+///
+/// A typed array describes its hits, not the read: `array<string, Mapping>` types the element an
+/// object while a miss holds null, so the element is tested before anything dereferences it.
+pub(super) fn lower_quiet_element_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    element: &Expr,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let receiver = lower_subscript_receiver_silently(ctx, element);
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![receiver.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    let missing = ctx.builder.create_named_block("quiet_element.missing", Vec::new());
+    let present = ctx.builder.create_named_block("quiet_element.present", Vec::new());
+    let merge = ctx.builder.create_named_block("quiet_element.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: missing,
+        then_args: Vec::new(),
+        else_target: present,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(missing);
+    if ctx.value_is_owning_temporary(receiver) {
+        crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(expr.span));
+    }
+    let null = lower_boxed_null(ctx, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Mixed, null, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(present);
+    let receiver = if ctx.value_is_owning_temporary(receiver) {
+        receiver
+    } else {
+        crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
+            ctx,
+            receiver,
+            Some(expr.span),
+        )
+    };
+    let fetched = super::property_access::lower_property_fetch_mode_from_value(
+        ctx,
+        receiver,
+        property,
+        PropertyFetchMode::Coalesce,
+        expr,
+    );
+    let fetched_type = ctx.builder.value_php_type(fetched.value);
+    let boxed = if matches!(fetched_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        fetched
+    } else {
+        ctx.box_value_as_mixed(fetched, fetched_type, Some(expr.span))
+    };
+    store_value_into_temp(ctx, &temp_name, PhpType::Mixed, boxed, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
+}
+
 /// Lowers a subscript-chain receiver with undefined-offset warnings suppressed on
 /// nested array reads, so `isset()`/`??` stay silent across chained subscripts.
 pub(super) fn lower_subscript_receiver_silently(
@@ -278,6 +348,15 @@ pub(super) fn lower_subscript_receiver_silently(
 ) -> LoweredValue {
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
+    }
+    // A property of an element that may not exist (`empty($mappings[$name]->list['x'])`): the
+    // element is fetched quietly too, and the property fetch answers null for a null receiver.
+    if let ExprKind::PropertyAccess { object, property } = &array.kind {
+        if matches!(object.kind, ExprKind::ArrayAccess { .. } | ExprKind::PropertyAccess { .. })
+            && super::lazy_isset::object_chain_reads_an_element(object)
+        {
+            return lower_quiet_element_property(ctx, object, property, array);
+        }
     }
     if let Some(value) =
         super::lazy_branches::lower_magic_property_null_coalesce_probe(ctx, array)

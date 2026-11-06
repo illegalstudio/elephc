@@ -340,6 +340,10 @@ pub(super) fn lower_lazy_property_isset_operand(
             Some(emit_bool_literal(ctx, false, Some(arg.span)))
         }
         IssetPropertyAction::Initialized => {
+            if matches!(object.kind, ExprKind::ArrayAccess { .. }) {
+                let probed = super::array_access::lower_quiet_element_property(ctx, object, property, arg);
+                return Some(super::lazy_isset::probe_value_is_set(ctx, probed, arg));
+            }
             let object = lower_subscript_receiver_silently(ctx, object);
             let object = refine_member_receiver(ctx, object, arg);
             Some(lower_initialized_property_isset(ctx, object, property, arg))
