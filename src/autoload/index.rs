@@ -74,8 +74,13 @@ impl AutoloadIndex {
         // afterwards, so a project whose autoloader was never generated keeps working; entries
         // already claimed here are deduplicated away by `read_files`.
         if composer_eager_files_enabled() {
+            // Composer lists every package here, the ones this build leaves out included.
+            let vendor = super::composer_files::vendor_dir(&project_root);
+            let left_out = |path: &Path| excluded.iter().any(|name| path.starts_with(vendor.join(name)));
             for path in super::composer_files::generated_eager_files(&project_root) {
-                builder.push_eager_file(path);
+                if !left_out(&path) {
+                    builder.push_eager_file(path);
+                }
             }
         }
         for manifest in autoload_manifest_paths(&project_root) {

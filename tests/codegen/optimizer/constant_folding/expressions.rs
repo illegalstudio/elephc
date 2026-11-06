@@ -13,11 +13,12 @@ use super::*;
 /// method bodies (e.g. the eval Reflection surface) legitimately call runtime
 /// string helpers and would trip needle-based assertions about user code.
 fn main_function_asm(user_asm: &str) -> &str {
-    let Some(start) = user_asm.find("@fn name=main ") else {
-        return user_asm;
-    };
+    let start = user_asm
+        .find("\n_main:")
+        .or_else(|| user_asm.find("\nmain:"))
+        .expect("user assembly has a main symbol");
     let rest = &user_asm[start..];
-    let end = rest[1..].find("@fn name=").map_or(rest.len(), |i| i + 1);
+    let end = rest.find("\n.globl ").unwrap_or(rest.len());
     &rest[..end]
 }
 

@@ -462,7 +462,7 @@ fn test_cli_test_ignores_an_installed_phpunit() {
     // package, here with the kind of dynamic include the compiler refuses.
     fs::write(
         dir.join("vendor/phpunit/phpunit/src/functions.php"),
-        "<?php\n$loader = __DIR__ . '/Loader.php';\nrequire $loader;\n",
+        "<?php\necho 'phpunit eager file ran';\n$loader = __DIR__ . '/Loader.php';\nrequire $loader;\n",
     )
     .unwrap();
     fs::write(
@@ -476,6 +476,15 @@ fn test_cli_test_ignores_an_installed_phpunit() {
     )
     .unwrap();
     fs::create_dir_all(dir.join("vendor/composer")).unwrap();
+    // Composer's generated list names every package, the ones the test build leaves out too.
+    fs::write(
+        dir.join("vendor/composer/autoload_files.php"),
+        "<?php\n$vendorDir = dirname(__DIR__);\nreturn array(\n\
+         'a' => $vendorDir . '/phpunit/phpunit/src/functions.php',\n\
+         'b' => $vendorDir . '/sebastian/exporter/src/functions.php',\n\
+         'c' => $vendorDir . '/acme/helpers/src/functions.php',\n);\n",
+    )
+    .unwrap();
     fs::write(
         dir.join("vendor/composer/installed.json"),
         r#"{"packages": [

@@ -327,10 +327,10 @@ echo ($inside & 0xFF);
 /// Omitted procedural cairo functions stay genuinely undefined (compile error),
 /// not silent stubs returning false/null. `cairo_font_options_create` is in the
 /// obscure PECL tail (font metrics) that this common subset deliberately
-/// omits; the `cairo_` prefix still triggers prelude injection, so the type checker
-/// rejects the call rather than treating it as a builtin no-op.
+/// omits; the `cairo_` prefix still triggers prelude injection, and the call raises php's
+/// uncaught `Error` when it runs rather than behaving as a builtin no-op.
 #[test]
-#[should_panic(expected = "Undefined function: cairo_font_options_create")]
+#[should_panic(expected = "Call to undefined function cairo_font_options_create()")]
 fn test_proc_omitted_function_is_undefined() {
     let _ = compile_and_run(
         r#"<?php

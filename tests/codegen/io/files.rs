@@ -478,21 +478,19 @@ string(3) "EFG"
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies a non-null `$context` is refused with a diagnostic that names the parameter, rather
-/// than being silently ignored: elephc has no stream-context plumbing on the read path, so a
-/// caller's context options could not be honored.
+/// A stream context on a plain file changes nothing: php opens the file and returns its bytes.
 #[test]
-fn test_file_get_contents_rejects_a_non_null_stream_context() {
-    let error = compile_source_expect_backend_error(
+fn test_file_get_contents_reads_a_plain_file_through_a_stream_context() {
+    let out = compile_and_run(
         r#"<?php
 $context = stream_context_create([]);
-echo file_get_contents("x.txt", false, $context);
+$path = tempnam(sys_get_temp_dir(), "elephc_ctx");
+file_put_contents($path, "ABC");
+echo file_get_contents($path, false, $context);
+unlink($path);
 "#,
     );
-    assert!(
-        error.contains("file_get_contents() $context argument"),
-        "expected a diagnostic naming $context, got: {error}"
-    );
+    assert_eq!(out, "ABC");
 }
 
 /// Verifies the 1-argument form is unchanged: a literal `null` context and an omitted one both

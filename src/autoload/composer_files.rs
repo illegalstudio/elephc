@@ -39,7 +39,7 @@ pub(super) fn generated_eager_files(project_root: &Path) -> Vec<PathBuf> {
 }
 
 /// Resolves the project's vendor directory, honouring `config.vendor-dir` in the root manifest.
-fn vendor_dir(project_root: &Path) -> PathBuf {
+pub(super) fn vendor_dir(project_root: &Path) -> PathBuf {
     let configured = std::fs::read_to_string(project_root.join("composer.json"))
         .ok()
         .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
