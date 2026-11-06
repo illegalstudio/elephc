@@ -1828,6 +1828,13 @@ fn lower_body_into_function(
     )>,
     web: bool,
 ) -> Vec<Function> {
+    // Fuse a pure array_map() temporary with its constant-indexed reads before any
+    // statement is lowered. The pass is fail-closed and only rewrites straight-line blocks.
+    let mut fused_body = body.to_vec();
+    if !crate::ir_lower::body_contains_eval_call(body) {
+        crate::ir_lower::stmt::map_read_fusion::fuse_map_reads(&mut fused_body, &env);
+    }
+    let body: &[Stmt] = &fused_body;
     // The constructor calls this ordinary EIR function before allocating a coroutine.
     // Reuse full lowering so reference/collector validation and exception cleanup stay shared.
     let mut eager_validators = Vec::new();

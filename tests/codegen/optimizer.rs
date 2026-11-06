@@ -45,6 +45,8 @@ mod json_decode_count_hoist;
 mod array_sum_int_sink;
 #[path = "optimizer/array_map_sum_add_int_sink.rs"]
 mod array_map_sum_add_int_sink;
+mod array_map_read_fusion;
+mod array_map_count_fusion;
 #[path = "optimizer/array_filter_count_hoist.rs"]
 mod array_filter_count_hoist;
 #[path = "optimizer/array_read_match.rs"]

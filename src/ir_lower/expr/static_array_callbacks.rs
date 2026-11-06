@@ -551,6 +551,74 @@ pub(super) fn lower_map_sum_add(
     ))
 }
 
+/// Lowers `count(array_map(fn($x) => <pure arithmetic>, $ints))` to the source length.
+///
+/// The single-array form preserves keys and emits exactly one result per source element,
+/// so a capture-free closure whose body is pure arithmetic cannot change the count. Its
+/// calls have no observable effects, which lets the map array disappear entirely. Capturing,
+/// typed, division-based, or otherwise effectful callbacks keep the generic map.
+pub(super) fn lower_count_map(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "count" || args.len() != 1 {
+        return None;
+    }
+    let ExprKind::FunctionCall {
+        name: map_name,
+        args: map_args,
+    } = &args[0].kind
+    else {
+        return None;
+    };
+    if php_symbol_key(map_name.as_str().trim_start_matches('\\')) != "array_map"
+        || ctx.functions.contains_key(map_name.as_str().trim_start_matches('\\'))
+        || map_args.len() != 2
+        || crate::types::call_args::has_named_args(map_args)
+        || map_args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let ExprKind::Variable(source_name) = &map_args[1].kind else {
+        return None;
+    };
+    if ctx.local_type(source_name).codegen_repr()
+        != PhpType::Array(Box::new(PhpType::Int))
+    {
+        return None;
+    }
+    let (param, body) = scalar_single_param_closure(&map_args[0], false)?;
+    if !count_pure_arithmetic(body, param) {
+        return None;
+    }
+    let source = lower_expr(ctx, &map_args[1]);
+    Some(ctx.emit_value(
+        Op::ArrayLen,
+        vec![source.value],
+        None,
+        PhpType::Int,
+        Op::ArrayLen.default_effects(),
+        Some(expr.span),
+    ))
+}
+
+/// Returns true for a pure arithmetic tree over the parameter and scalar literals.
+fn count_pure_arithmetic(expr: &Expr, param: &str) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(name) => name == param,
+        ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) => true,
+        ExprKind::Negate(inner) => count_pure_arithmetic(inner, param),
+        ExprKind::BinaryOp { left, op, right } => {
+            matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
+                && count_pure_arithmetic(left, param)
+                && count_pure_arithmetic(right, param)
+        }
+        _ => false,
+    }
+}
+
 /// Lowers `count(array_filter($ints, fn($x) => $x % $c === 0))` into one counting kernel.
 ///
 /// The predicate is exactly PHP's integer remainder compared strictly with zero, so the kernel

@@ -645,6 +645,17 @@ result, and the cast/release scaffolding is retired. The raw kernel shares the
 existing vector/scalar body but skips the Mixed box; a promoted map or running sum
 terminates in PHP's warned float-to-int conversion.
 
+`src/ir_lower/stmt/map_read_fusion.rs` observes a materialized `array_map()` temporary
+whose only consumers are constant-indexed reads: `$mapped = array_map(fn($v) =>
+<pure arithmetic>, $ints); echo $mapped[$k];` lowers each read to
+`isset($ints[$k]) ? <body with $v = $ints[$k]> : $ints[$k]` and removes the map.
+The closure must be capture-free, untyped, and a pure `+`/`-`/`*` tree over its
+parameter and scalar literals; a typed return, division/modulus, a call, a capture,
+or a use outside the same straight-line block keeps the generic map. A missing key
+keeps the source read's warning and null result. `count(array_map(...))` lowers to
+`ArrayLen(source)` for the same pure closures; capturing or effectful callbacks keep
+the materialized map and its per-element calls.
+
 `src/ir_passes/abs_int_sink.rs` applies the same cast-observed rule to `abs()`.
 When the operand is a concrete int, bool, or null-capable tagged scalar and the
 boxed result is observed only through one `(int)` cast, the call becomes
