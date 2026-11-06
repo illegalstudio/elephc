@@ -210,6 +210,10 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x2, x10");                                         // evaluate `cmp x2, x10` before selecting the projection branch
     emitter.instruction("b.eq __rt_object_to_hash_next");                       // skip or advance the current property via `__rt_object_to_hash_next`
     emit_deref_reference_property_slot(emitter, "x16", "x1", "x2", "x9");
+    // An owned reference slot keeps its marker in the cell: skip it past the dereference too.
+    abi::emit_load_int_immediate(emitter, "x10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp x1, x10");                                         // is the cell still uninitialized?
+    emitter.instruction("b.eq __rt_object_to_hash_next");                       // php omits an uninitialized property
     emit_resolve_prop_desc_tag(emitter, "x16", "x2", "x9");
     emitter.instruction("mov x0, x16");                                         // prepare the projection argument or result with `mov x0, x16`
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
@@ -466,6 +470,10 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rsi, r11");                                        // evaluate `cmp rsi, r11` before selecting the projection branch
     emitter.instruction("je __rt_object_to_hash_next_x");                       // skip or advance the current property via `__rt_object_to_hash_next_x`
     emit_deref_reference_property_slot(emitter, "r15", "rdi", "rsi", "rax");
+    // An owned reference slot keeps its marker in the cell: skip it past the dereference too.
+    abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp rdi, r11");                                        // is the cell still uninitialized?
+    emitter.instruction("je __rt_object_to_hash_next_x");                       // php omits an uninitialized property
     emit_resolve_prop_desc_tag(emitter, "r15", "rsi", "rax");
     emitter.instruction("mov rax, r15");                                        // prepare the projection argument or result with `mov rax, r15`
     emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
