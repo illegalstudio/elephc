@@ -372,11 +372,15 @@ fn emit_static_exception_at(
         None => String::new(),
     };
     let creation_line = location.as_ref().map_or(0, |(_, line)| *line);
-    let fatal_message = format!(
-        "\nFatal error: Uncaught {}: {}{}\n",
-        class_name, message, suffix
-    );
-    let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
+    // With frame readers live the unwinder writes the report, `Stack trace:` included, and this
+    // text is never read: 54 MB of the Symfony Demo's data, one rendering per raise site.
+    let (fatal_label, fatal_len) = if ctx.backtrace_enabled {
+        ctx.data.add_string(b"")
+    } else {
+        let fatal_message =
+            format!("\nFatal error: Uncaught {}: {}{}\n", class_name, message, suffix);
+        ctx.data.add_string(fatal_message.as_bytes())
+    };
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
 
     // Fifty-odd lines of this sequence are the same at every raise in the program; only the five

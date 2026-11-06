@@ -273,6 +273,22 @@ foreach ($c = new Caching([1, 2]) as $v) { echo $v, ':', var_export($c->hasNext(
     assert_eq!(out, "1:true\n2:false\n");
 }
 
+/// With frame readers the unwinder writes the uncaught report, so no raise site may store its own
+/// rendering of it: that was 54 MB of the Symfony Demo's data, read by nothing.
+#[test]
+fn test_a_raise_site_stores_no_uncaught_report_when_frames_write_it() {
+    let source = r#"<?php
+function ratio(int $a, int $b): int { return intdiv($a, $b); }
+try { throw new RuntimeException('x'); } catch (RuntimeException $e) { echo ratio(4, 2), "\n"; }
+"#;
+    let dir = make_cli_test_dir("elephc_no_prerendered_report");
+    let (asm, _runtime, _libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(asm.contains("Division by zero"), "the message itself stays");
+    assert!(!asm.contains("Uncaught DivisionByZeroError"), "the rendered report is gone");
+}
+
 /// `&__get()` hands the magic read its value (nette's `SmartObject`).
 #[test]
 fn test_by_reference_magic_get_reads_the_value() {
