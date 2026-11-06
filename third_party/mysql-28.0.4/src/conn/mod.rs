@@ -1676,6 +1676,14 @@ impl Conn {
         Ok((rows, exhausted))
     }
 
+    /// elephc patch: [`COM_STMT_RESET`](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_reset.html):
+    /// resets the server-side state of statement `stmt_id` (long data, an open cursor) and
+    /// reads its OK packet, like mysqlnd's `mysqli_stmt::reset()`.
+    pub fn stmt_reset(&mut self, stmt_id: u32) -> Result<()> {
+        self.write_command(Command::COM_STMT_RESET, &stmt_id.to_le_bytes())?;
+        self.drop_packet()
+    }
+
     /// Bulk-executes the given statement. Query results will be ignored.
     fn _execute_bulk<P, I>(&mut self, stmt: &Statement, params: I) -> Result<()>
     where

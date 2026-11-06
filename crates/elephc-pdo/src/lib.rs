@@ -4623,6 +4623,27 @@ pub extern "C" fn elephc_pdo_mysql_execute(stmt_id: i64) -> i64 {
     })
 }
 
+/// mysqli_stmt::reset(): resets the statement locally and sends `COM_STMT_RESET` (see
+/// `MyStmt::server_reset`). `1` on success, `-1` on failure (the error is the connection's) or
+/// for a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_stmt_reset(stmt_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut sguard = lock_recover(stmts());
+        match sguard.get_mut(&stmt_id) {
+            Some(Stmt::Mysql(s)) => {
+                let conn_id = s.conn_id;
+                let mut cguard = lock_recover(conns());
+                match cguard.get_mut(&conn_id) {
+                    Some(Conn::Mysql(c)) => instr_io::timed(|| s.server_reset(c)),
+                    _ => -1,
+                }
+            }
+            _ => -1,
+        }
+    })
+}
+
 /// Sets a MySQL statement's cursor type for its next execution (mysqli's
 /// `MYSQLI_STMT_ATTR_CURSOR_TYPE`: `0` none, `1` `MYSQLI_CURSOR_TYPE_READ_ONLY`). `1` on
 /// success, `0` for a non-MySQL or unknown handle.

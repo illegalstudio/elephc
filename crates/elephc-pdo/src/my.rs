@@ -2301,6 +2301,9 @@ impl MyConn {
         let Some(conn) = self.conn.0.take() else {
             return Err(-1);
         };
+        // Session state read while the worker owns the client (escaping, version).
+        self.server_version = conn.server_version();
+        self.no_backslash_escapes = conn.no_backslash_escape();
         #[cfg(unix)]
         {
             self.worker_socket = Some(std::os::unix::io::AsRawFd::as_raw_fd(&conn));
@@ -2326,6 +2329,9 @@ impl MyConn {
         let Some(conn) = self.conn.0.take() else {
             return Err(-1);
         };
+        // Session state read while the worker owns the client (escaping, version).
+        self.server_version = conn.server_version();
+        self.no_backslash_escapes = conn.no_backslash_escape();
         #[cfg(unix)]
         {
             self.worker_socket = Some(std::os::unix::io::AsRawFd::as_raw_fd(&conn));
@@ -3137,7 +3143,11 @@ impl MyConn {
                 cursor: -1,
                 executed: false,
                 is_call: sql_is_call_statement(sql),
-                buffered: self.buffered_query,
+                // A stored mysqli query() buffers only the CURRENT set, like mysqlnd's
+                // store_result(): later sets stay on the server until next_result(). With
+                // multi-statements off only a CALL returns several sets, so a raw CALL streams
+                // (the prelude buffers its first set) and everything else is read at once.
+                buffered: self.buffered_query && !(raw && sql_is_call_statement(sql)),
                 stream_id: None,
                 lazy_sets: self.lazy_rowsets,
                 cursor_type: 0,
@@ -3599,6 +3609,31 @@ impl MyStmt {
         self.trailing_error = None;
         self.stream_id = None;
         1
+    }
+
+    /// mysqli_stmt::reset(): the local [`MyStmt::reset`] (which finishes this statement's own
+    /// unread stream), then `COM_STMT_RESET` for a native statement. `1` on success, `-1`
+    /// with the connection's error recorded when the command fails (a lost connection).
+    pub fn server_reset(&mut self, conn: &mut MyConn) -> i64 {
+        self.reset(conn);
+        let Some(statement) = self.statement.as_ref() else {
+            return 1;
+        };
+        if !conn.ensure_not_busy() {
+            return -1;
+        }
+        match conn.conn.stmt_reset(statement.id()) {
+            Ok(()) => {
+                conn.errcode = 0;
+                conn.sqlstate = "00000".to_string();
+                conn.errmsg.clear();
+                1
+            }
+            Err(error) => {
+                conn.record_mysql_error(&error);
+                -1
+            }
+        }
     }
 
     /// Makes one materialized result set active and updates connection-level

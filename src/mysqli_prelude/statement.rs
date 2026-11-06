@@ -719,11 +719,19 @@ class mysqli_stmt {
 
     public function reset(): bool {
         $this->requireValid();
-        $this->linkBump("com_stmt_reset");
         if ($this->hasPending && $this->cursorOpen) {
             $this->drainCursor();
         }
-        elephc_pdo_reset($this->stmt);
+        // mysqlnd sends COM_STMT_RESET only on a ready link: while another result or
+        // an async query owns it, the reset is local and succeeds without traffic.
+        $_link = $this->link;
+        $_rc = 1;
+        if ($_link !== null && $_link->__elephcBusyFor($this->stmt)) {
+            elephc_pdo_reset($this->stmt);
+        } else {
+            $this->linkBump("com_stmt_reset");
+            $_rc = elephc_pdo_mysql_stmt_reset($this->stmt);
+        }
         // php's reset keeps the parameter and result bindings but discards
         // long data and any pending (unread) rows. A set store_result() already
         // buffered survives with its position and num_rows, like mysqlnd's;
@@ -735,6 +743,15 @@ class mysqli_stmt {
         $this->syncLink();
         if (!$this->stored) {
             $this->num_rows = 0;
+        }
+        if ($_rc < 0) {
+            // A failed reset (a lost connection) fails without mysqli_report(), like
+            // mysqli_stmt_reset(); the error is the statement's and the link's.
+            $this->adoptBridgeError();
+            if ($_link !== null) {
+                $_link->__elephcAdoptBridgeError();
+            }
+            return false;
         }
         $this->clearError();
         return true;
@@ -1053,6 +1070,13 @@ class mysqli_stmt {
     // (falling back to the connection for prepare-level failures), then
     // dispatches mysqli_report. Always returns false so callers tail-call it.
     private function opFailed(): bool {
+        $this->adoptBridgeError();
+        $this->report($this->error, $this->errno, $this->sqlstate);
+        return false;
+    }
+
+    // opFailed() without the mysqli_report() dispatch.
+    private function adoptBridgeError(): void {
         $this->error = mysqli::__elephcServerMessage(elephc_pdo_stmt_errmsg($this->stmt));
         $this->errno = mysqli::__elephcClientErrno(elephc_pdo_stmt_errcode($this->stmt), $this->error);
         $this->sqlstate = elephc_pdo_stmt_sqlstate($this->stmt);
@@ -1067,8 +1091,6 @@ class mysqli_stmt {
             $this->sqlstate = "HY000";
         }
         $this->error_list = [["errno" => $this->errno, "sqlstate" => $this->sqlstate, "error" => $this->error]];
-        $this->report($this->error, $this->errno, $this->sqlstate);
-        return false;
     }
 
     // Clears the per-operation error state after a successful operation.

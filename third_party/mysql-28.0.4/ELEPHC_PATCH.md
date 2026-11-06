@@ -19,6 +19,8 @@ workspace `Cargo.toml`, with these additions in `src/conn/mod.rs` (marked `eleph
   `CURSOR_TYPE_NO_CURSOR`), whose metadata EOF is parsed for `SERVER_STATUS_CURSOR_EXISTS`,
   and `Conn::stmt_fetch(stmt_id, num_rows, columns)`: `COM_STMT_FETCH` (mysqli's
   `MYSQLI_CURSOR_TYPE_READ_ONLY` statements).
+- `Conn::stmt_reset(stmt_id)`: `COM_STMT_RESET` with its OK packet (mysqli's
+  `mysqli_stmt::reset()`).
 - mysqlnd-exact wire statistics: `IO_STAT_NAMES`, `IoCounters`, the per-command response
   state machine that picks the mysqlnd packet reader of each received packet, and the
   `CountedStream` wrapper that counts raw received bytes.

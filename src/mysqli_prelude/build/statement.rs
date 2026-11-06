@@ -1150,7 +1150,6 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireValid", vec![])),
-                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_reset")])),
                     s_if(
                         e_binop(e_this_prop("hasPending"), BinOp::And, e_this_prop("cursorOpen")),
                         vec![
@@ -1159,7 +1158,23 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
+                    s_assign("_link", e_this_prop("link")),
+                    s_assign("_rc", e_int(1)),
+                    s_if(
+                        e_binop(
+                            e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
+                            BinOp::And,
+                            e_method_call(e_var("_link"), "__elephcBusyFor", vec![e_this_prop("stmt")]),
+                        ),
+                        vec![
+                            s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
+                        ],
+                        vec![],
+                        Some(vec![
+                            s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_reset")])),
+                            s_assign("_rc", e_call("elephc_pdo_mysql_stmt_reset", vec![e_this_prop("stmt")])),
+                        ]),
+                    ),
                     s_expr(e_method_call(e_this(), "clearLongData", vec![])),
                     s_prop_assign(e_this(), "hasPending", e_bool(false)),
                     s_expr(e_method_call(e_this(), "syncLink", vec![])),
@@ -1168,6 +1183,23 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_not(e_this_prop("stored")),
                         vec![s_prop_assign(e_this(), "num_rows", e_int(0))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "adoptBridgeError", vec![])),
+                            s_if(
+                                e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
+                                vec![
+                                    s_expr(e_method_call(e_var("_link"), "__elephcAdoptBridgeError", vec![])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_return(e_bool(false)),
+                        ],
                         vec![],
                         None,
                     ),
@@ -1682,6 +1714,16 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                 .private()
                 .returns(TypeExpr::Bool)
                 .body(vec![
+                    s_expr(e_method_call(e_this(), "adoptBridgeError", vec![])),
+                    s_expr(e_method_call(e_this(), "report", vec![e_this_prop("error"), e_this_prop("errno"), e_this_prop("sqlstate")])),
+                    s_return(e_bool(false)),
+                ]),
+        )
+        .method(
+            method("adoptBridgeError")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
                     s_prop_assign(e_this(), "error", e_static_call("mysqli", "__elephcServerMessage", vec![e_call("elephc_pdo_stmt_errmsg", vec![e_this_prop("stmt")])])),
                     s_prop_assign(e_this(), "errno", e_static_call("mysqli", "__elephcClientErrno", vec![e_call("elephc_pdo_stmt_errcode", vec![e_this_prop("stmt")]), e_this_prop("error")])),
                     s_prop_assign(e_this(), "sqlstate", e_call("elephc_pdo_stmt_sqlstate", vec![e_this_prop("stmt")])),
@@ -1704,8 +1746,6 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_prop_assign(e_this(), "error_list", e_array(vec![e_array_assoc(vec![(e_str("errno"), e_this_prop("errno")), (e_str("sqlstate"), e_this_prop("sqlstate")), (e_str("error"), e_this_prop("error"))])])),
-                    s_expr(e_method_call(e_this(), "report", vec![e_this_prop("error"), e_this_prop("errno"), e_this_prop("sqlstate")])),
-                    s_return(e_bool(false)),
                 ]),
         )
         .method(

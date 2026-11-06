@@ -306,6 +306,7 @@ extern "elephc_pdo" {
     function elephc_pdo_mysql_io_stat(int $conn, int $which): int;
     function elephc_pdo_mysql_set_server_option(int $conn, int $option): int;
     function elephc_pdo_mysql_execute(int $stmt): int;
+    function elephc_pdo_mysql_stmt_reset(int $stmt): int;
     function elephc_pdo_mysql_more_results(int $stmt): int;
     // MYSQLI_CURSOR_TYPE_READ_ONLY: the cursor type of the next execution, whether the
     // last one opened a server cursor (rows fetched with COM_STMT_FETCH, link free), and

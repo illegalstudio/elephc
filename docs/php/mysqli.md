@@ -199,6 +199,9 @@ while ($sel->fetch()) {            // writes the row into $id / $userName
 - `result_metadata()` returns a row-less `mysqli_result` describing the columns
   (available right after `prepare()`, like `field_count` and `param_count`).
 - `more_results()` / `next_result()` walk the result sets of a `CALL`.
+- `reset()` sends `COM_STMT_RESET` on a ready link (while another result owns the
+  link it resets locally, like mysqlnd) and returns `false` without `mysqli_report()`
+  when the connection is lost.
 - `attr_get()` / `attr_set()` handle `MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH` and
   `MYSQLI_STMT_ATTR_CURSOR_TYPE` (plus `MYSQLI_STMT_ATTR_PREFETCH_ROWS` before
   PHP 8.4), with php's `ValueError`s and mysqlnd's "Not implemented" for the
@@ -249,6 +252,10 @@ A `store_result()` result is independent and stays valid while the batch
 advances; with `use_result()` each set streams and must be consumed (or freed)
 before `next_result()`, which — like mysqlnd — returns `false` while the current
 set is unread.
+
+A stored `query()` of a `CALL` buffers only its first set, like mysqlnd's
+`store_result()`: the later sets stay on the server until `next_result()` reads
+them, and the link answers other commands with 2014 meanwhile.
 
 ## Async queries
 

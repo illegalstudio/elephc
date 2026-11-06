@@ -1701,6 +1701,67 @@ echo "\n";
     assert_eq!(out, "1:early|2:waited\n");
 }
 
+/// A stored synchronous `query()` of a `CALL` returns once its first set is buffered (mysqlnd's
+/// store_result()); the later sets stay on the server, keep the link out of sync (2014) and are
+/// read by `next_result()`, which waits for the slow statement between them. Expected output
+/// is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_query_call_reads_later_sets_on_next_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP PROCEDURE IF EXISTS msyncslow");
+$db->query("CREATE PROCEDURE msyncslow() BEGIN SELECT 1 AS a; DO SLEEP(1.5); SELECT 2 AS b; END");
+$start = microtime(true);
+$first = $db->query("CALL msyncslow()");
+echo $first->fetch_row()[0], ":", microtime(true) - $start < 1.0 ? "early" : "late";
+echo ":", var_export($db->more_results(), true), ":", var_export($db->query("SELECT 9"), true), $db->errno;
+$db->next_result();
+$second = $db->store_result();
+echo "|", $second->fetch_row()[0], ":", microtime(true) - $start >= 1.4 ? "waited" : "early";
+while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+echo "|", $db->query("SELECT 9")->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "1:early:true:false2014|2:waited|9\n");
+}
+
+/// mysqli_stmt::reset() sends COM_STMT_RESET on a ready link (counted, also for a fresh or an
+/// unread statement, whose rows it skips), resets locally without traffic while another result
+/// owns the link, keeps a stored set fetchable, and fails without mysqli_report() (even
+/// STRICT) when the connection is lost, with 2006 on the statement and the link. Expected
+/// output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_reset_sends_com_stmt_reset() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$s = $db->prepare("SELECT 1 UNION ALL SELECT 2");
+$c = function () use ($db) { return $db->get_connection_stats()["com_stmt_reset"]; };
+$c0 = $c();
+echo "fresh:", var_export($s->reset(), true), $c() - $c0, "|";
+$v = null;
+$s->execute();
+$s->store_result();
+$s->bind_result($v);
+echo "stored:", var_export($s->reset(), true), $c() - $c0, var_export($s->fetch(), true), $v, "|";
+$r = $db->query("SELECT 1 UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+echo "busy:", var_export($s->reset(), true), $c() - $c0, ":", $s->errno, "|";
+$r->free();
+$s->execute();
+echo "unread:", var_export($s->reset(), true), $c() - $c0, ":", $s->errno, ":", $db->query("SELECT 5")->fetch_row()[0], "|";
+$k = new mysqli($host, $user, $pass, $dbname, $port);
+$k->query("KILL " . $db->thread_id);
+usleep(200000);
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+echo "killed:", var_export($s->reset(), true), $c() - $c0, ":", $s->errno, ":", $s->sqlstate, ":", $db->errno, "\n";
+"#,
+    ));
+    assert_eq!(out, "fresh:true1|stored:true2true1|busy:true2:0|unread:true3:0:5|killed:false4:2006:HY000:2006\n");
+}
+
 /// An async `UPDATE` (and an unbuffered `real_query()` one) reports its OK packet once
 /// reaped: `affected_rows` and the "Rows matched: ..." `info` string, like mysqlnd.
 /// Expected output is php 8.5 + mysqlnd's.
@@ -1724,6 +1785,27 @@ echo "|", $db->affected_rows, "|", $db->info, "\n";
 "#,
     ));
     assert_eq!(out, "true|2|Rows matched: 2  Changed: 2  Warnings: 0|3|Rows matched: 3  Changed: 3  Warnings: 0\n");
+}
+
+/// real_escape_string() follows the session's NO_BACKSLASH_ESCAPES mode set just before an
+/// unbuffered result took the link: the quote is doubled, not backslash-escaped (and back to
+/// backslashes once the mode is cleared). Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_escape_during_a_stream_follows_the_current_sql_mode() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("SET SESSION sql_mode = 'NO_BACKSLASH_ESCAPES'");
+$r = $db->query("SELECT 1 UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+echo $db->real_escape_string("a'b\\c"), "|";
+$r->free();
+$db->query("SET SESSION sql_mode = ''");
+$r = $db->query("SELECT 1 UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+echo $db->real_escape_string("a'b\\c"), "\n";
+"#,
+    ));
+    assert_eq!(out, "a''b\\c|a\\'b\\\\c\n");
 }
 
 /// A multi_query() batch whose set is column-less (an OK packet) still announces the sets that
