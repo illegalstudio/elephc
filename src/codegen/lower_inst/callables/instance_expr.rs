@@ -91,7 +91,7 @@ fn lower_instance_method_callable_call(
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.return_ty)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Resolves a callable operand back to the receiver-bound method descriptor that produced it.

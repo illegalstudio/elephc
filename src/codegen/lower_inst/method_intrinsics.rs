@@ -51,7 +51,7 @@ pub(super) fn lower_interface_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Resolves interface method metadata and validates the EIR ABI operand count.
@@ -148,7 +148,7 @@ pub(super) fn lower_nullable_receiver_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)?;
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, target.by_ref_return)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
@@ -236,7 +236,7 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)?;
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
@@ -336,7 +336,7 @@ pub(super) fn lower_instance_runtime_intrinsic(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Lowers a runtime-backed intrinsic static method using the hidden called-class id ABI.
@@ -410,7 +410,7 @@ pub(super) fn lower_static_runtime_intrinsic(
         ctx.store_result_value(result)?;
     }
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Lowers `CallbackFilterIterator::__elephcAcceptCallback()` through its stored descriptor.

@@ -341,7 +341,7 @@ pub(super) fn lower_boxed_array_access_interface_call(
     store_call_result(ctx, inst, &return_ty)?;
     // Interface implementations use ordinary PHP parameter shadows, not argument-owner transfer.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Emits the concrete method body backing a PHP object runtime fallback.
@@ -374,7 +374,7 @@ pub(in crate::codegen) fn lower_runtime_object_method_call(
     store_runtime_object_call_result(ctx, inst, &target.return_ty)?;
     // The concrete PHP method owns any Mixed parameter that can flow into its return value.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Stores an object fallback call result, casting boxed Mixed values when the access type is known.

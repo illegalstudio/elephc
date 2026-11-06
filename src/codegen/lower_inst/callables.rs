@@ -2412,7 +2412,7 @@ fn emit_runtime_array_instance_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.sig.return_type)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Builds and invokes a receiver-captured descriptor for a matched instance method.

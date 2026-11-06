@@ -629,3 +629,50 @@ run();
     );
     assert_clean(out, "caught:2|caught:2|caught:2\n");
 }
+
+/// The writeback result guard also covers iterable and callable returns, the cell a
+/// by-reference return transfers, and calls through an interface-typed or a nullable
+/// receiver: a destructor thrown while the writeback releases the previous object leaks
+/// none of them. Output matches php 8.5.
+#[test]
+fn test_declared_reference_writeback_throw_releases_every_owned_result_kind() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {
+    public function __construct(public int $id) {}
+    public function __destruct() { if ($this->id === 1) { throw new RuntimeException("d"); } }
+}
+class R { public array $items = [1, 2]; }
+interface I { public function swap(?C &$c): R; }
+class M implements I { public function swap(?C &$c): R { $c = new C(2); return new R(); } }
+function replaceIt(?C &$c): iterable { $c = new C(2); return [new R()]; }
+function replaceFn(?C &$c): callable { $c = new C(2); $r = new R(); return function () use ($r) { return $r; }; }
+function &replaceRef(?C &$c): array { $c = new C(2); $a = [new R()]; return $a; }
+function viaInterface(I $i): void {
+    C $x = new C(1);
+    try { $r = $i->swap($x); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $x->id; }
+}
+function viaNullable(?M $m): void {
+    C $x = new C(1);
+    try { $r = $m->swap($x); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $x->id; }
+}
+function run(): void {
+    C $a = new C(1);
+    try { $r = replaceIt($a); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $a->id; }
+    echo "|";
+    C $b = new C(1);
+    try { $f = replaceFn($b); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $b->id; }
+    echo "|";
+    C $c = new C(1);
+    try { $v = replaceRef($c); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $c->id; }
+    echo "|";
+    viaInterface(new M());
+    echo "|";
+    viaNullable(new M());
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "caught:2|caught:2|caught:2|caught:2|caught:2\n");
+}

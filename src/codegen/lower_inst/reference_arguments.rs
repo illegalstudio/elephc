@@ -150,13 +150,8 @@ fn materialize_method_call_args_with_receiver_reg_and_refs_options(
             param_types.len()
         )));
     }
-    let ref_writebacks = plan_ref_arg_writebacks(ctx, operands, param_types, ref_params)?;
+    let mut ref_writebacks = plan_ref_arg_writebacks(ctx, operands, param_types, ref_params)?;
     let preleased_ref_cells = plan_preleased_ref_arg_cells(ctx, operands, ref_params)?;
-    if !ref_writebacks.is_empty() {
-        return Err(CodegenIrError::unsupported(
-            "receiver-register method call with scalar-to-mixed by-reference writebacks",
-        ));
-    }
     // Dynamic constructors use the same reference lifetime selection as fixed construction.
     // Only classes with borrowed reference properties keep the persistent fallback.
     let mut ref_temp_cells =
@@ -171,17 +166,19 @@ fn materialize_method_call_args_with_receiver_reg_and_refs_options(
     // `crate::codegen::frame` reserves a save slot for. This check makes that a hard
     // contract instead of a coincidence: a future caller that passes a scratch register and
     // a by-reference argument needing a cell gets a compile-time backend error rather than a
-    // constructor entered with the cell's value as `$this`.
-    if !ref_temp_cells.is_empty() && receiver_reg != abi::nested_call_reg(ctx.emitter) {
+    // constructor entered with the cell's value as `$this`. A writeback cell (a declared local
+    // passed to a nullable by-reference parameter) boxes its value the same way.
+    if (!ref_temp_cells.is_empty() || !ref_writebacks.is_empty())
+        && receiver_reg != abi::nested_call_reg(ctx.emitter)
+    {
         return Err(CodegenIrError::unsupported(format!(
             "receiver-register method call staging a by-reference cell with the receiver in \
              {receiver_reg} (needs the callee-saved nested-call register)"
         )));
     }
-    let mut no_writebacks: Vec<RefArgWriteback> = Vec::new();
     emit_ref_arg_cell_block(
         ctx,
-        &mut no_writebacks,
+        &mut ref_writebacks,
         &mut ref_temp_cells,
     )?;
     let cleanup_slots = plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
@@ -744,7 +741,36 @@ pub(super) fn emit_ref_arg_writebacks(
     ctx: &mut FunctionContext<'_>,
     call_args: &CallArgMaterialization,
 ) -> Result<()> {
-    emit_ref_arg_writebacks_guarding_result(ctx, call_args, None)
+    emit_ref_arg_writebacks_guarding_result(ctx, call_args, None, false)
+}
+
+/// Stores the call result in the guard slot at `guard_offset` when it owns something: a
+/// by-reference return's transferred cell and any owned refcounted value go through the guard's
+/// `__rt_decref_any` cleanup (which releases a cell lease too), an owned callable descriptor
+/// switches the record to the descriptor cleanup. Other results leave the slot empty.
+fn emit_publish_guarded_call_result(
+    ctx: &mut FunctionContext<'_>,
+    result: ValueId,
+    by_ref_return: bool,
+    guard_offset: usize,
+) -> Result<()> {
+    let repr = ctx.value_php_type(result)?.codegen_repr();
+    let callable = !by_ref_return && repr == PhpType::Callable;
+    let owned = by_ref_return
+        || (ctx.value_ownership(result)? == Ownership::Owned && (callable || repr.is_refcounted()));
+    if !owned {
+        return Ok(());
+    }
+    let reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(result, reg)?;
+    abi::emit_store_to_sp(ctx.emitter, reg, guard_offset);
+    if callable {
+        // The record's cleanup entry follows its chain link.
+        let scratch = abi::tertiary_scratch_reg(ctx.emitter);
+        abi::emit_symbol_address(ctx.emitter, scratch, "__rt_cleanup_call_operand_descriptor");
+        abi::emit_store_to_sp(ctx.emitter, scratch, guard_offset + 16 + 8);
+    }
+    Ok(())
 }
 
 /// Whether a call's writebacks can release a previous heap value, whose destructor may throw:
@@ -760,29 +786,21 @@ fn ref_writebacks_need_result_guard(writebacks: &[RefArgWriteback]) -> bool {
 }
 
 /// [`emit_ref_arg_writebacks`] for a call whose result is already stored: an owned heap
-/// result is published in the call's result guard while the writebacks run, so a destructor
-/// that throws when a writeback releases the previous value unwinds the result too (it is
-/// not yet in the caller's own result slot).
+/// result (or the cell a by-reference return transfers) is published in the call's result
+/// guard while the writebacks run, so a destructor that throws when a writeback releases the
+/// previous value unwinds the result too (it is not yet in the caller's own result slot).
 pub(super) fn emit_ref_arg_writebacks_guarding_result(
     ctx: &mut FunctionContext<'_>,
     call_args: &CallArgMaterialization,
     result: Option<ValueId>,
+    by_ref_return: bool,
 ) -> Result<()> {
     let cell_bytes = call_args.ref_writebacks.len() * CALL_ARG_TEMP_CLEANUP_BYTES
         + call_args.ref_temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     let guard = ref_writebacks_need_result_guard(&call_args.ref_writebacks);
     if guard {
         if let Some(result) = result {
-            let guarded = ctx.value_ownership(result)? == Ownership::Owned
-                && matches!(
-                    ctx.value_php_type(result)?.codegen_repr(),
-                    PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Mixed
-                );
-            if guarded {
-                let reg = abi::int_result_reg(ctx.emitter);
-                ctx.load_value_to_reg(result, reg)?;
-                abi::emit_store_to_sp(ctx.emitter, reg, cell_bytes);
-            }
+            emit_publish_guarded_call_result(ctx, result, by_ref_return, cell_bytes)?;
         }
     }
     for cell in call_args.ref_temp_cells.iter().rev() {
