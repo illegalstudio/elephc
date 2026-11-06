@@ -96,6 +96,12 @@ pub fn compute(
         check_result,
     );
     state.apply_usage(executable_usage, true);
+    // Preludes may select one of their own functions after pruning, during EIR lowering.
+    // Those names are compiler roots, not user references, so they are seeded explicitly.
+    for group in options.inventory.groups.values() {
+        state.reach.functions.extend(group.retained_functions.iter().cloned());
+        state.behavioral.functions.extend(group.retained_functions.iter().cloned());
+    }
     // An extern class is C struct layout metadata with no emitted code. Besides `ptr_cast<T>`
     // (recorded by the usage scan) it is named through types the scan does not walk: `ptr<T>`
     // in extern function signatures and in fields of other extern classes. Keeping every

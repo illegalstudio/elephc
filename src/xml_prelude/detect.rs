@@ -227,6 +227,7 @@ fn packed_field_refs_xml(field: &PackedField) -> bool {
 /// The `match` is exhaustive so a newly added `ExprKind` cannot silently bypass detection.
 fn expr_refs_xml(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Reference(inner) => expr_refs_xml(inner),
         // Leaves and identifier-only forms carry no xml reference.
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)

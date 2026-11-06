@@ -9,6 +9,7 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
+| [`addcslashes()`](./string/addcslashes.md) | `(string $string, string $characters): string` | `string` | ✓ | ✓ |
 | [`addslashes()`](./string/addslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`base64_decode()`](./string/base64_decode.md) | `(string $string, bool $strict = false): mixed` | `mixed` | ✓ | ✓ |
 | [`base64_encode()`](./string/base64_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |
@@ -126,6 +127,7 @@ sidebar:
 | [`openssl_encrypt()`](./string/openssl_encrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = '', int $tag_length = 16): mixed` | `mixed` | ✓ | ✓ |
 | [`openssl_get_cipher_methods()`](./string/openssl_get_cipher_methods.md) | `(bool $aliases = false): array` | `array` | ✓ | ✓ |
 | [`ord()`](./string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
+| [`parse_str()`](./string/parse_str.md) | `(string $string, mixed $result): void` | `void` | ✓ | - |
 | [`parse_url()`](./string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`printf()`](./string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |
 | [`quoted_printable_encode()`](./string/quoted_printable_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |
@@ -133,6 +135,7 @@ sidebar:
 | [`rawurldecode()`](./string/rawurldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurlencode()`](./string/rawurlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rtrim()`](./string/rtrim.md) | `(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string` | `string` | ✓ | ✓ |
+| [`setlocale()`](./string/setlocale.md) | `(int $category, mixed $locales, ...$rest): string|false` | `string|false` | ✓ | - |
 | [`sha1()`](./string/sha1.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`sprintf()`](./string/sprintf.md) | `(string $format, ...$values): string` | `string` | ✓ | ✓ |
 | [`sscanf()`](./string/sscanf.md) | `(string $string, string $format, ...$vars): array` | `array` | ✓ | ✓ |

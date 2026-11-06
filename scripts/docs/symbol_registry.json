@@ -18221,6 +18221,924 @@
       },
       "extension": false,
       "internal": false,
+      "module": "filter",
+      "name": "FILTER_CALLBACK",
+      "route": "predefined",
+      "since": null,
+      "value": 1024
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_DEFAULT",
+      "route": "predefined",
+      "since": null,
+      "value": 516
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_ALLOW_FRACTION",
+      "route": "predefined",
+      "since": null,
+      "value": 4096
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_ALLOW_HEX",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_ALLOW_OCTAL",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_ALLOW_SCIENTIFIC",
+      "route": "predefined",
+      "since": null,
+      "value": 16384
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_ALLOW_THOUSAND",
+      "route": "predefined",
+      "since": null,
+      "value": 8192
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_EMAIL_UNICODE",
+      "route": "predefined",
+      "since": null,
+      "value": 1048576
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_EMPTY_STRING_NULL",
+      "route": "predefined",
+      "since": null,
+      "value": 256
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_ENCODE_AMP",
+      "route": "predefined",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_ENCODE_HIGH",
+      "route": "predefined",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_ENCODE_LOW",
+      "route": "predefined",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_GLOBAL_RANGE",
+      "route": "predefined",
+      "since": null,
+      "value": 536870912
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_HOSTNAME",
+      "route": "predefined",
+      "since": null,
+      "value": 1048576
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_IPV4",
+      "route": "predefined",
+      "since": null,
+      "value": 1048576
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_IPV6",
+      "route": "predefined",
+      "since": null,
+      "value": 2097152
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_NONE",
+      "route": "predefined",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_NO_ENCODE_QUOTES",
+      "route": "predefined",
+      "since": null,
+      "value": 128
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_NO_PRIV_RANGE",
+      "route": "predefined",
+      "since": null,
+      "value": 8388608
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_NO_RES_RANGE",
+      "route": "predefined",
+      "since": null,
+      "value": 4194304
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_PATH_REQUIRED",
+      "route": "predefined",
+      "since": null,
+      "value": 262144
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_QUERY_REQUIRED",
+      "route": "predefined",
+      "since": null,
+      "value": 524288
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_STRIP_BACKTICK",
+      "route": "predefined",
+      "since": null,
+      "value": 512
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_STRIP_HIGH",
+      "route": "predefined",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_STRIP_LOW",
+      "route": "predefined",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FORCE_ARRAY",
+      "route": "predefined",
+      "since": null,
+      "value": 67108864
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_NULL_ON_FAILURE",
+      "route": "predefined",
+      "since": null,
+      "value": 134217728
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_REQUIRE_ARRAY",
+      "route": "predefined",
+      "since": null,
+      "value": 16777216
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_REQUIRE_SCALAR",
+      "route": "predefined",
+      "since": null,
+      "value": 33554432
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_SANITIZE_ADD_SLASHES",
+      "route": "predefined",
+      "since": null,
+      "value": 523
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_SANITIZE_EMAIL",
+      "route": "predefined",
+      "since": null,
+      "value": 517
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_SANITIZE_ENCODED",
+      "route": "predefined",
+      "since": null,
+      "value": 514
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_SANITIZE_FULL_SPECIAL_CHARS",
+      "route": "predefined",
+      "since": null,
+      "value": 522
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_SANITIZE_NUMBER_FLOAT",
+      "route": "predefined",
+      "since": null,
+      "value": 520
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_SANITIZE_NUMBER_INT",
+      "route": "predefined",
+      "since": null,
+      "value": 519
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_SANITIZE_SPECIAL_CHARS",
+      "route": "predefined",
+      "since": null,
+      "value": 515
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_SANITIZE_STRING",
+      "route": "predefined",
+      "since": null,
+      "value": 513
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_SANITIZE_STRIPPED",
+      "route": "predefined",
+      "since": null,
+      "value": 513
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_SANITIZE_URL",
+      "route": "predefined",
+      "since": null,
+      "value": 518
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_THROW_ON_FAILURE",
+      "route": "predefined",
+      "since": null,
+      "value": 268435456
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_UNSAFE_RAW",
+      "route": "predefined",
+      "since": null,
+      "value": 516
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_VALIDATE_BOOL",
+      "route": "predefined",
+      "since": null,
+      "value": 258
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_VALIDATE_BOOLEAN",
+      "route": "predefined",
+      "since": null,
+      "value": 258
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_VALIDATE_DOMAIN",
+      "route": "predefined",
+      "since": null,
+      "value": 277
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_VALIDATE_EMAIL",
+      "route": "predefined",
+      "since": null,
+      "value": 274
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_VALIDATE_FLOAT",
+      "route": "predefined",
+      "since": null,
+      "value": 259
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_VALIDATE_INT",
+      "route": "predefined",
+      "since": null,
+      "value": 257
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_VALIDATE_IP",
+      "route": "predefined",
+      "since": null,
+      "value": 275
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_VALIDATE_MAC",
+      "route": "predefined",
+      "since": null,
+      "value": 276
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_VALIDATE_REGEXP",
+      "route": "predefined",
+      "since": null,
+      "value": 272
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_VALIDATE_URL",
+      "route": "predefined",
+      "since": null,
+      "value": 273
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "standard",
       "name": "FNM_CASEFOLD",
       "route": "predefined",
@@ -20265,6 +21183,96 @@
       },
       "extension": false,
       "internal": false,
+      "module": "filter",
+      "name": "INPUT_COOKIE",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "INPUT_ENV",
+      "route": "predefined",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "INPUT_GET",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "INPUT_POST",
+      "route": "predefined",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "INPUT_SERVER",
+      "route": "predefined",
+      "since": null,
+      "value": 5
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "json",
       "name": "JSON_BIGINT_AS_STRING",
       "route": "predefined",
@@ -20774,6 +21782,146 @@
       "route": "predefined",
       "since": null,
       "value": 256
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_ALL",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_COLLATE",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_CTYPE",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_MESSAGES",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_MONETARY",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_NUMERIC",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "LC_TIME",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "int"
+      }
     },
     {
       "aot": {

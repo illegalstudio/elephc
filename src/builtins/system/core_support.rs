@@ -309,41 +309,57 @@ fn lower_trigger_operands(
     call: &NormalizedBuiltinCall<'_>,
     default_level: i64,
 ) -> Result<Vec<crate::ir::ValueId>, BuiltinLoweringError> {
-    let file = ctx.source_path().unwrap_or("unknown").to_string();
-    let file_data = ctx.intern_string(&file);
-    let file = ctx.emit_value(
-        Op::ConstStr,
-        Vec::new(),
-        Some(Immediate::Data(file_data)),
-        PhpType::Str,
-        Op::ConstStr.default_effects(),
-        Some(call.span),
-    );
-    let line = if !call.span.is_from_source() && default_level != 1_024 {
-        ctx.emit_value(
-            Op::CoreBuiltin,
-            Vec::new(),
-            Some(Immediate::I64(CoreBuiltinOp::DiagnosticCallerLine.as_i64())),
-            PhpType::Int,
-            CoreBuiltinOp::DiagnosticCallerLine.effects(),
-            Some(call.span),
-        )
-    } else {
-        ctx.emit_value(
+    // `__elephc_builtin_deprecated(message, file, line)` can pin a diagnostic to an engine
+    // location such as INI startup's `Unknown on line 0`. Other user-error calls keep the
+    // source/caller location computed below.
+    let explicit_site = call.operands.len() >= 3;
+    let (file, line, level) = if explicit_site {
+        let level = ctx.emit_value(
             Op::ConstI64,
             Vec::new(),
-            Some(Immediate::I64(i64::from(call.span.line))),
+            Some(Immediate::I64(default_level)),
             PhpType::Int,
             Op::ConstI64.default_effects(),
             Some(call.span),
+        );
+        (call.operand(1)?, call.operand(2)?, level.value)
+    } else {
+        let file = ctx.source_path().unwrap_or("unknown").to_string();
+        let file_data = ctx.intern_string(&file);
+        let file = ctx.emit_value(
+            Op::ConstStr,
+            Vec::new(),
+            Some(Immediate::Data(file_data)),
+            PhpType::Str,
+            Op::ConstStr.default_effects(),
+            Some(call.span),
+        );
+        let line = if !call.span.is_from_source() && default_level != 1_024 {
+            ctx.emit_value(
+                Op::CoreBuiltin,
+                Vec::new(),
+                Some(Immediate::I64(CoreBuiltinOp::DiagnosticCallerLine.as_i64())),
+                PhpType::Int,
+                CoreBuiltinOp::DiagnosticCallerLine.effects(),
+                Some(call.span),
+            )
+        } else {
+            ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(i64::from(call.span.line))),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(call.span),
+            )
+        };
+        (
+            file.value,
+            line.value,
+            operand_or_const_int(ctx, call, 1, default_level),
         )
     };
-    Ok(vec![
-        call.operand(0)?,
-        operand_or_const_int(ctx, call, 1, default_level),
-        file.value,
-        line.value,
-    ])
+    Ok(vec![call.operand(0)?, level, file, line])
 }
 
 macro_rules! core_builtin_home {

@@ -325,3 +325,38 @@ echo $s;
     assert_eq!(out.stdout, "a4c");
     assert!(out.stderr.contains("Only the first byte will be assigned"), "{}", out.stderr);
 }
+/// A boxed `mixed` string parameter carries a byte-by-byte loop mutation, as php-src does.
+#[test]
+fn test_string_offset_loop_mutation_through_mixed_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function octal_inc($s) {
+    $len = strlen($s);
+    while ($len > 0) {
+        $len--;
+        if ($s[$len] != '7') {
+            $s[$len] = $s[$len] + 1;
+            return $s;
+        }
+        $s[$len] = '0';
+    }
+    return '1' . $s;
+}
+function hex_inc($s) {
+    $len = strlen($s);
+    while ($len > 0) {
+        $len--;
+        if ($s[$len] != 'f') {
+            if ($s[$len] == '9') { $s[$len] = 'a'; }
+            else { $s[$len] = $s[$len] + 1; }
+            return $s;
+        }
+        $s[$len] = '0';
+    }
+    return '1' . $s;
+}
+echo octal_inc('777'), '|', octal_inc('123'), '|', hex_inc('fff'), '|', hex_inc('9ff');
+"#,
+    );
+    assert_eq!(out, "1000|124|1000|a00");
+}

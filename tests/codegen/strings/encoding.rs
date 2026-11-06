@@ -81,6 +81,51 @@ fn test_addslashes() {
     assert_eq!(out, r#"He said \"hi\" and it\'s ok"#);
 }
 
+/// Expands PHP's ascending character ranges and escapes printable members with a backslash.
+#[test]
+fn test_addcslashes_expands_ranges() {
+    let out = compile_and_run(r#"<?php echo addcslashes("foo[ ]", "A..z");"#);
+    assert_eq!(out, r"\f\o\o\[ \]");
+}
+
+/// Uses PHP's short C escapes for control characters and octal for other non-printables.
+#[test]
+fn test_addcslashes_uses_short_and_octal_escapes() {
+    let out = compile_and_run(
+        r#"<?php echo bin2hex(addcslashes("a\nb\0c", "\n\0"));"#,
+    );
+    assert_eq!(out, "615c6e625c30303063");
+}
+
+/// Rejects a descending range, escapes its literal bytes, and reports one warning per range.
+#[test]
+fn test_addcslashes_descending_range_warns_and_keeps_literals() {
+    let output = compile_and_run_capture(r#"<?php echo addcslashes("azAZ", "z..A y..B");"#);
+    assert_eq!(output.stdout, r"a\z\AZ");
+    assert_eq!(
+        output.stderr.matches("Invalid '..'-range").count(),
+        2,
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
+/// Reserves the four-bytes-per-byte worst case, including the heap fallback above scratch.
+#[test]
+fn test_addcslashes_large_input_uses_the_reserved_capacity() {
+    let out = compile_and_run(
+        r#"<?php echo strlen(addcslashes(str_repeat("a", 20000), "a"));"#,
+    );
+    assert_eq!(out, "40000");
+}
+
+/// Leaves the input unchanged when the character list is empty.
+#[test]
+fn test_addcslashes_empty_character_list_is_identity() {
+    let out = compile_and_run(r#"<?php echo addcslashes("abc", "");"#);
+    assert_eq!(out, "abc");
+}
+
 /// Verifies `stripslashes()` removes backslash escaping from \" and \' sequences.
 #[test]
 fn test_stripslashes() {

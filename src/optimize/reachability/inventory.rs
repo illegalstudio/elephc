@@ -25,6 +25,11 @@ pub struct PreludeInventory {
 pub struct PreludeGroup {
     pub id: String,
     pub functions: HashSet<String>,
+    /// Functions a prelude needs even when user source never spells them.
+    ///
+    /// Filter strict-mode wrappers are selected during EIR lowering, after declaration
+    /// reachability has run, so the inventory must keep them alive explicitly.
+    pub retained_functions: HashSet<String>,
     pub classes: HashSet<String>,
     pub methods: HashSet<(String, String, bool)>,
     pub externs: HashSet<String>,
@@ -51,6 +56,12 @@ impl PreludeInventory {
     pub fn record_program(&mut self, id: &str, prelude: &[Stmt]) {
         let group = self.group_mut(id);
         record_statements(group, prelude, None);
+    }
+
+    /// Marks one function whose reachability is established by a prelude rather than user source.
+    pub fn record_retained_function(&mut self, id: &str, name: &str) {
+        let key = php_symbol_key(name);
+        self.group_mut(id).retained_functions.insert(key);
     }
 
     /// Marks one compiler-owned method whose dynamic-call syntax only invokes closures created internally.

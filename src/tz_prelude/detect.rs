@@ -122,6 +122,7 @@ fn instanceof_target_refs_tz(target: &InstanceOfTarget) -> bool {
 /// `ExprKind` cannot silently bypass detection.
 fn expr_refs_tz(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Reference(inner) => expr_refs_tz(inner),
         // `require`/`include` in expression position: recurse into the path expression. This is a
         // transient parser node expanded by the resolver before later passes, but the match must
         // stay exhaustive so a new `ExprKind` cannot silently bypass detection.

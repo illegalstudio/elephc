@@ -84,6 +84,26 @@ impl Checker {
         }
     }
 
+    /// Resolves the declared hint of one parameter to the storage its frame slot uses.
+    ///
+    /// A compiler-synthesized parameter carries a dummy span, where bare `array` resolves to
+    /// the concrete `Array(Mixed)` internal ABI. That layout is the callee's only when it owns
+    /// the container: a by-reference parameter writes through the caller's cell, which may hold
+    /// packed or associative storage on different paths, so it keeps the `php_array()` contract
+    /// exactly like a user-written `array &$x` hint at a real source span.
+    pub(crate) fn resolve_declared_param_storage_hint(
+        &self,
+        type_expr: &TypeExpr,
+        span: crate::span::Span,
+        context: &str,
+        by_ref: bool,
+    ) -> Result<PhpType, CompileError> {
+        let ty = self.resolve_declared_param_type_hint(type_expr, span, context)?;
+        let bare_array = matches!(type_expr, TypeExpr::Named(name)
+            if name.as_str().eq_ignore_ascii_case("array"));
+        Ok(if by_ref && bare_array { PhpType::php_array() } else { ty })
+    }
+
     /// Resolves a return type hint from a `TypeExpr` to a `PhpType`. Unlike parameter hints,
     /// `never` is allowed here as a standalone return type but not nested inside other types.
     pub(crate) fn resolve_declared_return_type_hint(
@@ -586,10 +606,11 @@ impl Checker {
         let mut param_types = Vec::new();
         for (idx, param_name) in decl.params.iter().enumerate() {
             if let Some(type_ann) = decl.param_types.get(idx).and_then(|t| t.as_ref()) {
-                let declared_ty = self.resolve_declared_param_type_hint(
+                let declared_ty = self.resolve_declared_param_storage_hint(
                     type_ann,
                     decl.span,
                     &format!("Function '{}' parameter ${}", name, param_name),
+                    decl.ref_params.get(idx).copied().unwrap_or(false),
                 )?;
                 self.validate_resolved_declared_default_type(
                     &declared_ty,

@@ -141,8 +141,11 @@ pub(super) fn expect_bool(inst: &Instruction) -> Result<bool> {
 /// Returns the strict-PHP profile carried by a source-sensitive EIR instruction.
 pub(in crate::codegen) fn instruction_strict_php_profile(inst: &Instruction) -> bool {
     match inst.immediate {
-        Some(Immediate::Bool(strict_php))
-        | Some(Immediate::ProfiledData { strict_php, .. })
+        Some(Immediate::Bool(strict_php)) => strict_php,
+        Some(Immediate::I64(profile)) if inst.op == crate::ir::Op::CallableDescriptorInvoke => {
+            profile & 1 != 0
+        }
+        Some(Immediate::ProfiledData { strict_php, .. })
         | Some(Immediate::RuntimeCall(
             crate::ir::RuntimeCallTarget::ProfiledFunction { strict_php, .. },
         )) => strict_php,

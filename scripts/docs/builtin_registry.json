@@ -1932,6 +1932,20 @@
           "name": "message",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "",
+          "name": "file",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "line",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 1,
@@ -2030,6 +2044,20 @@
           "name": "message",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "''",
+          "name": "file",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "line",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "bool",
@@ -16340,6 +16368,148 @@
     "since": null,
     "slug": "acos",
     "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "characters",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "addcslashes",
+    "description": "Returns a string with backslashes before characters listed in a character set, including ranges.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/addcslashes.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "characters",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.addcslashes` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/addcslashes.rs"
+    },
+    "module": "standard",
+    "name": "addcslashes",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic_target",
+        "target": "addcslashes"
+      },
+      "effects": {
+        "kind": "static",
+        "names": []
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "addcslashes"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "addcslashes"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "characters",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "addcslashes",
+    "sub_area": "String"
   },
   {
     "aot": {
@@ -43322,7 +43492,7 @@
           "default": 0,
           "name": "status",
           "optional": true,
-          "type": "int"
+          "type": "string|int"
         }
       ],
       "required_param_count": 0,
@@ -43349,7 +43519,7 @@
           "default": "0",
           "name": "status",
           "optional": true,
-          "type": "int"
+          "type": "string|int"
         }
       ],
       "required_param_count": 0,
@@ -43384,7 +43554,7 @@
           "default": "0",
           "name": "status",
           "optional": true,
-          "type": "int"
+          "type": "string|int"
         }
       ],
       "return_type": "void",
@@ -45061,7 +45231,7 @@
           "default": 0,
           "name": "status",
           "optional": true,
-          "type": "int"
+          "type": "string|int"
         }
       ],
       "required_param_count": 0,
@@ -45088,7 +45258,7 @@
           "default": "0",
           "name": "status",
           "optional": true,
-          "type": "int"
+          "type": "string|int"
         }
       ],
       "required_param_count": 0,
@@ -45123,7 +45293,7 @@
           "default": "0",
           "name": "status",
           "optional": true,
-          "type": "int"
+          "type": "string|int"
         }
       ],
       "return_type": "void",
@@ -112294,6 +112464,81 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "result",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "parse_str",
+    "description": "Parses a URL-encoded query string into variables.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/parse_str_prelude.rs",
+      "codegen_function": "parse_str",
+      "notes": [
+        "Implemented by the compiler-injected parse_str prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "standard",
+    "name": "parse_str",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "result",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "parse_str",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -128660,6 +128905,81 @@
     "since": null,
     "slug": "setcookie",
     "sub_area": "Web"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "category",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "locales",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "area": "String",
+    "canonical_name": "setlocale",
+    "description": "Sets locale information and returns the new locale name, or false when unavailable.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/locale_prelude.rs",
+      "codegen_function": "setlocale",
+      "notes": [
+        "Implemented by the compiler-injected locale prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "standard",
+    "name": "setlocale",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "category",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "locales",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": "rest"
+    },
+    "since": null,
+    "slug": "setlocale",
+    "sub_area": "String"
   },
   {
     "aot": {

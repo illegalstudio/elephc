@@ -143,6 +143,7 @@ fn mark_main_stmt_strict_types(stmt: &mut Stmt) {
 /// lowering apply each prelude statement's own flag. Closure bodies keep their lexical flag.
 fn mark_main_expr_strict_types(expr: &mut Expr) {
     match &mut expr.kind {
+        ExprKind::Reference(inner) => mark_main_expr_strict_types(inner),
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
             mark_main_strict_types(prelude);
             mark_main_expr_strict_types(target);

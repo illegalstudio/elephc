@@ -519,6 +519,7 @@ fn audit_exprs(exprs: &[Expr], errors: &mut Vec<CompileError>) {
 fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
     let span = expr.span;
     match &expr.kind {
+        ExprKind::Reference(inner) => audit_expr(inner, errors),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

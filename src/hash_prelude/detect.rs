@@ -204,6 +204,7 @@ fn packed_field_refs_hash(field: &PackedField) -> bool {
 /// bypass detection.
 fn expr_refs_hash(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Reference(inner) => expr_refs_hash(inner),
         // Leaves and identifier-only forms carry no hash reference.
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)

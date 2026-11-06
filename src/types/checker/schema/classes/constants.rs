@@ -154,6 +154,7 @@ fn rewrite_expr(
     parent_name: ParentScope<'_>,
 ) -> Result<Expr, CompileError> {
     let kind = match &expr.kind {
+        ExprKind::Reference(inner) => ExprKind::Reference(Box::new(rewrite_expr(inner, class_name, parent_name)?)),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

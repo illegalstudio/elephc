@@ -851,14 +851,29 @@ impl Checker {
                     .get(param_idx)
                     .copied()
                     .unwrap_or(false);
-            let actual_ty = if descriptor_projected {
+            let supplied_reference_for_inference = param_idx < regular_param_count
+                && sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                && !defaults.get(param_idx).copied().unwrap_or(false);
+            let inferred = if descriptor_projected {
                 // Descriptor unpack reads a runtime-keyed Mixed cell. Its binder owns the tag
                 // check against the selected parameter after deciding which slot this key fills.
-                PhpType::Mixed
+                Ok(PhpType::Mixed)
             } else if descriptor_invocation {
-                self.infer_descriptor_call_arg_type(arg, caller_env)?
+                self.infer_descriptor_call_arg_type(arg, caller_env)
             } else {
-                self.infer_type(arg, caller_env)?
+                self.infer_type(arg, caller_env)
+            };
+            // PHP creates an undefined variable when it is passed to a by-reference parameter.
+            // The reference writes a fresh value, so there is no undefined read to diagnose.
+            let actual_ty = match inferred {
+                Ok(ty) => ty,
+                Err(error)
+                    if supplied_reference_for_inference
+                        && error.message.starts_with("Undefined variable: $") =>
+                {
+                    PhpType::Mixed
+                }
+                Err(error) => return Err(error),
             };
             let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
                 || self.boxed_reference_promotion_pending(arg, span);

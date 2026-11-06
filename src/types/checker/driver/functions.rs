@@ -21,6 +21,10 @@ use super::super::{Checker, FnDecl};
 #[path = "function_variant_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "ref_param_storage_tests.rs"]
+mod ref_param_storage_tests;
+
 impl Checker {
     /// Collects top-level function declarations from the program, deduplicating by PHP case-insensitive
     /// symbol key. Emits `DuplicateFunction` for repeats and `CannotRedeclareBuiltin` when a user
@@ -532,7 +536,12 @@ impl Checker {
         for (index, (_, ty)) in sig.params.iter_mut().enumerate() {
             *ty = match sig.param_type_exprs.get(index).and_then(Option::as_ref) {
                 Some(annotation) => {
-                    let resolved = self.resolve_declared_param_type_hint(annotation, decl.span, &format!("Function '{}' parameter", variant))?;
+                    let resolved = self.resolve_declared_param_storage_hint(
+                        annotation,
+                        decl.span,
+                        &format!("Function '{}' parameter", variant),
+                        decl.ref_params.get(index).copied().unwrap_or(false),
+                    )?;
                     if index == decl.params.len() { crate::types::PhpType::Array(Box::new(resolved)) } else { resolved }
                 }
                 None => crate::types::PhpType::Mixed,

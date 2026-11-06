@@ -225,11 +225,21 @@ impl Checker {
     ) {
         // A narrowed value can still occupy a nullable or union slot. Use that slot for
         // layout decisions and restore its full view after a callee can write through it.
+        let undefined_source = match &arg.kind {
+            ExprKind::Variable(name) => env.get(name).is_none(),
+            ExprKind::NamedArg { value, .. } => matches!(
+                &value.kind,
+                ExprKind::Variable(name) if env.get(name).is_none()
+            ),
+            _ => false,
+        };
         let array_value = actual.is_php_array()
             || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. });
         let guarded_storage = self.guarded_local_storage_type(arg, env).cloned();
         let actual = guarded_storage.as_ref().unwrap_or(actual);
-        let output_ty = if expected.is_php_array()
+        let output_ty = if undefined_source {
+            PhpType::Mixed
+        } else if expected.is_php_array()
             && array_value
         {
             PhpType::php_array()

@@ -323,3 +323,86 @@ echo implode(",", $b->items);
     );
     assert_eq!(out, "7,3,2,1,0");
 }
+
+/// `[&$value]` stores a hash entry that aliases the variable's storage in both directions.
+#[test]
+fn test_array_literal_reference_aliases_variable() {
+    let output = compile_and_run_capture(
+        r#"<?php
+$value = [1, 2];
+$refs = [&$value];
+$refs[0] = 9;
+var_dump($value, $refs);
+$value = [3];
+echo $refs[0][0];
+"#,
+    );
+    assert_eq!(
+        output.stdout,
+        "int(9)\narray(1) {\n  [0]=>\n  &int(9)\n}\n3"
+    );
+}
+
+/// A keyed reference element aliases the source variable as well.
+#[test]
+fn test_keyed_array_literal_reference_aliases_variable() {
+    let out = compile_and_run(
+        r#"<?php
+$value = "x";
+$refs = ["k" => &$value];
+echo $refs["k"];
+$refs["k"] = "y";
+echo $value;
+"#,
+    );
+    assert_eq!(out, "xy");
+}
+
+/// The legacy `array(&$value)` spelling takes the same reference path.
+#[test]
+fn test_legacy_array_literal_reference_aliases_variable() {
+    let out = compile_and_run(
+        r#"<?php
+$value = 1;
+$refs = array(&$value);
+$refs[0] = 2;
+echo $value;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// `$array[$key] = &$value` aliases both the slot and the source variable.
+#[test]
+fn test_array_element_reference_assignment_aliases_variable() {
+    let out = compile_and_run(
+        r#"<?php
+$value = "1";
+$data = ["a" => 1, "b" => 2];
+$data["a"] = &$value;
+$data["a"] = "5";
+echo $value, "|";
+$value = "7";
+echo $data["a"], "|", implode(",", array_keys($data));
+"#,
+    );
+    assert_eq!(out, "5|7|a,b");
+}
+
+/// `var_dump` prints PHP's `&` only while the reference cell has another owner.
+#[test]
+fn test_var_dump_marks_shared_references_only() {
+    let output = compile_and_run_capture(
+        r#"<?php
+$value = 1;
+$refs = [&$value];
+var_dump($refs);
+unset($value);
+var_dump($refs);
+"#,
+    );
+    assert_eq!(
+        output.stdout,
+        "array(1) {\n  [0]=>\n  &int(1)\n}\narray(1) {\n  [0]=>\n  int(1)\n}\n"
+    );
+}
