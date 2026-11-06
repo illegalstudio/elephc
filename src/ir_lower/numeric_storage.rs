@@ -25,8 +25,18 @@ fn loop_carried(ctx: &LoweringContext<'_, '_>) -> HashMap<String, HashSet<usize>
     // with handlers, including a loop whose body always reaches its backedge via catch.
     let exceptional = function.instructions.iter().any(|inst| matches!(inst.op,
         Op::TryPushHandler | Op::CatchBind | Op::FinallyEnter));
-    let cyclic_blocks: HashSet<_> = function.blocks.iter()
-        .filter(|block| exceptional || cyclic(function, block.id)).map(|block| block.id).collect();
+    // Only a checked operation can carry a float around a backedge, and most bodies have none.
+    if !function.instructions.iter().any(|inst| is_numeric_carrier(inst.op)) {
+        return HashMap::new();
+    }
+    let cyclic_blocks = if exceptional {
+        function.blocks.iter().map(|block| block.id).collect()
+    } else {
+        cyclic_blocks(&block_successors(function))
+            .into_iter()
+            .map(|index| function.blocks[index].id)
+            .collect::<HashSet<_>>()
+    };
     let mut local_writers: HashMap<LocalSlotId, Vec<ValueId>> = HashMap::new();
     for inst in &function.instructions {
         if inst.op == Op::StoreLocal {
@@ -87,8 +97,7 @@ fn numeric_writer(function: &Function, writers: &HashMap<LocalSlotId, Vec<ValueI
         };
         let inst = &function.instructions[inst.as_raw() as usize];
         match inst.op {
-            Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow
-                | Op::MixedNumericBinop | Op::StrIncDec => return true,
+            op if is_numeric_carrier(op) => return true,
             Op::Acquire | Op::MixedClone | Op::Move | Op::Borrow | Op::EnsureOwned => {
                 pending.extend(inst.operands.first().copied());
             }
@@ -102,25 +111,111 @@ fn numeric_writer(function: &Function, writers: &HashMap<LocalSlotId, Vec<ValueI
     false
 }
 
-/// Requires an explicit nonempty path back to a block, including nested loop backedges.
-fn cyclic(function: &Function, start: BlockId) -> bool {
-    let mut pending = successors(function, start);
-    let mut seen = HashSet::new();
-    while let Some(block) = pending.pop() {
-        if block == start {
-            return true;
-        }
-        if seen.insert(block) {
-            pending.extend(successors(function, block));
-        }
-    }
-    false
+/// Whether an operation can leave a promoted float in its result.
+fn is_numeric_carrier(op: Op) -> bool {
+    matches!(op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow
+        | Op::MixedNumericBinop | Op::StrIncDec)
 }
 
 /// Reads explicit edges only; exceptional edges cannot invalidate a conservative storage widening.
-fn successors(function: &Function, block: BlockId) -> Vec<BlockId> {
-    function.blocks[block.as_raw() as usize].terminator.as_ref()
-        .map(crate::ir_passes::successors).unwrap_or_default()
+fn block_successors(function: &Function) -> Vec<Vec<usize>> {
+    let position: HashMap<BlockId, usize> =
+        function.blocks.iter().enumerate().map(|(index, block)| (block.id, index)).collect();
+    function.blocks.iter()
+        .map(|block| {
+            block.terminator.as_ref().map(crate::ir_passes::successors).unwrap_or_default()
+                .into_iter()
+                .filter_map(|target| position.get(&target).copied())
+                .collect()
+        })
+        .collect()
+}
+
+/// Returns the nodes with a nonempty path back to themselves, nested loops included.
+///
+/// Tarjan's strongly connected components, iterative: a node is cyclic when its component has
+/// another member or an edge to itself. One pass answers for every block, where a search from
+/// each one was quadratic on the largest bodies of a framework.
+fn cyclic_blocks(successors: &[Vec<usize>]) -> Vec<usize> {
+    const UNVISITED: usize = usize::MAX;
+    let count = successors.len();
+    let mut order = vec![UNVISITED; count];
+    let mut low = vec![0; count];
+    let mut on_stack = vec![false; count];
+    let mut stack = Vec::new();
+    let mut cyclic = Vec::new();
+    let mut next = 0;
+    for root in 0..count {
+        if order[root] != UNVISITED {
+            continue;
+        }
+        let mut walk = vec![(root, 0usize)];
+        while let Some(&(node, edge)) = walk.last() {
+            if edge == 0 {
+                order[node] = next;
+                low[node] = next;
+                next += 1;
+                stack.push(node);
+                on_stack[node] = true;
+            }
+            if let Some(&target) = successors[node].get(edge) {
+                walk.last_mut().expect("the node being walked").1 += 1;
+                if order[target] == UNVISITED {
+                    walk.push((target, 0));
+                } else if on_stack[target] {
+                    low[node] = low[node].min(order[target]);
+                }
+                continue;
+            }
+            walk.pop();
+            if let Some(&(parent, _)) = walk.last() {
+                low[parent] = low[parent].min(low[node]);
+            }
+            if low[node] == order[node] {
+                let start = stack.iter().rposition(|member| *member == node).expect("on the stack");
+                let looped = stack.len() - start > 1 || successors[node].contains(&node);
+                for member in stack.drain(start..) {
+                    on_stack[member] = false;
+                    if looped {
+                        cyclic.push(member);
+                    }
+                }
+            }
+        }
+    }
+    cyclic
+}
+
+#[cfg(test)]
+mod cycle_tests {
+    use super::cyclic_blocks;
+
+    fn sorted(successors: &[Vec<usize>]) -> Vec<usize> {
+        let mut cyclic = cyclic_blocks(successors);
+        cyclic.sort_unstable();
+        cyclic
+    }
+
+    /// Verifies a straight line has no cycle, whatever the order of its blocks.
+    #[test]
+    fn a_straight_line_has_no_cycle() {
+        assert!(sorted(&[vec![1], vec![2], vec![]]).is_empty());
+        assert!(sorted(&[vec![], vec![0], vec![1]]).is_empty());
+    }
+
+    /// Verifies a self-loop and a two-block loop count, and what leads to them does not.
+    #[test]
+    fn a_loop_is_cyclic_and_its_entry_is_not() {
+        assert_eq!(sorted(&[vec![1], vec![1, 2], vec![]]), [1]);
+        assert_eq!(sorted(&[vec![1], vec![2], vec![1, 3], vec![]]), [1, 2]);
+    }
+
+    /// Verifies nested loops and a block reached twice, which a visited set must not confuse.
+    #[test]
+    fn nested_loops_and_diamonds() {
+        assert_eq!(sorted(&[vec![1], vec![2], vec![1, 3], vec![0, 4], vec![]]), [0, 1, 2, 3]);
+        assert!(sorted(&[vec![1, 2], vec![3], vec![3], vec![]]).is_empty());
+    }
 }
 
 /// Replays numeric loop reads and admitted closure calls against their final Mixed storage.
