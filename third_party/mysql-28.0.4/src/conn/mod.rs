@@ -874,6 +874,16 @@ impl Conn {
     }
 
     fn exec_com_change_user(&mut self, opts: ChangeUserOpts) -> Result<()> {
+        self.exec_com_change_user_with_collation(opts, None)
+    }
+
+    // ELEPHC PATCH: `collation` overrides the client collation COM_CHANGE_USER announces
+    // (mysqlnd sends the connection's current charset); `None` keeps upstream's default.
+    fn exec_com_change_user_with_collation(
+        &mut self,
+        opts: ChangeUserOpts,
+        collation: Option<u16>,
+    ) -> Result<()> {
         opts.update_opts(&mut self.0.opts);
         let com_change_user = ComChangeUser::new()
             .with_user(self.0.opts.get_user().map(|x| x.as_bytes()))
@@ -885,11 +895,11 @@ impl Conn {
                     .as_deref(),
             )
             .with_more_data(Some(
-                ComChangeUserMoreData::new(if self.server_version() >= (5, 5, 3) {
+                ComChangeUserMoreData::new(collation.unwrap_or(if self.server_version() >= (5, 5, 3) {
                     UTF8MB4_GENERAL_CI
                 } else {
                     UTF8_GENERAL_CI
-                })
+                }))
                 .with_auth_plugin(Some(self.0.auth_plugin.clone()))
                 .with_connect_attributes(self.0.opts.get_connect_attrs().cloned()),
             ))
@@ -954,6 +964,12 @@ impl Conn {
     /// [1]: https://dev.mysql.com/doc/c-api/5.7/en/mysql-change-user.html
     pub fn change_user(&mut self, opts: ChangeUserOpts) -> Result<()> {
         self.exec_com_change_user(opts)
+    }
+
+    /// ELEPHC PATCH: [`Conn::change_user`] announcing `collation` as the client collation, so
+    /// the re-authenticated session keeps the caller's charset (mysqlnd sends its current one).
+    pub fn change_user_with_collation(&mut self, opts: ChangeUserOpts, collation: u16) -> Result<()> {
+        self.exec_com_change_user_with_collation(opts, Some(collation))
     }
 
     fn switch_to_ssl(&mut self, ssl_opts: SslOpts) -> Result<()> {

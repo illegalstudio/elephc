@@ -2912,6 +2912,26 @@ pub extern "C" fn elephc_pdo_mysql_ping(conn_id: i64) -> i64 {
     })
 }
 
+/// Sets a MySQL connection's charset, backing `mysqli::set_charset()`: a name mysqlnd's
+/// charset table does not know fails with 2019 without a round trip, a known one runs
+/// `SET NAMES` and is the charset a later `change_user()` keeps. `1` on success, `-1` on
+/// failure (error state recorded) or for a non-MySQL or unknown handle.
+///
+/// # Safety
+/// `name` must point to a NUL-terminated string valid for the duration of the call (or be
+/// null, read as `""`).
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_mysql_set_charset(conn_id: i64, name: *const c_char) -> i64 {
+    ffi_guard(-1, || {
+        let name = cstr_arg(name).unwrap_or("");
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.set_charset(name),
+            _ => -1,
+        }
+    })
+}
+
 /// Sends `COM_CHANGE_USER` on a MySQL connection, backing `mysqli::change_user()`.
 /// `has_db` is `0` for a `null` database (keep none selected) and non-zero to select
 /// `db`. `1` on success, `-1` on failure (error state recorded) or for a non-MySQL

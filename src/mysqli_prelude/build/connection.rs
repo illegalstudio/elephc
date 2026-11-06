@@ -1178,14 +1178,14 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_not(e_method_call(e_this(), "charsetIdentIsValid", vec![e_var("charset")])),
                         vec![
-                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2019), e_str("Invalid characterset or character set not supported"), e_str("HY000")])),
+                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2019), e_str("Invalid character set was provided"), e_str("HY000")])),
                             s_return(e_bool(false)),
                         ],
                         vec![],
                         None,
                     ),
                     s_if(
-                        e_binop(e_call("elephc_pdo_exec", vec![e_this_prop("conn"), e_binop(e_str("SET NAMES "), BinOp::Concat, e_var("charset"))]), BinOp::Lt, e_int(0)),
+                        e_binop(e_call("elephc_pdo_mysql_set_charset", vec![e_this_prop("conn"), e_var("charset")]), BinOp::Lt, e_int(0)),
                         vec![
                             s_return(e_method_call(e_this(), "opFailed", vec![])),
                         ],

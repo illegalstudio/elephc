@@ -21,6 +21,9 @@ workspace `Cargo.toml`, with these additions in `src/conn/mod.rs` (marked `eleph
   `MYSQLI_CURSOR_TYPE_READ_ONLY` statements).
 - `Conn::stmt_reset(stmt_id)`: `COM_STMT_RESET` with its OK packet (mysqli's
   `mysqli_stmt::reset()`).
+- `Conn::change_user_with_collation(opts, collation)`: `COM_CHANGE_USER` announcing the
+  caller's client collation instead of the hardcoded `utf8mb4_general_ci`, so mysqli's
+  `change_user()` keeps the charset `set_charset()` chose, like mysqlnd.
 - `Conn::send_query(query)` / `Conn::read_query_result()`: the two halves of `query_iter`
   (write `COM_QUERY`, then read its response), so mysqli's `MYSQLI_ASYNC` send reports a
   write failure at once and the worker only reads.

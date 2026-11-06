@@ -3048,3 +3048,39 @@ links: {"total":2,"active_plinks":0,"cached_plinks":0}
 "#
     );
 }
+
+/// change_user() announces the charset set_charset() last chose, like mysqlnd: a `latin1`
+/// session stays `latin1_swedish_ci` (escaping included), a `utf8mb4` one becomes
+/// `utf8mb4_general_ci`, and a raw `SET NAMES` query does not count. set_charset() rejects a
+/// name mysqlnd's charset table does not know (`utf8mb3`, `utf-8`) with 2019 without contacting
+/// the server, reported through mysqli_report (STRICT throws). Expected output is php 8.5 +
+/// mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_change_user_keeps_the_set_charset() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function col(mysqli $db): string { $row = $db->query("SELECT @@collation_connection")->fetch_row(); return (string) $row[0]; }
+var_export($db->set_charset("LATIN1"));
+var_export($db->change_user($user, $pass, $dbname));
+echo ":", $db->character_set_name(), ":", col($db), ":", bin2hex($db->real_escape_string("\xbf'")), "|";
+$db->set_charset("utf8mb4");
+$db->change_user($user, $pass, $dbname);
+echo $db->character_set_name(), ":", col($db), "|";
+$db->query("SET NAMES latin1");
+$db->change_user($user, $pass, $dbname);
+echo $db->character_set_name(), ":", col($db), "|";
+foreach (["utf8mb3", "utf-8", "nope"] as $n) {
+    echo var_export($db->set_charset($n), true), ":", $db->errno, ":", $db->error, ":", $db->character_set_name(), "|";
+}
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+try { $db->set_charset("utf8mb3"); echo "nothrow"; } catch (mysqli_sql_exception $e) { echo "throw:", $e->getCode(); }
+echo "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "truetrue:latin1:latin1_swedish_ci:bf5c27|utf8mb4:utf8mb4_general_ci|utf8mb4:utf8mb4_general_ci|false:2019:Invalid character set was provided:utf8mb4|false:2019:Invalid character set was provided:utf8mb4|false:2019:Invalid character set was provided:utf8mb4|throw:2019\n"
+    );
+}

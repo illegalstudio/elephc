@@ -332,7 +332,13 @@ unconsumed result with the connection, so the next link starts clean.
 - `ping()` sends a real `COM_PING`, `select_db()` a real `COM_INIT_DB`, and
   `change_user($user, $password, $database)` a real `COM_CHANGE_USER` (the
   session is reset: an open transaction is rolled back, temporary tables and
-  session variables are dropped).
+  session variables are dropped). Like mysqlnd it announces the charset
+  `set_charset()` last chose, so the new session keeps it (`latin1` stays
+  `latin1_swedish_ci`, `utf8mb4` becomes `utf8mb4_general_ci`); a raw
+  `SET NAMES` query does not count, as in php.
+- `set_charset($name)` accepts only the charsets mysqlnd's table knows: any
+  other name (`utf8mb3`, `utf-8`) fails with 2019 "Invalid character set was
+  provided" without contacting the server.
 - `kill($process_id)` sends a real `COM_PROCESS_KILL` (`ValueError` for a
   non-positive id). Killing the connection's own `thread_id` returns `true`
   without waiting for the reply, and the link is gone from then on: every

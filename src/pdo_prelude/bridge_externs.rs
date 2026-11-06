@@ -286,6 +286,7 @@ extern "elephc_pdo" {
     function elephc_pdo_mysql_info(int $conn): string;
     function elephc_pdo_mysql_client_info(): string;
     function elephc_pdo_mysql_ping(int $conn): int;
+    function elephc_pdo_mysql_set_charset(int $conn, string $name): int;
     function elephc_pdo_mysql_change_user(int $conn, string $user, string $pass, string $db, int $has_db): int;
     function elephc_pdo_mysql_stmt_id(int $stmt): int;
     // v61: MYSQLI_ASYNC on a worker thread — send returns at once, wait blocks up to

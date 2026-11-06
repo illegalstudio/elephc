@@ -333,6 +333,11 @@ pub struct MyConn {
     /// multibyte session as utf8mb4 (the pre-fix vulnerability). A pooled
     /// persistent connection carries its last charset, so reuse is correct.
     current_charset: String,
+    /// The charset mysqlnd's own bookkeeping holds: the name `set_charset()` (or
+    /// `MYSQLI_SET_CHARSET_NAME`) last chose, `None` for the handshake's. Unlike
+    /// `current_charset` it ignores raw `SET NAMES` SQL, as mysqlnd does; `change_user()`
+    /// announces its collation so the re-authenticated session keeps it.
+    api_charset: Option<String>,
     /// Handshake version cached while an unbuffered worker temporarily owns `Conn`.
     server_version: (u16, u16, u16),
     /// Worker currently owning the client for a demand-driven result stream.
@@ -1167,6 +1172,39 @@ fn sql_is_call_statement(sql: &str) -> bool {
         return false;
     }
     rest.get(4).is_none_or(|&b| !is_ident_byte(b))
+}
+
+/// The client charsets mysqlnd's table (`mysqlnd_charset.c`) knows, each with the collation
+/// number mysqlnd announces for it: its first entry of that name. Measured on php 8.5 against
+/// MySQL 8.4 (every `SHOW CHARACTER SET` name through `set_charset()` then `change_user()`):
+/// `utf8mb3` is unknown to mysqlnd (2019), and `utf8mb4` maps to 45 (`utf8mb4_general_ci`),
+/// not the server's 255 default. The UCS-2/UTF-16/UTF-32 names are known to mysqlnd but the
+/// server refuses them as a client charset (1231).
+const MYSQLND_CHARSETS: &[(&str, u16)] = &[
+    ("big5", 1), ("dec8", 3), ("cp850", 4), ("hp8", 6), ("koi8r", 7), ("latin1", 8),
+    ("latin2", 9), ("swe7", 10), ("ascii", 11), ("ujis", 12), ("sjis", 13), ("hebrew", 16),
+    ("tis620", 18), ("euckr", 19), ("koi8u", 22), ("gb2312", 24), ("greek", 25),
+    ("cp1250", 26), ("gbk", 28), ("latin5", 30), ("armscii8", 32), ("utf8", 33),
+    ("ucs2", 35), ("cp866", 36), ("keybcs2", 37), ("macce", 38), ("macroman", 39),
+    ("cp852", 40), ("latin7", 41), ("utf8mb4", 45), ("cp1251", 51), ("utf16", 54),
+    ("utf16le", 56), ("cp1256", 57), ("cp1257", 59), ("utf32", 60), ("binary", 63),
+    ("geostd8", 92), ("cp932", 95), ("eucjpms", 97), ("gb18030", 248),
+];
+
+/// The canonical (lowercase) name of a charset mysqlnd knows, matched case-insensitively.
+fn mysqlnd_charset_name(name: &str) -> Option<&'static str> {
+    MYSQLND_CHARSETS
+        .iter()
+        .find(|(known, _)| known.eq_ignore_ascii_case(name))
+        .map(|(known, _)| *known)
+}
+
+/// The collation number mysqlnd announces for a charset it knows.
+fn mysqlnd_charset_collation(name: &str) -> Option<u16> {
+    MYSQLND_CHARSETS
+        .iter()
+        .find(|(known, _)| known.eq_ignore_ascii_case(name))
+        .map(|(_, collation)| *collation)
 }
 
 /// Returns the exclusive end of a `--` line comment at `bytes[i]` under the server's lexer
@@ -2196,6 +2234,7 @@ impl MyConn {
             warning_count: 0,
             in_transaction: false,
             current_charset,
+            api_charset: None,
             server_version,
             active_stream: None,
             async_query: None,
@@ -3090,6 +3129,24 @@ impl MyConn {
         }
     }
 
+    /// Backs `mysqli::set_charset()`: a name mysqlnd's charset table does not know fails with
+    /// its 2019 "Invalid character set was provided" without contacting the server; a known
+    /// one runs `SET NAMES <name>` and becomes the charset `change_user()` keeps. Returns `1`
+    /// on success and `-1` with the error recorded.
+    pub fn set_charset(&mut self, name: &str) -> i64 {
+        let Some(canonical) = mysqlnd_charset_name(name) else {
+            self.sqlstate = "HY000".to_string();
+            self.errcode = 2019;
+            self.errmsg = "Invalid character set was provided".to_string();
+            return -1;
+        };
+        if self.exec(&format!("SET NAMES {canonical}")) < 0 {
+            return -1;
+        }
+        self.api_charset = Some(canonical.to_string());
+        1
+    }
+
     /// Sends `COM_CHANGE_USER`, backing `mysqli::change_user()`: re-authenticates
     /// the same connection, which resets the session (open transactions rolled back,
     /// temporary tables dropped, session variables and charset reset). Returns `1` on
@@ -3102,13 +3159,19 @@ impl MyConn {
             .with_user(Some(user.to_string()))
             .with_pass(Some(pass.to_string()))
             .with_db_name(db_name.map(str::to_string));
-        match self.conn.change_user(opts) {
+        let collation = self.api_charset.as_deref().and_then(mysqlnd_charset_collation);
+        let result = match collation {
+            Some(collation) => self.conn.change_user_with_collation(opts, collation),
+            None => self.conn.change_user(opts),
+        };
+        match result {
             Ok(()) => {
                 self.errcode = 0;
                 self.sqlstate = "00000".to_string();
                 self.in_transaction = false;
                 self.autocommit = true;
-                self.current_charset = "utf8mb4".to_string();
+                self.current_charset =
+                    self.api_charset.clone().unwrap_or_else(|| "utf8mb4".to_string());
                 1
             }
             Err(error) => {
@@ -4577,6 +4640,19 @@ mod tests {
     /// comments, answers `true` for any leading MySQL / MariaDB executable comment (active or
     /// not, empty or not), and nothing else: an identifier that merely starts with the keyword
     /// and a keyword inside an inert comment are rejected.
+    /// mysqlnd's charset table: names match case-insensitively to their canonical spelling,
+    /// `utf8mb3` and non-identifiers are unknown, and `utf8mb4` announces collation 45.
+    #[test]
+    fn mysqlnd_charset_table_matches_php() {
+        assert_eq!(mysqlnd_charset_name("LATIN1"), Some("latin1"));
+        assert_eq!(mysqlnd_charset_name("utf8"), Some("utf8"));
+        assert_eq!(mysqlnd_charset_name("utf8mb3"), None);
+        assert_eq!(mysqlnd_charset_name("utf-8"), None);
+        assert_eq!(mysqlnd_charset_collation("utf8mb4"), Some(45));
+        assert_eq!(mysqlnd_charset_collation("Latin1"), Some(8));
+        assert_eq!(mysqlnd_charset_collation("gb18030"), Some(248));
+    }
+
     #[test]
     fn sql_may_return_several_sets_sees_through_executable_comments() {
         assert!(sql_may_return_several_sets("CALL p()"));

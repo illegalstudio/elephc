@@ -819,10 +819,13 @@ class mysqli {
         // charset name is an identifier, never quoted, so anything else is
         // rejected before it can smuggle SQL.
         if (!$this->charsetIdentIsValid($charset)) {
-            $this->syntheticFailure(2019, "Invalid characterset or character set not supported", "HY000");
+            $this->syntheticFailure(2019, "Invalid character set was provided", "HY000");
             return false;
         }
-        if (elephc_pdo_exec($this->conn, "SET NAMES " . $charset) < 0) {
+        // The bridge checks the name against mysqlnd's charset table (2019 without a round
+        // trip for one it does not know), then runs SET NAMES and remembers the charset so a
+        // later change_user() keeps it.
+        if (elephc_pdo_mysql_set_charset($this->conn, $charset) < 0) {
             return $this->opFailed();
         }
         $this->clearError();
