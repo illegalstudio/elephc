@@ -50,6 +50,10 @@ class mysqli {
     // Process-wide mysqlnd-style client statistics (mysqli_get_client_stats())
     // and link counters (mysqli_get_links_stats()).
     public static array $clientStats = [];
+    // Per-connection mysqlnd statistics, by connection slot: plain arrays, so neither the
+    // link nor its results allocate an object (object handles stay as php numbers them).
+    public static array $connStatRegistry = [];
+    public static int $nextStatId = 0;
     public static int $openLinks = 0;
     public static int $openPersistentLinks = 0;
     // Persistent (`p:`) links parked in the pool, the bridge handles the pool
@@ -134,7 +138,10 @@ class mysqli {
     private bool $multiStatementsOn = false;
     private bool $asyncUnbuffered = false;
     // Per-connection mysqlnd-style statistics (mysqli::get_connection_stats()).
-    private array $connStats = [];
+    // This connection's slot in mysqli::$connStatRegistry (-1: none yet). A reconnect or the
+    // object's destruction drops it, so results of an older connection never touch the
+    // current one's counters.
+    private int $statId = -1;
 
     public function __construct(
         ?string $hostname = null,
@@ -217,7 +224,7 @@ class mysqli {
             // connect() on a closed object starts it over on a new link.
             $this->linkStatus = 0;
             $this->resetOptions();
-            $this->connStats = [];
+            $this->releaseStats();
         }
         $_host = $hostname === null ? "localhost" : $hostname;
         $_persistent = 0;
@@ -234,7 +241,7 @@ class mysqli {
             // option and the connection statistics are back to their defaults.
             $this->closeLink(false);
             $this->resetOptions();
-            $this->connStats = [];
+            $this->releaseStats();
         }
         if (!$this->handleAllocated) {
             $this->handleAllocated = true;
@@ -415,7 +422,7 @@ class mysqli {
                 // A pool hit hands back the cached handle and its statistics;
                 // mysqlnd records no new connection.
                 mysqli::$cachedPlinks = mysqli::$cachedPlinks - 1;
-                $this->connStats = (array) (mysqli::$plinkStats[$_conn] ?? []);
+                mysqli::$connStatRegistry[$this->__elephcStatId()] = (array) (mysqli::$plinkStats[$_conn] ?? []);
             } else {
                 $_seen = mysqli::$seenPlinks;
                 $_seen[] = $_conn;
@@ -505,6 +512,7 @@ class mysqli {
         if ($this->linkStatus != 2) {
             $this->closeLink(true);
         }
+        $this->releaseStats();
     }
 
     // php_mysqli_close: a pooled persistent link goes back to the pool without
@@ -523,7 +531,7 @@ class mysqli {
             // an unreaped async query is evicted instead.
             if (elephc_pdo_driver_name($_handle) === "mysql") {
                 $_stats = mysqli::$plinkStats;
-                $_stats[$_handle] = $this->connStats;
+                $_stats[$_handle] = (array) (mysqli::$connStatRegistry[$this->__elephcStatId()] ?? []);
                 mysqli::$plinkStats = $_stats;
                 mysqli::$cachedPlinks = mysqli::$cachedPlinks + 1;
             }
@@ -716,11 +724,12 @@ class mysqli {
         $this->requireInitialized();
         // Values are numeric strings, like php's mysqlnd statistics.
         $_out = [];
+        $_counts = (array) (mysqli::$connStatRegistry[$this->__elephcStatId()] ?? []);
         foreach (mysqli::__elephcStatKeys() as $_key) {
             $_name = (string) $_key;
             // A closed link (handle -1) keeps its recorded counters only.
             $_out[$_name] = mysqli::__elephcWireStat($this->conn < 0 ? -2 : $this->conn, $_name)
-                ?? mysqli::__elephcStatString((int) ($this->connStats[$_name] ?? 0));
+                ?? mysqli::__elephcStatString((int) ($_counts[$_name] ?? 0));
         }
         return $_out;
     }
@@ -1568,25 +1577,65 @@ class mysqli {
 
     // Increments one per-connection statistic and its process-wide twin.
     private function bump(string $key): void {
-        $this->connStats[$key] = ((int) ($this->connStats[$key] ?? 0)) + 1;
+        mysqli::__elephcStatAdd($this->__elephcStatId(), $key, 1, true);
+    }
+
+    // This connection's statistics slot, opened on first use: a reconnect opens a new one,
+    // and a result keeps the slot it was counted on (not the mysqli object itself).
+    private function __elephcStatId(): int {
+        if ($this->statId < 0) {
+            $this->statId = mysqli::$nextStatId;
+            mysqli::$nextStatId = mysqli::$nextStatId + 1;
+            mysqli::$connStatRegistry[$this->statId] = [];
+        }
+        return $this->statId;
+    }
+
+    // Drops this connection's statistics slot (a reconnect, the object's destruction).
+    private function releaseStats(): void {
+        if ($this->statId >= 0) {
+            unset(mysqli::$connStatRegistry[$this->statId]);
+            $this->statId = -1;
+        }
+    }
+
+    // Adds $by to statistic $key of connection slot $id (unless $connection is false, for
+    // the counters mysqlnd bumps with MYSQLND_INC_GLOBAL_STATISTIC, or the slot is gone)
+    // and to the process-wide one.
+    private static function __elephcStatAdd(int $id, string $key, int $by, bool $connection): void {
+        if ($by == 0) {
+            return;
+        }
+        if ($connection && $id >= 0 && isset(mysqli::$connStatRegistry[$id])) {
+            mysqli::$connStatRegistry[$id][$key] = ((int) (mysqli::$connStatRegistry[$id][$key] ?? 0)) + $by;
+        }
         $_client = mysqli::$clientStats;
-        $_client[$key] = ((int) ($_client[$key] ?? 0)) + 1;
+        $_client[$key] = ((int) ($_client[$key] ?? 0)) + $by;
         mysqli::$clientStats = $_client;
+    }
+
+    // Whether this link's live set is still bridge statement $stmt: a result streamed from
+    // it goes stale once the link moved on (reconnect, close, change_user).
+    private function __elephcOwnsStream(int $stmt): bool {
+        return $stmt >= 0 && $this->liveStmt == $stmt;
+    }
+
+    // Dispatches mysqli_report for an error that is not the link's own (a stale result's),
+    // leaving the link's recorded error untouched.
+    private function __elephcReportGiven(string $message, int $errno, string $sqlstate): void {
+        $this->report($message, $errno, $sqlstate);
     }
 
     // Adds $by to one mysqlnd statistic: the connection's and the process-wide
     // one, or only the process-wide one ($connection false) for the counters
     // mysqlnd bumps with MYSQLND_INC_GLOBAL_STATISTIC.
     private function __elephcStat(string $key, int $by, bool $connection): void {
-        if ($by == 0) {
-            return;
-        }
-        if ($connection) {
-            $this->connStats[$key] = ((int) ($this->connStats[$key] ?? 0)) + $by;
-        }
-        $_client = mysqli::$clientStats;
-        $_client[$key] = ((int) ($_client[$key] ?? 0)) + $by;
-        mysqli::$clientStats = $_client;
+        mysqli::__elephcStatAdd($this->__elephcStatId(), $key, $by, $connection);
+    }
+
+    // Statistics charged by a result on the connection slot it was counted on.
+    private static function __elephcStatFor(int $id, string $key, int $by, bool $connection): void {
+        mysqli::__elephcStatAdd($id, $key, $by, $connection);
     }
 
     // mysqlnd_query_read_result_set_header: a result set counts as a result-set

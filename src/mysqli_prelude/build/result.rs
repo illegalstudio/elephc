@@ -87,7 +87,9 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
         .private_prop("streamLink", t_nullable(t_class("mysqli")), Some(e_null()))
         .private_prop("streamKinds", t_array(), Some(e_array(vec![])))
         .private_prop("streamRows", TypeExpr::Int, Some(e_int(0)))
-        .private_prop("statLink", t_nullable(t_class("mysqli")), Some(e_null()))
+        .private_prop("streamStale", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("streamReportLink", t_nullable(t_class("mysqli")), Some(e_null()))
+        .private_prop("statId", TypeExpr::Int, Some(e_neg(e_int(1))))
         .private_prop("statBinary", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("statKeys", t_array(), Some(e_array(vec![])))
         .private_prop("statFreed", TypeExpr::Bool, Some(e_bool(false)))
@@ -198,7 +200,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_var("_result"), "streamStep", e_var("firstStep")),
                     s_prop_assign(e_var("_result"), "streamLink", e_var("link")),
                     s_prop_assign(e_var("_result"), "streamKinds", e_var("kinds")),
-                    s_prop_assign(e_var("_result"), "statLink", e_var("link")),
+                    s_prop_assign(e_var("_result"), "statId", e_method_call(e_var("link"), "__elephcStatId", vec![])),
                     s_return(e_var("_result")),
                 ]),
         )
@@ -225,13 +227,14 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_var("target"), "streamLink", e_this_prop("streamLink")),
                     s_prop_assign(e_var("target"), "streamKinds", e_this_prop("streamKinds")),
                     s_prop_assign(e_var("target"), "streamRows", e_this_prop("streamRows")),
-                    s_prop_assign(e_var("target"), "statLink", e_this_prop("statLink")),
+                    s_prop_assign(e_var("target"), "streamStale", e_this_prop("streamStale")),
+                    s_prop_assign(e_var("target"), "statId", e_this_prop("statId")),
                     s_prop_assign(e_var("target"), "statBinary", e_this_prop("statBinary")),
                     s_prop_assign(e_var("target"), "statKeys", e_this_prop("statKeys")),
                     s_prop_assign(e_var("target"), "statFreed", e_this_prop("statFreed")),
                     s_prop_assign(e_this(), "streamStmt", e_neg(e_int(1))),
                     s_prop_assign(e_this(), "streamLink", e_null()),
-                    s_prop_assign(e_this(), "statLink", e_null()),
+                    s_prop_assign(e_this(), "statId", e_neg(e_int(1))),
                 ]),
         )
         .method(
@@ -356,7 +359,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .param("binary", TypeExpr::Bool)
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_prop_assign(e_this(), "statLink", e_var("link")),
+                    s_prop_assign(e_this(), "statId", e_method_call(e_var("link"), "__elephcStatId", vec![])),
                     s_prop_assign(e_this(), "statBinary", e_var("binary")),
                 ]),
         )
@@ -449,9 +452,9 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .param("buffered", TypeExpr::Bool)
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_assign("_link", e_this_prop("statLink")),
+                    s_assign("_id", e_this_prop("statId")),
                     s_if(
-                        e_binop(e_var("_link"), BinOp::StrictEq, e_null()),
+                        e_binop(e_var("_id"), BinOp::Lt, e_int(0)),
                         vec![
                             s_return_void(),
                         ],
@@ -461,12 +464,12 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_var("buffered"),
                         vec![
-                            s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_ternary(e_this_prop("statBinary"), e_str("rows_fetched_from_client_ps_buffered"), e_str("rows_fetched_from_client_normal_buffered")), e_int(1), e_bool(false)])),
+                            s_expr(e_static_call("mysqli", "__elephcStatFor", vec![e_var("_id"), e_ternary(e_this_prop("statBinary"), e_str("rows_fetched_from_client_ps_buffered"), e_str("rows_fetched_from_client_normal_buffered")), e_int(1), e_bool(false)])),
                         ],
                         vec![],
                         Some(vec![
-                        s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("rows_fetched_from_server_normal"), e_int(1), e_bool(true)])),
-                        s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("rows_fetched_from_client_normal_unbuffered"), e_int(1), e_bool(true)])),
+                        s_expr(e_static_call("mysqli", "__elephcStatFor", vec![e_var("_id"), e_str("rows_fetched_from_server_normal"), e_int(1), e_bool(true)])),
+                        s_expr(e_static_call("mysqli", "__elephcStatFor", vec![e_var("_id"), e_str("rows_fetched_from_client_normal_unbuffered"), e_int(1), e_bool(true)])),
                     ]),
                     ),
                     s_assign("_bytes", e_int(0)),
@@ -478,7 +481,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                                 s_if(
                                     e_this_prop("statBinary"),
                                     vec![
-                                        s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("proto_binary_fetched_bit"), e_int(1), e_bool(true)])),
+                                        s_expr(e_static_call("mysqli", "__elephcStatFor", vec![e_var("_id"), e_str("proto_binary_fetched_bit"), e_int(1), e_bool(true)])),
                                     ],
                                     vec![],
                                     None,
@@ -488,10 +491,10 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                             vec![],
                             None,
                         ),
-                        s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_method_call(e_this(), "statKey", vec![e_var("_i")]), e_int(1), e_bool(true)])),
+                        s_expr(e_static_call("mysqli", "__elephcStatFor", vec![e_var("_id"), e_method_call(e_this(), "statKey", vec![e_var("_i")]), e_int(1), e_bool(true)])),
                         s_assign("_bytes", e_binop(e_var("_bytes"), BinOp::Add, e_method_call(e_this(), "statBytes", vec![e_var("_i"), e_var("_value")]))),
                     ]),
-                    s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_ternary(e_this_prop("statBinary"), e_str("bytes_received_real_data_ps"), e_str("bytes_received_real_data_normal")), e_var("_bytes"), e_bool(true)])),
+                    s_expr(e_static_call("mysqli", "__elephcStatFor", vec![e_var("_id"), e_ternary(e_this_prop("statBinary"), e_str("bytes_received_real_data_ps"), e_str("bytes_received_real_data_normal")), e_var("_bytes"), e_bool(true)])),
                 ]),
         )
         .method(
@@ -499,9 +502,9 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .private()
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_assign("_link", e_this_prop("statLink")),
+                    s_assign("_id", e_this_prop("statId")),
                     s_if(
-                        e_binop(e_binop(e_var("_link"), BinOp::StrictEq, e_null()), BinOp::Or, e_this_prop("statFreed")),
+                        e_binop(e_binop(e_var("_id"), BinOp::Lt, e_int(0)), BinOp::Or, e_this_prop("statFreed")),
                         vec![
                             s_return_void(),
                         ],
@@ -509,7 +512,8 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_prop_assign(e_this(), "statFreed", e_bool(true)),
-                    s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("explicit_free_result"), e_int(1), e_bool(true)])),
+                    s_expr(e_static_call("mysqli", "__elephcStatFor", vec![e_var("_id"), e_str("explicit_free_result"), e_int(1), e_bool(true)])),
+                    s_prop_assign(e_this(), "statId", e_neg(e_int(1))),
                 ]),
         )
         .method(
@@ -920,6 +924,23 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .returns(t_nullable(t_array()))
                 .body(vec![
                     s_if(
+                        e_binop(e_method_call(e_this(), "streamDetachedIfStale", vec![]), BinOp::Or, e_this_prop("streamStale")),
+                        vec![
+                            s_assign("_link", e_this_prop("streamReportLink")),
+                            s_if(
+                                e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
+                                vec![
+                                    s_expr(e_method_call(e_var("_link"), "__elephcReportGiven", vec![e_str("Commands out of sync; you can't run this command now"), e_int(2014), e_str("HY000")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
                         e_binop(e_binop(e_this_prop("streamStmt"), BinOp::GtEq, e_int(0)), BinOp::And, e_binop(e_this_prop("streamStep"), BinOp::Eq, e_int(2))),
                         vec![
                             s_prop_assign(e_this(), "streamStep", e_call("elephc_pdo_step", vec![e_this_prop("streamStmt")])),
@@ -998,11 +1019,19 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign("_link", e_this_prop("statLink")),
                     s_if(
-                        e_binop(e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_this_prop("streamStep"), BinOp::NotEq, e_int(0))),
+                        e_method_call(e_this(), "streamDetachedIfStale", vec![]),
                         vec![
-                            s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("flushed_normal_sets"), e_int(1), e_bool(true)])),
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_id", e_this_prop("statId")),
+                    s_if(
+                        e_binop(e_binop(e_var("_id"), BinOp::GtEq, e_int(0)), BinOp::And, e_binop(e_this_prop("streamStep"), BinOp::NotEq, e_int(0))),
+                        vec![
+                            s_expr(e_static_call("mysqli", "__elephcStatFor", vec![e_var("_id"), e_str("flushed_normal_sets"), e_int(1), e_bool(true)])),
                         ],
                         vec![],
                         None,
@@ -1027,17 +1056,47 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         s_prop_assign(e_this(), "streamRows", e_binop(e_this_prop("streamRows"), BinOp::Add, e_int(1))),
                         s_prop_assign(e_this(), "streamStep", e_int(2)),
                         s_if(
-                            e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
+                            e_binop(e_var("_id"), BinOp::GtEq, e_int(0)),
                             vec![
-                                s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("rows_fetched_from_server_normal"), e_int(1), e_bool(true)])),
-                                s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("rows_fetched_from_client_normal_unbuffered"), e_int(1), e_bool(true)])),
-                                s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("rows_skipped_normal"), e_int(1), e_bool(true)])),
+                                s_expr(e_static_call("mysqli", "__elephcStatFor", vec![e_var("_id"), e_str("rows_fetched_from_server_normal"), e_int(1), e_bool(true)])),
+                                s_expr(e_static_call("mysqli", "__elephcStatFor", vec![e_var("_id"), e_str("rows_fetched_from_client_normal_unbuffered"), e_int(1), e_bool(true)])),
+                                s_expr(e_static_call("mysqli", "__elephcStatFor", vec![e_var("_id"), e_str("rows_skipped_normal"), e_int(1), e_bool(true)])),
                             ],
                             vec![],
                             None,
                         ),
                     ]),
                     s_expr(e_method_call(e_this(), "endStream", vec![])),
+                ]),
+        )
+        .method(
+            method("streamDetachedIfStale")
+                .private()
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("streamStmt"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_link", e_this_prop("streamLink")),
+                    s_if(
+                        e_binop(e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()), BinOp::And, e_method_call(e_var("_link"), "__elephcOwnsStream", vec![e_this_prop("streamStmt")])),
+                        vec![
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "streamStmt", e_neg(e_int(1))),
+                    s_prop_assign(e_this(), "streamLink", e_null()),
+                    s_prop_assign(e_this(), "streamReportLink", e_var("_link")),
+                    s_prop_assign(e_this(), "streamStale", e_bool(true)),
+                    s_prop_assign(e_this(), "lengths", e_null()),
+                    s_return(e_bool(true)),
                 ]),
         )
         .method(

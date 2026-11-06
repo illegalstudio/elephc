@@ -850,6 +850,13 @@ pub fn s_static_prop_array_assign(
     )
 }
 
+/// `<array-access chain> = <value>;` in statement position, for a write through more than
+/// one index (`Class::$prop[$a][$b] = <value>`, `$x[$a][$b] = <value>`): the parser's
+/// `NestedArrayAssign`, whose target is the full `ArrayAccess` chain.
+pub fn s_nested_array_assign(target: Expr, value: Expr) -> Stmt {
+    Stmt::new(StmtKind::NestedArrayAssign { target, value }, Span::dummy())
+}
+
 /// `Class::$prop[] = <value>;` in statement position.
 pub fn s_static_prop_array_push(class_name: &str, property: &str, value: Expr) -> Stmt {
     Stmt::new(

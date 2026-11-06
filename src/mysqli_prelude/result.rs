@@ -64,12 +64,17 @@ class mysqli_result implements IteratorAggregate {
     private ?mysqli $streamLink = null;
     private array $streamKinds = [];
     private int $streamRows = 0;
+    // Set once the link moved on from this set (reconnect, close): every fetch then fails
+    // with mysqlnd's 2014, reported without touching the link's own error.
+    private bool $streamStale = false;
+    private ?mysqli $streamReportLink = null;
 
-    // mysqlnd statistics: the link the rows are counted on (null: not counted),
+    // mysqlnd statistics: the connection statistics slot the rows are counted on (-1: not
+    // counted; the producing connection's, without keeping its mysqli object alive),
     // whether they arrived in the binary protocol (a statement's get_result()),
     // the per-column statistic each decoded field charges, and whether the
     // result was already freed (counted once).
-    private ?mysqli $statLink = null;
+    private int $statId = -1;
     private bool $statBinary = false;
     private array $statKeys = [];
     private bool $statFreed = false;
@@ -137,7 +142,7 @@ class mysqli_result implements IteratorAggregate {
         $_result->streamStep = $firstStep;
         $_result->streamLink = $link;
         $_result->streamKinds = $kinds;
-        $_result->statLink = $link;
+        $_result->statId = $link->__elephcStatId();
         return $_result;
     }
 
@@ -161,15 +166,16 @@ class mysqli_result implements IteratorAggregate {
         $target->streamLink = $this->streamLink;
         $target->streamKinds = $this->streamKinds;
         $target->streamRows = $this->streamRows;
+        $target->streamStale = $this->streamStale;
         // The statistics follow the rows: the new result counts its fetches and
         // its free, and the temporary source (destroyed right after) counts none.
-        $target->statLink = $this->statLink;
+        $target->statId = $this->statId;
         $target->statBinary = $this->statBinary;
         $target->statKeys = $this->statKeys;
         $target->statFreed = $this->statFreed;
         $this->streamStmt = -1;
         $this->streamLink = null;
-        $this->statLink = null;
+        $this->statId = -1;
     }
 
     // The conversion mysqlnd applies to a decoded cell of a column: 0 none,
@@ -235,7 +241,7 @@ class mysqli_result implements IteratorAggregate {
     // Has $link count this buffered result's statistics ($binary: a statement's
     // get_result(), decoded from the binary protocol).
     private function __elephcCountFor(mysqli $link, bool $binary): void {
-        $this->statLink = $link;
+        $this->statId = $link->__elephcStatId();
         $this->statBinary = $binary;
     }
 
@@ -337,40 +343,42 @@ class mysqli_result implements IteratorAggregate {
     // field, its type statistic and data bytes (a NULL text field charges
     // nothing; a NULL binary field its null statistic).
     private function countRow(array $row, bool $buffered): void {
-        $_link = $this->statLink;
-        if ($_link === null) {
+        $_id = $this->statId;
+        if ($_id < 0) {
             return;
         }
         if ($buffered) {
-            $_link->__elephcStat($this->statBinary ? "rows_fetched_from_client_ps_buffered" : "rows_fetched_from_client_normal_buffered", 1, false);
+            mysqli::__elephcStatFor($_id, $this->statBinary ? "rows_fetched_from_client_ps_buffered" : "rows_fetched_from_client_normal_buffered", 1, false);
         } else {
-            $_link->__elephcStat("rows_fetched_from_server_normal", 1, true);
-            $_link->__elephcStat("rows_fetched_from_client_normal_unbuffered", 1, true);
+            mysqli::__elephcStatFor($_id, "rows_fetched_from_server_normal", 1, true);
+            mysqli::__elephcStatFor($_id, "rows_fetched_from_client_normal_unbuffered", 1, true);
         }
         $_bytes = 0;
         for ($_i = 0; $_i < $this->field_count; $_i++) {
             $_value = $row[$_i];
             if ($_value === null) {
                 if ($this->statBinary) {
-                    $_link->__elephcStat("proto_binary_fetched_bit", 1, true);
+                    mysqli::__elephcStatFor($_id, "proto_binary_fetched_bit", 1, true);
                 }
                 continue;
             }
-            $_link->__elephcStat($this->statKey($_i), 1, true);
+            mysqli::__elephcStatFor($_id, $this->statKey($_i), 1, true);
             $_bytes = $_bytes + $this->statBytes($_i, $_value);
         }
-        $_link->__elephcStat($this->statBinary ? "bytes_received_real_data_ps" : "bytes_received_real_data_normal", $_bytes, true);
+        mysqli::__elephcStatFor($_id, $this->statBinary ? "bytes_received_real_data_ps" : "bytes_received_real_data_normal", $_bytes, true);
     }
 
     // mysqli_result free (close / free / free_result / destruction): php
     // always reports it as explicit.
     private function countFree(): void {
-        $_link = $this->statLink;
-        if ($_link === null || $this->statFreed) {
+        $_id = $this->statId;
+        if ($_id < 0 || $this->statFreed) {
             return;
         }
         $this->statFreed = true;
-        $_link->__elephcStat("explicit_free_result", 1, true);
+        mysqli::__elephcStatFor($_id, "explicit_free_result", 1, true);
+        // A freed result counts nothing more.
+        $this->statId = -1;
     }
 
     public function fetch_row(): ?array {
@@ -595,9 +603,17 @@ class mysqli_result implements IteratorAggregate {
         $this->countFree();
     }
 
-    // Reads the next row of a MYSQLI_USE_RESULT set from the server; null —
-    // and the link released — once the set is exhausted.
+    // Reads the next row of a MYSQLI_USE_RESULT set from the server; null (and the
+    // link released) once the set is exhausted, or for a set the link moved on from
+    // (mysqlnd's 2014, reported on the result alone; php returns false).
     private function streamRow(): ?array {
+        if ($this->streamDetachedIfStale() || $this->streamStale) {
+            $_link = $this->streamReportLink;
+            if ($_link !== null) {
+                $_link->__elephcReportGiven("Commands out of sync; you can't run this command now", 2014, "HY000");
+            }
+            return null;
+        }
         // 2 = the next row was not read yet: like mysqlnd, read it only now.
         if ($this->streamStmt >= 0 && $this->streamStep == 2) {
             $this->streamStep = elephc_pdo_step($this->streamStmt);
@@ -647,11 +663,14 @@ class mysqli_result implements IteratorAggregate {
         if ($this->streamStmt < 0) {
             return;
         }
+        if ($this->streamDetachedIfStale()) {
+            return;
+        }
         // mysqlnd skip_result: a set not read to its EOF is flushed, and every
         // row still on the wire is read (and counted) and skipped.
-        $_link = $this->statLink;
-        if ($_link !== null && $this->streamStep != 0) {
-            $_link->__elephcStat("flushed_normal_sets", 1, true);
+        $_id = $this->statId;
+        if ($_id >= 0 && $this->streamStep != 0) {
+            mysqli::__elephcStatFor($_id, "flushed_normal_sets", 1, true);
         }
         while (true) {
             if ($this->streamStep == 2) {
@@ -662,13 +681,32 @@ class mysqli_result implements IteratorAggregate {
             }
             $this->streamRows = $this->streamRows + 1;
             $this->streamStep = 2;
-            if ($_link !== null) {
-                $_link->__elephcStat("rows_fetched_from_server_normal", 1, true);
-                $_link->__elephcStat("rows_fetched_from_client_normal_unbuffered", 1, true);
-                $_link->__elephcStat("rows_skipped_normal", 1, true);
+            if ($_id >= 0) {
+                mysqli::__elephcStatFor($_id, "rows_fetched_from_server_normal", 1, true);
+                mysqli::__elephcStatFor($_id, "rows_fetched_from_client_normal_unbuffered", 1, true);
+                mysqli::__elephcStatFor($_id, "rows_skipped_normal", 1, true);
             }
         }
         $this->endStream();
+    }
+
+    // A set whose link moved on (a reconnect or close finalized its statement) is stale:
+    // it is detached without touching the link, and every later fetch fails. True when
+    // this call found it stale.
+    private function streamDetachedIfStale(): bool {
+        if ($this->streamStmt < 0) {
+            return false;
+        }
+        $_link = $this->streamLink;
+        if ($_link !== null && $_link->__elephcOwnsStream($this->streamStmt)) {
+            return false;
+        }
+        $this->streamStmt = -1;
+        $this->streamLink = null;
+        $this->streamReportLink = $_link;
+        $this->streamStale = true;
+        $this->lengths = null;
+        return true;
     }
 
     // Detaches from the live statement and tells the link its set is consumed.
@@ -811,4 +849,5 @@ final class __ElephcMysqliResultIterator implements Iterator {
         $this->position = $this->position + 1;
     }
 }
+
 "##;

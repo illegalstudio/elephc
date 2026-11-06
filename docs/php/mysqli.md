@@ -142,8 +142,18 @@ freed (or destroyed), `num_rows` reads `0` until the last row was fetched
 throw. A row read that fails midway (a read timeout, a lost connection) is
 reported like mysqli's fetch path (errno on the link, `mysqli_sql_exception`
 under `MYSQLI_REPORT_STRICT`, a warning under `MYSQLI_REPORT_ERROR`) instead of
-ending the set silently. Difference from PHP: with reporting off that fetch
-returns `null` where PHP returns `false`; both end a `while ($row = ...)` loop.
+ending the set silently. An unbuffered result whose link reconnected (or was
+closed) is stale: every fetch fails (`fetch_all()` returns an empty array) and
+reports mysqlnd's 2014 "Commands out of sync" of its own, leaving the link's
+recorded error untouched. Difference from PHP: with reporting off a failed row
+fetch returns `null` where PHP returns `false` (the methods keep their `?array`
+type so `?array` consumers still type-check); both end a `while ($row = ...)`
+loop.
+
+A buffered result does not keep its `mysqli` object alive: unsetting the link
+closes the connection while the already-read result stays fetchable. A result
+counts its fetches and its free on the connection that produced it, so after a
+reconnect an old result never charges the new connection's statistics.
 
 Non-select statements return `true` and refresh `affected_rows`,
 `insert_id`, `warning_count`, and `info` (the server's "Records: … Duplicates:
@@ -548,15 +558,15 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`mysqli_execute()`](./builtins/database/mysqli_execute.md) | `(mixed $statement, ?array $params = null): bool` | `bool` | ✓ | - |
 | [`mysqli_execute_query()`](./builtins/database/mysqli_execute_query.md) | `(mixed $mysql, string $query, ?array $params = null): mixed` | `mixed` | ✓ | - |
 | [`mysqli_fetch_all()`](./builtins/database/mysqli_fetch_all.md) | `(mixed $result, int $mode = 2): array` | `array` | ✓ | - |
-| [`mysqli_fetch_array()`](./builtins/database/mysqli_fetch_array.md) | `(mixed $result, int $mode = 3): ?array` | `?array` | ✓ | - |
-| [`mysqli_fetch_assoc()`](./builtins/database/mysqli_fetch_assoc.md) | `(mixed $result): ?array` | `?array` | ✓ | - |
+| [`mysqli_fetch_array()`](./builtins/database/mysqli_fetch_array.md) | `(mixed $result, int $mode = 3): array|null|false` | `array|null|false` | ✓ | - |
+| [`mysqli_fetch_assoc()`](./builtins/database/mysqli_fetch_assoc.md) | `(mixed $result): array|null|false` | `array|null|false` | ✓ | - |
 | [`mysqli_fetch_column()`](./builtins/database/mysqli_fetch_column.md) | `(mixed $result, int $column = 0): mixed` | `mixed` | ✓ | - |
 | [`mysqli_fetch_field()`](./builtins/database/mysqli_fetch_field.md) | `(mixed $result): mixed` | `mixed` | ✓ | - |
 | [`mysqli_fetch_field_direct()`](./builtins/database/mysqli_fetch_field_direct.md) | `(mixed $result, int $index): mixed` | `mixed` | ✓ | - |
 | [`mysqli_fetch_fields()`](./builtins/database/mysqli_fetch_fields.md) | `(mixed $result): array` | `array` | ✓ | - |
 | [`mysqli_fetch_lengths()`](./builtins/database/mysqli_fetch_lengths.md) | `(mixed $result): mixed` | `mixed` | ✓ | - |
 | [`mysqli_fetch_object()`](./builtins/database/mysqli_fetch_object.md) | `(mixed $result, string $class = 'stdClass', array $constructor_args = []): mixed` | `mixed` | ✓ | - |
-| [`mysqli_fetch_row()`](./builtins/database/mysqli_fetch_row.md) | `(mixed $result): ?array` | `?array` | ✓ | - |
+| [`mysqli_fetch_row()`](./builtins/database/mysqli_fetch_row.md) | `(mixed $result): array|null|false` | `array|null|false` | ✓ | - |
 | [`mysqli_field_count()`](./builtins/database/mysqli_field_count.md) | `(mixed $mysql): int` | `int` | ✓ | - |
 | [`mysqli_field_seek()`](./builtins/database/mysqli_field_seek.md) | `(mixed $result, int $index): bool` | `bool` | ✓ | - |
 | [`mysqli_field_tell()`](./builtins/database/mysqli_field_tell.md) | `(mixed $result): int` | `int` | ✓ | - |

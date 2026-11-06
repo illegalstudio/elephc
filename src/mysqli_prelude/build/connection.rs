@@ -58,11 +58,12 @@ use crate::synthetic_class::{
     s_for,
     s_foreach,
     s_if,
-    s_prop_array_assign,
+    s_nested_array_assign,
     s_prop_array_push,
     s_prop_assign,
     s_return,
     s_return_void,
+    s_static_prop_array_assign,
     s_static_prop_assign,
     s_throw,
     s_while,
@@ -81,6 +82,8 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .static_prop("lastConnectErrno", TypeExpr::Int, Some(e_int(0)))
         .static_prop("lastConnectError", TypeExpr::Str, Some(e_str("")))
         .static_prop("clientStats", t_array(), Some(e_array(vec![])))
+        .static_prop("connStatRegistry", t_array(), Some(e_array(vec![])))
+        .static_prop("nextStatId", TypeExpr::Int, Some(e_int(0)))
         .static_prop("openLinks", TypeExpr::Int, Some(e_int(0)))
         .static_prop("openPersistentLinks", TypeExpr::Int, Some(e_int(0)))
         .static_prop("cachedPlinks", TypeExpr::Int, Some(e_int(0)))
@@ -133,7 +136,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .private_prop("busyStatement", TypeExpr::Int, Some(e_neg(e_int(1))))
         .private_prop("multiStatementsOn", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("asyncUnbuffered", TypeExpr::Bool, Some(e_bool(false)))
-        .private_prop("connStats", t_array(), Some(e_array(vec![])))
+        .private_prop("statId", TypeExpr::Int, Some(e_neg(e_int(1))))
         .method(
             method("__construct")
                 .param_default("hostname", t_nullable(TypeExpr::Str), e_null())
@@ -251,7 +254,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                             ),
                             s_prop_assign(e_this(), "linkStatus", e_int(0)),
                             s_expr(e_method_call(e_this(), "resetOptions", vec![])),
-                            s_prop_assign(e_this(), "connStats", e_array(vec![])),
+                            s_expr(e_method_call(e_this(), "releaseStats", vec![])),
                         ],
                         vec![],
                         None,
@@ -272,7 +275,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![
                             s_expr(e_method_call(e_this(), "closeLink", vec![e_bool(false)])),
                             s_expr(e_method_call(e_this(), "resetOptions", vec![])),
-                            s_prop_assign(e_this(), "connStats", e_array(vec![])),
+                            s_expr(e_method_call(e_this(), "releaseStats", vec![])),
                         ],
                         vec![],
                         None,
@@ -570,7 +573,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                                 e_var("_pooled"),
                                 vec![
                                     s_static_prop_assign("mysqli", "cachedPlinks", e_binop(e_static_prop("mysqli", "cachedPlinks"), BinOp::Sub, e_int(1))),
-                                    s_prop_assign(e_this(), "connStats", e_cast(CastType::Array, e_null_coalesce(e_index(e_static_prop("mysqli", "plinkStats"), e_var("_conn")), e_array(vec![])))),
+                                    s_static_prop_array_assign("mysqli", "connStatRegistry", e_method_call(e_this(), "__elephcStatId", vec![]), e_cast(CastType::Array, e_null_coalesce(e_index(e_static_prop("mysqli", "plinkStats"), e_var("_conn")), e_array(vec![])))),
                                 ],
                                 vec![],
                                 Some(vec![
@@ -695,6 +698,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
+                    s_expr(e_method_call(e_this(), "releaseStats", vec![])),
                 ]),
         )
         .method(
@@ -720,7 +724,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                                 e_binop(e_call("elephc_pdo_driver_name", vec![e_var("_handle")]), BinOp::StrictEq, e_str("mysql")),
                                 vec![
                                     s_assign("_stats", e_static_prop("mysqli", "plinkStats")),
-                                    s_array_assign("_stats", e_var("_handle"), e_this_prop("connStats")),
+                                    s_array_assign("_stats", e_var("_handle"), e_cast(CastType::Array, e_null_coalesce(e_index(e_static_prop("mysqli", "connStatRegistry"), e_method_call(e_this(), "__elephcStatId", vec![])), e_array(vec![])))),
                                     s_static_prop_assign("mysqli", "plinkStats", e_var("_stats")),
                                     s_static_prop_assign("mysqli", "cachedPlinks", e_binop(e_static_prop("mysqli", "cachedPlinks"), BinOp::Add, e_int(1))),
                                 ],
@@ -1030,9 +1034,10 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireInitialized", vec![])),
                     s_assign("_out", e_array(vec![])),
+                    s_assign("_counts", e_cast(CastType::Array, e_null_coalesce(e_index(e_static_prop("mysqli", "connStatRegistry"), e_method_call(e_this(), "__elephcStatId", vec![])), e_array(vec![])))),
                     s_foreach(e_static_call("mysqli", "__elephcStatKeys", vec![]), None, "_key", vec![
                         s_assign("_name", e_cast(CastType::String, e_var("_key"))),
-                        s_array_assign("_out", e_var("_name"), e_null_coalesce(e_static_call("mysqli", "__elephcWireStat", vec![e_ternary(e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0)), e_neg(e_int(2)), e_this_prop("conn")), e_var("_name")]), e_static_call("mysqli", "__elephcStatString", vec![e_cast(CastType::Int, e_null_coalesce(e_index(e_this_prop("connStats"), e_var("_name")), e_int(0)))]))),
+                        s_array_assign("_out", e_var("_name"), e_null_coalesce(e_static_call("mysqli", "__elephcWireStat", vec![e_ternary(e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0)), e_neg(e_int(2)), e_this_prop("conn")), e_var("_name")]), e_static_call("mysqli", "__elephcStatString", vec![e_cast(CastType::Int, e_null_coalesce(e_index(e_var("_counts"), e_var("_name")), e_int(0)))]))),
                     ]),
                     s_return(e_var("_out")),
                 ]),
@@ -2410,15 +2415,48 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .param("key", TypeExpr::Str)
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_prop_array_assign(e_this(), "connStats", e_var("key"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_this_prop("connStats"), e_var("key")), e_int(0))), BinOp::Add, e_int(1))),
-                    s_assign("_client", e_static_prop("mysqli", "clientStats")),
-                    s_array_assign("_client", e_var("key"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_var("_client"), e_var("key")), e_int(0))), BinOp::Add, e_int(1))),
-                    s_static_prop_assign("mysqli", "clientStats", e_var("_client")),
+                    s_expr(e_static_call("mysqli", "__elephcStatAdd", vec![e_method_call(e_this(), "__elephcStatId", vec![]), e_var("key"), e_int(1), e_bool(true)])),
                 ]),
         )
         .method(
-            method("__elephcStat")
+            method("__elephcStatId")
                 .private()
+                .returns(TypeExpr::Int)
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("statId"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_prop_assign(e_this(), "statId", e_static_prop("mysqli", "nextStatId")),
+                            s_static_prop_assign("mysqli", "nextStatId", e_binop(e_static_prop("mysqli", "nextStatId"), BinOp::Add, e_int(1))),
+                            s_static_prop_array_assign("mysqli", "connStatRegistry", e_this_prop("statId"), e_array(vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_this_prop("statId")),
+                ]),
+        )
+        .method(
+            method("releaseStats")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("statId"), BinOp::GtEq, e_int(0)),
+                        vec![
+                            s_expr(e_call("unset", vec![e_index(e_static_prop("mysqli", "connStatRegistry"), e_this_prop("statId"))])),
+                            s_prop_assign(e_this(), "statId", e_neg(e_int(1))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
+        )
+        .method(
+            method("__elephcStatAdd")
+                .private()
+                .static_()
+                .param("id", TypeExpr::Int)
                 .param("key", TypeExpr::Str)
                 .param("by", TypeExpr::Int)
                 .param("connection", TypeExpr::Bool)
@@ -2433,9 +2471,9 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_if(
-                        e_var("connection"),
+                        e_binop(e_binop(e_var("connection"), BinOp::And, e_binop(e_var("id"), BinOp::GtEq, e_int(0))), BinOp::And, e_call("isset", vec![e_index(e_static_prop("mysqli", "connStatRegistry"), e_var("id"))])),
                         vec![
-                            s_prop_array_assign(e_this(), "connStats", e_var("key"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_this_prop("connStats"), e_var("key")), e_int(0))), BinOp::Add, e_var("by"))),
+                            s_nested_array_assign(e_index(e_index(e_static_prop("mysqli", "connStatRegistry"), e_var("id")), e_var("key")), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_index(e_static_prop("mysqli", "connStatRegistry"), e_var("id")), e_var("key")), e_int(0))), BinOp::Add, e_var("by"))),
                         ],
                         vec![],
                         None,
@@ -2443,6 +2481,50 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_assign("_client", e_static_prop("mysqli", "clientStats")),
                     s_array_assign("_client", e_var("key"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_var("_client"), e_var("key")), e_int(0))), BinOp::Add, e_var("by"))),
                     s_static_prop_assign("mysqli", "clientStats", e_var("_client")),
+                ]),
+        )
+        .method(
+            method("__elephcOwnsStream")
+                .private()
+                .param("stmt", TypeExpr::Int)
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_binop(e_binop(e_var("stmt"), BinOp::GtEq, e_int(0)), BinOp::And, e_binop(e_this_prop("liveStmt"), BinOp::Eq, e_var("stmt")))),
+                ]),
+        )
+        .method(
+            method("__elephcReportGiven")
+                .private()
+                .param("message", TypeExpr::Str)
+                .param("errno", TypeExpr::Int)
+                .param("sqlstate", TypeExpr::Str)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "report", vec![e_var("message"), e_var("errno"), e_var("sqlstate")])),
+                ]),
+        )
+        .method(
+            method("__elephcStat")
+                .private()
+                .param("key", TypeExpr::Str)
+                .param("by", TypeExpr::Int)
+                .param("connection", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_expr(e_static_call("mysqli", "__elephcStatAdd", vec![e_method_call(e_this(), "__elephcStatId", vec![]), e_var("key"), e_var("by"), e_var("connection")])),
+                ]),
+        )
+        .method(
+            method("__elephcStatFor")
+                .private()
+                .static_()
+                .param("id", TypeExpr::Int)
+                .param("key", TypeExpr::Str)
+                .param("by", TypeExpr::Int)
+                .param("connection", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_expr(e_static_call("mysqli", "__elephcStatAdd", vec![e_var("id"), e_var("key"), e_var("by"), e_var("connection")])),
                 ]),
         )
         .method(

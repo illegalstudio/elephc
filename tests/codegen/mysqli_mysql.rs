@@ -3327,3 +3327,95 @@ run($db);
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A buffered result does not keep its mysqli object alive: unsetting the link closes the
+/// connection at once while the result (already read into the client) stays fetchable, like
+/// php, whose result holds the native result state rather than the mysqli wrapper. Expected
+/// output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_buffered_result_does_not_keep_the_link_alive() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function lc_threads(string $h, string $u, string $p, string $d, int $port): int {
+    $m = new mysqli($h, $u, $p, $d, $port);
+    $row = $m->query("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER = '" . $u . "'")->fetch_row();
+    $m->close();
+    return (int) $row[0];
+}
+$base = lc_threads($host, $user, $pass, $dbname, $port);
+$db2 = new mysqli($host, $user, $pass, $dbname, $port);
+$r = $db2->query("SELECT 1 UNION ALL SELECT 2");
+echo "a:", lc_threads($host, $user, $pass, $dbname, $port) - $base, "|";
+unset($db2);
+echo "b:", lc_threads($host, $user, $pass, $dbname, $port) - $base, "|", json_encode($r->fetch_row()), "|";
+$r->free();
+echo "c:", lc_threads($host, $user, $pass, $dbname, $port) - $base, "|";
+unset($r);
+echo "d:", lc_threads($host, $user, $pass, $dbname, $port) - $base, "\n";
+"#,
+    ));
+    assert_eq!(out, "a:1|b:0|[\"1\"]|c:0|d:0\n");
+}
+
+/// A result produced before the link reconnected counts its fetches and its free on the
+/// connection that produced it: the replacement connection's statistics stay untouched while
+/// the process-wide totals still move, and the new connection's own results count on it.
+/// Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_old_result_after_reconnect_charges_its_own_connection() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function rc_keys(mysqli $db): string {
+    $s = $db->get_connection_stats();
+    return $s["explicit_free_result"] . "," . $s["rows_fetched_from_client_normal_buffered"] . "," . $s["bytes_received_real_data_normal"] . "," . $s["rows_fetched_from_client_normal_unbuffered"] . "," . $s["flushed_normal_sets"];
+}
+function rc_client(): string {
+    $s = mysqli_get_client_stats();
+    return $s["explicit_free_result"] . "," . $s["rows_fetched_from_client_normal_buffered"];
+}
+$r = $db->query("SELECT 1 AS a UNION ALL SELECT 2");
+$c0 = rc_client();
+$db->real_connect($host, $user, $pass, $dbname, $port);
+echo "fresh:", rc_keys($db), "|", json_encode($r->fetch_row()), "|";
+$r->free();
+$c1 = rc_client();
+echo "after:", rc_keys($db), "|client:", $c0, "->", $c1, "|";
+$own = $db->query("SELECT 3 AS b");
+$own->fetch_row();
+$own->free();
+echo "own:", rc_keys($db), "\n";
+"#,
+    ));
+    assert_eq!(out, "fresh:0,0,0,0,0|[\"1\"]|after:0,0,0,0,0|client:0,0->1,1|own:1,0,1,0,0\n");
+}
+
+/// An unbuffered result whose link reconnected is stale: every fetch fails (fetch_all() an
+/// empty array) without touching the new connection's error, and under STRICT it throws
+/// mysqlnd's 2014 "Commands out of sync" of its own, not the link's last error. Expected output
+/// is php 8.5 + mysqlnd's, except that the failed row fetches return `null` where php returns
+/// `false` (the documented fetch-failure difference; fetch_column() is `false` in both).
+#[test]
+#[ignore]
+fn test_mysqli_stale_unbuffered_result_fails_with_its_own_error() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$u = $db->query("SELECT 1 AS a UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+$db->real_connect($host, $user, $pass, $dbname, $port);
+echo var_export($u->fetch_row(), true), ":", var_export($u->fetch_assoc(), true), ":", var_export($u->fetch_object(), true), ":", var_export($u->fetch_column(), true), ":", count($u->fetch_all()), ":", $db->errno, "|";
+$u->free();
+$u2 = $db->query("SELECT 1 AS a UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+$u2->fetch_row();
+$db->real_connect($host, $user, $pass, $dbname, $port);
+$db->query("SELECT 1 FROM nope_table_x");
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+try { $u2->fetch_row(); echo "nothrow"; } catch (mysqli_sql_exception $e) { echo "throw:", $e->getCode(), ":", $e->getMessage(), ":", $e->getSqlState(); }
+echo ":", $db->errno, "|", $db->query("SELECT 5")->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "NULL:NULL:NULL:false:0:0|throw:2014:Commands out of sync; you can't run this command now:HY000:1146|5\n");
+}
