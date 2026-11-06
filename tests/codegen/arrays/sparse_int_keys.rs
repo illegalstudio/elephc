@@ -357,10 +357,11 @@ echo put(2.5, 3.5), "\n";
     assert_eq!(float_key_deprecations(&out.stderr), 2, "{}", out.stderr);
 }
 
-/// A packed `array<int>` local nothing writes reads as `mixed` under a counter key, as without
-/// promotable locals: reassigning an `int` local from it and indexing a buffer with it compile.
+/// A packed `array<int>` local with no write that can promote it (none, an append, a write at
+/// literal key `0`) reads as `mixed` under a counter or boxed key, as without promotable locals:
+/// reassigning an `int` local from it and indexing a buffer with it compile.
 #[test]
-fn test_unwritten_int_array_counter_reads_keep_mixed_view() {
+fn test_unpromotable_int_array_counter_reads_keep_mixed_view() {
     let out = compile_and_run(r#"<?php
 function pick(int $n): string {
     $cells = [2, 0, 1];
@@ -374,12 +375,29 @@ function pick(int $n): string {
     }
     return $out . ($y ?? -1);
 }
+function appended(int $n): string {
+    $cells = [2, 0, 1];
+    $cells[] = 4;
+    $y = 0;
+    if ($n > 0) {
+        $y = $cells[$n + 1];
+    }
+    return (string)($y ?? -1);
+}
+function fill(): int {
+    $cellOf = [1, 0, 1];
+    $cellOf[0] = 1;
+    $slots = buffer_new<int>(2);
+    $item = 1;
+    $slots[$cellOf[$item + 1]] = 7;
+    return $slots[1];
+}
 $cellOf = [1, 0, 1];
 $slots = buffer_new<int>(2);
 for ($item = 2; $item >= 0; $item--) {
     $slots[$cellOf[$item]] += $item + 1;
 }
-echo pick($argc), "|", $slots[0], ",", $slots[1], "\n";
+echo pick($argc), "|", appended($argc), "|", fill(), "|", $slots[0], ",", $slots[1], "\n";
 "#);
-    assert_eq!(out, "2,0,1,1|2,4\n");
+    assert_eq!(out, "2,0,1,1|1|7|2,4\n");
 }

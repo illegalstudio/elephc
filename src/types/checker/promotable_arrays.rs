@@ -128,12 +128,13 @@ impl Checker {
     /// counter key, which would otherwise read as `mixed`.
     ///
     /// Only a local that can really hold a promotable array takes that view: one the body writes
-    /// by element, or one already recorded promotable (an activated parameter, a promotable value
+    /// under a key that may skip a slot (`PromotableCandidates::keyed`), or one already recorded
+    /// promotable (an activated parameter, a promotable value
     /// assigned to it). A packed local nothing writes keeps the `mixed` read it has without this
     /// pass, so a buffer index, an `int` local it is reassigned into, and every other consumer
     /// that accepts `mixed` but not `?int` keeps compiling.
     pub(crate) fn promotable_array_element_read(&self, array: &str, elem_ty: &PhpType, idx_ty: &PhpType) -> bool {
-        (self.promotable_array_candidates.written(array) || self.is_promotable_array_local(array))
+        (self.promotable_array_candidates.keyed(array) || self.is_promotable_array_local(array))
             && promotable_element(elem_ty)
             && promotable_read_key(idx_ty)
     }
@@ -561,8 +562,8 @@ pub(crate) struct PromotableCandidates {
     disqualified: HashSet<String>,
     /// Locals the body assigns as a whole.
     assigned: HashSet<String>,
-    /// Locals the body writes by element or appends to.
-    written: HashSet<String>,
+    /// Locals the body writes under a key that may skip a slot (`Scan::keyed`).
+    keyed: HashSet<String>,
     /// Whether the body holds a construct a typed clone would duplicate.
     clone_blocked: bool,
 }
@@ -573,9 +574,10 @@ impl PromotableCandidates {
         self.active && !self.scope_escape && !self.disqualified.contains(name)
     }
 
-    /// Returns whether candidate `name` is written by element or appended to in this body.
-    pub(crate) fn written(&self, name: &str) -> bool {
-        self.contains(name) && self.written.contains(name)
+    /// Returns whether candidate `name` has an element write in this body that can make it
+    /// promotable. The set is syntactic, so a read checked before that write gets the same answer.
+    pub(crate) fn keyed(&self, name: &str) -> bool {
+        self.contains(name) && self.keyed.contains(name)
     }
 
     /// Returns whether a typed clone of this body may declare parameter `name` as `array<int>`:
@@ -609,7 +611,7 @@ pub(crate) fn find_candidates(checker: &Checker, body: &[Stmt]) -> PromotableCan
         scope_escape: scan.scope_escape,
         disqualified,
         assigned: scan.assigned,
-        written: scan.written,
+        keyed: scan.keyed,
         clone_blocked: scan.clone_blocked,
     }
 }
@@ -639,6 +641,12 @@ impl Checker {
 struct Scan {
     /// Locals written through a statement-form element write or append.
     written: HashSet<String>,
+    /// Locals with an element write whose key may skip a slot, the only write that can make a
+    /// candidate promotable: not an append, not a key provably in range (literal `0`), not a
+    /// string literal (always a hash) and not a bare `foreach` key (routed to the tagged writer).
+    keyed: HashSet<String>,
+    /// `foreach` key variables of the enclosing loops.
+    foreach_keys: Vec<String>,
     /// Locals some construct can reach outside the dispatched element operations.
     disqualified: HashSet<String>,
     /// Set when a builtin can read or rebind every local of the body.
@@ -654,6 +662,14 @@ struct Scan {
 }
 
 impl Scan {
+    /// Returns whether an element write under `index` may skip a slot and so make its local
+    /// promotable, mirroring the key gate of `Checker::promotable_array_write`.
+    fn key_may_skip(&self, index: &Expr) -> bool {
+        !crate::types::nonempty_array_key_stays_in_range(index)
+            && !matches!(&index.kind, ExprKind::StringLiteral(_))
+            && !matches!(&index.kind, ExprKind::Variable(name) if self.foreach_keys.contains(name))
+    }
+
     /// Walks a statement list.
     fn stmts(&mut self, stmts: &[Stmt]) {
         for stmt in stmts {
@@ -666,6 +682,9 @@ impl Scan {
         match &stmt.kind {
             StmtKind::ArrayAssign { array, index, value } => {
                 self.written.insert(array.clone());
+                if self.key_may_skip(index) {
+                    self.keyed.insert(array.clone());
+                }
                 self.expr(index);
                 self.expr(value);
             }
@@ -730,7 +749,10 @@ impl Scan {
                 self.disqualified.extend(key_var.iter().cloned());
                 self.disqualified.insert(value_var.clone());
                 self.expr(array);
+                let depth = self.foreach_keys.len();
+                self.foreach_keys.extend(key_var.iter().cloned());
                 self.stmts(body);
+                self.foreach_keys.truncate(depth);
             }
             StmtKind::Try {
                 try_body,
