@@ -27,6 +27,27 @@
 /// helper.
 pub(crate) fn emit_json_data() -> String {
     let mut out = String::new();
+    // Byte classification for the short plain-ASCII JSON string fast path: 1 marks a
+    // printable byte that copies verbatim (0x20..=0x7E minus quote, slash, and backslash);
+    // 0 marks a byte that needs escaping, UTF-8 validation, or the general sizing pass.
+    out.push_str(".balign 16\n.globl _json_plain_ascii\n_json_plain_ascii:\n");
+    let plain: Vec<u8> = (0u16..=255)
+        .map(|byte| {
+            let byte = byte as u8;
+            u8::from((0x20..=0x7e).contains(&byte) && !matches!(byte, 0x22 | 0x2f | 0x5c))
+        })
+        .collect();
+    for chunk in plain.chunks(16) {
+        out.push_str("    .byte ");
+        for (index, byte) in chunk.iter().enumerate() {
+            if index > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(&byte.to_string());
+        }
+        out.push('\n');
+    }
+
     out.push_str(".globl _json_true\n_json_true:\n    .ascii \"true\"\n");
     out.push_str(".globl _json_false\n_json_false:\n    .ascii \"false\"\n");
     out.push_str(".globl _json_null\n_json_null:\n    .ascii \"null\"\n");

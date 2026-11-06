@@ -1381,13 +1381,18 @@ call operand owns the source cell for the duration of the helper.
 | `__rt_json_integer_tree_write` | Write a proved integer tree into the sized allocation without callbacks or further allocation |
 
 The associative-array encoder has three direct-write fast paths for the common object
-shape: a key of at most 8 plain printable ASCII bytes (no quote, backslash or slash, and no
-active JSON flag) is written as `"key"` at the cursor; a string value of at most 16 such bytes
-takes the same path; an integer value is formatted with `__rt_itoa_into` into a reserved
-21-byte window and shifted onto the cursor. These paths skip the shared itoa scratch, the
-string escaping passes and the generic append copy. Flags, escapes, non-ASCII or control
-bytes, slashes and longer strings keep the full encoder, and the per-value `strbuf_sync` is
-emitted only in the branches that actually use formatter scratch.
+shape: a key or string value of at most 16 plain printable ASCII bytes (no quote, backslash
+or slash, and no active JSON flag) is written as a quoted slice at the cursor; an integer
+value is formatted with `__rt_itoa_into` into a reserved 21-byte window and shifted onto the
+cursor. The quoted paths reserve `len + 2`, classify each source byte through the 256-byte
+`_json_plain_ascii` table, and copy accepted bytes in the same pass, so they skip both the
+separate escaping scan and the generic append copy. A byte that needs escaping abandons the
+partial write and resumes at the saved cursor through the full encoder; the cursor is
+published immediately after buffer growth so a fallback never uses a pre-growth pointer.
+Flags, non-ASCII or control bytes, slashes and longer strings keep the full encoder, and the
+per-value `strbuf_sync` is emitted only in the branches that actually use formatter scratch.
+The same table-driven single-pass copy backs the `__rt_json_encode_str` fast path used by
+object keys and direct `json_encode($string)` calls.
 
 The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
 
