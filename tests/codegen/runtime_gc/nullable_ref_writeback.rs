@@ -707,3 +707,30 @@ run();
     );
     assert_clean(out, "caught:2|caught:2\n");
 }
+
+/// An emptied `array<mixed>` written back through a nullable by-reference parameter into a
+/// declared `array<int>` local (or as a nested empty array of an `array<array<int>>` local)
+/// takes the local's element layout, so later appends store raw ints that a `mixed` consumer
+/// reads correctly. Output matches php 8.5.
+#[test]
+fn test_declared_reference_empty_arrays_take_the_local_layout() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function fill(?array &$out): void { $empty = [1, "x"]; array_pop($empty); array_pop($empty); $out = $empty; }
+function fillNested(?array &$out): void { $empty = [1, "x"]; array_pop($empty); array_pop($empty); $out = [$empty, [3]]; }
+function show(mixed $v): string { return json_encode($v); }
+function run(): void {
+    array<int> $a = [5];
+    fill($a);
+    $a[] = 42;
+    echo show($a), count($a), "|";
+    array<array<int>> $n = [[1]];
+    fillNested($n);
+    $n[0][] = 7;
+    echo show($n), "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "[42]1|[[7],[3]]\n");
+}
