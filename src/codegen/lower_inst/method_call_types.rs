@@ -93,13 +93,27 @@ pub(super) struct RefArgTempCell {
     pub(super) retain_existing: bool,
 }
 
-/// A caller-side scalar local boxed into a temporary Mixed by-reference cell.
+/// A caller-side local boxed into a temporary Mixed by-reference cell.
+///
+/// The cell is published as a call-operand owner, so an exception thrown by the callee
+/// releases it (and the value it holds) while unwinding; the normal path unlinks it before
+/// writing the value back.
 pub(super) struct RefArgWriteback {
     pub(super) param_index: usize,
+    /// Further by-reference parameters bound to the same local (`f($v, $v)`): they share this
+    /// cell, so every write through any of them is seen by the others and written back once.
+    pub(super) alias_param_indexes: Vec<usize>,
     pub(super) source_value: ValueId,
     pub(super) source_slot: LocalSlotId,
     pub(super) source_ty: PhpType,
     pub(super) cell_offset: usize,
+}
+
+impl RefArgWriteback {
+    /// Whether by-reference parameter `param_index` passes this writeback's cell.
+    pub(super) fn covers(&self, param_index: usize) -> bool {
+        self.param_index == param_index || self.alias_param_indexes.contains(&param_index)
+    }
 }
 
 /// Runtime dispatch path for EIR `RuntimeCall` instructions that mean ArrayAccess indexing.

@@ -304,8 +304,17 @@ pub(super) fn plan_ref_arg_writebacks(
         }
         reject_unsupported_mixed_ref_writeback_source(&source_ty)?;
         let source = local_ref_arg_source(ctx, *value)?;
+        // A second reference to the same local shares the first one's cell.
+        if let Some(existing) = writebacks
+            .iter_mut()
+            .find(|writeback: &&mut RefArgWriteback| writeback.source_slot == source.slot)
+        {
+            existing.alias_param_indexes.push(param_index);
+            continue;
+        }
         writebacks.push(RefArgWriteback {
             param_index,
+            alias_param_indexes: Vec::new(),
             source_value: *value,
             source_slot: source.slot,
             source_ty,
@@ -358,10 +367,7 @@ pub(super) fn plan_ref_arg_temp_cells(
         if !ref_params[param_index] {
             continue;
         }
-        if writebacks
-            .iter()
-            .any(|writeback| writeback.param_index == param_index)
-        {
+        if writebacks.iter().any(|writeback| writeback.covers(param_index)) {
             continue;
         }
         if local_ref_arg_source(ctx, *value).is_ok() {
@@ -523,14 +529,23 @@ pub(super) fn emit_ref_arg_cell_block(
     writebacks: &mut [RefArgWriteback],
     temp_cells: &mut [RefArgTempCell],
 ) -> Result<()> {
-    let writeback_bytes = writebacks.len() * 16;
+    let writeback_bytes = writebacks.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     let total_bytes = writeback_bytes + temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     abi::emit_reserve_temporary_stack(ctx.emitter, total_bytes);
     for (index, writeback) in writebacks.iter_mut().enumerate() {
         ctx.load_value_to_result(writeback.source_value)?;
         emit_box_current_value_as_mixed(ctx.emitter, &writeback.source_ty);
-        writeback.cell_offset = index * 16;
+        writeback.cell_offset = index * CALL_ARG_TEMP_CLEANUP_BYTES;
         abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), writeback.cell_offset);
+        // A throwing callee leaves no writeback: the unwind releases the boxed cell instead.
+        let owner_address = abi::tertiary_scratch_reg(ctx.emitter);
+        abi::emit_temporary_stack_address(ctx.emitter, owner_address, writeback.cell_offset);
+        abi::emit_link_call_operand_owner_at_stack(
+            ctx.emitter,
+            owner_address,
+            false,
+            writeback.cell_offset + 16,
+        );
     }
     for (index, cell) in temp_cells.iter_mut().enumerate() {
         cell.cell_offset = writeback_bytes + index * CALL_ARG_TEMP_CLEANUP_BYTES;
@@ -606,7 +621,7 @@ pub(super) fn materialize_ref_arg_address(
 ) -> Result<()> {
     if let Some(writeback) = writebacks
         .iter()
-        .find(|writeback| writeback.param_index == param_index)
+        .find(|writeback| writeback.covers(param_index))
     {
         let cell_offset = arg_temp_bytes + ref_cell_base_offset + writeback.cell_offset;
         abi::emit_temporary_stack_address(
@@ -704,7 +719,19 @@ pub(super) fn emit_ref_arg_writebacks(
     ctx: &mut FunctionContext<'_>,
     call_args: &CallArgMaterialization,
 ) -> Result<()> {
-    for writeback in &call_args.ref_writebacks {
+    for cell in call_args.ref_temp_cells.iter().rev() {
+        abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, cell.cell_offset + 16);
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            cell.cell_offset,
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+    }
+    // Writeback owner records were published before the temporary cells' ones, so they are
+    // retired after them, innermost first.
+    for writeback in call_args.ref_writebacks.iter().rev() {
+        abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, writeback.cell_offset + 16);
         abi::emit_load_temporary_stack_slot(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
@@ -729,16 +756,7 @@ pub(super) fn emit_ref_arg_writebacks(
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     }
-    for cell in call_args.ref_temp_cells.iter().rev() {
-        abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, cell.cell_offset + 16);
-        abi::emit_load_temporary_stack_slot(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            cell.cell_offset,
-        );
-        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
-    }
-    let block_bytes = call_args.ref_writebacks.len() * 16
+    let block_bytes = call_args.ref_writebacks.len() * CALL_ARG_TEMP_CLEANUP_BYTES
         + call_args.ref_temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     abi::emit_release_temporary_stack(ctx.emitter, block_bytes);
     for cell in call_args.preleased_ref_cells.iter().rev() {
