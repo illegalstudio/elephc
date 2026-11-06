@@ -564,6 +564,11 @@ pub(super) fn check_types_impl(
     // their scalar seeds after three rounds. Stable programs still exit as soon as nothing moves.
     let return_round_limit = checker.fn_decls.len().saturating_add(1).max(3);
     for _ in 0..return_round_limit {
+        let returns_before: HashMap<String, crate::types::PhpType> = checker
+            .functions
+            .iter()
+            .map(|(name, sig)| (name.clone(), sig.return_type.clone()))
+            .collect();
         if !checker.reinfer_undeclared_function_returns() {
             break;
         }
@@ -572,6 +577,13 @@ pub(super) fn check_types_impl(
         // as `opt()` and through `call_user_func('opt', "probe")` returned `Str`, and `opt()`
         // printed `""` instead of `NULL`. Re-apply it before the methods see the new returns.
         checker.widen_dynamic_only_passthrough_returns();
+        let moved: Vec<String> = checker
+            .functions
+            .iter()
+            .filter(|(name, sig)| returns_before.get(*name) != Some(&sig.return_type))
+            .map(|(name, _)| name.clone())
+            .collect();
+        checker.method_worklist.functions_moved(moved.iter().map(String::as_str));
         checker.type_check_methods_until_stable(&methods_to_check, &mut errors)?;
     }
     checker.recheck_foreach_warning_functions(&mut errors);

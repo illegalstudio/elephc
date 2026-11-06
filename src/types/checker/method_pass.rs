@@ -175,7 +175,7 @@ impl Checker {
         let mut recent_tables = std::collections::VecDeque::with_capacity(PASS_CYCLE_WINDOW);
         self.seed_runtime_contract_param_types();
         let verify_worklist = std::env::var_os("ELEPHC_CHECK_VERIFY").is_some();
-        let mut worklist = super::method_worklist::MethodWorklist::default();
+        let mut worklist = std::mem::take(&mut self.method_worklist);
         let mut verifying = None;
         loop {
             passes += 1;
@@ -644,6 +644,7 @@ impl Checker {
             recent_tables.push_back(classes_before_pass);
             method_passes_remaining -= 1;
         }
+        self.method_worklist = worklist;
         Ok(())
     }
 

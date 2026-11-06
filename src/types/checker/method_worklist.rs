@@ -144,6 +144,23 @@ impl MethodWorklist {
         });
     }
 
+    /// Limits the next run of the fixpoint to the bodies that name a function that moved.
+    ///
+    /// A function is called by its last name segment, which is how a body's tokens read it.
+    pub(super) fn functions_moved<'a>(&mut self, names: impl Iterator<Item = &'a str>) {
+        if self.results.is_empty() {
+            return;
+        }
+        let mut hashes: HashSet<u64> = names
+            .map(|name| token_hash(&name.rsplit('\\').next().unwrap_or(name).to_ascii_lowercase()))
+            .collect();
+        if !hashes.is_empty() {
+            hashes.extend(DYNAMIC_NODES.iter().map(|node| token_hash(node)));
+        }
+        self.moved = Some(hashes);
+        self.kept_any = false;
+    }
+
     /// Whether the pass that just ended replayed at least one body.
     pub(super) fn kept_any(&self) -> bool {
         self.kept_any
@@ -239,6 +256,26 @@ mod tests {
         worklist.moved = Some(HashSet::from([token_hash("getname")]));
         assert!(worklist.kept_result(unit, "own").is_none());
         worklist.moved = Some(HashSet::from([token_hash("own")]));
+        assert!(worklist.kept_result(unit, "own").is_none());
+    }
+
+    /// Verifies a later run keeps every body but those naming a moved function.
+    #[test]
+    fn a_later_run_follows_the_functions_that_moved() {
+        let mut worklist = MethodWorklist::default();
+        let unit = (0, 0);
+        worklist.functions_moved(std::iter::empty());
+        assert!(worklist.moved.is_none(), "nothing has been walked yet");
+        worklist.results.insert(unit, MethodResult {
+            errors: Vec::new(),
+            seed_params: Vec::new(),
+            tokens: tokens("FunctionCall helper"),
+        });
+        worklist.functions_moved(std::iter::empty());
+        assert!(worklist.kept_result(unit, "own").is_some());
+        worklist.functions_moved(["App\\Other"].into_iter());
+        assert!(worklist.kept_result(unit, "own").is_some());
+        worklist.functions_moved(["App\\Helper"].into_iter());
         assert!(worklist.kept_result(unit, "own").is_none());
     }
 

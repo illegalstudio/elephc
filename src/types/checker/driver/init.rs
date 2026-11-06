@@ -166,6 +166,7 @@ impl Checker {
             reference_property_bindings: Vec::new(),
             clone_override_destinations: Default::default(),
             property_unset_destinations: Default::default(),
+            method_worklist: Default::default(),
             scope_dynamic_mutation_targets: Default::default(),
             throw_access_sites: HashMap::new(),
             binding_position: 0,

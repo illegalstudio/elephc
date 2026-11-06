@@ -338,6 +338,8 @@ pub(crate) struct Checker {
     pub interface_doc_comments: HashMap<String, String>,
     /// Class definitions collected during the first pass, keyed by canonical name.
     pub classes: crate::fast_hash::FastMap<String, ClassInfo>,
+    /// What the method fixpoint knows of each body, kept across its runs.
+    method_worklist: method_worklist::MethodWorklist,
     /// `names_an_operator_class` over `classes`, with the table size it was computed for. Exact:
     /// the checker only ever adds class names, so an unchanged size is an unchanged key set.
     operator_classes: std::cell::Cell<Option<(usize, bool)>>,
