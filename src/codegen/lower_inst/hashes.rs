@@ -792,7 +792,7 @@ pub(super) fn lower_hash_set_aarch64(
 }
 
 /// Lowers an associative-array write for AArch64 targets under a chosen key normalization.
-fn lower_hash_set_aarch64_with(
+pub(super) fn lower_hash_set_aarch64_with(
     ctx: &mut FunctionContext<'_>,
     hash: ValueId,
     key: ValueId,
@@ -860,7 +860,7 @@ pub(super) fn lower_hash_set_x86_64(
 }
 
 /// Lowers an associative-array write for x86_64 targets under a chosen key normalization.
-fn lower_hash_set_x86_64_with(
+pub(super) fn lower_hash_set_x86_64_with(
     ctx: &mut FunctionContext<'_>,
     hash: ValueId,
     key: ValueId,

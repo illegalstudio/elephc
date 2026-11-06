@@ -316,3 +316,43 @@ echo json_encode(f([7, 8])), " ", json_encode(g([7, 8], 3)), "\n";
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Counts PHP's precision deprecations for float keys in a program's stderr.
+fn float_key_deprecations(stderr: &str) -> usize {
+    stderr.matches("Implicit conversion from float").count()
+}
+
+/// A float variable key past the end, or negative, promotes a non-promotable packed local
+/// (float and string elements) to a hash and reports its precision loss once.
+#[test]
+fn test_nonempty_local_skipping_float_variable_key_promotes_to_hash() {
+    let out = compile_and_run_capture(r#"<?php
+function past(float $k): string { $a = [1.0, 2.0]; $a[$k] = 9.0; return json_encode($a) . " " . count($a); }
+function names(float $k): string { $a = ["x", "y"]; $a[$k] = "z"; return json_encode($a) . " " . count($a); }
+echo past($argc + 4.5), "\n", past(-1.5), "\n", names($argc + 3.25), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"0\":1,\"1\":2,\"5\":9} 3\n{\"0\":1,\"1\":2,\"-1\":9} 3\n{\"0\":\"x\",\"1\":\"y\",\"4\":\"z\"} 3\n"
+    );
+    assert_eq!(float_key_deprecations(&out.stderr), 3, "{}", out.stderr);
+}
+
+/// A boxed fractional key on a promotable local reports its precision loss once per write,
+/// both when it promotes the packed array and when it writes the already-promoted hash.
+#[test]
+fn test_promotable_local_boxed_float_key_warns_once_per_write() {
+    let out = compile_and_run_capture(r#"<?php
+function put(mixed $k, mixed $m): int {
+    $a = [0];
+    $a[$k] = 10;
+    $a[$m] = 20;
+    return $a[0] + count($a);
+}
+echo put(2.5, 3.5), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3\n");
+    assert_eq!(float_key_deprecations(&out.stderr), 2, "{}", out.stderr);
+}

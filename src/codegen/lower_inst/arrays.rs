@@ -1423,7 +1423,9 @@ pub(crate) fn promotable_scalar_element(elem_ty: &PhpType) -> bool {
 /// promotes the array once with `__rt_array_to_hash`, which copies every scalar by value under
 /// its own tag, then writes through the hash writer. A receiver already promoted (heap kind 3)
 /// writes through the hash writer directly. A boxed key is normalized first (numeric strings
-/// become integers); a key that stays a string can only live in a hash.
+/// become integers); a key that stays a string can only live in a hash. That probe already
+/// diagnosed a float key, so every hash write after it normalizes the key again silently; only
+/// a null value, which branches before the probe, diagnoses it there.
 ///
 /// Ownership mirrors the indexed setter: the caller hands over one owner of `array`, and the
 /// container left in the result register (packed, grown, or the new hash) replaces it. The
@@ -1448,6 +1450,11 @@ fn lower_promotable_scalar_array_set(
     );
     let nullable = matches!(value_ty, PhpType::TaggedScalar);
     let null_value = ctx.next_label("promotable_set_null_value");
+    let probed_key = if index_is_mixed_key {
+        super::hashes::HashKeyNormalization::PhpAlreadyDiagnosed
+    } else {
+        super::hashes::HashKeyNormalization::Php
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             if nullable {
@@ -1514,14 +1521,18 @@ fn lower_promotable_scalar_array_set(
 
             ctx.emitter.label(&hash);
             if nullable {
-                emit_promotable_nullable_hash_set_aarch64(ctx, array, index, value, false)?;
+                emit_promotable_nullable_hash_set_aarch64(ctx, array, index, value, false, probed_key)?;
                 ctx.emitter.instruction(&format!("b {done}"));                  // join after the integer hash entry
 
                 ctx.emitter.label(&null_value);
                 emit_promote_unless_hash_aarch64(ctx, array)?;
-                emit_promotable_nullable_hash_set_aarch64(ctx, array, index, value, true)?;
+                emit_promotable_nullable_hash_set_aarch64(
+                    ctx, array, index, value, true, super::hashes::HashKeyNormalization::Php,
+                )?;
             } else {
-                super::hashes::lower_hash_set_aarch64(ctx, array, index, value, value_ty, elem_ty)?;
+                super::hashes::lower_hash_set_aarch64_with(
+                    ctx, array, index, value, value_ty, elem_ty, probed_key,
+                )?;
             }
         }
         Arch::X86_64 => {
@@ -1589,14 +1600,18 @@ fn lower_promotable_scalar_array_set(
 
             ctx.emitter.label(&hash);
             if nullable {
-                emit_promotable_nullable_hash_set_x86_64(ctx, array, index, value, false)?;
+                emit_promotable_nullable_hash_set_x86_64(ctx, array, index, value, false, probed_key)?;
                 ctx.emitter.instruction(&format!("jmp {done}"));                // join after the integer hash entry
 
                 ctx.emitter.label(&null_value);
                 emit_promote_unless_hash_x86_64(ctx, array)?;
-                emit_promotable_nullable_hash_set_x86_64(ctx, array, index, value, true)?;
+                emit_promotable_nullable_hash_set_x86_64(
+                    ctx, array, index, value, true, super::hashes::HashKeyNormalization::Php,
+                )?;
             } else {
-                super::hashes::lower_hash_set_x86_64(ctx, array, index, value, value_ty, elem_ty)?;
+                super::hashes::lower_hash_set_x86_64_with(
+                    ctx, array, index, value, value_ty, elem_ty, probed_key,
+                )?;
             }
         }
     }
@@ -1644,14 +1659,16 @@ fn emit_promote_unless_hash_x86_64(ctx: &mut FunctionContext<'_>, array: ValueId
 ///
 /// `null_entry` selects the null payload (tag 8); otherwise the tagged scalar's integer payload is
 /// stored under the integer tag, which is what the typed reads of the promoted hash expect.
+/// `normalization` is `PhpAlreadyDiagnosed` when the caller's key probe already diagnosed a float.
 fn emit_promotable_nullable_hash_set_aarch64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     index: ValueId,
     value: ValueId,
     null_entry: bool,
+    normalization: super::hashes::HashKeyNormalization,
 ) -> Result<()> {
-    super::hashes::materialize_hash_key_aarch64(ctx, index)?;
+    super::hashes::materialize_hash_key_aarch64_with(ctx, index, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     if null_entry {
         ctx.emitter.instruction("mov x3, xzr");                                 // a null entry carries no payload
@@ -1672,14 +1689,16 @@ fn emit_promotable_nullable_hash_set_aarch64(
 ///
 /// `null_entry` selects the null payload (tag 8); otherwise the tagged scalar's integer payload is
 /// stored under the integer tag, which is what the typed reads of the promoted hash expect.
+/// `normalization` is `PhpAlreadyDiagnosed` when the caller's key probe already diagnosed a float.
 fn emit_promotable_nullable_hash_set_x86_64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     index: ValueId,
     value: ValueId,
     null_entry: bool,
+    normalization: super::hashes::HashKeyNormalization,
 ) -> Result<()> {
-    super::hashes::materialize_hash_key_x86_64(ctx, index)?;
+    super::hashes::materialize_hash_key_x86_64_with(ctx, index, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
     if null_entry {
         ctx.emitter.instruction("xor ecx, ecx");                                // a null entry carries no payload

@@ -315,10 +315,12 @@ fn lower_array_assign_with_update(
     // while the value is still a typed packed array: a loop contract may already have converted it.
     // The key gate mirrors the checker's: the checker walks a body more than once and specializes
     // it per call site, so a site recorded under an integer key must not act where this
-    // specialization holds a boxed key, which the checker routes to `Array(Mixed)` instead.
+    // specialization holds a boxed key, which the checker routes to `Array(Mixed)` instead. A raw
+    // float key normalizes to an integer key in the checker too, and the hash writer converts it
+    // once with its precision diagnostic.
     let recorded_sparse_key = op == Op::ArraySet
         && !mixed_elements
-        && index_value.ir_type == IrType::I64
+        && matches!(index_value.ir_type, IrType::I64 | IrType::F64)
         && ctx.is_recorded_sparse_key_write(span, array)
         && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
             PhpType::Array(element) if !is_empty_indexed_array_element(&element));
