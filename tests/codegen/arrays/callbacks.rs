@@ -2559,4 +2559,64 @@ echo count(explode(",", countExplodeSubject("a,b,c"))), "\n";
     };
     check();
     without_ir_opt(check);
+
+/// Verifies local indexed arrays with reference, key, string, first-class and callable-array
+/// walk callbacks are promoted to boxed storage, so every element write is visible and the
+/// uniform invoker receives both PHP arguments.
+#[test]
+fn test_array_walk_local_reference_callbacks_promote_to_boxed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$v) { $v *= 2; }
+class Doubler {
+    public function bump(&$v) { $v *= 2; }
+    public static function stat(&$v) { $v += 10; }
+}
+$by_ref = [1, 2, 3];
+array_walk($by_ref, function (&$v) { $v *= 2; });
+echo implode(",", $by_ref), "\n";
+$with_key = ["a" => 1, "b" => 2];
+array_walk($with_key, function (&$v, $k) { $v = $k . ":" . $v; });
+echo json_encode($with_key), "\n";
+$string_fn = [1, 2];
+array_walk($string_fn, "bump");
+echo implode(",", $string_fn), "\n";
+$first_global = [1, 2];
+array_walk($first_global, bump(...));
+echo implode(",", $first_global), "\n";
+$obj = new Doubler();
+$first_method = [1, 2];
+array_walk($first_method, $obj->bump(...));
+echo implode(",", $first_method), "\n";
+$first_static = [1, 2];
+array_walk($first_static, Doubler::stat(...));
+echo implode(",", $first_static), "\n";
+$callable_array = [1, 2];
+array_walk($callable_array, [$obj, "bump"]);
+echo implode(",", $callable_array), "\n";
+$static_array = [1, 2];
+array_walk($static_array, ["Doubler", "stat"]);
+echo implode(",", $static_array), "\n";
+$captured = [1, 2, 3];
+$count = 0;
+array_walk($captured, function (&$v) use (&$count) { $count++; $v += $count; });
+echo implode(",", $captured), "|", $count, "\n";
+$recursive = [1, [2, 3], 4];
+array_walk_recursive($recursive, function (&$v, $k) { $v = $v * 10 + $k; });
+echo json_encode($recursive), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2,4,6\n\
+         {\"a\":\"a:1\",\"b\":\"b:2\"}\n\
+         2,4\n\
+         2,4\n\
+         2,4\n\
+         11,12\n\
+         2,4\n\
+         11,12\n\
+         2,4,6|3\n\
+         [10,[20,31],42]\n"
+    );
 }

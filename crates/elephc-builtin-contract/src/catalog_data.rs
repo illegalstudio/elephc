@@ -6528,7 +6528,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "Applies a user function to every member of an array. AOT boxed arrays pass a writable value reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.",
+        summary: "Applies a user function to every member of an array. A walk over a local array whose callback declares a writable value or reads the key promotes that array to boxed storage, then passes a writable value reference and key to visible native closures, named functions, first-class callables, and callable arrays. Escaping element references through a closure capture or property remains unsupported.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.array-walk.php"),
@@ -6565,7 +6565,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "Applies a user function recursively to array leaf values. AOT boxed arrays pass a writable leaf reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.",
+        summary: "Applies a user function recursively to array leaf values. A walk over a local array whose callback declares a writable leaf or reads the key promotes that array to boxed storage, then passes a writable leaf reference and key to visible native closures, named functions, first-class callables, and callable arrays. Escaping element references through a closure capture or property remains unsupported.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.array-walk-recursive.php"),

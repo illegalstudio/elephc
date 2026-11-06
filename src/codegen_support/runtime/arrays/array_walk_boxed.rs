@@ -280,6 +280,8 @@ fn reject_opaque_callback(emitter: &mut Emitter) {
     load_indirect(emitter, kind, result);
     for accepted in [
         callable_descriptor::CALLABLE_DESC_KIND_CLOSURE,
+        callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
+        callable_descriptor::CALLABLE_DESC_KIND_ARRAY,
         callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,
         callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
         callable_descriptor::CALLABLE_DESC_KIND_INSTANCE_METHOD,
@@ -593,6 +595,8 @@ mod tests {
                 .0;
             for accepted in [
                 callable_descriptor::CALLABLE_DESC_KIND_CLOSURE,
+                callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
+                callable_descriptor::CALLABLE_DESC_KIND_ARRAY,
                 callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,
                 callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
                 callable_descriptor::CALLABLE_DESC_KIND_INSTANCE_METHOD,
