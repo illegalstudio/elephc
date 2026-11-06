@@ -1808,6 +1808,28 @@ echo $db->real_escape_string("a'b\\c"), "\n";
     assert_eq!(out, "a''b\\c|a\\'b\\\\c\n");
 }
 
+/// A `SET sql_mode` earlier in a multi_query() batch changes real_escape_string() as soon as
+/// its OK packet arrived, while the batch still owns the link, in both directions. Expected
+/// output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_escape_follows_a_sql_mode_set_inside_a_batch() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->multi_query("SET SESSION sql_mode = 'NO_BACKSLASH_ESCAPES'; SELECT 1");
+echo $db->real_escape_string("a'b"), "|";
+while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+echo $db->real_escape_string("a'b"), "|";
+$db->multi_query("SET SESSION sql_mode = ''; SELECT 1");
+echo $db->real_escape_string("a'b"), "|";
+while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+echo $db->real_escape_string("a'b"), "\n";
+"#,
+    ));
+    assert_eq!(out, "a''b|a''b|a\\'b|a\\'b\n");
+}
+
 /// A multi_query() batch whose set is column-less (an OK packet) still announces the sets that
 /// follow, and exposes that OK packet's `info`, while the batch owns the link: a DML-first batch
 /// reaches its SELECT, a later statement's error waits for next_result(), and a trailing DML set

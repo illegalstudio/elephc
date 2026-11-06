@@ -335,8 +335,6 @@ pub struct MyConn {
     current_charset: String,
     /// Handshake version cached while an unbuffered worker temporarily owns `Conn`.
     server_version: (u16, u16, u16),
-    /// Session quoting mode cached before the client moves into a worker.
-    no_backslash_escapes: bool,
     /// Worker currently owning the client for a demand-driven result stream.
     active_stream: Option<MyActiveStream>,
     /// Monotonic identity used to reject stale statement stream handles.
@@ -2115,7 +2113,6 @@ impl MyConn {
         };
         let conn = Conn::new(opts).map_err(|e| e.to_string())?;
         let server_version = conn.server_version();
-        let no_backslash_escapes = conn.no_backslash_escape();
         let io_counters = conn.io_counters();
         Ok(MyConn {
             conn: MyClientSlot(Some(conn)),
@@ -2137,7 +2134,6 @@ impl MyConn {
             in_transaction: false,
             current_charset,
             server_version,
-            no_backslash_escapes,
             active_stream: None,
             async_query: None,
             next_stream_id: 0,
@@ -2190,7 +2186,6 @@ impl MyConn {
     /// may have changed while its statement ran.
     fn restore_stream_client(&mut self, conn: Conn, warnings: u16) {
         self.server_version = conn.server_version();
-        self.no_backslash_escapes = conn.no_backslash_escape();
         self.warning_count = warnings;
         self.conn.0 = Some(conn);
         #[cfg(unix)]
@@ -2301,9 +2296,8 @@ impl MyConn {
         let Some(conn) = self.conn.0.take() else {
             return Err(-1);
         };
-        // Session state read while the worker owns the client (escaping, version).
+        // Handshake version read while the worker owns the client.
         self.server_version = conn.server_version();
-        self.no_backslash_escapes = conn.no_backslash_escape();
         #[cfg(unix)]
         {
             self.worker_socket = Some(std::os::unix::io::AsRawFd::as_raw_fd(&conn));
@@ -2329,9 +2323,8 @@ impl MyConn {
         let Some(conn) = self.conn.0.take() else {
             return Err(-1);
         };
-        // Session state read while the worker owns the client (escaping, version).
+        // Handshake version read while the worker owns the client.
         self.server_version = conn.server_version();
-        self.no_backslash_escapes = conn.no_backslash_escape();
         #[cfg(unix)]
         {
             self.worker_socket = Some(std::os::unix::io::AsRawFd::as_raw_fd(&conn));
@@ -2707,13 +2700,15 @@ impl MyConn {
     /// literal, so backslash-escaping a quoted value is unsafe there —
     /// `PDO::quote()`'s MySQL branch falls back to `''`-doubling only in that case,
     /// P1-f). The `mysql` crate already tracks this from the connection's session
-    /// state (`Conn::no_backslash_escape`), so no extra query is needed here.
+    /// state (`Conn::no_backslash_escape`), so no extra query is needed here. While a worker
+    /// owns the client, the status flags of the last OK/EOF packet it read are used, like
+    /// mysqlnd's `upsert_status`: a `SET sql_mode` earlier in a streamed batch counts as soon
+    /// as its OK packet arrived.
     pub fn no_backslash_escape(&self) -> bool {
-        self.conn
-            .0
-            .as_ref()
-            .map(Conn::no_backslash_escape)
-            .unwrap_or(self.no_backslash_escapes)
+        match self.conn.0.as_ref() {
+            Some(client) => client.no_backslash_escape(),
+            None => self.io_counters.last_status() & 0x0200 != 0,
+        }
     }
 
     /// Returns the server's connection (thread) id from the handshake, so
@@ -2747,7 +2742,6 @@ impl MyConn {
             return -1;
         };
         self.server_version = client.server_version();
-        self.no_backslash_escapes = client.no_backslash_escape();
         #[cfg(unix)]
         let socket = std::os::unix::io::AsRawFd::as_raw_fd(&client);
         #[cfg(unix)]
@@ -3049,7 +3043,6 @@ impl MyConn {
                 self.in_transaction = false;
                 self.autocommit = true;
                 self.current_charset = "utf8mb4".to_string();
-                self.no_backslash_escapes = self.no_backslash_escape();
                 1
             }
             Err(error) => {
