@@ -78,7 +78,8 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
                 dce_stmt_with_guards(stmt, &guards)
             } else {
                 let tail = stmts.by_ref().collect();
-                dce_stmt_with_tail(stmt, tail, &guards)
+                let profile = stmt.profile();
+                crate::source::with_parse_mode(profile, || dce_stmt_with_tail(stmt, tail, &guards))
             }
         } else {
             dce_stmt_with_guards(stmt, &guards)

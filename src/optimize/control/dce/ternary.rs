@@ -43,6 +43,34 @@ pub(super) fn discarded_ternary_as_if(stmt: Stmt) -> Stmt {
 mod tests {
     use super::*;
 
+    /// Tail specialization keeps the condition and arm profiles of the physical source file.
+    #[test]
+    fn discarded_ternary_tail_retains_statement_source_profile() {
+        use crate::source::{SourceMode, SourceProfile};
+
+        let tokens = crate::lexer::tokenize(
+            "<?php $argc > 1 ? printf('then') : printf('else'); echo 'tail';",
+        ).expect("tokenize ternary source-profile fixture");
+        let mut statements = crate::parser::parse(&tokens).expect("parse ternary source-profile fixture");
+        let expected = SourceProfile { mode: SourceMode::Lfc, strict_types: true };
+        for stmt in &mut statements {
+            stmt.source_mode = expected.mode;
+            stmt.strict_types = expected.strict_types;
+        }
+        let eliminated = crate::source::with_parse_mode(SourceProfile::new(SourceMode::Php), || {
+            super::super::dce_block(statements)
+        });
+        assert_eq!(eliminated.len(), 1);
+        assert_eq!(eliminated[0].profile(), expected);
+        let StmtKind::If { then_body, else_body: Some(else_body), .. } = &eliminated[0].kind else {
+            panic!("expected a tail-specialized ternary");
+        };
+        assert!(!then_body.is_empty() && !else_body.is_empty());
+        for stmt in then_body.iter().chain(else_body) {
+            assert_eq!(stmt.profile(), expected);
+        }
+    }
+
     /// Consecutive discarded ternaries must not duplicate the remaining control-flow tail.
     #[test]
     fn discarded_ternary_tail_keeps_ast_linear() {
