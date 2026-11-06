@@ -834,3 +834,40 @@ run();
     );
     assert_clean(out, "nnn1n1\n");
 }
+
+/// Named arguments and by-reference variadic tails bind null-only locals by their actual
+/// parameter: a by-value `?ptr<T>` parameter reached by name (in either order) or beside a
+/// `mixed &...$rest` tail keeps the local's null storage, while a by-reference `?array &$out`
+/// reached by name and a `mixed &...$outs` variadic still take boxed storage the callee fills.
+/// The non-pointer results match php 8.5.
+#[test]
+fn test_null_locals_bind_named_and_variadic_parameters_by_their_parameter() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+packed class V { public int $x; }
+function take(?ptr<V> $p, mixed &$other): string { $other = 1; return $p === null ? "n" : "p"; }
+function vtake(?ptr<V> $p, mixed &...$rest): string { return $p === null ? "n" : "p"; }
+function fill(int $n = 0, ?array &$out = null): void { $out = [1, 2]; }
+function mfill(int $n, mixed &...$outs): void { $outs[0] = [7, 8]; }
+function run(): void {
+    $p = null;
+    mixed $other = null;
+    echo take(p: $p, other: $other);
+    $q = null;
+    mixed $o2 = null;
+    echo vtake($q, $o2);
+    $r = null;
+    mixed $o3 = null;
+    echo take(other: $o3, p: $r), "|";
+    $x = null;
+    fill(out: $x);
+    echo count($x), "|";
+    $y = null;
+    mfill(1, $y);
+    echo count($y), "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "nnn|2|2\n");
+}

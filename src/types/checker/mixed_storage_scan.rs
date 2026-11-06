@@ -1457,11 +1457,12 @@ fn php_type_mentions_pointer(ty: &PhpType) -> bool {
     }
 }
 
-/// For a call to a declared function with plain positional arguments, returns per argument
-/// whether a null-only local there may take boxed storage: it binds a BY-REFERENCE parameter
-/// whose declared type admits `null` (`?array &$a`, not `int &$n` nor a by-value one). `None`
-/// when the mapping is not reliable (unknown callee, a named or spread argument, or no
-/// by-reference parameter at all), leaving the caller's generic handling.
+/// For a call to a declared function, returns per argument whether a null-only local there
+/// may take boxed storage: it binds (positionally, by name, or through the variadic tail) a
+/// BY-REFERENCE parameter whose declared type admits `null` (`?array &$a`, `mixed &...$rest`;
+/// not `int &$n`, nor any by-value parameter such as `?ptr<T> $p`). A spread argument, or a
+/// name the function does not declare, is never promotable. `None` for an unknown callee or
+/// one without any by-reference parameter, leaving the caller's generic handling.
 fn declared_by_ref_null_promotion(checker: &Checker, name: &Name, args: &[Expr]) -> Option<Vec<bool>> {
     let raw = name.as_str();
     let trimmed = raw.trim_start_matches('\\');
@@ -1469,24 +1470,37 @@ fn declared_by_ref_null_promotion(checker: &Checker, name: &Name, args: &[Expr])
         .fn_decls
         .get(raw)
         .or_else(|| checker.fn_decls.get(trimmed))?;
-    if decl.variadic_by_ref || !decl.ref_params.iter().any(|by_ref| *by_ref) {
+    if !decl.variadic_by_ref && !decl.ref_params.iter().any(|by_ref| *by_ref) {
         return None;
     }
-    if args
-        .iter()
-        .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
-    {
-        return None;
-    }
+    let admits_null = |ty: Option<&crate::parser::ast::TypeExpr>| ty.is_none_or(type_expr_admits_null);
+    let param = |index: usize| {
+        decl.ref_params.get(index).copied().unwrap_or(false)
+            && admits_null(decl.param_types.get(index).and_then(|ty| ty.as_ref()))
+    };
+    let variadic = || decl.variadic.is_some() && decl.variadic_by_ref && admits_null(decl.variadic_type.as_ref());
+    let mut positional = 0usize;
     Some(
-        (0..args.len())
-            .map(|index| {
-                decl.ref_params.get(index).copied().unwrap_or(false)
-                    && !decl
-                        .param_types
-                        .get(index)
-                        .and_then(|ty| ty.as_ref())
-                        .is_some_and(|ty| !type_expr_admits_null(ty))
+        args.iter()
+            .map(|arg| match &arg.kind {
+                ExprKind::NamedArg { name, .. } => {
+                    let name = name.trim_start_matches('$');
+                    match decl.params.iter().position(|param| param.trim_start_matches('$') == name) {
+                        Some(index) => param(index),
+                        // An unknown name lands in the variadic tail (php collects it there).
+                        None => variadic(),
+                    }
+                }
+                ExprKind::Spread(_) => false,
+                _ => {
+                    let index = positional;
+                    positional += 1;
+                    if index < decl.params.len() {
+                        param(index)
+                    } else {
+                        variadic()
+                    }
+                }
             })
             .collect(),
     )
