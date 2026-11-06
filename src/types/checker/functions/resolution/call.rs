@@ -730,6 +730,12 @@ impl Checker {
     /// vanishes and a real one is reported for the calling statement. By-reference and
     /// declared parameters keep their initial types. Completed callees with an inferred return
     /// are refreshed as for any other re-walk (`refresh_completed_inferred_callee`).
+    ///
+    /// A variable list has no static length, so an untyped by-value parameter with a default
+    /// holds its default for a short list and a list value for a longer one; neither binding
+    /// alone checks the body soundly (`function f(&$r, $m = [1])` indexes `$m`, while
+    /// `function f($n = 0, &$r)` over `[[1], 2]` indexes `$n`). Such a function is not
+    /// re-walked here and keeps its mark, so a later call with concrete arguments walks it.
     pub(in crate::types::checker) fn rewalk_marked_function_from_initial_params(
         &mut self,
         name: &str,
@@ -741,6 +747,14 @@ impl Checker {
         let Some(decl) = self.fn_decls.get(name).cloned() else {
             return Ok(());
         };
+        let has_untyped_defaulted_by_value_param = (0..decl.params.len()).any(|idx| {
+            decl.param_types.get(idx).is_some_and(Option::is_none)
+                && !decl.ref_params.get(idx).copied().unwrap_or(false)
+                && decl.defaults.get(idx).is_some_and(Option::is_some)
+        });
+        if has_untyped_defaulted_by_value_param {
+            return Ok(());
+        }
         self.rewalk_failed_body_at_next_call.remove(name);
         let param_types = self.list_value_param_types(name, &decl, list_value_ty)?;
         let outer_walk = self.refreshed_inferred_callees.is_none();

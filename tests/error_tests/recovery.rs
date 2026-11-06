@@ -542,6 +542,27 @@ fn test_failed_body_rewalk_survives_calls_under_eval_barrier() {
     }
 }
 
+/// A variable argument list does not decide whether an untyped defaulted parameter holds its
+/// default or a list value, so a failed body with one is not re-walked over the list and a
+/// valid body stays accepted: the re-walk bound `$m = [1]` to the list's `int` and reported
+/// `$m[0]` once the stale static property error had cleared.
+#[test]
+fn test_variable_list_rewalk_skips_untyped_defaulted_parameters() {
+    for program in [
+        "<?php function f(&$r, $m = [1]) { return C::$v[0] + $m[0]; } \
+         class C { public static $v; } $a = [1]; \
+         var_dump(call_user_func_array('f', $a)); C::$v = [9];",
+        "<?php function f($m = [1]) { return C::$v[0] + $m[0]; } \
+         class C { public static $v; } \
+         function src(): array<int>|array<float> { return [1]; } $a = src(); \
+         var_dump(call_user_func('f', ...$a)); C::$v = [9];",
+        "<?php function f($n = 0, &$r) { return $n[0]; } $a = [[1], 2]; \
+         var_dump(call_user_func_array('f', $a));",
+    ] {
+        expect_no_error(program);
+    }
+}
+
 /// `call_user_func_array` over a variable list binds every untyped by-value parameter, the
 /// variadic tail included, to the list's value type, so a body that indexes it stays accepted
 /// when the re-walk runs from it: beside a by-reference parameter (whose first walk bound the
