@@ -2595,6 +2595,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_expr(e_call("elephc_pdo_release", vec![e_this_prop("conn"), e_int(0)])),
                     s_prop_assign(e_this(), "conn", e_neg(e_int(1))),
                     s_prop_assign(e_this(), "asyncPending", e_bool(false)),
+                    s_prop_assign(e_this(), "busyStatement", e_neg(e_int(1))),
                     s_if(
                         e_this_prop("persistent"),
                         vec![

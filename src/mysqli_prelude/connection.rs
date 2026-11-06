@@ -1667,6 +1667,9 @@ class mysqli {
         elephc_pdo_release($this->conn, 0);
         $this->conn = -1;
         $this->asyncPending = false;
+        // A statement's unread set belonged to the released connection: it cannot keep
+        // the next connection of this link busy.
+        $this->busyStatement = -1;
         if ($this->persistent) {
             mysqli::$openPersistentLinks = mysqli::$openPersistentLinks - 1;
         }

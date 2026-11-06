@@ -1650,6 +1650,57 @@ echo mysqli_get_links_stats()["cached_plinks"] - $start, "\n";
     assert_eq!(out, "1\n");
 }
 
+/// A statement left with an unread result does not keep its link busy after `real_connect()`
+/// replaced the connection: the new connection runs queries at once. Expected output is
+/// php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_reconnect_forgets_an_old_statements_unread_set() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$link = new mysqli($host, $user, $pass, $dbname, $port);
+$st = $link->prepare("SELECT 1 UNION ALL SELECT 2");
+$st->execute();
+$link->real_connect($host, $user, $pass, $dbname, $port);
+$r = $link->query("SELECT 3");
+echo $r === false ? "busy:" . $link->errno : $r->fetch_row()[0];
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "3\n");
+}
+
+/// A buffered `MYSQLI_ASYNC` `CALL` is reaped as soon as its first set arrives, and its later
+/// sets are read by `next_result()` (waiting for the slow statement between them), like
+/// mysqlnd. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_async_buffered_call_reads_later_sets_on_next_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP PROCEDURE IF EXISTS mslow");
+$db->query("CREATE PROCEDURE mslow() BEGIN SELECT 1 AS a; DO SLEEP(1.5); SELECT 2 AS b; END");
+$start = microtime(true);
+$db->query("CALL mslow()", MYSQLI_ASYNC);
+$read = [$db];
+$error = [];
+$reject = [];
+mysqli_poll($read, $error, $reject, 5);
+$first = $db->reap_async_query();
+$reaped = microtime(true) - $start;
+echo $first->fetch_row()[0], ":", $reaped < 1.0 ? "early" : "late";
+$db->next_result();
+$second = $db->store_result();
+echo "|", $second->fetch_row()[0], ":", microtime(true) - $start >= 1.4 ? "waited" : "early";
+while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "1:early|2:waited\n");
+}
+
 /// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
 /// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
 /// the set is unread, and the statistics count one unbuffered set. Expected output is

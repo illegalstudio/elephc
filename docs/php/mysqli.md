@@ -268,15 +268,18 @@ if (mysqli_poll($read, $error, $reject, 5) > 0) {
 
 The query runs on a bridge worker thread, so `query()` returns at once and
 several links can work concurrently. `poll()` waits up to `$seconds` +
-`$microseconds` for one of the `$read` links to finish (links with no query in
-flight land in `$reject`; `$error` comes back empty), and `reap_async_query()`
-collects the result — blocking if the query is still running. Until it is
+`$microseconds` for one of the `$read` links to become readable (links with no
+query in flight land in `$reject`; links passed only in `$error` keep it waiting
+for its timeout, and `$error` comes back empty), and `reap_async_query()`
+collects the result (blocking if the server has not answered yet). Until it is
 reaped the link answers other commands with errno 2014, like mysqlnd, and a
 failing async query is reported by `reap_async_query()`, exactly where mysqlnd
-surfaces it. With `MYSQLI_ASYNC | MYSQLI_USE_RESULT` the worker reads only the
-result set's metadata, so `poll()` reports the link as soon as the server
-starts answering, and the reaped result is unbuffered: each fetch reads the
-next row from the server, and the link stays busy until it is read or freed.
+surfaces it. The worker reads only the first result set's metadata, so `poll()`
+reports the link as soon as the server starts answering. A buffered result reads
+the rows of that set when it is reaped; the later sets of a `CALL` are read by
+`next_result()`, like mysqlnd. With `MYSQLI_ASYNC | MYSQLI_USE_RESULT` the reaped
+result is unbuffered: each fetch reads the next row from the server, and the link
+stays busy until it is read or freed.
 
 ## Transactions and savepoints
 
