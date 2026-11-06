@@ -499,7 +499,7 @@ mod tests {
         assert_eq!(eval_internal, 150);
         // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 336);
+        assert_eq!(eval_pending, 340);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -509,10 +509,10 @@ mod tests {
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
-        assert_eq!(aot_registry, 864);
+        assert_eq!(aot_registry, 871);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 458 + curl_surface);
+        assert_eq!(aot_external, 462 + curl_surface);
         // The two tick registrars (`AOT_IMPLEMENTATION_PENDING`).
         assert_eq!(aot_unsupported, 2);
     }
@@ -573,7 +573,7 @@ mod tests {
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls.
-        assert_eq!(unsupported, 486);
+        assert_eq!(unsupported, 490);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {
