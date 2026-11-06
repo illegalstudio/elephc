@@ -314,7 +314,7 @@ fn apply_ref_cell_transfer(
 }
 
 /// Returns all CFG successors named by one terminator.
-fn terminator_successors(terminator: &Terminator) -> Vec<BlockId> {
+pub(super) fn terminator_successors(terminator: &Terminator) -> Vec<BlockId> {
     match terminator {
         Terminator::Br { target, .. } => vec![*target],
         Terminator::CondBr {

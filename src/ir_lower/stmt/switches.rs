@@ -8,6 +8,9 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use std::collections::HashMap;
+
+use crate::ir_lower::context::IfArmExit;
 
 /// Lowers a `switch` with source-ordered pattern evaluation and PHP fallthrough.
 pub(super) fn lower_switch(
@@ -53,42 +56,52 @@ pub(super) fn lower_switch(
         (Some(subject), owner)
     };
     let exit = ctx.builder.create_named_block("switch.exit", Vec::new());
-    let default_block = ctx.builder.create_named_block("switch.default", Vec::new());
-    let blocks = cases
-        .iter()
-        .map(|_| ctx.builder.create_named_block("switch.case", Vec::new()))
-        .collect::<Vec<_>>();
-    let dispatch_blocks = if owner.is_some() {
-        blocks.iter().map(|_| ctx.builder.create_named_block("switch.matched", Vec::new())).collect()
-    } else { blocks.clone() };
-    let dispatch_default = if owner.is_some() {
-        ctx.builder.create_named_block("switch.unmatched", Vec::new())
-    } else { default_block };
 
     // The compact integer jump table is valid only for an integer scrutinee with
     // integer case labels. Any other subject (string, float, mixed) takes the
     // source-ordered dynamic path. See `lower_dynamic_switch_dispatch` for how it
     // picks PHP loose-equality vs the integer fast path per subject/case pair.
-    if let Some(subject) = subject.filter(|subject| subject.ir_type == IrType::I64
+    let dispatch = if let Some(subject) = subject.filter(|subject| subject.ir_type == IrType::I64
         && ctx.builder.value_php_type(subject.value).codegen_repr() == PhpType::Int
         && can_lower_static_switch(cases))
     {
         let subject = coerce_to_int(ctx, subject, None);
-        lower_static_switch_dispatch(ctx, subject, cases, &dispatch_blocks, dispatch_default);
+        lower_static_switch_dispatch(ctx, subject, cases)
     } else {
-        lower_dynamic_switch_dispatch(ctx, subject, live_subject, cases, &dispatch_blocks, dispatch_default);
-    }
+        lower_dynamic_switch_dispatch(ctx, subject, live_subject, cases)
+    };
     if let Some(owner) = owner {
-        for (dispatch, target) in dispatch_blocks.iter().zip(&blocks)
-            .chain(std::iter::once((&dispatch_default, &default_block)))
-        {
-            ctx.builder.position_at_end(*dispatch);
+        // Every dispatch edge ends in its own unterminated block, so the rooted subject is
+        // retired there before the edge enters (or is joined into) its body.
+        for edge in dispatch.cases.iter().flatten().chain(std::iter::once(&dispatch.default)) {
+            ctx.builder.position_at_end(edge.tail);
             crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
-            branch_to(ctx, *target);
         }
     }
 
-    lower_switch_bodies(ctx, cases, default, &blocks, default_block, exit);
+    lower_switch_bodies(ctx, cases, default, dispatch, exit, span);
+}
+
+/// The edges a switch dispatch leaves, each carrying the flow facts on that edge.
+///
+/// A case label is an arbitrary expression evaluated in source order, and it may assign a
+/// local (`case ($x = null) === null:`), so the facts differ from one label to the next: a
+/// case body starts from the facts of the labels that select it, never from those left after
+/// the last label. `cases` holds one edge per label of each case, in source order; `default`
+/// is the edge taken when no label matches.
+pub(super) struct SwitchDispatch {
+    cases: Vec<Vec<IfArmExit>>,
+    default: IfArmExit,
+}
+
+/// Records the dispatch edge that reaches the unterminated block `tail`, with the current facts.
+fn switch_dispatch_edge(ctx: &LoweringContext<'_, '_>, tail: BlockId) -> IfArmExit {
+    IfArmExit {
+        tail,
+        types: ctx.local_types_snapshot(),
+        initialized: ctx.initialized_slots_snapshot(),
+        static_callables: HashMap::new(),
+    }
 }
 
 /// Returns true when every switch case pattern can use the static integer switch terminator.
@@ -100,15 +113,20 @@ pub(super) fn can_lower_static_switch(cases: &[(Vec<Expr>, Vec<Stmt>)]) -> bool 
 }
 
 /// Emits the compact integer-switch dispatch for statically-known case values.
+///
+/// Integer labels have no side effects, so every edge carries the facts at the dispatch.
 pub(super) fn lower_static_switch_dispatch(
     ctx: &mut LoweringContext<'_, '_>,
     subject: LoweredValue,
     cases: &[(Vec<Expr>, Vec<Stmt>)],
-    blocks: &[BlockId],
-    default_block: BlockId,
-) {
+) -> SwitchDispatch {
+    let blocks = cases
+        .iter()
+        .map(|_| ctx.builder.create_named_block("switch.case", Vec::new()))
+        .collect::<Vec<_>>();
+    let default_block = ctx.builder.create_named_block("switch.default", Vec::new());
     let mut switch_cases = Vec::new();
-    for ((case_exprs, _), case_block) in cases.iter().zip(blocks) {
+    for ((case_exprs, _), case_block) in cases.iter().zip(&blocks) {
         for case_expr in case_exprs {
             let Some(value) = int_case_value(case_expr) else {
                 continue;
@@ -127,6 +145,13 @@ pub(super) fn lower_static_switch_dispatch(
         default_args: Vec::new(),
     });
     ctx.clear_static_callable_locals();
+    SwitchDispatch {
+        cases: blocks
+            .iter()
+            .map(|block| vec![switch_dispatch_edge(ctx, *block)])
+            .collect(),
+        default: switch_dispatch_edge(ctx, default_block),
+    }
 }
 
 /// Emits source-ordered dynamic switch pattern checks for non-literal case expressions.
@@ -134,15 +159,18 @@ pub(super) fn lower_static_switch_dispatch(
 /// PHP `switch` compares the subject against each case with loose equality (`==`).
 /// Only pairs of PHP integers use `ICmp`. All other pairs use `Op::LooseEq` so
 /// bool, null, array, object and numeric-string comparisons retain their PHP rules.
+///
+/// Each label that matches branches to its own `switch.matched` block, whose edge records the
+/// facts as of that label: a label's expression may assign a local that a later label changes.
 pub(super) fn lower_dynamic_switch_dispatch(
     ctx: &mut LoweringContext<'_, '_>,
     subject: Option<LoweredValue>,
     live_subject: Option<&str>,
     cases: &[(Vec<Expr>, Vec<Stmt>)],
-    blocks: &[BlockId],
-    default_block: BlockId,
-) {
-    for ((case_exprs, _), case_block) in cases.iter().zip(blocks) {
+) -> SwitchDispatch {
+    let mut case_edges = Vec::with_capacity(cases.len());
+    for (case_exprs, _) in cases {
+        let mut edges = Vec::with_capacity(case_exprs.len());
         for case_expr in case_exprs {
             let case_value = lower_expr(ctx, case_expr);
             // PHP keeps a simple variable subject live across label evaluation and
@@ -194,14 +222,16 @@ pub(super) fn lower_dynamic_switch_dispatch(
                     Op::StrictEq.default_effects(),
                     Some(case_expr.span),
                 );
+                let matched_block = ctx.builder.create_named_block("switch.matched", Vec::new());
                 let miss_block = ctx.builder.create_named_block("switch.next", Vec::new());
                 ctx.builder.terminate(Terminator::CondBr {
                     cond: matched.value,
-                    then_target: *case_block,
+                    then_target: matched_block,
                     then_args: Vec::new(),
                     else_target: miss_block,
                     else_args: Vec::new(),
                 });
+                edges.push(switch_dispatch_edge(ctx, matched_block));
                 ctx.builder.position_at_end(miss_block);
                 continue;
             }
@@ -268,34 +298,54 @@ pub(super) fn lower_dynamic_switch_dispatch(
                 // and keeps it when widening makes the reload an owning conversion.
                 crate::ir_lower::ownership::release_if_owned(ctx, subject, Some(case_expr.span));
             }
+            let matched_block = ctx.builder.create_named_block("switch.matched", Vec::new());
             let miss_block = ctx.builder.create_named_block("switch.next", Vec::new());
             ctx.builder.terminate(Terminator::CondBr {
                 cond: matched.value,
-                then_target: *case_block,
+                then_target: matched_block,
                 then_args: Vec::new(),
                 else_target: miss_block,
                 else_args: Vec::new(),
             });
+            edges.push(switch_dispatch_edge(ctx, matched_block));
             ctx.builder.position_at_end(miss_block);
         }
+        case_edges.push(edges);
     }
+    let default_block = ctx.builder.create_named_block("switch.default", Vec::new());
     branch_to(ctx, default_block);
+    let default = switch_dispatch_edge(ctx, default_block);
     ctx.clear_static_callable_locals();
+    SwitchDispatch {
+        cases: case_edges,
+        default,
+    }
 }
 
 /// Lowers switch case/default bodies and preserves PHP fallthrough between adjacent bodies.
+///
+/// Each body is entered from the dispatch and, unless the body before it ended in `break`,
+/// by falling through; the exit is reached by every `break` and by the last body falling out.
+/// Those are joins exactly like an `if` merge, and lowering the bodies one after another used
+/// to leave each join with the facts of whichever body was lowered last: after
+/// `case 1: $o = null; break; case 2: …; default: …` the exit read `$o` as `null` on the path
+/// that kept the object. Every body therefore starts from its own dispatch edges (see
+/// [`SwitchDispatch`]) joined with its fall-through edge, and the exit joins every edge that reaches it
+/// (`finish_if_type_join`), boxing a local whose edges disagree on its representation.
 pub(super) fn lower_switch_bodies(
     ctx: &mut LoweringContext<'_, '_>,
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: Option<&[Stmt]>,
-    blocks: &[BlockId],
-    default_block: BlockId,
+    dispatch: SwitchDispatch,
     exit: BlockId,
+    span: Span,
 ) {
     let default_index = default
         .and_then(|default| switch_default_source_index(cases, default))
         .unwrap_or(cases.len());
     ctx.clear_static_callable_locals();
+    let mut case_edges = dispatch.cases.into_iter();
+    let mut default_edge = Some(dispatch.default);
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: exit,
@@ -306,36 +356,71 @@ pub(super) fn lower_switch_bodies(
         iterator_cleanup: None,
         receiver_pin: None,
     });
+    ctx.join_edge_arms.push((exit, Vec::new()));
+    let mut fallthrough = None;
     for index in 0..=cases.len() {
         if default.is_some() && default_index == index {
-            ctx.builder.position_at_end(default_block);
+            let edge = default_edge.take().expect("the default edge is entered once");
+            enter_switch_body(ctx, vec![edge], fallthrough.take(), span);
             if let Some(default) = default {
                 lower_block(ctx, default);
             }
-            if !ctx.builder.insertion_block_is_terminated() {
-                branch_to(ctx, blocks.get(index).copied().unwrap_or(exit));
-            }
-            ctx.clear_static_callable_locals();
+            fallthrough = leave_switch_body(ctx);
         }
         if let Some((_, body)) = cases.get(index) {
-            ctx.builder.position_at_end(blocks[index]);
+            let edges = case_edges.next().expect("the dispatch left edges for every case");
+            enter_switch_body(ctx, edges, fallthrough.take(), span);
             lower_block(ctx, body);
-            if !ctx.builder.insertion_block_is_terminated() {
-                branch_to(
-                    ctx,
-                    switch_next_body_block(index + 1, blocks, default_index, default_block, exit),
-                );
-            }
-            ctx.clear_static_callable_locals();
+            fallthrough = leave_switch_body(ctx);
         }
     }
+    let mut exit_edges = take_join_edges(ctx, exit);
+    exit_edges.extend(fallthrough);
     if default.is_none() {
-        ctx.builder.position_at_end(default_block);
-        branch_to(ctx, exit);
+        exit_edges.extend(default_edge.take());
     }
     ctx.loop_stack.pop();
+    join_edges(ctx, exit_edges, exit, span, ContainerJoin::Reconcile);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
+}
+
+/// Positions the builder at the start of one switch body, joining its incoming edges.
+///
+/// `dispatch` holds the edges from the dispatch that select this body, one per matching label.
+/// A body reached by exactly one edge starts in that edge's block with its facts; otherwise its
+/// dispatch edges and its fall-through edge are joined into a fresh block like the arms of an
+/// `if`.
+fn enter_switch_body(
+    ctx: &mut LoweringContext<'_, '_>,
+    mut dispatch: Vec<IfArmExit>,
+    fallthrough: Option<IfArmExit>,
+    span: Span,
+) {
+    dispatch.extend(fallthrough);
+    if dispatch.len() == 1 {
+        let edge = dispatch.pop().expect("one edge");
+        ctx.restore_local_types(edge.types);
+        ctx.restore_initialized_slots(edge.initialized);
+        ctx.builder.position_at_end(edge.tail);
+        return;
+    }
+    let body = ctx.builder.create_named_block("switch.body", Vec::new());
+    join_edges(ctx, dispatch, body, span, ContainerJoin::Reconcile);
+    ctx.builder.position_at_end(body);
+}
+
+/// Ends one switch body, deferring its fall-through edge when control can still leave it.
+fn leave_switch_body(ctx: &mut LoweringContext<'_, '_>) -> Option<IfArmExit> {
+    let fallthrough = if ctx.builder.insertion_block_is_terminated() {
+        None
+    } else {
+        let mut edges = Vec::with_capacity(1);
+        record_if_arm_exit(ctx, &mut edges);
+        edges.pop()
+    };
+    ctx.clear_static_callable_locals();
+    fallthrough
 }
 
 /// Returns the source-order insertion point for a non-empty switch default body.
@@ -361,21 +446,6 @@ pub(super) fn switch_default_source_index(
         }
     }
     Some(default_index)
-}
-
-/// Returns the block that follows one source-ordered switch body.
-pub(super) fn switch_next_body_block(
-    next_index: usize,
-    blocks: &[BlockId],
-    default_index: usize,
-    default_block: BlockId,
-    exit: BlockId,
-) -> BlockId {
-    if default_index == next_index {
-        default_block
-    } else {
-        blocks.get(next_index).copied().unwrap_or(exit)
-    }
 }
 
 /// Returns true when `span` appears before `pivot` in the same source file.

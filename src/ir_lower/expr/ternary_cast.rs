@@ -54,21 +54,25 @@ pub(super) fn lower_ternary_with_destination(
     let split_initialized = ctx.initialized_slots_snapshot();
     let merge = ctx.builder.create_named_block("ternary.merge", Vec::new());
 
+    let mut join = crate::ir_lower::stmt::ExprBranchJoin::at_split(ctx);
+
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_arm(ctx);
     store_branch_into_temp(ctx, &temp_name, result_type.clone(), then_expr, expr.span, destination);
     let then_reachable = !ctx.builder.insertion_block_is_terminated();
     let then_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.leave_arm(ctx);
 
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_arm(ctx);
     store_branch_into_temp(ctx, &temp_name, result_type, else_expr, expr.span, destination);
     let else_reachable = !ctx.builder.insertion_block_is_terminated();
     let else_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.leave_arm(ctx);
 
-    ctx.builder.position_at_end(merge);
+    join.finish(ctx, merge, expr.span);
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
         &split_initialized,
         then_initialized,

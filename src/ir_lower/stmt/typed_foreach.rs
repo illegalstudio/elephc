@@ -208,6 +208,7 @@ pub(super) fn lower_foreach(
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
+    apply_null_entry_boxing(ctx, None, body, None);
     // A direct instance property has a dedicated fetch-for-write operation that separates and
     // republishes its container before iteration. Reifying it as a synthetic alias here bypasses
     // that operation and loses the property's copy-on-write boundary. Static properties and
@@ -340,6 +341,8 @@ pub(super) fn lower_foreach(
     let header = ctx.builder.create_named_block("foreach.next", Vec::new());
     let body_block = ctx.builder.create_named_block("foreach.body", Vec::new());
     let exit = ctx.builder.create_named_block("foreach.exit", Vec::new());
+    let joins = LoopJumpJoins::begin(ctx, body, exit, header, false);
+    let exit_target = LoopJumpJoins::exit_target(&joins, exit);
     let first_nonempty = (value_by_ref
         && value_needs_null_init
         && foreach_ref_value_type(&source_ty) == PhpType::Mixed)
@@ -360,7 +363,7 @@ pub(super) fn lower_foreach(
             cond: has_next.value,
             then_target: first_nonempty,
             then_args: Vec::new(),
-            else_target: exit,
+            else_target: exit_target,
             else_args: Vec::new(),
         });
 
@@ -386,7 +389,7 @@ pub(super) fn lower_foreach(
         cond: has_next.value,
         then_target: body_block,
         then_args: Vec::new(),
-        else_target: exit,
+        else_target: exit_target,
         else_args: Vec::new(),
     });
 
@@ -410,7 +413,7 @@ pub(super) fn lower_foreach(
     ctx.push_loop_carried_missing_strings(missing_strings);
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
-        continue_block: header,
+        continue_block: LoopJumpJoins::continue_target(&joins, header),
         cleanup,
         source_owner: source_owner.map(|slot| (slot, array.span)),
         source_pin,
@@ -424,8 +427,16 @@ pub(super) fn lower_foreach(
     lower_block(ctx, body);
     ctx.loop_stack.pop();
     ctx.pop_loop_carried_missing_strings();
-    branch_to(ctx, header);
-    ctx.builder.position_at_end(exit);
+    match joins {
+        Some(joins) => {
+            joins.finish_latch(ctx, loop_span);
+            joins.finish_exit(ctx, loop_span);
+        }
+        None => {
+            branch_to(ctx, header);
+            ctx.builder.position_at_end(exit);
+        }
+    }
     ctx.clear_static_callable_locals();
     if by_ref_origin.is_some() {
         ctx.emit_void(

@@ -40,6 +40,7 @@ mod literal_defaults;
 mod literal_method_index;
 mod local_analysis;
 mod mbstring_configuration;
+mod null_local_proof;
 pub(crate) mod lower_inst;
 mod lower_term;
 mod machine_peephole;

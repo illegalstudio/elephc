@@ -70,6 +70,7 @@ use crate::types::{
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
+pub(crate) use loop_storage::loop_assigned_local_names;
 pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 pub(crate) use schema::normalize_signature_default_receivers;
