@@ -4005,8 +4005,9 @@ impl MyStmt {
     /// Executes a native statement asking the server for a read-only cursor
     /// (mysqli's `MYSQLI_CURSOR_TYPE_READ_ONLY`). When the server opens one, only the
     /// metadata is read and `step()` fetches the rows one `COM_STMT_FETCH` at a time; a
-    /// statement the server runs without a cursor (no result set) is materialized like a
-    /// buffered execution.
+    /// statement the server runs without a cursor (no result set, or a `CALL`) is
+    /// materialized like a buffered execution, keeping a later set's error for
+    /// `next_result()`.
     fn execute_with_cursor(
         &mut self,
         conn: &mut MyConn,
@@ -4015,7 +4016,8 @@ impl MyStmt {
     ) -> Result<(), i64> {
         let fetch_table_names = conn.fetch_table_names;
         let cursor_type = self.cursor_type;
-        let outcome: Result<(Vec<MyRowset>, Option<Arc<[Column]>>), mysql::Error> = (|| {
+        type CursorOutcome = (Vec<MyRowset>, Option<Arc<[Column]>>, Option<mysql::Error>);
+        let outcome: Result<CursorOutcome, mysql::Error> = (|| {
             let mut res = conn.conn.exec_iter_with_cursor(
                 &statement,
                 mysql::Params::Positional(values),
@@ -4023,7 +4025,19 @@ impl MyStmt {
             )?;
             let mut rowsets = Vec::new();
             let mut first_columns = None;
+            // Without a granted cursor (a CALL) every set is buffered here, but like
+            // collect_text_rowsets_until_error a later statement's failure keeps the sets
+            // before it: execute() succeeds and next_result() reports that error (mysqlnd
+            // reads further sets only on demand). A failing first set fails execute().
             while let Some(mut set) = res.iter() {
+                if set.is_errored() {
+                    if let Some(Err(error)) = set.next() {
+                        if rowsets.is_empty() {
+                            return Err(error);
+                        }
+                        return Ok((rowsets, first_columns, Some(error)));
+                    }
+                }
                 let live = set.columns();
                 let cols: &[Column] = live.as_ref();
                 if first_columns.is_none() && !cols.is_empty() {
@@ -4036,12 +4050,25 @@ impl MyStmt {
                     set.last_insert_id(),
                     fetch_table_names,
                 );
+                let mut ended = false;
                 for row in set.by_ref() {
-                    rowset.rows.push(decode_row(row?.unwrap(), &kinds));
+                    match row {
+                        Ok(row) => rowset.rows.push(decode_row(row.unwrap(), &kinds)),
+                        Err(error) if rowsets.is_empty() => return Err(error),
+                        // A later set is still announced and fails when its rows are read.
+                        Err(error) => {
+                            rowset.row_error = Some(error);
+                            ended = true;
+                            break;
+                        }
+                    }
                 }
                 rowsets.push(rowset);
+                if ended {
+                    break;
+                }
             }
-            Ok((rowsets, first_columns))
+            Ok((rowsets, first_columns, None))
         })();
         let warnings = conn.conn.warnings();
         let cursor_open = conn
@@ -4049,7 +4076,7 @@ impl MyStmt {
             .status_flags()
             .contains(mysql::consts::StatusFlags::SERVER_STATUS_CURSOR_EXISTS);
         match outcome {
-            Ok((mut rowsets, columns)) => {
+            Ok((mut rowsets, columns, trailing_error)) => {
                 conn.errcode = 0;
                 conn.sqlstate = "00000".to_string();
                 conn.warning_count = warnings;
@@ -4059,6 +4086,7 @@ impl MyStmt {
                     rowsets.remove(0)
                 };
                 self.remaining_rowsets = rowsets;
+                self.trailing_error = trailing_error;
                 self.install_rowset(conn, first);
                 if let (true, Some(columns)) = (cursor_open, columns) {
                     self.server_cursor = Some(MyServerCursor {

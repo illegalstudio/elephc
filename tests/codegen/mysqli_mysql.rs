@@ -3187,3 +3187,51 @@ echo "f:", mr($db), "\n";
         "a:true,true,true,true,true|b:false|c:true,d:true|e:true:true,true:true,true:true|f:true\n"
     );
 }
+
+/// A READ_ONLY cursor on a prepared CALL, which the server runs without a cursor: execute()
+/// succeeds with the first set's rows, a later statement's failure (a SIGNAL after the first
+/// SELECT) is reported only by next_result() (thrown under STRICT), and a procedure whose sets
+/// all succeed walks them as usual. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_cursor_call_keeps_the_first_set_before_a_later_error() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP PROCEDURE IF EXISTS mcsig");
+$db->query("CREATE PROCEDURE mcsig() BEGIN SELECT 1 AS a UNION ALL SELECT 2; SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'late'; END");
+$db->query("DROP PROCEDURE IF EXISTS mcok");
+$db->query("CREATE PROCEDURE mcok() BEGIN SELECT 1 AS a UNION ALL SELECT 2; SELECT 3 AS b; END");
+foreach (["mcsig", "mcok"] as $p) {
+    $st = $db->prepare("CALL $p()");
+    $st->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY);
+    echo $p, ":", var_export($st->execute(), true), ":", $st->errno, ":", var_export($st->more_results(), true);
+    $v = 0;
+    $st->bind_result($v);
+    $rows = [];
+    while ($st->fetch()) { $rows[] = $v; }
+    echo ":", implode(",", $rows), ":", var_export($st->more_results(), true);
+    $n = $st->next_result();
+    echo ":next=", var_export($n, true), ":", $st->errno, ":", $st->error;
+    if ($n) {
+        $st->bind_result($v);
+        $rows = [];
+        while ($st->fetch()) { $rows[] = $v; }
+        echo ":", implode(",", $rows);
+        while ($st->more_results()) { $st->next_result(); }
+    }
+    $st->close();
+    echo ":", $db->query("SELECT 9")->fetch_row()[0], "|";
+}
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$st = $db->prepare("CALL mcsig()");
+$st->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY);
+try { $st->execute(); echo "exec-ok"; $st->store_result(); echo ":stored"; $st->next_result(); echo ":nothrow"; } catch (mysqli_sql_exception $e) { echo ":throw:", $e->getCode(), ":", $e->getMessage(); }
+echo "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "mcsig:true:0:true:1,2:true:next=false:1644:late:9|mcok:true:0:true:1,2:true:next=true:0::3:9|exec-ok:stored:throw:1644:late\n"
+    );
+}
