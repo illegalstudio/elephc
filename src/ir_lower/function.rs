@@ -120,7 +120,9 @@ pub(crate) fn lower_main(
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
-        "main".to_string(),
+        &check_result.sparse_key_write_sites,
+        &check_result.promotable_arrays,
+        crate::types::TOP_LEVEL_SCOPE.to_string(),
         constants,
         None,
         PhpType::Void,
@@ -214,6 +216,10 @@ pub(crate) fn lower_user_function(
     function.params = function_params(&eir_signature);
     function.flags.is_internal = is_internal;
     function.flags.by_ref_return = signature.by_ref_return;
+    // A typed promotable clone is the original function to PHP: backtraces and introspection
+    // name the original, and `function_exists()` never lists the clone.
+    function.source_name = crate::generics::promotable_clones::promotable_clone_source_name(name)
+        .map(str::to_string);
     function.source_signature = Some(source_signature(name, &eir_signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
     function.source_defaults = params.iter().map(|(_, _, default, _)| default.clone()).collect();
@@ -269,6 +275,8 @@ pub(crate) fn lower_user_function(
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
+        &check_result.sparse_key_write_sites,
+        &check_result.promotable_arrays,
         name.to_string(),
         constants,
         None,
@@ -398,6 +406,8 @@ pub(crate) fn lower_class_method(
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
+        &check_result.sparse_key_write_sites,
+        &check_result.promotable_arrays,
         name.clone(),
         constants,
         Some(class_name.to_string()),
@@ -434,9 +444,11 @@ fn eval_aot_decision_maps() -> (
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
     std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    std::collections::HashMap<Span, std::collections::HashSet<String>>,
     std::collections::HashMap<(String, Span), std::collections::HashSet<String>>,
 ) {
     (
+        std::collections::HashMap::new(),
         std::collections::HashMap::new(),
         std::collections::HashMap::new(),
         std::collections::HashMap::new(),
@@ -481,8 +493,11 @@ pub(crate) fn lower_eval_aot_function(
         ref_detach_sites,
         retype_sites,
         mixed_storage_store_sites,
+        sparse_key_write_sites,
         boxed_reference_promotion_sites,
     ) = eval_aot_decision_maps();
+    // An eval fragment was never checked, so no promotion decision exists for its locals.
+    let promotable_arrays = crate::types::PromotableArrays::default();
     let closures = lower_body_into_function(
         &mut function,
         None,
@@ -520,7 +535,9 @@ pub(crate) fn lower_eval_aot_function(
         &ref_detach_sites,
         &retype_sites,
         &mixed_storage_store_sites,
-        "main".to_string(),
+        &sparse_key_write_sites,
+        &promotable_arrays,
+        crate::types::TOP_LEVEL_SCOPE.to_string(),
         constants,
         None,
         return_type,
@@ -614,8 +631,11 @@ pub(crate) fn lower_eval_aot_scope_function(
         ref_detach_sites,
         retype_sites,
         mixed_storage_store_sites,
+        sparse_key_write_sites,
         boxed_reference_promotion_sites,
     ) = eval_aot_decision_maps();
+    // An eval fragment was never checked, so no promotion decision exists for its locals.
+    let promotable_arrays = crate::types::PromotableArrays::default();
     let closures = lower_body_into_function(
         &mut function,
         None,
@@ -653,7 +673,9 @@ pub(crate) fn lower_eval_aot_scope_function(
         &ref_detach_sites,
         &retype_sites,
         &mixed_storage_store_sites,
-        "main".to_string(),
+        &sparse_key_write_sites,
+        &promotable_arrays,
+        crate::types::TOP_LEVEL_SCOPE.to_string(),
         constants,
         None,
         return_type,
@@ -776,6 +798,8 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
+        &check_result.sparse_key_write_sites,
+        &check_result.promotable_arrays,
         function_name.clone(),
         constants,
         Some(class_name.to_string()),
@@ -1147,6 +1171,8 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
+        &check_result.sparse_key_write_sites,
+        &check_result.promotable_arrays,
         function_name.clone(),
         constants,
         Some(class_name.to_string()),
@@ -1273,6 +1299,8 @@ pub(crate) fn lower_clone_override_function(
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
+        &check_result.sparse_key_write_sites,
+        &check_result.promotable_arrays,
         function_name.to_string(),
         constants,
         scope.map(str::to_string),
@@ -1444,6 +1472,8 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.local_ref_detach_sites,
             &check_result.local_retype_sites,
             &check_result.mixed_storage_store_sites,
+            &check_result.sparse_key_write_sites,
+            &check_result.promotable_arrays,
             function_name.clone(),
             constants,
             default_scope,
@@ -1696,6 +1726,8 @@ fn lower_closure_function_with_signature(
         parent.ref_detach_sites,
         parent.retype_sites,
         parent.mixed_storage_store_sites,
+        parent.sparse_key_write_sites,
+        parent.promotable_arrays,
         loop_storage_scope,
         &parent.constants,
         parent.current_class.clone(),
@@ -1761,6 +1793,8 @@ fn lower_body_into_function(
         Span,
         std::collections::HashSet<String>,
     >,
+    sparse_key_write_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
+    promotable_arrays: &crate::types::PromotableArrays,
     loop_storage_scope: String,
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     current_class: Option<String>,
@@ -1868,6 +1902,8 @@ fn lower_body_into_function(
         ref_detach_sites,
         retype_sites,
         mixed_storage_store_sites,
+        sparse_key_write_sites,
+        promotable_arrays,
         loop_storage_scope,
         constants,
         top_level_env,

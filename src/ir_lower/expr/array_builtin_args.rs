@@ -998,6 +998,17 @@ pub(super) fn lower_count_args(
         .filter(|(index, arg)| !count_arg_is_static_default_mode(*index, arg))
         .map(|(_, arg)| arg.clone())
         .collect();
+    // A promotable `array<int>` local is counted in its own storage, packed or promoted: both
+    // headers keep the element count in their first word, so the `array<mixed>` copy a
+    // whole-value read would build (every iteration of a `$i < count($a)` loop) is never needed.
+    if let [Expr { kind: ExprKind::Variable(name), span, .. }] = pruned.as_slice() {
+        if ctx.is_promotable_array_local(name)
+            && matches!(ctx.local_type(name).codegen_repr(),
+                PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+        {
+            return vec![ctx.load_local(name, Some(*span)).value];
+        }
+    }
     let mut operands = lower_args_with_signature(ctx, sig, &pruned);
     // Named and spread plans re-materialize the optional `mode` default even
     // after the AST prune; a trailing constant-zero mode stays a no-op for

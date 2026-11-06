@@ -56,7 +56,25 @@ impl Checker {
                     self.builtin_call_types.insert(expr.span, ty.clone());
                     return Ok(ty);
                 }
-                self.check_function_call(name.as_str(), &args, expr.span, env)
+                // A direct user call can hand promotable `array<int>` arguments on raw, and its
+                // promotable result reads as the `array<mixed>` view unless a sink takes it raw.
+                let callee = self
+                    .canonical_function_name_folded(name.as_str())
+                    .unwrap_or_else(|| name.as_str().to_string());
+                // A call redirected to a typed clone still checks against the original first:
+                // the original keeps the specialization (and the diagnostics) this call gives it,
+                // and the clone, checked last, owns the call-site records lowering reads.
+                let clone = self.prepare_promotable_call_args(&callee, &args, env, expr.span)?;
+                let mut ty = self.check_function_call(name.as_str(), &args, expr.span, env)?;
+                if let Some(clone) = &clone {
+                    let warnings = self.warnings.len();
+                    ty = self.check_function_call(clone, &args, expr.span, env)?;
+                    self.warnings.truncate(warnings);
+                }
+                self.confirm_promotable_call_args(env)?;
+                self.flush_promotable_reresolutions()?;
+                let target = clone.as_deref().unwrap_or(&callee);
+                Ok(self.promotable_call_result_view(target, expr.span, ty))
             }
             ExprKind::BufferNew { element_type, len } => {
                 let len_ty = self.infer_type(len, env)?;

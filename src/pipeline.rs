@@ -1048,6 +1048,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     exported_function_names.extend(crate::generics::instantiation_roots(
         &check_result.requested_instantiations,
     ));
+    // A promotable clone is reachable the same way: only lowering's redirect names it.
+    exported_function_names.extend(crate::generics::promotable_clones::promotable_clone_roots(
+        &check_result.requested_promotable_clones,
+    ));
     let exported_function_names = exported_function_names;
     let ast = optimize::prune_unreachable_declarations(
         ast,

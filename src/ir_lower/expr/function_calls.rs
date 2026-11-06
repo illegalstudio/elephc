@@ -11,6 +11,31 @@ use super::*;
 
 /// Lowers a direct function, builtin, or extern call.
 pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
+    let value = lower_function_call_unviewed(ctx, name, args, expr);
+    // A call returning a promotable `array<int>` may hand back hash storage; where the checker
+    // typed the result as a whole value, it takes the kind-aware `array<mixed>` view. The result
+    // is a fresh owner, so the conversion consumes it directly.
+    let key = (ctx.loop_storage_scope.clone(), expr.span);
+    let viewed = ctx.promotable_arrays.call_views.contains(&key)
+        && !ctx.promotable_arrays.raw_sites.contains(&key);
+    if viewed
+        && matches!(ctx.builder.value_php_type(value.value).codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+    {
+        return ctx.emit_value(
+            Op::ArrayToMixed,
+            vec![value.value],
+            None,
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            Op::ArrayToMixed.default_effects(),
+            Some(expr.span),
+        );
+    }
+    value
+}
+
+/// Lowers a function call without the promotable-result view `lower_function_call` applies.
+fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
     constants::register_static_define_call(ctx, name, args);
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;

@@ -144,6 +144,23 @@ $map["age"] = "30";      // add new key
 
 Associative arrays use a hash table runtime. If later values do not match the first value type, the checker widens to internal `mixed` runtime shape.
 
+An integer key that skips a slot, or is negative, makes an array a hash, as in PHP: `$a = [1, 2];
+$a[5] = 3;` gives `{"0":1,"1":2,"5":3}` and `$h->items[1] = 6` on a fresh object holding `[]`
+gives `{"1":6}`, never a zero-filled gap. An `array<int>` local written under a key elephc
+cannot bound (a loop counter, `$j + 1`, a value read from another array) keeps its raw integer
+slots, and the write itself switches the storage to a hash only when a key actually skips a slot
+at run time, so a sort or a scatter over integers runs on packed storage. Such an array crosses
+calls raw: an `array<int>` parameter or return takes it as it is, and an untyped parameter of an
+ordinary function receives it through a copy of that function compiled with the parameter typed
+`array<int>` (callers passing anything else, and dynamic calls, keep the original; backtraces
+and `function_exists()` see only the original). Any other use (another parameter, iteration,
+a builtin) gets the boxed `array<mixed>` view, packed or hash.
+A local that a reference, a by-reference call argument, `unset()` or a closure can reach becomes a
+hash at the skipping write instead, and an array whose values widen to `mixed` relies on the boxed
+writer, which makes the same run-time switch. An untyped property's storage is chosen from every
+write in its class, so any integer key there other than a literal `0` selects hash storage for
+that property, and later `$h->items[] = $v` appends continue from PHP's next integer key.
+
 Keys follow PHP's array-key normalization. Integer keys remain integers, booleans and floats normalize to integer keys, `null` normalizes to the empty-string key, numeric strings such as `"1"` normalize to the integer key `1`, and strings with leading zeroes such as `"01"` remain string keys. This applies to literals, reads and writes, `foreach`, `array_keys()`, `array_search()`, `array_key_exists()`, `array_flip()`, JSON object keys, and array union.
 
 ```php

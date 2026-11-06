@@ -66,6 +66,10 @@ pub(super) fn lower_pop_call_operand_owner(ctx: &mut FunctionContext<'_>, inst: 
 
 /// Lowers an ownership acquire by making the operand safe to store as a new owner.
 pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // A raw scalar boxed into a selected frame cell writes its tag and payload there instead.
+    if let Some(cell) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return super::arithmetic::stack_cell::lower_box(ctx, inst, cell);
+    }
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
     if crate::codegen::stack_numeric::is_stack_value(ctx.function, &ctx.numeric_cell_offsets, value) {

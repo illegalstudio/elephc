@@ -458,22 +458,41 @@ pub(super) fn interface_satisfies_interface(
 }
 
 /// Converts an untyped boxed Mixed payload into indexed-array storage with Mixed slots.
+///
+/// A boxed array a skipping integer key promoted at run time (`__rt_mixed_array_set`) is a
+/// kind-3 hash: it is already the `array<mixed>` representation a promoted indexed array has
+/// (per-entry tagged values), so it is kept as is instead of being walked as packed slots.
 pub(super) fn lower_mixed_to_mixed_indexed_array(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let keep_hash = ctx.next_label("mixed_to_indexed_keep_hash");
+    let done = ctx.next_label("mixed_to_indexed_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed-array payload to the Mixed conversion helper
             ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before Mixed-slot conversion
+            ctx.emitter.instruction("and x9, x1, #0xff");                       // isolate the runtime storage kind
+            ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = a hash promoted by a skipping key
+            ctx.emitter.instruction(&format!("b.eq {keep_hash}"));              // a promoted hash already holds tagged values
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before Mixed-slot conversion
+            ctx.emitter.instruction("mov r10, rsi");                            // copy the header to test the storage kind
+            ctx.emitter.instruction("and r10, 0xff");                           // isolate the runtime storage kind
+            ctx.emitter.instruction("cmp r10, 3");                              // kind 3 = a hash promoted by a skipping key
+            ctx.emitter.instruction(&format!("je {keep_hash}"));                // a promoted hash already holds tagged values
             ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
             ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&keep_hash);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rax, rdi");                                // the promoted hash is the result payload
+    }
+    ctx.emitter.label(&done);
     abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
     Ok(())
 }

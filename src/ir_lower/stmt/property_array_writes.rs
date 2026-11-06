@@ -172,6 +172,46 @@ fn lower_property_array_push_value_direct(
         );
         return;
     }
+    if let Some(property_ty) =
+        object_property_type(ctx, object.value, property).filter(is_assoc_array_type)
+    {
+        // An untyped slot a skipping integer key promoted to hash storage appends at the hash's
+        // own next integer key, with the same retain discipline as the keyed `HashSet` write.
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
+        let data = ctx.intern_string(property);
+        let property_value = ctx.emit_value(
+            Op::PropGet,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            property_ty.clone(),
+            Op::PropGet.default_effects(),
+            Some(span),
+        );
+        let property_value =
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
+        ctx.emit_void(
+            Op::HashAppend,
+            vec![property_value.value, value.value],
+            None,
+            Op::HashAppend.default_effects(),
+            Some(span),
+        );
+        release_property_array_insert_value_after_retain(ctx, &property_ty, value, span);
+        ctx.emit_void(
+            Op::PropSet,
+            vec![object.value, property_value.value],
+            Some(Immediate::Data(data)),
+            Op::PropSet.default_effects(),
+            Some(span),
+        );
+        release_rewritten_property_value_after_retaining_store(
+            ctx,
+            &property_ty,
+            property_value,
+            span,
+        );
+        return;
+    }
 
     native_xml::ordinary_append(ctx, object, property, value, span);
 }

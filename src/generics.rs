@@ -24,6 +24,7 @@ mod constructors;
 mod function_variants;
 pub(crate) use constructors::parameter_name;
 pub mod methods;
+pub mod promotable_clones;
 mod report;
 mod shared;
 mod value_types;
@@ -157,7 +158,15 @@ where
             instantiations: result.requested_method_instantiations.clone(),
             sites: result.generic_method_sites.clone(),
         };
-        if result.requested_instantiations.is_empty() && !class_work && method_work.is_empty() {
+        // A fourth kind: typed clones of functions whose undeclared parameters receive a
+        // promotable `array<int>` (`promotable_clones`). The checker already checked its own copy;
+        // the splice is what makes the clone exist for lowering.
+        let clone_work = &result.requested_promotable_clones;
+        if result.requested_instantiations.is_empty()
+            && !class_work
+            && method_work.is_empty()
+            && clone_work.is_empty()
+        {
             break result;
         }
         let (spliced, added) = splice_instantiations(program, &result.requested_instantiations);
@@ -165,7 +174,10 @@ where
         let (with_methods, method_added) =
             methods::instantiate(program, &context.method_templates, &method_work)?;
         program = with_methods;
-        if added == 0 && method_added == 0 && !class_work {
+        let (with_clones, clone_added) =
+            promotable_clones::splice_promotable_clones(program, clone_work);
+        program = with_clones;
+        if added == 0 && method_added == 0 && clone_added == 0 && !class_work {
             break result;
         }
         // The bodies just spliced in were written against `T` and are concrete now, so a
@@ -208,6 +220,8 @@ where
             collected_warnings.push(warning);
         }
     }
+    // A clone body repeats the original's diagnostics under its own source identity.
+    collected_warnings.retain(|warning| !promotable_clones::is_clone_span(warning.span));
     check_result.warnings = collected_warnings;
     // A template is not a function: its annotations name types with no representation, so it
     // must never reach lowering. Every instantiation the program reaches now exists.

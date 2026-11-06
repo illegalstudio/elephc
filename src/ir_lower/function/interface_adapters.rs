@@ -120,6 +120,8 @@ fn lower_interface_adapter(
         &Default::default(), // detached reference sites
         &Default::default(), // retyped binding sites
         &Default::default(), // mixed storage store sites
+        &Default::default(), // sparse key write sites
+        &Default::default(), // promotable arrays
         name.to_string(), &module.global_constants,
         Some(owner.to_string()), return_type, signature.declared_return,
         &signature.params, None, false, Default::default(), None,

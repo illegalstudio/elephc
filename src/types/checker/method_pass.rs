@@ -118,6 +118,9 @@ impl Checker {
         loop {
             self.method_property_refinements = Some(std::collections::HashSet::new());
             let classes_before_pass = self.classes.clone();
+            // A pass that denies a method local the promotable `?int` read view needs another
+            // pass, whose walk then keeps that local's reads `mixed`.
+            let view_denials_before_pass = self.promotable_view_denied.len();
             let mut pass_errors = Vec::new();
 
             for class in flattened_classes {
@@ -239,6 +242,7 @@ impl Checker {
                     self.current_by_ref_return = method.by_ref_return;
                     let loop_storage_scope = format!("{}::{}", class.name, method.name);
                     self.clear_loop_storage_scope(&loop_storage_scope);
+                    self.begin_promotable_walk(&loop_storage_scope);
                     let previous_loop_storage_scope = std::mem::replace(
                         &mut self.current_loop_storage_scope,
                         loop_storage_scope,
@@ -271,7 +275,7 @@ impl Checker {
                             .collect();
                     let return_facts = crate::optimize::ReturnBoundaryFacts::new(method.return_type.as_ref(),
                         method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body);
-                    crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
+                    let body_walk = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
                         method_ref_params,
                         method_param_names,
                         pre_bound_own_storage,
@@ -288,7 +292,10 @@ impl Checker {
                             }
                             Ok(())
                         },
-                    ))?;
+                    ));
+                    let method_scope = self.current_loop_storage_scope.clone();
+                    self.end_promotable_walk(&method_scope);
+                    body_walk?;
                     let method_has_errors = !method_errors.is_empty();
                     pass_errors.extend(method_errors);
 
@@ -303,6 +310,11 @@ impl Checker {
                 }
             }
 
+            // A pass that denied a view is never the kept one, and it does not spend the class
+            // stability budget: denials only grow, so these extra passes are bounded.
+            if self.promotable_view_denied.len() != view_denials_before_pass {
+                continue;
+            }
             let stabilized = self.classes == classes_before_pass;
             let out_of_passes = method_passes_remaining == 0;
             if stabilized || out_of_passes {

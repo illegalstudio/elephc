@@ -105,6 +105,10 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
     // element type selects the pointer mode.
     let pointer_elements = matches!(elem_ty.codegen_repr(), PhpType::Pointer(_));
     let done = ctx.next_label("array_to_mixed_done");
+    // A promotable typed local can already be hash storage (heap kind 3) with raw typed entries;
+    // `__rt_hash_to_mixed` boxes those in place of the indexed converter, and the result stays a
+    // runtime-promoted `Array(Mixed)` that every Mixed-array consumer already dispatches on.
+    let promoted = ctx.next_label("array_to_mixed_promoted");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
@@ -112,6 +116,10 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
             abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
             ctx.emitter.instruction("cmp x0, x9");                              // does the array carry the in-band null-container sentinel?
             ctx.emitter.instruction(&format!("b.eq {}", done));                 // missed-read sentinels pass through unconverted
+            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the uniform heap-kind header word
+            ctx.emitter.instruction("and x1, x1, #0xff");                       // isolate the runtime storage kind
+            ctx.emitter.instruction("cmp x1, #3");                              // kind 3 = a typed packed local promoted to a hash
+            ctx.emitter.instruction(&format!("b.eq {}", promoted));             // its raw entries widen through the hash converter
             ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the indexed-array packed header to recover the runtime slot tag
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the source element value_type for Mixed boxing
@@ -123,6 +131,9 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
                 );
             }
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the promoted-hash conversion
+            ctx.emitter.label(&promoted);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "rdi")?;
@@ -132,6 +143,10 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
             abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
             ctx.emitter.instruction("cmp rdi, r10");                            // does the array carry the in-band null-container sentinel?
             ctx.emitter.instruction(&format!("je {}", done));                   // missed-read sentinels pass through unconverted
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the uniform heap-kind header word
+            ctx.emitter.instruction("and rsi, 0xff");                           // isolate the runtime storage kind
+            ctx.emitter.instruction("cmp rsi, 3");                              // kind 3 = a typed packed local promoted to a hash
+            ctx.emitter.instruction(&format!("je {}", promoted));               // its raw entries widen through the hash converter
             ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the indexed-array packed header to recover the runtime slot tag
             ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the source element value_type for Mixed boxing
@@ -143,6 +158,9 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
                 );
             }
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the promoted-hash conversion
+            ctx.emitter.label(&promoted);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
         }
     }
     ctx.emitter.label(&done);
@@ -1335,14 +1353,39 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let value = expect_operand(inst, 2)?;
     let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
     let raw_value_ty = ctx.value_php_type(value)?.codegen_repr();
-    let value_ty = effective_array_set_value_type(&elem_ty, &raw_value_ty, inst)?;
-    require_integer_like_index(ctx.value_php_type(index)?, inst)?;
+    let promotable_key = matches!(
+        ctx.value_ir_type(index)?,
+        crate::ir::IrType::I64 | crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)
+    );
+    // A promotable `array<int>` local stores a nullable integer as PHP does: an integer in its
+    // slot, a `null` as a null hash entry (packed storage has no null slot).
+    let nullable_promotable = inst.immediate == Some(Immediate::PromotableArray)
+        && elem_ty.codegen_repr() == PhpType::Int
+        && raw_value_ty == PhpType::TaggedScalar
+        && promotable_key;
+    let value_ty = if nullable_promotable {
+        PhpType::TaggedScalar
+    } else {
+        effective_array_set_value_type(&elem_ty, &raw_value_ty, inst)?
+    };
+    // A promotable write normalizes a boxed key itself (numeric strings, string hash keys).
+    let promotable_write = inst.immediate == Some(Immediate::PromotableArray)
+        && promotable_scalar_element(&elem_ty)
+        && promotable_key;
+    if !promotable_write {
+        require_integer_like_index(ctx.value_php_type(index)?, inst)?;
+    }
     let source_local = source_load_local_slot(ctx, array)?;
     if let Some(slot) = source_local {
         ctx.prepare_mutated_source_local_owner(slot, array)?;
     }
-    if matches!(elem_ty.codegen_repr(), PhpType::Mixed) {
+    if nullable_promotable {
+        lower_promotable_scalar_array_set(ctx, array, index, value, &PhpType::Int, &value_ty)?;
+    } else if matches!(elem_ty.codegen_repr(), PhpType::Mixed) {
         lower_runtime_polymorphic_array_set(ctx, array, index, value, &raw_value_ty)?;
+    } else if promotable_write {
+        // Stamps its own packed branch: the promoted branch returns a hash header to keep.
+        lower_promotable_scalar_array_set(ctx, array, index, value, &elem_ty.codegen_repr(), &value_ty)?;
     } else {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
@@ -1352,13 +1395,323 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 lower_array_set_x86_64(ctx, array, index, value, &raw_value_ty, &value_ty)?
             }
         }
+        stamp_scalar_array_write_result(ctx, &value_ty);
     }
-    stamp_scalar_array_write_result(ctx, &value_ty);
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
         ctx.store_mutated_container_writeback_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
+    Ok(())
+}
+
+/// Returns whether a typed packed element can live raw in a promoted hash entry.
+///
+/// The promotable write and append store the element under its own runtime tag, so typed reads
+/// of the promoted hash (`emit_hash_get_success_*`) find the same raw payload the packed slot
+/// held. Only one-word scalars qualify; strings, nullable scalars and refcounted values keep
+/// their existing storage rules.
+pub(crate) fn promotable_scalar_element(elem_ty: &PhpType) -> bool {
+    matches!(elem_ty.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::Bool)
+}
+
+/// Writes a one-word scalar into a typed packed local whose storage may already be a hash.
+///
+/// PHP turns a packed array into a hash the moment an integer key skips a slot or is negative;
+/// packed storage would instead zero-fill the gap. This keeps the fast typed write for a key in
+/// `[0, count]` (an unsigned compare also sends a negative key to the slow side) and otherwise
+/// promotes the array once with `__rt_array_to_hash`, which copies every scalar by value under
+/// its own tag, then writes through the hash writer. A receiver already promoted (heap kind 3)
+/// writes through the hash writer directly. A boxed key is normalized first (numeric strings
+/// become integers); a key that stays a string can only live in a hash. That probe already
+/// diagnosed a float key, so every hash write after it normalizes the key again silently; only
+/// a null value, which branches before the probe, diagnoses it there.
+///
+/// Ownership mirrors the indexed setter: the caller hands over one owner of `array`, and the
+/// container left in the result register (packed, grown, or the new hash) replaces it. The
+/// abandoned packed array is released after the hash copy, which only borrowed it.
+fn lower_promotable_scalar_array_set(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+    value: ValueId,
+    elem_ty: &PhpType,
+    value_ty: &PhpType,
+) -> Result<()> {
+    let hash = ctx.next_label("promotable_set_hash");
+    let hash_pop = ctx.next_label("promotable_set_hash_pop");
+    let promote = ctx.next_label("promotable_set_promote");
+    let promote_pop = ctx.next_label("promotable_set_promote_pop");
+    let string_key = ctx.next_label("promotable_set_string_key");
+    let done = ctx.next_label("promotable_set_done");
+    let index_is_mixed_key = matches!(
+        ctx.value_ir_type(index)?,
+        crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)
+    );
+    let nullable = matches!(value_ty, PhpType::TaggedScalar);
+    let null_value = ctx.next_label("promotable_set_null_value");
+    let probed_key = if index_is_mixed_key {
+        super::hashes::HashKeyNormalization::PhpAlreadyDiagnosed
+    } else {
+        super::hashes::HashKeyNormalization::Php
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            if nullable {
+                ctx.load_value_to_result(value)?;
+                ctx.emitter.instruction(&format!(
+                    "cmp x1, #{}",
+                    crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
+                ));                                                             // a null value has no packed slot to live in
+                ctx.emitter.instruction(&format!("b.eq {null_value}"));         // store null as a null hash entry
+            }
+            if index_is_mixed_key {
+                super::hashes::materialize_hash_key_aarch64(ctx, index)?;
+                ctx.emitter.instruction("cmn x2, #1");                          // key_hi == -1 marks a normalized integer key
+                ctx.emitter.instruction(&format!("b.ne {string_key}"));         // a string key can only live in a hash
+            } else {
+                ctx.load_value_to_reg(index, "x1")?;
+            }
+            abi::emit_push_reg(ctx.emitter, "x1");                              // keep the integer key across the storage probes
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the uniform heap-kind header word
+            ctx.emitter.instruction("and x9, x9, #0xff");                       // isolate the runtime storage kind
+            ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = already promoted to a hash
+            ctx.emitter.instruction(&format!("b.eq {hash_pop}"));               // a promoted array writes through the hash writer
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the packed logical length
+            ctx.emitter.instruction("ldr x1, [sp]");                            // reload the integer key
+            ctx.emitter.instruction("cmp x1, x9");                              // unsigned: a negative key also compares above the length
+            ctx.emitter.instruction(&format!("b.hi {promote_pop}"));            // a key past the append slot would leave a gap
+            if nullable {
+                ctx.load_value_to_result(value)?;
+                ctx.emitter.instruction("mov x2, x0");                          // the non-null integer payload fills the packed slot
+                abi::emit_pop_reg(ctx.emitter, "x1");                           // the key stays in range: write the packed slot
+                ctx.load_value_to_reg(array, "x0")?;
+            } else {
+                abi::emit_pop_reg(ctx.emitter, "x1");                           // the key stays in range: write the packed slot
+                ctx.load_value_to_reg(array, "x0")?;
+                ctx.load_value_to_reg(value, "x2")?;
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
+            stamp_scalar_array_write_result(ctx, value_ty);
+            ctx.emitter.instruction(&format!("b {done}"));                      // join with the packed container in x0
+
+            ctx.emitter.label(&promote_pop);
+            abi::emit_pop_reg(ctx.emitter, "x1");                               // drop the saved key; the hash writer rematerializes it
+            ctx.emitter.instruction(&format!("b {promote}"));                   // promote the packed array before the hash write
+            ctx.emitter.label(&hash_pop);
+            abi::emit_pop_reg(ctx.emitter, "x1");                               // drop the saved key; the hash writer rematerializes it
+            ctx.emitter.instruction(&format!("b {hash}"));                      // write through the already-promoted hash
+
+            ctx.emitter.label(&string_key);
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the uniform heap-kind header word
+            ctx.emitter.instruction("and x9, x9, #0xff");                       // isolate the runtime storage kind
+            ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = already promoted to a hash
+            ctx.emitter.instruction(&format!("b.eq {hash}"));                   // a promoted array writes through the hash writer
+
+            ctx.emitter.label(&promote);
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            abi::emit_push_reg(ctx.emitter, "x0");                              // keep the new hash while the packed owner is released
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // the hash replaces the packed array as this write's receiver
+            ctx.store_result_value(array)?;
+
+            ctx.emitter.label(&hash);
+            if nullable {
+                emit_promotable_nullable_hash_set_aarch64(ctx, array, index, value, false, probed_key)?;
+                ctx.emitter.instruction(&format!("b {done}"));                  // join after the integer hash entry
+
+                ctx.emitter.label(&null_value);
+                emit_promote_unless_hash_aarch64(ctx, array)?;
+                emit_promotable_nullable_hash_set_aarch64(
+                    ctx, array, index, value, true, super::hashes::HashKeyNormalization::Php,
+                )?;
+            } else {
+                super::hashes::lower_hash_set_aarch64_with(
+                    ctx, array, index, value, value_ty, elem_ty, probed_key,
+                )?;
+            }
+        }
+        Arch::X86_64 => {
+            if nullable {
+                ctx.load_value_to_result(value)?;
+                ctx.emitter.instruction(&format!(
+                    "cmp rdx, {}",
+                    crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
+                ));                                                             // a null value has no packed slot to live in
+                ctx.emitter.instruction(&format!("je {null_value}"));           // store null as a null hash entry
+            }
+            if index_is_mixed_key {
+                super::hashes::materialize_hash_key_x86_64(ctx, index)?;
+                ctx.emitter.instruction("cmp rdx, -1");                         // key_hi == -1 marks a normalized integer key
+                ctx.emitter.instruction(&format!("jne {string_key}"));          // a string key can only live in a hash
+            } else {
+                ctx.load_value_to_reg(index, "rsi")?;
+            }
+            abi::emit_push_reg(ctx.emitter, "rsi");                             // keep the integer key across the storage probes
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov r10, QWORD PTR [rdi - 8]");            // load the uniform heap-kind header word
+            ctx.emitter.instruction("and r10, 0xff");                           // isolate the runtime storage kind
+            ctx.emitter.instruction("cmp r10, 3");                              // kind 3 = already promoted to a hash
+            ctx.emitter.instruction(&format!("je {hash_pop}"));                 // a promoted array writes through the hash writer
+            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load the packed logical length
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                // reload the integer key
+            ctx.emitter.instruction("cmp rsi, r10");                            // unsigned: a negative key also compares above the length
+            ctx.emitter.instruction(&format!("ja {promote_pop}"));              // a key past the append slot would leave a gap
+            if nullable {
+                ctx.load_value_to_result(value)?;
+                ctx.emitter.instruction("mov rdx, rax");                        // the non-null integer payload fills the packed slot
+                abi::emit_pop_reg(ctx.emitter, "rsi");                          // the key stays in range: write the packed slot
+                ctx.load_value_to_reg(array, "rdi")?;
+            } else {
+                abi::emit_pop_reg(ctx.emitter, "rsi");                          // the key stays in range: write the packed slot
+                ctx.load_value_to_reg(array, "rdi")?;
+                ctx.load_value_to_reg(value, "rdx")?;
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
+            stamp_scalar_array_write_result(ctx, value_ty);
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the packed container in rax
+
+            ctx.emitter.label(&promote_pop);
+            abi::emit_pop_reg(ctx.emitter, "rsi");                              // drop the saved key; the hash writer rematerializes it
+            ctx.emitter.instruction(&format!("jmp {promote}"));                 // promote the packed array before the hash write
+            ctx.emitter.label(&hash_pop);
+            abi::emit_pop_reg(ctx.emitter, "rsi");                              // drop the saved key; the hash writer rematerializes it
+            ctx.emitter.instruction(&format!("jmp {hash}"));                    // write through the already-promoted hash
+
+            ctx.emitter.label(&string_key);
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov r10, QWORD PTR [rdi - 8]");            // load the uniform heap-kind header word
+            ctx.emitter.instruction("and r10, 0xff");                           // isolate the runtime storage kind
+            ctx.emitter.instruction("cmp r10, 3");                              // kind 3 = already promoted to a hash
+            ctx.emitter.instruction(&format!("je {hash}"));                     // a promoted array writes through the hash writer
+
+            ctx.emitter.label(&promote);
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            abi::emit_push_reg(ctx.emitter, "rax");                             // keep the new hash while the packed owner is released
+            ctx.load_value_to_reg(array, "rax")?;
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // the hash replaces the packed array as this write's receiver
+            ctx.store_result_value(array)?;
+
+            ctx.emitter.label(&hash);
+            if nullable {
+                emit_promotable_nullable_hash_set_x86_64(ctx, array, index, value, false, probed_key)?;
+                ctx.emitter.instruction(&format!("jmp {done}"));                // join after the integer hash entry
+
+                ctx.emitter.label(&null_value);
+                emit_promote_unless_hash_x86_64(ctx, array)?;
+                emit_promotable_nullable_hash_set_x86_64(
+                    ctx, array, index, value, true, super::hashes::HashKeyNormalization::Php,
+                )?;
+            } else {
+                super::hashes::lower_hash_set_x86_64_with(
+                    ctx, array, index, value, value_ty, elem_ty, probed_key,
+                )?;
+            }
+        }
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Promotes a packed receiver to a hash (publishing it as `array`), or keeps an existing hash.
+fn emit_promote_unless_hash_aarch64(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    let keep = ctx.next_label("promotable_null_keep_hash");
+    ctx.load_value_to_reg(array, "x0")?;
+    ctx.emitter.instruction("ldr x9, [x0, #-8]");                               // load the uniform heap-kind header word
+    ctx.emitter.instruction("and x9, x9, #0xff");                               // isolate the runtime storage kind
+    ctx.emitter.instruction("cmp x9, #3");                                      // kind 3 = already promoted to a hash
+    ctx.emitter.instruction(&format!("b.eq {keep}"));                           // an existing hash takes the null entry directly
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+    abi::emit_push_reg(ctx.emitter, "x0");                                      // keep the new hash while the packed owner is released
+    ctx.load_value_to_reg(array, "x0")?;
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_pop_reg(ctx.emitter, "x0");                                       // the hash replaces the packed array as this write's receiver
+    ctx.store_result_value(array)?;
+    ctx.emitter.label(&keep);
+    Ok(())
+}
+
+/// Promotes a packed receiver to a hash (publishing it as `array`), or keeps an existing hash.
+fn emit_promote_unless_hash_x86_64(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    let keep = ctx.next_label("promotable_null_keep_hash");
+    ctx.load_value_to_reg(array, "rdi")?;
+    ctx.emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                    // load the uniform heap-kind header word
+    ctx.emitter.instruction("and r10, 0xff");                                   // isolate the runtime storage kind
+    ctx.emitter.instruction("cmp r10, 3");                                      // kind 3 = already promoted to a hash
+    ctx.emitter.instruction(&format!("je {keep}"));                             // an existing hash takes the null entry directly
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+    abi::emit_push_reg(ctx.emitter, "rax");                                     // keep the new hash while the packed owner is released
+    ctx.load_value_to_reg(array, "rax")?;
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_pop_reg(ctx.emitter, "rax");                                      // the hash replaces the packed array as this write's receiver
+    ctx.store_result_value(array)?;
+    ctx.emitter.label(&keep);
+    Ok(())
+}
+
+/// Writes a nullable integer into a promoted hash: an integer entry, or PHP's null entry.
+///
+/// `null_entry` selects the null payload (tag 8); otherwise the tagged scalar's integer payload is
+/// stored under the integer tag, which is what the typed reads of the promoted hash expect.
+/// `normalization` is `PhpAlreadyDiagnosed` when the caller's key probe already diagnosed a float.
+fn emit_promotable_nullable_hash_set_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+    value: ValueId,
+    null_entry: bool,
+    normalization: super::hashes::HashKeyNormalization,
+) -> Result<()> {
+    super::hashes::materialize_hash_key_aarch64_with(ctx, index, normalization)?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    if null_entry {
+        ctx.emitter.instruction("mov x3, xzr");                                 // a null entry carries no payload
+        abi::emit_load_int_immediate(ctx.emitter, "x5", runtime_value_tag(&PhpType::Void) as i64);
+    } else {
+        ctx.load_value_to_result(value)?;
+        ctx.emitter.instruction("mov x3, x0");                                  // the integer payload of the tagged scalar
+        abi::emit_load_int_immediate(ctx.emitter, "x5", runtime_value_tag(&PhpType::Int) as i64);
+    }
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+    ctx.load_value_to_reg(array, "x0")?;
+    ctx.emitter.instruction("mov x4, xzr");                                     // scalar entries leave the high payload word empty
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    Ok(())
+}
+
+/// Writes a nullable integer into a promoted hash: an integer entry, or PHP's null entry.
+///
+/// `null_entry` selects the null payload (tag 8); otherwise the tagged scalar's integer payload is
+/// stored under the integer tag, which is what the typed reads of the promoted hash expect.
+/// `normalization` is `PhpAlreadyDiagnosed` when the caller's key probe already diagnosed a float.
+fn emit_promotable_nullable_hash_set_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+    value: ValueId,
+    null_entry: bool,
+    normalization: super::hashes::HashKeyNormalization,
+) -> Result<()> {
+    super::hashes::materialize_hash_key_x86_64_with(ctx, index, normalization)?;
+    abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+    if null_entry {
+        ctx.emitter.instruction("xor ecx, ecx");                                // a null entry carries no payload
+        abi::emit_load_int_immediate(ctx.emitter, "r9", runtime_value_tag(&PhpType::Void) as i64);
+    } else {
+        ctx.load_value_to_result(value)?;
+        ctx.emitter.instruction("mov rcx, rax");                                // the integer payload of the tagged scalar
+        abi::emit_load_int_immediate(ctx.emitter, "r9", runtime_value_tag(&PhpType::Int) as i64);
+    }
+    abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+    ctx.load_value_to_reg(array, "rdi")?;
+    ctx.emitter.instruction("xor r8, r8");                                      // scalar entries leave the high payload word empty
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
     Ok(())
 }
 
@@ -1640,7 +1993,11 @@ pub(super) fn lower_array_push_value(
     if let Some(slot) = source_local {
         ctx.prepare_mutated_source_local_owner(slot, array)?;
     }
-    lower_runtime_polymorphic_array_push(ctx, array, value, &elem_ty, &stored_type)?;
+    // A promotable local keeps its typed scalars raw in a promoted hash, as its typed reads expect.
+    let raw_scalar_hash = inst.op == Op::ArrayPush
+        && inst.immediate == Some(Immediate::PromotableArray)
+        && promotable_scalar_element(&elem_ty);
+    lower_runtime_polymorphic_array_push(ctx, array, value, &elem_ty, &stored_type, raw_scalar_hash)?;
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
         ctx.store_mutated_container_writeback_to_local(slot, array)?;
@@ -1664,6 +2021,7 @@ fn lower_runtime_polymorphic_array_push(
     value: ValueId,
     elem_ty: &PhpType,
     stored_type: &PhpType,
+    raw_scalar_hash: bool,
 ) -> Result<()> {
     let hash = ctx.next_label("array_push_hash");
     let indexed = ctx.next_label("array_push_indexed");
@@ -1683,16 +2041,28 @@ fn lower_runtime_polymorphic_array_push(
             ctx.emitter.instruction(&format!("b {done}"));                      // join with the updated container pointer in x0
 
             ctx.emitter.label(&hash);
-            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the receiver across value boxing
-            prepare_boxed_mixed_value_for_container(ctx, value)?;
-            ctx.emitter.instruction("mov x1, x0");                              // pass the owned Mixed cell as the hash entry value
-            abi::emit_pop_reg(ctx.emitter, "x0");                               // recover the receiver without reloading a call-clobbered SSA register
-            ctx.emitter.instruction("mov x2, xzr");                             // boxed Mixed values use only the low payload word
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                "x3",
-                runtime_value_tag(&PhpType::Mixed) as i64,
-            );
+            if raw_scalar_hash {
+                abi::emit_push_reg(ctx.emitter, "x0");                          // preserve the receiver while the raw value is loaded
+                ctx.load_value_to_reg(value, "x1")?;
+                abi::emit_pop_reg(ctx.emitter, "x0");                           // recover the receiver for the hash append
+                ctx.emitter.instruction("mov x2, xzr");                         // one-word scalars use only the low payload word
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    "x3",
+                    runtime_value_tag(&elem_ty.codegen_repr()) as i64,
+                );
+            } else {
+                abi::emit_push_reg(ctx.emitter, "x0");                          // preserve the receiver across value boxing
+                prepare_boxed_mixed_value_for_container(ctx, value)?;
+                ctx.emitter.instruction("mov x1, x0");                          // pass the owned Mixed cell as the hash entry value
+                abi::emit_pop_reg(ctx.emitter, "x0");                           // recover the receiver without reloading a call-clobbered SSA register
+                ctx.emitter.instruction("mov x2, xzr");                         // boxed Mixed values use only the low payload word
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    "x3",
+                    runtime_value_tag(&PhpType::Mixed) as i64,
+                );
+            }
             abi::emit_call_label(ctx.emitter, "__rt_hash_append");
         }
         Arch::X86_64 => {
@@ -1710,16 +2080,28 @@ fn lower_runtime_polymorphic_array_push(
             ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the updated container pointer in rax
 
             ctx.emitter.label(&hash);
-            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the receiver across value boxing
-            prepare_boxed_mixed_value_for_container(ctx, value)?;
-            ctx.emitter.instruction("mov rsi, rax");                            // pass the owned Mixed cell as the hash entry value
-            abi::emit_pop_reg(ctx.emitter, "rdi");                              // recover the receiver without reloading a call-clobbered SSA register
-            ctx.emitter.instruction("xor edx, edx");                            // boxed Mixed values use only the low payload word
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                "rcx",
-                runtime_value_tag(&PhpType::Mixed) as i64,
-            );
+            if raw_scalar_hash {
+                abi::emit_push_reg(ctx.emitter, "rax");                         // preserve the receiver while the raw value is loaded
+                ctx.load_value_to_reg(value, "rsi")?;
+                abi::emit_pop_reg(ctx.emitter, "rdi");                          // pass the receiver as the hash append target
+                ctx.emitter.instruction("xor edx, edx");                        // one-word scalars use only the low payload word
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    "rcx",
+                    runtime_value_tag(&elem_ty.codegen_repr()) as i64,
+                );
+            } else {
+                abi::emit_push_reg(ctx.emitter, "rax");                         // preserve the receiver across value boxing
+                prepare_boxed_mixed_value_for_container(ctx, value)?;
+                ctx.emitter.instruction("mov rsi, rax");                        // pass the owned Mixed cell as the hash entry value
+                abi::emit_pop_reg(ctx.emitter, "rdi");                          // recover the receiver without reloading a call-clobbered SSA register
+                ctx.emitter.instruction("xor edx, edx");                        // boxed Mixed values use only the low payload word
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    "rcx",
+                    runtime_value_tag(&PhpType::Mixed) as i64,
+                );
+            }
             abi::emit_call_label(ctx.emitter, "__rt_hash_append");
         }
     }

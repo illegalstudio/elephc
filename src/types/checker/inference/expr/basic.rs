@@ -34,6 +34,7 @@ impl Checker {
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
             ExprKind::Variable(name) => {
                 let ty = self.variable_type_or_eval_dynamic(name, expr.span, env)?;
+                let ty = self.promotable_array_value_view(name, expr.span, ty);
                 self.record_local_value_read(name, expr.span, &ty, env);
                 Ok(ty)
             }

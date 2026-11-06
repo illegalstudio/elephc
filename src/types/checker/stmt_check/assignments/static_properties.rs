@@ -208,6 +208,7 @@ pub(super) fn check_static_property_array_assign(
                 checker,
                 &target.prop_ty,
                 target.property_has_declared_type,
+                false,
                 &format!("Static property {}::${}[]", target.class_name, property),
                 index,
                 &normalized_idx_ty,

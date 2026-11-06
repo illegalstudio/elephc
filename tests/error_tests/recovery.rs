@@ -2,7 +2,8 @@
 //! Integration or regression tests for diagnostic coverage of recovery, including parser recovery
 //! collects multiple errors, parser block recovery collects multiple errors, type checker recovery
 //! collects multiple errors, failed-assignment targets not cascading into `Undefined variable`, and
-//! function-body errors raised from a top-level call surviving the stale initial-error filter.
+//! function-body errors raised from a top-level call, a callback or a first-class callable
+//! surviving the stale initial-error filter.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -408,5 +409,228 @@ fn test_rewalk_refreshes_helper_return_built_from_late_static_property() {
     );
     expect_no_error(
         "<?php function a($n) { return b($n)[0]; } function b($n) { return C::$v; } class C { public static $v; } echo a(1); C::$v = [9];",
+    );
+}
+
+/// A body error of an untyped function is reported once when the program reaches the function
+/// only through a callback or a first-class callable, also after such a call failed on its
+/// arity before walking the body. The string-callback check discarded the
+/// failed walk's errors, and the other paths read the provisional signature that walk left
+/// instead of walking the body again in the final pass, so each program compiled a body that
+/// `f(1)` refuses.
+#[test]
+fn test_untyped_function_body_error_reached_through_callbacks_is_reported() {
+    let f = "function f($n) { $x = 5; return $x[0] + $n; }";
+    let c = "function c($a, $b) { $x = 5; return $x[0] + $a - $b; }";
+    let programs = [
+        format!("<?php {f} print_r(array_map('f', [1, 2]));"),
+        format!("<?php {f} print_r(array_filter([1, 2], 'f'));"),
+        format!("<?php {c} $a = [3, 1]; usort($a, 'c'); print_r($a);"),
+        format!("<?php {f} $h = f(...); var_dump($h(1));"),
+        format!("<?php {f} print_r(array_map(f(...), [1, 2]));"),
+        format!("<?php {f} var_dump(call_user_func('f', 1));"),
+        format!("<?php {f} var_dump(call_user_func_array('f', [1]));"),
+        format!("<?php {f} $a = [1]; var_dump(call_user_func_array('f', $a));"),
+        format!("<?php {f} $a = ['n' => 1]; var_dump(call_user_func_array('f', $a));"),
+        format!("<?php {f} $a = [0 => 1]; var_dump(call_user_func_array('f', $a));"),
+        "<?php function f(&$n) { $x = 5; return $x[0] + $n; } $a = [1]; \
+            var_dump(call_user_func_array('f', $a));"
+            .to_string(),
+        "<?php function f($n, &$r) { $x = 5; return $x[0] + $n; } $a = [[1], 2]; \
+            var_dump(call_user_func_array('f', $a));"
+            .to_string(),
+        "<?php function f($n, $m) { $x = 5; return $x[0] + $n; } $a = [1, 'x']; \
+            var_dump(call_user_func_array('f', $a));"
+            .to_string(),
+        format!("<?php {f} $a = []; var_dump(call_user_func_array('f', $a));"),
+        format!("<?php {f} $a = [1]; var_dump(call_user_func_array(f(...), $a));"),
+        format!("<?php {f} $h = f(...); $a = [1]; var_dump(call_user_func_array($h, $a));"),
+        format!(
+            "<?php {f} function arr(): array {{ return [1]; }} \
+             var_dump(call_user_func_array('f', arr()));"
+        ),
+        format!(
+            "<?php {f} function box(): mixed {{ return [1]; }} \
+             var_dump(call_user_func_array('f', box()));"
+        ),
+        format!(
+            "<?php {f} function arr(): array {{ return [1]; }} $a = arr(); \
+             var_dump(call_user_func('f', ...$a));"
+        ),
+        format!(
+            "<?php {f} function arr(): array {{ return [1]; }} $a = arr(); \
+             var_dump(call_user_func(f(...), ...$a));"
+        ),
+        format!(
+            "<?php {f} function arr(): array {{ return [1]; }} $a = arr(); $h = f(...); \
+             var_dump(call_user_func($h, ...$a));"
+        ),
+        format!(
+            "<?php {f} function src(): array<int>|array<string, int> {{ return [1]; }} \
+             $a = src(); var_dump(call_user_func('f', ...$a));"
+        ),
+        format!("<?php {f} var_dump(call_user_func('f', 1, 2)); echo f(1);"),
+        format!("<?php {f} $h = f(...); var_dump($h(1, 2)); echo f(1);"),
+        "<?php function id<T>(T $x) { $a = 5; return $a[0]; } \
+            print_r(array_map('id', [1, 2])); echo id(1);"
+            .to_string(),
+        format!("<?php {f} function w($n) {{ return array_map('f', [$n]); }} print_r(w(1));"),
+    ];
+    for program in &programs {
+        let messages = checker_error_messages(program);
+        assert_eq!(
+            messages.iter().filter(|message| *message == "Cannot index non-array").count(),
+            1,
+            "{}: {:?}",
+            program,
+            messages
+        );
+    }
+}
+
+/// A callback whose first walk failed only on a helper's stale return is accepted: the helper
+/// returns a static property that a later top-level statement assigns an array, and the
+/// final-pass walk at the callback refreshes the helper before reading its return.
+#[test]
+fn test_callback_rewalk_refreshes_helper_return_built_from_late_static_property() {
+    let helpers = "function a($n) { return b($n)[0] + $n; } \
+        function b($n) { return C::$v; } class C { public static $v; }";
+    for call in [
+        "print_r(array_map('a', [1]));",
+        "print_r(array_map(a(...), [1]));",
+        "var_dump(call_user_func('a', 1));",
+        "var_dump(call_user_func_array('a', [1]));",
+        "$h = a(...); var_dump($h(1));",
+        "$xs = [1]; var_dump(call_user_func_array('a', $xs));",
+        "$xs = ['n' => 1]; var_dump(call_user_func_array('a', $xs));",
+        "$xs = [1]; var_dump(call_user_func_array(a(...), $xs));",
+        "$h = a(...); $xs = [1]; var_dump(call_user_func_array($h, $xs));",
+        "function arr(): array { return [1]; } var_dump(call_user_func_array('a', arr()));",
+        "function arr(): array { return [1]; } $xs = arr(); var_dump(call_user_func('a', ...$xs));",
+        "function arr(): array { return [1]; } $xs = arr(); \
+         var_dump(call_user_func(a(...), ...$xs));",
+        "function src(): array<int>|array<string, int> { return [1]; } $xs = src(); \
+         var_dump(call_user_func('a', ...$xs));",
+    ] {
+        expect_no_error(&format!("<?php {helpers} {call} C::$v = [9];"));
+    }
+    expect_no_error(
+        "<?php function f(&$n) { return C::$v[0] + $n; } class C { public static $v; } \
+         $a = [1]; var_dump(call_user_func_array('f', $a)); C::$v = [9];",
+    );
+}
+
+/// A call reached under the eval barrier does not consume the re-walk of a failed untyped body:
+/// that call resolves to `mixed` without walking the body, so the body is walked again at the
+/// next call outside the barrier and its error is reported once.
+#[test]
+fn test_failed_body_rewalk_survives_calls_under_eval_barrier() {
+    for call in ["array_map('f', [1]);", "call_user_func('f', 1);", "f(1);"] {
+        let program = format!(
+            "<?php function f($n) {{ $x = 5; return $x[0] + $n; }} \
+             function outer() {{ $bad = C::$v[0]; eval(\"\"); {call} return $bad; }} \
+             class C {{ public static $v; }} echo outer(); C::$v = [9]; echo f(1);"
+        );
+        let messages = checker_error_messages(&program);
+        assert_eq!(
+            messages.iter().filter(|message| *message == "Cannot index non-array").count(),
+            1,
+            "{}: {:?}",
+            program,
+            messages
+        );
+    }
+}
+
+/// A variable argument list does not decide whether an untyped defaulted parameter holds its
+/// default or a list value, so a failed body with one is not re-walked over the list and a
+/// valid body stays accepted: the re-walk bound `$m = [1]` to the list's `int` and reported
+/// `$m[0]` once the stale static property error had cleared.
+#[test]
+fn test_variable_list_rewalk_skips_untyped_defaulted_parameters() {
+    for program in [
+        "<?php function f(&$r, $m = [1]) { return C::$v[0] + $m[0]; } \
+         class C { public static $v; } $a = [1]; \
+         var_dump(call_user_func_array('f', $a)); C::$v = [9];",
+        "<?php function f($m = [1]) { return C::$v[0] + $m[0]; } \
+         class C { public static $v; } \
+         function src(): array<int>|array<float> { return [1]; } $a = src(); \
+         var_dump(call_user_func('f', ...$a)); C::$v = [9];",
+        "<?php function f($n = 0, &$r) { return $n[0]; } $a = [[1], 2]; \
+         var_dump(call_user_func_array('f', $a));",
+    ] {
+        expect_no_error(program);
+    }
+}
+
+/// `call_user_func_array` over a variable list binds every untyped by-value parameter, the
+/// variadic tail included, to the list's value type, so a body that indexes it stays accepted
+/// when the re-walk runs from it: beside a by-reference parameter (whose first walk bound the
+/// by-value one to `int`), for a `mixed` list, for an empty list, and for a variadic tail that
+/// a spread of the list would have typed `array<int>`; a `call_user_func` spread of a union of
+/// array shapes, which the spread binder refuses, is accepted as well.
+#[test]
+fn test_call_user_func_array_variable_list_rewalk_accepts_valid_body() {
+    for program in [
+        "<?php function f($n) { return $n[0]; } $a = [[1], [2]]; \
+         var_dump(call_user_func_array('f', $a));",
+        "<?php function f($n, &$r) { return $n[0]; } $a = [[1], [2]]; \
+         var_dump(call_user_func_array('f', $a));",
+        "<?php function f($n) { return $n[0]; } $a = [1, 'x']; \
+         var_dump(call_user_func_array('f', $a));",
+        "<?php function f($n) { return $n[0]; } $a = []; \
+         var_dump(call_user_func_array('f', $a));",
+        "<?php function f($n, ...$rest) { return $rest[0][0]; } $a = [[1], [2]]; \
+         var_dump(call_user_func_array('f', $a));",
+        "<?php function f(&$r, ...$rest) { return $rest[0][0]; } $a = [0, [1]]; \
+         var_dump(call_user_func_array('f', $a));",
+        "<?php function f($n, &$r, ...$rest) { return $n[0]; } $a = [[1], [2], [3]]; \
+         var_dump(call_user_func_array('f', $a));",
+        "<?php function f($n) { return $n + 1; } \
+         function src(): array<int>|array<string, int> { return [1]; } $a = src(); \
+         var_dump(call_user_func('f', ...$a));",
+        "<?php function f($n) { return $n + 1; } \
+         function src(): array<int>|array<float> { return [1]; } $a = src(); \
+         var_dump(call_user_func('f', ...$a));",
+        "<?php function f($n) { return $n[0]; } \
+         function src(): array<int>|array<string> { return [1]; } $a = src(); \
+         var_dump(call_user_func('f', ...$a));",
+    ] {
+        expect_no_error(program);
+    }
+}
+
+/// A `call_user_func` spread of a union of array shapes whose value types differ binds the
+/// untyped parameter to the union of those value types, as a packed `array<int|float>` does,
+/// so indexing an `int|float` parameter is reported once. Joining the differing value types
+/// to `mixed` accepted the body, and the final pass then dropped the first walk's error.
+#[test]
+fn test_union_spread_rewalk_binds_union_of_differing_value_types() {
+    let f = "function f($n) { return $n[0]; } \
+        function src(): array<int>|array<float> { return [1]; } $a = src();";
+    for call in [
+        "var_dump(call_user_func('f', ...$a));",
+        "var_dump(call_user_func(f(...), ...$a));",
+        "$h = f(...); var_dump(call_user_func($h, ...$a));",
+    ] {
+        let program = format!("<?php {f} {call}");
+        let messages = checker_error_messages(&program);
+        assert_eq!(
+            messages,
+            vec!["Cannot index non-array".to_string()],
+            "{}",
+            program
+        );
+    }
+}
+
+/// A variadic callback whose first walk failed only on a helper's stale return is accepted: the
+/// failed body is walked again, refreshing the helper, before the descriptor promotion of its
+/// variadic collector re-resolves the signature from the provisional one.
+#[test]
+fn test_variadic_callback_rewalk_runs_before_descriptor_promotion() {
+    expect_no_error(
+        "<?php function f(...$n) { return g()[0]; } function g() { return C::$v; } \
+         class C { public static $v; } var_dump(call_user_func('f', 1)); C::$v = [9];",
     );
 }

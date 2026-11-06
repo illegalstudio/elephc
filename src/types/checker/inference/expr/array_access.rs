@@ -19,7 +19,16 @@ impl Checker {
         &mut self, expr: &Expr, env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let ExprKind::ArrayAccess { array, index } = &expr.kind else { unreachable!() };
-        let arr_ty = self.infer_type(array, env)?;
+        // The receiver of an element read is not a whole-value read: a promotable local's
+        // element ops dispatch on its heap kind, so its base keeps the typed `array<int>` view.
+        let arr_ty = match &array.kind {
+            ExprKind::Variable(name) if self.is_promotable_array_local(name) => {
+                let ty = self.variable_type_or_eval_dynamic(name, array.span, env)?;
+                self.record_local_value_read(name, array.span, &ty, env);
+                ty
+            }
+            _ => self.infer_type(array, env)?,
+        };
         let idx_ty = self.infer_type(index, env)?;
         self.infer_array_element_type(array, index, expr, arr_ty, idx_ty, false)
     }
@@ -58,6 +67,15 @@ impl Checker {
             }
             PhpType::Array(elem_ty) => {
                 if normalized_idx_ty != PhpType::Int {
+                    // A candidate `array<int>` local read under a boxed key reads as `?int`,
+                    // the unboxed nullable integer its read already produces, instead of `mixed`:
+                    // writing that value back keeps raw integer slots (a missed key still reads
+                    // and stores PHP's `null`), where `mixed` would box every slot.
+                    if let ExprKind::Variable(name) = &array.kind {
+                        if self.promotable_array_element_read(name, elem_ty, &idx_ty) {
+                            return Ok(PhpType::Union(vec![PhpType::Int, PhpType::Void]));
+                        }
+                    }
                     // PHP allows string keys on indexed arrays: the array
                     // promotes to hash at runtime. Return the element type
                     // widened to Mixed so ?? / isset / reads type-check.
@@ -66,6 +84,15 @@ impl Checker {
                     // Never is the element type of an empty indexed array, not a non-returning
                     // read. Nested write-back may still autovivify that selected slot.
                     Ok(PhpType::Void)
+                } else if matches!(&array.kind, ExprKind::Variable(name)
+                    if self.is_promotable_array_local(name)
+                        && super::super::super::promotable_arrays::promotable_element(elem_ty))
+                {
+                    // Once a promotable local may hold PHP's `null` (a missed read stored back,
+                    // or any key that skipped), its integer-key reads are `?int` too: the read
+                    // already produces that representation, and an `int` view would turn a
+                    // stored `null` into zero the next time the value is written back.
+                    Ok(PhpType::Union(vec![PhpType::Int, PhpType::Void]))
                 } else {
                     Ok(*elem_ty.clone())
                 }
