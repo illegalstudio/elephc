@@ -66,16 +66,11 @@ pub(in crate::interpreter) fn eval_ctype_named_result(
     values.bool_value(matches)
 }
 
-/// Checks one byte against the selected PHP ASCII character class.
+/// Checks one byte against the class of the selected predicate, on this platform's libc table.
 pub(in crate::interpreter) fn eval_ctype_byte_matches(
     name: &str,
     byte: u8,
 ) -> Result<bool, EvalStatus> {
-    match name {
-        "ctype_alpha" => Ok(byte.is_ascii_alphabetic()),
-        "ctype_digit" => Ok(byte.is_ascii_digit()),
-        "ctype_alnum" => Ok(byte.is_ascii_alphanumeric()),
-        "ctype_space" => Ok(matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')),
-        _ => Err(EvalStatus::UnsupportedConstruct),
-    }
+    let class = elephc_builtin_contract::ctype_class_of(name).ok_or(EvalStatus::UnsupportedConstruct)?;
+    Ok(elephc_builtin_contract::ctype_class_bits(byte, cfg!(target_os = "macos")) & class != 0)
 }

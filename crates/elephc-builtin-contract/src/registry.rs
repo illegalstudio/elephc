@@ -173,7 +173,7 @@ mod tests {
         // the password/array/preg/sodium/response-header surfaces, the `--web` handler prelude
         // declarations, the two internal last-error readers `__elephc_last_error_int` / `_str`, ...),
         // measured on the merged catalogs.
-        assert_eq!(contracts().len(), 1324 + curl_surface);
+        assert_eq!(contracts().len(), 1335 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

@@ -1520,3 +1520,46 @@ echo strip_tags("a\0b<c>");
         "Hello World|plain|ab|ab|hello|1 < 2|<p>Hello World</p>|<BR/>hi</br>|<p class=\"x\">Hi</p>|<p>Hello World</p>|plain|x|y|z|<p>A</p>B|ab"
     );
 }
+
+/// Verifies every `ctype_*` predicate answers per byte what php answers, compiled and through eval.
+///
+/// php asks libc, and darwin classifies bytes above 0x7f as Latin-1 where glibc classifies none,
+/// so the expected population depends on the host: these are php 8.5.10's numbers on each.
+#[test]
+fn test_ctype_byte_classes_match_php() {
+    let expected = if cfg!(target_os = "macos") {
+        "alnum 127 alpha 117 cntrl 66 digit 10 graph 188 lower 59 print 190 punct 39 space 7 upper 56 xdigit 22 "
+    } else {
+        "alnum 62 alpha 52 cntrl 33 digit 10 graph 94 lower 26 print 95 punct 32 space 6 upper 26 xdigit 22 "
+    };
+    let body = r#"
+$checks = ['alnum' => fn($c) => ctype_alnum($c), 'alpha' => fn($c) => ctype_alpha($c), 'cntrl' => fn($c) => ctype_cntrl($c),
+    'digit' => fn($c) => ctype_digit($c), 'graph' => fn($c) => ctype_graph($c), 'lower' => fn($c) => ctype_lower($c),
+    'print' => fn($c) => ctype_print($c), 'punct' => fn($c) => ctype_punct($c), 'space' => fn($c) => ctype_space($c),
+    'upper' => fn($c) => ctype_upper($c), 'xdigit' => fn($c) => ctype_xdigit($c)];
+foreach ($checks as $n => $f) {
+    $count = 0;
+    for ($i = 0; $i < 256; $i++) {
+        if ($f(chr($i))) {
+            $count++;
+        }
+    }
+    echo $n, ' ', $count, ' ';
+}
+"#;
+    assert_eq!(compile_and_run(&format!("<?php {body}")), expected);
+    assert_eq!(compile_and_run(&format!("<?php eval(<<<'CODE'\n{body}\nCODE);")), expected);
+}
+
+/// Verifies direct calls read the same table, and that an empty string fails every predicate.
+#[test]
+fn test_ctype_direct_calls() {
+    let out = compile_and_run(
+        r#"<?php
+echo (int) ctype_upper('AB'), (int) ctype_upper('Ab'), (int) ctype_lower('ab'), (int) ctype_lower('aB');
+echo (int) ctype_punct('!?'), (int) ctype_punct('!a'), (int) ctype_xdigit('fF0'), (int) ctype_xdigit('g');
+echo (int) ctype_cntrl("\n\t"), (int) ctype_cntrl('a'), (int) ctype_graph('a!'), (int) ctype_graph('a b');
+echo (int) ctype_print('a b'), (int) ctype_print("a\n"), (int) ctype_upper(''), (int) ctype_print('');"#,
+    );
+    assert_eq!(out, "1010101010101000");
+}

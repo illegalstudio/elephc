@@ -15,6 +15,7 @@
 mod aot_profile;
 mod callback_parameters;
 mod class_spec;
+mod ctype_classes;
 mod constant_spec;
 mod catalog_classes;
 mod catalog_constants;
@@ -62,6 +63,7 @@ pub use eval_profile::{
 };
 pub use extensions::{complete_surface_modules, module_php_functions, php_registration_rank};
 pub use class_spec::{ClassContract, ClassKind, ClassRoute};
+pub use ctype_classes::{ctype_class_bits, ctype_class_of};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;
 pub use core_functions::CORE_FUNCTION_NAMES;

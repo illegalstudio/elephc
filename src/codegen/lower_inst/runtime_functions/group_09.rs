@@ -62,6 +62,27 @@ pub(super) fn lower(
         RuntimeFnId::CtypeDigit => Some({
             crate::codegen::lower_inst::builtins::ctype::lower_ctype_digit(ctx, inst)
         }),
+        RuntimeFnId::CtypeUpper => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_upper(ctx, inst)
+        }),
+        RuntimeFnId::CtypeLower => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_lower(ctx, inst)
+        }),
+        RuntimeFnId::CtypePunct => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_punct(ctx, inst)
+        }),
+        RuntimeFnId::CtypeXdigit => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_xdigit(ctx, inst)
+        }),
+        RuntimeFnId::CtypeCntrl => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_cntrl(ctx, inst)
+        }),
+        RuntimeFnId::CtypeGraph => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_graph(ctx, inst)
+        }),
+        RuntimeFnId::CtypePrint => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_print(ctx, inst)
+        }),
         RuntimeFnId::CtypeSpace => Some({
             crate::codegen::lower_inst::builtins::ctype::lower_ctype_space(ctx, inst)
         }),

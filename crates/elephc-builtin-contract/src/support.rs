@@ -477,7 +477,7 @@ mod tests {
         // Main's count plus the Symfony branch's contracts (the three response-header runtime
         // builtins, the sodium/password/array/preg prelude surfaces, and the eleven array names no
         // longer eval-pending), measured on the merged catalogs.
-        assert_eq!(eval_registry, 838 + curl_surface);
+        assert_eq!(eval_registry, 845 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -569,7 +569,7 @@ mod tests {
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters.
         // `serialize` / `unserialize` are among them (see `eval_execution`).
-        assert_eq!(interpreter_adapter, 742 + curl_surface);
+        assert_eq!(interpreter_adapter, 749 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls.
