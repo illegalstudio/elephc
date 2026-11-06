@@ -147,4 +147,5 @@ mod fileinfo_reflection;
 mod fileinfo_validation;
 mod fileinfo_stream_diagnostics;
 mod fileinfo_wrapper_stat;
+mod ctype_php_src;
 mod fileinfo_stream_magic;

@@ -103,6 +103,7 @@ Proper type system for PHP compatibility.
 - [x] `base64_encode()`, `base64_decode()`
 - [x] `bin2hex()`, `hex2bin()`
 - [x] `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`
+- [x] Full `ext/ctype` surface — `ctype_cntrl()`, `ctype_graph()`, `ctype_lower()`, `ctype_print()`, `ctype_punct()`, `ctype_upper()`, `ctype_xdigit()` plus php-src 8.5 mixed-argument semantics: byte-class strings, the deprecated integer window/wrap/allow_digits/allow_minus fallback, runtime-type deprecation diagnostics with caller location, first-class and dynamic callables, real libc `LC_CTYPE` classification through `setlocale()`, and the migrated `ext/ctype` PHPT corpus (49/49)
 
 ## v0.5.x — I/O and file system (done)
 

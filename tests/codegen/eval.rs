@@ -9347,11 +9347,11 @@ Error:Object of class Closure could not be converted to string|"
     );
     assert_eq!(
         output.stderr,
-        "Warning: Array to string conversion\n\
-Warning: Object of class EvalBuiltinSprintfPlain could not be converted to int\n\
-Warning: Object of class EvalBuiltinSprintfPlain could not be converted to float\n\
-Warning: Object of class Closure could not be converted to int\n\
-Warning: Object of class Closure could not be converted to float\n"
+        "\nWarning: Array to string conversion\n\
+\nWarning: Object of class EvalBuiltinSprintfPlain could not be converted to int\n\
+\nWarning: Object of class EvalBuiltinSprintfPlain could not be converted to float\n\
+\nWarning: Object of class Closure could not be converted to int\n\
+\nWarning: Object of class Closure could not be converted to float\n"
     );
 }
 
@@ -9369,8 +9369,8 @@ echo sprintf("%d|%f", $box, $box);
     assert_eq!(output.stdout, "1|1.000000");
     assert_eq!(
         output.stderr,
-        "Warning: Object of class EvalSprintfNumericWarning could not be converted to int\n\
-Warning: Object of class EvalSprintfNumericWarning could not be converted to float\n"
+        "\nWarning: Object of class EvalSprintfNumericWarning could not be converted to int\n\
+\nWarning: Object of class EvalSprintfNumericWarning could not be converted to float\n"
     );
 }
 

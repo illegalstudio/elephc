@@ -11,13 +11,55 @@
 /* Private compile flag. pcre2posix has no PCRE2_EXTENDED bit (REG_EXTENDED is 0). */
 #define ELEPHC_PCRE2_EXTENDED 0x2000
 
+/* Compiles one pattern with character tables for the current libc locale.
+ *
+ * PHP's pcre extension does not change LC_CTYPE; PCRE2 receives the locale's ctype
+ * tables explicitly. pcre2_code_copy_with_tables gives the compiled code its own copy
+ * so the temporary table block can be freed before returning. */
+static pcre2_code *elephc_pcre2_compile_locale(
+    const uint8_t *pattern,
+    PCRE2_SIZE length,
+    uint32_t options,
+    int *errorcode,
+    PCRE2_SIZE *erroffset)
+{
+    const uint8_t *tables = pcre2_maketables(NULL);
+    pcre2_compile_context *context = pcre2_compile_context_create(NULL);
+    pcre2_code *code;
+
+    if (context != NULL && tables != NULL) {
+        pcre2_set_character_tables(context, tables);
+    }
+    code = pcre2_compile((PCRE2_SPTR)pattern, length, options,
+        errorcode, erroffset, context);
+    if (context != NULL) {
+        pcre2_compile_context_free(context);
+    }
+    if (code != NULL && tables != NULL) {
+        pcre2_code *owned = pcre2_code_copy_with_tables(code);
+        if (owned == NULL) {
+            pcre2_code_free(code);
+            code = NULL;
+            *errorcode = PCRE2_ERROR_NOMEMORY;
+        } else {
+            pcre2_code_free(code);
+            code = owned;
+        }
+    }
+    if (tables != NULL) {
+        pcre2_maketables_free(NULL, tables);
+    }
+    return code;
+}
+
 /* Compiles with PCRE2_EXTENDED while filling the same POSIX regex_t pcre2_regcomp uses.
  * An option group inserted before the pattern would hide (*UTF), (*ANYCRLF), (*CRLF),
  * and (*LIMIT_...) verbs, which PCRE2 accepts only at the very start. PHP passes /x
  * as a compile option. */
-static int elephc_pcre2_compile_extended(regex_t *preg, const char *pattern, int cflags)
+static int elephc_pcre2_compile_with_options(
+    regex_t *preg, const char *pattern, int cflags, uint32_t extra_options)
 {
-    uint32_t options = PCRE2_EXTENDED;
+    uint32_t options = extra_options;
     uint32_t capture_count = 0;
     int errorcode = 0;
     PCRE2_SIZE erroffset = 0;
@@ -34,8 +76,8 @@ static int elephc_pcre2_compile_extended(regex_t *preg, const char *pattern, int
     preg->re_cflags = cflags;
     preg->re_pcre2_code = NULL;
     preg->re_match_data = NULL;
-    code = pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED, options,
-        &errorcode, &erroffset, NULL);
+    code = elephc_pcre2_compile_locale((const uint8_t *)pattern,
+        PCRE2_ZERO_TERMINATED, options, &errorcode, &erroffset);
     preg->re_erroffset = erroffset;
     if (code == NULL) {
         (void)errorcode;
@@ -56,6 +98,16 @@ static int elephc_pcre2_compile_extended(regex_t *preg, const char *pattern, int
     }
     preg->re_erroffset = (size_t)(-1);
     return 0;
+}
+
+static int elephc_pcre2_compile_extended(regex_t *preg, const char *pattern, int cflags)
+{
+    return elephc_pcre2_compile_with_options(preg, pattern, cflags, PCRE2_EXTENDED);
+}
+
+static int elephc_pcre2_compile_posix(regex_t *preg, const char *pattern, int cflags)
+{
+    return elephc_pcre2_compile_with_options(preg, pattern, cflags, 0);
 }
 
 typedef struct elephc_pcre2_v1_handle {
@@ -90,7 +142,7 @@ int32_t elephc_pcre2_v1_compile(
         cflags &= ~(uint32_t)ELEPHC_PCRE2_EXTENDED;
         result = elephc_pcre2_compile_extended(&handle->regex, pattern_z, (int)cflags);
     } else {
-        result = pcre2_regcomp(&handle->regex, pattern_z, (int)cflags);
+        result = elephc_pcre2_compile_posix(&handle->regex, pattern_z, (int)cflags);
     }
     if (result != 0) {
         free(handle);
@@ -259,8 +311,9 @@ int32_t elephc_pcre2_v1_mime_compile(
         || (pattern == NULL && length != 0) || length > PTRDIFF_MAX) {
         return PCRE2_ERROR_BADDATA;
     }
-    code = pcre2_compile(pattern == NULL ? (const uint8_t *)"" : pattern,
-        (PCRE2_SIZE)length, PCRE2_CASELESS, &error, &offset, NULL);
+    code = elephc_pcre2_compile_locale(
+        pattern == NULL ? (const uint8_t *)"" : pattern,
+        (PCRE2_SIZE)length, PCRE2_CASELESS, &error, &offset);
     if (code == NULL) {
         *error_offset_out = (uint64_t)offset;
         return (int32_t)error;

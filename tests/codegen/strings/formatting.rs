@@ -464,11 +464,11 @@ echo @sprintf("%s|%d|%f", [1], $object, $closure);
     assert_eq!(output.stdout, "Array|1|1.000000|1|1.000000|Array|1|1.000000");
     assert_eq!(
         output.stderr,
-        "Warning: Array to string conversion\n\
-Warning: Object of class SprintfNumericWarning could not be converted to int\n\
-Warning: Object of class SprintfNumericWarning could not be converted to float\n\
-Warning: Object of class Closure could not be converted to int\n\
-Warning: Object of class Closure could not be converted to float\n"
+        "\nWarning: Array to string conversion\n\
+\nWarning: Object of class SprintfNumericWarning could not be converted to int\n\
+\nWarning: Object of class SprintfNumericWarning could not be converted to float\n\
+\nWarning: Object of class Closure could not be converted to int\n\
+\nWarning: Object of class Closure could not be converted to float\n"
     );
 }
 

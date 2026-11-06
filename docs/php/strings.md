@@ -349,10 +349,32 @@ routing and web transport verification remain open.
 | `gzuncompress()` | `gzuncompress(string $data): string\|false` | Decompress a `gzcompress()`-produced string; `false` on a zlib error |
 | `gzdeflate()` | `gzdeflate(string $data, int $level = -1): string` | Compress a string into raw DEFLATE — no zlib header or trailer; `$level` is `-1` (default) or `0`–`9` |
 | `gzinflate()` | `gzinflate(string $data): string\|false` | Decompress a raw DEFLATE string from `gzdeflate()` or the `zlib.deflate` stream filter; `false` on a zlib error |
-| `ctype_alpha()` | `ctype_alpha($str): bool` | All chars are A-Z/a-z |
-| `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
-| `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
-| `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
+| `ctype_alnum()` | `ctype_alnum(mixed $text): bool` | All chars are alphanumeric |
+| `ctype_alpha()` | `ctype_alpha(mixed $text): bool` | All chars are A-Z/a-z |
+| `ctype_cntrl()` | `ctype_cntrl(mixed $text): bool` | All chars are control characters |
+| `ctype_digit()` | `ctype_digit(mixed $text): bool` | All chars are 0-9 |
+| `ctype_graph()` | `ctype_graph(mixed $text): bool` | All chars are printable and not space |
+| `ctype_lower()` | `ctype_lower(mixed $text): bool` | All chars are a-z |
+| `ctype_print()` | `ctype_print(mixed $text): bool` | All chars are printable |
+| `ctype_punct()` | `ctype_punct(mixed $text): bool` | All chars are punctuation |
+| `ctype_space()` | `ctype_space(mixed $text): bool` | All chars are whitespace |
+| `ctype_upper()` | `ctype_upper(mixed $text): bool` | All chars are A-Z |
+| `ctype_xdigit()` | `ctype_xdigit(mixed $text): bool` | All chars are hexadecimal digits |
+
+The `ctype_*` functions follow php-src 8.5 exactly: the empty string is always
+`false`, every byte must satisfy the class, and a non-string argument emits
+`E_DEPRECATED` naming its runtime type. The deprecated integer fallback accepts
+`0`–`255` as a character code, wraps `-128`–`-1` into `128`–`255`, answers
+`true` for larger non-negative values only on the classes that allow digits
+(`ctype_alnum`, `ctype_digit`, `ctype_graph`, `ctype_print`, `ctype_xdigit`),
+and answers `true` for values below `-128` only on `ctype_graph` and
+`ctype_print`. Other types answer `false`.
+
+Byte classification is delegated to libc's `is*` predicates under the active
+`LC_CTYPE`, and `setlocale()` is a real libc call. Non-ASCII behavior therefore
+matches the host locale exactly, including `de_DE`'s Latin-1 class table.
+`preg_*` installs PCRE2 character tables built with `pcre2_maketables()` for the
+same locale instead of forcing `C.UTF-8`.
 
 `trim()`, `ltrim()`, and `rtrim()` expand PHP's `start..end` character ranges
 (for example `"a..z"`) using the same rules as `php_charmask()`: only an

@@ -573,6 +573,14 @@ impl Platform {
         }
     }
 
+    /// Returns the value of `LC_ALL` for `setlocale()`.
+    pub fn lc_all(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0,
+            Platform::Linux => 6,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
 }
 
 impl Arch {

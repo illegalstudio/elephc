@@ -522,8 +522,15 @@ pub enum RuntimeFnId {
     Crc32,
     CtypeAlnum,
     CtypeAlpha,
+    CtypeCntrl,
     CtypeDigit,
+    CtypeGraph,
+    CtypeLower,
+    CtypePrint,
+    CtypePunct,
     CtypeSpace,
+    CtypeUpper,
+    CtypeXdigit,
     /// Allocates a libcurl easy handle and boxes it as a resource-kind-6 Mixed cell.
     CurlEasyInit,
     /// Applies an integer-valued `curl_setopt()` option to an easy handle.
@@ -872,6 +879,8 @@ pub enum RuntimeFnId {
     ElephcGmmktimeRaw,
     ElephcMktimeRaw,
     ElephcStrtotimeRaw,
+    ElephcSetlocaleQuery,
+    ElephcSetlocaleSet,
     Checkdate,
     ClassAttributeArgs,
     ClassAttributeNames,
@@ -1509,10 +1518,6 @@ impl RuntimeFnId {
             RuntimeFnId::Cos |
             RuntimeFnId::Cosh |
             RuntimeFnId::Crc32 |
-            RuntimeFnId::CtypeAlnum |
-            RuntimeFnId::CtypeAlpha |
-            RuntimeFnId::CtypeDigit |
-            RuntimeFnId::CtypeSpace |
             RuntimeFnId::Bindec |
             RuntimeFnId::Decbin |
             RuntimeFnId::Dechex |
@@ -1569,6 +1574,21 @@ impl RuntimeFnId {
             RuntimeFnId::Tanh |
             RuntimeFnId::Ucfirst |
             RuntimeFnId::Ucwords => crate::ir::Effects::empty(),
+            // A ctype call on a non-string argument emits the php-src 8.1+ deprecation
+            // naming that argument's runtime type, which can enter a user error handler and
+            // throw. `prepare_call_site` therefore has to publish the caller location before
+            // the call; the pure string path still performs no observable work.
+            RuntimeFnId::CtypeAlnum
+            | RuntimeFnId::CtypeAlpha
+            | RuntimeFnId::CtypeCntrl
+            | RuntimeFnId::CtypeDigit
+            | RuntimeFnId::CtypeGraph
+            | RuntimeFnId::CtypeLower
+            | RuntimeFnId::CtypePrint
+            | RuntimeFnId::CtypePunct
+            | RuntimeFnId::CtypeSpace
+            | RuntimeFnId::CtypeUpper
+            | RuntimeFnId::CtypeXdigit => crate::ir::Effects::MAY_WARN,
             // These raise reference PHP's catchable `ValueError` for out-of-range
             // arguments (`array_chunk()` non-positive length, `clamp()` inverted bounds,
             // `array_fill()` negative count, `array_pad()` oversized length, `explode()`
@@ -2463,6 +2483,17 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::CloneWith
                 | RuntimeFnId::Count
+                | RuntimeFnId::CtypeAlnum
+                | RuntimeFnId::CtypeAlpha
+                | RuntimeFnId::CtypeCntrl
+                | RuntimeFnId::CtypeDigit
+                | RuntimeFnId::CtypeGraph
+                | RuntimeFnId::CtypeLower
+                | RuntimeFnId::CtypePrint
+                | RuntimeFnId::CtypePunct
+                | RuntimeFnId::CtypeSpace
+                | RuntimeFnId::CtypeUpper
+                | RuntimeFnId::CtypeXdigit
                 | RuntimeFnId::Getmypid
                 | RuntimeFnId::MemoryGetAllocations
                 | RuntimeFnId::MemoryGetFrees
@@ -2472,6 +2503,24 @@ impl RuntimeFnId {
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
+        )
+    }
+
+    /// Returns whether this runtime target is one of the `ctype_*` byte predicates.
+    pub const fn is_ctype(self) -> bool {
+        matches!(
+            self,
+            Self::CtypeAlnum
+                | Self::CtypeAlpha
+                | Self::CtypeCntrl
+                | Self::CtypeDigit
+                | Self::CtypeGraph
+                | Self::CtypeLower
+                | Self::CtypePrint
+                | Self::CtypePunct
+                | Self::CtypeSpace
+                | Self::CtypeUpper
+                | Self::CtypeXdigit
         )
     }
 
@@ -2506,6 +2555,19 @@ impl RuntimeFnId {
             | RuntimeFnId::MemoryResetPeakUsage
             => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
+            // ctype accepts PHP's whole `mixed` surface and implements the non-string
+            // fallback itself, so a dynamically selected source value always fits.
+            RuntimeFnId::CtypeAlnum
+            | RuntimeFnId::CtypeAlpha
+            | RuntimeFnId::CtypeCntrl
+            | RuntimeFnId::CtypeDigit
+            | RuntimeFnId::CtypeGraph
+            | RuntimeFnId::CtypeLower
+            | RuntimeFnId::CtypePrint
+            | RuntimeFnId::CtypePunct
+            | RuntimeFnId::CtypeSpace
+            | RuntimeFnId::CtypeUpper
+            | RuntimeFnId::CtypeXdigit => true,
             _ => false,
         }
     }
@@ -2650,7 +2712,13 @@ impl RuntimeFnId {
         }
         // Decoding always constructs an independent Mixed graph. String payloads are
         // persisted from decoder scratch; no result borrows the source argument pin.
-        if matches!(self, RuntimeFnId::JsonDecode | RuntimeFnId::JsonEncodeStr) {
+        if matches!(
+            self,
+            RuntimeFnId::JsonDecode
+                | RuntimeFnId::JsonEncodeStr
+                | RuntimeFnId::ElephcSetlocaleQuery
+                | RuntimeFnId::ElephcSetlocaleSet
+        ) {
             return BuiltinResultOwnership::Fresh;
         }
         if matches!(self, RuntimeFnId::JsonDecodeCount) {
@@ -3637,8 +3705,15 @@ impl RuntimeFnId {
             RuntimeFnId::CurlVersion => "__elephc_curl_version",
             RuntimeFnId::CtypeAlnum => "ctype_alnum",
             RuntimeFnId::CtypeAlpha => "ctype_alpha",
+            RuntimeFnId::CtypeCntrl => "ctype_cntrl",
             RuntimeFnId::CtypeDigit => "ctype_digit",
+            RuntimeFnId::CtypeGraph => "ctype_graph",
+            RuntimeFnId::CtypeLower => "ctype_lower",
+            RuntimeFnId::CtypePrint => "ctype_print",
+            RuntimeFnId::CtypePunct => "ctype_punct",
             RuntimeFnId::CtypeSpace => "ctype_space",
+            RuntimeFnId::CtypeUpper => "ctype_upper",
+            RuntimeFnId::CtypeXdigit => "ctype_xdigit",
             RuntimeFnId::Explode => "explode",
             RuntimeFnId::GraphemeStrrev => "grapheme_strrev",
             RuntimeFnId::Gzcompress => "gzcompress",
@@ -3829,6 +3904,8 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcGmmktimeRaw => "__elephc_gmmktime_raw",
             RuntimeFnId::ElephcMktimeRaw => "__elephc_mktime_raw",
             RuntimeFnId::ElephcStrtotimeRaw => "__elephc_strtotime_raw",
+            RuntimeFnId::ElephcSetlocaleQuery => "__elephc_setlocale_query",
+            RuntimeFnId::ElephcSetlocaleSet => "__elephc_setlocale_set",
             RuntimeFnId::Checkdate => "checkdate",
             RuntimeFnId::ClassAttributeArgs => "class_attribute_args",
             RuntimeFnId::ClassAttributeNames => "class_attribute_names",

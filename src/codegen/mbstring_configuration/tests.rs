@@ -42,6 +42,25 @@ fn mbstring_startup_assembles_on_all_supported_targets() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// Buffers the startup prefix and message into one completed diagnostic, so the warning
+/// dispatcher adds PHP's display-layer blank line exactly once instead of between fragments.
+#[test]
+fn mbstring_startup_diagnostic_completes_one_warning() {
+    let target = Target::detect_host();
+    let mut module = Module::new(target);
+    module.mbstring_startup = Some(vec![b"UTF-8".to_vec(); 3]);
+    let mut emitter = Emitter::new(target);
+    let mut data = DataSection::new();
+    emit(&module, &mut emitter, &mut data);
+    let assembly = emitter.output() + &data.emit(target);
+    let fragments = assembly.lines().filter(|line| line.contains("__rt_diag_warning_fragment")).count();
+    let complete = assembly.lines().filter(|line| {
+        line.contains("__rt_diag_warning") && !line.contains("__rt_diag_warning_fragment")
+    }).count();
+    assert_eq!(fragments, 2, "{assembly}");
+    assert_eq!(complete, 1, "{assembly}");
+}
+
 /// Emits PCRE2 MIME imports only when output matching or MIME validation selected the provider.
 #[test]
 fn mbstring_startup_mime_symbols_follow_runtime_capability() {

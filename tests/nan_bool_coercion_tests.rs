@@ -42,12 +42,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// The exact stderr line elephc emits for one NAN-to-bool coercion.
+/// The exact stderr text elephc emits for one NAN-to-bool coercion.
 ///
-/// php-src appends ` in <file> on line <n>`; elephc deliberately does not (see the module
-/// preamble). Keeping the text in one constant makes the message and the counts below impossible
-/// to drift apart.
-const NAN_WARNING: &str = "Warning: unexpected NAN value was coerced to bool\n";
+/// The leading blank line is PHP's display-layer separator; php-src appends the location tail
+/// separately and elephc deliberately does not (see the module preamble). Keeping the text in one
+/// constant makes the message and the counts below impossible to drift apart.
+const NAN_WARNING: &str = "\nWarning: unexpected NAN value was coerced to bool\n";
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -363,7 +363,7 @@ function raw(string $k) { $m = ["a" => 1.5]; return $m[$k]; }
 var_dump(empty(raw("zz")));
 "#,
         "bool(true)\n",
-        "Warning: Undefined array key \"zz\"\n",
+        "\nWarning: Undefined array key \"zz\"\n",
     );
 }
 

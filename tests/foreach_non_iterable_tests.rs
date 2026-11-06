@@ -37,8 +37,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
-/// The message body elephc and php-src share, minus the `<type> given` tail.
-const WARNING_PREFIX: &str = "Warning: foreach() argument must be of type array|object, ";
+/// The display-layer blank line followed by the message body elephc and php-src share.
+const WARNING_PREFIX: &str = "\nWarning: foreach() argument must be of type array|object, ";
 
 /// Creates an isolated temp dir unique across parallel test threads/processes.
 fn make_test_dir(prefix: &str) -> PathBuf {

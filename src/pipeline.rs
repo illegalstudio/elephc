@@ -593,6 +593,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         )
     };
     timings.record_since("fileinfo-prelude", phase_started);
+    crate::progress::phase("locale-prelude");
+    let phase_started = Instant::now();
+    let locale_used = crate::locale_prelude::program_uses_locale(&ast);
+    let ast = crate::locale_prelude::inject_if_used(ast, locale_used, target.platform);
+    timings.record_since("locale-prelude", phase_started);
     // Inject the Termwind-facing DOM HTML subset only when the program names a
     // DOM class, so other binaries never carry the HTML walker. This is an
     // interim prelude (choice B vs draft PR #654's native libxml stack).

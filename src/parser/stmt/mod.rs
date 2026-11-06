@@ -262,6 +262,27 @@ fn parse_stmt_dispatch(
         Token::LBracket if starts_bracket_destructuring_assignment(tokens, *pos) => {
             assign::parse_list_unpack(tokens, pos, span)
         }
+        // PHP allows the `exit`/`die` language constructs without a call parenthesis:
+        // `exit;` terminates with status 0 exactly like `exit();`.
+        Token::Identifier(name)
+            if matches!(name.to_ascii_lowercase().as_str(), "exit" | "die")
+                && matches!(
+                    tokens.get(*pos + 1).map(|(token, _)| token),
+                    Some(Token::Semicolon)
+                ) =>
+        {
+            let name = name.clone();
+            *pos += 1;
+            expect_semicolon(tokens, pos)?;
+            let call = crate::parser::ast::Expr::new(
+                ExprKind::FunctionCall {
+                    name: crate::names::Name::unqualified(name),
+                    args: Vec::new(),
+                },
+                span,
+            );
+            Ok(Stmt::new(StmtKind::ExprStmt(call), span))
+        }
         Token::Identifier(_)
         | Token::Enum
         | Token::Self_

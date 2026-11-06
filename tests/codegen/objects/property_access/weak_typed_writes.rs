@@ -619,9 +619,9 @@ Cannot assign float to property Box::$n of type int\n6"
     );
     assert_eq!(
         out.stderr,
-        "Deprecated: Implicit conversion from float 3.7 to int loses precision\n\
-Deprecated: Implicit conversion from float -2.5 to int loses precision\n\
-Deprecated: Implicit conversion from float-string \"2.5\" to int loses precision\n"
+        "\nDeprecated: Implicit conversion from float 3.7 to int loses precision\n\
+\nDeprecated: Implicit conversion from float -2.5 to int loses precision\n\
+\nDeprecated: Implicit conversion from float-string \"2.5\" to int loses precision\n"
     );
 }
 

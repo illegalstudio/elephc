@@ -662,6 +662,63 @@ return function_exists("ctype_space");"#,
     assert_eq!(values.output, "A:D:N:S:empty:not-digit:not-space:111");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval exposes every ctype class and the byte predicates php-src reports.
+#[test]
+fn execute_program_dispatches_complete_ctype_surface() {
+    let program = parse_fragment(
+        br#"echo ctype_lower("abc") ? "1" : "0";
+echo ctype_upper("ABC") ? "1" : "0";
+echo ctype_alpha("aZ") ? "1" : "0";
+echo ctype_digit("0123") ? "1" : "0";
+echo ctype_alnum("a1Z") ? "1" : "0";
+echo ctype_cntrl(chr(1) . chr(127)) ? "1" : "0";
+echo ctype_graph("a!~") ? "1" : "0";
+echo ctype_print("a b") ? "1" : "0";
+echo ctype_punct("!?@") ? "1" : "0";
+echo ctype_space(" \t\n\r" . chr(11) . chr(12)) ? "1" : "0";
+echo ctype_xdigit("09afAF") ? "1" : "0";
+echo ":";
+echo ctype_cntrl(chr(128)) ? "bad" : "0";
+echo ctype_graph(" a") ? "bad" : "0";
+echo ctype_space("") ? "bad" : "0";
+"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "11111111111:000");
+    assert!(values.warnings.is_empty(), "warnings: {:?}", values.warnings);
+}
+
+/// Verifies eval applies php-src's deprecated integer fallback matrix and warnings.
+#[test]
+fn execute_program_ctype_scalar_fallback_matches_php_src() {
+    let program = parse_fragment(
+        br#"echo ctype_alnum(48) ? "1" : "0";
+echo ctype_alnum(12345) ? "1" : "0";
+echo ctype_alpha(-191) ? "1" : "0";
+echo ctype_alpha(300) ? "1" : "0";
+echo ctype_graph(-300) ? "1" : "0";
+echo ctype_digit(-1) ? "1" : "0";
+"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "110010");
+    assert_eq!(values.warnings.len(), 6, "warnings: {:?}", values.warnings);
+    assert!(values
+        .warnings
+        .iter()
+        .all(|warning| warning.contains("ctype_") && warning.contains("Argument of type int")));
+}
 /// Verifies eval `crc32()` returns PHP-compatible non-negative checksums.
 #[test]
 fn execute_program_dispatches_crc32_builtin() {

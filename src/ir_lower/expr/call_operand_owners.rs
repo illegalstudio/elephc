@@ -429,6 +429,10 @@ pub(super) fn root_non_aliasing_callback_operands(
                 // Query flags can throw for containers or invoke a NAN warning handler.
                 || matches!(target, crate::ir::RuntimeFnId::MemoryGetUsage
                     | crate::ir::RuntimeFnId::MemoryGetPeakUsage)
+                // A non-string ctype argument raises a deprecation that can enter a
+                // throwing user error handler, so its evaluated operand must survive
+                // that unwind path until the call returns.
+                || target.is_ctype()
         }
         _ => matches!(
             def.spec.semantics.argument_lowering,

@@ -62,11 +62,38 @@ pub(super) fn lower(
         RuntimeFnId::CtypeAlpha => Some({
             crate::codegen::lower_inst::builtins::ctype::lower_ctype_alpha(ctx, inst)
         }),
+        RuntimeFnId::CtypeCntrl => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_cntrl(ctx, inst)
+        }),
         RuntimeFnId::CtypeDigit => Some({
             crate::codegen::lower_inst::builtins::ctype::lower_ctype_digit(ctx, inst)
         }),
+        RuntimeFnId::CtypeGraph => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_graph(ctx, inst)
+        }),
+        RuntimeFnId::CtypeLower => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_lower(ctx, inst)
+        }),
+        RuntimeFnId::CtypePrint => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_print(ctx, inst)
+        }),
+        RuntimeFnId::CtypePunct => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_punct(ctx, inst)
+        }),
         RuntimeFnId::CtypeSpace => Some({
             crate::codegen::lower_inst::builtins::ctype::lower_ctype_space(ctx, inst)
+        }),
+        RuntimeFnId::CtypeUpper => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_upper(ctx, inst)
+        }),
+        RuntimeFnId::CtypeXdigit => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_xdigit(ctx, inst)
+        }),
+        RuntimeFnId::ElephcSetlocaleQuery => Some({
+            crate::codegen::lower_inst::builtins::setlocale::lower_setlocale_query(ctx, inst)
+        }),
+        RuntimeFnId::ElephcSetlocaleSet => Some({
+            crate::codegen::lower_inst::builtins::setlocale::lower_setlocale_set(ctx, inst)
         }),
         RuntimeFnId::Explode => Some({
             crate::codegen::lower_inst::builtins::strings::lower_explode(ctx, inst)
