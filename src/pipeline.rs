@@ -147,6 +147,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         emit_source_map,
         report_generics,
         emit_debug_info,
+        debug_build,
         keep_symbols,
         regalloc_linear,
         ir_opt,
@@ -539,6 +540,12 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         &mut prelude_inventory,
     );
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::debug_prelude::inject_if_used(
+        ast,
+        debug_build,
+        strict_php,
+        &mut prelude_inventory,
+    );
     let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
     let ast = crate::gmp_prelude::inject_if_used(ast, with_crates.contains("gmp"), &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(ast, with_crates.contains("random"), &mut prelude_inventory);
@@ -863,7 +870,13 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("opt-fold");
     let phase_started = Instant::now();
-    let ast = optimize::fold_constants_for_target(ast, target);
+    // A debug build preserves source-mapped statements for breakpoint binding;
+    // constant folding is the first pass that can erase them.
+    let ast = if debug_build {
+        ast
+    } else {
+        optimize::fold_constants_for_target(ast, target)
+    };
     timings.record_since("opt-fold", phase_started);
 
     crate::progress::phase("typecheck");
@@ -993,9 +1006,15 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
     // lowering a concrete type the checker never approved for that name, so the pass is told which
     // names those are and refuses to record a fact for them.
-    let ast = post_typecheck_optimizer.propagate(
-        ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone(),
-    );
+    let ast = if debug_build {
+        ast
+    } else {
+        post_typecheck_optimizer.propagate(
+            ast,
+            check_result.mixed_storage_local_names(),
+            check_result.buffer_read_sites.clone(),
+        )
+    };
     timings.record_since("opt-prop", phase_started);
 
     crate::progress::phase("opt-post");
@@ -1004,7 +1023,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // default body into BOTH branches of the synthesized `if` with the original's spans. The
     // checker's local-binding decisions are keyed BY SPAN, so these phases are told which spans
     // carry one and the rewrite vetoes itself rather than duplicating a decision.
-    let ast = post_typecheck_optimizer.prune(ast, check_result.local_binding_decision_spans());
+    let ast = if debug_build {
+        ast
+    } else {
+        post_typecheck_optimizer.prune(ast, check_result.local_binding_decision_spans())
+    };
     timings.record_since("opt-post", phase_started);
 
     crate::progress::phase("opt-norm");
@@ -1016,53 +1039,64 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let phase_started = Instant::now();
     // Tail-sinking clones the tail of an `if`/`switch`/`try` into every branch, and a clone keeps
     // the original's spans — the same span-keyed hazard, in the other pass that clones.
-    let ast = post_typecheck_optimizer
-        .eliminate_dead_code(ast, check_result.local_binding_decision_spans());
+    let ast = if debug_build {
+        ast
+    } else {
+        post_typecheck_optimizer
+            .eliminate_dead_code(ast, check_result.local_binding_decision_spans())
+    };
     timings.record_since("dce", phase_started);
 
     crate::progress::phase("decl-reach");
     let phase_started = Instant::now();
-    let mut exported_function_names: HashSet<String> =
-        exported_functions.keys().cloned().collect();
-    exported_function_names.extend(exported_classes.iter().map(|class| format!("{}::", class.name)));
-    // The hoisted `opcache.preload` body is a reachability ROOT. Nothing in PHP calls it —
-    // the `--web` entry stub does, in assembly, before the request loop — so the declaration
-    // pruner sees an unreferenced function and removes it, taking the preload's side effects
-    // with it. That failure is silent: the responses come out clean, which is what the hoist
-    // was for, and the preload simply never runs.
-    if preload_startup_path.is_some() {
-        exported_function_names.insert(crate::web_prelude::PRELOAD_STARTUP_FN.to_string());
-    }
-    if web_application {
-        exported_function_names.extend([
-            web_prelude::application::READY,
-            web_prelude::application::REQUEST,
-            web_prelude::application::SHUTDOWN,
-            web_prelude::application::CONTEXT_OPTION,
-        ].map(str::to_string));
-    }
-    // A generic instantiation is reachable by construction — it exists only because a call
-    // site asked for it — but no call site NAMES it: the source still says `identity(5)` and
-    // lowering is what resolves that to `identity<int>`. Without this the pruner drops every
-    // instantiation as unreferenced and lowering finds nothing to call.
-    exported_function_names.extend(crate::generics::instantiation_roots(
-        &check_result.requested_instantiations,
-    ));
-    // A promotable clone is reachable the same way: only lowering's redirect names it.
-    exported_function_names.extend(crate::generics::promotable_clones::promotable_clone_roots(
-        &check_result.requested_promotable_clones,
-    ));
-    let exported_function_names = exported_function_names;
-    let ast = optimize::prune_unreachable_declarations(
-        ast,
-        &mut check_result,
-        optimize::reachability::PruneOptions {
-            inventory: &prelude_inventory,
-            forced_groups: &forced_groups,
-            exported_functions: &exported_function_names,
-            eval_forced: with_crates.contains("eval"),
-        },
-    );
+    // A debug build keeps every user declaration, so a breakpoint in an otherwise
+    // unreachable function still has a body to bind to. The checker has already
+    // validated every declaration, so codegen can emit the larger set.
+    let ast = if debug_build {
+        ast
+    } else {
+        let mut exported_function_names: HashSet<String> =
+            exported_functions.keys().cloned().collect();
+        exported_function_names.extend(exported_classes.iter().map(|class| format!("{}::", class.name)));
+        // The hoisted `opcache.preload` body is a reachability ROOT. Nothing in PHP calls it —
+        // the `--web` entry stub does, in assembly, before the request loop — so the declaration
+        // pruner sees an unreferenced function and removes it, taking the preload's side effects
+        // with it. That failure is silent: the responses come out clean, which is what the hoist
+        // was for, and the preload simply never runs.
+        if preload_startup_path.is_some() {
+            exported_function_names.insert(crate::web_prelude::PRELOAD_STARTUP_FN.to_string());
+        }
+        if web_application {
+            exported_function_names.extend([
+                web_prelude::application::READY,
+                web_prelude::application::REQUEST,
+                web_prelude::application::SHUTDOWN,
+                web_prelude::application::CONTEXT_OPTION,
+            ].map(str::to_string));
+        }
+        // A generic instantiation is reachable by construction — it exists only because a call
+        // site asked for it — but no call site NAMES it: the source still says `identity(5)` and
+        // lowering is what resolves that to `identity<int>`. Without this the pruner drops every
+        // instantiation as unreferenced and lowering finds nothing to call.
+        exported_function_names.extend(crate::generics::instantiation_roots(
+            &check_result.requested_instantiations,
+        ));
+        // A promotable clone is reachable the same way: only lowering's redirect names it.
+        exported_function_names.extend(crate::generics::promotable_clones::promotable_clone_roots(
+            &check_result.requested_promotable_clones,
+        ));
+        let exported_function_names = exported_function_names;
+        optimize::prune_unreachable_declarations(
+            ast,
+            &mut check_result,
+            optimize::reachability::PruneOptions {
+                inventory: &prelude_inventory,
+                forced_groups: &forced_groups,
+                exported_functions: &exported_function_names,
+                eval_forced: with_crates.contains("eval"),
+            },
+        )
+    };
     timings.record_since("decl-reach", phase_started);
     // Reachability removes bridge requirements belonging only to dead declarations.
     if emit == Emit::Phpext && !check_result.required_libraries.is_empty() {
@@ -1103,12 +1137,13 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     }
     crate::progress::phase("ir-lower");
     let phase_started = Instant::now();
-    let mut ir_module = match ir_lower::lower_program_with_source_path_and_web(
+    let mut ir_module = match ir_lower::lower_program_for_build(
         &ast,
         &check_result,
         target,
         Path::new(filename),
         web,
+        debug_build,
     ) {
         Ok(module) => module,
         Err(ir_lower::LoweringError::Unsupported(error)) => {
@@ -1190,6 +1225,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         exported_classes: &exported_classes,
         regalloc_linear,
         emit_debug_info,
+        debug_build,
         keep_symbols,
         output_paths: &output_paths,
         emit_source_map,

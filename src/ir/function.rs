@@ -15,6 +15,7 @@ use crate::ir::block::{BasicBlock, BlockId};
 use crate::ir::instr::{Immediate, InstId, Instruction, Op};
 use crate::ir::types::IrType;
 use crate::ir::value::{Value, ValueId};
+use crate::span::Span;
 use crate::types::{AttrArgEntry, FunctionSig, PhpType};
 
 /// Module-local identifier for an EIR function.
@@ -101,6 +102,95 @@ pub struct Function {
     /// (passes neutralize or relocate instructions rather than renumbering them), and passes
     /// that copy a body into another function carry the entries along.
     pub inlined_scopes: std::collections::HashMap<InstId, String>,
+    /// Source-level branch constructs in this function.
+    ///
+    /// Coverage builds emit one guard per source edge and join the site ids with
+    /// the debug metadata's `branches` table. Compiler-internal `CondBr`s
+    /// (guards, null checks, cleanup) are not recorded, so the report does not
+    /// invent branch points the source does not have.
+    pub branch_sites: Vec<BranchSite>,
+    /// Source-level logical and switch paths.
+    ///
+    /// A path is one terminal short-circuit route through a logical condition or
+    /// one dispatch route through a switch. Its `branch_site`/`edge` reference an
+    /// existing branch guard, so path coverage reuses the branch counters rather
+    /// than adding a second instrumentation family.
+    pub path_sites: Vec<PathSite>,
+}
+
+/// One source-level logical or switch path group.
+#[derive(Debug, Clone)]
+pub struct PathSite {
+    /// Source span that owns the group.
+    pub span: Span,
+    /// Logical operator or switch dispatch.
+    pub kind: PathSiteKind,
+    /// Hidden integer state holding one 2-bit field per evaluated leaf, for a
+    /// logical group. `None` for a switch.
+    pub state_local: Option<LocalSlotId>,
+    /// Branch-site index whose edges are the switch paths. `None` for a logical
+    /// group, whose paths get dedicated counters.
+    pub switch_branch_site: Option<usize>,
+    /// One entry per full logical prefix combination or switch edge.
+    pub paths: Vec<PathDescriptor>,
+    /// Blocks that must dispatch a logical path counter before their `Br`.
+    pub terminals: Vec<PathTerminal>,
+    /// Whether path planning hit its bounded cap.
+    pub truncated: bool,
+}
+
+/// Shape of one path group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathSiteKind {
+    /// A logical condition using `&&`, `||` or `!`.
+    Logical,
+    /// A switch dispatch: one path per case label plus default.
+    Switch,
+}
+
+/// One full route through a source-level logical or switch construct.
+#[derive(Debug, Clone)]
+pub struct PathDescriptor {
+    /// Logical prefix mask: two bits per leaf (evaluated, truth) in source order.
+    /// Unused for a switch.
+    pub mask: u64,
+    /// Display label: leaf outcomes plus terminal position, or `caseN`/`default`.
+    pub label: String,
+}
+
+/// One runtime dispatch point for logical paths ending on the same leaf edge.
+#[derive(Debug, Clone)]
+pub struct PathTerminal {
+    /// State-update block whose `Br` follows the dispatch.
+    pub block: BlockId,
+    /// Indices into `PathSite::paths` that terminate here.
+    pub paths: Vec<usize>,
+}
+
+/// One source-level branch construct whose outgoing edges should be counted.
+#[derive(Debug, Clone)]
+pub struct BranchSite {
+    /// Source span that owns the branch point.
+    pub span: Span,
+    /// Control-flow shape that implements the construct.
+    pub kind: BranchSiteKind,
+}
+
+/// Control-flow shape of one source-level branch construct.
+#[derive(Debug, Clone)]
+pub enum BranchSiteKind {
+    /// One `CondBr` with two edges: the leaf condition's true/false outcomes.
+    Conditional { block: BlockId },
+    /// One `Switch` terminator: one edge per case label plus the default edge.
+    StaticSwitch { block: BlockId },
+    /// A source-ordered dispatch chain: one `CondBr` per case label plus a final
+    /// branch to the default case.
+    DynamicSwitch {
+        /// Blocks whose `CondBr` then-edge is a case-match edge.
+        case_blocks: Vec<BlockId>,
+        /// Block whose branch is taken when no case matched.
+        default_block: BlockId,
+    },
 }
 
 impl Function {
@@ -157,6 +247,8 @@ impl Function {
             display_name: None,
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
             inlined_scopes: std::collections::HashMap::new(),
+            branch_sites: Vec::new(),
+            path_sites: Vec::new(),
         }
     }
 

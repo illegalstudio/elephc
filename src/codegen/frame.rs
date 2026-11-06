@@ -795,6 +795,9 @@ fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("epilogue + exit(0)");
+    if ctx.shared.debug_build {
+        super::debug_sites::emit_dump_call(ctx);
+    }
     // Drain still-active output buffers before any teardown so user output
     // handlers (including eval-registered ones) run while locals, statics, and
     // the eval context are still alive. The exit-path flush in abi::emit_exit
@@ -821,6 +824,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
         abi::emit_call_label(ctx.emitter, &symbol);
     }
     emit_main_static_property_cleanup(ctx, hosting_tables);
+    if ctx.shared.debug_build {
+        super::debug_sites::emit_exit_call(ctx);
+    }
     // Last owner teardown: a destructor above, or an engine object a hosting table released, may
     // still reach C code that calls a callback.
     if module_binds_extern_callbacks(ctx.module) {
@@ -1191,6 +1197,9 @@ fn emit_opcache_restart_boundary(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
+    if ctx.shared.debug_build {
+        super::debug_sites::emit_dump_call(ctx);
+    }
     emit_main_local_epilogue_cleanup(ctx);
     emit_eval_context_epilogue_cleanup(ctx);
     // Per-request local teardown may run PHP destructors, so it belongs inside
@@ -1220,6 +1229,9 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     // opened. Dumping from the epilogue as well wrote a profile for every request
     // including the ones that never started a slice, which is how an unprofiled
     // service filled its log.
+    if ctx.shared.debug_build {
+        super::debug_sites::emit_exit_call(ctx);
+    }
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
@@ -1257,6 +1269,13 @@ pub(super) fn emit_web_entry_stub(
     // main stack, so the floor measured here stays valid in every child. Measuring before the
     // bridge call also keeps the clobbered argument registers away from `elephc_web_run`.
     stack_guard::emit_stack_limit_init_call(ctx.emitter);
+    // A --debug web build boots once in the MASTER, before elephc_web_run forks.
+    // Workers then inherit the metadata and the route hook; a per-request boot in
+    // the handler prologue is a no-op. Booting in a worker instead would give
+    // every sibling the same inherited DAP fd and none of them a route election.
+    if ctx.shared.debug_build {
+        super::debug_sites::emit_boot_call(ctx, true);
+    }
     // Install the probe here — in the MASTER, before elephc_web_run forks — so the SIGPROF
     // sampler and the shared-memory ring are inherited by every worker. Placed in the handler
     // prologue instead, it would re-init per request in each worker and never share.
@@ -2112,7 +2131,7 @@ fn return_preserves_result_owner(result_ty: &PhpType, return_ty: &PhpType) -> bo
 }
 
 /// Preserves the current typed return value on the temporary stack.
-fn push_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
+pub(super) fn push_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Float => {
             abi::emit_push_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
@@ -2135,7 +2154,7 @@ fn push_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
 }
 
 /// Restores a typed return value preserved by `push_return_value`.
-fn pop_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
+pub(super) fn pop_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Float => {
             abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
@@ -2708,6 +2727,9 @@ pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
         .expect("codegen bug: user function has no epilogue label");
     ctx.emitter.label(&label);
     emit_function_local_epilogue_cleanup(ctx, None, None);
+    if ctx.shared.debug_build {
+        super::debug_sites::emit_exit_call(ctx);
+    }
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
     super::return_ownership::emit_status(ctx.emitter, true);

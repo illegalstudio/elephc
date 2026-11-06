@@ -279,6 +279,21 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         },
     },
     BridgeStaticlib {
+        lib_name: "elephc_debug",
+        env_var: "ELEPHC_DEBUG_LIB_DIR",
+        crate_name: "elephc-debug",
+        flag_name: "debug",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: false,
+        // The debugger site hook is an elephc-native diagnostic.
+        php_extensions: &[],
+        monitoring: MonitoringPolicy::Infrastructure {
+            reason: "per-site native debugger event capture",
+        },
+    },
+    BridgeStaticlib {
         lib_name: "elephc_web",
         env_var: "ELEPHC_WEB_LIB_DIR",
         crate_name: "elephc-web",
@@ -528,14 +543,14 @@ fn resolve_with<F>(
 where
     F: FnMut(&BridgeStaticlib) -> Result<PathBuf, LinkError>,
 {
-    let plan = plan.without_redundant_embedded_bridges();
+    let source_plan = plan.without_redundant_embedded_bridges();
     let mut located: HashMap<&'static str, PathBuf> = HashMap::new();
     let mut bridge_paths = Vec::new();
     let mut seen_paths = HashSet::new();
     let mut metadata = BridgeLinkMetadata::new(platform);
     let mut ordered = Vec::with_capacity(plan.items().len());
 
-    for item in plan.items() {
+    for item in source_plan.items() {
         if let LinkItem::StaticArchive {
             path,
             origin: LinkOrigin::Bridge { name },
@@ -598,10 +613,15 @@ where
     });
     ordered.extend(metadata.apple_libraries);
     ordered.extend(metadata.frameworks);
-    let mut plan = LinkPlan::from_items(ordered);
-    plan.prepend(bridge_paths);
+    let mut resolved_plan = LinkPlan::from_items(ordered);
+    // Resolving named bridges rebuilds the plan; carry the debug-metadata linker
+    // roots from the caller's plan into the rebuilt one.
+    for symbol in source_plan.undefined_symbols() {
+        resolved_plan.retain_undefined_symbol(symbol.clone());
+    }
+    resolved_plan.prepend(bridge_paths);
     Ok(BridgeResolution {
-        plan,
+        plan: resolved_plan,
         needs_libdl: metadata.needs_libdl,
     })
 }

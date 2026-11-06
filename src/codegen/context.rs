@@ -92,6 +92,17 @@ pub(crate) struct FunctionContext<'a> {
     /// `--instrument` id assigned to this function in its prologue, consumed by
     /// its epilogue's `elephc_instr_exit(id)`. `None` outside `--instrument`.
     pub(super) instr_id: Option<usize>,
+    /// Source `(source_id, line)` pairs that already received a debug guard in
+    /// this function. Keeping one logical site per line makes a breakpoint hit
+    /// again on every loop iteration instead of only once.
+    pub(super) debug_guarded_lines: std::collections::HashSet<(u32, u32)>,
+    /// Compiler-assigned debug function id for enter/exit hooks.
+    pub(super) debug_function_id: Option<u32>,
+    /// Allocated debug site ids per `Function::branch_sites` entry.
+    pub(super) branch_site_ids: Vec<Option<Vec<u32>>>,
+    /// Allocated dedicated counters per logical `Function::path_sites` entry.
+    /// A switch path group reuses its branch-site counters instead.
+    pub(super) path_site_ids: Vec<Option<Vec<u32>>>,
     pub(super) is_main: bool,
     pub(super) web: bool,
     pub(super) gc_stats: bool,
@@ -169,6 +180,8 @@ impl<'a> FunctionContext<'a> {
         epilogue_label: Option<String>,
     ) -> Self {
         let callable_reachability = CallableReachabilityAnalysis::new(module, function);
+        let branch_site_ids = vec![None; function.branch_sites.len()];
+        let path_site_ids = vec![None; function.path_sites.len()];
         let pcntl_async_signals = module_uses_pcntl_async_signals(module);
         let pcntl_signal_handlers = module_uses_pcntl_signal_handlers(module);
         let function_fragment = label_fragment(&function.name);
@@ -226,6 +239,10 @@ impl<'a> FunctionContext<'a> {
             backtrace_enabled: super::frame::module_uses_backtrace(module),
             epilogue_emitted: false,
             instr_id: None,
+            debug_guarded_lines: std::collections::HashSet::new(),
+            debug_function_id: None,
+            branch_site_ids,
+            path_site_ids,
             is_main,
             web: false,
             gc_stats,
@@ -487,6 +504,15 @@ impl<'a> FunctionContext<'a> {
             .get(slot.as_raw() as usize)
             .map(|metadata| crate::types::mixed_box_php_type(&metadata.php_type))
             .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
+    }
+
+    /// Returns the runtime storage representation of a local slot for metadata.
+    pub(super) fn local_representation_name(&self, slot: LocalSlotId) -> &'static str {
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => "raw",
+            LocalSlotRepresentation::RefCell => "ref_cell",
+            LocalSlotRepresentation::Dynamic => "dynamic",
+        }
     }
 
     /// Returns the semantic role attached to a local slot.

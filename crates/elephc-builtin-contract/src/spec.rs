@@ -31,6 +31,8 @@ pub enum Area {
     Callables,
     /// SPL builtins.
     Spl,
+    /// Elephc-native debug helpers (break, dump, trace segments).
+    Debug,
     /// Pointer and buffer extension builtins.
     Pointers,
     /// `ext/curl` builtins. Every member is `internal: true`: the PHP-visible

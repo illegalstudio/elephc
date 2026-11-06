@@ -45,6 +45,7 @@ fn generate_project_asm(
         false, // counters
         elephc::codegen::Instrumentation::Off, // instrument
         false, // probe
+        false, // debug_build
         heap_debug,
         requires_elephc_tls,
         elephc::codegen::Emit::Executable,

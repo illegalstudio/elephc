@@ -375,6 +375,7 @@ mod tests {
             obj: dir.join("main.o"),
             bin: dir.join("main"),
             source_map: dir.join("main.map"),
+            debug_metadata: dir.join("main.edbg.json"),
             header: None,
         };
         let victim = dir.join("victim.txt");

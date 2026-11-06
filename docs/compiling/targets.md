@@ -71,6 +71,13 @@ iOS device and Simulator targets. A linked iOS library requires macOS with the
 matching Xcode SDK. `--emit-asm` can stop before assembling, but it must still be
 paired with a library emit kind so the assembly contains the public library ABI.
 
+`--debug` on either iOS target is compile-only: `--emit-asm` writes `<stem>.s`
+and `<stem>.edbg.json` (sources, functions, sites, branches/paths and class
+layouts), and a library build embeds the same metadata. There is no attachable
+process, so `elephc debug`, `--dap` and a standalone executable are refused with
+an actionable diagnostic. Use `elephc monitor --calls` / `elephc test
+--coverage` on a host target for runtime capture.
+
 For the target-aware ABI and runtime details behind each platform, see
 [Architecture](../internals/architecture.md) and
 [The Code Generator](../internals/the-codegen.md).

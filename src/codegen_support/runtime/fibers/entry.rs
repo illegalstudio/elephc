@@ -96,6 +96,13 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #0]");                                   // x10 = handler.next (previous chain head)
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // restore the previous handler chain head
 
+    super::api::common::emit_debug_coroutine_hook(
+        emitter,
+        "elephc_debug_coroutine_finished_fn",
+        "__rt_fiber_entry_debug_coro_skip",
+        "x19",
+    );
+
     // -- switch back to whoever resumed us (caller can never be NULL inside a fiber) --
     emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_CALLER_OFFSET));   // x0 = caller fiber* (or NULL = main)
     emitter.instruction("bl __rt_fiber_switch");                                // hand control back; this call never returns inside this fiber
@@ -126,6 +133,13 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // restore the previous handler chain head
     emitter.instruction("ldr x10, [sp, #16]");                                  // x10 = saved diagnostic suppression depth
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore the diagnostic suppression depth captured at setjmp time
+
+    super::api::common::emit_debug_coroutine_hook(
+        emitter,
+        "elephc_debug_coroutine_finished_fn",
+        "__rt_fiber_entry_escape_debug_coro_skip",
+        "x19",
+    );
 
     // -- switch back to the caller; their helper sees Terminated + non-null pending_throw and re-raises --
     emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_CALLER_OFFSET));   // x0 = caller fiber* (or NULL = main)

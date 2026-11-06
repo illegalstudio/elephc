@@ -31,7 +31,9 @@ Everything about driving the compiler: the command-line flags and the full path 
 - [Native dependencies](compiling/native-dependencies.md) — declare, lock, build, cache, diagnose, and explicitly prune curated native packages with `elephc native`
 - [Optimization and codegen controls](compiling/optimization.md) — `--ir-opt` (EIR identity, peephole, and dead-instruction passes), `--regalloc`, `--null-repr`
 - [Output formats and diagnostics](compiling/output-and-diagnostics.md) — `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--debug-info`, `--gc-stats`, `--heap-debug`
-- [Source maps](compiling/source-maps.md) — the `--source-map` v2 JSON schema (function ranges, labels, opcode/origin-tagged mappings, inverse line index) and `--debug-info` DWARF lines
+- [Source maps](compiling/source-maps.md) — the `--source-map` v3 JSON schema (function ranges, labels, opcode/origin-tagged mappings, inverse line index) and `--debug-info` DWARF lines
+- [Debug metadata](compiling/debug-metadata.md) — the `--debug` v1 schema (sources, functions, sites, locals), `.edbg.json` sidecar and embedded table, and `test --coverage` line joins
+- [DAP adapter](compiling/dap.md) — `elephc debug --dap`: launch, breakpoints, stackTrace, scopes, variables, evaluate and stepping over stdio
 - [Linking, heap, and conditional compilation](compiling/linking-and-conditional-compilation.md) — `--link`/`-l`, `--link-path`/`-L`, `--framework`, `--heap-size`, `--define`
 
 ## PHP Syntax
@@ -94,6 +96,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [Testing](beyond-php/testing.md) — the native test runtime: `Elephc\Testing\TestCase`, the PHPUnit-compatible assertion subset, the `Runner` report and exit code, and the `PHPUnit\Framework\TestCase` alias
 - [Hosting PHP Extensions](beyond-php/php-extensions.md) — `elephc extension add` builds a real PECL/PIE or in-house C extension from source and links it, functions and classes included, on Elephc's own Rust implementation of the extension API
 - [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
+- [Debugging](beyond-php/debugging.md) — native breakpoints, stepping, stack/locals, DAP in VS Code and Neovim, call-value capture, traces and coverage without xdebug
 - [Profiling](beyond-php/profiling.md) - PHP-level profiling with one command in every environment: a launched program reports exact wall time, allocations, retained objects, database and outgoing-network wait, SQL queries, network operations and calls; a running service is sampled by default and exact only for a requested completed request. Includes per-`--web`-route tags, `.elephc` performance budgets, automatic curl trace propagation, W3C distributed traces, and a self-contained interactive call-graph page
 
 ## Compiler Internals

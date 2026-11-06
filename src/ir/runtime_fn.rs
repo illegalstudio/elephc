@@ -449,6 +449,7 @@ pub enum RuntimeFnId {
     Tanh,
     ElephcCloneOverrideReferenceGuard,
     ElephcObjectIsEnum,
+
     ElephcObjectPropCount,
     ElephcObjectPropName,
     ElephcObjectPropValue,
@@ -905,6 +906,8 @@ pub enum RuntimeFnId {
     MemoryGetAllocations,
     /// Native heap metric operation `memory_get_frees`.
     MemoryGetFrees,
+    /// Emits a dump or named trace-segment capture event for the debugger.
+    ElephcDebugEvent,
     /// Native heap metric operation `memory_get_peak_usage`.
     MemoryGetPeakUsage,
     /// Native heap metric operation `memory_get_usage`.
@@ -1642,6 +1645,16 @@ impl RuntimeFnId {
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            // Explicit capture events read the observed value, write the debug
+            // capture ring (and possibly stderr), allocate the event JSON, and
+            // can warn on a mismatched trace_end.
+            RuntimeFnId::ElephcDebugEvent => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::WRITES_GLOBAL.bits()
+                    | crate::ir::Effects::OUTPUT.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::MAY_WARN.bits(),
+            ),
             // Array-edge value/key functions read one edge and box it into a fresh
             // Mixed cell (retaining a container payload inside the box). No user code runs and
             // nothing is written, but the result depends on the array's current contents, so
@@ -2006,6 +2019,9 @@ impl RuntimeFnId {
             IoKind, MonitoringPolicy, TraceContextPolicy, WaitPolicy,
         };
         match self {
+            RuntimeFnId::ElephcDebugEvent => MonitoringPolicy::Infrastructure {
+                reason: "native debugger dump and trace-segment event capture",
+            },
             RuntimeFnId::MtRand
             | RuntimeFnId::Rand
             | RuntimeFnId::ArrayRand
@@ -2684,6 +2700,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::StreamBucketAppend
                 | RuntimeFnId::StreamBucketPrepend
                 | RuntimeFnId::ElephcPtrWriteString
+                | RuntimeFnId::ElephcDebugEvent
                 | RuntimeFnId::TokenizerErrorLocation
                 // Both array mutators answer the resulting element count. The returned
                 // machine integer cannot keep any variadic value operand alive.
@@ -3451,6 +3468,7 @@ impl RuntimeFnId {
             RuntimeFnId::Touch => "touch",
             RuntimeFnId::Umask => "umask",
             RuntimeFnId::Unlink => "unlink",
+            RuntimeFnId::ElephcDebugEvent => "__elephc_debug_event",
             RuntimeFnId::VarDump => "var_dump",
             RuntimeFnId::Vfprintf => "vfprintf",
             RuntimeFnId::Abs => "abs",

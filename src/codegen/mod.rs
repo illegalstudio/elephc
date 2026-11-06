@@ -11,6 +11,7 @@
 
 mod block_emit;
 mod block_layout;
+mod debug_sites;
 pub use block_emit::generic_body_sharing_oracle;
 pub(crate) mod callable_reachability;
 mod callable_signatures;
@@ -274,6 +275,7 @@ pub fn generate_user_asm_from_ir(
         false, // counters
         Instrumentation::Off, // instrument
         false, // probe
+        false, // debug_build
         heap_debug,
         false,
         Emit::Executable,
@@ -300,6 +302,7 @@ pub fn generate_user_asm_from_ir_with_options(
     counters: bool,
     instrument: Instrumentation,
     probe: bool,
+    debug_build: bool,
     heap_debug: bool,
     requires_elephc_tls: bool,
     emit: Emit,
@@ -314,6 +317,7 @@ pub fn generate_user_asm_from_ir_with_options(
         counters,
         instrument,
         probe,
+        debug_build,
         heap_debug,
         requires_elephc_tls,
         emit,
@@ -343,6 +347,7 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
     counters: bool,
     instrument: Instrumentation,
     probe: bool,
+    debug_build: bool,
     heap_debug: bool,
     requires_elephc_tls: bool,
     emit: Emit,
@@ -374,6 +379,7 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
         counters,
         instrument,
         probe,
+        debug_build,
         heap_debug,
         requires_elephc_tls,
         emit,

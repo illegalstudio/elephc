@@ -52,6 +52,7 @@ env:
     -p elephc-magician
     -p elephc-reference
     -p elephc-web
+    -p elephc-debug
     -p elephc-instr
     -p elephc-probe
     -p elephc-curl
@@ -1303,6 +1304,71 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: junit-web-tests-macos-aarch64-${{ matrix.shard }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Focused macOS arm64 execution gate for the native debugger. The full
+  # codegen/web shards already include these tests, but this job names the
+  # debugger surface explicitly: terminal/DAP/TCP-attach/postmortem in
+  # codegen_tests, web route debugging in web_tests, the runtime unit suite and
+  # the debug CLI parser. It runs in the macOS tier (merge queue or `ci:macos`).
+  debug-tests-macos-aarch64:
+    name: Debug Tests (macos-aarch64)
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install test-only native providers
+        run: brew install pcre2
+
+      - name: Download test archive
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Validate archived cargo-nextest
+        id: validate_archived_nextest
+        continue-on-error: true
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Remove invalid cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: rm -f "$RUNNER_TEMP/cargo-nextest"
+
+      - name: Retry cargo-nextest artifact download
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        uses: ./.github/actions/download-test-archive
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Validate retried cargo-nextest
+        if: steps.validate_archived_nextest.outcome == 'failure'
+        run: |
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
+
+      - name: Run focused debugger tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest-debug"
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest-debug" --extract-overwrite \
+            -E '(binary(codegen_tests) and (test(~test_cli_debug) or test(~test_cli_elephc_break))) or (binary(web_tests) and test(~web_debug)) or binary(elephc_debug) or binary(debugger_spike_macos_aarch64) or (binary(elephc) and test(~debug_cli))' \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 2
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-debug-tests-macos-aarch64
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
@@ -3749,6 +3815,7 @@ jobs:
       - cli-tests-linux-x86_64
       - cli-tests-linux-aarch64
       - web-tests-macos-aarch64
+      - debug-tests-macos-aarch64
       - web-tests-linux-x86_64
       - web-tests-linux-aarch64
       - codegen-tests-macos-aarch64
@@ -3818,7 +3885,7 @@ jobs:
             curl-codegen-tests-linux-aarch64 eval-codegen-tests-linux-x86_64
             eval-codegen-tests-linux-aarch64 managed-native-smoke"
           extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
-            web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
+            web-tests-macos-aarch64 debug-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
             curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64
             eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link"
           in_list() { case " $(echo $2) " in *" $1 "*) return 0 ;; esac; return 1; }

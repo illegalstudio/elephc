@@ -8,6 +8,8 @@
 //! Key details:
 //! - PHP source ranges end before separately emitted cleanup helpers; generator
 //!   constructors are synthetic, while their bodies carry PHP debug locations.
+//! - Physical source paths are announced once with `@file`; `@fn`/`@src`
+//!   carry the source id so DWARF and source maps keep included files distinct.
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
 //! - Executable and library PHP frames publish local cleanup activations so a throw
@@ -24,7 +26,8 @@ use crate::codegen::Emit;
 use crate::codegen::WebIsolation;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::DeferredFiberWrapper;
-use crate::ir::{BasicBlock, Function, InstId, Module};
+use crate::debug_projection::{debug_info_method, debug_projection, DebugProjectionValue};
+use crate::ir::{BasicBlock, Function, InstId, LocalKind, Module};
 use crate::names::{
     function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
     static_method_symbol, static_property_symbol,
@@ -33,6 +36,7 @@ use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 use super::block_layout;
+use super::debug_sites;
 use super::context::FunctionContext;
 use super::machine_peephole;
 use super::fibers;
@@ -87,6 +91,7 @@ pub(super) fn emit_module(
     counters: bool,
     instrument: crate::codegen::Instrumentation,
     probe: bool,
+    debug_build: bool,
     heap_debug: bool,
     requires_elephc_tls: bool,
     emit: Emit,
@@ -116,6 +121,16 @@ pub(super) fn emit_module(
         && emit == Emit::Executable;
     shared.counters = counters;
     shared.instrument = instrument;
+    shared.debug_build = debug_build;
+    emit_source_file_markers(module, emitter, &mut shared);
+    if debug_build {
+        emit_debug_class_markers(module, emitter);
+    }
+    if debug_build {
+        let flags = emitter.target.extern_symbol(debug_sites::SITE_FLAGS);
+        data.add_comm(flags, debug_sites::MAX_SITES);
+        debug_sites::emit_wrappers(emitter);
+    }
     if probe {
         let main_symbol = if web {
             frame::WEB_HANDLER_SYMBOL
@@ -178,14 +193,14 @@ pub(super) fn emit_module(
         .filter(|function| !is_main(function))
     {
         if let Some(survivor) = body_aliases.get(&function.name) {
-            emit_folded_body(function, survivor, emitter)?;
+            emit_folded_body(function, survivor, emitter, &mut shared)?;
             continue;
         }
         emit_user_function(module, function, emitter, data, &mut shared, regalloc_linear)?;
     }
     for method in &module.class_methods {
         if let Some(survivor) = body_aliases.get(&method.name) {
-            emit_folded_body(method, survivor, emitter)?;
+            emit_folded_body(method, survivor, emitter, &mut shared)?;
             continue;
         }
         emit_class_method(module, method, emitter, data, &mut shared, regalloc_linear)?;
@@ -303,7 +318,16 @@ fn emit_user_function(
 ) -> Result<()> {
     let entry_label = user_function_entry_symbol(function);
     let synthetic = !function.has_source_identity() || is_property_init_thunk(function);
-    emit_fn_marker(emitter, function.display_name(), &entry_label, synthetic || function.flags.is_generator);
+    let debug_function_id = emit_fn_marker(
+        shared,
+        emitter,
+        function.display_name(),
+        &entry_label,
+        synthetic || function.flags.is_generator,
+        function_source_id(function),
+        function_kind(function),
+        &function_flags(function),
+    );
     if function.flags.is_generator {
         emit_generator_function(
             module,
@@ -336,7 +360,14 @@ fn emit_user_function(
         false,
         Some(epilogue_label),
     );
+    // Source helpers keep their metadata id (so their `@local` markers stay
+    // attached to the right function) but never push an activation frame.
+    ctx.debug_function_id = debug_function_id
+        .filter(|_| !is_debug_source_helper(&ctx.function.name))
+        .map(|id| id as u32);
+    emit_local_markers(&mut ctx);
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
+    debug_sites::emit_enter_call(&mut ctx);
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
     emit_endfn_marker(ctx.emitter, function.display_name());
@@ -470,7 +501,16 @@ fn emit_class_method(
     regalloc_linear: bool,
 ) -> Result<()> {
     let entry_label = class_method_entry_symbol(function)?;
-    emit_fn_marker(emitter, function.display_name(), &entry_label, !function.has_source_identity() || function.flags.is_generator);
+    let debug_function_id = emit_fn_marker(
+        shared,
+        emitter,
+        function.display_name(),
+        &entry_label,
+        !function.has_source_identity() || function.flags.is_generator,
+        function_source_id(function),
+        function_kind(function),
+        &function_flags(function),
+    );
     if function.flags.is_generator {
         emit_generator_function(
             module,
@@ -503,7 +543,14 @@ fn emit_class_method(
         false,
         Some(epilogue_label),
     );
+    // Source helpers keep their metadata id (so their `@local` markers stay
+    // attached to the right function) but never push an activation frame.
+    ctx.debug_function_id = debug_function_id
+        .filter(|_| !is_debug_source_helper(&ctx.function.name))
+        .map(|id| id as u32);
+    emit_local_markers(&mut ctx);
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
+    debug_sites::emit_enter_call(&mut ctx);
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
     emit_endfn_marker(ctx.emitter, function.display_name());
@@ -802,7 +849,16 @@ fn emit_generator_body(
     regalloc_linear: bool,
 ) -> Result<()> {
     // PHP source locations belong to the body, not to the synthetic coroutine constructor.
-    emit_fn_marker(emitter, function.display_name(), body_label, !function.has_source_identity());
+    let debug_function_id = emit_fn_marker(
+        shared,
+        emitter,
+        function.display_name(),
+        body_label,
+        !function.has_source_identity(),
+        function_source_id(function),
+        function_kind(function),
+        &function_flags(function),
+    );
     let layout = frame::layout_for_function(
         function,
         emitter.target,
@@ -823,7 +879,14 @@ fn emit_generator_body(
         false,
         Some(epilogue_label),
     );
+    // Source helpers keep their metadata id (so their `@local` markers stay
+    // attached to the right function) but never push an activation frame.
+    ctx.debug_function_id = debug_function_id
+        .filter(|_| !is_debug_source_helper(&ctx.function.name))
+        .map(|id| id as u32);
+    emit_local_markers(&mut ctx);
     frame::emit_function_prologue_with_label(&mut ctx, body_label)?;
+    debug_sites::emit_enter_call(&mut ctx);
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
     emit_endfn_marker(ctx.emitter, function.display_name());
@@ -1034,7 +1097,16 @@ fn emit_main_function(
     } else {
         emitter.entry_symbol()
     };
-    emit_fn_marker(emitter, &function.name, entry_symbol, false);
+    let debug_function_id = emit_fn_marker(
+        shared,
+        emitter,
+        &function.name,
+        entry_symbol,
+        false,
+        function_source_id(function),
+        function_kind(function),
+        &function_flags(function),
+    );
     let mut layout = frame::layout_for_function(
         function,
         emitter.target,
@@ -1048,11 +1120,21 @@ fn emit_main_function(
     let mut ctx = FunctionContext::new(
         module, function, emitter, data, shared, layout, true, gc_stats, heap_debug, None,
     );
+    // Source helpers keep their metadata id (so their `@local` markers stay
+    // attached to the right function) but never push an activation frame.
+    ctx.debug_function_id = debug_function_id
+        .filter(|_| !is_debug_source_helper(&ctx.function.name))
+        .map(|id| id as u32);
+    emit_local_markers(&mut ctx);
     if web {
         ctx.web = true;
         frame::emit_web_handler_prologue(&mut ctx);
     } else {
         frame::emit_main_prologue(&mut ctx);
+    }
+    if ctx.shared.debug_build {
+        debug_sites::emit_boot_call(&mut ctx, false);
+        debug_sites::emit_enter_call(&mut ctx);
     }
     if requires_elephc_tls {
         crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
@@ -1435,6 +1517,7 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
         ctx.emitter
             .rewrite_text_from(region_start, |text| machine_peephole::optimize_region(text, target));
     }
+    lower_term::emit_path_markers(ctx);
     Ok(())
 }
 
@@ -1474,7 +1557,45 @@ pub(super) fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst
         return Ok(());
     };
     if span.line > 0 {
-        let mut marker = format!("@src line={} col={}", span.line, span.col);
+        let source = if span.is_from_source() {
+            span.source_path().map(|path| (span.source_id(), path))
+        } else {
+            None
+        };
+        let file_token = if let Some((source_id, path)) = source.as_ref() {
+            if ctx.shared.debug_sources.insert(*source_id) {
+                ctx.emitter.comment(&format!(
+                    "@file id={} path_hex={}",
+                    source_id,
+                    hex_encode(path.as_bytes())
+                ));
+            }
+            format!(" file={source_id}")
+        } else {
+            String::new()
+        };
+        // One logical guard per source line per function. The guard stays in the
+        // block where the line first appears, so a loop re-enters the same site
+        // and a breakpoint can stop on every iteration.
+        let site_id = if ctx.shared.debug_build {
+            source.as_ref().and_then(|(source_id, _)| {
+                let key = (*source_id, span.line);
+                if ctx.debug_guarded_lines.insert(key) {
+                    Some(ctx.shared.next_debug_site())
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+        let mut marker = format!(
+            "@src{} line={} col={}",
+            file_token, span.line, span.col
+        );
+        if let Some(site_id) = site_id {
+            let _ = write!(marker, " site={site_id}");
+        }
         if span.has_extent() {
             let _ = write!(marker, " end={}:{}", span.end_line, span.end_column());
         }
@@ -1483,20 +1604,382 @@ pub(super) fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst
             let _ = write!(marker, " origin={}", origin.name());
         }
         ctx.emitter.comment(&marker);
+        if let Some(site_id) = site_id {
+            debug_sites::emit_site_call(ctx, site_id);
+        }
     }
     Ok(())
+}
+
+/// Announces every physical source used by the module before any function or
+/// instruction marker.
+///
+/// A marker carries the `Span` source identity and the hex-encoded physical path.
+/// The DWARF reader uses it to emit one `.file` per included source; the source
+/// map uses it to build its `sources` array. Emitting them up front keeps `.file`
+/// directives ahead of the `.loc` directives that reference them and covers
+/// folded bodies that emit no instruction marker of their own.
+fn emit_source_file_markers(
+    module: &Module,
+    emitter: &mut Emitter,
+    shared: &mut SharedCodegenState,
+) {
+    for function in all_module_functions(module) {
+        for instruction in &function.instructions {
+            let Some(span) = instruction.span else {
+                continue;
+            };
+            if !span.is_from_source() {
+                continue;
+            }
+            let Some(path) = span.source_path() else {
+                continue;
+            };
+            let source_id = span.source_id();
+            if shared.debug_sources.insert(source_id) {
+                emitter.comment(&format!(
+                    "@file id={} path_hex={}",
+                    source_id,
+                    hex_encode(path.as_bytes())
+                ));
+            }
+        }
+    }
 }
 
 /// Emits the source-map marker opening a function region. `name` is the PHP-level
 /// function/method name and `symbol` the assembly entry label; the map generator
 /// pairs it with the matching `@endfn` to derive the function's assembly range.
 /// `synthetic` marks compiler-generated bodies with no user-written PHP source.
-fn emit_fn_marker(emitter: &mut Emitter, name: &str, symbol: &str, synthetic: bool) {
+/// `source_id` is the physical source identity of the function's first real span,
+/// when one exists.
+fn emit_fn_marker(
+    shared: &mut SharedCodegenState,
+    emitter: &mut Emitter,
+    name: &str,
+    symbol: &str,
+    synthetic: bool,
+    source_id: Option<u32>,
+    kind: &str,
+    flags: &str,
+) -> Option<usize> {
+    let function_id = shared.debug_build.then(|| shared.next_debug_function());
     let mut marker = format!("@fn name={} symbol={}", name, symbol);
+    if let Some(source_id) = source_id {
+        let _ = write!(marker, " file={source_id}");
+    }
+    if let Some(function_id) = function_id {
+        let _ = write!(marker, " id={function_id}");
+    }
+    let _ = write!(marker, " kind={kind}");
+    if !flags.is_empty() {
+        let _ = write!(marker, " flags={flags}");
+    }
     if synthetic {
         marker.push_str(" synthetic=1");
     }
     emitter.comment(&marker);
+    function_id
+}
+
+/// Returns the PHP-level kind of a function marker.
+fn function_kind(function: &Function) -> &'static str {
+    if function.flags.is_main {
+        "main"
+    } else if function.flags.is_method {
+        "method"
+    } else if function.flags.is_closure {
+        "closure"
+    } else if function.flags.is_generator {
+        "generator"
+    } else {
+        "function"
+    }
+}
+
+/// Returns the comma-separated function flags carried by an `@fn` marker.
+fn function_flags(function: &Function) -> String {
+    let mut flags = Vec::new();
+    if function.flags.is_static {
+        flags.push("static");
+    }
+    if function.flags.by_ref_return {
+        flags.push("by_ref");
+    }
+    if function.flags.is_generator {
+        flags.push("generator");
+    }
+    if function.flags.is_closure {
+        flags.push("closure");
+    }
+    if function.flags.is_method {
+        flags.push("method");
+    }
+    if function.flags.is_main {
+        flags.push("main");
+    }
+    flags.join(",")
+}
+
+/// Returns the source identity of the first real instruction span in `function`.
+///
+/// A function body may contain instructions spliced in from other files by the
+/// inliner; the first source-mapped instruction is the best available defining
+/// file for the function marker. Synthetic bodies return `None`.
+fn function_source_id(function: &Function) -> Option<u32> {
+    // Main is always the entry source. Its first EIR instructions can come from
+    // an inlined include body, so scanning the stream would label `main` with
+    // the included file.
+    if function.flags.is_main {
+        return Some(0);
+    }
+    function.instructions.iter().find_map(|instruction| {
+        let span = instruction.span?;
+        if span.is_from_source() && span.source_path().is_some() {
+            Some(span.source_id())
+        } else {
+            None
+        }
+    })
+}
+
+/// Encodes bytes as lowercase hexadecimal for the space-delimited `@file`
+/// marker. Hex keeps paths with spaces, quotes, newlines or non-UTF-8 bytes out
+/// of the marker grammar; the source-map and DWARF readers decode it again.
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+/// Returns whether `name` is one of the elephc-native debug source helpers.
+///
+/// These helpers exist to make the debugger request work; showing them as PHP
+/// frames would misplace `elephc_break()` and add a fake depth to every dump and
+/// trace segment.
+fn is_debug_source_helper(name: &str) -> bool {
+    name.eq_ignore_ascii_case("elephc_break")
+        || name.eq_ignore_ascii_case("elephc_dump")
+        || name.eq_ignore_ascii_case("elephc_trace_start")
+        || name.eq_ignore_ascii_case("elephc_trace_end")
+}
+
+/// Emits the class/property table consumed by the debugger's object formatter.
+///
+/// One `@class` marker names the class, then one `@prop` marker per layout slot
+/// carries the frame-relative offset, PHP type, visibility, reference-cell flag
+/// and typed-property flag. The markers are assembly comments, so they do not
+/// change the generated code or its section layout.
+fn emit_debug_class_markers(module: &Module, emitter: &mut Emitter) {
+    let mut classes: Vec<(&String, &crate::types::ClassInfo)> = module.class_infos.iter().collect();
+    classes.sort_by_key(|(_, info)| info.class_id);
+    for (name, info) in classes {
+        let parent = info.parent.as_deref().unwrap_or("");
+        // `stdClass` is the one internal class whose payload is a class id followed by a
+        // dynamic-property hash. Every other internal class can carry a compact/custom
+        // payload, so neither its property array nor a dynamic hash is safe to walk.
+        let dynamic_offset = if info.is_internal {
+            (name == "stdClass").then_some(8)
+        } else if info.allow_dynamic_properties
+            || info.eval_property_storage
+            || info.clone_override_property_storage
+            || info.scope_dynamic_property_storage
+        {
+            Some(8 + info.properties.len() * 16)
+        } else {
+            None
+        };
+        // The debugger gets its own read-only projection. It is deliberately
+        // broader than the var_dump fold: scalar and literal-array values are
+        // safe to display without running the method, while a body that computes
+        // anything falls back to the `runtime` marker and declared properties.
+        // Resolve through the implementation owner so an inherited
+        // `__debugInfo()` keeps its projection on child classes.
+        let projection = (!info.is_internal)
+            .then(|| debug_projection(info, &module.class_infos))
+            .flatten();
+        let method = (!info.is_internal)
+            .then(|| debug_info_method(info, &module.class_infos))
+            .flatten();
+        let debug_info = if projection.is_some() {
+            "projection"
+        } else if method.is_some_and(|method| !method.is_static && method.has_body) {
+            "runtime"
+        } else {
+            "none"
+        };
+        emitter.comment(&format!(
+            "@class id={} name_hex={} parent_hex={} abstract={} internal={} dynamic_offset={} debuginfo={}",
+            info.class_id,
+            hex_encode(name.as_bytes()),
+            hex_encode(parent.as_bytes()),
+            u8::from(info.is_abstract),
+            u8::from(info.is_internal),
+            dynamic_offset.map(|offset| offset.to_string()).unwrap_or_default(),
+            debug_info
+        ));
+        if let Some(projection) = &projection {
+            for (order, entry) in projection.iter().enumerate() {
+                match &entry.value {
+                    DebugProjectionValue::Property(property) => emitter.comment(&format!(
+                        "@debuginfo class={} order={} key_hex={} property_hex={}",
+                        info.class_id,
+                        order,
+                        hex_encode(entry.key.as_bytes()),
+                        hex_encode(property.as_bytes())
+                    )),
+                    DebugProjectionValue::Literal { text, php_type } => emitter.comment(&format!(
+                        "@debuginfo class={} order={} key_hex={} value_hex={} type_hex={}",
+                        info.class_id,
+                        order,
+                        hex_encode(entry.key.as_bytes()),
+                        hex_encode(text.as_bytes()),
+                        hex_encode(php_type.as_bytes())
+                    )),
+                }
+            }
+        }
+        // Built-in and injected classes can have compact/custom payloads that do
+        // not follow the regular property array. Emit their name for display but
+        // not slot offsets the debugger could read as ordinary properties.
+        if info.is_internal {
+            continue;
+        }
+        for (index, (property_name, property_type)) in info.properties.iter().enumerate() {
+            let visibility = info
+                .property_visibilities
+                .get(property_name)
+                .map(debug_visibility_name)
+                .unwrap_or("public");
+            let by_ref = info
+                .property_reference_slots
+                .get(index)
+                .copied()
+                .unwrap_or(false);
+            let declared = info
+                .property_declared_slots
+                .get(index)
+                .copied()
+                .unwrap_or(false);
+            // Property hooks are not executed by the debugger: it shows the raw
+            // backing value for a backed hooked property and a virtual marker for
+            // a property with no backing slot. The metadata exposes which accessors
+            // exist so the object view can explain what is (and is not) being read.
+            let hooks = info.property_hooks.get(property_name);
+            let hook_names = match hooks {
+                Some(hooks) if hooks.requires_get() && hooks.set => "get+set",
+                Some(hooks) if hooks.requires_get() => "get",
+                Some(hooks) if hooks.set => "set",
+                _ => "none",
+            };
+            emitter.comment(&format!(
+                "@prop class={} name_hex={} offset={} type_hex={} visibility={} by_ref={} declared={} hooks={} get_by_ref={} virtual={}",
+                info.class_id,
+                hex_encode(property_name.as_bytes()),
+                8 + index * 16,
+                hex_encode(property_type.to_string().as_bytes()),
+                visibility,
+                u8::from(by_ref),
+                u8::from(declared),
+                hook_names,
+                u8::from(hooks.is_some_and(|hooks| hooks.get_by_ref)),
+                u8::from(hooks.is_some_and(|hooks| hooks.is_virtual()))
+            ));
+        }
+    }
+}
+
+/// Stable lowercase spelling of a PHP property visibility for debug metadata.
+fn debug_visibility_name(visibility: &crate::parser::ast::Visibility) -> &'static str {
+    match visibility {
+        crate::parser::ast::Visibility::Public => "public",
+        crate::parser::ast::Visibility::Protected => "protected",
+        crate::parser::ast::Visibility::Private => "private",
+    }
+}
+
+/// Emits one `@local` marker per named source local whose frame offset is
+/// known. Hidden compiler temporaries are omitted; the metadata reader uses
+/// these markers to expose PHP variables and parameter slots.
+fn emit_local_markers(ctx: &mut FunctionContext<'_>) {
+    for local in &ctx.function.locals {
+        let Some(name) = local.name.as_deref() else {
+            continue;
+        };
+        // `#` and the internal `__elephc_` prefix mark compiler-owned temporaries;
+        // they are not PHP variables and would only add noise to locals/variables.
+        if name.contains('#') || name.starts_with("__elephc_") {
+            continue;
+        }
+        if !matches!(
+            local.kind,
+            LocalKind::PhpLocal | LocalKind::StaticLocal | LocalKind::RefCell | LocalKind::ReturnRefCell
+        ) {
+            continue;
+        }
+        let Ok(offset) = ctx.local_offset(local.id) else {
+            continue;
+        };
+        let param_index = local.id.as_raw() as usize;
+        let parameter = ctx
+            .function
+            .params
+            .get(param_index)
+            .filter(|parameter| parameter.name == name);
+        let mut marker = format!(
+            "@local name_hex={} offset={} type_hex={} kind={} storage={}",
+            hex_encode(name.as_bytes()),
+            offset,
+            hex_encode(local.php_type.to_string().as_bytes()),
+            local_kind_name(local.kind),
+            ctx.local_representation_name(local.id)
+        );
+        if let Some(state_offset) = ctx.ref_cell_state_offset(local.id) {
+            let _ = write!(marker, " state_offset={state_offset}");
+        }
+        if let Some(parameter) = parameter {
+            let _ = write!(marker, " param={param_index}");
+            if parameter.by_ref {
+                marker.push_str(" by_ref=1");
+            }
+            if parameter.variadic {
+                marker.push_str(" variadic=1");
+            }
+            let sensitive = ctx
+                .function
+                .signature
+                .as_ref()
+                .and_then(|signature| signature.param_attributes.get(param_index))
+                .is_some_and(|groups| {
+                    groups
+                        .iter()
+                        .flat_map(|group| &group.attributes)
+                        .any(|attribute| {
+                            attribute
+                                .name
+                                .as_canonical()
+                                .eq_ignore_ascii_case("SensitiveParameter")
+                        })
+                });
+            if sensitive {
+                marker.push_str(" sensitive=1");
+            }
+        }
+        ctx.emitter.comment(&marker);
+    }
+}
+
+/// Stable metadata spelling for a local slot kind.
+fn local_kind_name(kind: LocalKind) -> &'static str {
+    match kind {
+        LocalKind::PhpLocal => "php_local",
+        LocalKind::StaticLocal => "static_local",
+        LocalKind::RefCell => "ref_cell",
+        LocalKind::ReturnRefCell => "return_ref_cell",
+        _ => "hidden",
+    }
 }
 
 /// Emits the source-map marker closing the function region opened by
@@ -1702,13 +2185,23 @@ pub(super) fn emit_folded_body(
     function: &Function,
     survivor: &str,
     emitter: &mut Emitter,
+    shared: &mut SharedCodegenState,
 ) -> Result<()> {
     let is_static = function.flags.is_static;
     let entry = entry_symbol_for_name(&function.name, is_static);
     let survivor_entry = entry_symbol_for_name(survivor, is_static);
     // The source map discovers functions through `@fn`/`@endfn` regions; a folded body is a real
     // function whose range happens to be one jump, so it still needs its record.
-    emit_fn_marker(emitter, &function.name, &entry, false);
+    let _ = emit_fn_marker(
+        shared,
+        emitter,
+        &function.name,
+        &entry,
+        false,
+        function_source_id(function),
+        function_kind(function),
+        &function_flags(function),
+    );
     // `label_global` gives the thunk the same section and `%function` type the full bodies get
     // on Linux; a bare `.globl` would leave the jump in the PREVIOUS symbol's section and skip
     // the type annotation, which misdirects `--gc-sections` and debug extents.
