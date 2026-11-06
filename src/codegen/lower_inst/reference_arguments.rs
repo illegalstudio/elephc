@@ -543,8 +543,10 @@ pub(super) fn emit_ref_arg_cell_block(
     for (index, writeback) in writebacks.iter_mut().enumerate() {
         // A managed Mixed reference cell holding the boxed value: the callee may capture the
         // reference in a closure that outlives the call (`__rt_reference_cell_owner` then
-        // takes its own lease), which a stack slot could not survive.
-        ctx.load_value_to_result(writeback.source_value)?;
+        // takes its own lease), which a stack slot could not survive. The cell starts from the
+        // local's CURRENT value, read after every argument ran: a later argument may have
+        // written it (`take($v, bump($v))`), so the earlier `load_local` snapshot is stale.
+        ctx.load_local_to_result(writeback.source_slot)?;
         emit_box_current_value_as_mixed(ctx.emitter, &writeback.source_ty);
         abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
         abi::emit_load_int_immediate(
