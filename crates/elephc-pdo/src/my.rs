@@ -345,6 +345,9 @@ pub struct MyConn {
     /// link can shut the transport down instead of waiting for the worker to drain.
     #[cfg(unix)]
     worker_socket: Option<std::os::unix::io::RawFd>,
+    /// Whether a transport error (lost connection, read timeout) ended this session: like
+    /// mysqlnd's `CONN_QUIT_SENT`, an async send then fails at once without traffic.
+    lost: bool,
 }
 
 /// A live MySQL prepared statement and its buffered or demand-driven result.
@@ -545,7 +548,9 @@ enum MyStreamResponse {
     /// The current set ended; `true` when the server announced more result sets.
     RowsetEnd(bool),
     Finished(Conn, u16),
-    Failed(Conn, String, i64, String),
+    /// The command failed; the host records the error (marking the session lost on a
+    /// transport error) and restores the client.
+    Failed(Conn, mysql::Error),
 }
 
 /// Connection-owned control plane for one active MySQL result stream.
@@ -1182,6 +1187,9 @@ fn sql_may_return_several_sets(sql: &str) -> bool {
         }
         if let Some(end) = scan_my_comment(bytes, i) {
             i = end;
+        } else if bytes[i..].starts_with(b"--\n") {
+            // The server also ends a `--` comment at a newline right after it.
+            i += 2;
         }
         if bytes[i..].starts_with(b"/*!") || bytes[i..].starts_with(b"/*M!") {
             return true;
@@ -2173,6 +2181,7 @@ impl MyConn {
             next_stream_id: 0,
             #[cfg(unix)]
             worker_socket: None,
+            lost: false,
         })
     }
 
@@ -2240,12 +2249,10 @@ impl MyConn {
                     self.restore_stream_client(conn, warnings);
                     break;
                 }
-                MyStreamResponse::Failed(conn, sqlstate, errcode, message) => {
+                MyStreamResponse::Failed(conn, error) => {
                     let warnings = conn.warnings();
                     self.restore_stream_client(conn, warnings);
-                    self.sqlstate = sqlstate;
-                    self.errcode = errcode;
-                    self.errmsg = message;
+                    self.record_mysql_error(&error);
                     break;
                 }
                 MyStreamResponse::Rowset(..)
@@ -2298,12 +2305,10 @@ impl MyConn {
                 }
                 Err(-1)
             }
-            Ok(MyStreamResponse::Failed(conn, sqlstate, errcode, message)) => {
+            Ok(MyStreamResponse::Failed(conn, error)) => {
                 let warnings = conn.warnings();
                 self.restore_stream_client(conn, warnings);
-                self.sqlstate = sqlstate;
-                self.errcode = errcode;
-                self.errmsg = message;
+                self.record_mysql_error(&error);
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();
                 }
@@ -2402,12 +2407,10 @@ impl MyConn {
                 active.more_sets = more;
                 Ok(None)
             }
-            Ok(MyStreamResponse::Failed(conn, sqlstate, errcode, message)) => {
+            Ok(MyStreamResponse::Failed(conn, error)) => {
                 let warnings = conn.warnings();
                 self.restore_stream_client(conn, warnings);
-                self.sqlstate = sqlstate;
-                self.errcode = errcode;
-                self.errmsg = message;
+                self.record_mysql_error(&error);
                 let mut active = self.active_stream.take().expect("active stream disappeared");
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();
@@ -2456,12 +2459,10 @@ impl MyConn {
                 self.unbuffered_active = false;
                 Ok(None)
             }
-            Ok(MyStreamResponse::Failed(conn, sqlstate, errcode, message)) => {
+            Ok(MyStreamResponse::Failed(conn, error)) => {
                 let warnings = conn.warnings();
                 self.restore_stream_client(conn, warnings);
-                self.sqlstate = sqlstate;
-                self.errcode = errcode;
-                self.errmsg = message;
+                self.record_mysql_error(&error);
                 let mut active = self.active_stream.take().expect("active stream disappeared");
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();
@@ -2553,9 +2554,7 @@ impl MyConn {
                 affected
             }
             Err(e) => {
-                self.sqlstate = err_sqlstate(&e);
-                self.errmsg = e.to_string();
-                self.errcode = err_code(&e);
+                self.record_mysql_error(&e);
                 -1
             }
         }
@@ -2572,9 +2571,7 @@ impl MyConn {
                 1
             }
             Err(e) => {
-                self.sqlstate = err_sqlstate(&e);
-                self.errmsg = e.to_string();
-                self.errcode = err_code(&e);
+                self.record_mysql_error(&e);
                 0
             }
         }
@@ -2605,9 +2602,7 @@ impl MyConn {
                 1
             }
             Err(error) => {
-                self.sqlstate = err_sqlstate(&error);
-                self.errmsg = error.to_string();
-                self.errcode = err_code(&error);
+                self.record_mysql_error(&error);
                 0
             }
         }
@@ -2769,13 +2764,27 @@ impl MyConn {
             self.errmsg = "Commands out of sync; you can't run this command now".to_string();
             return -1;
         }
-        let Some(client) = self.conn.0.take() else {
+        if self.lost {
+            // mysqlnd refuses a lost session before sending anything.
+            self.sqlstate = "HY000".to_string();
+            self.errcode = 2006;
+            self.errmsg = "MySQL server has gone away".to_string();
+            return -2;
+        }
+        let Some(mut client) = self.conn.0.take() else {
             self.sqlstate = "HY000".to_string();
             self.errcode = 2014;
             self.errmsg = "Commands out of sync; you can't run this command now".to_string();
             return -1;
         };
         self.server_version = client.server_version();
+        // The command is written here, like mysqlnd's send phase: a write failure is this
+        // call's error and the statistics count it at once; the worker only reads.
+        if let Err(error) = client.send_query(sql) {
+            self.conn.0 = Some(client);
+            self.record_mysql_error(&error);
+            return -1;
+        }
         #[cfg(unix)]
         let socket = std::os::unix::io::AsRawFd::as_raw_fd(&client);
         #[cfg(unix)]
@@ -2784,7 +2793,6 @@ impl MyConn {
         }
         let done: AsyncReady = Arc::new((Mutex::new(false), Condvar::new()));
         let signal = Arc::clone(&done);
-        let text = sql.to_string();
         let fetch_table_names = self.fetch_table_names;
         // Both result modes stream: the prelude buffers a MYSQLI_STORE_RESULT set at reap
         // (`unbuffered` only tells it which result to build).
@@ -2794,7 +2802,6 @@ impl MyConn {
         let worker = std::thread::spawn(move || {
             run_mysql_async_text_stream(
                 client,
-                text,
                 fetch_table_names,
                 command_rx,
                 response_tx,
@@ -3032,11 +3039,15 @@ impl MyConn {
         }
     }
 
-    /// Records a client error from the `mysql` crate as the connection's last error.
+    /// Records a client error from the `mysql` crate as the connection's last error; a
+    /// transport error also marks the session lost.
     fn record_mysql_error(&mut self, error: &mysql::Error) {
         self.sqlstate = err_sqlstate(error);
         self.errmsg = error.to_string();
         self.errcode = err_code(error);
+        if matches!(error, mysql::Error::IoError(_) | mysql::Error::CodecError(_)) {
+            self.lost = true;
+        }
     }
 
     /// Sends a real `COM_PING`, backing `mysqli::ping()`. Returns `1` on success
@@ -3259,9 +3270,7 @@ impl MyConn {
                 })
             }
             Err(e) => {
-                self.sqlstate = err_sqlstate(&e);
-                self.errmsg = e.to_string();
-                self.errcode = err_code(&e);
+                self.record_mysql_error(&e);
                 Err(e.to_string())
             }
         }
@@ -3528,19 +3537,20 @@ fn run_mysql_text_stream(
     finish_mysql_stream_worker(conn, result, &responses);
 }
 
-/// Runs a MYSQLI_ASYNC | MYSQLI_USE_RESULT query on its own worker: like
-/// [`run_mysql_text_stream`], and `ready` is signalled once the first set's metadata (or the
-/// query's outcome) has been sent, which is when mysqlnd's poll sees the link readable.
+/// Reads a MYSQLI_ASYNC query's response on its own worker (`MyConn::async_send` already
+/// wrote the command): like [`run_mysql_text_stream`], and `ready` is signalled once the
+/// first set's metadata (or the query's outcome) has been sent, which is when mysqlnd's poll
+/// sees the link readable.
 fn run_mysql_async_text_stream(
     mut conn: Conn,
-    sql: String,
     fetch_table_names: bool,
     commands: mpsc::Receiver<MyStreamCommand>,
     responses: mpsc::Sender<MyStreamResponse>,
     ready: AsyncReady,
 ) {
     let counters = conn.io_counters();
-    let result = match conn.query_iter(sql) {
+    // The query was already written by `MyConn::async_send`.
+    let result = match conn.read_query_result() {
         Ok(result) => drive_mysql_stream_signalled(
             result,
             fetch_table_names,
@@ -3567,12 +3577,7 @@ fn finish_mysql_stream_worker(
             let _ = responses.send(MyStreamResponse::Finished(conn, warnings));
         }
         Err(error) => {
-            let sqlstate = err_sqlstate(&error);
-            let errcode = err_code(&error);
-            let message = error.to_string();
-            let _ = responses.send(MyStreamResponse::Failed(
-                conn, sqlstate, errcode, message,
-            ));
+            let _ = responses.send(MyStreamResponse::Failed(conn, error));
         }
     }
 }
@@ -3907,9 +3912,7 @@ impl MyStmt {
                 Ok(())
             }
             Err(e) => {
-                conn.sqlstate = err_sqlstate(&e);
-                conn.errmsg = e.to_string();
-                conn.errcode = err_code(&e);
+                conn.record_mysql_error(&e);
                 Err(-1)
             }
         }
@@ -4156,9 +4159,7 @@ impl MyStmt {
                 Ok(())
             }
             Err(error) => {
-                conn.sqlstate = err_sqlstate(&error);
-                conn.errmsg = error.to_string();
-                conn.errcode = err_code(&error);
+                conn.record_mysql_error(&error);
                 Err(-1)
             }
         }
@@ -4568,6 +4569,7 @@ mod tests {
         assert!(!sql_may_return_several_sets("CALLBACK()"));
         assert!(!sql_may_return_several_sets("EXECUTED()"));
         assert!(!sql_may_return_several_sets("/* CALL p() */ SELECT 1"));
+        assert!(sql_may_return_several_sets("--\nCALL p()"));
         assert!(sql_may_return_several_sets("/*! */ CALL p()"));
         assert!(sql_may_return_several_sets("/*!99999 SELECT 1 */ CALL p()"));
         assert!(sql_may_return_several_sets("/*!50000 SELECT 1 */"));

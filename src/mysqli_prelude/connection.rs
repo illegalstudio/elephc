@@ -1690,8 +1690,12 @@ class mysqli {
             return false;
         }
         $this->disableMultiStatements();
-        $this->bump("com_query");
-        if (elephc_pdo_mysql_async_send($this->conn, $query, (int) $unbuffered) < 0) {
+        // -2: a lost session refused before any traffic (mysqlnd counts no command).
+        $_rc = elephc_pdo_mysql_async_send($this->conn, $query, (int) $unbuffered);
+        if ($_rc != -2) {
+            $this->bump("com_query");
+        }
+        if ($_rc < 0) {
             return $this->opFailed();
         }
         $this->asyncPending = true;

@@ -1927,6 +1927,20 @@ impl Conn {
         Ok(meta)
     }
 
+    /// elephc patch: writes `query` as `COM_QUERY` without reading the response, the send
+    /// half of [`Queryable::query_iter`]; [`Conn::read_query_result`] reads it (mysqlnd's
+    /// async `send_query` / `reap_query` split).
+    pub fn send_query(&mut self, query: &str) -> Result<()> {
+        self.write_command(Command::COM_QUERY, query.as_bytes())
+    }
+
+    /// elephc patch: reads the response of a query sent with [`Conn::send_query`].
+    pub fn read_query_result(&mut self) -> Result<QueryResult<'_, '_, '_, Text>> {
+        let info = self.handle_result_set()?;
+        let meta = info.into_query_meta();
+        Ok(QueryResult::new(ConnMut::Mut(self), meta))
+    }
+
     /// Executes [`COM_PING`](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_ping.html)
     /// on `Conn`. Return `true` on success or `false` on error.
     pub fn ping(&mut self) -> Result<(), Error> {

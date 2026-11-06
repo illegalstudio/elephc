@@ -2631,9 +2631,17 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "disableMultiStatements", vec![])),
-                    s_expr(e_method_call(e_this(), "bump", vec![e_str("com_query")])),
+                    s_assign("_rc", e_call("elephc_pdo_mysql_async_send", vec![e_this_prop("conn"), e_var("query"), e_cast(CastType::Int, e_var("unbuffered"))])),
                     s_if(
-                        e_binop(e_call("elephc_pdo_mysql_async_send", vec![e_this_prop("conn"), e_var("query"), e_cast(CastType::Int, e_var("unbuffered"))]), BinOp::Lt, e_int(0)),
+                        e_binop(e_var("_rc"), BinOp::NotEq, e_neg(e_int(2))),
+                        vec![
+                            s_expr(e_method_call(e_this(), "bump", vec![e_str("com_query")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
                         vec![
                             s_return(e_method_call(e_this(), "opFailed", vec![])),
                         ],

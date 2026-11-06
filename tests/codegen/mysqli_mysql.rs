@@ -1714,7 +1714,7 @@ fn test_mysqli_query_call_reads_later_sets_on_next_result() {
 mysqli_report(MYSQLI_REPORT_OFF);
 $db->query("DROP PROCEDURE IF EXISTS msyncslow");
 $db->query("CREATE PROCEDURE msyncslow() BEGIN SELECT 1 AS a; DO SLEEP(1.5); SELECT 2 AS b; END");
-foreach (["CALL msyncslow()", "/*!50000 CALL msyncslow() */", "/*! */ CALL msyncslow()", "/*!99999 SELECT 1 */ CALL msyncslow()"] as $sql) {
+foreach (["CALL msyncslow()", "/*!50000 CALL msyncslow() */", "/*! */ CALL msyncslow()", "/*!99999 SELECT 1 */ CALL msyncslow()", "--\nCALL msyncslow()"] as $sql) {
     $start = microtime(true);
     $first = $db->query($sql);
     echo $first->fetch_row()[0], ":", microtime(true) - $start < 1.0 ? "early" : "late";
@@ -1727,7 +1727,7 @@ foreach (["CALL msyncslow()", "/*!50000 CALL msyncslow() */", "/*! */ CALL msync
 }
 "#,
     ));
-    assert_eq!(out, "1:early:true:false2014|2:waited|9\n".repeat(4));
+    assert_eq!(out, "1:early:true:false2014|2:waited|9\n".repeat(5));
 }
 
 /// send_long_data() sends each chunk to the server at once (one COM_STMT_SEND_LONG_DATA
@@ -1802,6 +1802,41 @@ echo "killed:", var_export($s->reset(), true), $c() - $c0, ":", $s->errno, ":", 
 "#,
     ));
     assert_eq!(out, "fresh:true1|stored:true2true1|busy:true2:0|unread:true3:0:5|killed:false4:2006:HY000:2006\n");
+}
+
+/// A MYSQLI_ASYNC query is written before query() returns (its command and bytes are counted
+/// at once), and a session a transport error already ended refuses it immediately with 2006,
+/// sending nothing (no com_query), reported through mysqli_report (STRICT throws), like
+/// mysqlnd. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_async_send_writes_the_query_before_returning() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$st = function () use ($db) {
+    $s = $db->get_connection_stats();
+    return [$s["packets_sent_command"], $s["bytes_sent"], $s["com_query"]];
+};
+$a = $st();
+echo var_export($db->query("SELECT SLEEP(0.3)", MYSQLI_ASYNC), true), ",";
+$b = $st();
+echo $b[0] - $a[0], ",", $b[1] - $a[1], "|";
+$db->reap_async_query();
+$k = new mysqli($host, $user, $pass, $dbname, $port);
+$k->query("KILL " . $db->thread_id);
+usleep(200000);
+echo var_export($db->query("SELECT 1"), true), ":", $db->errno, "|";
+$a = $st();
+echo var_export($db->query("SELECT 1", MYSQLI_ASYNC), true), ":", $db->errno, ":", $db->error, ":";
+$b = $st();
+echo $b[0] - $a[0], ",", $b[2] - $a[2], "|";
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+try { $db->query("SELECT 1", MYSQLI_ASYNC); echo "nothrow"; } catch (mysqli_sql_exception $e) { echo "throw:", $e->getCode(); }
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "true,1,26|false:2006|false:2006:MySQL server has gone away:0,0|throw:2006\n");
 }
 
 /// An async `UPDATE` (and an unbuffered `real_query()` one) reports its OK packet once
