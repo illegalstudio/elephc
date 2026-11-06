@@ -1659,10 +1659,16 @@ pub(crate) fn check_call_user_func_array(
             // A union of array shapes is array storage the spread binder refuses, so the
             // first walk binds the untyped parameters to the union's value type directly, as
             // the final-pass re-walk does (`rewalk_marked_function_over_variable_list`). Under
-            // the eval barrier the spread call below returns `mixed` without walking instead.
+            // the eval barrier a call without a signature is `mixed` and walks nothing, and a
+            // spread of the union would still be refused, so the call returns `mixed` here. A
+            // generic template is instantiated per call from its argument expressions, which a
+            // variable list does not provide, so it keeps the spread path.
             let list_ty = checker.infer_type(&args[1], env)?;
-            if !checker.eval_barrier_active && !spread_binder_accepts_source(&list_ty) {
+            if decl.type_params.is_empty() && !spread_binder_accepts_source(&list_ty) {
                 if let Some(value_ty) = variable_list_value_type(&list_ty) {
+                    if checker.eval_barrier_active {
+                        return Ok(PhpType::Mixed);
+                    }
                     let param_types =
                         checker.list_value_param_types(&cb_name, &decl, &value_ty)?;
                     return checker.resolve_function_signature(&cb_name, &decl, param_types);

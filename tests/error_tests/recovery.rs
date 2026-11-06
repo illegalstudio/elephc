@@ -542,6 +542,19 @@ fn test_failed_body_rewalk_survives_calls_under_eval_barrier() {
     }
 }
 
+/// A string `call_user_func_array` callee without a signature over a union of array shapes,
+/// reached under the eval barrier, resolves to `mixed` without walking the body: a spread of
+/// the union, which the spread binder refuses, was synthesized there and reported "Spread
+/// operator requires an array" for a valid program whose function is never called.
+#[test]
+fn test_call_user_func_array_union_list_under_eval_barrier_is_accepted() {
+    expect_no_error(
+        "<?php function f($n) { return $n + 1; } \
+         function src(): array<int>|array<float> { return [1]; } \
+         function outer() { eval(\"\"); $a = src(); var_dump(call_user_func_array('f', $a)); }",
+    );
+}
+
 /// `call_user_func_array` over a variable list binds every untyped by-value parameter, the
 /// variadic tail included, to the list's value type, so a body that indexes it stays accepted
 /// when the re-walk runs from it: beside a by-reference parameter (whose first walk bound the
