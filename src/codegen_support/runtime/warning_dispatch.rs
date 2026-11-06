@@ -454,8 +454,13 @@ fn emit_activation(e: &mut Emitter) {
     abi::emit_load_int_immediate(e, scratch, 0);
     abi::emit_store_to_sp(e, scratch, ACTIVATION + 24);
     abi::emit_store_to_sp(e, scratch, ACTIVATION + 32);
-    abi::emit_symbol_address(e, scratch, "__rt_gc_warning_frame_owners");
     abi::emit_store_to_sp(e, scratch, ACTIVATION + 40);
+    abi::emit_symbol_address(e, scratch, "__rt_gc_warning_frame_owners");
+    abi::emit_store_to_sp(
+        e,
+        scratch,
+        ACTIVATION + crate::codegen_support::try_handlers::ACTIVATION_OWNER_VISITOR_OFFSET,
+    );
     abi::emit_temporary_stack_address(e, scratch, ACTIVATION);
     abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
 }

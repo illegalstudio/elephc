@@ -128,6 +128,30 @@ __attribute__((noinline)) void boundary_poison_stack(void) {
     assert_eq!(out, "resumed|done");
 }
 
+/// Nested includes keep one activation each inside the including function's frame. Spaced tighter
+/// than a record, the inner record's visitor word was the outer record's previous link, and the
+/// collector jumped through it.
+#[test]
+fn test_gc_coroutine_boundary_skips_nested_include_activations() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function run(): void { include_once 'outer.php'; }
+$fiber = new Fiber('run');
+$fiber->start(); gc_collect_cycles(); $fiber->resume(); unset($fiber);
+echo 'done';
+"#,
+            ),
+            ("outer.php", "<?php include_once 'inner.php'; $trace = debug_backtrace();"),
+            ("inner.php", "<?php Fiber::suspend(); echo 'resumed|';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "resumed|done");
+}
+
 /// Both exceptional suspension exits notify the monitoring callback with the same coroutine.
 #[test]
 fn test_gc_coroutine_boundary_unparks_rejected_forced_suspension() {

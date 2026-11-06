@@ -53,7 +53,7 @@ const FRAME_FOOTER_BYTES: usize = 16;
 // backtraces: `[0]` previous, `[8]` cleanup callback, `[16]` frame pointer, `[24]` frame reader,
 // `[32]` caller line, `[40]` caller-file descriptor (`{ptr, len}`, zero for the entry file), then
 // the pure owner visitor at `ACTIVATION_OWNER_VISITOR_OFFSET` (the last word of the record).
-const EXCEPTION_ACTIVATION_BYTES: usize =
+pub(super) const EXCEPTION_ACTIVATION_BYTES: usize =
     crate::codegen_support::try_handlers::ACTIVATION_OWNER_VISITOR_OFFSET + 8;
 
 

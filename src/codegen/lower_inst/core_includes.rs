@@ -83,7 +83,7 @@ pub(super) fn lower_include_frame_enter(
     let Some(base) = ctx.include_frame_base else {
         return Ok(());
     };
-    let record_offset = base + frame.slot as usize * 48;
+    let record_offset = base + frame.slot as usize * crate::codegen::frame::EXCEPTION_ACTIVATION_BYTES;
     let source = ctx
         .module
         .source_catalog()
@@ -141,6 +141,7 @@ pub(super) fn lower_include_frame_enter(
             ctx.emitter.instruction("str x10, [x11, #16]");                     // [16] this site's descriptor
             abi::emit_symbol_address(ctx.emitter, "x10", "__rt_include_frame_reader");
             ctx.emitter.instruction("str x10, [x11, #24]");                     // [24] the shared frame reader
+            ctx.emitter.instruction("str xzr, [x11, #48]");                     // [48] no owner visitor
             ctx.emitter.instruction("stp xzr, xzr, [x11, #32]");                // [32]/[40] no caller site
             abi::emit_store_reg_to_symbol(ctx.emitter, "x11", "_exc_call_frame_top", 0);
         }
@@ -152,6 +153,7 @@ pub(super) fn lower_include_frame_enter(
             abi::emit_symbol_address(ctx.emitter, "rax", "__rt_include_frame_reader");
             ctx.emitter.instruction("mov QWORD PTR [r11 + 24], rax");           // [24] the shared frame reader
             ctx.emitter.instruction("mov QWORD PTR [r11 + 32], 0");             // [32] no caller line
+            ctx.emitter.instruction("mov QWORD PTR [r11 + 48], 0");             // [48] no owner visitor
             ctx.emitter.instruction("mov QWORD PTR [r11 + 40], 0");             // [40] no caller file
             abi::emit_store_reg_to_symbol(ctx.emitter, "r11", "_exc_call_frame_top", 0);
         }
@@ -173,7 +175,7 @@ pub(super) fn lower_include_frame_exit(
     let Some(base) = ctx.include_frame_base else {
         return Ok(());
     };
-    let record_offset = base + frame.slot as usize * 48;
+    let record_offset = base + frame.slot as usize * crate::codegen::frame::EXCEPTION_ACTIVATION_BYTES;
     let (record_reg, scratch) = match ctx.emitter.target.arch {
         Arch::AArch64 => ("x11", "x10"),
         Arch::X86_64 => ("r11", "rax"),
