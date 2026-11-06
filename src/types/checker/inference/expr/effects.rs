@@ -483,7 +483,11 @@ impl Checker {
                 for (conditions, result) in arms {
                     let mut arm_env = fallthrough_env.clone();
                     for condition in conditions {
-                        self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
+                        if let Err(error) =
+                            self.infer_type_with_assignment_effects(condition, &mut arm_env)
+                        {
+                            return Err(self.with_other_match_condition_errors(error, arms, &arm_env));
+                        }
                     }
                     fallthrough_env = arm_env.clone();
                     let mut result_env =

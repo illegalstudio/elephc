@@ -29,6 +29,33 @@ impl Checker {
         let _ = self.infer_type(&call, env);
     }
 
+    /// Adds to `first` what the other conditions of a `match` refuse.
+    ///
+    /// A closed world compiles a refused construct as php's run-time fault and checks the whole
+    /// program again. Stopping at the first condition made that one full check per arm:
+    /// `SymfonyCaster` matches four undefined constants, four rounds of 25 s each.
+    pub(super) fn with_other_match_condition_errors(
+        &mut self,
+        first: CompileError,
+        arms: &[(Vec<Expr>, Expr)],
+        env: &TypeEnv,
+    ) -> CompileError {
+        let mut errors = first.flatten();
+        for condition in arms.iter().flat_map(|(conditions, _)| conditions) {
+            let mut probe = env.clone();
+            if let Err(error) = self.infer_type_with_assignment_effects(condition, &mut probe) {
+                for error in error.flatten() {
+                    if !errors.iter().any(|known| {
+                        known.span == error.span && known.message == error.message
+                    }) {
+                        errors.push(error);
+                    }
+                }
+            }
+        }
+        CompileError::from_many(errors)
+    }
+
     /// Infers types for literals, variables, arrays, branches, unary operators, and casts.
     pub(super) fn infer_basic_expr_type(
         &mut self,
@@ -246,7 +273,9 @@ impl Checker {
                 let mut arm_types: Vec<(&Expr, PhpType)> = Vec::new();
                 for (conditions, result) in arms {
                     for c in conditions {
-                        self.infer_type(c, env)?;
+                        if let Err(error) = self.infer_type(c, env) {
+                            return Err(self.with_other_match_condition_errors(error, arms, env));
+                        }
                     }
                     let arm_env = self.match_arm_narrowed_env(subject, conditions, env)?;
                     let ty = self.match_arm_result_type(result, &arm_env)?;

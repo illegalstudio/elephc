@@ -732,6 +732,44 @@ foreach (['routes', 'dbal'] as $name) {
     assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
 }
 
+/// Every refused condition of a `match` is compiled to php's fault in one round: each round is a
+/// full check of the program, and `SymfonyCaster` spent four of them on four arms of one `match`.
+#[test]
+fn closed_world_demotes_every_match_condition_in_one_round() {
+    let dir = make_test_dir("cw_match_rounds");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\\\":"src/"}}}"#).unwrap();
+    fs::write(
+        dir.join("src/Caster.php"),
+        "<?php\nnamespace App;\nclass State { public const KNOWN = 0; }\nclass Caster {\n    public static function name(int $s): string {\n        return match ($s) {\n            State::KNOWN => 'known',\n            State::ONE => 'one',\n            State::TWO => 'two',\n            State::THREE => 'three',\n            default => 'other',\n        };\n    }\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+spl_autoload_register(function (string $c): void {
+    $f = __DIR__ . '/src/' . substr($c, 4) . '.php';
+    if (str_starts_with($c, 'App\\') && is_file($f)) { require $f; }
+});
+echo App\Caster::name(0), "\n";
+"#,
+    )
+    .unwrap();
+    let output = Command::new(elephc_bin())
+        .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_TYPECHECK_TIMES", "1")
+        .current_dir(&dir)
+        .args(["--closed-world", "--php-version", "8.5"])
+        .arg(dir.join("main.php"))
+        .output()
+        .expect("failed to spawn elephc");
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    let log = format!("{}{}", text(&output.stdout), text(&output.stderr));
+    let checks = log.matches("[elephc-typecheck] top_level_final").count();
+    assert_eq!(checks, 2, "one check that refuses, one that passes");
+    assert_eq!(text(&run(&dir).stdout), "known\n");
+}
+
 /// A rebuild starts from the refusals the first build remembered. A class php cannot load, and
 /// what extends it at any depth, must then come out the same as on the first build: the memo used
 /// to hand them to a run-time autoloader that a closed world does not have, and every rebuild of
