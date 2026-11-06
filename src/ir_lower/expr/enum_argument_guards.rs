@@ -3,6 +3,8 @@
 //!
 //! Called from:
 //! - Enum interface call rejection and runtime unpack materialization.
+//! - Function, method and closure entry, for by-reference parameters of a union of `null`,
+//!   arrays and objects ([`guard_reference_parameter_entry`]).
 //!
 //! Key details:
 //! - Callers stage every source expression before checking parameter-order constraints.
@@ -203,4 +205,49 @@ pub(super) fn throw_message(
         class_name: Name::unqualified(class), args: vec![message],
     }, span));
     ctx.builder.terminate(Terminator::Throw { value: exception.value });
+}
+
+/// Whether a by-reference parameter of type `ty` is checked at callee entry: a union whose
+/// members are all `null`, arrays or objects (`?array`, `?A`, `array|A`, `A|B|null`). Such a
+/// parameter is a boxed cell in the callee, which a caller's `mixed` local may fill with any
+/// value; these members never coerce, so the check is exact.
+pub(crate) fn reference_parameter_needs_entry_guard(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Union(members) if members.iter().all(|member| {
+        member.is_php_array()
+            || matches!(
+                member,
+                PhpType::Void | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+    }))
+}
+
+/// Checks a by-reference parameter's value against its declared union on entry to the callee,
+/// after every argument was evaluated (php's `RECV` order), raising php's
+/// `f(): Argument #N ($name) must be of type T, U given` `TypeError` for anything else.
+pub(crate) fn guard_reference_parameter_entry(
+    ctx: &mut LoweringContext<'_, '_>,
+    function: &str,
+    position: usize,
+    name: &str,
+    ty: &PhpType,
+) {
+    let span = Span::synthetic();
+    let variable = Expr::new(ExprKind::Variable(name.to_string()), span);
+    let Some(accepted) = accepts_type(ty, &variable, span) else { return; };
+    let accepted = lower_expr(ctx, &accepted);
+    let ok = ctx.builder.create_named_block("ref.param.type.ok", Vec::new());
+    let bad = ctx.builder.create_named_block("ref.param.type.bad", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: accepted.value, then_target: ok, then_args: Vec::new(),
+        else_target: bad, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(bad);
+    let literal = |text| Expr::new(ExprKind::StringLiteral(text), span);
+    let prefix = literal(format!(
+        "{function}(): Argument #{position} (${name}) must be of type {}, ",
+        diagnostic_type(ty)
+    ));
+    let message = concat(prefix, concat(runtime_debug_type(&variable, span), literal(" given".to_string()), span), span);
+    throw_message(ctx, "TypeError", message, span);
+    ctx.builder.position_at_end(ok);
 }

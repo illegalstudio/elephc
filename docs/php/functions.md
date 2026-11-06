@@ -444,7 +444,12 @@ values is converted into the declared element layout on the way back. A callee t
 value the declaration cannot hold (`null`, elements of another kind, an object or object
 element of another class, or a nested array of another element kind) stops the program with a
 diagnostic, as a direct assignment of that value would be rejected; PHP has no declared local
-types.
+types. While the declared local keeps its typed slot, the write-back runs when the call
+returns: if the callee throws after writing through the reference, the local keeps its
+previous value (PHP would already have applied the write), and nothing leaks. Two references to the same declared local (`f($v, $v)`) share one cell. A `mixed`
+local bound to a by-reference union of `null`, arrays and objects is checked against that
+union when the callee starts, after every argument was evaluated, and anything else raises
+`TypeError` like PHP.
 
 Known gaps against PHP for these nullable by-reference parameters:
 

@@ -529,3 +529,37 @@ run();
     );
     assert_clean(out, "TE|arr|A|TE|\n");
 }
+
+/// Declared-type locals bound to nullable by-reference parameters: a callee that throws after
+/// writing through the reference leaves no leaked writeback cell (the local keeps its previous
+/// value, as documented: the write is applied when the call returns), two references to the same
+/// local share one cell (`both($v, $v)` sees its own write and writes back once), and the
+/// boundary check of a `mixed` local runs after every argument was evaluated.
+#[test]
+fn test_declared_reference_writeback_unwinds_shares_and_checks_after_arguments() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function fail(?array &$a): void { $a = [9, 9]; throw new RuntimeException("x"); }
+function both(?float &$a, ?float &$b): void { $a = 2.0; echo $b, ","; $b = $b + 1; }
+function lists(?array &$a, ?array &$b): void { $a[] = 2; echo count($b), ","; $b[] = 3; }
+function src(): mixed { return 7; }
+function side(): int { echo "S"; return 1; }
+function take(?array &$a, int $x): string { return "in"; }
+function run(): void {
+    array<int> $arr = [1];
+    try { fail($arr); } catch (RuntimeException $e) { echo count($arr), ":", $arr[0], "|"; }
+    float $v = 1.0;
+    both($v, $v);
+    echo $v, "|";
+    array<int> $l = [1];
+    lists($l, $l);
+    echo count($l), "|";
+    $m = src();
+    try { echo take($m, side()); } catch (TypeError $e) { echo "TE"; }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "1:1|2,3|2,3|STE\n");
+}
