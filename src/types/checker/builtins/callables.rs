@@ -1424,9 +1424,7 @@ fn rewalk_marked_descriptor_call_target(
             continue;
         };
         let ty = checker.infer_type(inner, env)?;
-        if matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed)
-            || ty.is_php_array()
-        {
+        if spread_binder_accepts_source(&ty) {
             continue;
         }
         binder_accepts_spreads = false;
@@ -1444,6 +1442,14 @@ fn rewalk_marked_descriptor_call_target(
         .canonical_function_name_folded(name)
         .unwrap_or_else(|| name.to_string());
     checker.rewalk_marked_function_from_initial_params(&name, &value_ty)
+}
+
+/// Reports whether the spread binder (`spread_source_element_type`) unpacks a source of type
+/// `ty` statically: an array, a keyed array, a declared `array` or a `mixed` value. It refuses
+/// a union of array shapes, which only the descriptor paths accept.
+fn spread_binder_accepts_source(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed)
+        || ty.is_php_array()
 }
 
 /// Type-checks a `call_user_func_array` call: resolves the callback (first-class callable,
@@ -1649,7 +1655,19 @@ pub(crate) fn check_call_user_func_array(
             let ret_ty = checker.check_function_call(&cb_name, elems, span, env)?;
             return Ok(ret_ty);
         }
-        if checker.fn_decls.contains_key(cb_name.as_str()) {
+        if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
+            // A union of array shapes is array storage the spread binder refuses, so the
+            // first walk binds the untyped parameters to the union's value type directly, as
+            // the final-pass re-walk does (`rewalk_marked_function_over_variable_list`). Under
+            // the eval barrier the spread call below returns `mixed` without walking instead.
+            let list_ty = checker.infer_type(&args[1], env)?;
+            if !checker.eval_barrier_active && !spread_binder_accepts_source(&list_ty) {
+                if let Some(value_ty) = variable_list_value_type(&list_ty) {
+                    let param_types =
+                        checker.list_value_param_types(&cb_name, &decl, &value_ty)?;
+                    return checker.resolve_function_signature(&cb_name, &decl, param_types);
+                }
+            }
             let spread_args = vec![Expr::new(
                 ExprKind::Spread(Box::new(args[1].clone())),
                 args[1].span,

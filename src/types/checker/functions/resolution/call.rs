@@ -12,7 +12,7 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 use std::collections::HashSet;
 
-use crate::types::checker::Checker;
+use crate::types::checker::{Checker, FnDecl};
 
 impl Checker {
     /// Determines the element type for a variadic parameter's container.
@@ -742,7 +742,29 @@ impl Checker {
             return Ok(());
         };
         self.rewalk_failed_body_at_next_call.remove(name);
-        let mut param_types = self.initial_function_param_types(name, &decl)?;
+        let param_types = self.list_value_param_types(name, &decl, list_value_ty)?;
+        let outer_walk = self.refreshed_inferred_callees.is_none();
+        if outer_walk {
+            self.refreshed_inferred_callees = Some(HashSet::new());
+        }
+        let result = self.resolve_function_signature(name, &decl, param_types);
+        if outer_walk {
+            self.refreshed_inferred_callees = None;
+        }
+        result.map(|_| ())
+    }
+
+    /// Returns the declaration's initial parameter types with every untyped by-value
+    /// parameter bound to `list_value_ty`, the value type of a variable argument list, and an
+    /// untyped by-value variadic tail bound to an array of it. By-reference and declared
+    /// parameters keep their initial types.
+    pub(in crate::types::checker) fn list_value_param_types(
+        &mut self,
+        name: &str,
+        decl: &FnDecl,
+        list_value_ty: &PhpType,
+    ) -> Result<Vec<(String, PhpType)>, CompileError> {
+        let mut param_types = self.initial_function_param_types(name, decl)?;
         for (idx, (_, ty)) in param_types.iter_mut().enumerate().take(decl.params.len()) {
             let untyped = decl.param_types.get(idx).is_some_and(Option::is_none);
             let by_ref = decl.ref_params.get(idx).copied().unwrap_or(false);
@@ -755,15 +777,7 @@ impl Checker {
                 *ty = PhpType::Array(Box::new(list_value_ty.clone()));
             }
         }
-        let outer_walk = self.refreshed_inferred_callees.is_none();
-        if outer_walk {
-            self.refreshed_inferred_callees = Some(HashSet::new());
-        }
-        let result = self.resolve_function_signature(name, &decl, param_types);
-        if outer_walk {
-            self.refreshed_inferred_callees = None;
-        }
-        result.map(|_| ())
+        Ok(param_types)
     }
 
     /// Reports whether a call reaching `name` now has to walk its failed body again
