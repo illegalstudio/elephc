@@ -435,6 +435,9 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_strrev` | Reverse string (byte-wise) | `x1`/`x2` | `x1`/`x2` |
 | `__rt_grapheme_strrev` | Reverse a UTF-8 string by grapheme cluster for PHP 8.6 `grapheme_strrev()`; returns false on malformed UTF-8 | `x1`/`x2` | `x1`/`x2` |
 | `__rt_mbstring_native` | Shared invocation adapter that propagates failures through ordinary exception unwinding | C ABI operation ID, extended descriptor-pointer array, count, caller strictness, optional eval context | Primary value, status, byte length, result kind |
+| `__rt_mb_chr_utf8` | Encodes one non-surrogate U+0000..U+10FFFF codepoint into a 1-4 byte owned UTF-8 string; a null pointer reports PHP `false` | `x0`/`rax` = codepoint | AArch64 `x1`/`x2`; x86_64 `rax`/`rdx` |
+| `__rt_mb_encode_numericentity_utf8` | Encodes every non-ASCII UTF-8 scalar as `&#DECIMAL;` for the full-range identity map; null reports invalid UTF-8 for the bridge | source string | owned entity string, or null |
+| `__rt_mb_decode_numericentity_utf8` | Decodes well-formed decimal `&#N;` references in U+0080..U+10FFFF without surrogates; plain ampersands copy one byte; null reports a rejected shape for the bridge | source string | owned decoded string, or null |
 | `__rt_mbstring_status` | Same owned results and errors, with pending exceptions returned to eval without unwinding | C ABI operation ID, argument pointer, count | AArch64 `x0`/`x1`/`x2`/`x3`; x86_64 `rax`/`rdx`/`rcx`/`r8` |
 | `__rt_mbstring_string_array` | Validates packed binary strings and transfers copied elements into an owned indexed array of Mixed cells | C ABI packed pointer, byte length, element count | Owned array pointer, or zero for invalid framing |
 | `__rt_mbstring_array_next` | Borrows one ordered native array entry and normalizes concrete value tags without allocation or mutation | C ABI context, array descriptor, cursor, key output, value output | Entry, end, or failure status |
@@ -816,7 +819,15 @@ implementation ledger.
 `mb_encode_numericentity` and `mb_decode_numericentity` share the same protected
 array reader for conversion maps. Encoding resolution occurs before map-length
 validation, and only complete groups of four elements are accepted. Map keys are
-ignored. Integer conversion uses PHP arithmetic rules independently of caller
+ignored. The explicit-UTF-8 full decimal map `[0x80, 0x10FFFF, 0, 0x1FFFFF]`
+takes native helpers that pre-scan through the allocation-free length sink before
+building one owned result; any other map, encoding, malformed reference, or
+plain entity shape keeps the shared bridge. Decimal references are bounded to
+ten digits, matching php-src's entity scanner. `mb_convert_kana("a")` maps the
+ASCII and U+FF01..U+FF5D table subset to one byte, while `mb_chr` encodes one
+scalar directly; both allocate one owned string and keep the bridge for other
+encodings or unmapped table entries. Integer conversion uses PHP arithmetic
+rules independently of caller
 strictness: numeric prefixes may warn, finite float overflow wraps, and numeric
 string overflow saturates. Ordered warnings are delivered before the next
 referenced map element is read. The chosen encoding remains fixed across these

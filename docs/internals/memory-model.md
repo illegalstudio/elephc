@@ -455,7 +455,7 @@ A consequence is that `_concat_buf` usage grows with the depth of nested calls t
 
 ### Copy-on-store
 
-When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the codegen calls `__rt_str_persist` which copies the string from the concat buffer to the **heap**. This ensures:
+When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the codegen calls `__rt_str_persist` which copies the string from the concat buffer to the **heap**. Acquiring a `const_str` literal skips that call: its data-section payload is immutable and has no managed owner, and the mbstring identity origin was already registered when the constant was materialized. This matters inside loops, where the optimizer can hoist the literal but not its per-iteration acquire. This ensures:
 
 - **Variables always point to heap memory**, never into the scratch buffer
 - **The buffer can safely reset** without invalidating stored values
