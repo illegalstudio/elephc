@@ -224,6 +224,12 @@ condition `$divisor * $divisor <= $candidate`. Strict identity against a proven
 numeric partner is admitted on the same terms, including reads of the owning local
 as in `$value = $i * 4; if ($value !== 20)`. The product retains overflow-to-float
 semantics; this does not require or imply an integer range proof for either counter.
+An array or hash key is also a numeric observation: `$arr[$j + 1]` and
+`$arr[$j]` with an `int|float` counter `$j` read the cell's tag and payload into
+the key registers inline (a float key keeps PHP's truncation and deprecation),
+and a key never counts as a by-reference escape of its slot
+(`ir_passes::by_ref_alias`). An operand temporary that pins such a key may be
+retired by `unset_local`, which only zeroes the slot.
 Integer casts of selected frame cells or reads of proven numeric locals inspect
 the runtime tag and load an integer payload directly. A float keeps the existing
 boxed conversion on a cold path, including PHP's out-of-range integer value.
@@ -238,7 +244,9 @@ store writes the tag and payload into that cell instead of boxing on the heap.
 Re-entering the loop rewrites the same cell, because every read of the slot copies its
 payload before the next store. An explicit `mixed_box` of a raw integer or float,
 such as a guarded counter's exit publication, is a cell producer when the local is
-its only owner. A guarded entry's tag test reads its seed in the same block as the
+its only owner. So is an `acquire` that boxes a raw scalar, which appears when range
+analysis narrows a checked producer it retained (`$j = $i - 1` into an `int|float`
+counter). A guarded entry's tag test reads its seed in the same block as the
 payload copy. Nested loops with field-seeded counters therefore allocate nothing
 per loop entry.
 Private slots in the executable main frame use the same lifetime proof; globals

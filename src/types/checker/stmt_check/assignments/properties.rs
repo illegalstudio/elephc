@@ -13,8 +13,8 @@ use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_m
 use crate::parser::ast::{is_compound_property_assignment_self_read, Expr};
 use crate::span::Span;
 use crate::types::{
-    merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
-    PhpType, TypeEnv,
+    array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type,
+    static_array_key_forces_hash_storage, PhpType, TypeEnv,
 };
 
 use super::super::super::scope_dynamic_storage;
@@ -252,6 +252,7 @@ pub(super) fn check_property_array_assign(
                 checker,
                 &prop_ty,
                 property_has_declared_type,
+                true,
                 &format!("Property {}::${}[]", class_name, property),
                 index,
                 &normalized_idx_ty,
@@ -974,6 +975,19 @@ fn updated_array_property_push_type(
                 Ok(PhpType::Array(Box::new(merged_ty)))
             }
         }
+        // An untyped slot a skipping key promoted to hash storage keeps accepting appends: PHP
+        // appends at the next integer key, which `HashAppend` computes from the hash itself.
+        PhpType::AssocArray { key, value } if !property_has_declared_type => {
+            let merged_value = if value.as_ref() == val_ty {
+                *value.clone()
+            } else {
+                checker.merge_array_element_type(value, val_ty).unwrap_or(PhpType::Mixed)
+            };
+            Ok(PhpType::AssocArray {
+                key: Box::new(merge_array_key_types(*key.clone(), PhpType::Int)),
+                value: Box::new(merged_value),
+            })
+        }
         PhpType::Int | PhpType::Void if !property_has_declared_type => {
             Ok(PhpType::Array(Box::new(val_ty.clone())))
         }
@@ -992,8 +1006,9 @@ fn updated_array_property_push_type(
 ///
 /// Handles `PhpType::Array` and `PhpType::AssocArray` storage:
 /// - For `Array`: validates element type compatibility, handles `Never`-element arrays specially
-///   (converts to `AssocArray` when a static key forces hash storage), and merges element types
-///   for untyped properties.
+///   (converts to `AssocArray` when a static key forces hash storage), converts an untyped
+///   instance property to `AssocArray` for any integer key that may skip a slot, and merges element
+///   types for untyped properties.
 /// - For `AssocArray`: merges the key type with the index type and merges the value type with
 ///   the assigned value, preserving declared-type constraints.
 ///
@@ -1002,10 +1017,15 @@ fn updated_array_property_push_type(
 /// untyped `[]` slot stores a hash instead of an indexed array that drops the key. A key that
 /// is not provably an integer on a declared packed `array<T>` is refused, since that slot
 /// keeps its packed storage and the write would coerce the key into an index.
+///
+/// `instance_slot` limits the skipping-key promotion to instance properties: a static slot keeps
+/// its packed storage under an integer key, because its compound writes (`C::$p[$k] ??= v`) store
+/// the promoted hash with boxed values, which the typed static slot does not accept.
 pub(super) fn updated_array_property_assign_type(
     checker: &Checker,
     prop_ty: &PhpType,
     property_has_declared_type: bool,
+    instance_slot: bool,
     element_label: &str,
     index: &Expr,
     normalized_idx_ty: &PhpType,
@@ -1020,6 +1040,9 @@ pub(super) fn updated_array_property_assign_type(
             if !matches!(normalized_idx_ty, PhpType::Int)
                 || (matches!(elem_ty.as_ref(), PhpType::Never)
                     && static_array_key_forces_hash_storage(index))
+                || (instance_slot
+                    && !property_has_declared_type
+                    && untyped_property_key_may_skip(index))
             {
                 // A declared `array<T>` is a packed vector that keeps its storage, so a key
                 // that is not provably an integer would be coerced into an index and a string
@@ -1136,6 +1159,20 @@ pub(super) fn property_write_key_type(key: PhpType) -> PhpType {
         }
         _ => key,
     }
+}
+
+/// Returns whether an integer key written into an untyped array property may skip a slot.
+///
+/// Packed storage has no keys: slot `n` is key `n`, so a write past the logical end zero-fills
+/// the gap where PHP promotes the array to a hash (`$h->items[1] = 6` on a fresh object is
+/// `{"1":6}`). A local decides this from its flow-sensitive type, which is still empty at its
+/// first write. A property slot is typed from every write in the class instead, so an earlier
+/// `$h->items[0] = 5` elsewhere says nothing about the object a later write reaches: only a key
+/// that is provably `0` is always in range. Every other integer key takes hash storage, where a
+/// gap costs nothing, exactly as `array_key_contiguity_is_unproven` decides for an empty local.
+/// No loop-counter exception applies, because any call in the loop may reset the property.
+fn untyped_property_key_may_skip(index: &Expr) -> bool {
+    static_array_key_forces_hash_storage(index) || array_key_contiguity_is_unproven(index)
 }
 
 /// Returns true if `ty` is a valid PHP array key type (Int, Str, or Mixed).

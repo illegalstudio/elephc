@@ -47,6 +47,7 @@ mod binding_flow;
 mod mixed_storage_scan;
 mod numeric_regions;
 mod packed_counter;
+mod promotable_arrays;
 pub(crate) mod null_probe;
 mod schema;
 mod stmt_check;
@@ -181,6 +182,8 @@ pub(crate) struct Checker {
     /// Deduplicated by instantiated name, so the fixpoint terminates for any program without
     /// polymorphic recursion.
     pub requested_instantiations: Vec<(String, crate::generics::Bindings)>,
+    /// Typed clones the direct calls of this check redirected to, deduplicated by clone name.
+    pub requested_promotable_clones: Vec<crate::generics::promotable_clones::PromotableCloneRequest>,
     /// (enclosing function, call site) -> the instantiated function that call resolved to.
     ///
     /// Lowering cannot re-derive this: picking the instantiation needs the argument TYPES, and
@@ -194,7 +197,7 @@ pub(crate) struct Checker {
     /// same line and column. Keying on `Span` alone collapsed those two into one and made the
     /// second call invoke the first's function.
     ///
-    /// The scope half is `current_loop_storage_scope` (`main`, a function's name,
+    /// The scope half is `current_loop_storage_scope` (`#main`, a function's name,
     /// `Class::method`, or a closure's nested scope), which lowering spells the same way and
     /// `generics::site_scope` rebuilds for the AST rename passes. All three generic site maps
     /// use it.
@@ -623,6 +626,43 @@ pub(crate) struct Checker {
     /// type, as span -> the SET of local NAMES re-bound there. Carried in `CheckResult` from here
     /// so the binding-decision maps travel together, keyed and shaped the same way.
     pub local_retype_sites: HashMap<Span, HashSet<String>>,
+    /// Local array writes whose integer key may skip a slot of a non-empty packed array, as
+    /// span -> the SET of local NAMES promoted to hash storage there. See
+    /// `CheckResult::sparse_key_write_sites`.
+    pub sparse_key_write_sites: HashMap<Span, HashSet<String>>,
+    /// Typed scalar packed locals promoted to hash storage only at run time, and their whole-value
+    /// reads typed `array<mixed>`. See `CheckResult::promotable_arrays`.
+    pub promotable_arrays: crate::types::PromotableArrays,
+    /// The current body's locals `promotable_arrays::find_candidates` found free of references,
+    /// unsets, nested writes and by-reference calls, so they may become promotable. Installed per
+    /// body before it is checked, and saved and restored around nested bodies.
+    pub promotable_array_candidates: promotable_arrays::PromotableCandidates,
+    /// Spans of promotable values handed on raw: an argument bound to a promotable `array<int>`
+    /// parameter, a `return` from a function declared `array<int>`, or an assignment to a
+    /// candidate local. They skip the `array<mixed>` view.
+    pub promotable_raw_sites: HashSet<Span>,
+    /// `(function, parameter)` pairs some caller passes a promotable `array<int>` to, so the
+    /// parameter is promotable from the function's entry.
+    pub promotable_params: HashSet<(String, String)>,
+    /// Functions declared to return `array<int>` that return a promotable value.
+    pub promotable_returning: HashSet<String>,
+    /// Functions to re-resolve once their current resolution ends, because a promotable
+    /// decision about them appeared while their body was being checked.
+    pub pending_promotable_reresolutions: Vec<String>,
+    /// `(callee, parameter, argument)` for call arguments that are themselves calls: whether they
+    /// return a promotable value is known only once they are checked.
+    pub pending_promotable_call_args: Vec<(String, String, Expr)>,
+    /// Candidate sets of callee bodies, computed once per function.
+    pub promotable_callee_candidates: HashMap<String, promotable_arrays::PromotableCandidates>,
+    /// `(scope, local)` pairs whose boxed or counter-key element reads took the `?int` view in the
+    /// current walk of `scope`.
+    pub promotable_view_reads: HashSet<(String, String)>,
+    /// `(scope, local)` pairs some write or entry made promotable in the current walk of `scope`.
+    pub promotable_walk_locals: HashSet<(String, String)>,
+    /// `(scope, local)` pairs denied the `?int` view because a walk gave it to them and nothing in
+    /// that walk made them promotable. It only grows, so re-walking a body until it stops growing
+    /// terminates, and the last walk gives the view exactly to the locals it promotes.
+    pub promotable_view_denied: HashSet<(String, String)>,
     /// AST address of the expression that forms the ENTIRE expression-statement currently being
     /// checked, or `None` outside one.
     ///
@@ -1565,6 +1605,7 @@ fn check_types_on_compiler_stack(
 
     Ok(CheckResult {
         requested_instantiations: checker.requested_instantiations,
+        requested_promotable_clones: checker.requested_promotable_clones,
         generic_call_sites: checker.generic_call_sites,
         requested_class_instantiations: checker.requested_class_instantiations,
         requested_method_instantiations: checker.requested_method_instantiations,
@@ -1604,6 +1645,8 @@ fn check_types_on_compiler_stack(
         local_ref_detach_sites: checker.local_ref_detach_sites,
         local_retype_sites: checker.local_retype_sites,
         mixed_storage_store_sites: checker.mixed_storage_store_sites,
+        sparse_key_write_sites: checker.sparse_key_write_sites,
+        promotable_arrays: checker.promotable_arrays,
     })
 }
 

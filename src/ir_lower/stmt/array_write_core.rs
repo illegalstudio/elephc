@@ -267,6 +267,25 @@ fn lower_array_assign_with_update(
     } else {
         (array_value, None)
     };
+    if op == Op::ArraySet
+        && ctx.is_promotable_array_local(array)
+        && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+    {
+        lower_promotable_array_local_set(
+            ctx,
+            array,
+            array_value,
+            index_value,
+            value_value,
+            std::mem::take(&mut index_pins),
+            index.span,
+            value.span,
+            span,
+            key_already_diagnosed,
+        );
+        return;
+    }
     // Concrete string keys normally select associative storage. Ref-bound Mixed-slot
     // arrays instead use the shared writer, preserving invoker markers and keeping numeric
     // strings indexed. A boxed Mixed/Union index may hold either
@@ -290,8 +309,26 @@ fn lower_array_assign_with_update(
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
     let reference_string_key = mixed_elements && index_value.ir_type == IrType::Str
         && ctx.is_ref_bound_local(array);
+    // The checker promoted this write because its integer key may land past the end of the
+    // non-empty packed array the local holds, where `ArraySet` would zero-fill the gap. The
+    // decision is the checker's (it alone sees the loop-counter proofs), and it is acted on only
+    // while the value is still a typed packed array: a loop contract may already have converted it.
+    // The key gate mirrors the checker's: the checker walks a body more than once and specializes
+    // it per call site, so a site recorded under an integer key must not act where this
+    // specialization holds a boxed key, which the checker routes to `Array(Mixed)` instead. A raw
+    // float key normalizes to an integer key in the checker too, and the hash writer converts it
+    // once with its precision diagnostic.
+    let recorded_sparse_key = op == Op::ArraySet
+        && !mixed_elements
+        && matches!(index_value.ir_type, IrType::I64 | IrType::F64)
+        && ctx.is_recorded_sparse_key_write(span, array)
+        && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
+            PhpType::Array(element) if !is_empty_indexed_array_element(&element));
     if op == Op::ArraySet
-        && (index_value.ir_type == IrType::Str || empty_sparse_key || nonempty_sparse_key)
+        && (index_value.ir_type == IrType::Str
+            || empty_sparse_key
+            || nonempty_sparse_key
+            || recorded_sparse_key)
         && !reference_string_key
     {
         lower_array_key_hash_promotion(
@@ -527,6 +564,93 @@ pub(super) fn coerce_buffer_set_value(
         crate::ir_lower::ownership::release_if_owned(ctx, value, span);
     }
     coerced
+}
+
+/// Writes into a promotable `array<int>` local through the heap-kind-dispatching `ArraySet`.
+///
+/// The checker kept the local typed although the key may skip a slot, so codegen decides at run
+/// time: a key in `[0, count]` writes the packed slot, any other key promotes the storage to a
+/// hash once, and a local promoted earlier writes its hash. A boxed key is passed through for
+/// codegen to normalize (numeric strings become integers, strings stay hash keys); a nullable key
+/// is boxed so `null` keeps PHP's empty-string key; a float key converts with its diagnostic. A
+/// nullable integer value stays tagged so a `null` is stored as `null`, not as zero.
+/// A boxed key is only borrowed by the backend and is released after the write when it owns.
+fn lower_promotable_array_local_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    index_value: LoweredValue,
+    value_value: LoweredValue,
+    index_pins: Vec<crate::ir_lower::expr::PinnedInFlightOwner>,
+    index_span: Span,
+    value_span: Span,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, index_pins, index_span);
+    // The backend only borrows a boxed key, so an owning one (`$j + 1`, a call's result, or the
+    // box made here) is released after the write, exactly as the boxed-key writer's callers do.
+    let (index_value, boxed_key) = match index_value.ir_type {
+        IrType::I64 => (index_value, None),
+        IrType::Heap(crate::ir::IrHeapKind::Mixed) => (index_value, Some(index_value)),
+        IrType::TaggedScalar | IrType::Heap(crate::ir::IrHeapKind::Union) | IrType::Str => {
+            let key = ctx.box_value_as_mixed(index_value, PhpType::Mixed, Some(index_span));
+            release_persisted_string_operand(ctx, index_value, span);
+            (key, Some(key))
+        }
+        _ => (
+            coerce_array_key_to_int_at_span(ctx, index_value, Some(index_span), key_already_diagnosed),
+            None,
+        ),
+    };
+    // A `?int` local read the checker viewed as `mixed` arrives freshly boxed; the write takes
+    // the tagged scalar inside instead, keeps its `null`, and retires the unused box.
+    let value_value = unboxed_tagged_scalar_write_value(ctx, value_value, value_span);
+    // A nullable integer stays tagged: codegen keeps its `null` as a null entry of the promoted
+    // hash rather than the zero a coercion to `int` would store.
+    let (value_value, (array_value, updated_ty, needs_storeback)) =
+        if value_value.ir_type == IrType::TaggedScalar {
+            (value_value, (array_value, None, false))
+        } else {
+            let array_ty = ctx.builder.value_php_type(array_value.value);
+            let value_value =
+                coerce_indexed_array_set_value(ctx, &array_ty, value_value, Some(value_span));
+            (value_value, prepare_indexed_array_local_set(ctx, array_value, value_value, span))
+        };
+    ctx.emit_void(
+        Op::ArraySet,
+        vec![array_value.value, index_value.value, value_value.value],
+        Some(Immediate::PromotableArray),
+        Op::ArraySet.default_effects(),
+        Some(span),
+    );
+    let elem_ty = indexed_array_write_element_type(ctx, array_value, updated_ty.as_ref());
+    finish_indexed_array_local_write(ctx, array, array_value, updated_ty, needs_storeback, span);
+    release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value_value, span);
+    if let Some(key) = boxed_key {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(index_span));
+    }
+}
+
+/// Returns the tagged scalar a fresh `MixedBox` wraps, releasing the box, or `value` unchanged.
+fn unboxed_tagged_scalar_write_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let Some(inner) = ctx
+        .builder
+        .value_defining_instruction(value.value)
+        .filter(|inst| inst.op == Op::MixedBox)
+        .and_then(|inst| inst.operands.first().copied())
+    else {
+        return value;
+    };
+    if ctx.builder.value_type(inner) != IrType::TaggedScalar {
+        return value;
+    }
+    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    LoweredValue { value: inner, ir_type: IrType::TaggedScalar }
 }
 
 /// Promotes string-key or potentially sparse first writes into associative storage.

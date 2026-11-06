@@ -11,6 +11,8 @@ use super::*;
 
 #[path = "stack_numeric/comparisons.rs"]
 mod comparisons;
+#[path = "stack_numeric/counter_keys.rs"]
+mod counter_keys;
 #[path = "stack_numeric/integer_casts.rs"]
 mod integer_casts;
 
