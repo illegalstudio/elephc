@@ -50,6 +50,7 @@ pub use request_state::{
 // `__rt_http_response_code`) can link against the response-control setters.
 pub use request_state::{
     elephc_web_handle_uncaught_exception, elephc_web_header, elephc_web_header_remove,
+    elephc_web_remove_cookie,
     elephc_web_response_header_line, elephc_web_set_status,
 };
 

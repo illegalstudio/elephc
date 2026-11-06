@@ -256,6 +256,14 @@ fn decl_extern_elephc_web_session_get_name() -> Stmt {
         .build()
 }
 
+/// `elephc_web_remove_cookie`: drops a cookie's pending `Set-Cookie` headers.
+fn decl_extern_elephc_web_remove_cookie() -> Stmt {
+    extern_fn("elephc_web_remove_cookie", "elephc_web")
+        .param("name", CType::Str)
+        .returns(CType::Void)
+        .build()
+}
+
 /// `elephc_web_session_set_name` — transcribed from the PHP form.
 fn decl_extern_elephc_web_session_set_name() -> Stmt {
     extern_fn("elephc_web_session_set_name", "elephc_web")
@@ -1262,12 +1270,39 @@ fn decl_fn_elephc_emit_cookie() -> Stmt {
         .param_untyped("secure")
         .param_untyped("httponly")
         .body(vec![
+            // The third argument is php's `expires_or_options`.
+            s_assign("__elephc_ck_exp", e_int(0)),
+            s_assign("__elephc_ck_ss", e_str("")),
+            s_if(
+                e_call("is_array", vec![e_var("expires")]),
+                vec![
+                    s_assign("__elephc_ck_o", e_var("expires")),
+                    cookie_option("__elephc_ck_exp", "expires", CastType::Int),
+                    cookie_option("path", "path", CastType::String),
+                    cookie_option("domain", "domain", CastType::String),
+                    cookie_option("secure", "secure", CastType::Bool),
+                    cookie_option("httponly", "httponly", CastType::Bool),
+                    cookie_option("__elephc_ck_ss", "samesite", CastType::String),
+                ],
+                vec![],
+                Some(vec![s_assign("__elephc_ck_exp", e_cast(CastType::Int, e_var("expires")))]),
+            ),
+            // php spells a removal `deleted`, expired one second into the epoch.
+            s_if(
+                e_binop(e_cast(CastType::String, e_var("value")), BinOp::StrictEq, e_str("")),
+                vec![
+                    s_assign("value", e_str("deleted")),
+                    s_assign("__elephc_ck_exp", e_int(1)),
+                ],
+                vec![],
+                None,
+            ),
             s_assign("c", e_binop(e_binop(e_var("name"), BinOp::Concat, e_str("=")), BinOp::Concat, e_var("value"))),
             s_if(
-                e_binop(e_var("expires"), BinOp::NotEq, e_int(0)),
+                e_binop(e_var("__elephc_ck_exp"), BinOp::NotEq, e_int(0)),
                 vec![
-                    s_assign("c", e_binop(e_binop(e_binop(e_var("c"), BinOp::Concat, e_str("; expires=")), BinOp::Concat, e_call("gmdate", vec![e_str("D, d-M-Y H:i:s"), e_var("expires")])), BinOp::Concat, e_str(" GMT"))),
-                    s_assign("c", e_binop(e_binop(e_var("c"), BinOp::Concat, e_str("; Max-Age=")), BinOp::Concat, e_binop(e_var("expires"), BinOp::Sub, e_call("time", vec![])))),
+                    s_assign("c", e_binop(e_binop(e_binop(e_var("c"), BinOp::Concat, e_str("; expires=")), BinOp::Concat, e_call("gmdate", vec![e_str("D, d M Y H:i:s"), e_var("__elephc_ck_exp")])), BinOp::Concat, e_str(" GMT"))),
+                    s_assign("c", e_binop(e_binop(e_var("c"), BinOp::Concat, e_str("; Max-Age=")), BinOp::Concat, e_call("max", vec![e_int(0), e_binop(e_var("__elephc_ck_exp"), BinOp::Sub, e_call("time", vec![]))]))),
                 ],
                 vec![],
                 None,
@@ -1304,11 +1339,30 @@ fn decl_fn_elephc_emit_cookie() -> Stmt {
                 vec![],
                 None,
             ),
+            s_if(
+                e_binop(e_var("__elephc_ck_ss"), BinOp::StrictNotEq, e_str("")),
+                vec![
+                    s_assign("c", e_binop(e_binop(e_var("c"), BinOp::Concat, e_str("; SameSite=")), BinOp::Concat, e_var("__elephc_ck_ss"))),
+                ],
+                vec![],
+                None,
+            ),
             s_expr(e_call("header", vec![e_binop(e_str("Set-Cookie: "), BinOp::Concat, e_var("c")), e_bool(false)])),
             s_return(e_bool(true)),
         ])
         .build()
 }
+
+/// `if (isset($o[$key])) { $target = (cast) $o[$key]; }`, for one `setcookie()` option.
+fn cookie_option(target: &str, key: &str, cast: CastType) -> Stmt {
+    s_if(
+        e_call("isset", vec![e_index(e_var("__elephc_ck_o"), e_str(key))]),
+        vec![s_assign(target, e_cast(cast, e_index(e_var("__elephc_ck_o"), e_str(key))))],
+        vec![],
+        None,
+    )
+}
+
 
 /// `setcookie` — transcribed from the PHP form.
 fn decl_fn_setcookie() -> Stmt {
@@ -4111,6 +4165,8 @@ fn decl_fn_elephc_session_send_cookie() -> Stmt {
                 vec![],
                 None,
             ),
+            // php sends one session cookie per response, the last.
+            s_expr(e_call("elephc_web_remove_cookie", vec![e_var("name")])),
             s_expr(e_call("header", vec![e_binop(e_str("Set-Cookie: "), BinOp::Concat, e_var("cookie")), e_bool(false)])),
             s_return(e_bool(true)),
         ])
@@ -5283,6 +5339,7 @@ pub(crate) fn web_declarations_with_environment(
             decl_extern_elephc_web_session_reset(),
             decl_extern_elephc_web_session_get_name(),
             decl_extern_elephc_web_session_set_name(),
+            decl_extern_elephc_web_remove_cookie(),
             decl_extern_elephc_web_session_get_id(),
             decl_extern_elephc_web_session_set_id(),
             decl_extern_elephc_web_session_get_status(),
@@ -5546,6 +5603,7 @@ pub(crate) fn session_declarations(
             decl_extern_elephc_web_session_reset(),
             decl_extern_elephc_web_session_get_name(),
             decl_extern_elephc_web_session_set_name(),
+            decl_extern_elephc_web_remove_cookie(),
             decl_extern_elephc_web_session_get_id(),
             decl_extern_elephc_web_session_set_id(),
             decl_extern_elephc_web_session_get_status(),

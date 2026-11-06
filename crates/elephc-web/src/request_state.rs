@@ -370,6 +370,20 @@ pub unsafe extern "C" fn elephc_web_header_remove(ptr: *const u8, len: i64) {
 /// borrows this buffer until the next call.
 static mut RESPONSE_HEADER_LINE: String = String::new();
 
+/// Drops the pending `Set-Cookie` headers of cookie `name`, as php's session module does before
+/// it sends its own: a response carries one session cookie.
+///
+/// # Safety
+/// `name` must be a valid NUL-terminated C string; each worker is single-threaded.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_remove_cookie(name: *const c_char) {
+    let headers = &mut *core::ptr::addr_of_mut!(RESPONSE_HEADERS);
+    let prefix = format!("{}=", std::ffi::CStr::from_ptr(name).to_string_lossy());
+    headers.retain(|(header, value)| {
+        !(header.eq_ignore_ascii_case("set-cookie") && value.starts_with(&prefix))
+    });
+}
+
 /// Formats pending response header `index` as the `"Name: value"` line `headers_list()` reports,
 /// or returns null past the last header.
 ///

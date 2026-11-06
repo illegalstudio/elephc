@@ -4788,3 +4788,33 @@ fn web_a_nested_superglobal_write_keeps_the_hash_alive() {
     let _ = child.wait();
     assert_eq!(raw_response_body(&resp), "{\"bag\":{\"a\":1,\"b\":2,\"c\":3}}", "response: {resp:?}");
 }
+
+/// `setcookie()` takes php's options array, spells a removal `deleted`, and never sends a negative
+/// `Max-Age`. A session cookie replaces the ones sent before it, as php's does.
+#[test]
+fn web_cookies_follow_php_rules() {
+    let dir = make_test_dir("web_cookie_rules");
+    let src = "<?php\n\
+        setcookie('a', '', ['path' => '/', 'httponly' => true, 'samesite' => 'lax']);\n\
+        setcookie('c', 'v', ['path' => '/x']);\n\
+        setcookie('e', 'v', 1, '/q');\n\
+        setcookie('PHPSESSID', '', 0, '/');\n\
+        session_start();\n\
+        $l = array_map(fn ($h) => str_starts_with($h, 'Set-Cookie: PHPSESSID=') ? substr($h, 0, 22) . 'ID' . substr($h, -8) : $h, headers_list());\n\
+        echo implode(\"\\n\", array_filter($l, fn ($h) => str_starts_with($h, 'Set-Cookie')));\n";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(
+        raw_response_body(&resp),
+        "Set-Cookie: a=deleted; expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0; path=/; HttpOnly; SameSite=lax\n\
+         Set-Cookie: c=v; path=/x\n\
+         Set-Cookie: e=v; expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0; path=/q\n\
+         Set-Cookie: PHPSESSID=ID; path=/",
+        "response: {resp:?}"
+    );
+}
