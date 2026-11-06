@@ -68,6 +68,17 @@ fn internal_object_operators_available() -> bool {
     with_active_instance_dispatch_metadata(|metadata| metadata.is_some_and(|metadata| metadata.has_internal_object_operators))
 }
 
+/// Native boolean and array conversions can reject a SimpleXML object without a node.
+pub(super) fn internal_conversion_may_throw(expr: &Expr) -> bool {
+    internal_object_operators_available() && !literal_scalar_operand(expr)
+}
+
+/// Includes the implicit native conversion performed when evaluating a condition.
+fn condition_effect(expr: &Expr) -> Effect {
+    let effect = expr_effect(expr);
+    if internal_conversion_may_throw(expr) { effect.with_may_throw() } else { effect }
+}
+
 /// Returns true if any statement in `stmts` may throw, including implicit destruction.
 pub(super) fn block_may_throw(stmts: &[Stmt]) -> bool {
     block_effect(stmts).may_throw
@@ -151,11 +162,11 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             then_body,
             elseif_clauses,
             else_body,
-        } => expr_effect(condition)
+        } => condition_effect(condition)
             .combine(block_effect(then_body))
             .combine(combine_effects(
                 elseif_clauses.iter().map(|(condition, body)| {
-                    expr_effect(condition).combine(block_effect(body))
+                    condition_effect(condition).combine(block_effect(body))
                 }),
             ))
             .combine(
@@ -175,7 +186,7 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                 .unwrap_or(Effect::PURE),
         ),
         StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
-            expr_effect(condition).combine(block_effect(body))
+            condition_effect(condition).combine(block_effect(body))
         }
         StmtKind::For {
             init,
@@ -189,7 +200,7 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             .combine(
                 condition
                     .as_ref()
-                    .map(|expr| expr_effect(expr))
+                    .map(condition_effect)
                     .unwrap_or(Effect::PURE),
             )
             .combine(
@@ -292,7 +303,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             } else { effect }
         }
         ExprKind::Not(inner)
-        | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Cast { target: CastType::Bool | CastType::Array, expr: inner } => condition_effect(inner),
+        ExprKind::ErrorSuppress(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. } => expr_effect(inner),
         ExprKind::Spread(inner) => {
@@ -316,7 +328,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 // Object-to-number warnings can call a handler that mutates globals or throws.
                 operands.with_side_effects().with_may_throw().with_writes_globals()
             } else if binary_op_may_throw(op, right)
-                || (internal_object_operators_available() && internal_arithmetic_candidate(left, op, right)) {
+                || (internal_object_operators_available() && internal_arithmetic_candidate(left, op, right))
+                || (matches!(op, BinOp::And | BinOp::Or | BinOp::Xor)
+                    && (internal_conversion_may_throw(left) || internal_conversion_may_throw(right))) {
                 operands.with_may_throw()
             } else {
                 operands
@@ -454,11 +468,11 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             condition,
             then_expr,
             else_expr,
-        } => expr_effect(condition)
+        } => condition_effect(condition)
             .combine(expr_effect(then_expr))
             .combine(expr_effect(else_expr)),
         ExprKind::ShortTernary { value, default } => {
-            expr_effect(value).combine(expr_effect(default))
+            condition_effect(value).combine(expr_effect(default))
         }
         ExprKind::Closure { .. } => Effect::PURE,
         ExprKind::NamedArg { value, .. } => expr_effect(value),

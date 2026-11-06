@@ -579,10 +579,10 @@ pub(super) fn root_user_call_operands(
     roots
 }
 
-/// Gives an independently owned string argument one releasing owner across an alias-returning call.
+/// Gives an independently owned string argument one releasing owner across a call.
 ///
 /// The caller pins the claimed value across the call (see `root_user_call_operands`), so a throw
-/// out of the callee releases it through the unwind chain.
+/// out of the callee releases it through the unwind chain. Native dimension reads also claim their key.
 ///
 /// A fresh transient string (a `.`, interpolation or scalar-to-string result in concat scratch,
 /// or a heap block stamped `CONCAT_TEMP_HEAP_KIND`) has no owner that frees it: the first
@@ -596,7 +596,7 @@ pub(super) fn root_user_call_operands(
 /// release stays a validated no-op. Already owned strings, including Mixed-to-string casts,
 /// keep the same payload and lease, but gain the same unwind-visible record. Borrowed views
 /// are excluded, and an existing argument-evaluation pin already has the required owner shape.
-fn claim_owned_string_operand(
+pub(super) fn claim_owned_string_operand(
     ctx: &mut LoweringContext<'_, '_>,
     operand: crate::ir::ValueId,
     span: Span,

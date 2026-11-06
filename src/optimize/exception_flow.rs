@@ -692,11 +692,12 @@ impl ExceptionFlowAnalysis {
                 elseif_clauses,
                 else_body,
             } => {
-                let mut thrown = operand(condition);
+                let mut thrown = operand(condition).combined(self.internal_conversion_throws(condition));
                 thrown = thrown.combined(block(then_body));
                 for (condition, body) in elseif_clauses {
                     thrown = thrown
                         .combined(operand(condition))
+                        .combined(self.internal_conversion_throws(condition))
                         .combined(block(body));
                 }
                 if let Some(body) = else_body {
@@ -716,6 +717,7 @@ impl ExceptionFlowAnalysis {
                 thrown
             }
             StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => operand(condition)
+                .combined(self.internal_conversion_throws(condition))
                 .combined(block(body)),
             StmtKind::For {
                 init,
@@ -729,7 +731,7 @@ impl ExceptionFlowAnalysis {
                 .combined(
                     condition
                         .as_ref()
-                        .map(|expr| operand(expr))
+                        .map(|expr| operand(expr).combined(self.internal_conversion_throws(expr)))
                         .unwrap_or_default(),
                 )
                 .combined(
@@ -818,6 +820,13 @@ impl ExceptionFlowAnalysis {
         }
     }
 
+    /// Includes native conversion errors while literal scalars retain their exact throw domain.
+    fn internal_conversion_throws(&self, expr: &Expr) -> ThrownTypes {
+        if self.has_internal_object_operators && !effects::literal_scalar_operand(expr) {
+            ThrownTypes::unknown()
+        } else { ThrownTypes::default() }
+    }
+
     /// Computes throwable flow for an expression, preserving exact explicit and callable throws.
     fn expr_throws(
         &self,
@@ -853,8 +862,8 @@ impl ExceptionFlowAnalysis {
                     thrown.combined(ThrownTypes::unknown())
                 } else { thrown }
             }
-            ExprKind::Not(inner)
-            | ExprKind::ErrorSuppress(inner)
+            ExprKind::Not(inner) => operand(inner).combined(self.internal_conversion_throws(inner)),
+            ExprKind::ErrorSuppress(inner)
             | ExprKind::PtrCast { expr: inner, .. } => operand(inner),
             ExprKind::Spread(inner) => {
                 let evaluated = operand(inner);
@@ -871,6 +880,8 @@ impl ExceptionFlowAnalysis {
                 let mut thrown = operand(inner);
                 if matches!(target, CastType::String) {
                     thrown = thrown.combined(self.string_conversion_throws(inner, class_context));
+                } else if matches!(target, CastType::Bool | CastType::Array) {
+                    thrown = thrown.combined(self.internal_conversion_throws(inner));
                 }
                 thrown
             }
@@ -881,6 +892,9 @@ impl ExceptionFlowAnalysis {
                     .combined(operand(right));
                 if self.has_internal_object_operators && effects::internal_arithmetic_candidate(left, op, right) {
                     thrown = thrown.combined(ThrownTypes::unknown());
+                } else if matches!(op, BinOp::And | BinOp::Or | BinOp::Xor) {
+                    thrown = thrown.combined(self.internal_conversion_throws(left))
+                        .combined(self.internal_conversion_throws(right));
                 } else if let Some(class_name) = binary_op_exact_throw_type(left, op, right) {
                     thrown = thrown.combined(ThrownTypes::exact(class_name));
                 } else if binary_op_has_dynamic_throw(left, op, right) {
@@ -1044,10 +1058,13 @@ impl ExceptionFlowAnalysis {
                 then_expr,
                 else_expr,
             } => operand(condition)
+                .combined(self.internal_conversion_throws(condition))
                 .combined(operand(then_expr))
                 .combined(operand(else_expr)),
-            ExprKind::ShortTernary { value, default }
-            | ExprKind::NullCoalesce { value, default } => operand(value)
+            ExprKind::ShortTernary { value, default } => operand(value)
+                .combined(self.internal_conversion_throws(value))
+                .combined(operand(default)),
+            ExprKind::NullCoalesce { value, default } => operand(value)
                 .combined(operand(default)),
             ExprKind::Match {
                 subject,

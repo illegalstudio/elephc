@@ -565,18 +565,22 @@ fn lower_array_access_from_values_with_receiver_pins(
         index_value = rooted;
         owner
     } else { None };
-    let owns_hash_string_key = matches!(op, Op::HashGet | Op::HashGetSilent)
-        && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Str
-        && ctx.value_is_owning_temporary(index_value);
-    let key_pins = if owns_hash_string_key {
-        super::pin_in_flight_owners(ctx, &[index_value.value], index.span)
-    } else { Vec::new() };
     // Native dimension syntax is distinct from explicit ArrayAccess method calls, even
     // when a nullable subclass implements that interface and overrides offsetGet.
     let native_method = (op == Op::RuntimeCall).then(|| {
         native_dimension_method_for_type(ctx, &ctx.builder.value_php_type(array_value.value),
             elephc_builtin_contract::ObjectDimension::Get)
     }).flatten();
+    if native_method.is_some() {
+        index_value.value = claim_owned_string_operand(ctx, index_value.value, index.span);
+    }
+    let owns_string_key = (matches!(op, Op::HashGet | Op::HashGetSilent) || native_method.is_some())
+        && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Str
+        && ctx.value_is_owning_temporary(index_value);
+    let key_pins = if owns_string_key || native_method.is_some() {
+        // A native getter can throw before the existing key cleanup, including on a null path.
+        super::pin_in_flight_owners(ctx, &[index_value.value], index.span)
+    } else { Vec::new() };
     let result = if let Some(method) = native_method {
         lower_native_dimension_read(ctx, array_value, index_value, method, warn_on_missing,
             result_type, expr)
@@ -612,8 +616,8 @@ fn lower_array_access_from_values_with_receiver_pins(
         let normalized_copy = ctx.builder.value_defining_instruction(index_value.value)
             .is_some_and(|producer| producer.op == Op::StrPersist
                 && producer.immediate == Some(Immediate::Bool(true)));
-        if owns_hash_string_key && !normalized_copy {
-            // Hash lookups never retain or return the key. Ternaries and calls can own
+        if owns_string_key && !normalized_copy {
+            // Hash and native reads never retain the key. Ternaries and calls can own
             // ordinary string keys independently of the normalized-cast copies below.
             crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
         }

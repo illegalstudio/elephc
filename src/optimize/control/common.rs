@@ -23,6 +23,17 @@ pub(crate) fn expr_to_effect_stmt(expr: Expr) -> Vec<Stmt> {
     }
 }
 
+/// Preserves the implicit boolean conversion when an if condition loses its branches.
+pub(crate) fn condition_to_effect_stmt(condition: Expr) -> Vec<Stmt> {
+    let span = condition.span;
+    let condition = if effects::internal_conversion_may_throw(&condition) {
+        Expr::new(ExprKind::Cast {
+            target: CastType::Bool, expr: Box::new(condition),
+        }, span)
+    } else { condition };
+    expr_to_effect_stmt(condition)
+}
+
 /// Normalizes an optional block by removing `None` and empty bodies.
 /// Filters out `None` and empty vectors, returning `None` only when the body
 /// is `None` or truly empty. Used to prune no-op control-flow branches.
