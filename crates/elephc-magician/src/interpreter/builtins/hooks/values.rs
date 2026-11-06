@@ -677,13 +677,16 @@ impl EvalValuesHook {
                 "implode" => eval_implode_declared_values_result(evaluated_args, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::StreamBoolPredicate => one_arg(evaluated_args, values, |stream, values| {
-                match name {
-                    "stream_is_local" => eval_stream_is_local_result(stream, values),
-                    "stream_supports_lock" => eval_stream_supports_lock_result(stream, values),
+            Self::StreamBoolPredicate => match name {
+                "stream_is_local" => match evaluated_args {
+                    [stream] | [stream, _] => eval_stream_is_local_result(*stream, values),
                     _ => Err(EvalStatus::RuntimeFatal),
+                },
+                "stream_supports_lock" => {
+                    one_arg(evaluated_args, values, eval_stream_supports_lock_result)
                 }
-            }),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::StreamIntrospection => {
                 if !evaluated_args.is_empty() {
                     return Err(EvalStatus::RuntimeFatal);

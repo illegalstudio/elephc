@@ -42,7 +42,7 @@ echo fclose($h) ? "close" : "bad"; echo ":";
 echo file_get_contents("{file}") === "abc" ? "truncated" : "bad"; echo ":";
 $src = fopen("{file}", "r");
 $dst = fopen("{copy}", "w+");
-echo stream_copy_to_stream($src, $dst, null, 1) === 2 ? "copy" : "bad"; echo ":";
+echo stream_copy_to_stream($src, $dst, null, 1, null) === 2 ? "copy" : "bad"; echo ":";
 rewind($dst);
 echo stream_get_contents($dst) === "bc" ? "copied" : "bad"; echo ":";
 fclose($src);

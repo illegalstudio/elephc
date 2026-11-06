@@ -135439,6 +135439,13 @@
           "name": "offset",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 2,
@@ -135487,6 +135494,13 @@
           "name": "offset",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 2,
@@ -135601,6 +135615,13 @@
           "name": "offset",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "mixed",
@@ -137167,6 +137188,13 @@
           "name": "stream",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -137193,6 +137221,13 @@
           "default": null,
           "name": "stream",
           "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
           "type": "mixed"
         }
       ],
@@ -137286,6 +137321,13 @@
           "name": "stream",
           "optional": false,
           "type": "resource"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "bool",
@@ -139342,6 +139384,13 @@
           "name": "protocol",
           "optional": false,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 3,
@@ -139383,6 +139432,13 @@
           "name": "protocol",
           "optional": false,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 3,
@@ -139489,6 +139545,13 @@
           "name": "protocol",
           "optional": false,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "mixed",

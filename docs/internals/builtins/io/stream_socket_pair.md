@@ -37,12 +37,12 @@ description: "Compiler internals for stream_socket_pair(): lowering path, type c
 ## Signature summary
 
 ```php
-function stream_socket_pair(int $domain, int $type, int $protocol): mixed
+function stream_socket_pair(int $domain, int $type, int $protocol, mixed $context = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
+- **Arity**: takes 3–4 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

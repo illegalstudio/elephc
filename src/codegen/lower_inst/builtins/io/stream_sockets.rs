@@ -105,7 +105,7 @@ pub(crate) fn lower_stream_socket_pair(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, "stream_socket_pair", 3)?;
+    super::super::ensure_arg_count_between(inst, "stream_socket_pair", 3, 4)?;
     let domain = expect_operand(inst, 0)?;
     let socket_type = expect_operand(inst, 1)?;
     let protocol = expect_operand(inst, 2)?;

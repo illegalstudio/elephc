@@ -14,7 +14,7 @@ pub(crate) fn lower_stream_copy_to_stream(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    ensure_arg_count_between(inst, "stream_copy_to_stream", 2, 4)?;
+    ensure_arg_count_between(inst, "stream_copy_to_stream", 2, 5)?;
     let source = expect_operand(inst, 0)?;
     let dest = expect_operand(inst, 1)?;
     load_stream_fd_to_result(ctx, source, "stream_copy_to_stream")?;

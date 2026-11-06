@@ -60,6 +60,7 @@ pub(crate) fn requested(usage: &crate::prelude_prune::usage::Usage) -> bool {
             || name == "fread"
             || name == "fwrite"
             || name == "file_get_contents"
+            || name == "stream_copy_to_stream"
             || name == "stream_get_contents"
             || name == "stream_select"
             || name.starts_with("stream_context_")

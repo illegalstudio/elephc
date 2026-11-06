@@ -101,7 +101,7 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("stream_copy_to_stream"),
-            Some(["from", "to", "length", "offset"].as_slice())
+            Some(["from", "to", "length", "offset", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_default_value("stream_copy_to_stream", 2),
@@ -142,7 +142,9 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("stream_select"),
-            Some(["read", "write", "except", "seconds", "microseconds"].as_slice())
+            Some(
+                ["read", "write", "except", "seconds", "microseconds", "context"].as_slice()
+            )
         );
         assert_eq!(
             eval_builtin_signature_shape("stream_select").map(|shape| shape.by_ref_params),

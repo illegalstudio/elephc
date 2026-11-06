@@ -759,3 +759,167 @@ foreach ([$first, $second] as $context) {
     );
     assert_eq!(out, "new\nnew\n");
 }
+
+/// The 8.6 context parameters are accepted by `stream_copy_to_stream()`,
+/// `stream_socket_pair()`, and `stream_is_local()`.
+#[test]
+fn test_stream_context_parameters_php86() {
+    let out = run86(
+        r#"<?php
+$context = stream_context_create(['stream' => ['error_mode' => StreamErrorMode::Silent]]);
+$source = fopen('php://memory', 'w+');
+fwrite($source, 'hello');
+rewind($source);
+$destination = fopen('php://memory', 'w+');
+$bytes = stream_copy_to_stream($source, $destination, null, -1, $context);
+rewind($destination);
+$copied = stream_get_contents($destination);
+$local = stream_is_local(stream: 'php://memory', context: $context);
+$pair = stream_socket_pair(
+    domain: STREAM_PF_UNIX,
+    type: STREAM_SOCK_STREAM,
+    protocol: STREAM_IPPROTO_IP,
+    context: $context,
+);
+echo $bytes, ':', $copied, ':', $local ? 'local' : 'remote', ':', count($pair), "\n";
+foreach ($pair as $stream) {
+    fclose($stream);
+}
+fclose($source);
+fclose($destination);
+"#,
+    );
+    assert_eq!(out, "5:hello:local:2\n");
+}
+
+/// Copying from a wrapper that over-reports `stream_read()` dispatches the
+/// read error once through the context supplied to `stream_copy_to_stream()`.
+#[test]
+fn test_stream_copy_to_stream_read_error_php86() {
+    let out = run86(
+        r#"<?php
+class CopyErrorReadStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_read(int $count): string { return str_repeat('A', $count + 1); }
+    public function stream_eof(): bool { return false; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('copy-error-read', CopyErrorReadStream::class);
+$context = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_store' => StreamErrorStore::All,
+    'error_handler' => static function (array $errors): void {
+        echo 'handler: ', count($errors), ':', $errors[0]->code->name, "\n";
+        echo $errors[0]->message, "\n";
+    },
+]]);
+$source = fopen('copy-error-read://x', 'r', false, $context);
+$destination = fopen('php://memory', 'w+');
+var_dump(stream_copy_to_stream($source, $destination, 8, -1, $context));
+var_dump(count(stream_last_errors()));
+fclose($source);
+fclose($destination);
+"#,
+    );
+    assert_eq!(
+        out,
+        "handler: 1:UserspaceInvalidReturn\n\
+CopyErrorReadStream::stream_read - read 1 bytes more data than requested (8193 read, 8192 max) - excess data will be lost\n\
+int(8)\n\
+int(1)\n"
+    );
+}
+
+/// Copying into a wrapper that over-reports `stream_write()` dispatches the
+/// write error through the copy call's context.
+#[test]
+fn test_stream_copy_to_stream_write_error_php86() {
+    let out = run86(
+        r#"<?php
+class CopyErrorWriteStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_write(string $data): int { return strlen($data) + 1; }
+    public function stream_read(int $count): string { return ''; }
+    public function stream_eof(): bool { return true; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('copy-error-write', CopyErrorWriteStream::class);
+$context = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_store' => StreamErrorStore::All,
+    'error_handler' => static function (array $errors): void {
+        echo 'handler: ', count($errors), ':', $errors[0]->code->name, "\n";
+        echo $errors[0]->message, "\n";
+    },
+]]);
+$source = fopen('php://memory', 'w+');
+fwrite($source, 'abcdefgh');
+rewind($source);
+$destination = fopen('copy-error-write://x', 'w', false, $context);
+var_dump(stream_copy_to_stream($source, $destination, 8, -1, $context));
+var_dump(count(stream_last_errors()));
+fclose($source);
+fclose($destination);
+"#,
+    );
+    assert_eq!(
+        out,
+        "handler: 1:UserspaceInvalidReturn\n\
+CopyErrorWriteStream::stream_write wrote 1 bytes more data than requested (9 written, 8 max)\n\
+int(8)\n\
+int(1)\n"
+    );
+}
+
+/// A copy that records both a read and a write error reports them in one
+/// context-handler invocation, in read-then-write order.
+#[test]
+fn test_stream_copy_to_stream_combined_errors_php86() {
+    let out = run86(
+        r#"<?php
+class CopyCombinedReadStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_read(int $count): string { return str_repeat('A', $count + 1); }
+    public function stream_eof(): bool { return false; }
+    public function stream_stat(): array { return []; }
+}
+class CopyCombinedWriteStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_write(string $data): int { return strlen($data) + 1; }
+    public function stream_read(int $count): string { return ''; }
+    public function stream_eof(): bool { return true; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('copy-combined-read', CopyCombinedReadStream::class);
+stream_wrapper_register('copy-combined-write', CopyCombinedWriteStream::class);
+$context = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_store' => StreamErrorStore::All,
+    'error_handler' => static function (array $errors): void {
+        echo 'handler: ', count($errors), "\n";
+        foreach ($errors as $error) {
+            echo $error->code->name, ': ', $error->message, "\n";
+        }
+    },
+]]);
+$source = fopen('copy-combined-read://x', 'r', false, $context);
+$destination = fopen('copy-combined-write://x', 'w', false, $context);
+var_dump(stream_copy_to_stream($source, $destination, 8, -1, $context));
+var_dump(count(stream_last_errors()));
+fclose($source);
+fclose($destination);
+"#,
+    );
+    assert_eq!(
+        out,
+        "handler: 2\n\
+UserspaceInvalidReturn: CopyCombinedReadStream::stream_read - read 1 bytes more data than requested (8193 read, 8192 max) - excess data will be lost\n\
+UserspaceInvalidReturn: CopyCombinedWriteStream::stream_write wrote 1 bytes more data than requested (9 written, 8 max)\n\
+int(8)\n\
+int(2)\n"
+    );
+}

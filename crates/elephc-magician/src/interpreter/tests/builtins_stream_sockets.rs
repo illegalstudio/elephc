@@ -72,7 +72,7 @@ $recv = stream_socket_recvfrom(...);
 $dynAddr = "";
 echo $recv($peer, 4, 0, $dynAddr) === "call" && $dynAddr !== "" ? "dynrecv" : "bad"; echo ":";
 fclose($client); fclose($peer); fclose($server);
-$pair = stream_socket_pair(1, 1, 0);
+$pair = stream_socket_pair(1, 1, 0, null);
 echo is_array($pair) && is_resource($pair[0]) && is_resource($pair[1]) ? "pair" : "bad"; echo ":";
 fwrite($pair[0], "xy");
 echo fread($pair[1], 2) === "xy" ? "pairio" : "bad"; echo ":";

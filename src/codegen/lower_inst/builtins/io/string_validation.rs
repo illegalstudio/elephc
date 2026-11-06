@@ -117,7 +117,10 @@ pub(super) fn require_int(ty: PhpType, name: &str) -> Result<()> {
 
 /// Verifies that an optional integer argument is either `int` or literal `null`.
 pub(super) fn require_optional_int(ty: PhpType, name: &str) -> Result<()> {
-    if matches!(ty, PhpType::Int | PhpType::Void | PhpType::Never) {
+    if matches!(
+        ty,
+        PhpType::Int | PhpType::Void | PhpType::Never | PhpType::TaggedScalar
+    ) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(

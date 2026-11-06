@@ -6,13 +6,14 @@ description: "Checks if a stream is a local stream."
 ## stream_is_local()
 
 ```php
-function stream_is_local(resource $stream): bool
+function stream_is_local(resource $stream, mixed $context = null): bool
 ```
 
 Checks if a stream is a local stream.
 
 **Parameters**:
 - `$stream` (`resource`)
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
 

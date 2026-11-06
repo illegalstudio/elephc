@@ -306,7 +306,11 @@ fn test_error_stream_supports_lock_requires_resource_handle() {
 fn test_error_stream_is_local_wrong_args() {
     expect_error(
         "<?php stream_is_local();",
-        "stream_is_local() takes exactly 1 argument",
+        "stream_is_local() takes 1 or 2 arguments",
+    );
+    expect_error(
+        "<?php stream_is_local(STDIN, null, 1);",
+        "stream_is_local() takes 1 or 2 arguments",
     );
 }
 
@@ -353,7 +357,11 @@ fn test_error_stream_get_contents_length_and_offset_must_be_ints() {
 fn test_error_stream_copy_to_stream_wrong_args() {
     expect_error(
         "<?php stream_copy_to_stream(STDIN);",
-        "stream_copy_to_stream() takes 2 to 4 arguments",
+        "stream_copy_to_stream() takes 2 to 5 arguments",
+    );
+    expect_error(
+        "<?php stream_copy_to_stream(STDIN, STDOUT, null, -1, null, 1);",
+        "stream_copy_to_stream() takes 2 to 5 arguments",
     );
 }
 
@@ -861,7 +869,11 @@ fn test_error_stream_socket_get_name_requires_resource() {
 fn test_error_stream_socket_pair_wrong_args() {
     expect_error(
         "<?php stream_socket_pair(1, 1);",
-        "stream_socket_pair() takes exactly 3 arguments",
+        "stream_socket_pair() takes 3 or 4 arguments",
+    );
+    expect_error(
+        "<?php stream_socket_pair(1, 1, 0, null, 1);",
+        "stream_socket_pair() takes 3 or 4 arguments",
     );
 }
 

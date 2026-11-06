@@ -36,7 +36,9 @@ pub(in crate::interpreter) fn eval_stream_copy_to_stream_declared_values_result(
     match evaluated_args {
         [from, to] => eval_stream_copy_to_stream_result(*from, *to, None, None, context, values),
         [from, to, length] => eval_stream_copy_to_stream_result(*from, *to, Some(*length), None, context, values),
-        [from, to, length, offset] => eval_stream_copy_to_stream_result(*from, *to, Some(*length), Some(*offset), context, values),
+        [from, to, length, offset] | [from, to, length, offset, _] => {
+            eval_stream_copy_to_stream_result(*from, *to, Some(*length), Some(*offset), context, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -48,7 +50,7 @@ pub(in crate::interpreter) fn eval_builtin_stream_copy_to_stream(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !(2..=4).contains(&args.len()) {
+    if !(2..=5).contains(&args.len()) {
         return Err(EvalStatus::RuntimeFatal);
     }
     let from = eval_expr(&args[0], context, scope, values)?;
@@ -61,6 +63,9 @@ pub(in crate::interpreter) fn eval_builtin_stream_copy_to_stream(
         Some(offset) => Some(eval_expr(offset, context, scope, values)?),
         None => None,
     };
+    if let Some(context_arg) = args.get(4) {
+        let _ = eval_expr(context_arg, context, scope, values)?;
+    }
     eval_stream_copy_to_stream_result(from, to, length, offset, context, values)
 }
 

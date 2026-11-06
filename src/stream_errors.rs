@@ -1,5 +1,5 @@
 //! Purpose:
-//! Routes PHP 8.6's `fopen()` and `stream_context_set_default()` through their error-aware wrappers.
+//! Routes PHP 8.6's error-aware stream calls through their injected PHP wrappers.
 //!
 //! Called from:
 //! - `crate::pfa::desugar_for_version` for every compilation profile at or above PHP 8.6.
@@ -28,6 +28,7 @@ pub(crate) fn rewrite(program: Program, version: crate::php_version::PhpVersion)
         && !wrappers.fread
         && !wrappers.fwrite
         && !wrappers.file_get_contents
+        && !wrappers.stream_copy_to_stream
         && !wrappers.stream_get_contents
         && !wrappers.stream_select
         && !wrappers.context_create
@@ -51,6 +52,7 @@ struct Wrappers {
     fread: bool,
     fwrite: bool,
     file_get_contents: bool,
+    stream_copy_to_stream: bool,
     stream_get_contents: bool,
     stream_select: bool,
     context_create: bool,
@@ -69,6 +71,7 @@ fn wrappers_present(program: &[Stmt]) -> Wrappers {
                 "__elephc_fread" => wrappers.fread = true,
                 "__elephc_fwrite" => wrappers.fwrite = true,
                 "__elephc_file_get_contents" => wrappers.file_get_contents = true,
+                "__elephc_stream_copy_to_stream" => wrappers.stream_copy_to_stream = true,
                 "__elephc_stream_get_contents" => wrappers.stream_get_contents = true,
                 "__elephc_stream_select" => wrappers.stream_select = true,
                 "__elephc_stream_context_create" => wrappers.context_create = true,
@@ -112,6 +115,9 @@ impl Pass for Rewriter {
             "file_get_contents" if self.wrappers.file_get_contents => {
                 Some("__elephc_file_get_contents")
             }
+            "stream_copy_to_stream" if self.wrappers.stream_copy_to_stream => {
+                Some("__elephc_stream_copy_to_stream")
+            }
             "stream_get_contents" if self.wrappers.stream_get_contents => {
                 Some("__elephc_stream_get_contents")
             }
@@ -143,6 +149,7 @@ impl Pass for Rewriter {
                 | "__elephc_fwrite"
                 | "__elephc_file_get_contents"
                 | "__elephc_file_get_contents_fallback"
+                | "__elephc_stream_copy_to_stream"
                 | "__elephc_stream_get_contents"
                 | "__elephc_stream_select"
                 | "__elephc_stream_context_create"
