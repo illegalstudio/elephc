@@ -1703,8 +1703,8 @@ echo "\n";
 
 /// A stored synchronous `query()` of a `CALL` returns once its first set is buffered (mysqlnd's
 /// store_result()); the later sets stay on the server, keep the link out of sync (2014) and are
-/// read by `next_result()`, which waits for the slow statement between them. Expected output
-/// is php 8.5 + mysqlnd's.
+/// read by `next_result()`, which waits for the slow statement between them, also for a `CALL`
+/// inside an executable comment. Expected output is php 8.5 + mysqlnd's.
 #[test]
 #[ignore]
 fn test_mysqli_query_call_reads_later_sets_on_next_result() {
@@ -1713,18 +1713,20 @@ fn test_mysqli_query_call_reads_later_sets_on_next_result() {
 mysqli_report(MYSQLI_REPORT_OFF);
 $db->query("DROP PROCEDURE IF EXISTS msyncslow");
 $db->query("CREATE PROCEDURE msyncslow() BEGIN SELECT 1 AS a; DO SLEEP(1.5); SELECT 2 AS b; END");
-$start = microtime(true);
-$first = $db->query("CALL msyncslow()");
-echo $first->fetch_row()[0], ":", microtime(true) - $start < 1.0 ? "early" : "late";
-echo ":", var_export($db->more_results(), true), ":", var_export($db->query("SELECT 9"), true), $db->errno;
-$db->next_result();
-$second = $db->store_result();
-echo "|", $second->fetch_row()[0], ":", microtime(true) - $start >= 1.4 ? "waited" : "early";
-while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
-echo "|", $db->query("SELECT 9")->fetch_row()[0], "\n";
+foreach (["CALL msyncslow()", "/*!50000 CALL msyncslow() */"] as $sql) {
+    $start = microtime(true);
+    $first = $db->query($sql);
+    echo $first->fetch_row()[0], ":", microtime(true) - $start < 1.0 ? "early" : "late";
+    echo ":", var_export($db->more_results(), true), ":", var_export($db->query("SELECT 9"), true), $db->errno;
+    $db->next_result();
+    $second = $db->store_result();
+    echo "|", $second->fetch_row()[0], ":", microtime(true) - $start >= 1.4 ? "waited" : "early";
+    while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+    echo "|", $db->query("SELECT 9")->fetch_row()[0], "\n";
+}
 "#,
     ));
-    assert_eq!(out, "1:early:true:false2014|2:waited|9\n");
+    assert_eq!(out, "1:early:true:false2014|2:waited|9\n1:early:true:false2014|2:waited|9\n");
 }
 
 /// mysqli_stmt::reset() sends COM_STMT_RESET on a ready link (counted, also for a fresh or an

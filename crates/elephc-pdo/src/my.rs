@@ -1164,6 +1164,48 @@ fn sql_is_call_statement(sql: &str) -> bool {
     rest.get(4).is_none_or(|&b| !is_ident_byte(b))
 }
 
+/// Whether a mysqli text statement can return several result sets while multi-statements are
+/// off: a `CALL`, or an `EXECUTE` (of an SQL-level prepared `CALL`), behind any leading
+/// whitespace and comments, including inside a MySQL `/*!` / `/*!NNNNN` or MariaDB `/*M!`
+/// executable comment, whose body the server runs as SQL. Such a statement streams so that
+/// `query()` buffers only its first set (mysqlnd's `store_result()`).
+fn sql_may_return_several_sets(sql: &str) -> bool {
+    let bytes = sql.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    loop {
+        let start = i;
+        while i < len && is_my_space(bytes[i]) {
+            i += 1;
+        }
+        if let Some(end) = scan_my_comment(bytes, i) {
+            i = end;
+        }
+        let marker = if bytes[i..].starts_with(b"/*!") {
+            3
+        } else if bytes[i..].starts_with(b"/*M!") {
+            4
+        } else {
+            0
+        };
+        if marker > 0 {
+            i += marker;
+            while i < len && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+        }
+        if i == start {
+            break;
+        }
+    }
+    let rest = &bytes[i..];
+    [&b"call"[..], &b"execute"[..]].iter().any(|keyword| {
+        rest.len() >= keyword.len()
+            && rest[..keyword.len()].eq_ignore_ascii_case(keyword)
+            && rest.get(keyword.len()).is_none_or(|&b| !is_ident_byte(b))
+    })
+}
+
 /// Returns whether `sql` contains a second non-empty statement after a real
 /// semicolon separator. Quoted regions and MySQL comments are skipped with the
 /// same escape rules as placeholder translation, so a semicolon inside data
@@ -3138,9 +3180,10 @@ impl MyConn {
                 is_call: sql_is_call_statement(sql),
                 // A stored mysqli query() buffers only the CURRENT set, like mysqlnd's
                 // store_result(): later sets stay on the server until next_result(). With
-                // multi-statements off only a CALL returns several sets, so a raw CALL streams
-                // (the prelude buffers its first set) and everything else is read at once.
-                buffered: self.buffered_query && !(raw && sql_is_call_statement(sql)),
+                // multi-statements off only a CALL (or an EXECUTE of one) returns several sets,
+                // so such a raw statement streams (the prelude buffers its first set) and
+                // everything else is read at once.
+                buffered: self.buffered_query && !(raw && sql_may_return_several_sets(sql)),
                 stream_id: None,
                 lazy_sets: self.lazy_rowsets,
                 cursor_type: 0,
@@ -4490,6 +4533,28 @@ mod tests {
         let varchar_utf8mb4 =
             Column::new(ColumnType::MYSQL_TYPE_VAR_STRING).with_character_set(45);
         assert_eq!(ColKind::from_column(&varchar_utf8mb4), ColKind::Other);
+    }
+
+    /// `sql_may_return_several_sets` finds `CALL` and `EXECUTE` behind whitespace, inert
+    /// comments and MySQL / MariaDB executable comments (with or without a version), and
+    /// nothing else: an identifier that merely starts with the keyword, a keyword inside an
+    /// inert comment, and an ordinary statement inside an executable comment are rejected.
+    #[test]
+    fn sql_may_return_several_sets_sees_through_executable_comments() {
+        assert!(sql_may_return_several_sets("CALL p()"));
+        assert!(sql_may_return_several_sets(" /* hint */ call p()"));
+        assert!(sql_may_return_several_sets("/*!50000 CALL p() */"));
+        assert!(sql_may_return_several_sets("/*! CALL p() */"));
+        assert!(sql_may_return_several_sets("/*M!100100 CALL p() */"));
+        assert!(sql_may_return_several_sets("-- x\n/*!50000 CALL p() */"));
+        assert!(sql_may_return_several_sets("EXECUTE s"));
+        assert!(sql_may_return_several_sets("/*!50000 execute s */"));
+        assert!(!sql_may_return_several_sets("CALLBACK()"));
+        assert!(!sql_may_return_several_sets("EXECUTED()"));
+        assert!(!sql_may_return_several_sets("/* CALL p() */ SELECT 1"));
+        assert!(!sql_may_return_several_sets("/*!50000 SELECT 1 */"));
+        assert!(!sql_may_return_several_sets("SELECT 1"));
+        assert!(!sql_may_return_several_sets(""));
     }
 
     /// P0-C (mandatory unit test, no server needed): `sql_is_call_statement`
