@@ -177,3 +177,21 @@ fn test_parse_dunder_trait_magic_constant() {
 }
 
 // --- ::class magic constant ---
+
+
+/// Verifies a semi-reserved keyword is accepted as a trait method name and alias.
+#[test]
+fn test_parse_trait_adaptation_semi_reserved_namespace() {
+    let stmts = parse_source("<?php class C { use A { namespace as bar; } }");
+    let StmtKind::ClassDecl { trait_uses, .. } = &stmts[0].kind else {
+        panic!("Expected class declaration, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(trait_uses[0].adaptations.len(), 1);
+    match &trait_uses[0].adaptations[0] {
+        TraitAdaptation::Alias { method, alias, .. } => {
+            assert_eq!(method, "namespace");
+            assert_eq!(alias.as_deref(), Some("bar"));
+        }
+        other => panic!("Expected trait alias adaptation, got {other:?}"),
+    }
+}

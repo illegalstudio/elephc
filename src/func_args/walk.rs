@@ -62,6 +62,8 @@ pub(super) struct Rewriter {
     capture_all_frames: bool,
     rewrite_introspection: bool,
     saw_backtrace: bool,
+    /// True for the backtrace detector, which must not walk compiler-injected prelude bodies.
+    detect_only: bool,
 }
 
 impl Rewriter {
@@ -73,6 +75,15 @@ impl Rewriter {
             capture_all_frames,
             rewrite_introspection,
             saw_backtrace: false,
+            detect_only: false,
+        }
+    }
+
+    /// Creates the read-only backtrace detector used before the rewrite pass.
+    pub(super) fn new_detector() -> Self {
+        Self {
+            detect_only: true,
+            ..Self::new(false, false)
         }
     }
 
@@ -90,6 +101,19 @@ impl Rewriter {
 
     /// Rewrites one statement, recursing into every nested statement and expression.
     fn walk_stmt(&mut self, stmt: &mut Stmt) {
+        if self.detect_only
+            && stmt.source_mode == crate::source::SourceMode::Internal
+            && matches!(
+                stmt.kind,
+                StmtKind::FunctionDecl { .. }
+                    | StmtKind::ClassDecl { .. }
+                    | StmtKind::EnumDecl { .. }
+                    | StmtKind::TraitDecl { .. }
+                    | StmtKind::InterfaceDecl { .. }
+            )
+        {
+            return;
+        }
         match &mut stmt.kind {
             // Statements with no expression and no nested body.
             StmtKind::Break(_)
@@ -753,7 +777,7 @@ fn string_literal_names_backtrace(literal: &str) -> bool {
 /// this gate off the compiler's allocation path for every program, including the ones that
 /// never mention a backtrace.
 pub(super) fn program_uses_backtrace(program: &mut [Stmt]) -> bool {
-    let mut detector = Rewriter::new(false, false);
+    let mut detector = Rewriter::new_detector();
     detector.walk_stmts(program);
     detector.saw_backtrace
 }

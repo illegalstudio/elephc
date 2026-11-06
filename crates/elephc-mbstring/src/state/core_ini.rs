@@ -20,6 +20,7 @@ pub struct CoreIni {
     local: [IniString; DIRECTIVES.len()],
     max_variables: i64,
     max_nesting: i64,
+    memory_limit: i64,
     display_errors: u8,
 }
 
@@ -29,8 +30,9 @@ impl Default for CoreIni {
         let global = std::array::from_fn(|index| IniString::interned(DIRECTIVES[index].default.unwrap().as_bytes()));
         let max_variables = numeric::quantity(&global[Key::MaxVariables as usize]).0;
         let max_nesting = numeric::quantity(&global[Key::MaxNesting as usize]).0;
+        let memory_limit = numeric::quantity(&global[Key::MemoryLimit as usize]).0;
         let display_errors = numeric::display_errors(&global[Key::DisplayErrors as usize]);
-        Self { local: global.clone(), global, max_variables, max_nesting, display_errors }
+        Self { local: global.clone(), global, max_variables, max_nesting, memory_limit, display_errors }
     }
 }
 
@@ -45,6 +47,16 @@ impl CoreIni {
             let accepted = match key {
                 Key::Separators => !value.is_empty(),
                 Key::DisplayErrors => { state.display_errors = numeric::display_errors(value); true },
+                Key::MemoryLimit => {
+                    let (parsed, warning) = numeric::quantity(value);
+                    let invalid = warning.is_some();
+                    if let Some(warning) = warning {
+                        let mut message = format!("Invalid \"{}\" setting. ", directive.name).into_bytes();
+                        message.extend_from_slice(&warning);
+                        diagnostics.push(Diagnostic { level: 2, message });
+                    }
+                    if invalid || parsed < -1 { false } else { state.memory_limit = parsed; true }
+                },
                 Key::MaxNesting | Key::MaxVariables => {
                     let (parsed, warning) = numeric::quantity(value);
                     if let Some(warning) = warning {
@@ -73,7 +85,12 @@ impl CoreIni {
     pub fn set(&mut self, name: &[u8], value: IniString) -> Option<IniString> {
         let key = lookup(name)?;
         if DIRECTIVES[key as usize].access & 1 == 0 { return None; }
-        self.display_errors = numeric::display_errors(&value);
+        if key == Key::DisplayErrors { self.display_errors = numeric::display_errors(&value); }
+        if key == Key::MemoryLimit {
+            let (parsed, warning) = numeric::quantity(&value);
+            if warning.is_some() || parsed < -1 { return None; }
+            self.memory_limit = parsed;
+        }
         Some(std::mem::replace(&mut self.local[key as usize], value).scalar_result())
     }
 
@@ -86,6 +103,7 @@ impl CoreIni {
     pub fn reset(&mut self) {
         self.local = self.global.clone();
         self.display_errors = numeric::display_errors(&self.local[Key::DisplayErrors as usize]);
+        self.memory_limit = numeric::quantity(&self.local[Key::MemoryLimit as usize]).0;
     }
 
     /// Borrows the C-string separator bytes until the next request mutation or reset.
@@ -98,6 +116,9 @@ impl CoreIni {
 
     /// Returns the validated nesting limit read before each field registration.
     pub fn max_nesting(&self) -> i64 { self.max_nesting }
+
+    /// Returns the validated memory limit in bytes, or `-1` when unlimited.
+    pub fn memory_limit(&self) -> i64 { self.memory_limit }
 
     /// Returns PHP's disabled, stdout, or stderr display mode without collapsing its raw INI value.
     pub fn display_errors(&self) -> u8 { self.display_errors }

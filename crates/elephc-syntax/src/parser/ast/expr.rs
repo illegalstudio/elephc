@@ -1,0 +1,585 @@
+//! Purpose:
+//! Defines expression AST nodes for PHP expressions and elephc expression-level extensions.
+//! Carries operands, call forms, access forms, magic constants, and source spans.
+//!
+//! Called from:
+//! - `crate::parser::expr` and AST-walking passes such as resolver, name resolver, optimizer, and codegen.
+//!
+//! Key details:
+//! - Expression variants must preserve PHP evaluation shape so later passes can model side effects correctly.
+
+use crate::names::Name;
+use crate::span::Span;
+
+use super::{BinOp, Stmt, StmtKind, TypeExpr};
+
+// --- Expressions ---
+
+#[cfg_attr(not(feature = "tokenizer-validation"), derive(Clone))]
+#[derive(Debug)]
+/// Expression AST node.
+pub struct Expr {
+    pub kind: ExprKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// One entry of an array literal that mixes spreads with explicit keys.
+///
+/// PHP lets the three forms appear in any order in one literal -- `["a" => 1, ...$v, 2]` -- and
+/// the order is observable, because a spread's elements take the next free integer key at the
+/// point they appear. Keeping them in one ordered list is what preserves that.
+pub enum ArrayEntry {
+    /// `...$source`: the source's entries are appended in order, string keys kept and integer
+    /// keys renumbered from the destination's next free slot.
+    Spread(Expr),
+    /// `key => value`.
+    Keyed(Expr, Expr),
+    /// A bare element, which takes the next free integer key.
+    Value(Expr),
+}
+
+impl ArrayEntry {
+    /// Returns every expression this entry holds, in EVALUATION order.
+    ///
+    /// Most of the tree walkers over `ExprKind` only need to reach the sub-expressions of a
+    /// node, not to know which role each one plays. Handing them one iterator keeps their
+    /// `ArrayLiteralMixed` arm a single line and stops the three shapes from being re-matched,
+    /// and re-ordered, in thirty different places.
+    pub fn exprs(&self) -> std::vec::IntoIter<&Expr> {
+        match self {
+            Self::Spread(expr) | Self::Value(expr) => vec![expr].into_iter(),
+            Self::Keyed(key, value) => vec![key, value].into_iter(),
+        }
+    }
+
+    /// Mutable counterpart of [`ArrayEntry::exprs`], for the rewriting passes.
+    pub fn exprs_mut(&mut self) -> std::vec::IntoIter<&mut Expr> {
+        match self {
+            Self::Spread(expr) | Self::Value(expr) => vec![expr].into_iter(),
+            Self::Keyed(key, value) => vec![key, value].into_iter(),
+        }
+    }
+
+    /// Rebuilds this entry with `rewrite` applied to each expression, keeping the entry's shape.
+    ///
+    /// The rewriting passes (constant folding, pruning, magic-constant substitution) replace an
+    /// expression tree wholesale, and every one of them has to put a spread back as a spread and
+    /// a key back as a key. Doing that here means none of them can quietly turn one into another.
+    pub fn map_exprs(self, mut rewrite: impl FnMut(Expr) -> Expr) -> Self {
+        match self {
+            Self::Spread(expr) => Self::Spread(rewrite(expr)),
+            Self::Value(expr) => Self::Value(rewrite(expr)),
+            Self::Keyed(key, value) => Self::Keyed(rewrite(key), rewrite(value)),
+        }
+    }
+
+    /// Fallible counterpart of [`ArrayEntry::map_exprs`], borrowing rather than consuming.
+    ///
+    /// The schema passes rewrite `self::`/`parent::` inside a constant initializer and can
+    /// reject what they find, so they need the error to escape rather than be swallowed.
+    pub fn try_map_exprs<E>(
+        &self,
+        mut rewrite: impl FnMut(&Expr) -> Result<Expr, E>,
+    ) -> Result<Self, E> {
+        Ok(match self {
+            Self::Spread(expr) => Self::Spread(rewrite(expr)?),
+            Self::Value(expr) => Self::Value(rewrite(expr)?),
+            Self::Keyed(key, value) => Self::Keyed(rewrite(key)?, rewrite(value)?),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Expression kind.
+pub enum ExprKind {
+    StringLiteral(String),
+    IntLiteral(i64),
+    FloatLiteral(f64),
+    Variable(String),
+    BinaryOp {
+        left: Box<Expr>,
+        op: BinOp,
+        right: Box<Expr>,
+    },
+    InstanceOf {
+        value: Box<Expr>,
+        target: InstanceOfTarget,
+    },
+    BoolLiteral(bool),
+    Null,
+    Negate(Box<Expr>),
+    Not(Box<Expr>),
+    BitNot(Box<Expr>),
+    Throw(Box<Expr>),
+    ErrorSuppress(Box<Expr>),
+    Print(Box<Expr>),
+    NullCoalesce {
+        value: Box<Expr>,
+        default: Box<Expr>,
+    },
+    /// PHP 8.5 pipe operator: `value |> callable` evaluates `value`, then invokes
+    /// `callable` with the resulting value as the single positional argument.
+    /// Left-associative; LHS is observably evaluated before RHS.
+    Pipe {
+        value: Box<Expr>,
+        callable: Box<Expr>,
+    },
+    Assignment {
+        target: Box<Expr>,
+        value: Box<Expr>,
+        result_target: Option<Box<Expr>>,
+        prelude: Vec<Stmt>,
+        conditional_value_temp: Option<String>,
+    },
+    PreIncrement(String),
+    PostIncrement(String),
+    PreDecrement(String),
+    PostDecrement(String),
+    FunctionCall {
+        name: Name,
+        args: Vec<Expr>,
+    },
+    ArrayLiteral(Vec<Expr>),
+    ArrayLiteralAssoc(Vec<(Expr, Expr)>),
+    /// An array literal that MIXES a spread with explicit keys, which neither of the two
+    /// nodes above can hold: `ArrayLiteral` has no place for a key and `ArrayLiteralAssoc`
+    /// has no place for a keyless spread. Produced only for that shape.
+    ArrayLiteralMixed(Vec<ArrayEntry>),
+    Match {
+        subject: Box<Expr>,
+        arms: Vec<(Vec<Expr>, Expr)>,
+        default: Option<Box<Expr>>,
+    },
+    ArrayAccess {
+        array: Box<Expr>,
+        index: Box<Expr>,
+    },
+    Ternary {
+        condition: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+    },
+    ShortTernary {
+        value: Box<Expr>,
+        default: Box<Expr>,
+    },
+    Cast {
+        target: CastType,
+        expr: Box<Expr>,
+    },
+    Closure {
+        params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
+        variadic: Option<String>,
+        /// Whether the variadic parameter was declared by reference (`&...$args`).
+        variadic_by_ref: bool,
+        /// Declared element type hint on the variadic parameter (`int ...$xs`), if any.
+        variadic_type: Option<TypeExpr>,
+        return_type: Option<TypeExpr>,
+        body: Vec<Stmt>,
+        is_arrow: bool,
+        is_static: bool,
+        /// `true` when declared with `fn &()`/`function &()` — the closure returns a
+        /// reference (alias) to the returned lvalue rather than a copy.
+        by_ref_return: bool,
+        captures: Vec<String>,
+        capture_refs: Vec<String>,
+    },
+    NamedArg {
+        name: String,
+        value: Box<Expr>,
+    },
+    /// A `require`/`include` used in expression position (e.g. `$x = require 'f.php';`).
+    ///
+    /// This is a transient node produced by the parser and fully expanded by the resolver into
+    /// the included file's statements (run in the caller's scope) plus a hidden temporary that
+    /// captures the file's top-level `return` value. It must never survive past resolution; later
+    /// passes never see it.
+    IncludeValue {
+        path: Box<Expr>,
+        once: bool,
+        required: bool,
+    },
+    Spread(Box<Expr>),
+    ClosureCall {
+        var: String,
+        args: Vec<Expr>,
+    },
+    ExprCall {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    ConstRef(Name),
+    NewObject {
+        class_name: Name,
+        args: Vec<Expr>,
+    },
+    /// `new Box<int>(5)` — construction of a generic class at explicit type arguments.
+    ///
+    /// Lives only between parsing and monomorphization, exactly like
+    /// [`crate::parser::ast::TypeExpr::GenericClass`], which is what `class_type` always holds.
+    /// `crate::generics::classes` rewrites it to an ordinary `NewObject` naming the instantiated
+    /// class, so nothing downstream has a notion of constructing a template.
+    ///
+    /// A separate variant rather than a field on `NewObject` because the type arguments have to
+    /// be a `TypeExpr`, not text: the name resolver canonicalizes `new Box<User>` to
+    /// `\App\Box<\App\User>`, and it can only do that by walking the argument as a type. It
+    /// also keeps every pass that predates generics matching on `NewObject` unchanged.
+    NewGeneric {
+        class_type: crate::parser::ast::TypeExpr,
+        args: Vec<Expr>,
+    },
+    /// PHP `new $var()` / `new $var(args)` — the class is named at runtime
+    /// by a string expression. Resolved through the runtime class table at
+    /// codegen time (`__rt_new_by_name`).
+    NewDynamic {
+        name_expr: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    /// Internal synthetic factory used by compiler-provided methods that must
+    /// construct an object from a runtime class-string while constraining it to
+    /// a known parent class.
+    NewDynamicObject {
+        class_name: Box<Expr>,
+        fallback_class: Name,
+        required_parent: Name,
+        args: Vec<Expr>,
+    },
+    Clone(Box<Expr>),
+    PropertyAccess {
+        object: Box<Expr>,
+        property: String,
+    },
+    DynamicPropertyAccess {
+        object: Box<Expr>,
+        property: Box<Expr>,
+    },
+    NullsafePropertyAccess {
+        object: Box<Expr>,
+        property: String,
+    },
+    NullsafeDynamicPropertyAccess {
+        object: Box<Expr>,
+        property: Box<Expr>,
+    },
+    StaticPropertyAccess {
+        receiver: StaticReceiver,
+        property: String,
+    },
+    MethodCall {
+        object: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+    },
+    NullsafeMethodCall {
+        object: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+    },
+    NullsafeDynamicMethodCall {
+        object: Box<Expr>,
+        method: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    StaticMethodCall {
+        receiver: StaticReceiver,
+        method: String,
+        args: Vec<Expr>,
+    },
+    FirstClassCallable(CallableTarget),
+    This,
+    PtrCast {
+        target_type: String,
+        expr: Box<Expr>,
+    },
+    BufferNew {
+        element_type: TypeExpr,
+        len: Box<Expr>,
+    },
+    /// `MyClass::class`, `self::class`, `parent::class`, `static::class`.
+    /// For `Named`, `Self_`, `Parent` the FQN is resolved at compile time;
+    /// `Static` resolves the called class via late static binding.
+    ClassConstant {
+        receiver: StaticReceiver,
+    },
+    /// `$object::class` or another object-valued expression followed by `::class`.
+    /// Unlike `ClassConstant`, this resolves the concrete runtime class of the
+    /// evaluated object instead of naming a compile-time static receiver.
+    ObjectClassName {
+        object: Box<Expr>,
+    },
+    /// Access to a user-declared class constant: `MyClass::FOO`,
+    /// `self::FOO`, `parent::FOO`, `static::FOO`. Resolved at type-check
+    /// time by looking up the constant in the receiver's class info.
+    ScopedConstantAccess {
+        receiver: StaticReceiver,
+        name: String,
+    },
+    /// `new self()`, `new static()`, `new parent()`. Distinct from `NewObject`
+    /// which uses a fixed class name; this variant carries a `StaticReceiver`
+    /// so that codegen can apply late static binding for `static`.
+    NewScopedObject {
+        receiver: StaticReceiver,
+        args: Vec<Expr>,
+    },
+    MagicConstant(MagicConstant),
+    Yield {
+        key: Option<Box<Expr>>,
+        value: Option<Box<Expr>>,
+    },
+    YieldFrom(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+/// Magic constant.
+pub enum MagicConstant {
+    Dir,
+    File,
+    Function,
+    Class,
+    Method,
+    Namespace,
+    Trait,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Cast type.
+pub enum CastType {
+    Int,
+    Float,
+    String,
+    Bool,
+    Array,
+    Object,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Static receiver.
+pub enum StaticReceiver {
+    Named(Name),
+    /// `Box<int>::of(1)` — static access through a generic class named with type arguments.
+    ///
+    /// Lives only between parsing and monomorphization, exactly like
+    /// [`crate::parser::ast::TypeExpr::GenericClass`], which is always what it holds.
+    /// `generics::classes` instantiates the template and the AST walker collapses this back to
+    /// `Named`, so no pass after that has a notion of a generic static receiver.
+    ///
+    /// A variant rather than a `Name` carrying angle brackets because the arguments have to be
+    /// resolved and substituted as TYPES: `Box<User>` inside a namespace names that namespace's
+    /// `User`, and `Box<T>` inside a template becomes `Box<int>` only once `T` is bound.
+    Generic(crate::parser::ast::TypeExpr),
+    Self_,
+    Static,
+    Parent,
+}
+
+impl StaticReceiver {
+    /// Returns this receiver with a generic class reduced to the class it is WRITTEN on.
+    ///
+    /// `Box<int>::of()` reaches through `Box` until `generics::classes` renames it to
+    /// `Box<int>`, so a pass that asks "which class does this receiver name" gets a truthful
+    /// answer either side of instantiation. Every other receiver is returned unchanged.
+    ///
+    /// Used by the passes that only look a receiver up — the effect model, the checker's class
+    /// resolution, reflection metadata — so their matches can state that a generic receiver
+    /// never reaches them, and be right. It is NOT used by the passes that rebuild a receiver:
+    /// those must carry the type arguments through, or the instantiation never happens.
+    pub fn written_class_receiver(&self) -> StaticReceiver {
+        match self {
+            StaticReceiver::Generic(crate::parser::ast::TypeExpr::GenericClass {
+                name, ..
+            }) => StaticReceiver::Named(name.clone()),
+            StaticReceiver::Generic(crate::parser::ast::TypeExpr::Named(name)) => {
+                StaticReceiver::Named(name.clone())
+            }
+            other => other.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// InstanceOf target.
+pub enum InstanceOfTarget {
+    Name(Name),
+    /// `$x instanceof Box<int>` — a generic class named with type arguments.
+    ///
+    /// Lives only between parsing and monomorphization, exactly like
+    /// [`crate::parser::ast::TypeExpr::GenericClass`], which is always what it holds. The AST
+    /// walker collapses it back to `Name` once the type is concrete, so no pass after
+    /// instantiation has a notion of a generic instanceof target.
+    Generic(crate::parser::ast::TypeExpr),
+    Expr(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Callable target.
+pub enum CallableTarget {
+    Function(Name),
+    StaticMethod {
+        receiver: StaticReceiver,
+        method: String,
+    },
+    Method {
+        object: Box<Expr>,
+        method: String,
+    },
+}
+
+/// Returns `true` when an assignment value came from `$name op= rhs` or `$name ??= rhs`.
+///
+/// Compound assignment parsing lowers the value to a regular `BinaryOp`/`NullCoalesce`, so the
+/// caller's assignment span is used to distinguish actual compound syntax from a plain
+/// self-referential assignment such as `$x = $x + 1`.
+pub fn is_compound_assignment_self_read(
+    value: &Expr,
+    name: &str,
+    assignment_span: Span,
+) -> bool {
+    if value.span.line != assignment_span.line || value.span.col != assignment_span.col {
+        return false;
+    }
+    match &value.kind {
+        ExprKind::BinaryOp { left, .. } => {
+            matches!(&left.kind, ExprKind::Variable(v) if v == name)
+        }
+        ExprKind::NullCoalesce { value: inner, .. } => {
+            matches!(&inner.kind, ExprKind::Variable(v) if v == name)
+        }
+        _ => false,
+    }
+}
+
+/// Returns `true` when a property assignment value came from compound or incdec syntax.
+///
+/// The parser lowers `$object->property op= rhs` and property `++`/`--` to an ordinary
+/// `PropertyAssign` whose value reads the same property, sometimes through a prelude temporary.
+/// The synthetic operation keeps the assignment span, which distinguishes it from direct
+/// assignment such as `$object->property = $object->property . $rhs`.
+pub fn is_compound_property_assignment_self_read(
+    value: &Expr,
+    object: &Expr,
+    property: &str,
+    assignment_span: Span,
+    prelude: &[Stmt],
+) -> bool {
+    if value.span.line != assignment_span.line || value.span.col != assignment_span.col {
+        return false;
+    }
+    let same_property = |read: &Expr| matches!(
+        &read.kind,
+        ExprKind::PropertyAccess {
+            object: read_object,
+            property: read_property,
+        } if read_object.as_ref() == object && read_property == property
+    );
+    match &value.kind {
+        ExprKind::BinaryOp { left, .. } => same_property(left),
+        ExprKind::Variable(name) => prelude.iter().rev().find_map(|stmt| {
+            let StmtKind::Assign { name: bound, value } = &stmt.kind else { return None; };
+            (bound == name).then(|| is_compound_property_assignment_self_read(
+                value, object, property, assignment_span, &[],
+            ))
+        }).unwrap_or(false),
+        ExprKind::Assignment { value: operation, prelude, .. } => {
+            let (ExprKind::PreIncrement(old) | ExprKind::PostIncrement(old)
+                | ExprKind::PreDecrement(old) | ExprKind::PostDecrement(old)) = &operation.kind
+            else { return false; };
+            prelude.iter().any(|stmt| matches!(&stmt.kind,
+                StmtKind::Assign { name, value } if name == old && same_property(value)))
+        }
+        _ => false,
+    }
+}
+
+impl PartialEq for Expr {
+    /// Compares two expressions by comparing their `ExprKind`s only.
+    /// Spans are not considered in equality.
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+
+#[allow(dead_code)] // Constructors used by test crate
+#[cfg(feature = "tokenizer-validation")]
+impl Clone for Expr {
+    /// Validation parses the same grammar but never reads the tree, so a placeholder
+    /// clone is enough and keeps the deep AST clone out of the validator.
+    fn clone(&self) -> Self {
+        Expr::new(ExprKind::Null, self.span)
+    }
+}
+
+impl Expr {
+    /// Constructs an expression with the given kind and span.
+    /// Typically used by parsers; test code may also use this directly.
+    pub fn new(kind: ExprKind, span: Span) -> Self {
+        Self { kind, span }
+    }
+
+    /// Constructs a string literal expression with the given value.
+    pub fn string_lit(s: impl Into<String>) -> Self {
+        Self::new(ExprKind::StringLiteral(s.into()), Span::dummy())
+    }
+
+    /// Constructs an integer literal expression with the given value.
+    pub fn int_lit(n: i64) -> Self {
+        Self::new(ExprKind::IntLiteral(n), Span::dummy())
+    }
+
+    /// Constructs a float literal expression with the given value.
+    pub fn float_lit(f: f64) -> Self {
+        Self::new(ExprKind::FloatLiteral(f), Span::dummy())
+    }
+
+    /// Constructs a variable expression with the given name.
+    pub fn var(name: impl Into<String>) -> Self {
+        Self::new(ExprKind::Variable(name.into()), Span::dummy())
+    }
+
+    /// Constructs a binary operation expression with the given left operand, operator, and right operand.
+    /// Both operands are boxed and evaluated left-to-right (PHP evaluation order).
+    pub fn binop(left: Expr, op: BinOp, right: Expr) -> Self {
+        Self::new(
+            ExprKind::BinaryOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            },
+            Span::dummy(),
+        )
+    }
+
+    /// Constructs an `instanceof` expression with a static class name target.
+    /// The target is resolved at type-check time.
+    pub fn instance_of(value: Expr, target: Name) -> Self {
+        Self::new(
+            ExprKind::InstanceOf {
+                value: Box::new(value),
+                target: InstanceOfTarget::Name(target),
+            },
+            Span::dummy(),
+        )
+    }
+
+    /// Constructs a dynamic `instanceof` expression where the target is an expression
+    /// evaluated at runtime rather than a static class name.
+    pub fn dynamic_instance_of(value: Expr, target: Expr) -> Self {
+        Self::new(
+            ExprKind::InstanceOf {
+                value: Box::new(value),
+                target: InstanceOfTarget::Expr(Box::new(target)),
+            },
+            Span::dummy(),
+        )
+    }
+
+    /// Constructs a negation expression for the given expression.
+    pub fn negate(inner: Expr) -> Self {
+        Self::new(ExprKind::Negate(Box::new(inner)), Span::dummy())
+    }
+
+    /// Constructs a `print` expression that outputs the given expression's value.
+    pub fn print(inner: Expr) -> Self {
+        Self::new(ExprKind::Print(Box::new(inner)), Span::dummy())
+    }
+}

@@ -191,7 +191,7 @@
       "total": 329
     },
     "constants": {
-      "have": 1349,
+      "have": 1352,
       "total": 3180
     },
     "functions": {
@@ -1483,8 +1483,8 @@
         "total": 6
       },
       "constants": {
-        "eval": 142,
-        "have": 163,
+        "eval": 145,
+        "have": 166,
         "total": 400
       },
       "docs": null,

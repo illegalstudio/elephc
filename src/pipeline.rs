@@ -525,9 +525,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     crate::progress::phase("hash-prelude");
     let phase_started = Instant::now();
     let ast = crate::hash_prelude::inject_if_used(ast, autoloaded("hash"), &mut prelude_inventory);
-    let ast = crate::tokenizer_prelude::inject_if_used(
+    let ast = crate::tokenizer_prelude::inject_if_used_with_web(
         ast,
         with_crates.contains("tokenizer") || autoloaded("tokenizer"),
+        heap_size,
+        web,
         &mut prelude_inventory,
     );
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);

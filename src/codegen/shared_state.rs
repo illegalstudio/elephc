@@ -148,6 +148,12 @@ impl SharedCodegenState {
         }
     }
 
+    /// Reserves the runtime families the shared mixed-string ladder uses on its throw path.
+    pub(super) fn require_mixed_string_runtime(&mut self) {
+        self.generated_runtime_features.handler_state = true;
+        self.generated_runtime_features.object_clone = true;
+    }
+
     /// Returns optional runtime families introduced after the module-level EIR scan.
     pub(crate) fn generated_runtime_features(&self) -> GeneratedRuntimeFeatures {
         self.generated_runtime_features
