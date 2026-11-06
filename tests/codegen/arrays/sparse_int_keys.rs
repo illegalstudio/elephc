@@ -401,3 +401,19 @@ echo pick($argc), "|", appended($argc), "|", fill(), "|", $slots[0], ",", $slots
 "#);
     assert_eq!(out, "2,0,1,1|1|7|2,4\n");
 }
+
+/// A later write that cannot promote (a string cast or concatenation key, a key still bound by an earlier
+/// `foreach`, a value that is never an integer) leaves a counter-key read checked before it on
+/// the `mixed` view, so assigning that read to an `int` local inside a branch compiles.
+#[test]
+fn test_unpromotable_later_writes_keep_mixed_view_for_earlier_reads() {
+    let out = compile_and_run(r#"<?php
+function after_cast(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[(string)$n] = 1; return (string)($y ?? -1); }
+function after_concat(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells["k" . $n] = 1; return (string)($y ?? -1); }
+function after_foreach(int $n): string { $cells = [2, 0, 1]; foreach ([10] as $k => $v) {} $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[$k] = 1; return (string)($y ?? -1); }
+function after_string_value(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[$n] = "x"; return (string)($y ?? -1); }
+function after_float_value(int $n): string { $cells = [2, 0, 1]; $y = 0; if ($n > 0) { $y = $cells[$n + 1]; } $cells[$n] = 1.5; return (string)($y ?? -1); }
+echo after_cast($argc), after_concat($argc), after_foreach($argc), after_string_value($argc), after_float_value($argc), "\n";
+"#);
+    assert_eq!(out, "11111\n");
+}

@@ -22,7 +22,7 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 use crate::types::PhpType;
 
@@ -636,17 +636,39 @@ impl Checker {
     }
 }
 
+/// Returns whether an element write's value may be an integer, the only value a promotable
+/// `array<int>` write stores: a string, float, bool, `null` or array literal, a concatenation and
+/// a cast to anything but `int` never are. Every other expression stays eligible, because its
+/// type is not syntactic and an element copy (`$a[$j + 1] = $a[$j]`) must keep the view.
+fn value_may_stay_int(value: &Expr) -> bool {
+    !matches!(
+        &value.kind,
+        ExprKind::StringLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+            | ExprKind::ArrayLiteral(_)
+            | ExprKind::ArrayLiteralAssoc(_)
+            | ExprKind::ArrayLiteralMixed(_)
+            | ExprKind::BinaryOp { op: BinOp::Concat, .. }
+            | ExprKind::Cast {
+                target: CastType::String | CastType::Float | CastType::Bool | CastType::Array | CastType::Object,
+                ..
+            }
+    )
+}
+
 /// What one walk of a body collects.
 #[derive(Default)]
 struct Scan {
     /// Locals written through a statement-form element write or append.
     written: HashSet<String>,
-    /// Locals with an element write whose key may skip a slot, the only write that can make a
-    /// candidate promotable: not an append, not a key provably in range (literal `0`), not a
-    /// string literal (always a hash) and not a bare `foreach` key (routed to the tagged writer).
+    /// Locals with an element write that can make a candidate promotable: its key may skip a
+    /// slot (`Scan::key_may_skip`) and its value may stay an integer (`value_may_stay_int`).
     keyed: HashSet<String>,
-    /// `foreach` key variables of the enclosing loops.
-    foreach_keys: Vec<String>,
+    /// `foreach` key variables, in source order: a name stays here after its loop until it is
+    /// assigned again, exactly as `Checker::is_foreach_key` keeps it.
+    foreach_keys: HashSet<String>,
     /// Locals some construct can reach outside the dispatched element operations.
     disqualified: HashSet<String>,
     /// Set when a builtin can read or rebind every local of the body.
@@ -663,10 +685,19 @@ struct Scan {
 
 impl Scan {
     /// Returns whether an element write under `index` may skip a slot and so make its local
-    /// promotable, mirroring the key gate of `Checker::promotable_array_write`.
+    /// promotable, mirroring the key gate of `Checker::promotable_array_write`: not a key provably
+    /// in range (literal `0`), not a syntactic string key (a string literal, `null`, a string cast
+    /// or a concatenation, which always take a hash), and not a `foreach` key (routed to the
+    /// tagged writer).
     fn key_may_skip(&self, index: &Expr) -> bool {
         !crate::types::nonempty_array_key_stays_in_range(index)
-            && !matches!(&index.kind, ExprKind::StringLiteral(_))
+            && !matches!(
+                &index.kind,
+                ExprKind::StringLiteral(_)
+                    | ExprKind::Null
+                    | ExprKind::Cast { target: CastType::String, .. }
+                    | ExprKind::BinaryOp { op: BinOp::Concat, .. }
+            )
             && !matches!(&index.kind, ExprKind::Variable(name) if self.foreach_keys.contains(name))
     }
 
@@ -682,7 +713,7 @@ impl Scan {
         match &stmt.kind {
             StmtKind::ArrayAssign { array, index, value } => {
                 self.written.insert(array.clone());
-                if self.key_may_skip(index) {
+                if self.key_may_skip(index) && value_may_stay_int(value) {
                     self.keyed.insert(array.clone());
                 }
                 self.expr(index);
@@ -714,6 +745,7 @@ impl Scan {
             }
             StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
                 self.assigned.insert(name.clone());
+                self.foreach_keys.remove(name);
                 self.expr(value);
             }
             StmtKind::Include { path, .. } => {
@@ -749,10 +781,8 @@ impl Scan {
                 self.disqualified.extend(key_var.iter().cloned());
                 self.disqualified.insert(value_var.clone());
                 self.expr(array);
-                let depth = self.foreach_keys.len();
                 self.foreach_keys.extend(key_var.iter().cloned());
                 self.stmts(body);
-                self.foreach_keys.truncate(depth);
             }
             StmtKind::Try {
                 try_body,
@@ -902,6 +932,7 @@ impl Scan {
             ExprKind::Assignment { target, .. } => match &target.kind {
                 ExprKind::Variable(name) => {
                     self.assigned.insert(name.clone());
+                    self.foreach_keys.remove(name);
                 }
                 _ => self.disqualify_root(target),
             },
