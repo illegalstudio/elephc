@@ -312,7 +312,6 @@ pub(super) fn plan_ref_arg_writebacks(
         writebacks.push(RefArgWriteback {
             param_index,
             alias_param_indexes: Vec::new(),
-            source_value: *value,
             source_slot: source.slot,
             source_ty,
             cell_offset: 0,

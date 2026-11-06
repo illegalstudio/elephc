@@ -103,7 +103,6 @@ pub(super) struct RefArgWriteback {
     /// Further by-reference parameters bound to the same local (`f($v, $v)`): they share this
     /// cell, so every write through any of them is seen by the others and written back once.
     pub(super) alias_param_indexes: Vec<usize>,
-    pub(super) source_value: ValueId,
     pub(super) source_slot: LocalSlotId,
     pub(super) source_ty: PhpType,
     pub(super) cell_offset: usize,
