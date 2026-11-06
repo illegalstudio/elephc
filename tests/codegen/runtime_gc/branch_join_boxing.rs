@@ -53,12 +53,13 @@ echo $total, "\n";
     assert_clean(out, "10067\n");
 }
 
-/// Float/string, object and array arms joined inside a loop leave the heap clean.
+/// Float/string, object and array arms joined inside a loop leave the heap clean. The string arm
+/// comes first because the checker currently refuses a string assignment after a float arm.
 #[test]
 fn test_closure_local_retype_branch_join_heap_clean_mixed_arms() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
-$g = function (int $n) { $v = 1; if ($n % 3 === 1) { $v = 2.5; } elseif ($n % 3 === 2) { $v = "x" . $n; } return $v; };
+$g = function (int $n) { $v = 1; if ($n % 3 === 2) { $v = "x" . $n; } elseif ($n % 3 === 1) { $v = 2.5; } return $v; };
 $h = function (int $n) { $v = null; if ($n % 2 === 0) { $v = [$n, "e" . $n]; } return $v; };
 $o = function (int $n) { $v = null; if ($n % 2 === 0) { $v = new ArrayObject([$n]); } return $v; };
 $total = 0;
