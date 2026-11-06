@@ -194,6 +194,7 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
 
     emitter.label("__rt_uwfread_empty");
+    emitter.instruction("bl __rt_user_wrapper_read_missing_error");             // record the missing stream_read for the PHP dispatcher
     emitter.instruction("mov x1, #0");                                          // empty-string pointer for the missing stream_read fallback
     emitter.instruction("mov x2, #0");                                          // empty-string length for the missing stream_read fallback
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
@@ -285,27 +286,43 @@ pub fn emit_user_wrapper_fwrite(emitter: &mut Emitter) {
     emitter.comment("--- runtime: user_wrapper_fwrite ---");
     emitter.label_global("__rt_user_wrapper_fwrite");
 
-    // Frame: 32 bytes. [sp, #0..16] saved x29/x30. [sp, #16..24] data ptr.
-    //   [sp, #24..32] data len.
-    emitter.instruction("sub sp, sp, #32");                                     // helper frame for the wrapper dispatch
+    // Frame: 64 bytes. [16] data ptr, [24] data len, [32] wrapper object,
+    // [40] returned count.
+    emitter.instruction("sub sp, sp, #64");                                     // helper frame for the wrapper dispatch
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
     emitter.instruction("stp x1, x2, [sp, #16]");                               // save the data string pointer/length across the helper call
 
-    emit_aarch64_handle_lookup(emitter, "__rt_uwfwrite_zero");                  // resolve obj into x0, fall through to zero on missing handles
-    emit_aarch64_method_lookup(emitter, "__rt_uwfwrite_zero", VTABLE_SLOT_WRITE); // resolve stream_write method pointer into x11
+    emit_aarch64_handle_lookup(emitter, "__rt_uwfwrite_missing");               // resolve obj into x0, fall through to missing on no handle
+    emitter.instruction("str x0, [sp, #32]");                                   // keep the wrapper object for the error tracker
+    emit_aarch64_method_lookup(emitter, "__rt_uwfwrite_missing", VTABLE_SLOT_WRITE); // resolve stream_write method pointer into x11
 
     // -- call stream_write($this, $data) → returns int in x0 --
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload data string ptr/len for the second argument pair
     emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_WRITE, "fwrite");        // invoke stream_write, unboxing an undeclared return
+    emitter.instruction("str x0, [sp, #40]");                                   // keep the reported byte count
+    emitter.instruction("ldr x9, [sp, #24]");                                   // requested byte count
+    emitter.instruction("cmp x0, x9");                                          // did stream_write over-report the write?
+    emitter.instruction("b.le __rt_uwfwrite_done");                             // no excess report
+    emitter.instruction("ldr x0, [sp, #32]");                                   // wrapper object for the error tracker
+    emitter.instruction("ldr x1, [sp, #40]");                                   // returned byte count
+    emitter.instruction("ldr x2, [sp, #24]");                                   // requested byte count
+    emitter.instruction("mov x3, #0");                                          // mode 0 = over-reported write
+    emitter.instruction("bl __rt_user_wrapper_write_error");                    // record the UserspaceInvalidReturn event
+    emitter.instruction("ldr x0, [sp, #24]");                                   // PHP clamps the write to the requested byte count
+    emitter.label("__rt_uwfwrite_done");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's int result to the caller
 
-    emitter.label("__rt_uwfwrite_zero");
+    emitter.label("__rt_uwfwrite_missing");
+    emitter.instruction("mov x1, #0");                                          // no bytes were written
+    emitter.instruction("ldr x2, [sp, #24]");                                   // requested byte count
+    emitter.instruction("mov x3, #1");                                          // mode 1 = stream_write is missing
+    emitter.instruction("bl __rt_user_wrapper_write_error");                    // record the NotImplemented event
     emitter.instruction("mov x0, #0");                                          // zero-byte fallback for the missing stream_write
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return 0 bytes written
 }
 
@@ -317,26 +334,41 @@ fn emit_user_wrapper_fwrite_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 16");                                         // helper frame for the wrapper dispatch
+    emitter.instruction("sub rsp, 32");                                         // helper frame for the wrapper dispatch
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the data string pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the data string length
 
     // rdi already holds the synthetic fd from the builtin call site; the
     // handle lookup expects the fd in rdi so no extra reload is needed.
-    emit_x86_handle_lookup(emitter, "__rt_uwfwrite_zero_x86");                  // resolve obj into rdi, fall through on missing handles
-    emit_x86_method_lookup(emitter, "__rt_uwfwrite_zero_x86", VTABLE_SLOT_WRITE); // resolve stream_write method pointer into r11
+    emit_x86_handle_lookup(emitter, "__rt_uwfwrite_missing_x86");               // resolve obj into rdi, fall through to missing on no handle
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // keep the wrapper object for the error tracker
+    emit_x86_method_lookup(emitter, "__rt_uwfwrite_missing_x86", VTABLE_SLOT_WRITE); // resolve stream_write method pointer into r11
 
     // -- call stream_write($this, $data) → returns int in rax --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload data string pointer as the second arg
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload data string length as the third arg
     emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_WRITE, "fwrite");            // invoke stream_write, unboxing an undeclared return
-    emitter.instruction("add rsp, 16");                                         // release the helper frame
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // keep the reported byte count
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // did stream_write over-report the write?
+    emitter.instruction("jle __rt_uwfwrite_done_x86");                          // no excess report
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // wrapper object for the error tracker
+    emitter.instruction("mov rsi, rax");                                        // returned byte count
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // requested byte count
+    emitter.instruction("xor ecx, ecx");                                        // mode 0 = over-reported write
+    emitter.instruction("call __rt_user_wrapper_write_error");                  // record the UserspaceInvalidReturn event
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // PHP clamps the write to the requested byte count
+    emitter.label("__rt_uwfwrite_done_x86");
+    emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's int result to the caller
 
-    emitter.label("__rt_uwfwrite_zero_x86");
+    emitter.label("__rt_uwfwrite_missing_x86");
+    emitter.instruction("xor esi, esi");                                        // no bytes were written
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // requested byte count
+    emitter.instruction("mov ecx, 1");                                          // mode 1 = stream_write is missing
+    emitter.instruction("call __rt_user_wrapper_write_error");                  // record the NotImplemented event
     emitter.instruction("xor eax, eax");                                        // zero-byte fallback for the missing stream_write
-    emitter.instruction("add rsp, 16");                                         // release the helper frame
+    emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return 0 bytes written
 }

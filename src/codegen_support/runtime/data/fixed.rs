@@ -75,8 +75,13 @@ pub(crate) fn emit_runtime_data_fixed(
         "__elephc_stream_read_count",
         "__elephc_stream_read_excess",
         "__elephc_stream_read_class",
+        "__elephc_stream_read_missing",
         "__elephc_stream_cast_count",
         "__elephc_stream_cast_class",
+        "__elephc_stream_write_returned",
+        "__elephc_stream_write_requested",
+        "__elephc_stream_write_missing",
+        "__elephc_stream_write_class",
     ] {
         out.push_str(&comm_directive(&crate::names::ir_global_symbol(name), 8, target));
     }

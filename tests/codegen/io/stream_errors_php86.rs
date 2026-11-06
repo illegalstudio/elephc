@@ -610,3 +610,142 @@ fclose($two);
     );
     assert_eq!(out, "first handler\nsecond handler\n");
 }
+
+/// A wrapper that over-reports `stream_write` yields a clamped write and a
+/// `UserspaceInvalidReturn` error through the context handler.
+#[test]
+fn test_user_wrapper_stream_write_excess_php86() {
+    let out = run86(
+        r#"<?php
+class WriteExcessStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_write(string $data): int { return strlen($data) + 1; }
+    public function stream_read(int $count): string { return ''; }
+    public function stream_eof(): bool { return true; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('write-excess-stream', WriteExcessStream::class);
+$context = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_store' => StreamErrorStore::All,
+    'error_handler' => static function (array $errors): void {
+        echo 'handler: ', count($errors), ':', $errors[0]->code->name, "\n";
+        echo $errors[0]->message, "\n";
+    },
+]]);
+$stream = fopen('write-excess-stream://x', 'w', false, $context);
+var_dump(fwrite($stream, 'abc'));
+var_dump(count(stream_last_errors()));
+fclose($stream);
+"#,
+    );
+    assert_eq!(
+        out,
+        "handler: 1:UserspaceInvalidReturn\n\
+WriteExcessStream::stream_write wrote 1 bytes more data than requested (4 written, 3 max)\n\
+int(3)\n\
+int(1)\n"
+    );
+}
+
+/// A wrapper without `stream_write` reports `NotImplemented` for `fwrite`.
+#[test]
+fn test_user_wrapper_stream_write_missing_php86() {
+    let out = run86(
+        r#"<?php
+class WriteMissingStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_read(int $count): string { return ''; }
+    public function stream_eof(): bool { return true; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('write-missing-stream', WriteMissingStream::class);
+$context = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_store' => StreamErrorStore::All,
+    'error_handler' => static function (array $errors): void {
+        echo 'handler: ', count($errors), ':', $errors[0]->code->name, "\n";
+        echo $errors[0]->message, "\n";
+    },
+]]);
+$stream = fopen('write-missing-stream://x', 'w', false, $context);
+var_dump(fwrite($stream, 'abc'));
+var_dump(count(stream_last_errors()));
+fclose($stream);
+"#,
+    );
+    assert_eq!(
+        out,
+        "handler: 1:NotImplemented\n\
+WriteMissingStream::stream_write is not implemented!\n\
+int(0)\n\
+int(1)\n"
+    );
+}
+
+/// `file_get_contents()` dispatches a missing wrapper `stream_read` through the
+/// caller's context.
+#[test]
+fn test_user_wrapper_file_get_contents_missing_read_php86() {
+    let out = run86(
+        r#"<?php
+class NoReadStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_eof(): bool { return false; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('no-read-file-stream', NoReadStream::class);
+$context = stream_context_create(['stream' => [
+    'error_mode' => StreamErrorMode::Silent,
+    'error_store' => StreamErrorStore::All,
+    'error_handler' => static function (array $errors): void {
+        echo 'handler: ', count($errors), ':', $errors[0]->code->name, "\n";
+        echo $errors[0]->message, "\n";
+    },
+]]);
+$data = file_get_contents('no-read-file-stream://x', false, $context);
+var_dump($data);
+var_dump(count(stream_last_errors()));
+"#,
+    );
+    assert_eq!(
+        out,
+        "handler: 1:NotImplemented\n\
+NoReadStream::stream_read is not implemented!\n\
+string(0) \"\"\n\
+int(1)\n"
+    );
+}
+
+/// `stream_context_set_option()` updates the per-context map for both the
+/// component form and the options-array form.
+#[test]
+fn test_stream_context_set_option_updates_dispatch_php86() {
+    let out = run86(
+        r#"<?php
+class SetOptionStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_write(string $data): int { return strlen($data) + 1; }
+    public function stream_eof(): bool { return true; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('set-option-stream', SetOptionStream::class);
+$old = static function (array $errors): void { echo "old\n"; };
+$new = static function (array $errors): void { echo "new\n"; };
+$first = stream_context_create(['stream' => ['error_mode' => StreamErrorMode::Silent, 'error_handler' => $old]]);
+stream_context_set_option($first, 'stream', 'error_handler', $new);
+$second = stream_context_create(['stream' => ['error_mode' => StreamErrorMode::Silent, 'error_handler' => $old]]);
+stream_context_set_option($second, ['stream' => ['error_handler' => $new]]);
+foreach ([$first, $second] as $context) {
+    $stream = fopen('set-option-stream://x', 'w', false, $context);
+    fwrite($stream, 'x');
+    fclose($stream);
+}
+"#,
+    );
+    assert_eq!(out, "new\nnew\n");
+}

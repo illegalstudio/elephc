@@ -58,6 +58,8 @@ pub(crate) fn requested(usage: &crate::prelude_prune::usage::Usage) -> bool {
             || name == "stream_last_errors"
             || name == "stream_clear_errors"
             || name == "fread"
+            || name == "fwrite"
+            || name == "file_get_contents"
             || name == "stream_get_contents"
             || name == "stream_select"
             || name.starts_with("stream_context_")
@@ -68,7 +70,7 @@ pub(crate) fn requested(usage: &crate::prelude_prune::usage::Usage) -> bool {
 }
 
 /// The PHP-visible `StreamErrorCode` cases, in upstream declaration order.
-const STREAM_ERROR_CODES: [&str; 76] = [
+const STREAM_ERROR_CODES: [&str; 78] = [
     "None",
     "Generic",
     "ReadFailed",
@@ -144,7 +146,9 @@ const STREAM_ERROR_CODES: [&str; 76] = [
     "TemporaryFileFailed",
     "LockFailed",
     "LockNotSupported",
+    "UserspaceNotImplemented",
     "UserspaceInvalidReturn",
+    "UserspaceCallFailed",
 ];
 
 /// Builds one unit enum with the supplied case names.
@@ -453,7 +457,7 @@ fn fopen_wrapper() -> Stmt {
         .body(vec![
             s_assign("stream", e_null()),
             s_if(
-                e_binop(e_var("context"), BinOp::StrictEq, e_null()),
+                e_call("is_null", vec![e_var("context")]),
                 vec![s_assign(
                     "stream",
                     Expr::new(

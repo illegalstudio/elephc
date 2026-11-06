@@ -26,10 +26,13 @@ pub(crate) fn rewrite(program: Program, version: crate::php_version::PhpVersion)
     if !wrappers.fopen
         && !wrappers.default_context
         && !wrappers.fread
+        && !wrappers.fwrite
+        && !wrappers.file_get_contents
         && !wrappers.stream_get_contents
         && !wrappers.stream_select
         && !wrappers.context_create
         && !wrappers.context_get_options
+        && !wrappers.context_set_option
     {
         return program;
     }
@@ -46,10 +49,13 @@ struct Wrappers {
     fopen: bool,
     default_context: bool,
     fread: bool,
+    fwrite: bool,
+    file_get_contents: bool,
     stream_get_contents: bool,
     stream_select: bool,
     context_create: bool,
     context_get_options: bool,
+    context_set_option: bool,
 }
 
 /// Scans the top-level declarations for the two wrapper functions.
@@ -61,10 +67,13 @@ fn wrappers_present(program: &[Stmt]) -> Wrappers {
                 "__elephc_fopen" => wrappers.fopen = true,
                 "__elephc_stream_context_set_default" => wrappers.default_context = true,
                 "__elephc_fread" => wrappers.fread = true,
+                "__elephc_fwrite" => wrappers.fwrite = true,
+                "__elephc_file_get_contents" => wrappers.file_get_contents = true,
                 "__elephc_stream_get_contents" => wrappers.stream_get_contents = true,
                 "__elephc_stream_select" => wrappers.stream_select = true,
                 "__elephc_stream_context_create" => wrappers.context_create = true,
                 "__elephc_stream_context_get_options" => wrappers.context_get_options = true,
+                "__elephc_stream_context_set_option" => wrappers.context_set_option = true,
                 _ => {}
             }
         }
@@ -99,6 +108,10 @@ impl Pass for Rewriter {
                 Some("__elephc_stream_context_set_default")
             }
             "fread" if self.wrappers.fread => Some("__elephc_fread"),
+            "fwrite" if self.wrappers.fwrite => Some("__elephc_fwrite"),
+            "file_get_contents" if self.wrappers.file_get_contents => {
+                Some("__elephc_file_get_contents")
+            }
             "stream_get_contents" if self.wrappers.stream_get_contents => {
                 Some("__elephc_stream_get_contents")
             }
@@ -108,6 +121,9 @@ impl Pass for Rewriter {
             }
             "stream_context_get_options" if self.wrappers.context_get_options => {
                 Some("__elephc_stream_context_get_options")
+            }
+            "stream_context_set_option" if self.wrappers.context_set_option => {
+                Some("__elephc_stream_context_set_option")
             }
             _ => None,
         };
@@ -124,10 +140,14 @@ impl Pass for Rewriter {
             "__elephc_fopen"
                 | "__elephc_stream_context_set_default"
                 | "__elephc_fread"
+                | "__elephc_fwrite"
+                | "__elephc_file_get_contents"
+                | "__elephc_file_get_contents_fallback"
                 | "__elephc_stream_get_contents"
                 | "__elephc_stream_select"
                 | "__elephc_stream_context_create"
                 | "__elephc_stream_context_get_options"
+                | "__elephc_stream_context_set_option"
                 | "__elephc_stream_failure"
                 | "__elephc_stream_apply_errors"
                 | "__elephc_stream_read_flush"
