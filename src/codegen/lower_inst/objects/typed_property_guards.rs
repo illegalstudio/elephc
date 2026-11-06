@@ -105,13 +105,14 @@ pub(super) fn emit_property_read_state_guard(
     missing_result: PropertyReadMissingResult<'_>,
 ) -> Result<Option<String>> {
     if slot.is_declared && mode.is_read() {
+        if let Some(class_name) = lazy_property_get_class(ctx, slot) {
+            return emit_lazy_property_get(ctx, slot, object_reg, &class_name, missing_result)
+                .map(Some);
+        }
         if slot.is_reference {
             let cell_reg = reference_pointer_reg(ctx, object_reg);
             abi::emit_load_from_address(ctx.emitter, cell_reg, object_reg, slot.offset);
             emit_uninitialized_owned_ref_property_guard(ctx, slot, cell_reg);
-        } else if let Some(class_name) = lazy_property_get_class(ctx, slot) {
-            return emit_lazy_property_get(ctx, slot, object_reg, &class_name, missing_result)
-                .map(Some);
         } else {
             emit_uninitialized_typed_property_guard(ctx, slot, object_reg);
         }
