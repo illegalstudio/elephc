@@ -124,6 +124,7 @@ fn dummy_check_result() -> CheckResult {
 
     CheckResult {
         requested_instantiations: Vec::new(),
+        requested_promotable_clones: Vec::new(),
         requested_class_instantiations: Vec::new(),
         requested_method_instantiations: Vec::new(),
         generic_method_sites: std::collections::HashMap::new(),
@@ -162,6 +163,8 @@ fn dummy_check_result() -> CheckResult {
         local_ref_detach_sites: Default::default(),
         local_retype_sites: Default::default(),
         mixed_storage_store_sites: Default::default(),
+        sparse_key_write_sites: Default::default(),
+        promotable_arrays: Default::default(),
     }
 }
 

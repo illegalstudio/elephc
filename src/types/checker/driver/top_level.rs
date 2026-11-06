@@ -57,6 +57,11 @@ impl Checker {
         // globals all live in program storage, and `name_is_seeded_program_storage` keeps the
         // marking off them outright.
         self.run_mixed_storage_scan(program, &std::collections::HashMap::new());
+        // A top-level local named by a `global` statement anywhere in the program is program
+        // storage another scope reaches, so it cannot carry a per-body promotion decision.
+        let mut candidates = super::super::promotable_arrays::find_candidates(self, program);
+        candidates.disqualify(self.program_global_names.iter());
+        self.promotable_array_candidates = candidates;
         let mut all_errors = Vec::with_capacity(program.len());
         // `(statement index, name, span)` for every null probe this pass tolerated, so the
         // deferred diagnostic lands on the statement that contains the probe.

@@ -164,10 +164,11 @@ This limits additional stack use to simultaneously live transient values instead
 of the total number of operations in a long expression.
 
 `src/codegen/stack_numeric.rs` proves the complete use graph before frame layout.
-Only same-block scalar observations, numeric ordered or strict identity
-comparisons, closed numeric producers, ownership
-scaffolding and one ordinary local or owned operand slot may consume a selected
-pointer. Declared integer returns copy the payload and retain their type check.
+Only same-block scalar observations (including the key position of an array or
+hash access, which copies the payload into key registers), numeric ordered or
+strict identity comparisons, closed numeric producers, ownership scaffolding and
+one ordinary local or owned operand slot may consume a selected pointer. Declared
+integer returns copy the payload and retain their type check.
 Every access to the owning slot must preserve the numeric storage contract. A
 borrowed pointer must be converted before that slot is stored or released, or any
 producer that can back it executes again. Independent cells may intervene.

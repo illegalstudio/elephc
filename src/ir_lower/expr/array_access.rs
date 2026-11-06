@@ -179,11 +179,24 @@ pub(super) fn lower_array_access_with_missing_warning(
     warn_on_missing: bool,
 ) -> LoweredValue {
     let array_value = if warn_on_missing {
-        lower_expr(ctx, array)
+        lower_element_receiver(ctx, array)
     } else {
         lower_subscript_receiver_silently(ctx, array)
     };
     lower_array_access_from_receiver(ctx, array_value, index, expr, warn_on_missing)
+}
+
+/// Lowers an element receiver, keeping a promotable `array<int>` local in its typed storage.
+///
+/// The element read dispatches on the heap kind itself, so the boxed `array<mixed>` view a
+/// whole-value read of that local takes would only cost a copy and change the element type.
+fn lower_element_receiver(ctx: &mut LoweringContext<'_, '_>, array: &Expr) -> LoweredValue {
+    match &array.kind {
+        ExprKind::Variable(name) if ctx.is_promotable_array_local(name) => {
+            ctx.with_promotable_view_suppressed(|ctx| lower_expr(ctx, array))
+        }
+        _ => lower_expr(ctx, array),
+    }
 }
 
 /// Lowers array access over an already evaluated receiver, taking the null-safe route when
@@ -210,7 +223,7 @@ pub(super) fn lower_subscript_receiver_silently(
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
     }
-    lower_expr(ctx, array)
+    lower_element_receiver(ctx, array)
 }
 
 /// Lowers array access once the receiver is already evaluated.

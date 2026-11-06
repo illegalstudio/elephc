@@ -114,7 +114,18 @@ pub(super) fn check_assign(
     checker: &mut Checker, name: &str, value: &Expr, span: Span,
     env: &mut TypeEnv, stmt_form: bool,
 ) -> Result<(), CompileError> {
-    check_assign_value_type(checker, name, value, span, env, stmt_form).map(|_| ())
+    // A promotable `array<int>` stored into a candidate local stays raw, and the local is then
+    // promotable itself: its element ops dispatch on the heap kind the value may already have.
+    let promotes = checker.prepare_promotable_assignment(name, value, env);
+    check_assign_value_type(checker, name, value, span, env, stmt_form)?;
+    // Judged once the value is checked: a call is known to return a promotable value only now.
+    if promotes
+        && checker.is_promotable_value_expr(value, env)
+        && matches!(env.get(name), Some(PhpType::Array(elem)) if elem.codegen_repr() == PhpType::Int)
+    {
+        checker.record_promotable_array_local(name);
+    }
+    Ok(())
 }
 
 /// Type-checks a simple variable assignment (`$name = value`).

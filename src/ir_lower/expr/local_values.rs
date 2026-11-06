@@ -31,6 +31,12 @@ pub(super) fn lower_local_value(
         if let Some(previous) = previous { ctx.local_types.insert(name.to_string(), previous); }
         else { ctx.local_types.remove(name); }
     }
+    if ctx.is_promotable_array_value_read(name, span)
+        && matches!(ctx.builder.value_php_type(value.value).codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+    {
+        return promotable_array_value_view(ctx, value, span);
+    }
     if boxed_read && value.ir_type == IrType::TaggedScalar {
         ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
     } else if projected_local_value_type(ctx, name, span).is_some() && value.ir_type == IrType::TaggedScalar {
@@ -38,6 +44,26 @@ pub(super) fn lower_local_value(
     } else {
         value
     }
+}
+
+/// Views a promotable `array<int>` local as the boxed `array<mixed>` the checker typed this read.
+///
+/// The local's storage may already be a hash (a key skipped a slot at run time). `ArrayToMixed`
+/// boxes either storage kind and returns its own owner, so the read retains the local's array
+/// first, exactly as a merge temporary converts a local load: the conversion's copy-on-write split
+/// then leaves the local's typed storage untouched.
+fn promotable_array_value_view(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span,
+) -> LoweredValue {
+    let source = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    ctx.emit_value(
+        Op::ArrayToMixed,
+        vec![source.value],
+        None,
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        Op::ArrayToMixed.default_effects(),
+        Some(span),
+    )
 }
 
 /// Gives literal and merge planning the same integer shape as the eventual value read.

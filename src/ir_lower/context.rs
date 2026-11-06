@@ -395,6 +395,16 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// other two — the value is a set because a `Span` names no file, so two different marked
     /// locals can share one position.
     pub mixed_storage_store_sites: &'m HashMap<Span, HashSet<String>>,
+    /// Local array writes the CHECKER promoted to hash storage because their integer key may
+    /// skip a slot of a non-empty packed array (`CheckResult::sparse_key_write_sites`), each
+    /// mapped to the SET of locals written at that position. Packed storage would zero-fill the
+    /// gap, so the write promotes the local with `ArrayToHash` + `HashSet` instead.
+    pub sparse_key_write_sites: &'m HashMap<Span, HashSet<String>>,
+    /// Typed scalar packed locals the checker kept typed under keys that may skip a slot, and the
+    /// whole-value reads it typed `array<mixed>` (`CheckResult::promotable_arrays`). Their element
+    /// writes and appends carry `Immediate::PromotableArray`; those reads lower through the
+    /// kind-aware `ArrayToMixed` view.
+    pub promotable_arrays: &'m crate::types::PromotableArrays,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
@@ -481,6 +491,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Set while a container write BORROWS its value operand — the reference belongs to a
     /// hidden temporary that outlives the write. See `with_borrowed_write_operand`.
     write_operand_is_borrowed: bool,
+    /// Set while lowering the receiver of an element read, `isset` or `??`: a promotable local
+    /// read there feeds a heap-kind-dispatching element op, never the `array<mixed>` view.
+    promotable_view_suppressed: bool,
     eval_barrier_active: bool,
     eval_executed: bool,
     consuming_string_append_enabled: bool,
@@ -557,6 +570,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         ref_detach_sites: &'m HashMap<Span, HashSet<String>>,
         retype_sites: &'m HashMap<Span, HashSet<String>>,
         mixed_storage_store_sites: &'m HashMap<Span, HashSet<String>>,
+        sparse_key_write_sites: &'m HashMap<Span, HashSet<String>>,
+        promotable_arrays: &'m crate::types::PromotableArrays,
         loop_storage_scope: String,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
@@ -627,6 +642,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ref_detach_sites,
             retype_sites,
             mixed_storage_store_sites,
+            sparse_key_write_sites,
+            promotable_arrays,
             loop_storage_scope,
             constants: constants.clone(),
             top_level_env,
@@ -679,6 +696,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             argument_guards: HashMap::new(),
             argument_guard_scopes: Vec::new(),
             write_operand_is_borrowed: false,
+            promotable_view_suppressed: false,
             eval_barrier_active: false,
             eval_executed: false,
             consuming_string_append_enabled: true,
@@ -3338,6 +3356,54 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .get(&span)
                 .is_some_and(|boxed| boxed.contains(name))
             && self.local_binding_may_force_mixed_storage(name)
+    }
+
+    /// Returns whether the checker promoted THIS write into `name` to hash storage because its
+    /// integer key may skip a slot of the non-empty packed array the local holds.
+    ///
+    /// Keyed by span AND name like `is_recorded_retype_site`. Acting on the decision twice is
+    /// harmless (a second promotion of the same write reuses the hash `ArrayToHash` returns), so a
+    /// post-typecheck pass may clone such a write without consulting this map.
+    pub(crate) fn is_recorded_sparse_key_write(&self, span: Span, name: &str) -> bool {
+        span.identifies_a_node()
+            && self
+                .sparse_key_write_sites
+                .get(&span)
+                .is_some_and(|written| written.contains(name))
+    }
+
+    /// Returns whether the checker kept `name` a typed packed local whose storage may become a
+    /// hash at run time, so its element writes and appends must dispatch on the heap kind.
+    ///
+    /// Program storage (globals, statics, reference cells) is excluded: the decision is per body,
+    /// and those slots are reached from elsewhere.
+    pub(crate) fn is_promotable_array_local(&self, name: &str) -> bool {
+        self.promotable_arrays
+            .locals
+            .contains(&(self.loop_storage_scope.clone(), name.to_string()))
+            && !self.is_ref_bound_local(name)
+            && self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal) == LocalKind::PhpLocal
+            && !self.uses_global_storage(name, LocalKind::PhpLocal)
+    }
+
+    /// Runs `f` with promotable-local reads kept in their typed storage, for an element receiver.
+    pub(crate) fn with_promotable_view_suppressed<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let previous = std::mem::replace(&mut self.promotable_view_suppressed, true);
+        let result = f(self);
+        self.promotable_view_suppressed = previous;
+        result
+    }
+
+    /// Returns whether the checker typed this read of `name` as the `array<mixed>` view of a
+    /// promotable local, and the read is a whole value rather than an element receiver.
+    pub(crate) fn is_promotable_array_value_read(&self, name: &str, span: Span) -> bool {
+        !self.promotable_view_suppressed
+            && !self.promotable_arrays.raw_sites.contains(&(self.loop_storage_scope.clone(), span))
+            && self.promotable_arrays.value_reads.contains(&(
+            self.loop_storage_scope.clone(),
+            span,
+            name.to_string(),
+        ))
     }
 
     /// Returns whether `name`'s storage shape can carry the whole-frame boxed-`Mixed` contract.

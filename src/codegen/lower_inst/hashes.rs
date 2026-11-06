@@ -931,6 +931,16 @@ pub(super) fn materialize_hash_key_aarch64_with(
     key: ValueId,
     normalization: HashKeyNormalization,
 ) -> Result<()> {
+    // Gate on the IR type before the PHP type: `Op::IChecked*` (what `$i++` and `$j + 1`
+    // lower to) reports PHP `Mixed` while its runtime value is a RAW INTEGER, and unboxing that
+    // word as a cell pointer crashed every hash write or read keyed by a loop counter.
+    if ctx.value_ir_type(key)? == crate::ir::IrType::I64
+        && matches!(ctx.value_php_type(key)?, PhpType::Mixed | PhpType::Union(_))
+    {
+        ctx.load_value_to_reg(key, "x1")?;
+        abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+        return Ok(());
+    }
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "x1", "x2")?;
@@ -1002,6 +1012,16 @@ pub(super) fn materialize_hash_key_x86_64_with(
     key: ValueId,
     normalization: HashKeyNormalization,
 ) -> Result<()> {
+    // Gate on the IR type before the PHP type: `Op::IChecked*` (what `$i++` and `$j + 1`
+    // lower to) reports PHP `Mixed` while its runtime value is a RAW INTEGER, and unboxing that
+    // word as a cell pointer crashed every hash write or read keyed by a loop counter.
+    if ctx.value_ir_type(key)? == crate::ir::IrType::I64
+        && matches!(ctx.value_php_type(key)?, PhpType::Mixed | PhpType::Union(_))
+    {
+        ctx.load_value_to_reg(key, "rsi")?;
+        abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+        return Ok(());
+    }
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "rax", "rdx")?;
@@ -1098,12 +1118,69 @@ pub(super) fn emit_undefined_hash_key_warning_x86_64(
     Ok(())
 }
 
+/// Reads a proven `int|float` cell as a hash key on AArch64 without the generic unbox call.
+///
+/// The numeric frame proof guarantees the cell (a frame cell or a heap box) holds a concrete
+/// int or float tag, never a string, null or nested box, so only the float conversion remains.
+fn materialize_numeric_cell_key_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+    normalization: HashKeyNormalization,
+) -> Result<()> {
+    let integer = ctx.next_label("numeric_key_int");
+    ctx.load_value_to_reg(key, "x0")?;
+    ctx.emitter.instruction("ldr x1, [x0, #8]");                                // load the numeric payload word as the candidate key
+    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the cell's int-or-float runtime tag
+    ctx.emitter.instruction("cmp x9, #2");                                      // runtime tag 2 = float, which PHP truncates to an int key
+    ctx.emitter.instruction(&format!("b.ne {}", integer));                      // an int payload is already the key
+    ctx.emitter.instruction("fmov d0, x1");                                     // move the raw IEEE-754 payload bits into an FP register
+    if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
+        abi::emit_call_label(ctx.emitter, "__rt_php_float_to_int");
+        ctx.emitter.instruction("mov x0, x9");                                  // recover the normalized PHP integer key without another warning
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+    }
+    ctx.emitter.instruction("mov x1, x0");                                      // use the diagnosed PHP integer key
+    ctx.emitter.label(&integer);
+    ctx.emitter.instruction("mov x2, #-1");                                     // key_hi sentinel marks a numeric key as an integer key
+    Ok(())
+}
+
+/// Reads a proven `int|float` cell as a hash key on x86_64 without the generic unbox call.
+///
+/// See the AArch64 twin: the cell's tag is int or float by proof.
+fn materialize_numeric_cell_key_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+    normalization: HashKeyNormalization,
+) -> Result<()> {
+    let integer = ctx.next_label("numeric_key_int");
+    ctx.load_value_to_reg(key, "rax")?;
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rax + 8]");                    // load the numeric payload word as the candidate key
+    ctx.emitter.instruction("cmp QWORD PTR [rax], 2");                          // runtime tag 2 = float, which PHP truncates to an int key
+    ctx.emitter.instruction(&format!("jne {}", integer));                       // an int payload is already the key
+    ctx.emitter.instruction("movq xmm0, rsi");                                  // move the raw IEEE-754 payload bits into an FP register
+    if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
+        abi::emit_call_label(ctx.emitter, "__rt_php_float_to_int");
+        ctx.emitter.instruction("mov rax, r11");                                // recover the normalized PHP integer key without another warning
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+    }
+    ctx.emitter.instruction("mov rsi, rax");                                    // use the diagnosed PHP integer key
+    ctx.emitter.label(&integer);
+    ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks a numeric key as an integer key
+    Ok(())
+}
+
 /// Materializes a boxed Mixed key as the AArch64 hash key pair `x1`/`x2`.
 fn materialize_mixed_hash_key_aarch64(
     ctx: &mut FunctionContext<'_>,
     key: ValueId,
     normalization: HashKeyNormalization,
 ) -> Result<()> {
+    if crate::codegen::stack_numeric::numeric_value(ctx.function, &ctx.numeric_values, key) {
+        return materialize_numeric_cell_key_aarch64(ctx, key, normalization);
+    }
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
     let float_key = ctx.next_label("mixed_hash_key_float");
@@ -1152,6 +1229,9 @@ fn materialize_mixed_hash_key_x86_64(
     key: ValueId,
     normalization: HashKeyNormalization,
 ) -> Result<()> {
+    if crate::codegen::stack_numeric::numeric_value(ctx.function, &ctx.numeric_values, key) {
+        return materialize_numeric_cell_key_x86_64(ctx, key, normalization);
+    }
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
     let float_key = ctx.next_label("mixed_hash_key_float");
@@ -1670,6 +1750,31 @@ pub(super) fn emit_hash_get_success_aarch64(
     result_ty: &PhpType,
     for_write: bool,
 ) -> Result<()> {
+    // An integer hash can hold PHP's `null` as a tag-8 entry (a promotable `array<int>` local
+    // stores a null write that way); a nullable read returns it as the tagged null.
+    let null_entry = (matches!(value_ty, PhpType::Int) && matches!(result_ty, PhpType::TaggedScalar))
+        .then(|| (ctx.next_label("hash_get_null_entry"), ctx.next_label("hash_get_entry_done")));
+    if let Some((null_label, _)) = &null_entry {
+        ctx.emitter.instruction("cmp x3, #8");                                  // does the entry carry the runtime null tag?
+        ctx.emitter.instruction(&format!("b.eq {null_label}"));                 // read a null entry as the tagged null
+    }
+    let result = emit_hash_get_success_aarch64_entry(ctx, value_ty, result_ty, for_write);
+    if let Some((null_label, done_label)) = null_entry {
+        ctx.emitter.instruction(&format!("b {done_label}"));                    // skip the null entry result
+        ctx.emitter.label(&null_label);
+        crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+        ctx.emitter.label(&done_label);
+    }
+    result
+}
+
+/// Moves a found AArch64 hash entry's payload into the canonical result registers.
+fn emit_hash_get_success_aarch64_entry(
+    ctx: &mut FunctionContext<'_>,
+    value_ty: &PhpType,
+    result_ty: &PhpType,
+    for_write: bool,
+) -> Result<()> {
     if !matches!(value_ty, PhpType::Mixed) {
         emit_hash_get_concrete_reference_payload_aarch64(ctx);
     }
@@ -1710,6 +1815,31 @@ pub(super) fn emit_hash_get_success_aarch64(
 
 /// Moves a successful x86_64 hash lookup payload into the canonical result registers.
 pub(super) fn emit_hash_get_success_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    value_ty: &PhpType,
+    result_ty: &PhpType,
+    for_write: bool,
+) -> Result<()> {
+    // An integer hash can hold PHP's `null` as a tag-8 entry (a promotable `array<int>` local
+    // stores a null write that way); a nullable read returns it as the tagged null.
+    let null_entry = (matches!(value_ty, PhpType::Int) && matches!(result_ty, PhpType::TaggedScalar))
+        .then(|| (ctx.next_label("hash_get_null_entry"), ctx.next_label("hash_get_entry_done")));
+    if let Some((null_label, _)) = &null_entry {
+        ctx.emitter.instruction("cmp rcx, 8");                                  // does the entry carry the runtime null tag?
+        ctx.emitter.instruction(&format!("je {null_label}"));                   // read a null entry as the tagged null
+    }
+    let result = emit_hash_get_success_x86_64_entry(ctx, value_ty, result_ty, for_write);
+    if let Some((null_label, done_label)) = null_entry {
+        ctx.emitter.instruction(&format!("jmp {done_label}"));                  // skip the null entry result
+        ctx.emitter.label(&null_label);
+        crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+        ctx.emitter.label(&done_label);
+    }
+    result
+}
+
+/// Moves a found x86_64 hash entry's payload into the canonical result registers.
+fn emit_hash_get_success_x86_64_entry(
     ctx: &mut FunctionContext<'_>,
     value_ty: &PhpType,
     result_ty: &PhpType,

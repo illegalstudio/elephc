@@ -104,10 +104,15 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
             } else {
                 prepare_indexed_array_local_write(ctx, array_value, value, span)
             };
+        // A promotable `array<int>` local may already be hash storage: its append keeps the raw
+        // integer under its own tag, as the typed reads of the promoted hash expect.
+        let promotable = ctx.is_promotable_array_local(array)
+            && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
+                PhpType::Array(element) if element.codegen_repr() == PhpType::Int);
         ctx.emit_void(
             op,
             vec![array_value.value, value.value],
-            None,
+            promotable.then_some(crate::ir::Immediate::PromotableArray),
             op.default_effects(),
             Some(span),
         );

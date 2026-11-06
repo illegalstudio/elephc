@@ -98,6 +98,17 @@ pub(crate) fn empty_array_key_requires_hash_storage(expr: &Expr) -> bool {
     }
 }
 
+/// Returns whether an integer key written into the non-empty packed local `array` provably lands
+/// inside `[0, count($array)]`, so the write can neither leave a gap nor need a negative key.
+///
+/// Packed storage has no keys: slot `n` is key `n`, and a write past the logical end zero-fills
+/// the gap where PHP promotes the array to a hash (`$a = [1, 2]; $a[5] = 3;` is
+/// `{"0":1,"1":2,"5":3}`). Without a length fact the only key bounded syntactically is one that
+/// is provably `0`; the checker adds the loop-counter proofs it owns.
+pub(crate) fn nonempty_array_key_stays_in_range(index: &Expr) -> bool {
+    !empty_array_key_requires_hash_storage(index)
+}
+
 /// Merges two array key types from adjacent elements into a unified key type.
 ///
 /// If both sides have the same type, returns that type. Otherwise returns `PhpType::Mixed`
