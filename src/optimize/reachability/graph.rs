@@ -310,6 +310,22 @@ struct GraphState {
     applied_hazards: [bool; 4],
 }
 
+/// Rewrites a reused `(class, method, is_static)` key in place.
+fn fill_method_key(key: &mut (String, String, bool), class: &str, method: &str, is_static: bool) {
+    key.0.clear();
+    key.0.push_str(class);
+    key.1.clear();
+    key.1.push_str(method);
+    key.2 = is_static;
+}
+
+/// Inserts `key` unless present, allocating only for the one that stores.
+fn insert_new_method(methods: &mut HashSet<(String, String, bool)>, key: &(String, String, bool)) {
+    if !methods.contains(key) {
+        methods.insert(key.clone());
+    }
+}
+
 impl GraphState {
     /// Creates graph state with hazards found in executable roots.
     fn new(
@@ -685,6 +701,9 @@ impl GraphState {
         let live_classes = std::mem::take(&mut self.reach.classes);
         // Reused by every probe below; see the comment in the inner loop.
         let mut probe: (String, bool) = (String::new(), false);
+        // Reused too: the fixed point meets the same pairs every round, so almost every key is
+        // already in the set and building one per pair copied 36 000 samples of a Demo build.
+        let mut key: (String, String, bool) = (String::new(), String::new(), false);
         for class in &live_classes {
             let Some(node) = self.index.classes.get(class.as_str()) else {
                 continue;
@@ -724,11 +743,12 @@ impl GraphState {
                         .get(class.as_str())
                         .is_some_and(|methods| methods.contains(&probe))
                 {
-                    let key = (class.clone(), method.clone(), *is_static);
-                    self.reach.methods.insert(key.clone());
-                    self.behavioral.methods.insert(key);
+                    fill_method_key(&mut key, class, method, *is_static);
+                    insert_new_method(&mut self.reach.methods, &key);
+                    insert_new_method(&mut self.behavioral.methods, &key);
                 } else if self.structural_referenced_methods.contains(&probe) {
-                    self.reach.methods.insert((class.clone(), method.clone(), *is_static));
+                    fill_method_key(&mut key, class, method, *is_static);
+                    insert_new_method(&mut self.reach.methods, &key);
                 }
             }
         }
@@ -920,6 +940,9 @@ impl GraphState {
         let mut done: HashSet<(&str, bool)> = HashSet::default();
         // Probes a map keyed by `(String, bool)`, which cannot be looked up with a `&str`.
         let mut probe: (String, bool) = (String::new(), false);
+        // Reused too: the fixed point meets the same pairs every round, so almost every key is
+        // already in the set and building one per pair copied 36 000 samples of a Demo build.
+        let mut key: (String, String, bool) = (String::new(), String::new(), false);
         for class in &live_classes {
             chain.clear();
             seen.clear();

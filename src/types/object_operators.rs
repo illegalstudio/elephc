@@ -41,6 +41,8 @@ pub(crate) fn names_an_operator_class<'a>(names: impl IntoIterator<Item = &'a St
 std::thread_local! {
     /// Whole-table operator-class scans (`names_an_operator_class`) on this test thread.
     pub(crate) static OPERATOR_CLASS_SCANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Per-operand sorted walks of the class table in operator lowering.
+    pub(crate) static OPERATOR_PLAN_WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Finds internal operator metadata for a non-nullable, statically known object.

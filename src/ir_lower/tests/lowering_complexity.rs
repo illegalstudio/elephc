@@ -170,6 +170,16 @@ fn operator_class_presence_is_scanned_once_not_per_operator() {
     assert_eq!(small, large, "operator-class scans grew with the operators: {small} vs {large}");
 }
 
+/// A program without an operator class has no plan to look for: every `mixed` operand used to
+/// sort the whole class table to learn that, a tenth of the lowering of a Symfony build.
+#[test]
+fn mixed_operands_do_not_walk_the_class_table_without_operator_classes() {
+    crate::types::object_operators::OPERATOR_PLAN_WALKS.with(|walks| walks.set(0));
+    let _module = lower_source(&many_mixed_operators(8));
+    let walks = crate::types::object_operators::OPERATOR_PLAN_WALKS.with(|walks| walks.get());
+    assert_eq!(walks, 0, "operator lowering walked the class table {walks} times");
+}
+
 /// `count` classes, each writing a runtime-named property on `$this`: every class is a receiver
 /// family the dynamic-storage pass resolves.
 fn many_runtime_named_writers(count: usize) -> String {
