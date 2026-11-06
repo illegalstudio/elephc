@@ -132,6 +132,33 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_relation(
     store_if_result(ctx, inst)
 }
 
+/// Converts a borrowed boxed object through its eval owner and retires the discarded text.
+///
+/// The caller has already checked stringability and rooted the operand. The owning context
+/// takes precedence over native carrier metadata, so an eval override runs exactly once.
+pub(in crate::codegen::lower_inst::builtins) fn emit_discarded_object_string_context(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+) -> Result<()> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    for offset in [0, EVAL_RESULT_VALUE_CELL_OFFSET, EVAL_RESULT_ERROR_OFFSET] {
+        abi::emit_store_to_sp(ctx.emitter, scratch, offset);
+    }
+    let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    ctx.load_value_to_reg(object, value_arg)?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), 0);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_string_context");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    Ok(())
+}
+
 /// Resolves an object's class name through its owning eval context when one exists.
 ///
 /// The object payload pointer is expected in the architecture's integer result register

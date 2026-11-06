@@ -33,7 +33,7 @@ echo (new OwnedJoinMethod())->join("left", "right");
     for function in module.functions.iter().chain(module.class_methods.iter()) {
         for instruction in &function.instructions {
             if !matches!(instruction.immediate,
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Implode))))
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target: RuntimeFnId::Implode, .. })))
             {
                 continue;
             }
@@ -64,7 +64,7 @@ echo joinBoxedArray(["object" => new JoinedObjectValue()]);
         let joins = module.functions.iter().flat_map(|function| &function.instructions)
             .filter(|instruction| instruction.op == Op::RuntimeCall && matches!(
                 instruction.immediate,
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Implode)))
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target: RuntimeFnId::Implode | RuntimeFnId::Join, .. }))
             )).collect::<Vec<_>>();
         assert_eq!(joins.len(), 2, "{name}");
         assert!(joins.iter().all(|instruction| instruction.result_ownership == Ownership::Owned), "{name}");
