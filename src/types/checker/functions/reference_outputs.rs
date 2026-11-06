@@ -304,8 +304,9 @@ impl Checker {
     /// Records how a declared-type local is bound to by-reference parameter `expected` in the
     /// call at `call_span`, and rejects the call once the same local is bound both through a
     /// boxed writeback cell (a nullable parameter keeping its typed slot) and by its direct
-    /// typed address (a concrete parameter): the two cannot alias, so a write through one
-    /// would be lost to the other, where php shares one reference.
+    /// typed address (a concrete parameter, or any of its elements bound in place): the two
+    /// cannot alias, so a write through one would be lost to the other, where php shares one
+    /// reference.
     fn record_declared_reference_binding(
         &mut self,
         arg: &Expr,
@@ -317,14 +318,24 @@ impl Checker {
         while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &bare.kind {
             bare = value;
         }
+        // An element (`$a[0]`, `$a[0][1]`) is bound in place, inside the root local's array
+        // storage: for the alias rule it is a direct binding of that root, so a boxed
+        // whole-array writeback cell of the same local in the same call would lose its writes.
+        let mut element = false;
+        while let ExprKind::ArrayAccess { array, .. } = &bare.kind {
+            element = true;
+            bare = array;
+        }
         let ExprKind::Variable(name) = &bare.kind else {
             return Ok(());
         };
         if !call_span.identifies_a_node() || !self.typed_local_names.contains_key(name) {
             return Ok(());
         }
-        let direct = !through_cell
-            && !matches!(expected.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar);
+        let through_cell = through_cell && !element;
+        let direct = element
+            || (!through_cell
+                && !matches!(expected.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar));
         let entry = self
             .declared_reference_bindings
             .entry((self.current_loop_storage_scope.clone(), call_span))
@@ -337,7 +348,7 @@ impl Checker {
             return Err(crate::errors::CompileError::new(
                 arg.span,
                 &format!(
-                    "${name} is passed by reference to a nullable parameter and to a typed parameter of the same call; elephc cannot share one reference between them, pass a separate variable to one of them"
+                    "${name} is passed by reference to a nullable parameter and to a typed parameter of the same call (itself or one of its elements); elephc cannot share one reference between them, pass a separate variable to one of them"
                 ),
             ));
         }

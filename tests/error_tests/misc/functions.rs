@@ -604,6 +604,25 @@ fn test_error_declared_local_split_across_nullable_and_typed_by_ref_params() {
     );
 }
 
+/// The same split through an element: a declared array passed whole to a nullable
+/// by-reference parameter (boxed writeback cell) and one of its elements to another
+/// by-reference parameter (bound in place) of the same call, in either order, is rejected
+/// instead of letting the writeback overwrite the element write.
+#[test]
+fn test_error_declared_array_split_across_nullable_whole_and_element_by_ref_params() {
+    for (decl, call) in [
+        ("function f(?array &$whole, int &$element): void { if ($whole !== null) { $whole[0] = 2; $element = 3; } }", "f($a, $a[0]);"),
+        ("function f(int &$element, ?array &$whole): void { $element = 3; }", "f($a[0], $a);"),
+        ("function f(?array &$whole, int &$element): void {}", "f($a, $a[0][0]);"),
+    ] {
+        let local = if call.contains("[0][0]") { "array<array<int>> $a = [[1]];" } else { "array<int> $a = [1];" };
+        expect_error(
+            &format!("<?php {decl} function run(): void {{ {local} {call} echo json_encode($a); }} run();"),
+            "is passed by reference to a nullable parameter and to a typed parameter of the same call",
+        );
+    }
+}
+
 /// Mixed-local widening does not relabel an existing concrete reference set.
 #[test]
 fn test_error_mixed_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
