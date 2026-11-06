@@ -4696,6 +4696,27 @@ pub extern "C" fn elephc_pdo_mysql_stmt_reset(stmt_id: i64) -> i64 {
     })
 }
 
+/// mysqli_stmt::fetch() past an exhausted read-only cursor: sends the extra
+/// `COM_STMT_FETCH` mysqlnd sends and drops the server's error (see
+/// `MyStmt::fetch_past_cursor_end`). Always `0`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_stmt_fetch_past_end(stmt_id: i64) -> i64 {
+    ffi_guard(0, || {
+        let mut sguard = lock_recover(stmts());
+        match sguard.get_mut(&stmt_id) {
+            Some(Stmt::Mysql(s)) => {
+                let conn_id = s.conn_id;
+                let mut cguard = lock_recover(conns());
+                match cguard.get_mut(&conn_id) {
+                    Some(Conn::Mysql(c)) => instr_io::timed(|| s.fetch_past_cursor_end(c)),
+                    _ => 0,
+                }
+            }
+            _ => 0,
+        }
+    })
+}
+
 /// Sets a MySQL statement's cursor type for its next execution (mysqli's
 /// `MYSQLI_STMT_ATTR_CURSOR_TYPE`: `0` none, `1` `MYSQLI_CURSOR_TYPE_READ_ONLY`). `1` on
 /// success, `0` for a non-MySQL or unknown handle.

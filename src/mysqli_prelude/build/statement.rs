@@ -586,6 +586,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                                 e_this_prop("cursorSpent"),
                                 vec![
                                     s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_fetch")])),
+                                    s_expr(e_call("elephc_pdo_mysql_stmt_fetch_past_end", vec![e_this_prop("stmt")])),
                                     s_return(e_bool(false)),
                                 ],
                                 vec![],

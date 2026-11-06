@@ -1097,6 +1097,53 @@ $db->query("DROP TABLE mcur");
     assert_eq!(out, "set|0|42|1:7,2:7,3:7,|3|false|8|3=1,2,3|3=1|re=1|empty=NULL|ins=1|20,18,12,6,3,5,1");
 }
 
+/// Every fetch() of a read-only cursor is one `COM_STMT_FETCH` on the wire (17 bytes), the
+/// fetch past the end included: the server answers that one with an error packet, which
+/// mysqlnd drops (fetch() is `false`, no errno, nothing reported even under STRICT) and the
+/// link stays usable. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_cursor_fetch_past_the_end_goes_on_the_wire() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function cur_snap(mysqli $db): array {
+    $s = $db->get_connection_stats();
+    $o = [];
+    foreach (["packets_sent_command", "bytes_sent", "packets_received", "bytes_received", "com_stmt_fetch"] as $n) {
+        $o[] = (int) $s[$n];
+    }
+    return $o;
+}
+function cur_delta(array $a, array $b): string {
+    $o = [];
+    for ($i = 0; $i < count($a); $i++) {
+        $o[] = $b[$i] - $a[$i];
+    }
+    return implode(",", $o);
+}
+$st = $db->prepare("SELECT 1 UNION ALL SELECT 2");
+$st->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY);
+$st->execute();
+$id = 0;
+$st->bind_result($id);
+for ($i = 0; $i < 5; $i++) {
+    $a = cur_snap($db);
+    $r = $st->fetch();
+    echo var_export($r, true), ":", cur_delta($a, cur_snap($db)), ":", $st->errno, ":", $st->error, ":", $db->errno, "|";
+}
+echo $db->query("SELECT 5")->fetch_row()[0], "|";
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+try { echo var_export($st->fetch(), true), "nothrow"; } catch (mysqli_sql_exception $e) { echo "throw:", $e->getCode(); }
+echo "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "true:1,17,2,23,1:0::0|true:1,17,2,23,1:0::0|NULL:1,17,1,9,1:0::0|false:1,17,1,50,1:0::0|false:1,17,1,50,1:0::0|5|falsenothrow\n"
+    );
+}
+
 /// A read-only cursor statement refuses `fetch()` and `store_result()` with a reported 2014 (on
 /// the statement and the link) while an unbuffered query owns the link, then reads its remaining
 /// rows once that result is freed. Expected output is php 8.5 + mysqlnd's.

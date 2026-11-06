@@ -4118,6 +4118,24 @@ impl MyStmt {
         }
     }
 
+    /// mysqli_stmt::fetch() past an exhausted read-only cursor: mysqlnd sends one more
+    /// `COM_STMT_FETCH`, which the server answers with an error (the cursor is closed), and
+    /// fails without recording or reporting that error. The command goes on the wire so the
+    /// statistics count it; its answer is consumed and dropped. The exhausted set's local
+    /// cursor state is already reset, and the error answer carries no row, so the fetch
+    /// needs only the prepared statement's id. Always `0`.
+    pub fn fetch_past_cursor_end(&mut self, conn: &mut MyConn) -> i64 {
+        let Some(statement) = self.statement.as_ref() else {
+            return 0;
+        };
+        if conn.client_unavailable() {
+            return 0;
+        }
+        let no_columns: Arc<[Column]> = Arc::from(Vec::new());
+        let _ = conn.conn.stmt_fetch(statement.id(), 1, no_columns);
+        0
+    }
+
     /// Reads every remaining row of an open server cursor with one `COM_STMT_FETCH`
     /// (mysqlnd's `get_result()` / `store_result()` on a cursor statement); `step()` then
     /// walks them. Returns the number of rows read, `0` without an open cursor, or `-1`
@@ -4249,8 +4267,6 @@ impl MyStmt {
         }
     }
 
-    /// Advances to the next row: `1` for a row, `0` when exhausted, `-1` on error.
-    /// Executes lazily on the first call.
     /// Whether the current result set is followed by another one, without reading it:
     /// a streaming set's closing EOF/OK flag, or a buffered statement's remaining sets.
     pub fn more_results(&self, conn: &MyConn) -> bool {
@@ -4272,6 +4288,8 @@ impl MyStmt {
         0
     }
 
+    /// Advances to the next row: `1` for a row, `0` when exhausted, `-1` on error.
+    /// Executes lazily on the first call.
     pub fn step(&mut self, conn: &mut MyConn) -> i64 {
         if !self.executed {
             if let Err(code) = self.execute(conn) {
@@ -4636,10 +4654,6 @@ mod tests {
         assert_eq!(ColKind::from_column(&varchar_utf8mb4), ColKind::Other);
     }
 
-    /// `sql_may_return_several_sets` finds `CALL` and `EXECUTE` behind whitespace and inert
-    /// comments, answers `true` for any leading MySQL / MariaDB executable comment (active or
-    /// not, empty or not), and nothing else: an identifier that merely starts with the keyword
-    /// and a keyword inside an inert comment are rejected.
     /// mysqlnd's charset table: names match case-insensitively to their canonical spelling,
     /// `utf8mb3` and non-identifiers are unknown, and `utf8mb4` announces collation 45.
     #[test]
@@ -4653,6 +4667,10 @@ mod tests {
         assert_eq!(mysqlnd_charset_collation("gb18030"), Some(248));
     }
 
+    /// `sql_may_return_several_sets` finds `CALL` and `EXECUTE` behind whitespace and inert
+    /// comments, answers `true` for any leading MySQL / MariaDB executable comment (active or
+    /// not, empty or not), and nothing else: an identifier that merely starts with the keyword
+    /// and a keyword inside an inert comment are rejected.
     #[test]
     fn sql_may_return_several_sets_sees_through_executable_comments() {
         assert!(sql_may_return_several_sets("CALL p()"));

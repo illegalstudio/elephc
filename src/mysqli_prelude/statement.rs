@@ -389,8 +389,10 @@ class mysqli_stmt {
                 return false;
             }
             if ($this->cursorSpent) {
-                // Past a cursor's end mysqlnd sends one more COM_STMT_FETCH and fails.
+                // Past a cursor's end mysqlnd sends one more COM_STMT_FETCH and fails,
+                // dropping the server's error (nothing recorded or reported).
                 $this->linkBump("com_stmt_fetch");
+                elephc_pdo_mysql_stmt_fetch_past_end($this->stmt);
                 return false;
             }
             return null;

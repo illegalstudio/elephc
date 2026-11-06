@@ -308,6 +308,7 @@ extern "elephc_pdo" {
     function elephc_pdo_mysql_set_server_option(int $conn, int $option): int;
     function elephc_pdo_mysql_execute(int $stmt): int;
     function elephc_pdo_mysql_stmt_reset(int $stmt): int;
+    function elephc_pdo_mysql_stmt_fetch_past_end(int $stmt): int;
     function elephc_pdo_mysql_send_long_data(int $stmt, int $index, string $data, int $len): int;
     function elephc_pdo_mysql_more_results(int $stmt): int;
     // MYSQLI_CURSOR_TYPE_READ_ONLY: the cursor type of the next execution, whether the
