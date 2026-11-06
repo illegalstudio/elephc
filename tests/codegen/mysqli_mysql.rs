@@ -1701,6 +1701,31 @@ echo "\n";
     assert_eq!(out, "1:early|2:waited\n");
 }
 
+/// An async `UPDATE` (and an unbuffered `real_query()` one) reports its OK packet once
+/// reaped: `affected_rows` and the "Rows matched: ..." `info` string, like mysqlnd.
+/// Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_async_dml_reports_affected_rows_and_info() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS mad");
+$db->query("CREATE TABLE mad (v INT)");
+$db->query("INSERT INTO mad VALUES (1), (2), (3)");
+$db->query("UPDATE mad SET v = v + 10 WHERE v < 3", MYSQLI_ASYNC);
+$read = [$db];
+$error = [];
+$reject = [];
+mysqli_poll($read, $error, $reject, 5);
+echo var_export($db->reap_async_query(), true), "|", $db->affected_rows, "|", $db->info;
+$db->real_query("UPDATE mad SET v = v + 1");
+echo "|", $db->affected_rows, "|", $db->info, "\n";
+"#,
+    ));
+    assert_eq!(out, "true|2|Rows matched: 2  Changed: 2  Warnings: 0|3|Rows matched: 3  Changed: 3  Warnings: 0\n");
+}
+
 /// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
 /// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
 /// the set is unread, and the statistics count one unbuffered set. Expected output is

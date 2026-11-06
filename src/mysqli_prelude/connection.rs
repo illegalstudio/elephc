@@ -1116,9 +1116,11 @@ class mysqli {
         $_columnCount = elephc_pdo_column_count($_stmt);
         $this->__elephcHeaderStats($_columnCount, true);
         if ($_columnCount == 0) {
+            // Finalize first: a streamed statement (async, unbuffered) gives the client
+            // back to the link then, and its OK packet's info is read from the client.
+            elephc_pdo_finalize($_stmt);
             $this->refreshStatus();
             $this->field_count = 0;
-            elephc_pdo_finalize($_stmt);
             $this->clearError();
             return true;
         }
@@ -2004,9 +2006,11 @@ class mysqli {
         $_columnCount = elephc_pdo_column_count($_stmt);
         $this->__elephcHeaderStats($_columnCount, true);
         if ($_columnCount == 0) {
+            // Finalize first: a streamed statement (async, unbuffered) gives the client
+            // back to the link then, and its OK packet's info is read from the client.
+            elephc_pdo_finalize($_stmt);
             $this->refreshStatus();
             $this->field_count = 0;
-            elephc_pdo_finalize($_stmt);
             $this->clearError();
             return 1;
         }

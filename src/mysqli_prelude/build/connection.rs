@@ -1728,9 +1728,9 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_var("_columnCount"), BinOp::Eq, e_int(0)),
                         vec![
+                            s_expr(e_call("elephc_pdo_finalize", vec![e_var("_stmt")])),
                             s_expr(e_method_call(e_this(), "refreshStatus", vec![])),
                             s_prop_assign(e_this(), "field_count", e_int(0)),
-                            s_expr(e_call("elephc_pdo_finalize", vec![e_var("_stmt")])),
                             s_expr(e_method_call(e_this(), "clearError", vec![])),
                             s_return(e_bool(true)),
                         ],
@@ -3127,9 +3127,9 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_var("_columnCount"), BinOp::Eq, e_int(0)),
                         vec![
+                            s_expr(e_call("elephc_pdo_finalize", vec![e_var("_stmt")])),
                             s_expr(e_method_call(e_this(), "refreshStatus", vec![])),
                             s_prop_assign(e_this(), "field_count", e_int(0)),
-                            s_expr(e_call("elephc_pdo_finalize", vec![e_var("_stmt")])),
                             s_expr(e_method_call(e_this(), "clearError", vec![])),
                             s_return(e_int(1)),
                         ],
