@@ -143,6 +143,12 @@ pub fn check_with_options(
     result::check_with_options(program, options)
 }
 
+/// The checker/EIR scope key of the top-level program body.
+///
+/// `#` is never part of a PHP identifier, so no user function (not even one named `main`) can
+/// share this key, its loop storage facts, or its promotable-array walk state.
+pub(crate) const TOP_LEVEL_SCOPE: &str = "#main";
+
 /// Returns the stable checker/EIR scope key for a closure nested at `span`.
 pub(crate) fn nested_loop_storage_scope(parent: &str, span: crate::span::Span) -> String {
     format!("{}{CLOSURE_SCOPE_SEPARATOR}{}:{}", parent, span.line, span.col)

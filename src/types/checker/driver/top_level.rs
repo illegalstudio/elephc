@@ -33,9 +33,9 @@ impl Checker {
         program: &Program,
     ) -> (TypeEnv, Vec<Vec<CompileError>>) {
         loop {
-            let denials = self.promotable_view_denials_within("main");
+            let denials = self.promotable_view_denials_within(crate::types::TOP_LEVEL_SCOPE);
             let result = self.check_top_level_program_walk(program);
-            if self.promotable_view_denials_within("main") == denials {
+            if self.promotable_view_denials_within(crate::types::TOP_LEVEL_SCOPE) == denials {
                 return result;
             }
         }
@@ -46,7 +46,7 @@ impl Checker {
         &mut self,
         program: &Program,
     ) -> (TypeEnv, Vec<Vec<CompileError>>) {
-        self.begin_promotable_walk("main");
+        self.begin_promotable_walk(crate::types::TOP_LEVEL_SCOPE);
         let saved_eval_barrier_active = self.eval_barrier_active;
         self.eval_barrier_active = false;
         let saved_null_probe_scope = self.null_probe_scope_is_top_level;
@@ -106,7 +106,7 @@ impl Checker {
         self.active_ref_params = saved_ref_params;
         self.active_external_ref_bindings = saved_external_ref_bindings;
         self.exit_local_binding_scope(saved_local_binding_scope);
-        self.end_promotable_walk("main");
+        self.end_promotable_walk(crate::types::TOP_LEVEL_SCOPE);
         (global_env, all_errors)
     }
 

@@ -150,11 +150,21 @@ impl Checker {
     }
 
     /// Starts a walk of `scope` (a body and its lexical closures): forgets what an earlier walk
-    /// of it read under the view and promoted, keeping only the denials.
+    /// of it read under the view and promoted, keeping only the denials. The promotable facts
+    /// lowering reads (locals, whole-value reads, call views) are forgotten too, so they are
+    /// exactly the last walk's, and an earlier walk's promotion cannot give an integer-key read
+    /// the `?int` view.
     pub(crate) fn begin_promotable_walk(&mut self, scope: &str) {
         let within = |(walked, _): &(String, String)| crate::types::loop_storage_scope_is_within(walked, scope);
         self.promotable_view_reads.retain(|key| !within(key));
         self.promotable_walk_locals.retain(|key| !within(key));
+        self.promotable_arrays.locals.retain(|key| !within(key));
+        self.promotable_arrays
+            .value_reads
+            .retain(|(walked, _, _)| !crate::types::loop_storage_scope_is_within(walked, scope));
+        self.promotable_arrays
+            .call_views
+            .retain(|(walked, _)| !crate::types::loop_storage_scope_is_within(walked, scope));
     }
 
     /// Ends a walk of `scope`: every local of it whose reads took the view while nothing promoted

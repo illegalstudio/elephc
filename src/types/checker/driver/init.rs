@@ -134,7 +134,7 @@ impl Checker {
             finally_assigned_value_types: HashMap::new(),
             exception_analysis: None,
             finally_break_continue_bases: Vec::new(),
-            current_loop_storage_scope: "main".to_string(),
+            current_loop_storage_scope: crate::types::TOP_LEVEL_SCOPE.to_string(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
             clone_override_destinations: Default::default(),

@@ -290,8 +290,12 @@ impl Checker {
                 }
             }
 
-            let stabilized = self.classes == classes_before_pass
-                && self.promotable_view_denied.len() == view_denials_before_pass;
+            // A pass that denied a view is never the kept one, and it does not spend the class
+            // stability budget: denials only grow, so these extra passes are bounded.
+            if self.promotable_view_denied.len() != view_denials_before_pass {
+                continue;
+            }
+            let stabilized = self.classes == classes_before_pass;
             let out_of_passes = method_passes_remaining == 0;
             if stabilized || out_of_passes {
                 errors.extend(pass_errors);

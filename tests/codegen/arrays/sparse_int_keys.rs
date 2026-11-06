@@ -440,3 +440,67 @@ echo plus($argc), half($argc), cmp($argc), neg($argc), klass($argc), quiet($argc
 "#);
     assert_eq!(out, "1111111111\n");
 }
+
+/// A promotion an earlier walk made does not outlive the walk that drops it: a literal-key read of
+/// a local only a denied read fed keeps `int`. A chain of four method locals, each promoted only
+/// through the next one's view, converges although every pass denies one more view.
+#[test]
+fn test_view_denials_chain_through_locals_and_method_passes() {
+    let out = compile_and_run(r#"<?php
+function chained(int $n): string {
+    $cells = [2, 0, 1];
+    $other = [9, 8, 7];
+    $saved = 0;
+    $rd = $cells[$n + 1];
+    if ($n > 0) {
+        $saved = $other[0];
+    }
+    $other[$n] = $rd;
+    $cells[$n] = $n + 1;
+    return (string)($saved ?? -1);
+}
+class C {
+    function pick(int $n): string {
+        $a = [2, 0, 1];
+        $b = [2, 0, 1];
+        $c = [2, 0, 1];
+        $d = [2, 0, 1];
+        $saved = 0;
+        $rd = $d[$n + 1];
+        $rc = $c[$n + 1];
+        $rb = $b[$n + 1];
+        $ra = $a[$n + 1];
+        if ($n > 0) {
+            $saved = $ra;
+        }
+        $c[$n] = $rd;
+        $b[$n] = $rc;
+        $a[$n] = $rb;
+        $d[$n] = $n + 1;
+        return (string)($saved ?? -1);
+    }
+}
+echo chained($argc), "|", (new C)->pick($argc), "\n";
+"#);
+    assert_eq!(out, "9|1\n");
+}
+
+/// A user function named `main` does not share the top-level body's walk state, so calling it
+/// after a top-level read does not keep that read's denied `?int` view.
+#[test]
+fn test_user_function_named_main_keeps_top_level_views_apart() {
+    let out = compile_and_run(r#"<?php
+function main(int $n): int {
+    return $n;
+}
+$cells = [2, 0, 1];
+$y = 0;
+if ($argc > 0) {
+    $y = $cells[$argc + 1];
+}
+$cells[$argc] = $argc + 1;
+main(1);
+echo (string)($y ?? -1), "\n";
+"#);
+    assert_eq!(out, "1\n");
+}

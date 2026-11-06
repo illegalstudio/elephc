@@ -197,7 +197,7 @@ pub(crate) struct Checker {
     /// same line and column. Keying on `Span` alone collapsed those two into one and made the
     /// second call invoke the first's function.
     ///
-    /// The scope half is `current_loop_storage_scope` (`main`, a function's name,
+    /// The scope half is `current_loop_storage_scope` (`#main`, a function's name,
     /// `Class::method`, or a closure's nested scope), which lowering spells the same way and
     /// `generics::site_scope` rebuilds for the AST rename passes. All three generic site maps
     /// use it.
