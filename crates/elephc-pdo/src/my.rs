@@ -398,6 +398,9 @@ pub struct MyStmt {
     /// The error of a later statement of a buffered batch (a MYSQLI_ASYNC `CALL` whose
     /// procedure fails after a first set), reported when `next_rowset()` reaches it.
     trailing_error: Option<mysql::Error>,
+    /// The error that interrupted reading the active buffered set's rows, reported by
+    /// `step()` once the rows read before it are consumed.
+    pending_row_error: Option<mysql::Error>,
     /// Current 0-based row index; `-1` before the first `step()`.
     cursor: isize,
     /// Whether the query has been executed yet.
@@ -575,6 +578,9 @@ struct MyRowset {
     col_precisions: Vec<u8>,
     /// Decoded rows for this result set.
     rows: Vec<Vec<Cell>>,
+    /// The error that interrupted reading this set's rows (a later set of a buffered batch):
+    /// the set is still announced, and the error is reported when its rows are drained.
+    row_error: Option<mysql::Error>,
 }
 
 impl MyRowset {
@@ -591,6 +597,7 @@ impl MyRowset {
             col_lengths: Vec::new(),
             col_precisions: Vec::new(),
             rows: Vec::new(),
+            row_error: None,
         }
     }
 
@@ -632,6 +639,14 @@ fn collect_text_rowsets_until_error(
     };
     let mut rowsets = Vec::new();
     while let Some(mut set) = result.iter() {
+        // A statement whose header failed (an errored set) is the batch's error itself:
+        // next_result() fails with it. Only a failure while reading a set's rows keeps
+        // that set (below).
+        if set.is_errored() {
+            if let Some(Err(error)) = set.next() {
+                return (rowsets, Some(error));
+            }
+        }
         let last_id = set.last_insert_id();
         let affected = set.affected_rows() as i64;
         let columns = set.columns();
@@ -656,12 +671,21 @@ fn collect_text_rowsets_until_error(
             .collect::<Vec<_>>();
         let col_precisions = columns.iter().map(Column::decimals).collect::<Vec<_>>();
         let mut rows = Vec::new();
+        let mut row_error = None;
         for row in set.by_ref() {
             match row {
                 Ok(row) => rows.push(decode_row(row.unwrap(), &col_kinds)),
-                Err(error) => return (rowsets, Some(error)),
+                // A failure in the first set fails the whole operation. A later set is
+                // still announced (next_result() advances to it, like mysqlnd) and keeps
+                // the error for the read of its rows; the batch ends there.
+                Err(error) if rowsets.is_empty() => return (rowsets, Some(error)),
+                Err(error) => {
+                    row_error = Some(error);
+                    break;
+                }
             }
         }
+        let ended = row_error.is_some();
         rowsets.push(MyRowset {
             affected,
             last_id,
@@ -673,7 +697,11 @@ fn collect_text_rowsets_until_error(
             col_lengths,
             col_precisions,
             rows,
+            row_error,
         });
+        if ended {
+            break;
+        }
     }
     (rowsets, None)
 }
@@ -3115,6 +3143,7 @@ impl MyConn {
                 rows: Vec::new(),
                 remaining_rowsets: Vec::new(),
                 trailing_error: None,
+                pending_row_error: None,
                 cursor: -1,
                 executed: false,
                 is_call: sql_is_call_statement(sql),
@@ -3189,6 +3218,7 @@ impl MyConn {
                     rows: Vec::new(),
                     remaining_rowsets: Vec::new(),
                     trailing_error: None,
+                    pending_row_error: None,
                     cursor: -1,
                     executed: false,
                     is_call: sql_is_call_statement(sql),
@@ -3335,6 +3365,7 @@ fn mysql_stream_rowset(
         col_lengths: columns.iter().map(Column::column_length).collect(),
         col_precisions: columns.iter().map(Column::decimals).collect(),
         rows: Vec::new(),
+        row_error: None,
     }
 }
 
@@ -3586,6 +3617,7 @@ impl MyStmt {
         self.col_lengths = rowset.col_lengths;
         self.col_precisions = rowset.col_precisions;
         self.rows = rowset.rows;
+        self.pending_row_error = rowset.row_error;
         self.cursor = -1;
         self.executed = true;
         conn.unbuffered_active = !self.buffered
@@ -3753,6 +3785,7 @@ impl MyStmt {
                     col_lengths,
                     col_precisions,
                     rows,
+                    row_error: None,
                 });
             }
             Ok(rowsets)
@@ -3775,6 +3808,7 @@ impl MyStmt {
                         col_lengths: self.col_lengths.clone(),
                         col_precisions: self.col_precisions.clone(),
                         rows: Vec::new(),
+                        row_error: None,
                     }
                 } else {
                     rowsets.remove(0)
@@ -4022,6 +4056,7 @@ impl MyStmt {
                         col_lengths: Vec::new(),
                         col_precisions: Vec::new(),
                         rows: Vec::new(),
+                        row_error: None,
                     }
                 } else {
                     rowsets.remove(0)
@@ -4102,6 +4137,10 @@ impl MyStmt {
             1
         } else {
             conn.unbuffered_active = false;
+            if let Some(error) = self.pending_row_error.take() {
+                conn.record_mysql_error(&error);
+                return -1;
+            }
             0
         }
     }
