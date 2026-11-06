@@ -51,7 +51,7 @@ fn is_symbol_byte(byte: u8) -> bool {
 }
 
 /// The arm text with every label it defines replaced by `@<n>`, numbered by first definition.
-pub(super) fn normalized_arm_text(text: &str) -> String {
+pub(in crate::codegen) fn normalized_arm_text(text: &str) -> String {
     let mut defined: HashMap<&str, usize> = HashMap::new();
     for line in text.lines() {
         if let Some(name) = line.strip_suffix(':') {

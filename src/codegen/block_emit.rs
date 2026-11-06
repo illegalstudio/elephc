@@ -2405,10 +2405,14 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock, entry_safe_poin
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
         let stats_mark = op_stats_enabled().then(|| ctx.emitter.text_mark());
+        let outline_mark = super::op_outline::enabled().then(|| ctx.emitter.checkpoint());
         lower_inst::lower_instruction(ctx, *inst_id).map_err(|error| {
             let location = instruction_location(ctx, *inst_id);
             error.at(location)
         })?;
+        if let Some(mark) = outline_mark {
+            super::op_outline::outline_instruction(ctx, mark);
+        }
         if let Some(mark) = stats_mark {
             if let Some(inst) = ctx.function.instruction(*inst_id) {
                 record_op_stats(op_stats_key(inst), ctx.emitter.instructions_since(mark));

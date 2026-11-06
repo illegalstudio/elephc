@@ -136,6 +136,7 @@ pub(in crate::codegen) fn emit_pending_property_guard_helpers(
     data: &mut DataSection,
     shared: &mut SharedCodegenState,
 ) -> Result<()> {
+    crate::codegen::op_outline::emit_pending_op_routines(emitter, shared.op_outline_state());
     for pending in shared.take_pending_property_guards() {
         let slot = PropertySlot {
             class_name: String::new(),

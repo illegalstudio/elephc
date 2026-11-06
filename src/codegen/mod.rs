@@ -74,6 +74,7 @@ mod shared_type_error_given;
 mod shared_eval_status;
 mod shared_reflection;
 mod shared_mbstring_callable;
+mod op_outline;
 mod shared_state;
 pub(crate) mod stack_guard;
 mod stack_numeric;

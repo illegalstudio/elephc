@@ -228,6 +228,8 @@ pub(crate) struct SharedCodegenState {
     /// name table `elephc_instr_init` reads; main is emitted last, so it is
     /// complete by then.
     instr_registry: Vec<String>,
+    /// Instruction sequences this worker has seen, for `op_outline`.
+    op_outline: super::op_outline::OpOutlineState,
     /// Keys of the typed-property guard helpers this state has already requested.
     property_guard_requested: HashSet<String>,
     /// Requested guard helpers whose bodies have not been emitted yet. They are emitted right
@@ -580,6 +582,7 @@ impl SharedCodegenState {
             probe_table: None,
             counter_registry: Vec::new(),
             instr_registry: Vec::new(),
+            op_outline: Default::default(),
             property_guard_requested: HashSet::default(),
             property_guard_pending: Vec::new(),
             dynamic_prop_requested: HashSet::default(),
@@ -770,6 +773,11 @@ impl SharedCodegenState {
     /// Takes the runtime-name property helpers requested since the last drain.
     pub(super) fn take_pending_dynamic_prop_helpers(&mut self) -> Vec<PendingDynamicPropHelper> {
         std::mem::take(&mut self.dynamic_prop_pending)
+    }
+
+    /// The instruction sequences this worker has seen.
+    pub(super) fn op_outline_state(&mut self) -> &mut super::op_outline::OpOutlineState {
+        &mut self.op_outline
     }
 
     /// Takes the guard helpers requested since the last drain.
