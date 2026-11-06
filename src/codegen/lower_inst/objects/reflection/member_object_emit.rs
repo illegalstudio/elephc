@@ -63,6 +63,15 @@ pub(super) fn emit_reflection_member_object(
         member.declaring_class_name.as_deref(),
     )?;
     if member_class_name == "ReflectionMethod" {
+        // Internal methods such as `finfo::set_flags` carry a TENTATIVE return type: PHP's
+        // `getReturnType()` answers null while `getTentativeReturnType()` exposes the contract.
+        let tentative_return = member.declaring_class_name.as_deref().is_some_and(|class| {
+            super::class_traits::reflection_class_like_is_internal(class)
+                && elephc_builtin_contract::reflection_methods::has_tentative_return(
+                    class,
+                    &member.name,
+                )
+        });
         // The same `__string` slot the standalone `new ReflectionMethod(...)` path fills, for the
         // entries `ReflectionClass::getMethods()` hands back (#1080).
         let method_string = reflection_listed_method_to_string(ctx, member);
@@ -87,7 +96,13 @@ pub(super) fn emit_reflection_member_object(
             ctx,
             member_class_name,
             "__has_return_type",
-            member.type_metadata.is_some(),
+            member.type_metadata.is_some() && !tentative_return,
+        )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            member_class_name,
+            "__has_tentative_return_type",
+            tentative_return,
         )?;
         emit_reflection_owner_type_property(ctx, member_class_name, member.type_metadata.as_ref())?;
         emit_reflection_owner_bool_property(

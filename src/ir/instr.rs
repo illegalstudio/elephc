@@ -1556,7 +1556,12 @@ impl Op {
             // the hash removal can reallocate the table.
             PropUnset | DynamicPropUnset => E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
+            // A float or NAN array key emits PHP's precision/range diagnostic before the
+            // store, so the instruction must publish its call site like any other warner.
+            ArraySet | HashSet => {
+                E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP | E::MAY_WARN
+            }
+            DescriptorArgSet | ArrayPush | HashAppend
             | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             // `PropSet` and `DynamicPropSet` now carry the SAME conservative contract, because

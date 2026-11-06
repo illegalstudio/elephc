@@ -100,6 +100,7 @@ fn lower_on_compiler_stack(
     source_path: Option<&Path>,
     web: bool,
 ) -> Result<Module, LoweringError> {
+    crate::ir_lower::expr::clear_descendant_cache();
     super::diagnostics::begin_collection();
     let _closure_param_hints =
         crate::ir_lower::closure_param_hints::install(&check_result.closure_param_hints);

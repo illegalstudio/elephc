@@ -203,6 +203,23 @@ fn test_exit_code() {
     assert_eq!(out, "before");
 }
 
+/// A declared `int|string` exit status dispatches on the runtime tag: the string form prints
+/// and exits 0, the integer form becomes the process status.
+#[test]
+fn test_exit_union_status() {
+    let string_status = compile_and_run_capture(
+        r#"<?php function pick(bool $ok): int|string { return $ok ? 7 : "bye"; } exit(pick(false));"#,
+    );
+    assert!(string_status.success, "string exit status must succeed");
+    assert_eq!(string_status.stdout, "bye");
+
+    let integer_status = compile_and_run_capture(
+        r#"<?php function pick(bool $ok): int|string { return $ok ? 7 : "bye"; } exit(pick(true));"#,
+    );
+    assert!(!integer_status.success, "integer exit status must fail with code 7");
+    assert_eq!(integer_status.stdout, "");
+}
+
 // --- $argc ---
 
 /// Compiles `<?php echo $argc;` and asserts stdout is `1` (test binary is run with no extra args).
@@ -227,3 +244,31 @@ fn test_argv_first_entry_exists() {
     assert!(out.ends_with("/test"), "unexpected argv[0]: {out}");
 }
 
+
+/// Weak mode coerces bool, float and null exit statuses exactly like PHP: booleans become
+/// 0/1, floats truncate with the precision deprecation, and null becomes 0 with its own
+/// deprecation. Strict mode still rejects all three at compile time.
+#[test]
+fn test_exit_weak_scalar_statuses() {
+    let truthy = compile_and_run_capture("<?php exit(true);");
+    assert!(!truthy.success, "true must exit with status 1");
+    let falsy = compile_and_run_capture("<?php exit(false);");
+    assert!(falsy.success, "false must exit with status 0");
+    let integral = compile_and_run_capture("<?php exit(1.0);");
+    assert!(!integral.success, "1.0 must exit with status 1");
+    assert!(integral.stderr.is_empty(), "integral floats are silent");
+    let fractional = compile_and_run_capture("<?php exit(1.5);");
+    assert!(!fractional.success, "1.5 must exit with status 1");
+    assert!(
+        fractional.stderr.contains("Implicit conversion from float 1.5 to int loses precision"),
+        "missing float deprecation: {}",
+        fractional.stderr
+    );
+    let null = compile_and_run_capture("<?php exit(null);");
+    assert!(null.success, "null must exit with status 0");
+    assert!(
+        null.stderr.contains("Passing null to parameter #1 ($status) of type string|int is deprecated"),
+        "missing null deprecation: {}",
+        null.stderr
+    );
+}

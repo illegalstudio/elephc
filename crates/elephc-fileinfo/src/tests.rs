@@ -210,3 +210,146 @@ fn fileinfo_native_blocked_file_does_not_block_other_handles() {
         assert_eq!((freed, flags, value.to_bytes()), (1, 1, b"us-ascii".as_slice()));
     }
 }
+
+/// A hostile database cannot grow the warning queue without bound.
+#[test]
+fn fileinfo_warning_queue_is_bounded() {
+    clear_warnings();
+    for _ in 0..(MAX_WARNINGS + 1) {
+        unsafe { elephc_libmagic_warn(c"warning".as_ptr()); }
+    }
+    assert_eq!(elephc_fileinfo_warnings_pending(), MAX_WARNINGS as i64);
+    assert_eq!(elephc_fileinfo_warnings_suppressed(), 1);
+    clear_warnings();
+    assert_eq!(elephc_fileinfo_warnings_pending(), 0);
+    assert_eq!(elephc_fileinfo_warnings_suppressed(), 0);
+}
+
+/// open_basedir compares resolved paths, honours directory boundaries and multiple roots, and
+/// rejects symlink targets, `..` escapes and sibling prefixes while allowing nonexistent leaves
+/// inside an allowed root.
+#[test]
+fn fileinfo_open_basedir_paths() {
+    use std::os::unix::fs::symlink;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let root = std::env::temp_dir().join(format!(
+        "elephc_fileinfo_basedir_{}_{nanos}", std::process::id()
+    ));
+    let sibling = root.with_file_name(format!("{}_sibling", root.file_name().unwrap().to_string_lossy()));
+    let outside = root.with_file_name(format!("{}_outside", root.file_name().unwrap().to_string_lossy()));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_file(&outside);
+    std::fs::create_dir(&root).unwrap();
+    let inside = root.join("inside.magic");
+    std::fs::write(&inside, b"0 string x test\n").unwrap();
+    std::fs::write(&outside, b"0 string x test\n").unwrap();
+    let link = root.join("link.magic");
+    symlink(&outside, &link).unwrap();
+    let roots = CString::new(root.to_str().unwrap()).unwrap();
+    let allowed = |path: &Path, roots: &CStr| {
+        let path = CString::new(path.to_str().unwrap()).unwrap();
+        unsafe { elephc_fileinfo_path_allowed(path.as_ptr(), roots.as_ptr()) == 1 }
+    };
+    assert!(allowed(&inside, &roots));
+    let confined = unsafe { CStr::from_ptr(elephc_fileinfo_confined_path()) };
+    assert_eq!(
+        Path::new(confined.to_str().unwrap()),
+        inside.canonicalize().unwrap(),
+        "an allowed path is published in canonical form"
+    );
+    assert!(allowed(&root.join("missing.magic"), &roots));
+    assert!(!allowed(&outside, &roots));
+    assert!(!allowed(&link, &roots));
+    assert!(!allowed(&sibling, &roots));
+    assert!(!allowed(&root.join("..").join(outside.file_name().unwrap()), &roots));
+    let multiple = CString::new(format!("{}:{}", root.display(), outside.parent().unwrap().display())).unwrap();
+    assert!(allowed(&outside, &multiple));
+    assert!(unsafe {
+        elephc_fileinfo_path_allowed(c"/etc/hosts".as_ptr(), c"/".as_ptr()) == 1
+    });
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_file(&outside);
+}
+
+/// Lexical normalization keeps an absolute root when `..` would pop past it.
+#[test]
+fn absolute_parent_components_keep_the_root() {
+    assert_eq!(lexical_path(Path::new("/../etc/hosts")), PathBuf::from("/etc/hosts"));
+    assert_eq!(lexical_path(Path::new("/a/../b")), PathBuf::from("/b"));
+    assert_eq!(lexical_path(Path::new("../a")), PathBuf::from("a"));
+}
+
+/// One oversized libmagic diagnostic is truncated to the per-message cap.
+#[test]
+fn warning_message_is_bounded() {
+    unsafe {
+        let long = CString::new("x".repeat(MAX_WARNING_BYTES * 4)).unwrap();
+        elephc_fileinfo_clear_warnings();
+        elephc_libmagic_warn(long.as_ptr());
+        let taken = CStr::from_ptr(elephc_fileinfo_warning_take());
+        assert_eq!(taken.to_bytes().len(), MAX_WARNING_BYTES);
+        elephc_fileinfo_clear_warnings();
+    }
+}
+
+/// Reads an allowed file through the descriptor-relative traversal.
+#[test]
+fn confined_read_allows_an_inside_file() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let root = std::env::temp_dir().join(format!(
+        "elephc_fileinfo_confined_ok_{}_{nanos}", std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir(&root).unwrap();
+    let inside = root.join("inside.magic");
+    std::fs::write(&inside, b"0 string x test\n").unwrap();
+    let roots = CString::new(root.to_str().unwrap()).unwrap();
+    let path = CString::new(inside.to_str().unwrap()).unwrap();
+    unsafe { elephc_fileinfo_set_basedir(roots.as_ptr()); }
+    let id = unsafe { elephc_fileinfo_read(path.as_ptr()) };
+    assert_ne!(id, 0, "{}", unsafe { CStr::from_ptr(elephc_fileinfo_error()) }.to_string_lossy());
+    assert_eq!(unsafe { elephc_fileinfo_read_length(id) }, b"0 string x test\n".len() as i64);
+    unsafe { elephc_fileinfo_read_release(id); elephc_fileinfo_set_basedir(std::ptr::null()); }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A leaf swapped to an outside symlink after the lexical check is re-resolved and rejected
+/// before the native open, so a check/open race cannot escape the configured root.
+#[test]
+fn confined_read_rejects_a_swapped_leaf() {
+    use std::os::unix::fs::symlink;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let root = std::env::temp_dir().join(format!(
+        "elephc_fileinfo_confined_swap_{}_{nanos}", std::process::id()
+    ));
+    let outside = root.with_file_name(format!("{}_outside", root.file_name().unwrap().to_string_lossy()));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_file(&outside);
+    std::fs::create_dir(&root).unwrap();
+    let inside = root.join("inside.magic");
+    std::fs::write(&inside, b"0 string x test\n").unwrap();
+    std::fs::write(&outside, b"0 string x outside\n").unwrap();
+    let roots = CString::new(root.to_str().unwrap()).unwrap();
+    let path = CString::new(inside.to_str().unwrap()).unwrap();
+    unsafe { elephc_fileinfo_set_basedir(roots.as_ptr()); }
+    assert_eq!(unsafe { elephc_fileinfo_path_allowed(path.as_ptr(), roots.as_ptr()) }, 1);
+    std::fs::remove_file(&inside).unwrap();
+    symlink(&outside, &inside).unwrap();
+    assert_eq!(
+        unsafe { elephc_fileinfo_read(path.as_ptr()) },
+        0,
+        "a swapped symlink must not be opened"
+    );
+    unsafe { elephc_fileinfo_set_basedir(std::ptr::null()); }
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_file(&outside);
+}

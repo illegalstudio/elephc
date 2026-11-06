@@ -385,7 +385,9 @@ fn test_program_function_effects_propagate_throwing_calls() {
     );
 }
 
-/// Declared dynamic int returns can throw, while inferred and native int returns stay pure.
+/// Declared dynamic int returns can throw. A function with any declared scalar parameter also
+/// keeps `may_throw` at its call boundary: a strict-union argument can fail the runtime guard
+/// even when the body itself is a pure identity.
 #[test]
 fn test_function_effects_keep_declared_int_return_verification() {
     let tokens = crate::lexer::tokenize("<?php function checked(mixed $input): int { return $input; } function inferred(mixed $input) { return $input; } function nativeInt(int $input): int { return $input; } function changed(int $input, mixed $replacement): int { $input = $replacement; return $input; } function relay(int $input): int { return NATIVEINT($input); } function strlen(mixed $input): mixed { return $input; } function shadowed(mixed $input): int { return STRLEN($input); }").unwrap();
@@ -394,7 +396,7 @@ fn test_function_effects_keep_declared_int_return_verification() {
     assert!(effects["checked"].may_throw);
     assert!(effects["changed"].may_throw);
     assert_eq!(effects["inferred"], Effect::PURE);
-    assert_eq!(effects["nativeInt"], Effect::PURE);
-    assert_eq!(effects["relay"], Effect::PURE);
+    assert!(effects["nativeInt"].may_throw);
+    assert!(effects["relay"].may_throw);
     assert!(effects["shadowed"].may_throw);
 }

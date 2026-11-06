@@ -392,6 +392,17 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
     }
 
+    /// Returns a value's logical PHP type without collapsing a union to `Mixed`.
+    ///
+    /// The storage representation still comes from [`Self::value_php_type`]; this accessor is
+    /// only for lowering decisions that must distinguish `int|string` from an erased cell.
+    pub(super) fn value_declared_php_type(&self, value: ValueId) -> Result<PhpType> {
+        self.function
+            .value(value)
+            .map(|metadata| metadata.php_type.clone())
+            .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
+    }
+
     /// Returns a function value's IR storage type.
     ///
     /// This is the ONLY reliable way to tell whether a value is a genuinely boxed `Mixed` CELL.

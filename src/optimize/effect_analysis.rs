@@ -426,6 +426,9 @@ fn type_guard_may_throw(ty: Option<&TypeExpr>) -> bool {
     match ty {
         TypeExpr::False | TypeExpr::Named(_) if !type_expr_is_builtin(ty) => true,
         TypeExpr::GenericClass { .. } | TypeExpr::Intersection(_) => true,
+        // A declared scalar parameter can reject a union-valued argument at the CALL
+        // boundary under `strict_types`; the callee body alone cannot prove the call total.
+        TypeExpr::Int | TypeExpr::Float | TypeExpr::Str | TypeExpr::Bool | TypeExpr::False => true,
         TypeExpr::Nullable(inner) => type_guard_may_throw(Some(inner)),
         TypeExpr::Union(members) => members.iter().any(|member| type_guard_may_throw(Some(member))),
         _ => false,

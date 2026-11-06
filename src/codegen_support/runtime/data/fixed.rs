@@ -984,11 +984,22 @@ pub(crate) fn emit_runtime_data_fixed(
     ] {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
+    out.push_str(&format!(
+        ".globl _diag_exit_null_deprecation\n_diag_exit_null_deprecation:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::data::EXIT_NULL_DEPRECATION
+    ));
+    out.push_str(&format!(
+        ".globl _diag_nan_coerced_string\n_diag_nan_coerced_string:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::data::NAN_STRING_COERCION_WARNING
+    ));
     for (label, message) in [
         ("_diag_float_key_precision_prefix", "Deprecated: Implicit conversion from float "),
-        ("_diag_float_key_precision_suffix", " to int loses precision\n"),
+        ("_diag_float_key_precision_suffix", " to int loses precision"),
         ("_diag_float_key_range_prefix", "Warning: The float "),
-        ("_diag_float_key_range_suffix", " is not representable as an int, cast occurred\n"),
+        ("_diag_float_key_range_suffix", " is not representable as an int, cast occurred"),
+        ("_diag_location_in", " in "),
+        ("_diag_location_line", " on line "),
+        ("_diag_newline", "\n"),
         ("_diag_sqrt_nan_warning", crate::codegen_support::runtime::numeric::SQRT_NAN_WARNING),
     ] {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));

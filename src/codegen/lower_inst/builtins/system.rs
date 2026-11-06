@@ -731,6 +731,148 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
+    let status_ty = ctx.value_declared_php_type(status)?;
+    if matches!(status_ty, PhpType::Void) {
+        let (ptr_reg, len_reg) = match ctx.emitter.target.arch {
+            Arch::AArch64 => ("x1", "x2"),
+            Arch::X86_64 => (
+                abi::int_arg_reg_name(ctx.emitter.target, 0),
+                abi::int_arg_reg_name(ctx.emitter.target, 1),
+            ),
+        };
+        abi::emit_symbol_address(ctx.emitter, ptr_reg, "_diag_exit_null_deprecation");
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            len_reg,
+            crate::codegen_support::runtime::data::EXIT_NULL_DEPRECATION.len() as i64,
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+        if ctx.emitter.phpext_output {
+            emit_diagnostic_newline(ctx);
+        } else {
+            emit_diagnostic_location(ctx);
+        }
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("mov x0, #0"),                  // null statuses exit successfully
+            Arch::X86_64 => ctx.emitter.instruction("xor eax, eax"),                // null statuses exit successfully
+        }
+        emit_dynamic_exit(ctx);
+        return Ok(());
+    }
+    if status_ty.codegen_repr() == PhpType::Float {
+        // PHP's `string|int` weak binding tries int first and falls back to string when the
+        // float is not representable: `exit(1e100)` prints `1.0E+100` and exits 0, while
+        // `exit(1.5)` emits the precision deprecation and exits 1. NAN additionally warns
+        // before it prints.
+        let nan_status = ctx.next_label("exit_float_nan");
+        let string_status = ctx.next_label("exit_float_string");
+        ctx.load_value_to_result(status)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("fcmp d0, d0");                         // detect NaN before ordered range checks
+                ctx.emitter.instruction(&format!("b.vs {nan_status}"));          // NaN warns and prints as a string
+                abi::emit_load_int_immediate(ctx.emitter, "x9", 0x43e0000000000000);
+                ctx.emitter.instruction("fmov d1, x9");                         // load positive 2^63, the signed range bound
+                ctx.emitter.instruction("fcmp d0, d1");                         // compare the positive range bound
+                ctx.emitter.instruction(&format!("b.ge {string_status}"));       // out-of-range floats print as strings
+                abi::emit_load_int_immediate(ctx.emitter, "x9", 0xc3e0000000000000_u64 as i64);
+                ctx.emitter.instruction("fmov d1, x9");                         // load negative 2^63, the signed range bound
+                ctx.emitter.instruction("fcmp d0, d1");                         // compare the negative range bound
+                ctx.emitter.instruction(&format!("b.lt {string_status}"));       // out-of-range floats print as strings
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("ucomisd xmm0, xmm0");                  // detect NaN before ordered range checks
+                ctx.emitter.instruction(&format!("jp {nan_status}"));            // NaN warns and prints as a string
+                abi::emit_load_int_immediate(ctx.emitter, "r10", 0x43e0000000000000);
+                ctx.emitter.instruction("movq xmm1, r10");                      // load positive 2^63, the signed range bound
+                ctx.emitter.instruction("ucomisd xmm0, xmm1");                  // compare the positive range bound
+                ctx.emitter.instruction(&format!("jae {string_status}"));        // out-of-range floats print as strings
+                abi::emit_load_int_immediate(ctx.emitter, "r10", 0xc3e0000000000000_u64 as i64);
+                ctx.emitter.instruction("movq xmm1, r10");                      // load negative 2^63, the signed range bound
+                ctx.emitter.instruction("ucomisd xmm0, xmm1");                  // compare the negative range bound
+                ctx.emitter.instruction(&format!("jb {string_status}"));         // out-of-range floats print as strings
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+        emit_dynamic_exit(ctx);
+        ctx.emitter.label(&nan_status);
+        if crate::codegen_support::runtime::nan_bool_coercion_warning_enabled() {
+            emit_nan_string_warning(ctx);
+        }
+        ctx.emitter.label(&string_status);
+        ctx.load_value_to_result(status)?;
+        abi::emit_call_label(ctx.emitter, "__rt_ftoa_repr");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, x1");                          // capture-aware write: formatted float pointer → x0
+                ctx.emitter.instruction("mov x1, x2");                          // capture-aware write: formatted float length → x1
+                abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+                ctx.emitter.instruction("mov x0, #0");                          // string statuses exit successfully
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // formatted float pointer → first C argument
+                ctx.emitter.instruction("mov rsi, rdx");                        // formatted float length → second C argument
+                abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+                ctx.emitter.instruction("xor eax, eax");                        // string statuses exit successfully
+            }
+        }
+        emit_dynamic_exit(ctx);
+        return Ok(());
+    }
+    if status_ty.codegen_repr() == PhpType::Str {
+        // `exit("message")` prints the message and exits with status 0.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.load_string_value_to_regs(status, "x1", "x2")?;
+                ctx.emitter.instruction("mov x0, x1");                          // capture-aware write: message pointer → x0
+                ctx.emitter.instruction("mov x1, x2");                          // capture-aware write: message length → x1
+                abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+                ctx.emitter.instruction("mov x0, #0");                          // string statuses exit successfully
+            }
+            Arch::X86_64 => {
+                ctx.load_string_value_to_regs(status, "rdi", "rsi")?;
+                abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+                ctx.emitter.instruction("xor eax, eax");                        // string statuses exit successfully
+            }
+        }
+        emit_dynamic_exit(ctx);
+        return Ok(());
+    }
+    if matches!(status_ty, PhpType::Union(_)) {
+        // `int|string` selects PHP's two status semantics from the runtime tag.
+        let string_status = ctx.next_label("exit_string_status");
+        super::super::predicates::emit_mixed_tag_eq(
+            ctx,
+            status,
+            super::type_predicates::mixed_type_predicate_tag(&PhpType::Str)
+                .expect("the string tag is a scalar tag"),
+        )?;
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &string_status);
+        ctx.load_value_to_result(status)?;
+        super::super::call_operands::move_int_result_to_first_arg(ctx);
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        emit_dynamic_exit(ctx);
+        ctx.emitter.label(&string_status);
+        ctx.load_value_to_result(status)?;
+        super::super::call_operands::move_int_result_to_first_arg(ctx);
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, x1");                          // capture-aware write: message pointer → x0
+                ctx.emitter.instruction("mov x1, x2");                          // capture-aware write: message length → x1
+                abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+                ctx.emitter.instruction("mov x0, #0");                          // string statuses exit successfully
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // mixed cast leaves the pointer in rax
+                ctx.emitter.instruction("mov rsi, rdx");                        // mixed cast leaves the length in rdx
+                abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+                ctx.emitter.instruction("xor eax, eax");                        // string statuses exit successfully
+            }
+        }
+        emit_dynamic_exit(ctx);
+        return Ok(());
+    }
     require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
     emit_dynamic_exit(ctx);
     Ok(())
@@ -928,6 +1070,95 @@ fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits a process-exit sequence using the already-loaded integer result register.
+/// Emits PHP 8.5's `unexpected NAN value was coerced to string` warning and finishes it.
+fn emit_nan_string_warning(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_nan_coerced_string");
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x2",
+                crate::codegen_support::runtime::data::NAN_STRING_COERCION_WARNING.len() as i64,
+            );
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_nan_coerced_string");
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "rsi",
+                crate::codegen_support::runtime::data::NAN_STRING_COERCION_WARNING.len() as i64,
+            );
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    if ctx.emitter.phpext_output {
+        emit_diagnostic_newline(ctx);
+    } else {
+        emit_diagnostic_location(ctx);
+    }
+}
+
+/// Finishes a pending diagnostic with just the newline, for the host warning API.
+fn emit_diagnostic_newline(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_newline");
+            abi::emit_load_int_immediate(ctx.emitter, "x2", 1);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_newline");
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", 1);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+}
+
+/// Appends PHP's ` in <file> on line <n>\n` suffix to the pending diagnostic and dispatches it.
+fn emit_diagnostic_location(ctx: &mut FunctionContext<'_>) {
+    // Error handlers receive the message alone; the default output keeps the location suffix.
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_pending_len", 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_rt_diag_warning_message_len", 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_location_in");
+            abi::emit_load_int_immediate(ctx.emitter, "x2", 4);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x1", "_php_diagnostic_file", 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x2", "_php_diagnostic_file_len", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_location_line");
+            abi::emit_load_int_immediate(ctx.emitter, "x2", 9);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x0", "_php_diagnostic_line", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_newline");
+            abi::emit_load_int_immediate(ctx.emitter, "x2", 1);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_location_in");
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", 4);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "rdi", "_php_diagnostic_file", 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "rsi", "_php_diagnostic_file_len", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_location_line");
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", 9);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "rdi", "_php_diagnostic_line", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the formatted line pointer to the dispatcher
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the formatted line length to the dispatcher
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_newline");
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", 1);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+        }
+    }
+}
+
 fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
     abi::emit_cdylib_exit_escape(ctx.emitter);
     match (ctx.emitter.target.platform, ctx.emitter.target.arch) {

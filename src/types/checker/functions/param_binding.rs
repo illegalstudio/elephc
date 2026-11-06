@@ -65,8 +65,44 @@ impl Checker {
         if !by_ref && *expected == PhpType::Void && actual.codegen_repr() == PhpType::Mixed {
             return Ok(());
         }
-
-        if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
+        // Exact scalar-to-scalar matches are the overwhelming common case and need none of
+        // the union/callable/numeric probes. Keep the classification for the shapes that
+        // can bind through a rewrite or a run-time guard.
+        let needs_classification = self.strict_types
+            || matches!(expected, PhpType::Union(_) | PhpType::Callable)
+            || matches!(
+                actual,
+                PhpType::Union(_) | PhpType::Callable | PhpType::Mixed | PhpType::TaggedScalar
+            );
+        if !needs_classification
+            && (Self::types_compatible(expected, actual) || self.type_accepts(expected, actual))
+        {
+            return Ok(());
+        }
+        // A union can accept the value at runtime only through the rewrite below; an
+        // early `type_accepts` return would leave the raw scalar in `Mixed` storage.
+        let classified = classify_param_binding(expected, actual, arg);
+        let requires_binding = matches!(
+            classified,
+            ParamBinding::Cast(_)
+                | ParamBinding::Const(_)
+                | ParamBinding::Callable(_)
+                | ParamBinding::Deprecated(_)
+                | ParamBinding::TypeError(_)
+                | ParamBinding::NeedsRuntimeCheck(_)
+        );
+        if !requires_binding
+            && (Self::types_compatible(expected, actual) || self.type_accepts(expected, actual))
+        {
+            return Ok(());
+        }
+        // Main's compound-guard classifier reports `NeedsRuntimeCheck` for a union that still
+        // satisfies the declared type (`int|float` into `int`). The checker accepts that
+        // binding, and the ABI materializes the integer payload; only a union the checker does
+        // NOT already accept needs the explicit-cast diagnostic.
+        if matches!(&classified, ParamBinding::NeedsRuntimeCheck(_))
+            && (Self::types_compatible(expected, actual) || self.type_accepts(expected, actual))
+        {
             return Ok(());
         }
         if by_ref && matches!(expected, PhpType::Object(_))
@@ -89,7 +125,7 @@ impl Checker {
             }
             return self.require_compatible_arg_type(expected, actual, arg.span, context);
         }
-        match classify_param_binding(expected, actual, arg) {
+        match classified {
             ParamBinding::Identity | ParamBinding::Cast(_) | ParamBinding::Const(_) => Ok(()),
             ParamBinding::Callable(target) => {
                 let sig = self

@@ -32,11 +32,14 @@ impl Checker {
         &mut self,
         name: &str,
         decl: &FnDecl,
-        param_types: Vec<(String, PhpType)>,
+        mut param_types: Vec<(String, PhpType)>,
     ) -> Result<PhpType, CompileError> {
         self.completed_function_signatures.remove(name);
         // This walk replaces whatever a previous failed walk of the body recorded.
         self.failed_function_body_errors.remove(name);
+        // A first-call resolution builds `param_types` from the declaration or the call site;
+        // normalize it before the body and its callers share one ABI contract.
+        crate::fileinfo_prelude::abi::widen_function_params(name, &mut param_types);
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());

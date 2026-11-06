@@ -875,8 +875,12 @@ fn test_nullable_fallback_flow_review_total_scalar_boundaries() {
     let checked = check_source_full("<?php function logical(mixed $value) { if (is_int($value) || is_string($value)) { return $value; } return false; }").unwrap();
     assert_eq!(checked.functions["logical"].return_type, types::PhpType::Mixed);
     check_source("<?php function need(string $value): string { return $value; } function logical(mixed $value) { if (is_int($value) || is_string($value)) { return $value; } return 0; } echo need(logical(42));").unwrap();
-    expect_error("<?php function need(string $value): void {} function declared(int|string $value): void { need($value); }", "expects string");
-    expect_error("<?php function need(string $value): void {} function sentinel(string|false $value): void { need($value); }", "expects string");
+    // PHP's weak binding casts every member of `int|string` and `string|false` to string;
+    // the fileinfo corpus depends on the latter for `T|false` results.
+    check_source("<?php function need(string $value): void {} function declared(int|string $value): void { need($value); }")
+        .unwrap_or_else(|error| panic!("int|string into string must bind: {error}"));
+    check_source("<?php function need(string $value): void {} function sentinel(string|false $value): void { need($value); }")
+        .unwrap_or_else(|error| panic!("string|false into string must bind: {error}"));
     expect_error("<?php function need(string &$value): void {} function shared(mixed $value): void { if (is_int($value) || is_string($value)) { need($value); } }", "by-reference storage");
 }
 

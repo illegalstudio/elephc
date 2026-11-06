@@ -305,6 +305,15 @@ fn test_error_microtime_wrong_args() {
     );
 }
 
+/// Verifies `phpinfo()` uses PHP's `expects at most` wording with the received count.
+#[test]
+fn test_error_phpinfo_wrong_args() {
+    expect_error(
+        "<?php phpinfo(1, 2);",
+        "phpinfo() expects at most 1 argument, 2 given",
+    );
+}
+
 /// Verifies that `sleep()` with no arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_sleep_wrong_args() {

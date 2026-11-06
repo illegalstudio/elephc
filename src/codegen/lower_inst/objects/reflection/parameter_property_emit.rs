@@ -39,7 +39,9 @@ fn reflection_declaring_function_dump(
                 signature.deprecation.is_some(),
                 signature.by_ref_return,
                 &parameters,
-                reflection_return_type_metadata(signature).as_ref(),
+                reflection_owner_return_type_metadata(name)
+                    .or_else(|| reflection_return_type_metadata(signature))
+                    .as_ref(),
             ));
         }
 
@@ -54,7 +56,9 @@ fn reflection_declaring_function_dump(
             signature.deprecation.is_some(),
             signature.by_ref_return,
             &parameters,
-            reflection_return_type_metadata(&signature).as_ref(),
+            reflection_owner_return_type_metadata(name)
+                .or_else(|| reflection_return_type_metadata(&signature))
+                .as_ref(),
         ));
     };
 

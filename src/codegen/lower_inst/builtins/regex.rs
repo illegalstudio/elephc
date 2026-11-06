@@ -546,12 +546,14 @@ fn load_pattern_and_subject(
 ) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            load_string_arg(ctx, pattern, "x1", "x2", "preg pattern")?;
-            load_string_arg(ctx, subject, "x3", "x4", "preg subject")
+            // Materialize a boxed/union subject first: scalar coercion uses scratch
+            // registers that would otherwise clobber the already-loaded pattern.
+            load_string_arg(ctx, subject, "x3", "x4", "preg subject")?;
+            load_string_arg(ctx, pattern, "x1", "x2", "preg pattern")
         }
         Arch::X86_64 => {
-            load_string_arg(ctx, pattern, "rdi", "rsi", "preg pattern")?;
-            load_string_arg(ctx, subject, "rdx", "rcx", "preg subject")
+            load_string_arg(ctx, subject, "rdx", "rcx", "preg subject")?;
+            load_string_arg(ctx, pattern, "rdi", "rsi", "preg pattern")
         }
     }
 }
@@ -793,8 +795,7 @@ fn load_string_arg(
     len_reg: &str,
     context: &str,
 ) -> Result<()> {
-    require_string(ctx.value_php_type(value)?, context)?;
-    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)
+    super::strings::load_value_as_string_to_regs(ctx, value, context, ptr_reg, len_reg)
 }
 
 /// Loads the optional `preg_split()` limit, using PHP's default `-1`.
@@ -813,17 +814,6 @@ fn load_flags_arg(ctx: &mut FunctionContext<'_>, flags: Option<ValueId>, reg: &s
         return Ok(());
     };
     require_integer_like(ctx.load_value_to_reg(flags, reg)?, "preg flags")
-}
-
-/// Verifies that a regex string operand is statically string-shaped.
-fn require_string(ty: PhpType, context: &str) -> Result<()> {
-    if ty == PhpType::Str {
-        return Ok(());
-    }
-    Err(CodegenIrError::unsupported(format!(
-        "{} for PHP type {:?}",
-        context, ty
-    )))
 }
 
 /// Verifies that a regex integer option is statically integer-like.

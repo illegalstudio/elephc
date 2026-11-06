@@ -109,6 +109,39 @@ pub(super) fn collect_object_reference_entry_checks(
     }
 }
 
+/// Collects free functions whose declared scalar parameters can reject a call argument.
+///
+/// Used when the optimizer runs without checker metadata, so the AST declaration is the only
+/// source for the call-boundary `TypeError` a `strict_types` union argument can raise.
+pub(super) fn collect_scalar_parameter_entry_checks(
+    stmts: &[Stmt],
+    functions: &mut HashSet<String>,
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, params, .. } => {
+                if params.iter().any(|(_, hint, _, _)| hint.as_ref().is_some_and(type_hint_is_scalar)) {
+                    functions.insert(name.clone());
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                collect_scalar_parameter_entry_checks(body, functions);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Reports whether a declared parameter hint is one of PHP's scalar declarations.
+fn type_hint_is_scalar(hint: &TypeExpr) -> bool {
+    match hint {
+        TypeExpr::Int | TypeExpr::Float | TypeExpr::Str | TypeExpr::Bool | TypeExpr::False => true,
+        TypeExpr::Nullable(inner) => type_hint_is_scalar(inner),
+        TypeExpr::Union(members) => members.iter().any(type_hint_is_scalar),
+        _ => false,
+    }
+}
+
 /// Finds parameter hints that can reject a `Class|false` / `Class|null` argument.
 ///
 /// A class-typed parameter runs the union guard at the call boundary whether it is by-value

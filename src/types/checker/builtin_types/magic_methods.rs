@@ -49,7 +49,7 @@ fn declares_source_variadic(method: &ClassMethod) -> bool {
 /// For `__get`/`__isset`/`__unset`: parameter 0 is `PhpType::Str` (the property name).
 /// For `__set`: parameter 0 is `PhpType::Str`, parameter 1 is `PhpType::Mixed`.
 /// For `__call`/`__callStatic`: parameter 0 is `PhpType::Str`, parameter 1 is
-/// `PhpType::Array` of `PhpType::Never` (the forwarded argument list).
+/// `PhpType::Array` of `PhpType::Mixed` (the forwarded argument list).
 /// Declared `__isset`/`__unset` return types are validated separately.
 /// Does nothing for classes that do not declare these methods.
 pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
@@ -84,7 +84,7 @@ pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
                 param.1 = PhpType::Str;
             }
             if let Some(param) = sig.params.get_mut(1) {
-                param.1 = PhpType::Array(Box::new(PhpType::Never));
+                param.1 = PhpType::Array(Box::new(PhpType::Mixed));
             }
         }
         // `__callStatic` is a static method, so it lives in `static_methods`.
@@ -93,7 +93,7 @@ pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
                 param.1 = PhpType::Str;
             }
             if let Some(param) = sig.params.get_mut(1) {
-                param.1 = PhpType::Array(Box::new(PhpType::Never));
+                param.1 = PhpType::Array(Box::new(PhpType::Mixed));
             }
         }
     }

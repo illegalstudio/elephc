@@ -16,12 +16,22 @@ fn invalid(message: &str) -> Vec<Stmt> {
     failure(e_str(message))
 }
 
-/// Emits a wrapper failure with the original URL and public fileinfo call name.
-pub(super) fn failure(reason: Expr) -> Vec<Stmt> {
+/// Builds the `function(target): Failed to open stream: reason` warning text.
+fn failure_message(reason: Expr) -> Expr {
     let mut message = e_binop(e_var("_function"), BinOp::Concat, e_str("("));
     message = e_binop(message, BinOp::Concat, e_var("filename"));
     message = e_binop(message, BinOp::Concat, e_str("): Failed to open stream: "));
-    vec![s_if(e_var("_report_errors"), vec![s_expr(e_call("__elephc_builtin_warning", vec![e_binop(message, BinOp::Concat, reason)]))], vec![], None), s_return(e_bool(false))]
+    e_binop(message, BinOp::Concat, reason)
+}
+
+/// Emits a wrapper failure with the original URL and public fileinfo call name.
+pub(super) fn failure(reason: Expr) -> Vec<Stmt> {
+    vec![s_if(e_var("_report_errors"), vec![super::build::warning(failure_message(reason.clone()))], vec![], None), s_return(e_bool(false))]
+}
+
+/// Emits the same wrapper failure for a public query that always reports its own warnings.
+pub(super) fn forced_failure(reason: Expr) -> Vec<Stmt> {
+    vec![super::build::warning(failure_message(reason)), s_return(e_bool(false))]
 }
 
 /// Decodes a data URL into bytes for the runtime stream reader.

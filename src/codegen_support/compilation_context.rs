@@ -17,6 +17,9 @@ thread_local! {
     /// Selected PHP language profile and whether the current compilation uses web SAPI.
     static COMPILE_PROFILE: Cell<(crate::web_prelude::PhpVersion, bool)> =
         const { Cell::new((crate::web_prelude::PhpVersion::Php85, false)) };
+    /// Selected output target, used by compile-time metadata such as `phpinfo()`.
+    static COMPILE_TARGET: Cell<Option<crate::codegen_support::platform::Target>> =
+        const { Cell::new(None) };
     /// The compile-time `--ini KEY=VALUE` directive overrides of this compilation.
     static INI_OVERRIDES: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
     /// Whether `opcache.restrict_api` denies this binary's calls into the OPcache API.
@@ -75,6 +78,18 @@ pub(crate) fn compile_is_web_sapi() -> bool {
     COMPILE_PROFILE.with(|profile| profile.get().1)
 }
 
+/// Records the output target of the current compilation.
+pub fn set_compile_target(target: crate::codegen_support::platform::Target) {
+    COMPILE_TARGET.with(|slot| slot.set(Some(target)));
+}
+
+/// Returns the selected output target, defaulting to the host for direct codegen tests.
+pub(crate) fn compile_target() -> crate::codegen_support::platform::Target {
+    COMPILE_TARGET
+        .with(Cell::get)
+        .unwrap_or_else(crate::codegen_support::platform::Target::detect_host)
+}
+
 /// Sets the number of autoload rules registered.
 pub fn set_autoload_rule_count(n: usize) {
     AUTOLOAD_RULE_COUNT.with(|c| c.set(n));
@@ -83,6 +98,32 @@ pub fn set_autoload_rule_count(n: usize) {
 /// Returns the number of autoload rules registered.
 pub fn autoload_rule_count() -> usize {
     AUTOLOAD_RULE_COUNT.with(|c| c.get())
+}
+
+/// Extensions every elephc binary reports as loaded, matching `extension_loaded()`.
+pub(crate) const CORE_LOADED_EXTENSIONS: &[&str] = &[
+    "Core",
+    "standard",
+    "SPL",
+    "json",
+    "pcre",
+    "date",
+    "ctype",
+    "mbstring",
+    "random",
+    "Reflection",
+    "Zend OPcache",
+];
+
+/// Returns the effective extension set: core modules plus the bridges linked into this build.
+pub(crate) fn loaded_extension_names() -> Vec<String> {
+    let mut names: Vec<String> = CORE_LOADED_EXTENSIONS.iter().map(|name| (*name).to_string()).collect();
+    for extension in linked_extensions() {
+        if !names.iter().any(|existing| existing.eq_ignore_ascii_case(&extension)) {
+            names.push(extension);
+        }
+    }
+    names
 }
 
 /// Records the canonical PHP extension names of the bridge staticlibs linked
@@ -114,4 +155,91 @@ pub fn set_ini_overrides(overrides: Vec<(String, String)>) {
 /// [`set_ini_overrides`] ran for it, which is the no-override default).
 pub(crate) fn ini_overrides() -> Vec<(String, String)> {
     INI_OVERRIDES.with(|entries| entries.borrow().clone())
+}
+
+/// Reports whether the compiled binary renders default diagnostics as HTML.
+///
+/// PHP applies the last directive, so a later `html_errors=0` disables an earlier `=1`.
+pub(crate) fn html_errors_enabled() -> bool {
+    ini_overrides().iter().rev()
+        .find(|(name, _)| name.eq_ignore_ascii_case("html_errors"))
+        .is_some_and(|(_, value)| ini_truthy(value))
+}
+
+/// Returns the compiled binary's nonempty `open_basedir` roots, unparsed.
+///
+/// PHP applies the last `open_basedir` directive, and the message it prints repeats the value
+/// exactly as configured, so the prelude embeds this spelling rather than a normalized list.
+pub(crate) fn open_basedir_roots() -> Option<String> {
+    // PHP's last directive wins, including an empty one: `open_basedir` set and then cleared
+    // disables confinement rather than restoring the earlier roots.
+    ini_overrides().iter().rev()
+        .find(|(name, _)| name.eq_ignore_ascii_case("open_basedir"))
+        .map(|(_, value)| unquote_ini_value(value).to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Removes PHP INI's matching single or double quotes around a directive value.
+fn unquote_ini_value(value: &str) -> &str {
+    let trimmed = value.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 2
+        && ((bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
+            || (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"'))
+    {
+        return &trimmed[1..trimmed.len() - 1];
+    }
+    trimmed
+}
+
+/// Parses PHP's INI boolean spellings used by the overrides this compiler honours.
+fn ini_truthy(value: &str) -> bool {
+    !matches!(value.trim().to_ascii_lowercase().as_str(), "" | "0" | "off" | "false" | "no" | "none")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Clears the per-thread overrides even when an assertion fails.
+    struct OverrideRestore;
+
+    impl Drop for OverrideRestore {
+        /// Restores the no-override default for the current test thread.
+        fn drop(&mut self) {
+            set_ini_overrides(Vec::new());
+        }
+    }
+
+    /// Verifies a later `html_errors` directive replaces an earlier one.
+    #[test]
+    fn last_html_errors_directive_wins() {
+        let _restore = OverrideRestore;
+        set_ini_overrides(vec![
+            ("html_errors".to_string(), "1".to_string()),
+            ("html_errors".to_string(), "0".to_string()),
+        ]);
+        assert!(!html_errors_enabled());
+        set_ini_overrides(vec![
+            ("html_errors".to_string(), "0".to_string()),
+            ("html_errors".to_string(), "1".to_string()),
+        ]);
+        assert!(html_errors_enabled());
+    }
+
+    /// Verifies an empty final `open_basedir` disables confinement, as PHP does.
+    #[test]
+    fn empty_open_basedir_disables_roots() {
+        let _restore = OverrideRestore;
+        set_ini_overrides(vec![
+            ("open_basedir".to_string(), "/tmp".to_string()),
+            ("open_basedir".to_string(), String::new()),
+        ]);
+        assert_eq!(open_basedir_roots(), None);
+        set_ini_overrides(vec![
+            ("open_basedir".to_string(), String::new()),
+            ("open_basedir".to_string(), "/tmp".to_string()),
+        ]);
+        assert_eq!(open_basedir_roots().as_deref(), Some("/tmp"));
+    }
 }

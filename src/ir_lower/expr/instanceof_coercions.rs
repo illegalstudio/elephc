@@ -106,6 +106,18 @@ pub(crate) fn coerce_to_int_at_span(
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
     match value.ir_type {
+        IrType::I64 if ctx.builder.value_php_type(value.value) == PhpType::Bool => {
+            // A bool and an int share the I64 ABI, but the PHP type tag differs: a union
+            // parameter boxes this value and `gettype()` must report `integer`.
+            ctx.emit_value(
+                Op::Cast,
+                vec![value.value],
+                Some(Immediate::CastTarget(IrType::I64)),
+                PhpType::Int,
+                Op::Cast.default_effects(),
+                span,
+            )
+        }
         IrType::I64 => value,
         IrType::F64 => ctx.emit_value(Op::FToI, vec![value.value], None, PhpType::Int, Op::FToI.default_effects(), span),
         IrType::Str => {

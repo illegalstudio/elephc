@@ -152,6 +152,12 @@ pub(crate) fn classify_param_binding(
     {
         return classify_numeric_binding(expected, arg);
     }
+    if let Some(binding) = classify_union_scalar_binding(expected, actual, arg) {
+        return binding;
+    }
+    if let Some(binding) = classify_scalar_union_actual(expected, actual) {
+        return binding;
+    }
     // A union that names the declared class plus exactly one of `false`/`null` is accepted by
     // PHP at compile time; the call throws `TypeError` at runtime when the other alternative is
     // the one supplied. EIR lowering inserts that instance guard.
@@ -186,44 +192,44 @@ pub(crate) fn classify_param_binding(
     }
 }
 
-/// The four PHP scalar type declarations `declare(strict_types=1)` compares by identity.
+/// Reports whether a union-like scalar declaration can accept one already-typed value in
+/// `declare(strict_types=1)` mode.
 ///
-/// `false` collapses into `Bool` because it is a subtype of `bool`, not a separate scalar for
-/// binding purposes. Every non-scalar declaration — objects, arrays, `iterable`, `callable`,
-/// `mixed`, unions, elephc's `Mixed`/`Pointer`/`Resource` — is deliberately absent: strict mode
-/// changes nothing about how those bind, so they must keep their existing acceptance rules.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StrictScalar {
-    Int,
-    Float,
-    Str,
-    Bool,
-}
-
-impl StrictScalar {
-    /// Returns the PHP spelling used in a `TypeError` message and in a cast suggestion.
-    fn php_name(self) -> &'static str {
-        match self {
-            StrictScalar::Int => "int",
-            StrictScalar::Float => "float",
-            StrictScalar::Str => "string",
-            StrictScalar::Bool => "bool",
-        }
+/// Strict mode compares identities, not coercions: the sole widening PHP keeps is `int` to
+/// `float`. A declaration that is not a scalar (or a union made only of scalars) keeps the
+/// ordinary binding rules, so it always answers `true` here.
+pub(crate) fn strict_member_accepts(expected: &PhpType, actual: &PhpType) -> bool {
+    match expected {
+        PhpType::Int => matches!(actual, PhpType::Int),
+        PhpType::Float => matches!(actual, PhpType::Float | PhpType::Int),
+        PhpType::Str => matches!(actual, PhpType::Str),
+        // `false` is a subtype of `bool`; a `true` value is caught by lowering's runtime guard
+        // when the declaration names the literal `false`.
+        PhpType::Bool => matches!(actual, PhpType::Bool | PhpType::False),
+        PhpType::False => matches!(actual, PhpType::False),
+        PhpType::Void | PhpType::Never => matches!(actual, PhpType::Void | PhpType::Never),
+        PhpType::Union(members) => members.iter().any(|member| strict_member_accepts(member, actual)),
+        _ => true,
     }
 }
 
-/// Classifies a declared type as one of PHP's scalar type declarations, or `None` when strict
-/// mode has nothing to say about it.
+/// Reports whether a declaration is a scalar or a union made only of scalars.
 ///
-/// The *declared* type is inspected rather than `codegen_repr()`, which would flatten a union to
-/// `Mixed` and a resource to `Int` and so invent scalar identities strict mode must not judge.
-fn strict_scalar_kind(ty: &PhpType) -> Option<StrictScalar> {
+/// Only those declarations are compared by identity under `strict_types`; objects, arrays,
+/// `mixed`, and mixed unions keep their ordinary runtime checks.
+pub(crate) fn strict_scalar_declaration(ty: &PhpType) -> bool {
     match ty {
-        PhpType::Int => Some(StrictScalar::Int),
-        PhpType::Float => Some(StrictScalar::Float),
-        PhpType::Str => Some(StrictScalar::Str),
-        PhpType::Bool | PhpType::False => Some(StrictScalar::Bool),
-        _ => None,
+        PhpType::Int
+        | PhpType::Float
+        | PhpType::Str
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Void
+        | PhpType::Never => true,
+        PhpType::Union(members) => {
+            !members.is_empty() && members.iter().all(strict_scalar_declaration)
+        }
+        _ => false,
     }
 }
 
@@ -235,27 +241,59 @@ fn strict_scalar_kind(ty: &PhpType) -> Option<StrictScalar> {
 /// `int`→`string` and numeric-string→`int` conversions its coercive mode performs silently.
 /// Verified against PHP 8.4.20 for the full 4x4 scalar matrix.
 ///
+/// A union-valued argument is accepted: some runtime member may satisfy the declaration, and
+/// EIR lowering inserts the guard that raises PHP's `TypeError` for the rejected one. Only a
+/// union whose members are ALL rejected is a definite compile-time error.
+///
 /// Returns `None` for any pair involving a non-scalar declared type: strict mode does not change
 /// how those bind, so the caller's normal compatibility rules stay in charge.
 pub(crate) fn strict_param_binding_rejection(
     expected: &PhpType,
     actual: &PhpType,
 ) -> Option<String> {
-    let expected_kind = strict_scalar_kind(expected)?;
-    let actual_kind = strict_scalar_kind(actual)?;
-    if expected_kind == actual_kind {
+    if !strict_scalar_declaration(expected) {
         return None;
     }
-    if expected_kind == StrictScalar::Float && actual_kind == StrictScalar::Int {
-        return None;
-    }
+    let expected_name = crate::types::diagnostic_names::php_type_name(expected);
+    let actual_name = crate::types::diagnostic_names::php_type_name(actual);
+    let invalid_member = match actual {
+        PhpType::Union(members) => {
+            if members.iter().any(|member| strict_member_accepts(expected, member)) {
+                return None;
+            }
+            members.first().unwrap_or(actual)
+        }
+        PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False
+        | PhpType::Void | PhpType::Never => {
+            if strict_member_accepts(expected, actual) {
+                return None;
+            }
+            actual
+        }
+        // An object never binds to a scalar declaration under strict mode, even when it is
+        // `Stringable`: PHP rejects the call before the weak-mode string conversion.
+        PhpType::Object(_) | PhpType::Callable | PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            actual
+        }
+        // `mixed` and resources are runtime-checked by their own guards.
+        _ => return None,
+    };
+    let actual_name = if matches!(actual, PhpType::Union(_)) {
+        crate::types::diagnostic_names::php_type_name(invalid_member)
+    } else {
+        actual_name
+    };
+    let cast = match expected {
+        PhpType::Int => "add an explicit `(int)` cast at the call site",
+        PhpType::Float => "add an explicit `(float)` cast at the call site",
+        PhpType::Str => "add an explicit `(string)` cast at the call site",
+        PhpType::Bool => "add an explicit `(bool)` cast at the call site",
+        _ => "add an explicit cast at the call site",
+    };
     Some(format!(
         "`declare(strict_types=1)` is active in this file, so PHP performs no conversion here \
-         and throws `TypeError: ... must be of type {}, {} given`; add an explicit `({})` cast \
-         at the call site",
-        expected_kind.php_name(),
-        actual_kind.php_name(),
-        expected_kind.php_name()
+         and throws `TypeError: ... must be of type {}, {} given`; {cast}",
+        expected_name, actual_name
     ))
 }
 
@@ -307,6 +345,75 @@ pub(crate) fn callable_target_from_name(name: &str) -> Option<CallableTarget> {
         });
     }
     Some(CallableTarget::Function(Name::unqualified(name)))
+}
+
+/// Applies PHP's weak-mode scalar coercion when the declared type is a union.
+///
+/// PHP checks each union member in declaration order and then runs the ordinary coercive
+/// rules: a scalar binds a `string` member through PHP's total `(string)` cast. Members the
+/// value already satisfies never reach this function, because `types_compatible` and
+/// `type_accepts` are consulted first.
+fn classify_union_scalar_binding(expected: &PhpType, actual: &PhpType, arg: &Expr) -> Option<ParamBinding> {
+    let PhpType::Union(members) = expected else { return None };
+    // An exact member is already the desired type; never coerce it toward another member.
+    if members.contains(actual) {
+        return None;
+    }
+    // PHP's union preference order is int, float, string, bool. Otherwise the first
+    // coercible member wins.
+    if members.contains(&PhpType::Int) {
+        match actual {
+            PhpType::Bool => return Some(ParamBinding::Cast(CastType::Int)),
+            PhpType::Float | PhpType::Str => {
+                return Some(classify_numeric_binding(&PhpType::Int, arg));
+            }
+            _ => {}
+        }
+    }
+    if members.contains(&PhpType::Float) && *actual == PhpType::Int {
+        return Some(ParamBinding::Cast(CastType::Float));
+    }
+    if members.contains(&PhpType::Str)
+        && matches!(actual, PhpType::Int | PhpType::Float | PhpType::Bool)
+    {
+        return Some(ParamBinding::Cast(CastType::String));
+    }
+    if members.contains(&PhpType::Bool) && matches!(actual, PhpType::Float | PhpType::Str) {
+        return Some(ParamBinding::Cast(CastType::Bool));
+    }
+    None
+}
+
+/// Applies PHP's weak-mode coercion when the argument itself is a scalar union.
+///
+/// `file_get_contents()` and `finfo_open()` return `T|false`, and PHP's weak parameter binding
+/// converts a runtime `false` into the declared scalar. The cast is total for the union below,
+/// so the lowering can apply it without a runtime guard.
+fn classify_scalar_union_actual(expected: &PhpType, actual: &PhpType) -> Option<ParamBinding> {
+    let PhpType::Union(members) = actual else { return None };
+    if members.is_empty() {
+        return None;
+    }
+    let all_bind = |target: &PhpType| members.iter().all(|member| {
+        member == target || matches!((target, member),
+            (PhpType::Str, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False)
+            | (PhpType::Bool, PhpType::Int | PhpType::Float | PhpType::Str | PhpType::False)
+            | (PhpType::Int, PhpType::Bool | PhpType::False)
+            | (PhpType::Float, PhpType::Int | PhpType::Bool | PhpType::False))
+    });
+    if matches!(expected, PhpType::Str | PhpType::Bool | PhpType::Int | PhpType::Float)
+        && all_bind(expected)
+    {
+        let cast = match expected {
+            PhpType::Str => CastType::String,
+            PhpType::Bool => CastType::Bool,
+            PhpType::Int => CastType::Int,
+            PhpType::Float => CastType::Float,
+            _ => unreachable!(),
+        };
+        return Some(ParamBinding::Cast(cast));
+    }
+    None
 }
 
 /// Classifies a float or string argument bound to an `int`/`float` parameter.
@@ -576,6 +683,71 @@ mod tests {
         assert!(matches!(binding, ParamBinding::NeedsRuntimeCheck(_)));
     }
 
+    /// Verifies the lowering-facing cast helper sees the same union preference.
+    #[test]
+    fn scalar_param_cast_union_prefers_int() {
+        assert_eq!(
+            scalar_param_cast(&PhpType::Union(vec![PhpType::Str, PhpType::Int]), &PhpType::Bool),
+            Some(CastType::Int)
+        );
+    }
+
+    /// Verifies `string|false` binds to a `string` parameter through PHP's total weak-mode
+    /// cast, as `file_get_contents()` results do in the fileinfo PHPT corpus.
+    #[test]
+    fn scalar_union_actual_binds_declared_scalar() {
+        let arg = Expr::new(ExprKind::Variable("value".to_string()), crate::span::Span::dummy());
+        let union = PhpType::Union(vec![PhpType::Str, PhpType::False]);
+        assert_eq!(
+            classify_param_binding(&PhpType::Str, &union, &arg),
+            ParamBinding::Cast(CastType::String)
+        );
+        let union = PhpType::Union(vec![PhpType::Int, PhpType::False]);
+        assert_eq!(
+            classify_param_binding(&PhpType::Int, &union, &arg),
+            ParamBinding::Cast(CastType::Int)
+        );
+    }
+
+    /// Verifies union coercion follows PHP's int, float, string, bool preference order
+    /// instead of the order members happen to be declared in.
+    #[test]
+    fn union_scalar_preference_matches_php() {
+        let arg = Expr::new(ExprKind::Variable("value".to_string()), crate::span::Span::dummy());
+        let int_or_string = PhpType::Union(vec![PhpType::Str, PhpType::Int]);
+        assert_eq!(
+            classify_param_binding(&int_or_string, &PhpType::Bool, &arg),
+            ParamBinding::Cast(CastType::Int)
+        );
+        let float_or_string = PhpType::Union(vec![PhpType::Str, PhpType::Float]);
+        assert_eq!(
+            classify_param_binding(&float_or_string, &PhpType::Int, &arg),
+            ParamBinding::Cast(CastType::Float)
+        );
+        let nullable = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
+        assert_eq!(
+            classify_param_binding(&nullable, &PhpType::Int, &arg),
+            ParamBinding::Cast(CastType::String)
+        );
+    }
+
+    /// Verifies PHP's weak mode coerces a scalar into a `?string` union member, as `finfo_open`
+    /// does for an integer or float magic database name.
+    #[test]
+    fn scalar_binds_nullable_string_union() {
+        let arg = Expr::new(ExprKind::IntLiteral(123), crate::span::Span::dummy());
+        let nullable = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
+        assert_eq!(
+            classify_param_binding(&nullable, &PhpType::Int, &arg),
+            ParamBinding::Cast(CastType::String)
+        );
+        let nullable = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
+        assert_eq!(
+            classify_param_binding(&nullable, &PhpType::Float, &arg),
+            ParamBinding::Cast(CastType::String)
+        );
+    }
+
     /// Verifies `declare(strict_types=1)` keeps only the `int`→`float` widening across the full
     /// 4x4 scalar matrix, matching PHP 8.4.20's accept/reject table.
     #[test]
@@ -600,10 +772,10 @@ mod tests {
         }
     }
 
-    /// Verifies the strict rejection stays out of every non-scalar declaration, so `mixed`,
-    /// arrays, unions, `callable` and class types keep the acceptance rules they already had.
+    /// Verifies strict mode identity-checks scalar unions while leaving every non-scalar
+    /// declaration (and mixed unions) on its existing acceptance rules.
     #[test]
-    fn strict_types_ignores_non_scalar_declarations() {
+    fn strict_types_checks_scalar_unions_and_ignores_mixed_declarations() {
         assert!(strict_param_binding_rejection(&PhpType::Mixed, &PhpType::Int).is_none());
         assert!(strict_param_binding_rejection(&PhpType::Int, &PhpType::Mixed).is_none());
         assert!(strict_param_binding_rejection(&PhpType::Callable, &PhpType::Str).is_none());
@@ -612,8 +784,16 @@ mod tests {
             &PhpType::Str
         )
         .is_none());
+        // A definite scalar outside a scalar-only union is rejected: PHP coerces neither
+        // `bool` to `int` nor `bool` to `string` under `strict_types`.
         assert!(strict_param_binding_rejection(
             &PhpType::Union(vec![PhpType::Int, PhpType::Str]),
+            &PhpType::Bool
+        )
+        .is_some());
+        // A union that also names a non-scalar keeps its ordinary object/array binding rules.
+        assert!(strict_param_binding_rejection(
+            &PhpType::Union(vec![PhpType::Int, PhpType::Object("Marker".to_string())]),
             &PhpType::Bool
         )
         .is_none());

@@ -942,8 +942,22 @@ impl Checker {
                     if !runtime_descriptor_projection
                         && sig.declared_params.get(param_idx).copied().unwrap_or(false)
                     {
+                        // A widened prelude ABI slot stores `mixed` but keeps the declaration
+                        // in `param_type_exprs`; strict mode must compare the declaration.
+                        let strict_ty = if *expected_ty == PhpType::Mixed {
+                            match sig.param_type_exprs.get(param_idx).and_then(|expr| expr.as_ref()) {
+                                Some(annotation) => self.resolve_declared_param_type_hint(
+                                    annotation,
+                                    arg.span,
+                                    &format!("{} parameter ${}", callee_desc, param_name),
+                                )?,
+                                None => expected_ty.clone(),
+                            }
+                        } else {
+                            expected_ty.clone()
+                        };
                         self.require_strict_types_param_binding(
-                            expected_ty,
+                            &strict_ty,
                             &actual_ty,
                             arg.span,
                             &format!("{} parameter ${}", callee_desc, param_name),

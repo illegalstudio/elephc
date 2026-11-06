@@ -349,19 +349,7 @@ fn literal_constant_is_defined(ctx: &FunctionContext<'_>, constant_name: &str) -
 /// extensions and injected surfaces such as `PDO` and `mysqli` remain absent in eval because it
 /// has no AOT link manifest (documented divergence: `extension_loaded('PDO')` and
 /// `extension_loaded('mysqli')` are `false` in eval).
-pub(crate) const CORE_LOADED_EXTENSIONS: &[&str] = &[
-    "Core",
-    "standard",
-    "SPL",
-    "json",
-    "pcre",
-    "date",
-    "ctype",
-    "mbstring",
-    "random",
-    "Reflection",
-    "Zend OPcache",
-];
+pub(crate) use crate::codegen_support::CORE_LOADED_EXTENSIONS;
 
 /// Compile-time-known set of loaded Zend extensions returned by `get_loaded_extensions(true)`.
 ///
