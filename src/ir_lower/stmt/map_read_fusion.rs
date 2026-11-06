@@ -31,9 +31,117 @@ struct Candidate {
 }
 
 /// Rewrites every straight-line block in `body` that contains one safe map temporary.
-pub(crate) fn fuse_map_reads(body: &mut Vec<Stmt>, env: &TypeEnv) {
+pub(crate) fn fuse_map_reads(
+    body: &mut Vec<Stmt>,
+    env: &TypeEnv,
+    by_ref_params: &std::collections::HashSet<String>,
+) {
+    let aliased = aliased_locals(body, by_ref_params);
     fuse_direct_stmts(body, env);
-    fuse_block(body, env);
+    fuse_block(body, env, &aliased);
+}
+
+/// Collects locals whose storage another binding can mutate.
+///
+/// The indexed-read fusion defers a source read that PHP's `array_map()` performed at the
+/// assignment. A reference, global, static binding, or by-reference parameter can change that
+/// source between the two points, so those sources keep the materialized map.
+fn aliased_locals(
+    body: &[Stmt],
+    by_ref_params: &std::collections::HashSet<String>,
+) -> std::collections::HashSet<String> {
+    fn collect(stmts: &[Stmt], aliased: &mut std::collections::HashSet<String>) {
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::RefAssign { target, source } => {
+                    aliased.insert(target.clone());
+                    if let Some(root) = root_local(source) {
+                        aliased.insert(root.to_string());
+                    }
+                }
+                StmtKind::Foreach {
+                    value_var,
+                    value_by_ref,
+                    body,
+                    ..
+                } => {
+                    if *value_by_ref {
+                        aliased.insert(value_var.clone());
+                    }
+                    collect(body, aliased);
+                }
+                StmtKind::Global { vars } => {
+                    aliased.extend(vars.iter().cloned());
+                }
+                StmtKind::StaticVar { name, .. } => {
+                    aliased.insert(name.clone());
+                }
+                StmtKind::For { body, .. }
+                | StmtKind::While { body, .. }
+                | StmtKind::DoWhile { body, .. }
+                | StmtKind::IncludeOnceGuard { body, .. }
+                | StmtKind::NamespaceBlock { body, .. }
+                | StmtKind::Synthetic(body) => collect(body, aliased),
+                StmtKind::IfDef { then_body, else_body, .. } => {
+                    collect(then_body, aliased);
+                    if let Some(body) = else_body {
+                        collect(body, aliased);
+                    }
+                }
+                StmtKind::If {
+                    then_body,
+                    elseif_clauses,
+                    else_body,
+                    ..
+                } => {
+                    collect(then_body, aliased);
+                    for (_, body) in elseif_clauses {
+                        collect(body, aliased);
+                    }
+                    if let Some(body) = else_body {
+                        collect(body, aliased);
+                    }
+                }
+                StmtKind::Switch { cases, default, .. } => {
+                    for (_, body) in cases {
+                        collect(body, aliased);
+                    }
+                    if let Some(body) = default {
+                        collect(body, aliased);
+                    }
+                }
+                StmtKind::Try {
+                    try_body,
+                    catches,
+                    finally_body,
+                } => {
+                    collect(try_body, aliased);
+                    for catch in catches {
+                        collect(&catch.body, aliased);
+                    }
+                    if let Some(body) = finally_body {
+                        collect(body, aliased);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut aliased = by_ref_params.clone();
+    collect(body, &mut aliased);
+    aliased
+}
+
+/// Returns the simple local at the root of a reference source, if any.
+fn root_local(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::ArrayAccess { array, .. } => root_local(array),
+        ExprKind::ErrorSuppress(inner) | ExprKind::NamedArg { value: inner, .. } => {
+            root_local(inner)
+        }
+        _ => None,
+    }
 }
 
 /// Rewrites direct `array_map(...)[$key]` reads throughout the statement tree.
@@ -271,13 +379,13 @@ fn direct_map_read(expr: &Expr, env: &TypeEnv) -> Option<Expr> {
 }
 
 /// Recurses into nested scopes and then fuses candidates in this block.
-fn fuse_block(stmts: &mut Vec<Stmt>, env: &TypeEnv) {
+fn fuse_block(stmts: &mut Vec<Stmt>, env: &TypeEnv, aliased: &std::collections::HashSet<String>) {
     for stmt in stmts.iter_mut() {
-        recurse_stmt(stmt, env);
+        recurse_stmt(stmt, env, aliased);
     }
     let mut index = 0;
     while index < stmts.len() {
-        let Some(candidate) = map_candidate(&stmts[index], env) else {
+        let Some(candidate) = map_candidate(&stmts[index], env, aliased) else {
             index += 1;
             continue;
         };
@@ -307,34 +415,34 @@ fn fuse_block(stmts: &mut Vec<Stmt>, env: &TypeEnv) {
 }
 
 /// Recurses into the bodies of nested control-flow statements.
-fn recurse_stmt(stmt: &mut Stmt, env: &TypeEnv) {
+fn recurse_stmt(stmt: &mut Stmt, env: &TypeEnv, aliased: &std::collections::HashSet<String>) {
     match &mut stmt.kind {
         StmtKind::For { body, .. }
         | StmtKind::While { body, .. }
         | StmtKind::DoWhile { body, .. }
         | StmtKind::Foreach { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. }
-        | StmtKind::NamespaceBlock { body, .. } => fuse_block(body, env),
+        | StmtKind::NamespaceBlock { body, .. } => fuse_block(body, env, aliased),
         StmtKind::If {
             then_body,
             elseif_clauses,
             else_body,
             ..
         } => {
-            fuse_block(then_body, env);
+            fuse_block(then_body, env, aliased);
             for (_, body) in elseif_clauses {
-                fuse_block(body, env);
+                fuse_block(body, env, aliased);
             }
             if let Some(body) = else_body {
-                fuse_block(body, env);
+                fuse_block(body, env, aliased);
             }
         }
         StmtKind::Switch { cases, default, .. } => {
             for (_, body) in cases {
-                fuse_block(body, env);
+                fuse_block(body, env, aliased);
             }
             if let Some(body) = default {
-                fuse_block(body, env);
+                fuse_block(body, env, aliased);
             }
         }
         StmtKind::Try {
@@ -342,21 +450,25 @@ fn recurse_stmt(stmt: &mut Stmt, env: &TypeEnv) {
             catches,
             finally_body,
         } => {
-            fuse_block(try_body, env);
+            fuse_block(try_body, env, aliased);
             for catch in catches {
-                fuse_block(&mut catch.body, env);
+                fuse_block(&mut catch.body, env, aliased);
             }
             if let Some(body) = finally_body {
-                fuse_block(body, env);
+                fuse_block(body, env, aliased);
             }
         }
-        StmtKind::Synthetic(body) => fuse_block(body, env),
+        StmtKind::Synthetic(body) => fuse_block(body, env, aliased),
         _ => {}
     }
 }
 
 /// Returns the safe `array_map()` assignment represented by one statement.
-fn map_candidate(stmt: &Stmt, env: &TypeEnv) -> Option<Candidate> {
+fn map_candidate(
+    stmt: &Stmt,
+    env: &TypeEnv,
+    aliased: &std::collections::HashSet<String>,
+) -> Option<Candidate> {
     let StmtKind::Assign { name: mapped, value } = &stmt.kind else {
         return None;
     };
@@ -371,6 +483,7 @@ fn map_candidate(stmt: &Stmt, env: &TypeEnv) -> Option<Candidate> {
     };
     if env.get(source).map(PhpType::codegen_repr)
         != Some(PhpType::Array(Box::new(PhpType::Int)))
+        || aliased.contains(source)
     {
         return None;
     }

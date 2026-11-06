@@ -212,3 +212,19 @@ echo array_map(fn($v) => intdiv($v, 2), $values)[1];
     let main = main_ir(source);
     assert_eq!(main.matches("runtime.array_map").count(), 2, "{main}");
 }
+
+/// A reference alias created before the map keeps the generic map: PHP snapshots the source at
+/// the assignment, so a later write through the alias must not change the read value.
+#[test]
+fn test_map_read_alias_before_assignment_keeps_generic_map() {
+    let source = r#"<?php
+$values = [1, 2];
+$alias = &$values;
+$mapped = array_map(fn($v) => $v * 2, $values);
+$alias[0] = 99;
+echo $mapped[0];
+"#;
+    assert_eq!(compile_and_run(source), "2");
+    let main = main_ir(source);
+    assert_eq!(main.matches("runtime.array_map").count(), 1, "{main}");
+}
