@@ -4716,3 +4716,38 @@ mod environment;
 /// mbstring request settings and catalog identity across reused prefork workers.
 #[path = "web/mbstring.rs"]
 mod mbstring;
+
+/// `print_r()` of an array reaches the response: its structure was written straight to the
+/// server's stdout, and the client only ever got the word `Array`.
+#[test]
+fn web_print_r_of_an_array_reaches_the_response() {
+    let dir = make_test_dir("web_print_r_response");
+    let bin = compile_web(&dir, "<?php print_r(['a' => 1]);", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(raw_response_body(&resp), "Array\n(\n    [a] => 1\n)\n", "response: {resp:?}");
+}
+
+/// php compares `session.cookie_samesite` without case: Symfony's `lax` was refused, so every
+/// session cookie went out without its `SameSite` attribute.
+#[test]
+fn web_session_cookie_samesite_takes_php_spellings() {
+    let dir = make_test_dir("web_samesite_case");
+    let src = "<?php\n\
+        var_dump(ini_set('session.cookie_samesite', 'lax') !== false);\n\
+        var_dump(ini_set('session.cookie_samesite', 'bogus'));\n\
+        session_start();\n\
+        echo ini_get('session.cookie_samesite');\n";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(raw_response_body(&resp).ends_with("lax"), "response: {resp:?}");
+}

@@ -3783,7 +3783,7 @@ fn decl_fn_session_set_cookie_params() -> Stmt {
                 None,
             ),
             s_if(
-                e_binop(e_binop(e_binop(e_binop(e_var("__elephc_scp_css"), BinOp::StrictNotEq, e_str("")), BinOp::And, e_binop(e_var("__elephc_scp_css"), BinOp::StrictNotEq, e_str("Strict"))), BinOp::And, e_binop(e_var("__elephc_scp_css"), BinOp::StrictNotEq, e_str("Lax"))), BinOp::And, e_binop(e_var("__elephc_scp_css"), BinOp::StrictNotEq, e_str("None"))),
+                e_binop(e_binop(e_binop(e_binop(e_var("__elephc_scp_css"), BinOp::StrictNotEq, e_str("")), BinOp::And, e_binop(e_call("strtolower", vec![e_cast(CastType::String, e_var("__elephc_scp_css"))]), BinOp::StrictNotEq, e_str("strict"))), BinOp::And, e_binop(e_call("strtolower", vec![e_cast(CastType::String, e_var("__elephc_scp_css"))]), BinOp::StrictNotEq, e_str("lax"))), BinOp::And, e_binop(e_call("strtolower", vec![e_cast(CastType::String, e_var("__elephc_scp_css"))]), BinOp::StrictNotEq, e_str("none"))),
                 vec![
                     s_return(e_bool(false)),
                 ],
@@ -4639,7 +4639,7 @@ fn decl_fn_ini_set() -> Stmt {
                 None,
             ),
             s_if(
-                e_binop(e_binop(e_binop(e_binop(e_binop(e_var("option"), BinOp::StrictEq, e_str("session.cookie_samesite")), BinOp::And, e_binop(e_var("value"), BinOp::StrictNotEq, e_str(""))), BinOp::And, e_binop(e_var("value"), BinOp::StrictNotEq, e_str("Strict"))), BinOp::And, e_binop(e_var("value"), BinOp::StrictNotEq, e_str("Lax"))), BinOp::And, e_binop(e_var("value"), BinOp::StrictNotEq, e_str("None"))),
+                e_binop(e_binop(e_binop(e_binop(e_binop(e_var("option"), BinOp::StrictEq, e_str("session.cookie_samesite")), BinOp::And, e_binop(e_var("value"), BinOp::StrictNotEq, e_str(""))), BinOp::And, e_binop(e_call("strtolower", vec![e_cast(CastType::String, e_var("value"))]), BinOp::StrictNotEq, e_str("strict"))), BinOp::And, e_binop(e_call("strtolower", vec![e_cast(CastType::String, e_var("value"))]), BinOp::StrictNotEq, e_str("lax"))), BinOp::And, e_binop(e_call("strtolower", vec![e_cast(CastType::String, e_var("value"))]), BinOp::StrictNotEq, e_str("none"))),
                 vec![
                     s_return(e_bool(false)),
                 ],
