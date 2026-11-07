@@ -15,6 +15,56 @@ use super::ops::{
     try_fold_array_access, try_fold_binary_op, try_fold_bit_not, try_fold_negate, try_fold_not,
     try_fold_null_coalesce, try_fold_short_ternary, try_fold_ternary,
 };
+use std::cell::{Cell, RefCell};
+
+thread_local! {
+    /// One local read substitution active while a literal-foreach body is being folded.
+    static VARIABLE_SUBSTITUTION: RefCell<Option<(String, Expr)>> = const { RefCell::new(None) };
+    /// Variable watched by the literal-foreach reflection probe.
+    static REFLECTION_PROBE: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Whether the watched variable reached a Reflection constructor argument.
+    static REFLECTION_MATCH: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `fold` with reads of `name` replaced by `replacement`.
+///
+/// The literal-foreach unroller substitutes the loop variable before the checker sees the
+/// body, which is what turns `new ReflectionFunction($fn)` into a statically-known target.
+/// The thread-local keeps every existing `fold_expr` call site unchanged; the guard clears it
+/// even if a fold panics.
+pub(in crate::optimize) fn with_variable_substitution<R>(
+    name: &str,
+    replacement: &Expr,
+    fold: impl FnOnce() -> R,
+) -> R {
+    struct ClearSubstitution;
+    impl Drop for ClearSubstitution {
+        /// Clears the thread-local substitution when the fold scope ends.
+        fn drop(&mut self) {
+            VARIABLE_SUBSTITUTION.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+    VARIABLE_SUBSTITUTION.with(|slot| {
+        *slot.borrow_mut() = Some((name.to_string(), replacement.clone()));
+    });
+    let _clear = ClearSubstitution;
+    fold()
+}
+
+/// Returns whether a simple loop body constructs a Reflection object from the loop variable.
+///
+/// The unroller is intentionally limited to this shape: arbitrary literal loops must keep
+/// their ordinary iterator lowering, while `new ReflectionFunction($name)` and its siblings
+/// need a literal constructor target before the checker runs.
+pub(in crate::optimize) fn body_mentions_reflection_constructor(body: &[Stmt], variable: &str) -> bool {
+    REFLECTION_MATCH.with(|flag| flag.set(false));
+    REFLECTION_PROBE.with(|probe| *probe.borrow_mut() = Some(variable.to_string()));
+    for statement in body {
+        let _ = fold_stmt(statement.clone());
+    }
+    REFLECTION_PROBE.with(|probe| *probe.borrow_mut() = None);
+    REFLECTION_MATCH.with(Cell::get)
+}
 
 /// Folds default expressions in function parameters.
 /// Returns a new parameter list with each parameter's default expression folded.
@@ -115,7 +165,14 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value),
         ExprKind::IntLiteral(value) => ExprKind::IntLiteral(value),
         ExprKind::FloatLiteral(value) => ExprKind::FloatLiteral(value),
-        ExprKind::Variable(name) => ExprKind::Variable(name),
+        ExprKind::Variable(name) => {
+            let replacement = VARIABLE_SUBSTITUTION.with(|slot| {
+                slot.borrow().as_ref().and_then(|(target, replacement)| {
+                    (name == *target).then(|| replacement.kind.clone())
+                })
+            });
+            replacement.unwrap_or(ExprKind::Variable(name))
+        }
         ExprKind::BinaryOp { left, op, right } => {
             let left = fold_expr(*left);
             let right = fold_expr(*right);
@@ -521,10 +578,24 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             }
             _ => ExprKind::ConstRef(name),
         },
-        ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
-            class_name,
-            args: args.into_iter().map(fold_expr).collect(),
-        },
+        ExprKind::NewObject { class_name, args } => {
+            REFLECTION_PROBE.with(|probe| {
+                if let Some(target) = probe.borrow().as_ref() {
+                    let key = class_name.as_str().trim_start_matches('\\').to_ascii_lowercase();
+                    if matches!(key.as_str(), "reflectionfunction" | "reflectionmethod" | "reflectionclass")
+                        && args.iter().any(|arg| {
+                            matches!(&arg.kind, ExprKind::Variable(name) if name == target)
+                        })
+                    {
+                        REFLECTION_MATCH.with(|flag| flag.set(true));
+                    }
+                }
+            });
+            ExprKind::NewObject {
+                class_name,
+                args: args.into_iter().map(fold_expr).collect(),
+            }
+        }
         ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
             class_type,
             args: args.into_iter().map(fold_expr).collect(),

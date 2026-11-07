@@ -386,8 +386,29 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
 /// Returns a new `Vec<Stmt>` with each statement folded.
 pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
     let mut guard_values = super::super::target_guards::GuardValues::default();
+    let mut pending_literal_array: Option<(String, Expr)> = None;
     body.into_iter()
         .flat_map(|mut stmt| {
+            // A literal array assigned immediately before its only foreach is a safe
+            // substitution point: no intervening statement can observe or mutate it. This is
+            // what gives the reflection unroller the literal it needs for the loop names.
+            if let Some((name, literal)) = pending_literal_array.take() {
+                if let StmtKind::Foreach {
+                    array,
+                    key_var,
+                    value_var,
+                    value_by_ref,
+                    body,
+                } = &mut stmt.kind
+                {
+                    if !*value_by_ref
+                        && matches!(&array.kind, ExprKind::Variable(array_name) if array_name == &name)
+                        && super::unroll_foreach::should_unroll(body, value_var, key_var.as_deref())
+                    {
+                        *array = literal;
+                    }
+                }
+            }
             if active_fold_target().is_some() {
                 guard_values.prepare(&mut stmt);
                 guard_values.observe(&stmt);
@@ -406,8 +427,15 @@ pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
                 _ => false,
             };
             let stmt = fold_stmt(stmt);
+            if let StmtKind::Assign { name, value } = &stmt.kind {
+                if super::unroll_foreach::is_safe_literal_array(value) {
+                    pending_literal_array = Some((name.clone(), value.clone()));
+                }
+            }
             if active_fold_target().is_some() && target_dependent_if {
                 prune_target_boolean_if(stmt)
+            } else if let Some(unrolled) = super::unroll_foreach::unroll(&stmt) {
+                unrolled
             } else {
                 vec![stmt]
             }
