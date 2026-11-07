@@ -5,10 +5,11 @@
 - [x] Cover property/attribute access, iteration, conversions, DOM import, errors, and eval with focused tests.
 - [x] Update generated coverage, user documentation, and a runnable example.
 - [x] Open a draft PR and route heavy validation and regression checks through CI.
-- [ ] Resolve confirmed SimpleXML correctness defects and regressions in this PR, preserving every test and check.
-- [ ] Obtain three independent full-branch reviews (GLM 5.3-flash, MiniMax M3.1-flash, Mistral Large 4) and green CI on the same final head.
+- [x] Resolve confirmed SimpleXML correctness defects and regressions in this PR, preserving every test and check.
+- [x] Obtain three independent full-branch reviews (GLM 5.3-flash, MiniMax M3.1-flash, Mistral Large 4).
+- [ ] Open a dedicated `main`-targeted PR and obtain green CI on the rebased head.
 
-The current priority is closing SimpleXML. Do not extend the generalized native-reference refactor. The php-src 8.5.8 corpus runs at 154/154 and the branch is pushed; the three-model review is the remaining gate. Group necessary corrections into one push, keep the PR draft, and let CI terminate on the stable published candidate.
+`feat/simplexml` merged to `main` through PR #2060. The php-src 8.5.8 corpus and the review fixes are replayed on `main` in `feat/simplexml-php-src-compliance`; the corpus runs at 154/154 locally. The remaining gate is the main-targeted PR and its CI.
 
 Deferred generalized native-reference follow-up:
 
