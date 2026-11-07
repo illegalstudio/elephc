@@ -450,6 +450,9 @@ pub(super) fn check_types_impl(
     patch_builtin_generator_signatures(&mut checker);
     patch_builtin_spl_storage_signatures(&mut checker);
     patch_magic_method_signatures(&mut checker);
+    // Before any body is checked: an object passed or returned as `Stringable` must already
+    // satisfy it, or the first pass reports an error the final pass cannot withdraw.
+    apply_implicit_stringable_interfaces(&mut checker.classes);
 
     // Every class, interface and enum is registered, and no body has been checked: a violated
     // bound is reported now, alone, instead of as whatever the instantiated body trips over.

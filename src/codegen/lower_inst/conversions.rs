@@ -578,7 +578,69 @@ fn lower_object_to_string(
     if object_class_has_tostring(ctx, normalized) {
         return lower_runtime_object_method_call(ctx, inst, normalized, "__toString");
     }
+    if object_class_dispatches_tostring(ctx, normalized) {
+        let value = *inst.operands.first().ok_or_else(|| {
+            CodegenIrError::unsupported("object string cast without operand".to_string())
+        })?;
+        emit_object_tostring_dispatch(ctx, value, MixedStringContextMode::Result)?;
+        if let Some(result) = inst.result {
+            ctx.store_runtime_return_ownership(result);
+        }
+        return store_if_result(ctx, inst);
+    }
     emit_missing_tostring_fatal(ctx, normalized);
+    Ok(())
+}
+
+/// Returns true when the static type names no `__toString()` itself but the runtime class
+/// may: an interface such as `Stringable`, which a class satisfies implicitly, or a class
+/// that is not final, whose subclass may declare the method.
+pub(super) fn object_class_dispatches_tostring(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
+    ctx.module
+        .class_infos
+        .get(class_name)
+        .is_none_or(|class_info| !class_info.is_final)
+}
+
+/// Converts the object `value` to a string through the `__toString()` of its RUNTIME class,
+/// or throws PHP's catchable object-to-string `Error` naming that class when it has none.
+pub(in crate::codegen) fn emit_object_tostring_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    mode: MixedStringContextMode,
+) -> Result<()> {
+    let candidates = mixed_method_candidates(ctx, "__toString", 1)?;
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let no_match_label = ctx.next_label("object_string_no_match");
+    let done_label = ctx.next_label("object_string_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!("object_string_{}", label_fragment(&candidate.class_name)))
+        })
+        .collect::<Vec<_>>();
+    ctx.load_value_to_result(value)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, receiver_reg, result_reg);
+    emit_mixed_method_class_dispatch(
+        ctx,
+        receiver_reg,
+        &candidates,
+        &match_labels,
+        &no_match_label,
+    );
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let return_ty = emit_mixed_tostring_candidate_call(ctx, value, receiver_reg, candidate)?;
+        coerce_tostring_return_to_string_result(ctx, &return_ty)?;
+        if matches!(mode, MixedStringContextMode::Stdout) {
+            abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+        }
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+    ctx.emitter.label(&no_match_label);
+    emit_mixed_missing_tostring_error(ctx, receiver_reg);
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 
