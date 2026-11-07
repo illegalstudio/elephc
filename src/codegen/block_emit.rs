@@ -2273,6 +2273,21 @@ fn normalized_candidate_body(
     Some(normalize_body_text(&text, function))
 }
 
+/// Replaces the `@local` marker's type spelling with a stable placeholder.
+fn normalize_local_marker_type(line: &str) -> String {
+    if !line.contains("@local ") {
+        return line.to_string();
+    }
+    let Some(start) = line.find("type_hex=") else {
+        return line.to_string();
+    };
+    let value_start = start + "type_hex=".len();
+    let value_end = line[value_start..]
+        .find(' ')
+        .map_or(line.len(), |offset| value_start + offset);
+    format!("{}type_hex=<type>{}", &line[..start], &line[value_end..])
+}
+
 /// Erases every symbol that names the candidate and canonicalizes internal labels, so two
 /// structurally identical bodies compare byte-equal.
 ///
@@ -2310,7 +2325,12 @@ fn normalize_body_text(text: &str, function: &Function) -> String {
             if line.trim_start().starts_with(".ascii") {
                 return line.to_string();
             }
-            let mut erased_line = line.to_string();
+            // `@local` carries the PHP type spelling for the debugger. A generic
+            // receiver's `$this` type differs per instantiation (`Box<User>` vs
+            // `Box<Order>`) even when the lowered body is identical; the emitted
+            // instructions already encode the real type-specific behavior, so the
+            // metadata spelling must not veto the fold.
+            let mut erased_line = normalize_local_marker_type(line);
             for symbol in &own_symbols {
                 erased_line = erase_word_bounded(&erased_line, symbol);
             }
