@@ -84,7 +84,7 @@ pub(super) fn read_and_parse(
     };
     timings.record_since("magic-constants", phase_started);
     let unit = crate::resolver::SourceUnit {
-        canonical_path: main_file_path.canonicalize().unwrap_or(main_file_path),
+        canonical_path: crate::source::canonical(&main_file_path).unwrap_or(main_file_path),
         mode: if generated_source.is_some() { SourceMode::Internal } else { source_mode },
         source: source.into(),
     };

@@ -485,7 +485,7 @@ fn filter_statements(
 
 /// Canonicalizes a path for comparison, keeping it as written when it cannot be resolved.
 fn canonical(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    crate::source::canonical(&path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Returns the `eager_function_files` key of one EIR function name: the public qualified name,

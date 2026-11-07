@@ -195,7 +195,7 @@ fn compile_file_units(
         };
         let path = Path::new(&literal);
         let path = if path.is_absolute() { path.to_path_buf() } else { preload_dir.join(path) };
-        let Ok(canonical) = path.canonicalize() else {
+        let Ok(canonical) = crate::source::canonical(&path) else {
             continue;
         };
         if units.iter().any(|unit| unit.canonical_path == canonical)
@@ -236,7 +236,7 @@ fn preload_directory_closure(
     let mut files = Vec::new();
     collect_php_files(preload_dir, &mut files);
     files.sort();
-    let preload_canonical = preload_path.canonicalize().ok();
+    let preload_canonical = crate::source::canonical(&preload_path).ok();
     let span = Span::dummy();
     let mut declaration_files = Vec::new();
     let mut units: Vec<crate::ir::IncludeUnit> = Vec::new();
@@ -250,7 +250,7 @@ fn preload_directory_closure(
     // include already takes the file's declarations into the program.
     let mut unit_included: HashSet<PathBuf> = HashSet::new();
     for path in files {
-        let Ok(canonical) = path.canonicalize() else {
+        let Ok(canonical) = crate::source::canonical(&path) else {
             continue;
         };
         if Some(&canonical) == preload_canonical.as_ref()
@@ -478,7 +478,7 @@ pub fn literal_include_units(
         if !path.is_absolute() {
             continue;
         }
-        if let Ok(canonical) = path.canonicalize() {
+        if let Ok(canonical) = crate::source::canonical(&path) {
             paths.push((canonical, span));
         }
     }
@@ -507,7 +507,7 @@ pub fn project_data_units(
     let paths = files
         .into_iter()
         .filter(|path| starts_with_return(path))
-        .filter_map(|path| path.canonicalize().ok())
+        .filter_map(|path| crate::source::canonical(&path).ok())
         .map(|path| (path, Span::dummy()))
         .collect();
     units_for_paths(paths, defines, known)
@@ -517,7 +517,7 @@ pub fn project_data_units(
 /// open tag, comments, `declare` and `namespace`/`use` lines: the only shapes
 /// `unit_file_is_eligible` can admit. A cheap filter before that parse, not the decision.
 fn starts_with_return(path: &Path) -> bool {
-    let Ok(bytes) = std::fs::read(path) else {
+    let Ok(bytes) = crate::source::read_physical_bytes(path) else {
         return false;
     };
     let text = String::from_utf8_lossy(&bytes);
@@ -1330,7 +1330,7 @@ pub fn resolve_preload_path(directive: &str, base_dir: &Path) -> Option<PathBuf>
     } else {
         base_dir.join(candidate)
     };
-    Some(candidate.canonicalize().unwrap_or(candidate))
+    Some(crate::source::canonical(&candidate).unwrap_or(candidate))
 }
 
 #[cfg(test)]

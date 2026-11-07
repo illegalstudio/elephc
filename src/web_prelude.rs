@@ -168,7 +168,7 @@ fn lift_preload_to_startup(
     };
     // The guard is keyed by the canonical source path of the included file (ours dropped the
     // hashed `include_once_label`), so the preload is matched by that path.
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical = crate::source::canonical(&path).unwrap_or_else(|_| path.to_path_buf());
     let mut program = program;
     let preload = program
         .iter_mut()

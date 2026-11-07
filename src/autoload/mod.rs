@@ -183,10 +183,10 @@ fn run_collecting_included_on_compiler_stack(
     // of its functions — is declined whole here, exactly as a half-taken one is below.
     let handed_back: HashSet<PathBuf> = deferral::inherited_deferred_files()
         .into_iter()
-        .map(|path| path.canonicalize().unwrap_or(path))
+        .map(|path| crate::source::canonical(&path).unwrap_or(path))
         .collect();
     for path in registry.always_included_files() {
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canonical = crate::source::canonical(&path).unwrap_or_else(|_| path.to_path_buf());
         if handed_back.contains(&canonical) {
             continue;
         }
@@ -348,7 +348,7 @@ fn run_collecting_included_on_compiler_stack(
                 continue;
             }
             if let Some(path) = resolve_class(&fqn, registry) {
-                let canonical = path.canonicalize().unwrap_or(path);
+                let canonical = crate::source::canonical(&path).unwrap_or(path);
                 if included.insert(canonical.clone()) {
                     let bundle = load_autoloaded_bundle(
                         &fqn,
@@ -560,7 +560,7 @@ pub fn record_compile_time_inclusions(
 ) {
     module.preincluded_sources = autoloaded_files
         .iter()
-        .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
+        .map(|path| crate::source::canonical(&path).unwrap_or_else(|_| path.clone()))
         .collect();
     let probe_only: std::collections::HashSet<String> = probe_only_class_names(program)
         .into_iter()
@@ -579,7 +579,7 @@ pub fn record_compile_time_inclusions(
             // spelling while the autoload pass reports `/private/var/...` for the same file,
             // and comparing them raw silently matches nothing.
             let declared = std::path::PathBuf::from(file);
-            let declared = declared.canonicalize().unwrap_or(declared);
+            let declared = crate::source::canonical(&declared).unwrap_or(declared);
             probe_only.contains(&name.trim_start_matches('\\').to_ascii_lowercase())
                 && autoloaded.contains(&declared)
         })
@@ -1029,7 +1029,7 @@ fn load_autoloaded_bundle(
             let Some(path) = resolve_class(&dependency, registry) else {
                 continue;
             };
-            let dependency_path = path.canonicalize().unwrap_or(path);
+            let dependency_path = crate::source::canonical(&path).unwrap_or(path);
             // Inserting before the recursion is what breaks a dependency cycle: the second
             // visit finds the path already claimed and stops.
             if !included.insert(dependency_path.clone()) {
@@ -1146,7 +1146,7 @@ fn load_autoloaded_file(
     // canonical path, so a compiled frame, a warning and a Throwable created in this class
     // file name THIS file rather than the program's entry file.
     let source_id = Span::fresh_source_id();
-    let shown_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let shown_path = crate::source::canonical(&path).unwrap_or_else(|_| path.to_path_buf());
     Span::register_source_path(source_id, shown_path.display().to_string());
     let tokens = crate::lexer::tokenize_with_mode_and_source_id(&content, source_mode, source_id)
         .map_err(|e| AutoloadFileError::Unparsed(e.with_file(file_label.clone())))?;
@@ -1191,7 +1191,7 @@ fn load_autoloaded_file(
         unit.insert_into(&mut declaration_sources.source_units, Span::dummy())?;
     }
     crate::resolver::SourceUnit {
-        canonical_path: path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
+        canonical_path: crate::source::canonical(&path).unwrap_or_else(|_| path.to_path_buf()),
         mode: source_mode,
         source: content.into(),
     }.insert_into(&mut declaration_sources.source_units, Span::dummy())?;

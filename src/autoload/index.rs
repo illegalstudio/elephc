@@ -126,7 +126,7 @@ impl AutoloadIndex {
             .fqn_to_path
             .iter()
             .filter(|(name, path)| {
-                let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+                let path = crate::source::canonical(&path).unwrap_or_else(|_| path.to_path_buf());
                 !excluded.iter().any(|directory| path.starts_with(directory))
                     && file_declares_class(&path, name)
             })
@@ -160,7 +160,7 @@ fn manifest_dev_directories(project_root: &Path) -> Vec<PathBuf> {
             other => vec![other.clone()],
         })
         .filter_map(|value| value.as_str().map(|path| project_root.join(path)))
-        .map(|path| path.canonicalize().unwrap_or(path))
+        .map(|path| crate::source::canonical(&path).unwrap_or(path))
         .collect()
 }
 
@@ -175,7 +175,7 @@ fn dev_package_directories(project_root: &Path) -> Vec<PathBuf> {
         .flatten()
         .filter_map(|name| name.as_str())
         .map(|name| project_root.join("vendor").join(name))
-        .map(|path| path.canonicalize().unwrap_or(path))
+        .map(|path| crate::source::canonical(&path).unwrap_or(path))
         .collect()
 }
 
@@ -237,7 +237,7 @@ pub(crate) fn nearest_autoload_manifest_root(entry_dir: &Path) -> Option<PathBuf
 
 /// Returns `entry_dir` as an absolute path, so a lexical ancestor walk sees the real directories.
 fn absolute_entry_dir(entry_dir: &Path) -> PathBuf {
-    if let Ok(canonical) = entry_dir.canonicalize() {
+    if let Ok(canonical) = crate::source::canonical(&entry_dir) {
         return canonical;
     }
     if entry_dir.is_absolute() {
@@ -268,7 +268,7 @@ fn nested_autoload_manifest_paths(root: &Path) -> Vec<PathBuf> {
     let mut visited = HashSet::new();
     let mut manifests = Vec::new();
     while let Some(dir) = pending.pop_front() {
-        let canonical = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+        let canonical = crate::source::canonical(&dir).unwrap_or_else(|_| dir.clone());
         if !visited.insert(canonical) {
             continue;
         }
@@ -483,7 +483,7 @@ impl IndexBuilder {
 
     /// Registers one eager source, keeping the FIRST claim on a path so order is stable.
     fn push_eager_file(&mut self, path: PathBuf) {
-        let canonical = path.canonicalize().unwrap_or(path);
+        let canonical = crate::source::canonical(&path).unwrap_or(path);
         if !self.files_to_include.contains(&canonical) {
             self.files_to_include.push(canonical);
         }
@@ -537,7 +537,7 @@ fn walk_psr4(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<Strin
             } else {
                 format!("{}\\{}", prefix, suffix)
             };
-            let canonical = path.canonicalize().unwrap_or(path);
+            let canonical = crate::source::canonical(&path).unwrap_or(path);
             index.entry(fqn).or_insert(canonical);
         }
     }
@@ -596,7 +596,7 @@ fn walk_psr0(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<Strin
                 // class name.
                 parts.join("_")
             };
-            let canonical = path.canonicalize().unwrap_or(path);
+            let canonical = crate::source::canonical(&path).unwrap_or(path);
             index.entry(fqn).or_insert(canonical);
         }
     }

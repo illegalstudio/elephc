@@ -69,7 +69,7 @@ pub(super) fn resolve_include_stmt(
     let path_str =
         fold_include_path(path, state).map_err(|msg| CompileError::new(stmt.span, &msg))?;
     let resolved = resolve_path(&path_str, base_dir);
-    let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+    let canonical = crate::source::canonical(&resolved).unwrap_or_else(|_| resolved.clone());
 
     if !resolved.exists() {
         if required {

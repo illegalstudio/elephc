@@ -130,7 +130,74 @@ pub fn discoverable_source_stem(component: &str) -> String {
 /// unnoticed: both sides of a comparison were transformed alike, and only the bytes LEAVING the
 /// program differed.
 pub(crate) fn read_physical_source(path: impl AsRef<Path>) -> std::io::Result<String> {
-    std::fs::read(path).map(decode_physical_source)
+    read_physical_bytes(path).map(|bytes| decode_physical_source(bytes.to_vec()))
+}
+
+/// One file's bytes and what identifies that version of it.
+struct RememberedSource {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    bytes: std::rc::Rc<[u8]>,
+}
+
+thread_local! {
+    /// The sources this compile already read. The closure of a Symfony build is walked several
+    /// times (the prelude probe, the real load, the preload units), so each of about 30 000 files
+    /// was opened three times, and opening was a tenth of the whole build.
+    static READ_SOURCES: std::cell::RefCell<crate::fast_hash::FastMap<std::path::PathBuf, RememberedSource>> =
+        std::cell::RefCell::new(Default::default());
+    /// `canonical` answers of this compile; each one is a `realpath` walking every component.
+    static CANONICAL_PATHS: std::cell::RefCell<crate::fast_hash::FastMap<std::path::PathBuf, std::path::PathBuf>> =
+        std::cell::RefCell::new(Default::default());
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Files actually opened by [`read_physical_bytes`].
+    pub(crate) static SOURCE_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Forgets what this thread read; a compile starts from what is on disk.
+pub(crate) fn reset_source_memos() {
+    READ_SOURCES.with(|memo| memo.borrow_mut().clear());
+    CANONICAL_PATHS.with(|memo| memo.borrow_mut().clear());
+}
+
+/// The bytes of a file, read once per version of it (size and modification time).
+pub(crate) fn read_physical_bytes(path: impl AsRef<Path>) -> std::io::Result<std::rc::Rc<[u8]>> {
+    let path = path.as_ref();
+    let metadata = std::fs::metadata(path)?;
+    let (len, modified) = (metadata.len(), metadata.modified().ok());
+    let known = READ_SOURCES.with(|memo| {
+        memo.borrow()
+            .get(path)
+            .filter(|source| source.len == len && source.modified == modified)
+            .map(|source| std::rc::Rc::clone(&source.bytes))
+    });
+    if let Some(bytes) = known {
+        return Ok(bytes);
+    }
+    #[cfg(test)]
+    SOURCE_OPENS.with(|opens| opens.set(opens.get() + 1));
+    let bytes: std::rc::Rc<[u8]> = std::fs::read(path)?.into();
+    READ_SOURCES.with(|memo| {
+        memo.borrow_mut().insert(
+            path.to_path_buf(),
+            RememberedSource { len, modified, bytes: std::rc::Rc::clone(&bytes) },
+        );
+    });
+    Ok(bytes)
+}
+
+/// `Path::canonicalize`, answered once per path during a compile. A failure is not remembered.
+pub(crate) fn canonical(path: impl AsRef<Path>) -> std::io::Result<std::path::PathBuf> {
+    let path = path.as_ref();
+    if let Some(known) = CANONICAL_PATHS.with(|memo| memo.borrow().get(path).cloned()) {
+        return Ok(known);
+    }
+    let resolved = path.canonicalize()?;
+    CANONICAL_PATHS.with(|memo| memo.borrow_mut().insert(path.to_path_buf(), resolved.clone()));
+    Ok(resolved)
 }
 
 /// Converts one physical PHP byte stream into the UTF-8 storage used by the parser.
@@ -386,5 +453,52 @@ mod tests {
         assert!(!SourceMode::Php.strict_php_is_effective(false));
         assert!(!SourceMode::Lfc.strict_php_is_effective(true));
         assert!(!SourceMode::Internal.strict_php_is_effective(true));
+    }
+
+    /// A file walked several times in a compile is opened once.
+    #[test]
+    fn a_source_is_opened_once_per_compile() {
+        let dir = memo_test_dir("opened_once");
+        let path = dir.join("a.php");
+        std::fs::write(&path, "<?php echo 1;").unwrap();
+        reset_source_memos();
+        let before = SOURCE_OPENS.with(std::cell::Cell::get);
+        for _ in 0..3 {
+            assert_eq!(read_physical_source(&path).unwrap(), "<?php echo 1;");
+        }
+        assert_eq!(SOURCE_OPENS.with(std::cell::Cell::get) - before, 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A rewritten file is read again, so a remembered version can never reach a compile.
+    #[test]
+    fn a_rewritten_source_is_read_again() {
+        let dir = memo_test_dir("rewritten");
+        let path = dir.join("a.php");
+        std::fs::write(&path, "<?php echo 1;").unwrap();
+        reset_source_memos();
+        assert_eq!(read_physical_source(&path).unwrap(), "<?php echo 1;");
+        std::fs::write(&path, "<?php echo 22;").unwrap();
+        assert_eq!(read_physical_source(&path).unwrap(), "<?php echo 22;");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A path that does not exist yet is not remembered as missing.
+    #[test]
+    fn a_failed_canonicalization_is_not_remembered() {
+        let dir = memo_test_dir("failed_canonical");
+        let path = dir.join("later.php");
+        reset_source_memos();
+        assert!(canonical(&path).is_err());
+        std::fs::write(&path, "<?php").unwrap();
+        assert_eq!(canonical(&path).unwrap(), path.canonicalize().unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A fresh directory for one memo test.
+    fn memo_test_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("elephc-source-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 }

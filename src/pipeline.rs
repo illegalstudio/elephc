@@ -131,6 +131,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
 fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // One numbering of included/autoloaded files per compile; see `resolver::resolve_*`.
     crate::span::Span::reset_source_ids();
+    crate::source::reset_source_memos();
     // Before any file is parsed: an earlier build's PHPDoc erasures apply from the first round.
     crate::docblock::erasure::set_entry(Path::new(&config.filename));
     let CliConfig {
@@ -1390,7 +1391,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             .map(|(name, path)| (name.clone(), path.clone())),
     );
     let deferrable_class_files: HashSet<PathBuf> = {
-        let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canonical = |path: &Path| crate::source::canonical(&path).unwrap_or_else(|_| path.to_path_buf());
         let mut fixed: HashSet<PathBuf> = autoload_registry
             .always_included_files()
             .iter()
@@ -1428,7 +1429,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // A re-run the backend asked for (`autoload::deferral::BackendDeferral`) starts with the files
     // an earlier round already handed back; they were reported when they were first handed back.
     for path in crate::autoload::deferral::inherited_deferred_files() {
-        let path = path.canonicalize().unwrap_or(path);
+        let path = crate::source::canonical(&path).unwrap_or(path);
         if deferrable_class_files.contains(&path) {
             deferral_reasons
                 .entry(path.clone())
@@ -1438,7 +1439,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     }
     // The re-run is a new process: what the round that found them decided about them comes along.
     for path in crate::autoload::deferral::inherited_harmless_deferred_files() {
-        probe_only_deferred.insert(path.canonicalize().unwrap_or(path));
+        probe_only_deferred.insert(crate::source::canonical(&path).unwrap_or(path));
     }
     // Files an earlier build of this same program handed back, while their bytes are unchanged:
     // deferring them now saves the type-check rounds and the backend re-run that found them.
@@ -1841,10 +1842,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     }
     // A deferred file was never compiled, so the runtime must not treat it as already included.
     opcache_autoloaded_files.retain(|path| {
-        !deferred_class_files.contains(&path.canonicalize().unwrap_or_else(|_| path.clone()))
+        !deferred_class_files.contains(&crate::source::canonical(&path).unwrap_or_else(|_| path.clone()))
     });
     preload_compiled_whole.retain(|path| {
-        !deferred_class_files.contains(&path.canonicalize().unwrap_or_else(|_| path.clone()))
+        !deferred_class_files.contains(&crate::source::canonical(&path).unwrap_or_else(|_| path.clone()))
     });
     timings.record_since("typecheck", phase_started);
     decl_trace("after typecheck", &ast);
@@ -2178,7 +2179,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         .chain(preload_source_paths.iter())
         .chain(unit_source_paths.iter())
     {
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+        let canonical = crate::source::canonical(&path).unwrap_or_else(|_| path.clone());
         if source_units.contains_key(&canonical) {
             continue;
         }
@@ -2507,7 +2508,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
 /// `./bin/console` and `bin/console` are the same file. It fails on a path that does not exist
 /// yet, which is the normal case for an output, so the textual comparison stays as the fallback.
 fn same_file(left: &Path, right: &Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
+    match (crate::source::canonical(&left), crate::source::canonical(&right)) {
         (Ok(left), Ok(right)) => left == right,
         _ => left == right,
     }

@@ -63,7 +63,7 @@ pub(super) fn parse_file_with_source(
     let source_id = Span::fresh_source_id();
     // php names a frame, a warning and a Throwable by the file its code came from, resolved. The
     // same name serves a later checker or lowering diagnostic, which carries only a span.
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical = crate::source::canonical(&path).unwrap_or_else(|_| path.to_path_buf());
     Span::register_source_path(source_id, canonical.display().to_string());
     let tokens = lexer::tokenize_with_mode_and_source_id(&source, mode, source_id)
         .map_err(|e| e.with_file(file.clone()))?;

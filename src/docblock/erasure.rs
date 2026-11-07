@@ -123,7 +123,7 @@ pub fn store_memo() {
 }
 
 fn canonical(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    crate::source::canonical(&path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Whether `source` carries a tag that can make a declaration generic.

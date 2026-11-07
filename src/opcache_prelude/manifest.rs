@@ -136,7 +136,7 @@ pub fn collect_manifest(
 /// canonicalize, but the entry file arrives as the raw CLI argument, and canonicalizing every
 /// candidate is what guarantees the dedup key and the baked path both match `__FILE__`.
 pub(super) fn push_manifest_entry(manifest: &mut Vec<ScriptEntry>, seen: &mut HashSet<String>, path: &Path) {
-    let Ok(path) = path.canonicalize() else {
+    let Ok(path) = crate::source::canonical(&path) else {
         return;
     };
     let path_str = path.display().to_string();

@@ -74,7 +74,7 @@ pub(super) fn discover_include(
         return Ok(());
     }
     let resolved = resolve_path(&path_str, base_dir);
-    let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+    let canonical = crate::source::canonical(&resolved).unwrap_or_else(|_| resolved.clone());
 
     if !resolved.exists() {
         if required {

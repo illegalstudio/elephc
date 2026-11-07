@@ -1065,7 +1065,7 @@ fn class_file<'a>(class_files: &'a HashMap<String, String>, name: &str) -> Optio
 }
 
 fn canonical(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    crate::source::canonical(&path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(test)]

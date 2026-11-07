@@ -312,7 +312,7 @@ fn candidate_templates(
         }
         let mut found = Vec::new();
         collect_files(dir, &mut found);
-        files.extend(found.into_iter().filter_map(|file| file.canonicalize().ok()));
+        files.extend(found.into_iter().filter_map(|file| crate::source::canonical(&file).ok()));
     }
     if files.len() > MAX_TEMPLATES_PER_SITE {
         return Vec::new();
