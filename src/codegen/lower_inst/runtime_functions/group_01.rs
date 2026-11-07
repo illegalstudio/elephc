@@ -58,6 +58,9 @@ pub(super) fn lower(
         RuntimeFnId::ArrayMapFloatScale => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_map_float_scale(ctx, inst)
         }),
+        RuntimeFnId::ArrayMapFloatAffine => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_float_affine(ctx, inst)
+        }),
         RuntimeFnId::ArrayMapSumAdd => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add(ctx, inst)
         }),

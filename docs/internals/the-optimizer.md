@@ -647,8 +647,8 @@ terminates in PHP's warned float-to-int conversion.
 
 `src/ir_lower/stmt/stored_numeric_map.rs` marks a stored
 `$mapped = array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v |
-$v * $v + C | $v * F, $ints)` when every use of `$mapped` and its value aliases is
-storage-neutral: indexed
+$v * $v + C | $v * F | $v * F + G, $ints)` when every use of `$mapped` and its
+value aliases is storage-neutral: indexed
 reads, value-`foreach`, read-only aliasing, or a whitelisted builtin such as
 `count`, `array_sum`, `implode`, `json_encode`, `var_dump`, `array_values`, or
 `array_keys`. The affine form also accepts `B + $v * A`, `B - $v * A`,
@@ -656,7 +656,9 @@ reads, value-`foreach`, read-only aliasing, or a whitelisted builtin such as
 callback `$v * $v` uses its own single-product kernel, and `$v * $v + C` (including
 `C + $v * $v` and `$v * $v - C`) checks the square then the offset. A float
 literal scale `$v * F` (or `F * $v`) builds a raw `array<float>` with 8-byte
-IEEE-754 slots; every element is a double, matching PHP without boxing. The boxed
+IEEE-754 slots; every element is a double, matching PHP without boxing. The
+affine form `$v * F + G` (including `G + $v * F`, `$v * F - G`, and
+`G - $v * F`) does the multiply and add entirely in double precision. The boxed
 `array_sum()` aggregate recognizes that value_type and reduces the slots with a
 double loop, boxing only the final float. Any
 element write, direct or through an alias, keeps the generic boxed map so

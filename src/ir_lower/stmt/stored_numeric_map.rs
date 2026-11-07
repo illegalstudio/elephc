@@ -1,6 +1,6 @@
 //! Purpose:
 //! Marks `array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v |
-//! $v * $v + C | $v * F, $ints)` assignments whose
+//! $v * $v + C | $v * F | $v * F + G, $ints)` assignments whose
 //! result is only observed through storage-neutral consumers, so lowering may build
 //! a raw `array<int>` instead of boxing one Mixed cell per element.
 //!
@@ -127,6 +127,8 @@ pub(crate) enum StoredNumericMapShape {
     SquareAffine { offset: i64 },
     /// `$v * F` (or `F * $v`) with a floating-point literal scale.
     FloatScale { scale: f64 },
+    /// `$v * F + G` (and its commutative/negated forms), evaluated multiply-then-add.
+    FloatAffine { scale: f64, offset: f64 },
 }
 
 /// The single-operation map selector carried in `StoredNumericMapShape::Single`.
@@ -149,7 +151,77 @@ pub(crate) fn parse_stored_numeric_map(
         .or_else(|| parse_square(left, op, right, param))
         .or_else(|| parse_square_affine(left, op, right, param))
         .or_else(|| parse_affine(left, op, right, param))
+        .or_else(|| parse_float_affine(left, op, right, param))
         .or_else(|| parse_float_scale(left, op, right, param))
+}
+
+/// Parses `$v * F + G`, `G + $v * F`, `$v * F - G`, and `G - $v * F`.
+fn parse_float_affine(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    param: &str,
+) -> Option<StoredNumericMapShape> {
+    match op {
+        BinOp::Add => {
+            if let (Some(scale), Some(offset)) =
+                (float_scale_expr(left, param), literal_f64_any(right))
+            {
+                return Some(StoredNumericMapShape::FloatAffine { scale, offset });
+            }
+            if let (Some(offset), Some(scale)) =
+                (literal_f64_any(left), float_scale_expr(right, param))
+            {
+                return Some(StoredNumericMapShape::FloatAffine { scale, offset });
+            }
+        }
+        BinOp::Sub => {
+            if let (Some(scale), Some(offset)) =
+                (float_scale_expr(left, param), literal_f64_any(right))
+            {
+                return Some(StoredNumericMapShape::FloatAffine {
+                    scale,
+                    offset: -offset,
+                });
+            }
+            if let (Some(offset), Some(scale)) =
+                (literal_f64_any(left), float_scale_expr(right, param))
+            {
+                return Some(StoredNumericMapShape::FloatAffine {
+                    scale: -scale,
+                    offset,
+                });
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+/// Returns the floating-point scale in `$v * F` or `F * $v`.
+fn float_scale_expr(expr: &Expr, param: &str) -> Option<f64> {
+    let ExprKind::BinaryOp { left, op: BinOp::Mul, right } = &expr.kind else {
+        return None;
+    };
+    match (&left.kind, &right.kind) {
+        (ExprKind::Variable(name), _) if name == param => literal_f64_any(right),
+        (_, ExprKind::Variable(name)) if name == param => literal_f64_any(left),
+        _ => None,
+    }
+}
+
+/// Returns a floating-point or integer literal as an exact double.
+fn literal_f64_any(expr: &Expr) -> Option<f64> {
+    match &expr.kind {
+        ExprKind::FloatLiteral(value) => Some(*value),
+        ExprKind::IntLiteral(value) => Some(*value as f64),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::FloatLiteral(value) => Some(-value),
+            ExprKind::IntLiteral(value) => Some(-(*value as f64)),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Parses `$v * F` or `F * $v` with a floating-point literal scale.

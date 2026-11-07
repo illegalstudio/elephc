@@ -1,7 +1,7 @@
 //! Purpose:
 //! End-to-end coverage for the stored `array_map(fn($v) => $v + C | $v - C | $v * C |
-//! $v * A + B | $v * $v | $v * $v + C | $v * F, $ints)` kernels. Integer callbacks keep
-//! a raw `array<int>` when no element overflows; the float-scale callback keeps a raw
+//! $v * A + B | $v * $v | $v * $v + C | $v * F | $v * F + G, $ints)` kernels. Integer
+//! callbacks keep a raw `array<int>` when no element overflows; float callbacks keep a raw
 //! `array<float>`.
 //!
 //! Called from:
@@ -635,11 +635,8 @@ var_dump($mapped[1]);
     assert!(!main.contains("runtime.array_map "), "{main}");
 }
 
-/// Element writes keep the generic boxed map for float-scale callbacks.
-///
-/// The generic untyped float-callback map currently crashes at run time on a pre-existing
-/// backend bug (reproduced with the compiler built before the float-scale kernel), so this
-/// regression pins the fallback decision in EIR instead of executing that unrelated path.
+/// Element writes keep the generic boxed map for float-scale callbacks; the generic untyped
+/// float-callback path now boxes the closure's raw F64 return correctly.
 #[test]
 fn test_stored_numeric_map_float_scale_element_writes_keep_generic_map() {
     let source = r#"<?php
@@ -649,6 +646,7 @@ $copy = $mapped;
 $copy[0] = 9.5;
 echo $mapped[0], "|", $copy[0], "\n";
 "#;
+    assert_eq!(compile_and_run(source), "1.5|9.5\n");
     let main = emit_main_ir(source, true);
     assert_eq!(main.matches("runtime.array_map ").count(), 1, "{main}");
     assert!(!main.contains("runtime.array_map_float_scale"), "{main}");
@@ -687,4 +685,99 @@ echo $sum, "\n";
 "#;
     assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "22725\n");
     assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "22725\n");
+}
+
+/// Float-affine callbacks accept every operand order and feed the raw float consumers.
+#[test]
+fn test_stored_numeric_map_float_affine_shapes_and_consumers() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+$a = array_map(fn($v) => $v * 1.5 + 2.5, $values);
+$b = array_map(fn($v) => 2.5 + $v * 1.5, $values);
+$c = array_map(fn($v) => $v * 1.5 - 2.5, $values);
+$d = array_map(fn($v) => 2.5 - $v * 1.5, $values);
+$e = array_map(fn($v) => $v * 2 + 1.5, $values);
+$f = array_map(fn($v) => $v * 1.5 + 1, $values);
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implode(",", $d), "|", implode(",", $e), "|", implode(",", $f), "\n";
+echo array_sum($a), "|", json_encode($a), "|";
+foreach ($a as $v) { echo gettype($v), ":", $v, ","; }
+echo "\n";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "4,5.5,7|4,5.5,7|-1,0.5,2|1,-0.5,-2|3.5,5.5,7.5|2.5,4,5.5\n\
+         16.5|[4,5.5,7]|double:4,double:5.5,double:7,\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_float_affine").count(), 6, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// Large integers convert to double before the scale and offset are applied.
+#[test]
+fn test_stored_numeric_map_float_affine_large_values() {
+    let source = r#"<?php
+$big = [PHP_INT_MAX, PHP_INT_MIN, 0];
+$mapped = array_map(fn($v) => $v * 1.5 + 2.5, $big);
+foreach ($mapped as $v) { echo gettype($v), ":", $v, "|"; }
+echo "\n";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "double:1.3835058055282E+19|double:-1.3835058055282E+19|double:2.5|\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_float_affine").count(), 1, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// Element writes keep the generic boxed map for float-affine callbacks and still run.
+#[test]
+fn test_stored_numeric_map_float_affine_element_writes_keep_generic_map() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+$mapped = array_map(fn($v) => $v * 1.5 + 2.5, $values);
+$copy = $mapped;
+$copy[0] = 9.5;
+echo $mapped[0], "|", $copy[0], "\n";
+"#;
+    assert_eq!(compile_and_run(source), "4|9.5\n");
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map ").count(), 1, "{main}");
+    assert!(!main.contains("runtime.array_map_float_affine"), "{main}");
+}
+
+/// The raw float-affine result releases without leaks.
+#[test]
+fn test_stored_numeric_map_float_affine_heap_debug_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = range(1, 5);
+$mapped = array_map(fn($v) => $v * 1.5 + 2.5, $values);
+echo array_sum($mapped), "|", implode(",", $mapped), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "35|4,5.5,7,8.5,10\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// The float-affine kernel produces the same output with the EIR optimizer on and off.
+#[test]
+fn test_stored_numeric_map_float_affine_ir_opt_parity() {
+    let source = r#"<?php
+$values = range(1, 100);
+$sum = 0;
+for ($i = 0; $i < 3; $i++) {
+    $mapped = array_map(fn($v) => $v * 1.5 + 2.5, $values);
+    $sum += array_sum($mapped);
+}
+echo $sum, "\n";
+"#;
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "23475\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "23475\n");
 }

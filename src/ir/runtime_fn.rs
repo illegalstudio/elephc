@@ -139,6 +139,11 @@ pub enum RuntimeFnId {
     /// Every element is converted to double and multiplied by the literal scale, producing a
     /// raw `array<float>` with value_type 2 and no per-element boxed Mixed cells.
     ArrayMapFloatScale,
+    /// Stored `array_map(fn($x) => $x * F + G, $packedInts)` raw float-affine kernel.
+    ///
+    /// Multiplication and addition happen entirely in double precision, producing a raw
+    /// `array<float>` with value_type 2.
+    ArrayMapFloatAffine,
     /// Fused `array_sum(array_map(fn($x) => $x + $literal, $packedInts))` scalar kernel.
     ArrayMapSumAdd,
     /// Raw-int observation of the fused map+sum kernel; avoids boxing the result.
@@ -1025,6 +1030,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMapSquare => Some((1, Some(1))),
             RuntimeFnId::ArrayMapSquareAffine => Some((2, Some(2))),
             RuntimeFnId::ArrayMapFloatScale => Some((2, Some(2))),
+            RuntimeFnId::ArrayMapFloatAffine => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSumAddIntCached => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSumAddSafe => Some((2, Some(2))),
             RuntimeFnId::ArrayElementTypeCheck => Some((3, Some(3))),
@@ -1938,7 +1944,8 @@ impl RuntimeFnId {
             | RuntimeFnId::ArrayMapAffine
             | RuntimeFnId::ArrayMapSquare
             | RuntimeFnId::ArrayMapSquareAffine
-            | RuntimeFnId::ArrayMapFloatScale => {
+            | RuntimeFnId::ArrayMapFloatScale
+            | RuntimeFnId::ArrayMapFloatAffine => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
             // The fused map+sum kernel walks a packed payload and boxes one result cell.
@@ -3284,6 +3291,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMapSquare => "array_map_square",
             RuntimeFnId::ArrayMapSquareAffine => "array_map_square_affine",
             RuntimeFnId::ArrayMapFloatScale => "array_map_float_scale",
+            RuntimeFnId::ArrayMapFloatAffine => "array_map_float_affine",
             RuntimeFnId::ArrayMapSumAdd => "array_map_sum_add",
             RuntimeFnId::ArrayMapSumAddInt => "array_map_sum_add_int",
             RuntimeFnId::ArrayMapSumProbeInt => "array_map_sum_probe_int",

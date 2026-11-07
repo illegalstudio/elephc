@@ -123,6 +123,30 @@ pub(crate) fn lower_array_map_float_scale(
     store_if_result(ctx, inst)
 }
 
+/// Lowers the stored `$x * F + G` float-affine map over a packed int array.
+pub(crate) fn lower_array_map_float_affine(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let scale = expect_operand(inst, 1)?;
+    let offset = expect_operand(inst, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(scale, "d0")?;
+            ctx.load_value_to_reg(offset, "d1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(scale, "xmm0")?;
+            ctx.load_value_to_reg(offset, "xmm1")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_map_float_affine");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `array_map_sum_add(array, offset)` into the fused runtime kernel.
 pub(crate) fn lower_array_map_sum_add(
     ctx: &mut FunctionContext<'_>,
