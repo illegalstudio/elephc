@@ -308,11 +308,20 @@ pub(super) unsafe fn opt_ptr(slot: *const Option<CString>) -> *const c_char {
     }
 }
 
+/// Replaces an `Option<CString>` static and drops the previous allocation.
+///
+/// `core::ptr::write` would overwrite the old `CString` without running its
+/// destructor, leaking one allocation per replacement; every request that
+/// touches session config replaces these slots during reset.
+pub(super) unsafe fn reset_cstr(slot: *mut Option<CString>, value: Option<CString>) {
+    drop(core::ptr::replace(slot, value));
+}
+
 /// Stores a Rust string into a `Option<CString>` static via raw pointer, replacing
 /// any prior value. Interior NULs are stripped (CString cannot hold them).
 pub(super) unsafe fn set_cstr(slot: *mut Option<CString>, s: &str) {
     let cstr = CString::new(s.replace('\0', "")).unwrap_or_default();
-    core::ptr::write(slot, Some(cstr));
+    reset_cstr(slot, Some(cstr));
 }
 
 /// Converts a NUL-terminated C string pointer into an owned Rust string.
@@ -931,29 +940,29 @@ pub unsafe extern "C" fn elephc_web_session_reset() {
     let configured_upload_cleanup = config.upload_progress_cleanup;
 
     // Reset all state to PHP defaults plus the deployment-level overrides.
-    core::ptr::write(core::ptr::addr_of_mut!(SESSION_NAME), configured_name);
-    core::ptr::write(core::ptr::addr_of_mut!(SESSION_ID), None);
+    reset_cstr(core::ptr::addr_of_mut!(SESSION_NAME), configured_name);
+    reset_cstr(core::ptr::addr_of_mut!(SESSION_ID), None);
     core::ptr::write(core::ptr::addr_of_mut!(SESSION_STATUS), 1);
-    core::ptr::write(
+    reset_cstr(
         core::ptr::addr_of_mut!(SESSION_SAVE_PATH),
         configured_save_path,
     );
-    core::ptr::write(core::ptr::addr_of_mut!(SESSION_CACHE_LIMITER), None);
+    reset_cstr(core::ptr::addr_of_mut!(SESSION_CACHE_LIMITER), None);
     core::ptr::write(core::ptr::addr_of_mut!(SESSION_CACHE_EXPIRE), 180);
     core::ptr::write(core::ptr::addr_of_mut!(COOKIE_LIFETIME), 0);
-    core::ptr::write(core::ptr::addr_of_mut!(COOKIE_PATH), None);
-    core::ptr::write(core::ptr::addr_of_mut!(COOKIE_DOMAIN), None);
+    reset_cstr(core::ptr::addr_of_mut!(COOKIE_PATH), None);
+    reset_cstr(core::ptr::addr_of_mut!(COOKIE_DOMAIN), None);
     core::ptr::write(core::ptr::addr_of_mut!(COOKIE_SECURE), false);
     core::ptr::write(core::ptr::addr_of_mut!(COOKIE_PARTITIONED), false);
     core::ptr::write(core::ptr::addr_of_mut!(COOKIE_HTTPONLY), false);
-    core::ptr::write(core::ptr::addr_of_mut!(COOKIE_SAMESITE), None);
+    reset_cstr(core::ptr::addr_of_mut!(COOKIE_SAMESITE), None);
     (*core::ptr::addr_of_mut!(SESSION_SNAPSHOT)).clear();
     (*core::ptr::addr_of_mut!(DATA_BUFFER)).clear();
     (*core::ptr::addr_of_mut!(PUBLISHED_BUFFERS)).clear();
     (*core::ptr::addr_of_mut!(STAGING_BUFFER)).clear();
     core::ptr::write(core::ptr::addr_of_mut!(SESSION_FD), -1);
     core::ptr::write(core::ptr::addr_of_mut!(STRICT_MODE), 0);
-    core::ptr::write(
+    reset_cstr(
         core::ptr::addr_of_mut!(SERIALIZE_HANDLER),
         configured_serializer,
     );
@@ -964,7 +973,7 @@ pub unsafe extern "C" fn elephc_web_session_reset() {
     core::ptr::write(core::ptr::addr_of_mut!(SID_BITS_PER_CHARACTER), 4);
     // v4 ini config layer: strings reset to None (getters re-init to defaults),
     // ints reset to their PHP defaults.
-    core::ptr::write(core::ptr::addr_of_mut!(SESSION_REFERER_CHECK), None);
+    reset_cstr(core::ptr::addr_of_mut!(SESSION_REFERER_CHECK), None);
     core::ptr::write(core::ptr::addr_of_mut!(USE_COOKIES), 1);
     core::ptr::write(
         core::ptr::addr_of_mut!(USE_ONLY_COOKIES),
@@ -972,8 +981,8 @@ pub unsafe extern "C" fn elephc_web_session_reset() {
     );
     core::ptr::write(core::ptr::addr_of_mut!(LAZY_WRITE), 1);
     core::ptr::write(core::ptr::addr_of_mut!(USE_TRANS_SID), 0);
-    core::ptr::write(core::ptr::addr_of_mut!(TRANS_SID_TAGS), None);
-    core::ptr::write(core::ptr::addr_of_mut!(TRANS_SID_HOSTS), None);
+    reset_cstr(core::ptr::addr_of_mut!(TRANS_SID_TAGS), None);
+    reset_cstr(core::ptr::addr_of_mut!(TRANS_SID_HOSTS), None);
     core::ptr::write(
         core::ptr::addr_of_mut!(UPLOAD_PROGRESS_ENABLED),
         i64::from(configured_upload_enabled),
@@ -982,10 +991,10 @@ pub unsafe extern "C" fn elephc_web_session_reset() {
         core::ptr::addr_of_mut!(UPLOAD_PROGRESS_CLEANUP),
         i64::from(configured_upload_cleanup),
     );
-    core::ptr::write(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_PREFIX), None);
-    core::ptr::write(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_NAME), None);
-    core::ptr::write(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_FREQ), None);
-    core::ptr::write(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_MIN_FREQ), None);
+    reset_cstr(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_PREFIX), None);
+    reset_cstr(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_NAME), None);
+    reset_cstr(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_FREQ), None);
+    reset_cstr(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_MIN_FREQ), None);
     // auto_start is seeded from the process-level env config, NOT a fixed
     // default, so a `session.auto_start=1` deployment auto-starts every request.
     core::ptr::write(
