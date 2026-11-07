@@ -269,6 +269,10 @@ pub(super) fn emit_exit_call(ctx: &mut FunctionContext<'_>) {
         super::frame::push_return_value(ctx, &return_ty);
     }
     let target = ctx.emitter.target;
+    let stack_pointer = match target.arch {
+        Arch::AArch64 => "sp",
+        Arch::X86_64 => "rsp",
+    };
     let tag_arg = abi::int_arg_reg_name(target, 2);
     let lo_arg = abi::int_arg_reg_name(target, 3);
     let hi_arg = abi::int_arg_reg_name(target, 4);
@@ -277,13 +281,13 @@ pub(super) fn emit_exit_call(ctx: &mut FunctionContext<'_>) {
         abi::emit_load_int_immediate(ctx.emitter, lo_arg, 0);
         abi::emit_load_int_immediate(ctx.emitter, hi_arg, 0);
     } else if return_ty == PhpType::TaggedScalar {
-        abi::emit_load_from_address(ctx.emitter, lo_arg, "sp", 0);
-        abi::emit_load_from_address(ctx.emitter, tag_arg, "sp", 8);
+        abi::emit_load_from_address(ctx.emitter, lo_arg, stack_pointer, 0);
+        abi::emit_load_from_address(ctx.emitter, tag_arg, stack_pointer, 8);
         abi::emit_load_int_immediate(ctx.emitter, hi_arg, 0);
     } else {
-        abi::emit_load_from_address(ctx.emitter, lo_arg, "sp", 0);
+        abi::emit_load_from_address(ctx.emitter, lo_arg, stack_pointer, 0);
         if return_ty == PhpType::Str {
-            abi::emit_load_from_address(ctx.emitter, hi_arg, "sp", 8);
+            abi::emit_load_from_address(ctx.emitter, hi_arg, stack_pointer, 8);
             abi::emit_load_int_immediate(ctx.emitter, tag_arg, 1);
         } else {
             abi::emit_load_int_immediate(ctx.emitter, tag_arg, return_value_tag(&return_ty));
@@ -328,6 +332,9 @@ pub(super) fn emit_dump_call(ctx: &mut FunctionContext<'_>) {
 mod tests {
     use super::*;
     use crate::codegen::platform::Target;
+    use crate::codegen::{Emit, Instrumentation, WebIsolation};
+    use std::collections::HashMap;
+    use std::path::Path;
 
     /// Verifies the AArch64 wrapper saves the full caller-saved set, preserves
     /// NZCV, and calls the Rust inner hook.
@@ -353,6 +360,39 @@ mod tests {
         let asm = emitter.output();
         assert!(asm.contains("bl _elephc_debug_site_inner"), "{asm}");
         assert!(asm.contains("__elephc_debug_site:"), "{asm}");
+    }
+
+    /// Verifies the debug exit hook addresses the x86_64 stack pointer as `rsp`.
+    ///
+    /// The hook pushes the return value and reloads it after the call. A hardcoded
+    /// `sp` assembles on AArch64 and fails every x86_64 debug build at `as` time.
+    #[test]
+    fn x86_64_exit_hook_uses_the_stack_pointer_name() {
+        let target = Target::parse("linux-x86_64").unwrap();
+        let module = crate::ir_lower::tests::lower_source_at_for_target(
+            "<?php function addOne(int $value): int { return $value + 1; } echo addOne(1);",
+            Path::new("main.php"),
+            Path::new("."),
+            target,
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir_with_options(
+            &module,
+            false,
+            false,
+            Instrumentation::Off,
+            false,
+            true,
+            false,
+            false,
+            Emit::Executable,
+            &HashMap::new(),
+            true,
+            false,
+            WebIsolation::Worker,
+        )
+        .expect("debug assembly");
+        assert!(!asm.contains("QWORD PTR [sp"), "{asm}");
+        assert!(asm.contains("QWORD PTR [rsp"), "{asm}");
     }
 
     /// Verifies the x86_64 wrapper saves the SysV caller-saved registers, XMM

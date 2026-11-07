@@ -54,7 +54,8 @@ pub(crate) fn lower_event(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     if releases_box {
         abi::emit_push_reg(ctx.emitter, arg(1));
     }
-    abi::emit_call_label(ctx.emitter, "elephc_debug_event");
+    let event_symbol = ctx.emitter.target.extern_symbol("elephc_debug_event");
+    abi::emit_call_label(ctx.emitter, &event_symbol);
     if releases_box {
         abi::emit_pop_reg(ctx.emitter, &result);
         abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
