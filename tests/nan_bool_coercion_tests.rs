@@ -441,3 +441,72 @@ var_dump(empty(f()));
         &warnings(2),
     );
 }
+
+// ---------------------------------------------------------------------------
+// NAN coerced to string (AIC #219, illegalstudio/elephc#1354)
+// ---------------------------------------------------------------------------
+
+/// The exact stderr line elephc emits for one NAN-to-string coercion.
+const NAN_STRING_WARNING: &str = "Warning: unexpected NAN value was coerced to string\n";
+
+/// Every string coercion of a NAN warns once: `(string)`, `echo`, concatenation, interpolation,
+/// `strval()`, a builtin's string parameter, `implode()`, `settype()`, `printf("%s")`, and a boxed
+/// `mixed` cast and `echo`. Reference PHP 8.5.10 prints eleven warnings and the stdout asserted
+/// here.
+#[test]
+fn every_string_coercion_site_warns_once_for_a_nan() {
+    assert_run(
+        "nan_string_sites",
+        r#"<?php
+function f(): float { return NAN; }
+function m(): mixed { return json_decode('[1]', true) ? NAN : 0; }
+echo (string) f(), "\n";
+echo f(), "\n";
+echo "i:" . f() . "\n";
+$v = f(); echo "s:$v\n";
+echo strval(f()), "\n";
+echo str_pad(f(), 4, "*"), "\n";
+echo implode(",", [f()]), "\n";
+$t = f(); settype($t, "string"); echo $t, "\n";
+printf("%s\n", f());
+echo (string) m(), "\n";
+echo m(), "\n";
+"#,
+        "NAN\nNAN\ni:NAN\ns:NAN\nNAN\nNAN*\nNAN\nNAN\nNAN\nNAN\nNAN\n",
+        &NAN_STRING_WARNING.repeat(11),
+    );
+}
+
+/// Only a NAN warns: `INF`, `-INF`, `0.0`, `-0.0` and an ordinary float coerce silently, and
+/// `var_dump()`, `print_r()` and `var_export()` render a NAN without coercing it.
+#[test]
+fn string_coercion_of_other_floats_and_nan_dumps_stay_silent() {
+    assert_run(
+        "nan_string_controls",
+        r#"<?php
+function g(float $x): float { return $x; }
+echo (string) g(INF), " ", g(-INF), " ", g(0.0), " ", g(-0.0), " ", g(1.5), "\n";
+function f(): float { return NAN; }
+var_dump(f());
+print_r(f()); echo "\n";
+echo var_export(f(), true), "\n";
+"#,
+        "INF -INF 0 -0 1.5\nfloat(NAN)\nNAN\nNAN\n",
+        "",
+    );
+}
+
+/// PHP 8.4 coerces a NAN to string silently, so a `--php-version 8.4` build emits no probe.
+#[test]
+fn string_coercion_of_a_nan_is_silent_before_php_8_5() {
+    assert_run_for_version(
+        "nan_string_84",
+        r#"<?php
+function f(): float { return NAN; }
+echo (string) f(), " ", f(), "\n";
+"#,
+        Some("8.4"),
+        "NAN NAN\n",
+        "",
+    );
+}

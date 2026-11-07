@@ -485,6 +485,17 @@ pub(super) fn emit_nan_bool_coercion_probe(ctx: &mut FunctionContext<'_>) {
     crate::codegen_support::runtime::emit_nan_bool_coercion_probe(ctx.emitter, &skip_label);
 }
 
+/// Emits PHP 8.5's `unexpected NAN value was coerced to string` probe ahead of a float's
+/// `__rt_ftoa`, with the float already in `d0` / `xmm0`. Like the bool probe it emits nothing
+/// on pre-8.5 profiles and warns once per conversion reached.
+pub(super) fn emit_nan_string_coercion_probe(ctx: &mut FunctionContext<'_>) {
+    if !crate::codegen_support::runtime::nan_bool_coercion_warning_enabled() {
+        return;
+    }
+    let skip_label = ctx.next_label("nan_string_warn_skip");
+    crate::codegen_support::runtime::emit_nan_string_coercion_probe(ctx.emitter, &skip_label);
+}
+
 /// Emits PHP string truthiness, where `""` and `"0"` are false.
 pub(super) fn emit_string_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let true_label = ctx.next_label("str_truthy_true");
