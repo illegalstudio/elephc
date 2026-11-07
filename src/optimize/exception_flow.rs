@@ -1476,6 +1476,7 @@ fn resolve_exception_receiver(
             class_context.and_then(|context| context.parent_name.clone())
         }
         crate::parser::ast::StaticReceiver::Static => None,
+        crate::parser::ast::StaticReceiver::Dynamic(_) => None,
     }
 }
 

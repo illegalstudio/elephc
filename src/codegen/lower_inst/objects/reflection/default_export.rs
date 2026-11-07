@@ -96,7 +96,9 @@ impl DefaultExporter<'_> {
                     }
                     StaticReceiver::Self_ => "self".to_string(),
                     StaticReceiver::Parent => "parent".to_string(),
-                    StaticReceiver::Static | StaticReceiver::Generic(_) => return None,
+                    StaticReceiver::Static
+                    | StaticReceiver::Generic(_)
+                    | StaticReceiver::Dynamic(_) => return None,
                 };
                 Some(format!("{receiver}::{}", reflection_dump_text(name)))
             }

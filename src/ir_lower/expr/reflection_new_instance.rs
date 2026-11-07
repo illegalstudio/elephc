@@ -43,6 +43,16 @@ pub(super) fn reflection_class_new_instance_args_value(
     if let ExprKind::Variable(name) = &array_expr.kind {
         return ctx.reflection_arg_array_local(name);
     }
+    if let ExprKind::StaticPropertyAccess { receiver, property } = &array_expr.kind {
+        let class_name = super::static_method_calls::static_receiver_class_name(ctx, receiver)?;
+        let info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+        let index = info
+            .static_properties
+            .iter()
+            .position(|(name, _)| name == property)?;
+        let default = info.static_defaults.get(index)?.as_ref()?;
+        return reflection_class_new_instance_args_value_without_locals(default);
+    }
     reflection_class_new_instance_args_value_without_locals(array_expr)
 }
 

@@ -85,6 +85,7 @@ pub(super) fn receiver_name(receiver: &StaticReceiver) -> String {
         StaticReceiver::Self_ => "self".to_string(),
         StaticReceiver::Static => "static".to_string(),
         StaticReceiver::Parent => "parent".to_string(),
+        StaticReceiver::Dynamic(_) => "dynamic".to_string(),
     }
 }
 
@@ -126,6 +127,7 @@ pub(super) fn static_receiver_class_name(
                 .get(current)
                 .and_then(|class_info| class_info.parent.clone())
         }
+        StaticReceiver::Dynamic(_) => None,
     }
 }
 

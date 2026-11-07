@@ -386,26 +386,36 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
 /// Returns a new `Vec<Stmt>` with each statement folded.
 pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
     let mut guard_values = super::super::target_guards::GuardValues::default();
-    let mut pending_literal_array: Option<(String, Expr)> = None;
+    let mut literal_arrays: std::collections::HashMap<String, Expr> = std::collections::HashMap::new();
     body.into_iter()
         .flat_map(|mut stmt| {
-            // A literal array assigned immediately before its only foreach is a safe
-            // substitution point: no intervening statement can observe or mutate it. This is
-            // what gives the reflection unroller the literal it needs for the loop names.
-            if let Some((name, literal)) = pending_literal_array.take() {
-                if let StmtKind::Foreach {
-                    array,
-                    key_var,
-                    value_var,
-                    value_by_ref,
-                    body,
-                } = &mut stmt.kind
-                {
-                    if !*value_by_ref
-                        && matches!(&array.kind, ExprKind::Variable(array_name) if array_name == &name)
-                        && super::unroll_foreach::should_unroll(body, value_var, key_var.as_deref())
-                    {
-                        *array = literal;
+            // A literal array assigned to a local is a safe substitution source until a
+            // statement can write that local. Calls cannot see caller locals except through
+            // by-reference arguments, which `stmt_invalidation` already reports. This is what
+            // gives the reflection unroller the literal it needs for the loop names even when
+            // unrelated setup statements sit between the assignment and the foreach.
+            let invalidation = literal_array_invalidation(&stmt);
+            if let StmtKind::Foreach {
+                array,
+                key_var,
+                value_var,
+                value_by_ref,
+                body,
+            } = &mut stmt.kind
+            {
+                if !*value_by_ref {
+                    let literal = match &array.kind {
+                        ExprKind::Variable(name) => literal_arrays.get(name).cloned(),
+                        _ => None,
+                    };
+                    if let Some(literal) = literal {
+                        if super::unroll_foreach::should_unroll(
+                            body,
+                            value_var,
+                            key_var.as_deref(),
+                        ) {
+                            *array = literal;
+                        }
                     }
                 }
             }
@@ -427,9 +437,17 @@ pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
                 _ => false,
             };
             let stmt = fold_stmt(stmt);
+            match invalidation {
+                super::super::propagate::Invalidation::Names(names) => {
+                    for name in names {
+                        literal_arrays.remove(&name);
+                    }
+                }
+                super::super::propagate::Invalidation::All => literal_arrays.clear(),
+            }
             if let StmtKind::Assign { name, value } = &stmt.kind {
                 if super::unroll_foreach::is_safe_literal_array(value) {
-                    pending_literal_array = Some((name.clone(), value.clone()));
+                    literal_arrays.insert(name.clone(), value.clone());
                 }
             }
             if active_fold_target().is_some() && target_dependent_if {
@@ -558,4 +576,59 @@ fn prune_target_boolean_if(stmt: Stmt) -> Vec<Stmt> {
             attributes,
         }],
     }
+}
+
+/// Returns the locals a statement invalidates for the pre-check literal-array environment.
+///
+/// The shared invalidation pass treats a top-level call with `WRITES_GLOBAL` as writing every
+/// local, because a top-level PHP local is visible through `$GLOBALS`. Known runtime-state
+/// setters (`set_error_handler`, `error_reporting`, …) write compiler/runtime state but cannot
+/// rewrite a caller local they never received; keeping the literal environment across them is
+/// what lets a setup call sit between an array assignment and its literal foreach.
+fn literal_array_invalidation(stmt: &Stmt) -> super::super::propagate::Invalidation {
+    let invalidation = super::super::propagate::stmt_invalidation(stmt);
+    if matches!(invalidation, super::super::propagate::Invalidation::All) {
+        // `new stdClass()` runs no user code, so only its assignment target is affected. The
+        // shared pass cannot know that and reports the constructor as an unknown global write.
+        if let StmtKind::Assign {
+            name,
+            value:
+                Expr {
+                    kind: ExprKind::NewObject { class_name, args },
+                    ..
+                },
+            ..
+        } = &stmt.kind
+        {
+            if args.is_empty()
+                && class_name
+                    .as_canonical()
+                    .trim_start_matches('\\')
+                    .eq_ignore_ascii_case("stdClass")
+            {
+                let mut names = super::super::propagate::Invalidation::none();
+                names.add(name);
+                return names;
+            }
+        }
+        if let StmtKind::ExprStmt(Expr {
+            kind: ExprKind::FunctionCall { name, .. },
+            ..
+        }) = &stmt.kind
+        {
+            let canonical = name.as_canonical();
+            let name = canonical.trim_start_matches('\\');
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "set_error_handler"
+                    | "set_exception_handler"
+                    | "restore_error_handler"
+                    | "restore_exception_handler"
+                    | "error_reporting"
+            ) {
+                return super::super::propagate::Invalidation::none();
+            }
+        }
+    }
+    invalidation
 }

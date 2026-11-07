@@ -1015,7 +1015,7 @@ impl Checker {
             StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone(),
             StaticReceiver::Parent => self.current_class.as_ref().and_then(|name|
                 self.classes.get(name).and_then(|class| class.parent.clone())),
-            StaticReceiver::Generic(_) => None,
+            StaticReceiver::Generic(_) | StaticReceiver::Dynamic(_) => None,
         };
         let description = named_class.map(|class| format!("Static method {class}::{method}"))
             .unwrap_or_else(|| "Static method call".to_string());
@@ -1043,6 +1043,12 @@ impl Checker {
                 "StaticReceiver::Generic must be instantiated by generics::classes"
             ),
             StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
+            StaticReceiver::Dynamic(_) => {
+                return Err(CompileError::new(
+                    expr.span,
+                    "Dynamic class access is not supported for a static method",
+                ));
+            }
             StaticReceiver::Self_ => self.current_class.as_ref().cloned().ok_or_else(|| {
                 CompileError::new(expr.span, "Cannot use self:: outside class method scope")
             })?,

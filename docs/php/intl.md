@@ -58,6 +58,12 @@ Current focus order:
   milliseconds, `IntlDateFormatter::format()` takes seconds, and `parse()` returns seconds.
 - The bridge invokes ICU exactly once per call. It never issues a null-buffer sizing query,
   because that would execute mutating methods (`add`, `roll`, `set`, `setTimeZone`) twice.
+- `UConverter` subclasses that override `toUCallback()`/`fromUCallback()` are served by a
+  PHP-side UTF-8 <-> ASCII callback path, because ICU's C++ callbacks cannot re-enter generated
+  PHP. Base `UConverter` and every other encoding keep the bridge conversion; callback close
+  notifications run when the converter is destroyed.
+- `get_extension_funcs("intl")` enumerates the compiled Intl surface, so a program may iterate
+  over it to discover or invoke the available Intl functions.
 - Nullable scalar arguments are split into explicit branches before the typed value stream is
   packed; a nullable scalar packed into a `mixed` array loses its tag.
 - Intl functions are effectful: ICU keeps process-wide default locale and error state, and the

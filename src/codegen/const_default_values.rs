@@ -680,7 +680,7 @@ pub(in crate::codegen) fn resolve_static_receiver_name(
         // A generic receiver is rewritten to its instantiated name before the checker runs, so
         // reaching one here means a template body that is walked and then stripped — it has no
         // constant to resolve.
-        StaticReceiver::Generic(_) => None,
+        StaticReceiver::Generic(_) | StaticReceiver::Dynamic(_) => None,
         StaticReceiver::Parent => {
             let current = context.current_class?;
             resolve_const_default_class(context.module, current)

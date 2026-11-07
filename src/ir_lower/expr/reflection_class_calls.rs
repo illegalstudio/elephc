@@ -85,6 +85,43 @@ pub(super) fn lower_reflection_class_new_instance_args(
     let Some(forwarded_args) = reflection_class_new_instance_args_array(ctx, args) else {
         return lower_reflection_class_new_instance_args_unsupported(ctx, expr);
     };
+    // When the reflected class is statically known, construct it directly. The dynamic class
+    // ladder has to compile every possible constructor at this site's argument types; a
+    // statically-known class avoids both that over-approximation and runtime class dispatch.
+    if let Some(object_expr) = object_expr {
+        if let Some(class_name) = reflection_class_reflected_class(ctx, object_expr) {
+            // Abstract classes and non-public constructors keep the reflective runtime path,
+            // which raises PHP's ReflectionException instead of a source-scope visibility error.
+            if ctx.classes.get(class_name.trim_start_matches('\\')).is_some_and(|info| {
+                info.is_abstract
+                    || info.method_visibilities.get(&crate::names::php_symbol_key("__construct"))
+                        == Some(&crate::parser::ast::Visibility::Private)
+            }) {
+                return lower_reflection_class_new_instance(
+                    ctx, Some(object_expr), object, &forwarded_args, expr,
+                );
+            }
+            let class_name = crate::names::Name::from_parts(
+                crate::names::NameKind::FullyQualified,
+                class_name
+                    .trim_start_matches('\\')
+                    .split('\\')
+                    .map(str::to_string)
+                    .collect(),
+            );
+            if ctx.value_is_owning_temporary(object) {
+                crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
+            }
+            let constructor = Expr::new(
+                ExprKind::NewObject {
+                    class_name,
+                    args: forwarded_args,
+                },
+                expr.span,
+            );
+            return lower_expr(ctx, &constructor);
+        }
+    }
     lower_reflection_class_new_instance(ctx, object_expr, object, &forwarded_args, expr)
 }
 

@@ -185,6 +185,7 @@ pub(super) fn static_late_binding_receiver_type_for_ir(
         StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => {
             ctx.current_class.clone()
         }
+        StaticReceiver::Dynamic(_) => None,
     }
 }
 
@@ -494,5 +495,6 @@ pub(crate) fn static_receiver_class_name(
             let current = ctx.current_class.as_deref()?;
             ctx.classes.get(current).and_then(|class_info| class_info.parent.clone())
         }
+        StaticReceiver::Dynamic(_) => None,
     }
 }

@@ -407,6 +407,46 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             if let Some(folded) = try_fold_scalar_builtin(&name, &args) {
                 return fold_expr(Expr::new(folded, span));
             }
+            // `get_extension_funcs('intl')` enumerates the extension's compiled surface. The
+            // contract owns that list, so a literal request folds to the same names the linked
+            // bridge exposes; the literal-foreach unroller can then resolve each iteration.
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("get_extension_funcs")
+                && args.len() == 1
+            {
+                if let ExprKind::StringLiteral(extension) = &args[0].kind {
+                    if extension.eq_ignore_ascii_case("intl") {
+                        let names = elephc_builtin_contract::contracts()
+                            .iter()
+                            .filter(|contract| {
+                                contract.module == elephc_builtin_contract::PhpModule::Intl
+                                    && !contract.internal
+                                    && !contract.extension
+                            })
+                            .map(|contract| Expr::new(
+                                ExprKind::StringLiteral(contract.name.to_string()),
+                                span,
+                            ))
+                            .collect();
+                        return Expr::new(ExprKind::ArrayLiteral(names), span);
+                    }
+                }
+            }
+            // `range('A', 'D')` over two single-byte literals is the common enumeration idiom.
+            // Folding it before the checker lets a literal-foreach unroller see the elements;
+            // every other range shape keeps the runtime implementation.
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("range")
+                && args.len() == 2
+            {
+                if let Some(values) = fold_literal_range(&args[0], &args[1]) {
+                    return Expr::new(ExprKind::ArrayLiteral(values), span);
+                }
+            }
             if name
                 .as_canonical()
                 .trim_start_matches('\\')
@@ -634,6 +674,27 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             }
         }
         ExprKind::StaticPropertyAccess { receiver, property } => {
+            let receiver = match receiver {
+                crate::parser::ast::StaticReceiver::Dynamic(class_expr) => {
+                    let class_expr = fold_expr(*class_expr);
+                    if let ExprKind::StringLiteral(class_name) = &class_expr.kind {
+                        let parts = class_name
+                            .trim_start_matches('\\')
+                            .split('\\')
+                            .map(str::to_string)
+                            .collect();
+                        crate::parser::ast::StaticReceiver::Named(
+                            crate::names::Name::from_parts(
+                                crate::names::NameKind::FullyQualified,
+                                parts,
+                            ),
+                        )
+                    } else {
+                        crate::parser::ast::StaticReceiver::Dynamic(Box::new(class_expr))
+                    }
+                }
+                receiver => receiver,
+            };
             ExprKind::StaticPropertyAccess { receiver, property }
         }
         ExprKind::MethodCall {
@@ -1032,4 +1093,53 @@ fn token_constant_name(id: i64) -> Option<&'static str> {
                 _ => None,
             }
         })
+}
+
+/// Folds `range()` over two integer or two single-byte string literals.
+///
+/// Only the two-argument form with the implicit step is handled: its values are exactly the
+/// inclusive ascending or descending sequence, so the folded literal array is PHP-equivalent.
+fn fold_literal_range(start: &Expr, end: &Expr) -> Option<Vec<Expr>> {
+    match (&start.kind, &end.kind) {
+        (ExprKind::IntLiteral(first), ExprKind::IntLiteral(last)) => {
+            let step = if first <= last { 1 } else { -1 };
+            let mut values = Vec::new();
+            let mut current = *first;
+            loop {
+                values.push(Expr::new(ExprKind::IntLiteral(current), start.span));
+                if current == *last {
+                    break;
+                }
+                if values.len() > 10_000 {
+                    return None;
+                }
+                current = current.checked_add(step)?;
+            }
+            Some(values)
+        }
+        (ExprKind::StringLiteral(first), ExprKind::StringLiteral(last))
+            if first.len() == 1 && last.len() == 1 =>
+        {
+            let first = first.as_bytes()[0];
+            let last = last.as_bytes()[0];
+            let step: i16 = if first <= last { 1 } else { -1 };
+            let mut values = Vec::new();
+            let mut current = i16::from(first);
+            loop {
+                values.push(Expr::new(
+                    ExprKind::StringLiteral(char::from(current as u8).to_string()),
+                    start.span,
+                ));
+                if current == i16::from(last) {
+                    break;
+                }
+                if values.len() > 256 {
+                    return None;
+                }
+                current += step;
+            }
+            Some(values)
+        }
+        _ => None,
+    }
 }

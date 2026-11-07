@@ -274,6 +274,7 @@ fn static_method_sig(
             let current = ctx.current_class.as_ref()?;
             ctx.classes.get(current.as_str()).and_then(|class| class.parent.clone())?
         }
+        StaticReceiver::Dynamic(_) => return None,
     };
     let method_key = php_symbol_key(method);
     ctx.classes

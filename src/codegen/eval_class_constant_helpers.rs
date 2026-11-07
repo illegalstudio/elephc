@@ -635,6 +635,7 @@ fn static_receiver_name(
         StaticReceiver::Generic(_) => unreachable!(
             "StaticReceiver::Generic must be instantiated by generics::classes"
         ),
+        StaticReceiver::Dynamic(_) => None,
         StaticReceiver::Named(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static => Some(current_class.to_string()),
         StaticReceiver::Parent => current_info.and_then(|info| info.parent.clone()),

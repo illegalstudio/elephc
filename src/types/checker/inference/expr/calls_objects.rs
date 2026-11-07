@@ -403,6 +403,12 @@ impl Checker {
                     crate::parser::ast::StaticReceiver::Generic(_) => unreachable!(
                         "StaticReceiver::Generic must be instantiated by generics::classes"
                     ),
+                    crate::parser::ast::StaticReceiver::Dynamic(_) => {
+                        return Err(CompileError::new(
+                            expr.span,
+                            "Dynamic class access is not supported for `new`",
+                        ));
+                    }
                     crate::parser::ast::StaticReceiver::Self_ => {
                         self.current_class.clone().ok_or_else(|| {
                             CompileError::new(

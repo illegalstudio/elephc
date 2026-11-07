@@ -31,9 +31,16 @@ pub(super) fn lower_unset_locals(
     let null = lower_null(ctx, expr);
     let mut changed = None;
     let mut unconditional = false;
+    // Unsetting a plain object local only drops one root. PHP does not run the cycle collector
+    // there, so keeping the object's cycle for the next explicit `gc_collect_cycles()` is what
+    // makes the collector's result match PHP. Array/property removals keep their safe point.
+    let mut object_local_only = true;
     for arg in args {
         let removal = match &arg.kind {
             ExprKind::Variable(name) => {
+                if !matches!(ctx.local_type(name).codegen_repr(), PhpType::Object(_)) {
+                    object_local_only = false;
+                }
                 ctx.unset_local(name, null, Some(arg.span));
                 None
             }
@@ -52,12 +59,17 @@ pub(super) fn lower_unset_locals(
             _ => None,
         };
         if let Some(removal) = removal {
+            object_local_only = false;
             changed = Some(super::unset_collection::combine_removals(ctx, changed, removal, arg.span));
-        } else {
+        } else if !matches!(arg.kind, ExprKind::Variable(_)) {
             unconditional = true;
+        } else if !object_local_only {
+            // A mixed/local array unset may expose a cycle; keep the ordinary safe point.
         }
     }
-    super::unset_collection::collect_after_unset(ctx, changed, unconditional, expr.span);
+    if !object_local_only {
+        super::unset_collection::collect_after_unset(ctx, changed, unconditional, expr.span);
+    }
     Some(null)
 }
 

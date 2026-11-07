@@ -39,6 +39,97 @@ pub(super) fn static_callable_call_lowers_directly(
     }
 }
 
+/// Returns the static PHP type of one callable argument at this lowering point.
+///
+/// The checker does not validate the arguments of a `$callable(...)` site; it only knows the
+/// callback variable's type. Direct-call lowering therefore has to recover the obvious local
+/// types itself, or it hands an object to a string parameter and the callee crashes.
+/// Returns the static PHP type of one callable argument at this lowering point.
+fn callable_argument_static_type(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> PhpType {
+    match &arg.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        ExprKind::StringLiteral(_) => PhpType::Str,
+        ExprKind::IntLiteral(_) => PhpType::Int,
+        ExprKind::FloatLiteral(_) => PhpType::Float,
+        ExprKind::BoolLiteral(_) => PhpType::Bool,
+        ExprKind::Null => PhpType::Void,
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(
+            class_name.as_canonical().trim_start_matches('\\').to_string(),
+        ),
+        ExprKind::ArrayLiteral(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+        ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => {
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            }
+        }
+        _ => super::merge_temps::fallback_expr_type(arg),
+    }
+}
+
+/// Returns whether an argument is clearly outside a parameter's declared PHP type.
+///
+/// Only clear storage mismatches are rejected here. Scalar-to-scalar coercions stay on the
+/// callee's ordinary conversion path, and `Mixed`/union arguments are left alone because this
+/// pre-check is intentionally narrower than the checker.
+fn callable_argument_is_clearly_incompatible(
+    ctx: &LoweringContext<'_, '_>,
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    if matches!(actual, PhpType::Mixed | PhpType::Union(_)) {
+        return false;
+    }
+    match expected.codegen_repr() {
+        PhpType::Mixed => false,
+        PhpType::Union(members) => members
+            .iter()
+            .all(|member| callable_argument_is_clearly_incompatible(ctx, member, actual)),
+        PhpType::Object(target) => match actual.codegen_repr() {
+            PhpType::Void => true,
+            PhpType::Object(actual) => {
+                let target = target.trim_start_matches('\\');
+                let actual = actual.trim_start_matches('\\');
+                if actual.eq_ignore_ascii_case(target)
+                    || crate::ir_lower::expr::class_extends_class(ctx, actual, target)
+                {
+                    return false;
+                }
+                !ctx.classes
+                    .get(actual)
+                    .is_some_and(|info| {
+                        info.interfaces
+                            .iter()
+                            .any(|interface| interface.eq_ignore_ascii_case(target))
+                    })
+            }
+            _ => true,
+        },
+        PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False => {
+            matches!(
+                actual.codegen_repr(),
+                PhpType::Object(_)
+                    | PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+                    | PhpType::Iterable
+            )
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            matches!(
+                actual.codegen_repr(),
+                PhpType::Object(_)
+                    | PhpType::Str
+                    | PhpType::Int
+                    | PhpType::Float
+                    | PhpType::Bool
+                    | PhpType::False
+                    | PhpType::Void
+            )
+        }
+        _ => false,
+    }
+}
+
 /// Lowers one resolved static callable target to the corresponding EIR call opcode.
 pub(super) fn lower_static_callable_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -55,6 +146,56 @@ pub(super) fn lower_static_callable_call(
     match target {
         StaticCallableBinding::UserFunction(function_name) => {
             let sig = ctx.functions.get(&function_name).cloned();
+            // A callable string reaches this path without the checker's arity validation. A
+            // hidden argument collector also changes the physical parameter list, so the
+            // direct opcode cannot materialize this call; the descriptor path builds the
+            // collector and lets the callee raise its own ArgumentCountError.
+            let statically_positional = !crate::types::call_args::has_named_args(callback_args)
+                && !callback_args.iter().any(is_spread_arg);
+            if statically_positional {
+                if let Some(sig) = sig.as_ref() {
+                    let required = crate::types::call_args::required_param_count(sig);
+                    let maximum = sig
+                        .variadic
+                        .is_some()
+                        .then_some(usize::MAX)
+                        .unwrap_or(crate::types::call_args::regular_param_count(sig));
+                    if callback_args.len() < required || callback_args.len() > maximum {
+                        return Some(crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+                            ctx,
+                            &format!(
+                                "{}() expects {} arguments, {} given",
+                                function_name, required, callback_args.len()
+                            ),
+                            expr.span,
+                            PhpType::Mixed,
+                        ));
+                    }
+                }
+            }
+            if statically_positional && sig.as_ref().is_some_and(|sig| {
+                let regular = crate::types::call_args::regular_param_count(sig);
+                callback_args.iter().enumerate().any(|(index, arg)| {
+                    index < regular
+                        && sig.params.get(index).is_some_and(|(_, expected)| {
+                            callable_argument_is_clearly_incompatible(
+                                ctx,
+                                expected,
+                                &callable_argument_static_type(ctx, arg),
+                            )
+                        })
+                })
+            }) {
+                return Some(crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+                    ctx,
+                    &format!(
+                        "{}() received an argument of an incompatible type",
+                        function_name
+                    ),
+                    expr.span,
+                    PhpType::Mixed,
+                ));
+            }
             let php_type = call_return_type(ctx, &function_name, &[]);
             let return_alias = ctx.return_alias_summaries.function(&function_name)
                 .cloned().unwrap_or(ReturnArgAlias::Unknown);
@@ -125,6 +266,62 @@ pub(super) fn lower_static_callable_call(
             Some(call)
         }
         StaticCallableBinding::Builtin(function_name) => {
+            let sig = call_signature(
+                ctx,
+                &function_name,
+                source_prefers_extension_builtin(&function_name),
+            );
+            // A dynamic call site reaches this path with arguments the checker never validated
+            // against the builtin's signature (for example a literal-foreach callable). If the
+            // count cannot bind, leave the call to the runtime descriptor path so PHP's
+            // ArgumentCountError is raised at execution time instead of failing codegen. Named
+            // and spread calls keep the direct planner, which owns their binding rules.
+            let statically_positional = !crate::types::call_args::has_named_args(callback_args)
+                && !callback_args.iter().any(is_spread_arg);
+            if statically_positional {
+                if let Some(sig) = sig.as_ref() {
+                    let required = crate::types::call_args::required_param_count(sig);
+                    let maximum = sig
+                        .variadic
+                        .is_some()
+                        .then_some(usize::MAX)
+                        .unwrap_or(sig.params.len());
+                    if callback_args.len() < required || callback_args.len() > maximum {
+                        return Some(crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+                            ctx,
+                            &format!(
+                                "{}() expects {} arguments, {} given",
+                                function_name, required, callback_args.len()
+                            ),
+                            expr.span,
+                            PhpType::Mixed,
+                        ));
+                    }
+                }
+            }
+            if statically_positional && sig.as_ref().is_some_and(|sig| {
+                let regular = crate::types::call_args::regular_param_count(sig);
+                callback_args.iter().enumerate().any(|(index, arg)| {
+                    index < regular
+                        && sig.params.get(index).is_some_and(|(_, expected)| {
+                            callable_argument_is_clearly_incompatible(
+                                ctx,
+                                expected,
+                                &callable_argument_static_type(ctx, arg),
+                            )
+                        })
+                })
+            }) {
+                return Some(crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+                    ctx,
+                    &format!(
+                        "{}() received an argument of an incompatible type",
+                        function_name
+                    ),
+                    expr.span,
+                    PhpType::Mixed,
+                ));
+            }
             if let Some(value) =
                 lower_class_introspection(ctx, &function_name, callback_args, expr)
             {
@@ -135,11 +332,6 @@ pub(super) fn lower_static_callable_call(
             {
                 return Some(value);
             }
-            let sig = call_signature(
-                ctx,
-                &function_name,
-                source_prefers_extension_builtin(&function_name),
-            );
             if let Some(call) = lower_packed_builtin_call(
                 ctx, &function_name, sig.as_ref(), callback_args, expr,
             ) {

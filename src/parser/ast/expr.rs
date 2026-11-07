@@ -405,6 +405,11 @@ pub enum StaticReceiver {
     Self_,
     Static,
     Parent,
+    /// `$class::$property` — the receiver expression names the class at run time.
+    ///
+    /// The optimizer folds a literal class string to `Named` before type checking; other
+    /// shapes remain dynamic and are rejected by the checker until codegen can resolve them.
+    Dynamic(Box<Expr>),
 }
 
 impl StaticReceiver {

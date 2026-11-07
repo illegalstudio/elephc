@@ -964,3 +964,16 @@ fn test_error_static_property_reference_requires_a_local_source() {
         "Static property reference assignment requires a local variable source",
     );
 }
+
+/// A runtime class receiver remains unsupported for static-property access.
+///
+/// A literal class string reaches codegen through the literal-foreach unroller or another
+/// compile-time pass; without that resolution the checker names the unsupported receiver
+/// instead of rejecting only at codegen.
+#[test]
+fn test_error_dynamic_static_property_requires_a_literal_class() {
+    expect_error(
+        "<?php class C { public static int $p = 1; } $c = 'C'; echo $c::$p;",
+        "Dynamic class access is not supported for a static property",
+    );
+}

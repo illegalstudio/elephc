@@ -21,7 +21,7 @@ pub(crate) fn source_constant_name(default: &Expr) -> Option<String> {
         StaticReceiver::Self_ => "self".into(),
         StaticReceiver::Parent => "parent".into(),
         StaticReceiver::Static => "static".into(),
-        StaticReceiver::Generic(_) => return None,
+        StaticReceiver::Generic(_) | StaticReceiver::Dynamic(_) => return None,
     };
     Some(format!("{receiver}::{name}"))
 }

@@ -915,6 +915,10 @@ fn resolve_static_receiver_class(
         StaticReceiver::Named(name) => resolve_class_name(checker, name.as_str())
             .map(str::to_string)
             .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", name))),
+        StaticReceiver::Dynamic(_) => Err(CompileError::new(
+            span,
+            "Dynamic class access is not supported for a class constant",
+        )),
         StaticReceiver::Self_ | StaticReceiver::Static => checker
             .current_class
             .clone()

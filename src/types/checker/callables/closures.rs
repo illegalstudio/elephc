@@ -626,6 +626,7 @@ impl Checker {
             ),
             StaticReceiver::Named(name) => Ok(self.resolve_class_name_for_metadata(name.as_str())),
             StaticReceiver::Self_ | StaticReceiver::Static => Ok(self.current_class.clone()),
+            StaticReceiver::Dynamic(_) => Ok(None),
             StaticReceiver::Parent => {
                 let Some(current_class) = self.current_class.as_ref() else {
                     return Ok(None);

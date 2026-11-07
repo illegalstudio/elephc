@@ -301,11 +301,19 @@ fn test_prefix_incdec_declines_a_variable_with_a_place_suffix() {
         );
     }
 
-    // `?->` and `$o::$n` are places the desugar does not support either, so they end at the
-    // fallback error. What matters is the same thing: NEITHER silently becomes `++$o`.
-    for source in ["<?php echo ++$o?->n;", "<?php echo ++$o::$n;"] {
-        assert!(parse_fails(source), "{source} must not parse as ++$o");
-    }
+    // `?->` is a place the desugar does not support, so it ends at the fallback error. What
+    // matters is that it does not silently become `++$o`.
+    assert!(parse_fails("<?php echo ++$o?->n;"), "?-> must not parse as ++$o");
+
+    // `$o::$n` IS a static-property place now: the parser accepts a runtime class receiver
+    // and the optimizer folds a literal class string before type checking. The increment has
+    // to desugar the place rather than land on `$o`.
+    let dynamic_static = parse_source("<?php echo ++$o::$n;");
+    let parsed = echoed_expr(&dynamic_static);
+    assert!(
+        matches!(parsed, ExprKind::Assignment { prelude, .. } if !prelude.is_empty()),
+        "$o::$n must desugar the static-property place, got {parsed:?}"
+    );
 
     // The bare variable still takes the dedicated node: the guard narrows the fast path, it
     // does not remove it.

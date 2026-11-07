@@ -44,6 +44,15 @@ receiver or index can still invalidate facts. Ambiguous spans retain no proof.
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 
+The pre-check fold also unrolls a literal `foreach` whose body is a simple,
+control-transfer-free sequence that constructs a Reflection object from the loop
+variable, and propagates a literal array local across unrelated setup statements
+until a statement can actually write it. Each unrolled iteration receives a
+distinct source column so the checker's span-keyed binding decisions stay unique.
+`get_extension_funcs("intl")` and a two-literal `range()` fold to literal arrays so
+those loops become unrollable; `C::$property = &$local` is parsed into the
+equivalent value store plus local reference binding.
+
 The pre-check target fold resolves `function_exists()` guards using known string
 assignments, constants, and concatenations. Its narrow string-fact environment
 substitutes only availability arguments, leaving ordinary variable reads intact

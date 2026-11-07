@@ -17,12 +17,14 @@
 
 mod class_constants;
 mod functions;
+mod uconverter_callbacks;
 
 use crate::optimize::reachability::PreludeInventory;
 use crate::parser::ast::{
     BinOp, CastType, Expr, Stmt, StmtKind, TypeExpr,
 };
 use crate::prelude_prune::usage;
+use self::uconverter_callbacks::uconverter_callback_helpers;
 use crate::synthetic_class::{
     class, e_array, e_array_assoc, e_binop, e_call, e_cast, e_class_const, e_concat, e_concat_all, e_const,
     e_float, e_index, e_instance_of, e_int, e_not, e_method_call, e_new, e_new_static, e_null, e_prop, e_self_call, e_static_call, e_str, e_ternary, e_this_prop, e_var, function,
@@ -53,7 +55,13 @@ pub fn program_uses_intl(program: &[Stmt]) -> bool {
         return true;
     }
     let constant_names = intl_constant_names();
-    usage.constants.iter().any(|name| constant_names.iter().any(|known| known == name))
+    // `get_extension_funcs("intl")` asks for this surface by name even though the source
+    // never spells an Intl symbol. The optimizer folds the literal call to the contract's
+    // function list, and dynamic calls from that list need the bridge linked.
+    let asks_for_extension = usage.functions.contains("get_extension_funcs")
+        && usage.literals.contains("intl");
+    asks_for_extension
+        || usage.constants.iter().any(|name| constant_names.iter().any(|known| known == name))
         || usage.literals.iter().any(|name| constant_names.iter().any(|known| known == name))
         // `ini_set("intl.*")` is rewritten to the prelude helper, which must exist even when the
         // program mentions no other Intl symbol.
@@ -69,6 +77,11 @@ pub(crate) fn is_intl_class(name: &str) -> bool {
 /// Returns whether the program names an Intl function or class (not only a constant).
 fn program_needs_bridge(program: &[Stmt]) -> bool {
     let usage = usage::collect(program);
+    // The extension list asks for every public Intl function, so the bridge-backed prelude
+    // declarations must be present even when no individual function name is spelled.
+    if usage.functions.contains("get_extension_funcs") && usage.literals.contains("intl") {
+        return true;
+    }
     if elephc_builtin_contract::contracts()
         .iter()
         .filter(|contract| contract.module == elephc_builtin_contract::PhpModule::Intl)
@@ -1610,8 +1623,27 @@ fn helper_functions() -> Vec<Stmt> {
             ])
             .build(),
     );
+    helpers.push(
+        function("__elephc_collator_sort_text")
+            .param("value", t_mixed())
+            .returns(TypeExpr::Str)
+            .body(vec![
+                s_if(e_call("is_object", vec![e_var("value")]), vec![
+                    s_try(
+                        vec![s_return(e_cast(CastType::String, e_var("value")))],
+                        vec![(vec!["Throwable"], None, vec![s_return(e_str(""))])],
+                        None,
+                    ),
+                ], vec![], None),
+                s_if(e_call("is_array", vec![e_var("value")]), vec![s_return(e_str("Array"))], vec![], None),
+                s_return(e_cast(CastType::String, e_var("value"))),
+            ])
+            .build(),
+    );
+    helpers.extend(uconverter_callback_helpers());
     helpers
 }
+
 
 /// Builds every synthetic procedural Intl function that crosses the bridge.
 fn function_declarations() -> Vec<Stmt> {
@@ -2998,7 +3030,7 @@ fn build_normalizer_class() -> Stmt {
 }
 
 /// Builds `isset(<value>)` as the function call the parser emits.
-fn call_isset(value: Expr) -> Expr {
+pub(super) fn call_isset(value: Expr) -> Expr {
     e_call("isset", vec![value])
 }
 
@@ -3934,7 +3966,9 @@ fn build_list_formatter_class() -> Stmt {
 
 /// Builds the `UConverter` class and its ICU-backed conversion surface.
 fn build_uconverter_class() -> Stmt {
-    let mut builder = class("UConverter").prop("__elephc_handle", TypeExpr::Int, Some(e_int(0)));
+    let mut builder = class("UConverter")
+        .prop("__elephc_handle", TypeExpr::Int, Some(e_int(0)))
+        .static_prop("__elephc_callback_started", t_array(), Some(e_array(vec![])));
     for (constant, value) in constants_for("UConverter") {
         builder = builder.constant(constant, const_value_expr(value));
     }
@@ -3976,9 +4010,12 @@ fn build_uconverter_class() -> Stmt {
             .param("str", TypeExpr::Str)
             .param_default("reverse", TypeExpr::Bool, crate::synthetic_class::e_bool(false))
             .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
-            .body(vec![s_return(e_method_call(e_var("this"), "__elephc_call", vec![
-                e_str("convert"), e_array(vec![e_var("str"), e_var("reverse")]),
+            .body(vec![s_return(e_call("__elephc_uconverter_convert_callbacks", vec![
+                e_var("this"), e_var("str"), e_var("reverse"),
             ]))]))
+        .method(method("__destruct").body(vec![
+            s_expr(e_call("__elephc_uconverter_close_callbacks", vec![e_var("this")])),
+        ]))
         .method(method("getSourceEncoding").returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
             .body(vec![s_return(e_method_call(e_var("this"), "__elephc_call", vec![e_str("get_source_encoding"), e_array(vec![])]))]))
         .method(method("getDestinationEncoding").returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
@@ -4055,7 +4092,7 @@ fn build_uconverter_class() -> Stmt {
         .method(method("toUCallback")
             .param("reason", TypeExpr::Int)
             .param("source", t_mixed())
-            .param("codePoint", TypeExpr::Int)
+            .param("codePoint", t_mixed())
             .param_by_ref("error", Some(t_mixed()))
             .returns(t_nullable(t_mixed()))
             .body(vec![s_return(e_null())]))
@@ -4582,17 +4619,23 @@ fn build_iterator_class() -> Stmt {
         .prop("__elephc_items", t_array(), Some(e_array(vec![])))
         .prop("__elephc_keys", t_array(), Some(e_array(vec![])))
         .prop("__elephc_index", TypeExpr::Int, Some(e_int(0)))
+        // php-src's IntlIterator owns an internal iterator that references the PHP object.
+        // Keep the same self-cycle so `gc_collect_cycles()` reports one collected cycle after
+        // the last caller reference is dropped, as the php-src cycle-management test expects.
+        .prop("__elephc_cycle", t_mixed(), Some(e_null()))
         .implements("Iterator")
         .method(method("__construct").protected().body(vec![]))
         .method(method("__elephc_from_array").static_().param("items", t_mixed()).returns(t_class("static")).body(vec![
             s_assign("_object", e_new_static(vec![])),
             s_prop_assign(e_var("_object"), "__elephc_items", e_var("items")),
             s_prop_assign(e_var("_object"), "__elephc_keys", e_call("array_keys", vec![e_cast(CastType::Array, e_var("items"))])),
+            s_prop_assign(e_var("_object"), "__elephc_cycle", e_var("_object")),
             s_return(e_var("_object")),
         ]))
         .method(method("__elephc_from_handle").static_().param("handle", TypeExpr::Int).returns(t_class("static")).body(vec![
             s_assign("_object", e_new_static(vec![])),
             s_prop_assign(e_var("_object"), "__elephc_handle", e_var("handle")),
+            s_prop_assign(e_var("_object"), "__elephc_cycle", e_var("_object")),
             s_return(e_var("_object")),
         ]))
         .method(method("current").returns(t_mixed()).body(vec![s_return(e_index(e_this_prop("__elephc_items"), e_index(e_this_prop("__elephc_keys"), e_this_prop("__elephc_index"))))]))
@@ -6023,7 +6066,7 @@ fn build_collator_class() -> Stmt {
                 crate::synthetic_class::s_array_push("_values", e_var("_value")),
                 crate::synthetic_class::s_array_push(
                     "_sort_keys",
-                    e_cast(CastType::String, e_var("_value")),
+                    e_call("__elephc_collator_sort_text", vec![e_var("_value")]),
                 ),
             ],
         );

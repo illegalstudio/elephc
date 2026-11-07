@@ -384,6 +384,7 @@ fn resolve_property_receiver(object: &Expr) -> Option<InstanceEffectReceiver> {
                     class_name: name.as_str().to_string(),
                     exact: true,
                 }),
+                crate::parser::ast::StaticReceiver::Dynamic(_) => None,
             }
         }
         _ => None,
@@ -512,6 +513,7 @@ fn resolve_instance_receiver(
                     class_name: name.as_str().to_string(),
                     exact: true,
                 }),
+                crate::parser::ast::StaticReceiver::Dynamic(_) => None,
             }
         }
         _ => None,
@@ -688,5 +690,6 @@ pub(super) fn resolve_static_receiver_class(receiver: &crate::parser::ast::Stati
                 .and_then(|context| context.parent_name.clone())
         }),
         crate::parser::ast::StaticReceiver::Static => None,
+        crate::parser::ast::StaticReceiver::Dynamic(_) => None,
     }
 }

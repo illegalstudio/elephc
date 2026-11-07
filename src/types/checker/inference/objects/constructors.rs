@@ -884,6 +884,10 @@ impl Checker {
                 "StaticReceiver::Generic must be instantiated by generics::classes"
             ),
             StaticReceiver::Named(name) => Ok(name.as_canonical()),
+            StaticReceiver::Dynamic(_) => Err(CompileError::new(
+                span,
+                "Dynamic class access is not supported for a class constant",
+            )),
             StaticReceiver::Self_ | StaticReceiver::Static => {
                 self.current_class.clone().ok_or_else(|| {
                     CompileError::new(span, "Cannot use self::class outside a class context")
@@ -1127,6 +1131,10 @@ impl Checker {
             StaticReceiver::Generic(_) => unreachable!(
                 "StaticReceiver::Generic must be instantiated by generics::classes"
             ),
+            StaticReceiver::Dynamic(_) => Err(CompileError::new(
+                span,
+                "Dynamic class access is not supported for a fiber callable",
+            )),
             StaticReceiver::Named(class_name) => self
                 .resolve_fiber_callable_class_name(class_name.as_str())
                 .map(str::to_string)

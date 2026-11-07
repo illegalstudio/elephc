@@ -219,6 +219,7 @@ fn normalize_default_tree(default: &mut Option<Expr>, owner_class: &str, parent_
                 "written_class_receiver leaves no generic receiver behind"
             ),
             StaticReceiver::Named(_) => None,
+            StaticReceiver::Dynamic(_) => None,
             StaticReceiver::Self_ => Some(owner_class),
             StaticReceiver::Static => None,
             StaticReceiver::Parent => parent_class,

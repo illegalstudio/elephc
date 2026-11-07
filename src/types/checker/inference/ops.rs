@@ -1244,6 +1244,10 @@ impl Checker {
             StaticReceiver::Generic(_) => unreachable!(
                 "StaticReceiver::Generic must be instantiated by generics::classes"
             ),
+            StaticReceiver::Dynamic(_) => Err(CompileError::new(
+                span,
+                "Dynamic class access is not supported for a callable array",
+            )),
             StaticReceiver::Named(name) => self
                 .resolve_callable_array_class_name(name.as_str())
                 .map(str::to_string)

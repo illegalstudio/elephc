@@ -549,6 +549,10 @@ impl Checker {
                 "StaticReceiver::Generic must be instantiated by generics::classes"
             ),
             StaticReceiver::Named(class_name) => Ok(class_name.as_str().to_string()),
+            StaticReceiver::Dynamic(_) => Err(CompileError::new(
+                expr.span,
+                "Dynamic class access is not supported for a static property",
+            )),
             StaticReceiver::Self_ => self.current_class.as_ref().cloned().ok_or_else(|| {
                 CompileError::new(expr.span, "Cannot use self:: outside class method scope")
             }),

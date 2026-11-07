@@ -950,6 +950,7 @@ impl Scanner<'_> {
             StaticReceiver::Named(name) => Some(self.class_key(name.as_str())),
             StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.as_deref().map(php_symbol_key),
             StaticReceiver::Parent => self.parent_class.as_deref().map(php_symbol_key),
+            StaticReceiver::Dynamic(_) => None,
         }
     }
 
