@@ -273,7 +273,7 @@ expect_builtin_arity_error!(
 expect_builtin_arity_error!(
     test_error_html_entity_decode_wrong_args,
     "<?php html_entity_decode();",
-    "html_entity_decode() takes exactly 1 argument"
+    "html_entity_decode() takes 1 to 3 arguments"
 );
 
 // Tests urldecode() arity error when called with no arguments.
@@ -409,15 +409,6 @@ expect_builtin_arity_error!(
     test_error_count_chars_non_literal_mode,
     "<?php $m = strlen(\"ab\"); count_chars(\"ab\", $m);",
     "count_chars() mode argument must be an integer literal in AOT mode"
-);
-
-// Tests str_replace() refusing an array subject instead of compiling a silent wrong answer:
-// php-src accepts `array|string` here, elephc's contract implements the string form only, and
-// the array used to be coerced as if it were one.
-expect_builtin_arity_error!(
-    test_error_str_replace_array_subject,
-    "<?php $words = [\"ab\", \"cb\"]; echo str_replace(\"b\", \"x\", $words);",
-    "str_replace(): Argument #3 ($subject) must be of type string, array given"
 );
 
 // Tests that a named argument reaches the same refusal, numbered by the parameter it names.

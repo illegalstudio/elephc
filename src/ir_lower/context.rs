@@ -247,6 +247,7 @@ pub(crate) struct LoweringSnapshot {
     /// Casts that borrowed a concrete string local inside this speculative state.
     provisional_borrowed_string_casts: HashSet<String>,
     append_update_cell_aliases: HashSet<String>,
+    property_ref_alias_sources: HashMap<String, Expr>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
@@ -362,6 +363,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// This sealed replay proof survives speculative rollback, unlike provisional value IDs.
     pub(crate) owned_string_offset_sites: HashSet<Span>,
     pub(crate) append_update_cell_aliases: HashSet<String>,
+    /// Instance properties behind `$local =& $object->property` aliases.
+    ///
+    /// A mixed by-reference parameter cannot receive the property's raw concrete cell. The call
+    /// boundary rewrites the alias to this property place, passes a boxed temporary, and writes
+    /// the temporary back through the property so PHP's typed-property coercion runs.
+    pub(crate) property_ref_alias_sources: HashMap<String, Expr>,
     initialized_slots: HashSet<LocalSlotId>,
     /// PHP slots assigned by an already lowered store, including conditional stores.
     assigned_php_local_slots: HashSet<LocalSlotId>,
@@ -745,6 +752,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             this_storage_stays_concrete: false,
             eval_reference_snapshots: false,
             append_update_cell_aliases: HashSet::new(),
+            property_ref_alias_sources: HashMap::new(),
             argument_guards: HashMap::new(),
             argument_guard_scopes: Vec::new(),
             write_operand_is_borrowed: false,
@@ -821,6 +829,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             owned_string_cast_locals: self.owned_string_cast_locals.clone(),
             provisional_borrowed_string_casts: self.provisional_borrowed_string_casts.clone(),
             append_update_cell_aliases: self.append_update_cell_aliases.clone(),
+            property_ref_alias_sources: self.property_ref_alias_sources.clone(),
             argument_guards: self.argument_guards.clone(),
             argument_guard_scopes: self.argument_guard_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
@@ -935,6 +944,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.owned_string_cast_locals = snapshot.owned_string_cast_locals;
         self.provisional_borrowed_string_casts = snapshot.provisional_borrowed_string_casts;
         self.append_update_cell_aliases = snapshot.append_update_cell_aliases;
+        self.property_ref_alias_sources = snapshot.property_ref_alias_sources;
         self.argument_guards = snapshot.argument_guards;
         self.argument_guard_scopes = snapshot.argument_guard_scopes;
         self.eval_barrier_active = snapshot.eval_barrier_active;
@@ -1668,6 +1678,31 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn local_is_promotable_to_ref_cell(&self, name: &str) -> bool {
         self.local_can_own_reference_cell(name)
             && self.local_slots
+                .get(name)
+                .is_some_and(|slot| self.initialized_slots.contains(slot))
+    }
+
+    /// Returns whether a local can be given canonical Mixed ref-cell storage even before its
+    /// first assignment.
+    ///
+    /// A never-declared variable passed by reference is created by the binding itself: the
+    /// promotion boxes `null` into the cell the callee writes through. The ordinary
+    /// `local_is_promotable_to_ref_cell` predicate excludes an uninitialized slot, which is
+    /// exactly the state of those arguments.
+    pub(crate) fn local_is_declarable_ref_cell(&self, name: &str) -> bool {
+        if self.extern_global_type(name).is_some() || self.eval_scope_read_param.is_some() {
+            return false;
+        }
+        let kind = self
+            .local_kinds
+            .get(name)
+            .copied()
+            .unwrap_or(LocalKind::PhpLocal);
+        kind == LocalKind::PhpLocal
+            && !self.uses_global_storage(name, kind)
+            && !self.is_borrowed_element_ref_local(name)
+            && !self
+                .local_slots
                 .get(name)
                 .is_some_and(|slot| self.initialized_slots.contains(slot))
     }

@@ -1538,10 +1538,8 @@ echo $alias . "|" . $c->p . "|" . $o->p;
 /// Verifies an override ARRAY ELEMENT that is itself a reference never reaches the applicator.
 ///
 /// php 8.5 raises `Cannot assign by reference when cloning with updated properties` at run time.
-/// This compiler has no by-reference element representation at all, so both syntactic ways of
-/// building one are refused before any clone runs. The test pins that refusal so the day element
-/// references become representable, the clone path is revisited rather than silently applying an
-/// aliased value.
+/// The array element now really is a tag-11 reference cell, and the generated applicator runs
+/// the per-entry reference guard before assigning it.
 #[test]
 fn test_clone_function_never_receives_a_by_reference_override_element() {
     let source = r#"<?php
@@ -1550,14 +1548,12 @@ $v = 5;
 $ov = ["n" => &$v];
 clone(new R(), $ov);
 "#;
-    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
-    let error = elephc::parser::parse(&tokens).expect_err("a by-reference element must be refused");
+    let out = compile_and_run_capture(source);
+    assert!(!out.success, "the override must be refused");
+    let output = format!("{}{}", out.stdout, out.stderr);
     assert!(
-        error
-            .message
-            .contains("Reference elements in array literals"),
-        "unexpected diagnostic: {}",
-        error.message
+        output.contains("Cannot assign by reference when cloning with updated properties"),
+        "unexpected output: {output}"
     );
 }
 

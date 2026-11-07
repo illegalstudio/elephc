@@ -321,7 +321,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // delete every one of those declarations again (measured: 40 functions in, 1 out,
     // `curl_init` and `CurlHandle` both gone). See
     // `curl_prelude::reachability_tests::forcing_the_curl_group_keeps_the_whole_surface`.
-    let forced_groups: HashSet<String> = [
+    let mut forced_groups: HashSet<String> = [
         (with_crates.contains("pdo"), "pdo"),
         (with_crates.contains("mysqli"), "mysqli"),
         (with_crates.contains("tz"), "tz"),
@@ -335,6 +335,9 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
     .collect();
+    if crate::intl::program_uses_intl(&ast) {
+        forced_groups.insert("intl".to_string());
+    }
 
     // Snapshot the USER-declared function/class names for `opcache.preload`'s
     // `preload_statistics`, taken HERE — after include resolution but BEFORE any compiler prelude
@@ -601,6 +604,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         )
     };
     timings.record_since("fileinfo-prelude", phase_started);
+    // Intl declarations call `pack`, so they must be injected before the pack prelude's
+    // usage scan. The managed ICU archive is linked only when a registry Intl builtin or a
+    // synthetic bridge declaration is actually reachable.
+    let intl_force = with_crates.contains("intl");
+    let ast = crate::intl::inject_if_used(ast, intl_force, &mut prelude_inventory);
     // Inject the Termwind-facing DOM HTML subset only when the program names a
     // DOM class, so other binaries never carry the HTML walker. This is an
     // interim prelude (choice B vs draft PR #654's native libxml stack).
@@ -1025,6 +1033,9 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let mut exported_function_names: HashSet<String> =
         exported_functions.keys().cloned().collect();
     exported_function_names.extend(exported_classes.iter().map(|class| format!("{}::", class.name)));
+    if crate::intl::program_uses_intl(&ast) {
+        exported_function_names.extend(crate::intl::root_function_names());
+    }
     // The hoisted `opcache.preload` body is a reachability ROOT. Nothing in PHP calls it —
     // the `--web` entry stub does, in assembly, before the request loop — so the declaration
     // pruner sees an unreferenced function and removes it, taking the preload's side effects

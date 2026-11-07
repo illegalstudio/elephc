@@ -31,7 +31,11 @@ pub(super) fn reflection_function_metadata(
     };
     let reflected_name = function.name.trim_start_matches('\\').to_string();
     let required_parameter_count = reflection_required_parameter_count(signature);
-    let type_metadata = reflection_return_type_metadata(signature);
+    let contract = elephc_builtin_contract::lookup(&function_name);
+    let mut type_metadata = reflection_return_type_metadata(signature);
+    if contract.is_some_and(|contract| type_spec_allows_null(&contract.returns)) {
+        allow_null_type_metadata(type_metadata.as_mut());
+    }
     let declaring_function = ReflectionDeclaringFunctionMember::Function {
         name: reflected_name.clone(),
         attr_names: function.attribute_names.clone(),
@@ -56,6 +60,16 @@ pub(super) fn reflection_function_metadata(
         &[],
         Some(&function.source_defaults),
     )?;
+    if let Some(contract) = contract {
+        for member in &mut metadata.parameter_members {
+            if let Some(param) = contract.params.iter().find(|param| param.name == member.name) {
+                if type_spec_allows_null(&param.ty) {
+                    member.allows_null = true;
+                    allow_null_type_metadata(member.type_metadata.as_mut());
+                }
+            }
+        }
+    }
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
     metadata.is_deprecated = signature.deprecation.is_some();
@@ -77,7 +91,11 @@ pub(super) fn reflection_builtin_function_metadata(
             })
         });
     let required_parameter_count = reflection_required_parameter_count(signature);
-    let type_metadata = reflection_return_type_metadata(signature);
+    let contract = elephc_builtin_contract::lookup(&function_name);
+    let mut type_metadata = reflection_return_type_metadata(signature);
+    if contract.is_some_and(|contract| type_spec_allows_null(&contract.returns)) {
+        allow_null_type_metadata(type_metadata.as_mut());
+    }
     let declaring_function = ReflectionDeclaringFunctionMember::Function {
         name: function_name.to_string(),
         attr_names: Vec::new(),
@@ -100,10 +118,45 @@ pub(super) fn reflection_builtin_function_metadata(
         &[],
         None,
     )?;
+    if let Some(contract) = contract {
+        for member in &mut metadata.parameter_members {
+            if let Some(param) = contract.params.iter().find(|param| param.name == member.name) {
+                if type_spec_allows_null(&param.ty) {
+                    member.allows_null = true;
+                    allow_null_type_metadata(member.type_metadata.as_mut());
+                }
+            }
+        }
+    }
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
     metadata.is_deprecated = is_deprecated;
     Ok(metadata)
+}
+
+/// Returns whether a shared contract type admits PHP null.
+fn type_spec_allows_null(ty: &elephc_builtin_contract::TypeSpec) -> bool {
+    match ty {
+        elephc_builtin_contract::TypeSpec::Null
+        | elephc_builtin_contract::TypeSpec::Nullable(_) => true,
+        elephc_builtin_contract::TypeSpec::Union(members) => members.iter().any(|member| {
+            matches!(
+                member,
+                elephc_builtin_contract::TypeSpec::Null
+                    | elephc_builtin_contract::TypeSpec::Nullable(_)
+            )
+        }),
+        _ => false,
+    }
+}
+
+/// Marks retained named/union reflection metadata as nullable.
+fn allow_null_type_metadata(metadata: Option<&mut ReflectionParameterTypeMetadata>) {
+    match metadata {
+        Some(ReflectionParameterTypeMetadata::Named(named)) => named.allows_null = true,
+        Some(ReflectionParameterTypeMetadata::Union(union)) => union.allows_null = true,
+        Some(ReflectionParameterTypeMetadata::Intersection(_)) | None => {}
+    }
 }
 
 /// Returns the canonical callable-builtin name and signature for ReflectionFunction.

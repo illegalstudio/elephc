@@ -18,8 +18,10 @@ pub(in crate::ir_lower) fn lower_object_comparison_dispatch(module: &mut Module)
     classes.sort();
     let mut statements = Vec::new();
     for name in classes {
-        let Some(class) = elephc_builtin_contract::lookup_class(name) else { continue; };
-        let Some(method) = class.operators.and_then(|operators| operators.compare) else { continue; };
+        let compare = elephc_builtin_contract::lookup_class(name)
+            .and_then(|class| class.operators.and_then(|operators| operators.compare))
+            .or_else(|| intl_compare_method(name));
+        let Some(method) = compare else { continue; };
         let condition = e_binop(e_instance_of(e_var("left"), name), BinOp::Or,
             e_instance_of(e_var("right"), name));
         statements.push(s_if(condition, vec![s_return(e_static_call(name, method,
@@ -44,6 +46,12 @@ pub(in crate::ir_lower) fn lower_object_comparison_dispatch(module: &mut Module)
     function.flags.is_internal = true;
     function.flags.is_synthetic = true;
     module.add_function(function);
+}
+
+/// Returns the compare handler for a synthetic Intl class, which is not in the shared class
+/// catalog. Only the classes php-src gives a `compare_objects` handler are listed.
+fn intl_compare_method(name: &str) -> Option<&'static str> {
+    matches!(name, "IntlBreakIterator" | "IntlTimeZone").then_some("__elephc_compare")
 }
 
 /// Keeps the runtime callback ABI without creating unused owning parameter shadows.

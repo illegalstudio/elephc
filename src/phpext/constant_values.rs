@@ -51,8 +51,10 @@ pub(super) fn from_expression(expr: &Expr, depth: usize) -> Result<ConstantValue
             .map(|(key, value)| Ok(ConstantArrayEntry::Keyed(array_key(key)?, convert(value)?)))
             .collect::<Result<Vec<_>, CompileError>>()?),
         ExprKind::ArrayLiteralMixed(values) => ConstantValue::Array(values.iter().map(|entry| Ok(match entry {
-            ArrayEntry::Value(value) => ConstantArrayEntry::Value(convert(value)?),
-            ArrayEntry::Keyed(key, value) => ConstantArrayEntry::Keyed(array_key(key)?, convert(value)?),
+            ArrayEntry::Value(value) | ArrayEntry::Reference(value) =>
+                ConstantArrayEntry::Value(convert(value)?),
+            ArrayEntry::Keyed(key, value) | ArrayEntry::KeyedReference(key, value) =>
+                ConstantArrayEntry::Keyed(array_key(key)?, convert(value)?),
             ArrayEntry::Spread(value) => {
                 let value = if let ExprKind::Spread(inner) = &value.kind { inner } else { value };
                 spread(value, depth + 1)?

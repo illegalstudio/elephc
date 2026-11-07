@@ -32,7 +32,8 @@ pub(super) fn reflection_constant_array_entries_fold(
     let mut max_int: Option<i64> = None;
     for entry in entries {
         match entry {
-            crate::parser::ast::ArrayEntry::Value(expr) => {
+            crate::parser::ast::ArrayEntry::Value(expr)
+            | crate::parser::ast::ArrayEntry::Reference(expr) => {
                 let value = reflection_constant_value(
                     ctx,
                     current_class,
@@ -50,7 +51,8 @@ pub(super) fn reflection_constant_array_entries_fold(
                     value,
                 });
             }
-            crate::parser::ast::ArrayEntry::Keyed(key_expr, value_expr) => {
+            crate::parser::ast::ArrayEntry::Keyed(key_expr, value_expr)
+            | crate::parser::ast::ArrayEntry::KeyedReference(key_expr, value_expr) => {
                 let key = reflection_constant_array_key_expr(
                     ctx,
                     current_class,

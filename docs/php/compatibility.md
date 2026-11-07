@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **1056 / 2169** (49%), classes **188 / 329** (57%), constants **1361 / 3180** (43%).
+Overall coverage: functions **1243 / 2169** (57%), classes **188 / 329** (57%), constants **1361 / 3180** (43%).
 
 ## Coverage by PHP module
 
@@ -38,7 +38,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `gmp` | 51 / 51 · 100% | 1 / 1 · 100% | 9 / 9 · 100% |
 | `hash` | 9 / 20 · 45% | 1 / 1 · 100% | 0 / 40 · 0% |
 | [`iconv`](./iconv.md#functions) | 10 / 10 · 100% | - | 4 / 4 · 100% |
-| `intl` | 0 / 187 · 0% | 0 / 22 · 0% | 0 / 170 · 0% |
+| [`intl`](./intl.md#functions) | 187 / 187 · 100% | 0 / 22 · 0% | 0 / 170 · 0% |
 | `json` | 5 / 5 · 100% | 2 / 2 · 100% | 29 / 29 · 100% |
 | `ldap` | 0 / 55 · 0% | 0 / 3 · 0% | 0 / 92 · 0% |
 | `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 17 / 28 · 61% |
@@ -93,6 +93,7 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `gd` functions: 83 / 0
 - `gd` constants: 67 / 0
 - `gmp` constants: 9 / 0
+- `intl` functions: 187 / 0
 - `mysqli` functions: 84 / 0
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0

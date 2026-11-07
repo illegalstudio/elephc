@@ -25,6 +25,8 @@ pub mod codegen_support;
 pub mod compiler_stack;
 /// Conditional compilation directives.
 pub mod conditional;
+/// Shared trailing-timezone parsing for date builtins and the optimizer.
+mod date_time_zone;
 /// `ext/curl` easy-handle standard-library prelude injection (`CurlHandle` + `curl_*`).
 pub mod curl_prelude;
 /// Termwind-facing DOM HTML subset (`DOMDocument::loadHTML` and node walk).
@@ -127,6 +129,8 @@ pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).
 pub mod tz_prelude;
 pub mod xml_prelude;
+/// Managed ICU-backed `ext/intl` synthetic AST surface.
+pub mod intl;
 mod simplexml_prelude;
 pub mod fileinfo_prelude;
 pub mod tokenizer_prelude;

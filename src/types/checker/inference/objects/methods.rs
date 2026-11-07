@@ -1371,12 +1371,26 @@ impl Checker {
             return Ok(return_ty);
         }
         let mut arg_types = Vec::new();
-        for arg in &normalized_args {
-            arg_types.push(if allow_by_ref_spread {
-                self.infer_descriptor_call_arg_type(arg, env)?
+        let static_ref_params = self
+            .classes
+            .get(class_name)
+            .and_then(|info| info.static_methods.get(&method_key))
+            .map(|method_sig| method_sig.ref_params.clone())
+            .unwrap_or_default();
+        for (index, arg) in normalized_args.iter().enumerate() {
+            // A never-declared variable bound by reference is created by the call. Pre-inferring
+            // it here raised `Undefined variable` even though the callee writes it.
+            let undefined_by_ref = static_ref_params.get(index).copied().unwrap_or(false)
+                && matches!(&arg.kind, ExprKind::Variable(name) if !env.contains_key(name));
+            if undefined_by_ref {
+                arg_types.push(PhpType::Mixed);
             } else {
-                self.infer_type(arg, env)?
-            });
+                arg_types.push(if allow_by_ref_spread {
+                    self.infer_descriptor_call_arg_type(arg, env)?
+                } else {
+                    self.infer_type(arg, env)?
+                });
+            }
         }
 
         let direct_impl_class_name = if parent_call || self_call {

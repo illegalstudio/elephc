@@ -23,7 +23,10 @@ pub(crate) fn fold_spreadless_mixed_array_literal(
     let mut pairs = Vec::with_capacity(entries.len());
     for entry in entries {
         match entry {
-            ArrayEntry::Spread(_) => return None,
+            // Reference entries cannot be flattened into the plain associative form without
+            // losing their shared-cell semantics.
+            ArrayEntry::Spread(_) | ArrayEntry::Reference(_) | ArrayEntry::KeyedReference(_, _) =>
+                return None,
             ArrayEntry::Keyed(key, value) => {
                 if let Some(int_key) = literal_int_key(key)? {
                     max_int = Some(max_int.map_or(int_key, |max| max.max(int_key)));

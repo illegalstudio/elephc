@@ -3704,7 +3704,11 @@ fn runtime_debug_info_entry(
     let Some(impl_class) = class_info.method_impl_classes.get(&key) else {
         return none;
     };
-    if classes.get(impl_class).map_or(true, |owner| owner.is_internal && !is_hosted_extension_class(owner)) {
+    if classes.get(impl_class).map_or(true, |owner| {
+        owner.is_internal
+            && !is_hosted_extension_class(owner)
+            && !is_intl_runtime_debug_info_class(impl_class)
+    }) {
         return none;
     }
     let Some(return_type) = class_info.methods.get(&key).map(|sig| sig.return_type.codegen_repr()) else {
@@ -3719,6 +3723,15 @@ fn runtime_debug_info_entry(
         return none;
     }
     Ok((source_instance_method_entry(class_info, &key, classes)?, returns_nothing))
+}
+
+/// IntlTimeZone's synthetic `__debugInfo` is a plain PHP projection, safe for the runtime
+/// walk; unlike the SPL containers it has no NUL-mangled keys. User subclasses inherit it.
+fn is_intl_runtime_debug_info_class(name: &str) -> bool {
+    matches!(
+        php_symbol_key(name).as_str(),
+        "intltimezone" | "intlcalendar" | "intlgregoriancalendar"
+    )
 }
 
 /// Selects the source vtable entry without adapting a physical source-variadic slot.
@@ -3956,6 +3969,12 @@ fn var_dump_descriptor_rows(
         .iter()
         .enumerate()
         .filter_map(|(layout_index, (prop_name, prop_ty))| {
+            // `__elephc_*` slots are compiler storage for synthetic internal classes (an ICU
+            // bridge handle, a break-iterator cursor). PHP's internal objects keep that state
+            // in C and never render it, so every object renderer must skip these rows.
+            if prop_name.starts_with("__elephc_") {
+                return None;
+            }
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, layout_index, prop_name,
             );
@@ -4402,6 +4421,7 @@ fn canonical_scalar_property_flag(class: &ClassInfo, index: usize, ty: &PhpType)
 
 /// Returns the logical serialization tag of a property's native payload after following its cell.
 fn serialized_property_payload_tag(prop_ty: &PhpType) -> u64 {
+
     if prop_ty.codegen_repr() == PhpType::TaggedScalar {
         return TAGGED_SCALAR_PROPERTY_TAG;
     }

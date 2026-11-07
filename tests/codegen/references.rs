@@ -833,3 +833,121 @@ ok -9223372036854775808\n\
 err Cannot assign float to reference held by property C::$n of type int\n"
     );
 }
+
+/// Regression: an undeclared variable passed by reference to a static method is created by
+/// the binding. Two calls in one scope (the second after the variable is read) previously
+/// reused an unpromoted frame word and crashed in the callee's write-back.
+#[test]
+fn test_undefined_local_static_method_by_ref_output_twice() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public static function assign(&$out = null): int {
+        $out = 42;
+        return 1;
+    }
+}
+var_dump(T::assign($value), $value);
+var_dump(T::assign($value), $value);
+"#,
+    );
+    assert_eq!(out, "int(1)\nint(42)\nint(1)\nint(42)\n");
+}
+
+/// Regression: the same declaration called from a nested expression still publishes the
+/// caller variable after the call.
+#[test]
+fn test_undefined_local_static_method_by_ref_output_nested() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public static function pass(string $id, &$system = null): string {
+        $system = true;
+        return $id;
+    }
+}
+var_dump(T::pass("Europe/Lisbon", $isSystem));
+var_dump($isSystem);
+"#,
+    );
+    assert_eq!(out, "string(13) \"Europe/Lisbon\"\nbool(true)\n");
+}
+
+/// A `[&$x]` element shares one reference set with the local in both directions, and copies of
+/// the array keep sharing that set the way php references do.
+#[test]
+fn test_array_literal_reference_element_aliases_local_both_ways() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 24;
+$arr = ['k' => &$a, 'x' => 1];
+$a = 9;
+echo $arr['k'], "|";
+$arr['k'] = 21;
+echo $a, "|";
+$copy = $arr;
+$copy['k'] = 5;
+echo $a, ":", $arr['k'], ":", $copy['k'], "|";
+echo $arr['x'];
+"#,
+    );
+    assert_eq!(out, "9|21|5:5:5|1");
+}
+
+/// An automatic integer key is materialized when a reference element appears in a list literal.
+#[test]
+fn test_array_literal_reference_element_with_automatic_key() {
+    let out = compile_and_run(
+        r#"<?php
+$en = 'en';
+$data = ['de', &$en];
+$en = 'fr';
+echo $data[1], "|";
+$data[1] = 'it';
+echo $en;
+"#,
+    );
+    assert_eq!(out, "fr|it");
+}
+
+/// `C::$items = &$local` aliases the static slot to the local in both directions.
+///
+/// The static-property parser desugars the reference form into the value store PHP performs
+/// when the reference set is created, then binds the local to the static ref slot. Mutating
+/// either name must therefore be visible through the other, including array appends.
+#[test]
+fn test_static_property_reference_assignment_aliases_a_local() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticReferenceOwner { public static array $items = []; }
+$values = [3, 1, 2];
+StaticReferenceOwner::$items = &$values;
+StaticReferenceOwner::$items[] = 4;
+echo implode(",", $values), "|";
+$values[] = 5;
+echo implode(",", StaticReferenceOwner::$items);
+"#,
+    );
+    assert_eq!(out, "3,1,2,4|3,1,2,4,5");
+}
+
+/// `var_dump` marks a reference property with `&`, including typed string properties.
+///
+/// The property descriptor flag is the runtime contract between the checker's promotion and
+/// the object walker; the walker must request the one-shot `&` prefix before resolving the
+/// cell payload.
+#[test]
+fn test_var_dump_marks_a_reference_property() {
+    let out = compile_and_run(
+        r#"<?php
+class ReferencePropertyDump { public string $value = "hello"; }
+$object = new ReferencePropertyDump();
+$alias = &$object->value;
+var_dump($object);
+"#,
+    );
+    assert_eq!(
+        out,
+        "object(ReferencePropertyDump)#1 (1) {\n  [\"value\"]=>\n  &string(5) \"hello\"\n}\n"
+    );
+}

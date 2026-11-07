@@ -15,7 +15,7 @@ description: "Compiler internals for html_entity_decode(): lowering path, type c
 ### Lowering notes
 
 - Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.string.html_entity_decode` through `BuiltinLoweringContext`.
+- Emits the typed EIR target `runtime.html_entity_decode` through `BuiltinLoweringContext`.
 - The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
@@ -23,26 +23,26 @@ description: "Compiler internals for html_entity_decode(): lowering path, type c
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `fresh`
+- **Result ownership**: `independent`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `dynamic`
+- **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.string.html_entity_decode`
+- **Typed EIR target**: `runtime.html_entity_decode`
 - **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 
 ```php
-function html_entity_decode(string $string): string
+function html_entity_decode(string $string, int $flags = 11, ?string $encoding = null): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–3 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

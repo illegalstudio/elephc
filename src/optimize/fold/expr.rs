@@ -15,6 +15,56 @@ use super::ops::{
     try_fold_array_access, try_fold_binary_op, try_fold_bit_not, try_fold_negate, try_fold_not,
     try_fold_null_coalesce, try_fold_short_ternary, try_fold_ternary,
 };
+use std::cell::{Cell, RefCell};
+
+thread_local! {
+    /// One local read substitution active while a literal-foreach body is being folded.
+    static VARIABLE_SUBSTITUTION: RefCell<Option<(String, Expr)>> = const { RefCell::new(None) };
+    /// Variable watched by the literal-foreach reflection probe.
+    static REFLECTION_PROBE: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Whether the watched variable reached a Reflection constructor argument.
+    static REFLECTION_MATCH: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `fold` with reads of `name` replaced by `replacement`.
+///
+/// The literal-foreach unroller substitutes the loop variable before the checker sees the
+/// body, which is what turns `new ReflectionFunction($fn)` into a statically-known target.
+/// The thread-local keeps every existing `fold_expr` call site unchanged; the guard clears it
+/// even if a fold panics.
+pub(in crate::optimize) fn with_variable_substitution<R>(
+    name: &str,
+    replacement: &Expr,
+    fold: impl FnOnce() -> R,
+) -> R {
+    struct ClearSubstitution;
+    impl Drop for ClearSubstitution {
+        /// Clears the thread-local substitution when the fold scope ends.
+        fn drop(&mut self) {
+            VARIABLE_SUBSTITUTION.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+    VARIABLE_SUBSTITUTION.with(|slot| {
+        *slot.borrow_mut() = Some((name.to_string(), replacement.clone()));
+    });
+    let _clear = ClearSubstitution;
+    fold()
+}
+
+/// Returns whether a simple loop body constructs a Reflection object from the loop variable.
+///
+/// The unroller is intentionally limited to this shape: arbitrary literal loops must keep
+/// their ordinary iterator lowering, while `new ReflectionFunction($name)` and its siblings
+/// need a literal constructor target before the checker runs.
+pub(in crate::optimize) fn body_mentions_reflection_constructor(body: &[Stmt], variable: &str) -> bool {
+    REFLECTION_MATCH.with(|flag| flag.set(false));
+    REFLECTION_PROBE.with(|probe| *probe.borrow_mut() = Some(variable.to_string()));
+    for statement in body {
+        let _ = fold_stmt(statement.clone());
+    }
+    REFLECTION_PROBE.with(|probe| *probe.borrow_mut() = None);
+    REFLECTION_MATCH.with(Cell::get)
+}
 
 /// Folds default expressions in function parameters.
 /// Returns a new parameter list with each parameter's default expression folded.
@@ -115,7 +165,14 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value),
         ExprKind::IntLiteral(value) => ExprKind::IntLiteral(value),
         ExprKind::FloatLiteral(value) => ExprKind::FloatLiteral(value),
-        ExprKind::Variable(name) => ExprKind::Variable(name),
+        ExprKind::Variable(name) => {
+            let replacement = VARIABLE_SUBSTITUTION.with(|slot| {
+                slot.borrow().as_ref().and_then(|(target, replacement)| {
+                    (name == *target).then(|| replacement.kind.clone())
+                })
+            });
+            replacement.unwrap_or(ExprKind::Variable(name))
+        }
         ExprKind::BinaryOp { left, op, right } => {
             let left = fold_expr(*left);
             let right = fold_expr(*right);
@@ -191,6 +248,159 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
         ExprKind::FunctionCall { name, args } => {
             let args = args.into_iter().map(fold_expr).collect::<Vec<_>>();
+            // `array_values(array_intersect($assoc, ...))` only needs the intersection's
+            // VALUES. Feeding each operand's values to the intersection lets it use the
+            // indexed Mixed/string path; the outer call still renumbers the sparse result
+            // keys, so values and order are unchanged.
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("array_values")
+                && args.len() == 1
+            {
+                if let ExprKind::FunctionCall {
+                    name: inner_name,
+                    args: inner_args,
+                } = &args[0].kind
+                {
+                    let inner_is_intersect = inner_name
+                        .as_canonical()
+                        .trim_start_matches('\\')
+                        .eq_ignore_ascii_case("array_intersect");
+                    let first_is_values = matches!(
+                        inner_args.first().map(|arg| &arg.kind),
+                        Some(ExprKind::FunctionCall { name, .. })
+                            if name
+                                .as_canonical()
+                                .trim_start_matches('\\')
+                                .eq_ignore_ascii_case("array_values")
+                    );
+                    if inner_is_intersect && inner_args.len() >= 2 && !first_is_values
+                        && inner_args.iter().all(|arg| {
+                            !matches!(
+                                arg.kind,
+                                ExprKind::Spread(_) | ExprKind::NamedArg { .. }
+                            )
+                        })
+                    {
+                        let mut rewritten = inner_args.clone();
+                        for operand in &mut rewritten {
+                            if !matches!(
+                                operand.kind,
+                                ExprKind::FunctionCall { ref name, .. }
+                                    if name
+                                        .as_canonical()
+                                        .trim_start_matches('\\')
+                                        .eq_ignore_ascii_case("array_values")
+                            ) {
+                                *operand = Expr::new(
+                                    ExprKind::FunctionCall {
+                                        name: crate::names::Name::unqualified("array_values"),
+                                        args: vec![operand.clone()],
+                                    },
+                                    operand.span,
+                                );
+                            }
+                        }
+                        let inner = Expr::new(
+                            ExprKind::FunctionCall {
+                                name: inner_name.clone(),
+                                args: rewritten,
+                            },
+                            args[0].span,
+                        );
+                        return Expr::new(
+                            ExprKind::FunctionCall {
+                                name,
+                                args: vec![inner],
+                            },
+                            span,
+                        );
+                    }
+                }
+            }
+            // The runtime `strtotime` parser does not know tzdb abbreviations and cannot
+            // combine a textual date with a trailing numeric offset. A literal argument can
+            // be split here: parse the zone-free text and apply the fixed offset.
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("strtotime")
+            {
+                if let Some(Expr {
+                    kind: ExprKind::StringLiteral(literal),
+                    span: arg_span,
+                }) = args.first()
+                {
+                    if let Some(zone) = crate::date_time_zone::split_fixed_zone(literal) {
+                        return Expr::new(
+                            ExprKind::StaticMethodCall {
+                                receiver: crate::parser::ast::StaticReceiver::Named(
+                                    crate::names::Name::unqualified("DateTime"),
+                                ),
+                                method: "__elephc_strtotime_zone".to_string(),
+                                args: vec![
+                                    Expr::new(
+                                        ExprKind::StringLiteral(zone.stripped),
+                                        *arg_span,
+                                    ),
+                                    Expr::new(ExprKind::IntLiteral(zone.offset), span),
+                                ],
+                            },
+                            span,
+                        );
+                    }
+                }
+            }
+            // `str_replace()` with a literal search array and a scalar replacement is a chain of
+            // scalar replacements; lowering it as nested calls keeps the runtime's string path.
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("str_replace")
+                && args.len() == 3
+            {
+                if let (
+                    ExprKind::ArrayLiteral(items),
+                    ExprKind::StringLiteral(replacement),
+                ) = (&args[0].kind, &args[1].kind)
+                {
+                    if !items.is_empty()
+                        && items.iter().all(|item| matches!(item.kind, ExprKind::StringLiteral(_)))
+                    {
+                        let mut subject = args[2].clone();
+                        for item in items.iter().rev() {
+                            subject = Expr::new(
+                                ExprKind::FunctionCall {
+                                    name: name.clone(),
+                                    args: vec![
+                                        item.clone(),
+                                        Expr::new(
+                                            ExprKind::StringLiteral(replacement.clone()),
+                                            args[1].span,
+                                        ),
+                                        subject,
+                                    ],
+                                },
+                                span,
+                            );
+                        }
+                        return subject;
+                    }
+                }
+            }
+            // Numeric HTML character references decode to UTF-8 at compile time. Only a
+            // literal call whose entities are all numeric is folded; named entities and
+            // non-UTF-8 encodings keep the runtime decoder's full table.
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("html_entity_decode")
+            {
+                if let Some(decoded) = fold_numeric_html_entities(&args) {
+                    return Expr::new(ExprKind::StringLiteral(decoded), span);
+                }
+            }
             if let Some(rebound) = namespace_fallbacks::resolve_call(&name, &args, span) {
                 return fold_expr(rebound);
             }
@@ -368,10 +578,24 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             }
             _ => ExprKind::ConstRef(name),
         },
-        ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
-            class_name,
-            args: args.into_iter().map(fold_expr).collect(),
-        },
+        ExprKind::NewObject { class_name, args } => {
+            REFLECTION_PROBE.with(|probe| {
+                if let Some(target) = probe.borrow().as_ref() {
+                    let key = class_name.as_str().trim_start_matches('\\').to_ascii_lowercase();
+                    if matches!(key.as_str(), "reflectionfunction" | "reflectionmethod" | "reflectionclass")
+                        && args.iter().any(|arg| {
+                            matches!(&arg.kind, ExprKind::Variable(name) if name == target)
+                        })
+                    {
+                        REFLECTION_MATCH.with(|flag| flag.set(true));
+                    }
+                }
+            });
+            ExprKind::NewObject {
+                class_name,
+                args: args.into_iter().map(fold_expr).collect(),
+            }
+        }
         ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
             class_type,
             args: args.into_iter().map(fold_expr).collect(),
@@ -496,6 +720,69 @@ fn fold_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
         InstanceOfTarget::Generic(class_type) => InstanceOfTarget::Generic(class_type),
         InstanceOfTarget::Expr(expr) => InstanceOfTarget::Expr(Box::new(fold_expr(*expr))),
     }
+}
+
+/// Decodes a literal `html_entity_decode()` argument that contains only numeric references.
+///
+/// Returns `None` when any argument is not a literal, the encoding is not UTF-8, the input
+/// contains a named entity, or a reference is malformed/out of range: the runtime decoder owns
+/// those cases. At least one reference must decode, so ordinary literal strings stay untouched.
+fn fold_numeric_html_entities(args: &[Expr]) -> Option<String> {
+    let ExprKind::StringLiteral(input) = &args.first()?.kind else {
+        return None;
+    };
+    if let Some(flags) = args.get(1) {
+        if !matches!(flags.kind, ExprKind::IntLiteral(_)) {
+            return None;
+        }
+    }
+    if let Some(encoding) = args.get(2) {
+        let ExprKind::StringLiteral(encoding) = &encoding.kind else {
+            return None;
+        };
+        if !matches!(encoding.to_ascii_uppercase().as_str(), "UTF-8" | "UTF8") {
+            return None;
+        }
+    }
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.char_indices().peekable();
+    let mut decoded_any = false;
+    while let Some((_, character)) = chars.next() {
+        if character != '&' {
+            output.push(character);
+            continue;
+        }
+        let Some((_, '#')) = chars.peek().copied() else {
+            return None;
+        };
+        chars.next();
+        let hex = matches!(chars.peek().map(|(_, c)| *c), Some('x' | 'X'));
+        if hex {
+            chars.next();
+        }
+        let mut value: u32 = 0;
+        let mut digits = 0usize;
+        while let Some((_, digit)) = chars.peek().copied() {
+            let digit_value = if hex {
+                digit.to_digit(16)
+            } else {
+                digit.to_digit(10)
+            };
+            let Some(digit_value) = digit_value else { break };
+            value = value.checked_mul(if hex { 16 } else { 10 })?.checked_add(digit_value)?;
+            digits += 1;
+            chars.next();
+        }
+        if digits == 0 || !matches!(chars.next(), Some((_, ';'))) {
+            return None;
+        }
+        if value == 0 || value > 0x10FFFF || (0xD800..=0xDFFF).contains(&value) {
+            return None;
+        }
+        output.push(char::from_u32(value)?);
+        decoded_any = true;
+    }
+    decoded_any.then_some(output)
 }
 
 /// Folds the target of a first-class callable, recursing into object expressions.

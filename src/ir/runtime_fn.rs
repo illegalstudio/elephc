@@ -651,6 +651,7 @@ pub enum RuntimeFnId {
     IconvStrpos,
     IconvStrrpos,
     IconvSubstr,
+    HtmlEntityDecode,
     Htmlentities,
     Htmlspecialchars,
     Implode,
@@ -1528,6 +1529,7 @@ impl RuntimeFnId {
             RuntimeFnId::GraphemeStrrev |
             RuntimeFnId::HashAlgos |
             RuntimeFnId::HashEquals |
+            RuntimeFnId::HtmlEntityDecode |
             RuntimeFnId::Htmlentities |
             RuntimeFnId::Htmlspecialchars |
             RuntimeFnId::Hexdec |
@@ -3148,6 +3150,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::Decbin
                 | RuntimeFnId::Dechex
                 | RuntimeFnId::Decoct
+                | RuntimeFnId::HtmlEntityDecode
                 | RuntimeFnId::Htmlentities
                 | RuntimeFnId::Htmlspecialchars
                 // Both network conversions build a fresh boxed string or false; the packed
@@ -3672,6 +3675,7 @@ impl RuntimeFnId {
             RuntimeFnId::IconvStrpos => "iconv_strpos",
             RuntimeFnId::IconvStrrpos => "iconv_strrpos",
             RuntimeFnId::IconvSubstr => "iconv_substr",
+            RuntimeFnId::HtmlEntityDecode => "html_entity_decode",
             RuntimeFnId::Htmlentities => "htmlentities",
             RuntimeFnId::Htmlspecialchars => "htmlspecialchars",
             RuntimeFnId::Implode => "implode",

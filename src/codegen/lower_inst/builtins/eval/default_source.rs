@@ -109,6 +109,9 @@ fn expression(expr: &Expr, context: &EvalNativeDefaultContext<'_>) -> Option<Str
                 }
                 ArrayEntry::Keyed(key, value) => format!("{} => {}",
                     expression(key, context)?, expression(value, context)?),
+                ArrayEntry::Reference(value) => format!("&{}", expression(value, context)?),
+                ArrayEntry::KeyedReference(key, value) => format!("{} => &{}",
+                    expression(key, context)?, expression(value, context)?),
             })).collect::<Option<Vec<_>>>()?;
             format!("[{}]", values.join(", "))
         }

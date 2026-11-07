@@ -6,13 +6,15 @@ description: "Converts HTML entities in a string back into their corresponding c
 ## html_entity_decode()
 
 ```php
-function html_entity_decode(string $string): string
+function html_entity_decode(string $string, int $flags = 11, ?string $encoding = null): string
 ```
 
 Converts HTML entities in a string back into their corresponding characters.
 
 **Parameters**:
 - `$string` (`string`)
+- `$flags` (`int`), default `11`, optional
+- `$encoding` (`?string`), default `null`, optional
 
 **Returns**: `string`
 

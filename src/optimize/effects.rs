@@ -432,12 +432,22 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 .iter()
                 .map(|(key, value)| expr_effect(key).combine(expr_effect(value))),
         ),
-        ExprKind::ArrayLiteralMixed(entries) => combine_effects(
-            entries
-                .iter()
-                .flat_map(|entry| entry.exprs())
-                .map(expr_effect),
-        ).with_may_throw(),
+        ExprKind::ArrayLiteralMixed(entries) => {
+            let effect = combine_effects(
+                entries
+                    .iter()
+                    .flat_map(|entry| entry.exprs())
+                    .map(expr_effect),
+            )
+            .with_may_throw();
+            // Exposing a variable as a reference makes later writes observable through the
+            // array, so the literal must never be treated as removable.
+            if entries.iter().any(|entry| entry.is_reference()) {
+                effect.with_side_effects()
+            } else {
+                effect
+            }
+        }
         ExprKind::Match {
             subject,
             arms,

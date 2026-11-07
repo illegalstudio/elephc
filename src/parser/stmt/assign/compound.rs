@@ -105,6 +105,79 @@ fn parse_ref_assign(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
+    // `$ref = &$value[]`: php appends a slot and binds the reference to it. Arrays are a
+    // storage-specific lowering this compiler does not have yet; for an object php raises
+    // `Cannot apply [] to <Class> object` from the ArrayAccess handler. Report that exact
+    // runtime shape instead of a parse error, and keep the array case explicit.
+    if let Some((Token::Variable(name), name_meta)) = tokens.get(*pos) {
+        if matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::LBracket))
+            && matches!(tokens.get(*pos + 2).map(|(token, _)| token), Some(Token::RBracket))
+        {
+            let append_span = name_meta.span;
+            *pos += 3;
+            expect_semicolon(tokens, pos)?;
+            let value = Expr::new(ExprKind::Variable(name.clone()), append_span);
+            let class_name = Expr::new(
+                ExprKind::FunctionCall {
+                    name: crate::names::Name::unqualified("get_class"),
+                    args: vec![value.clone()],
+                },
+                append_span,
+            );
+            let object_message = [
+                Expr::new(ExprKind::StringLiteral("Cannot apply [] to ".to_string()), append_span),
+                class_name,
+                Expr::new(ExprKind::StringLiteral(" object".to_string()), append_span),
+            ]
+            .into_iter()
+            .reduce(|left, right| {
+                Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(left),
+                        op: BinOp::Concat,
+                        right: Box::new(right),
+                    },
+                    append_span,
+                )
+            })
+            .expect("the append diagnostic always has a prefix");
+            let array_error = Expr::new(
+                ExprKind::NewObject {
+                    class_name: crate::names::Name::unqualified("Error"),
+                    args: vec![Expr::new(
+                        ExprKind::StringLiteral(
+                            "Reference append to arrays is not supported yet".to_string(),
+                        ),
+                        append_span,
+                    )],
+                },
+                append_span,
+            );
+            let object_error = Expr::new(
+                ExprKind::NewObject {
+                    class_name: crate::names::Name::unqualified("Error"),
+                    args: vec![object_message],
+                },
+                append_span,
+            );
+            let is_array = Expr::new(
+                ExprKind::FunctionCall {
+                    name: crate::names::Name::unqualified("is_array"),
+                    args: vec![value],
+                },
+                append_span,
+            );
+            return Ok(Stmt::new(
+                StmtKind::If {
+                    condition: is_array,
+                    then_body: vec![Stmt::new(StmtKind::Throw(array_error), append_span)],
+                    elseif_clauses: Vec::new(),
+                    else_body: Some(vec![Stmt::new(StmtKind::Throw(object_error), append_span)]),
+                },
+                span,
+            ));
+        }
+    }
     let source = parse_expr(tokens, pos)?;
     if !is_valid_reference_source(&source.kind) {
         return Err(CompileError::new(

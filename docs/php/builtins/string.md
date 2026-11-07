@@ -33,7 +33,7 @@ sidebar:
 | [`hash_init()`](./string/hash_init.md) | `(string $algo): HashContext` | `HashContext` | ✓ | ✓ |
 | [`hash_update()`](./string/hash_update.md) | `(HashContext $context, string $data): bool` | `bool` | ✓ | ✓ |
 | [`hex2bin()`](./string/hex2bin.md) | `(string $string): string` | `string` | ✓ | ✓ |
-| [`html_entity_decode()`](./string/html_entity_decode.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`html_entity_decode()`](./string/html_entity_decode.md) | `(string $string, int $flags = 11, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`htmlentities()`](./string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
 | [`htmlspecialchars()`](./string/htmlspecialchars.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
 | [`iconv()`](./string/iconv.md) | `(string $from_encoding, string $to_encoding, string $string): mixed` | `mixed` | ✓ | ✓ |
@@ -141,7 +141,7 @@ sidebar:
 | [`str_ireplace()`](./string/str_ireplace.md) | `(string $search, string $replace, string $subject, int $count = null): string` | `string` | ✓ | ✓ |
 | [`str_pad()`](./string/str_pad.md) | `(string $string, int $length, string $pad_string = ' ', int $pad_type = 1): string` | `string` | ✓ | ✓ |
 | [`str_repeat()`](./string/str_repeat.md) | `(string $string, int $times): string` | `string` | ✓ | ✓ |
-| [`str_replace()`](./string/str_replace.md) | `(string $search, string $replace, string $subject, int $count = null): string` | `string` | ✓ | ✓ |
+| [`str_replace()`](./string/str_replace.md) | `(string|array $search, string|array $replace, string|array $subject, int $count = null): string` | `string` | ✓ | ✓ |
 | [`str_split()`](./string/str_split.md) | `(string $string, int $length = 1): array` | `array` | ✓ | ✓ |
 | [`str_starts_with()`](./string/str_starts_with.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
 | [`str_word_count()`](./string/str_word_count.md) | `(string $string, int $format = 0, ?string $characters = null): array|int` | `array|int` | ✓ | ✓ |

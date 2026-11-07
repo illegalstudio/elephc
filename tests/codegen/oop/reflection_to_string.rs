@@ -706,3 +706,17 @@ echo strpos($dump, "Parameter #2") === false ? "N" : "n";
     );
     assert_eq!(out, "01N");
 }
+
+/// A literal-array foreach unrolls before checking, so the loop variable reaches Reflection as
+/// the literal function name its constructor requires.
+#[test]
+fn test_reflection_function_from_a_literal_foreach_variable() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (['strlen', 'strtoupper'] as $function) {
+    echo (new ReflectionFunction($function))->getName(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "strlen\nstrtoupper\n");
+}

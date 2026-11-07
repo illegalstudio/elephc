@@ -21,8 +21,9 @@
 //!   contract for a method, printed under the module's registered name (`SPL`).
 
 use super::{
-    ReflectionDefaultArrayKey, ReflectionListedMember, ReflectionMemberFlags,
-    ReflectionParameterDefaultValue, ReflectionParameterMember, ReflectionParameterTypeMetadata,
+    ReflectionDeclaringFunctionMember, ReflectionDefaultArrayKey, ReflectionListedMember,
+    ReflectionMemberFlags, ReflectionParameterDefaultValue, ReflectionParameterMember,
+    ReflectionParameterTypeMetadata,
 };
 use crate::names::is_generated_local_name;
 use elephc_builtin_contract::PhpModule;
@@ -212,6 +213,26 @@ fn reflection_parameter_to_string_at_position(
     rendered
 }
 
+/// Returns whether the reflected parameter belongs to an internal function or method.
+fn parameter_owner_is_internal(parameter: &ReflectionParameterMember) -> bool {
+    match parameter.declaring_function.as_ref() {
+        Some(ReflectionDeclaringFunctionMember::Function { name, .. }) => {
+            elephc_builtin_contract::lookup(name).is_some()
+        }
+        Some(ReflectionDeclaringFunctionMember::Method {
+            name,
+            declaring_class_name,
+            ..
+        }) => {
+            declaring_class_name
+                .as_deref()
+                .is_some_and(|class| elephc_builtin_contract::lookup_class(class).is_some())
+                || elephc_builtin_contract::lookup(name).is_some()
+        }
+        None => false,
+    }
+}
+
 /// Renders one parameter's default the way PHP's dump does.
 ///
 /// A default written as a constant prints the CONSTANT's name, not its value, `= LIMIT` and
@@ -220,6 +241,16 @@ fn reflection_parameter_to_string_at_position(
 /// (`new \Foo(Foo::VALUE)`), and a named class constant prints fully qualified
 /// (`= \N\Foo::VALUE`) although `getDefaultValueConstantName()` answers `N\Foo::VALUE`.
 fn reflection_parameter_default_to_string(parameter: &ReflectionParameterMember) -> Option<String> {
+    // Internal-function dumps spell their implicit null default `null`; a user function's
+    // written `null` keeps the constant spelling `NULL` (php 8.5.10).
+    if parameter_owner_is_internal(parameter)
+        && matches!(
+            parameter.default_value.as_ref(),
+            Some(ReflectionParameterDefaultValue::Null)
+        )
+    {
+        return Some("null".to_string());
+    }
     if let Some(exported) = parameter.default_value_export.as_ref() {
         return Some(exported.clone());
     }

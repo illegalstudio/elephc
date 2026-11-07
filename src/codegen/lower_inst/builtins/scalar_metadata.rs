@@ -327,6 +327,7 @@ pub(crate) fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 /// Returns true when a const-string `defined()` name exists as a global or class-like constant.
 fn literal_constant_is_defined(ctx: &FunctionContext<'_>, constant_name: &str) -> bool {
     ctx.has_global_name(constant_name)
+        || crate::intl::is_intl_constant(constant_name)
         || crate::types::class_like_constant_is_defined(
             &ctx.module.class_infos,
             &ctx.module.interface_infos,

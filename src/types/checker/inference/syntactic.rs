@@ -483,9 +483,10 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                         };
                         assoc_spread_entry_types_syntactic(inner).1
                     }
-                    ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => {
-                        infer_expr_type_syntactic(value)
-                    }
+                    ArrayEntry::Keyed(_, value)
+                    | ArrayEntry::KeyedReference(_, value)
+                    | ArrayEntry::Value(value)
+                    | ArrayEntry::Reference(value) => infer_expr_type_syntactic(value),
                 };
                 value_ty = Some(match value_ty {
                     Some(current) => {

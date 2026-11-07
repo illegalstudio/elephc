@@ -918,7 +918,21 @@ impl Checker {
                     .get(param_idx)
                     .copied()
                     .unwrap_or(false);
-            let actual_ty = if descriptor_projected {
+            // PHP creates a variable passed by reference; it is not read at the call site.
+            // Inferring it here would raise `Undefined variable` for the common
+            // `$obj->byRef(..., $out)` idiom.
+            let by_ref_undefined_local = param_idx < regular_param_count
+                && sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                && !defaults.get(param_idx).copied().unwrap_or(false)
+                && matches!(&arg.kind, ExprKind::Variable(name) if !caller_env.contains_key(name));
+            let actual_ty = if by_ref_undefined_local {
+                // The callee owns the first write: PHP creates the variable as the reference is
+                // bound, so the slot holds the declared parameter type before any write-back.
+                sig.params
+                    .get(param_idx)
+                    .map(|(_, ty)| ty.clone())
+                    .unwrap_or(PhpType::Void)
+            } else if descriptor_projected {
                 // Descriptor unpack reads a runtime-keyed Mixed cell. Its binder owns the tag
                 // check against the selected parameter after deciding which slot this key fills.
                 PhpType::Mixed
@@ -1001,6 +1015,9 @@ impl Checker {
                             span,
                             caller_env,
                         );
+                    }
+                    if by_ref_undefined_local {
+                        self.record_undefined_by_ref_argument(arg, expected_ty, span);
                     }
                     // `strict_types` applies to every declared parameter type, including the
                     // closure and first-class-callable surfaces that stay off the coercive

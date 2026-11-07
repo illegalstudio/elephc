@@ -322,10 +322,61 @@ impl Checker {
                     && (span.line, span.col) < (arg.span.line, arg.span.col) && names.contains(name))
     }
 
+    /// Declares a by-reference argument that the caller had never assigned.
+    ///
+    /// PHP binds the reference before the callee runs, which creates the caller variable. The
+    /// checker's call validation sees the slot as undefined, so record the parameter type as the
+    /// variable's type once the call's effects are applied. Without this, a later read of the
+    /// variable reports `Undefined variable` even though the callee wrote it.
+    pub(crate) fn record_undefined_by_ref_argument(&mut self, arg: &Expr, expected: &PhpType,
+                                                    call_span: Span) {
+        if !call_span.identifies_a_node() {
+            return;
+        }
+        let mut arg = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+            arg = value;
+        }
+        let ExprKind::Variable(name) = &arg.kind else {
+            return;
+        };
+        if expected.codegen_repr() == PhpType::Mixed && arg.span.identifies_a_node() {
+            // The call passes this local's storage address. A never-declared local still needs
+            // the canonical boxed Mixed cell before the callee can write through it.
+            self.boxed_reference_promotion_sites
+                .entry((self.current_loop_storage_scope.clone(), arg.span))
+                .or_default()
+                .insert(name.clone());
+        }
+        self.boxed_reference_outputs
+            .entry((self.current_loop_storage_scope.clone(), call_span))
+            .or_default()
+            .insert(name.clone(), expected.clone());
+    }
+
     /// Applies one successful call's storage changes before checking subsequent expressions.
     pub(crate) fn apply_boxed_reference_outputs(&mut self, span: Span, env: &mut TypeEnv) {
         let key = (self.current_loop_storage_scope.clone(), span);
-        if let Some(outputs) = self.boxed_reference_outputs.remove(&key) {
+        // The call validator and the expression-effect walk can carry different spans for the
+        // same method call (`->m(...)` vs the receiver). Apply an exact match first, then drain
+        // pending outputs recorded on the same source line and scope.
+        let mut applied = self.boxed_reference_outputs.remove(&key);
+        if applied.is_none() {
+            let same_line: Vec<_> = self
+                .boxed_reference_outputs
+                .keys()
+                .filter(|(scope, pending)| {
+                    *scope == self.current_loop_storage_scope && pending.line == span.line
+                })
+                .cloned()
+                .collect();
+            for pending_key in same_line {
+                if let Some(outputs) = self.boxed_reference_outputs.remove(&pending_key) {
+                    applied.get_or_insert_with(Default::default).extend(outputs);
+                }
+            }
+        }
+        if let Some(outputs) = applied {
             for (name, output_ty) in outputs {
                 self.record_local_storage_effect(&name, &output_ty);
                 self.definitely_bound_locals.insert(name.clone());

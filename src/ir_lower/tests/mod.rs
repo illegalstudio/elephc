@@ -285,6 +285,10 @@ fn try_lower_source_at_for_target_with_reachability(
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    // Same position as `pipeline::compile`: Intl declarations call `pack`, so they must be
+    // visible before prelude usage scans. The plain CLI profile has no manifest to force the
+    // surface, so usage detection selects it exactly as it does for a standalone script.
+    let ast = crate::intl::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(

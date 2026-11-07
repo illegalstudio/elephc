@@ -83,6 +83,19 @@ use schema::propagate_abstract_return_types;
 /// Checker carries program-wide type-checking state including function signatures,
 /// class/interface/enum definitions, variable environments, and warnings collected
 /// during type checking.
+/// Returns PHP 8.5's deprecation text for a global constant, when it is deprecated.
+///
+/// The synthetic Intl prelude declares these constants, so the message lives here rather than
+/// in the shared catalog (which only carries compiler-registered constants).
+pub(crate) fn deprecated_constant_message(name: &str) -> Option<&'static str> {
+    match name {
+        "U_MULTIPLE_DECIMAL_SEPERATORS" => Some(
+            "Constant U_MULTIPLE_DECIMAL_SEPERATORS is deprecated since 8.3, use U_MULTIPLE_DECIMAL_SEPARATORS instead",
+        ),
+        _ => None,
+    }
+}
+
 pub(crate) struct Checker {
     /// Target platform for codegen (affects ABI, sizes, and platform checks).
     /// Full compilation target. `platform` drives OS constants; `apple_variant`
@@ -564,6 +577,12 @@ pub(crate) struct Checker {
     /// A reference can escape through a callee, so the alias is permanent for the rest of the
     /// body.
     pub ref_aliased_locals: HashSet<String>,
+    /// Locals bound by `$local =& $object->property`.
+    ///
+    /// Passing one to a mixed by-reference parameter cannot hand over the property's concrete
+    /// cell; the call boundary rewrites it to the property place and writes a boxed temporary
+    /// back through the property.
+    pub property_ref_aliased_locals: HashSet<String>,
     /// Reference-aliased locals whose alias did not arise solely from a registry builtin call.
     ///
     /// Registry builtins can mutate by-reference arguments but do not retain their cells. Direct

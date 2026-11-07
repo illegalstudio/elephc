@@ -582,7 +582,14 @@ impl Checker {
 }
 
 /// Records one statement-form assignment to `name`.
-fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: Span) {
+fn record_assign(
+    checker: &Checker,
+    facts: &mut Facts,
+    name: &str,
+    value: &Expr,
+    depth: u32,
+    span: Span,
+) {
     // The INNERMOST open guard on this name governs the assignment, because the checker's
     // narrowings compose: an inner `is_float($a)` re-narrows what an outer `is_string($a)` just
     // installed. `rev().find` takes that one; an `any` over the whole stack let an outer frame
@@ -600,13 +607,13 @@ fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: 
     // programs that type-check perfectly well today, and a marked local's storage is boxed. Any
     // inexact value therefore disqualifies the name outright, which keeps the marking confined to
     // programs the checker rejects without it.
-    if !has_exact_syntactic_type(value) {
+    let Some(ty) = exact_assignment_type(checker, value) else {
         entry.disqualified = true;
         return;
-    }
+    };
     let site = entry.assigns.len();
     entry.assigns.push(AssignSite {
-        ty: infer_expr_type_syntactic(value),
+        ty,
         depth,
         span,
         guard_region,
@@ -618,7 +625,44 @@ fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: 
     }
 }
 
+/// Returns the assignment type when it is a property of the expression itself.
+///
+/// Literals, scalar casts and concatenations are typed syntactically. A direct call contributes
+/// its DECLARED return type when that type is concrete: `grapheme_substr()` answers
+/// `string|false`, which is enough to detect a branch-divergent store against
+/// `grapheme_strlen()`'s `int|false` without consulting the flow environment. Calls whose return
+/// type is `mixed`, `void` or `never` stay guesses and disqualify the name.
+fn exact_assignment_type(checker: &Checker, value: &Expr) -> Option<PhpType> {
+    if has_exact_syntactic_type(value) {
+        return Some(infer_expr_type_syntactic(value));
+    }
+    let ExprKind::FunctionCall { name, .. } = &value.kind else {
+        return None;
+    };
+    let raw = name.as_str();
+    let trimmed = raw.trim_start_matches('\\');
+    let ty = if let Some(signature) = checker
+        .functions
+        .get(raw)
+        .or_else(|| checker.functions.get(trimmed))
+        .cloned()
+        .or_else(|| crate::types::builtin_call_sig(trimmed))
+    {
+        signature.return_type
+    } else {
+        // Synthetic Intl declarations are intentionally untyped at the bridge surface; their
+        // shared contract owns the PHP-visible return type.
+        let contract = elephc_builtin_contract::lookup(trimmed)?;
+        crate::builtins::convert::type_spec_to_php(&contract.returns)
+    };
+    if matches!(ty, PhpType::Mixed | PhpType::Void | PhpType::Never) {
+        return None;
+    }
+    Some(ty)
+}
+
 /// Marks `name` as never eligible for mixed storage in this body.
+#[track_caller]
 fn disqualify(facts: &mut Facts, name: &str) {
     facts.names.entry(name.to_string()).or_default().disqualified = true;
 }
@@ -834,7 +878,7 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
             if is_compound_assignment_self_read(value, name, stmt.span) {
                 disqualify(facts, name);
             } else {
-                record_assign(facts, name, value, depth, stmt.span);
+                record_assign(checker, facts, name, value, depth, stmt.span);
             }
             collect_expr(checker, value, depth, facts);
         }
@@ -854,7 +898,12 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
             collect_expr(checker, value, depth, facts);
         }
         StmtKind::ArrayPush { array, value } => {
-            disqualify(facts, array);
+            // A compiler-generated helper body may use a `$result[]` accumulator in the same
+            // body that carries user statements. Its dummy span names no source local, so it
+            // is not evidence against a user variable that happens to share the name.
+            if stmt.span.identifies_a_node() {
+                disqualify(facts, array);
+            }
             collect_expr(checker, value, depth, facts);
         }
         StmtKind::NestedArrayAssign { target, value } => {

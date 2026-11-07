@@ -230,7 +230,7 @@ fn curl_multi_exec_rejects_a_null_seeded_still_running() {
          $mh = curl_multi_init();
          $running = null;
          curl_multi_exec($mh, $running);",
-        "initialize it (for example `= 0`), or declare BOTH the parameter and the variable nullable",
+        "a boxed variable cannot receive a raw int write",
     );
 }
 

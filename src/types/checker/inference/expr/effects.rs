@@ -355,6 +355,27 @@ impl Checker {
                             self.infer_contextual_callback_effects(arg, env)?;
                             continue;
                         }
+                        // A prelude-provided builtin may declare a `mixed &$out` parameter. Give
+                        // an undeclared caller variable its canonical boxed cell before the call
+                        // is lowered, so the callee writes through a live Mixed cell instead of
+                        // an uninitialized slot.
+                        if let Some(sig) = crate::types::signatures::builtin_call_sig(builtin_name) {
+                            if sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                                && sig.params.get(param_idx).is_some_and(|(_, ty)| {
+                                    ty.codegen_repr() == PhpType::Mixed
+                                })
+                            {
+                                if let Some(name) = output_variable(arg) {
+                                    if !env.contains_key(name) {
+                                        env.insert(name.clone(), PhpType::Mixed);
+                                        self.boxed_reference_promotion_sites
+                                            .entry((self.current_loop_storage_scope.clone(), arg.span))
+                                            .or_default()
+                                            .insert(name.clone());
+                                    }
+                                }
+                            }
+                        }
                         if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
                             // Forming the output reference requires dynamic storage before later
                             // source arguments can pass that same variable to a mutating call.
@@ -387,7 +408,7 @@ impl Checker {
                             );
                         if runtime_iterated_spread {
                             self.infer_spread_source_assignment_effects(arg, env)?;
-                        } else {
+                        } else if !Self::is_undefined_variable_argument(arg, env) {
                             self.infer_type_with_assignment_effects(arg, env)?;
                         }
                     }
@@ -478,6 +499,7 @@ impl Checker {
                                     self.active_external_ref_bindings.remove(var);
                                     self.by_ref_captured_locals.remove(var);
                                     self.ref_aliased_locals.remove(var);
+                                    self.property_ref_aliased_locals.remove(var);
                                     self.non_builtin_ref_aliased_locals.remove(var);
                                     self.ref_assign_aliased_locals.remove(var);
                                 } else if let Some(names) = self.local_ref_detach_sites.get_mut(&arg.span) {
@@ -556,6 +578,9 @@ impl Checker {
             ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 for arg in &expanded_args {
+                    if Self::is_undefined_variable_argument(arg, env) {
+                        continue;
+                    }
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
@@ -635,6 +660,9 @@ impl Checker {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 self.promote_pdo_binding_ref_storage(object, method, &expanded_args, env)?;
                 for arg in &expanded_args {
+                    if Self::is_undefined_variable_argument(arg, env) {
+                        continue;
+                    }
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
@@ -668,6 +696,20 @@ impl Checker {
             self.record_operation_exception_flow(expr, env);
         }
         result
+    }
+
+    /// Returns true for a never-declared bare variable argument.
+    ///
+    /// Call argument pre-walks record assignment effects, but an undefined variable has none.
+    /// Deferring the read to the callee's own validation lets a by-reference parameter create
+    /// the variable (PHP's `$obj->getOffset($ts, true, $raw, $dst)` idiom) without masking the
+    /// ordinary by-value `Undefined variable` diagnostic.
+    fn is_undefined_variable_argument(arg: &Expr, env: &TypeEnv) -> bool {
+        let arg = match &arg.kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => arg,
+        };
+        matches!(&arg.kind, ExprKind::Variable(name) if !env.contains_key(name))
     }
 
     /// Visits a call-unpack source for assignment effects without choosing its container policy.

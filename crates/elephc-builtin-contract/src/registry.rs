@@ -40,6 +40,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
                     + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
+                    + crate::catalog_intl::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
                     + curl_capacity,
             );
@@ -48,6 +49,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_intl::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
             #[cfg(feature = "curl")]
             contracts.extend_from_slice(crate::catalog_curl::CURL_CONTRACTS);
@@ -167,7 +169,9 @@ mod tests {
         // +8: FileInfo procedures and shared warning/deprecation helpers.
         // +4: internal pointer/zval aliases used by extension hosting.
         // +2: PHP 8.5 array value-edge functions.
-        assert_eq!(contracts().len(), 1253 + curl_surface);
+        // +187: the complete PHP 8.5 `ext/intl` procedural surface.
+        assert_eq!(contracts().len(), 1440 + curl_surface);
+
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

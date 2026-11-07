@@ -652,26 +652,28 @@ fn test_error_goto_label_is_not_supported() {
 
 // --- References inside array literals ---
 
-/// Verifies `[&$x]` reports the unsupported construct by name instead of "Unexpected token:
-/// Ampersand". elephc arrays hold values, so an element cannot alias a variable's storage.
+/// Verifies a reference element must name a local variable.
+///
+/// Lowering binds the named local to the array entry's reference cell, which needs a frame
+/// slot. Property and nested-element targets still use a place-specific path and are refused.
 #[test]
-fn test_error_reference_element_in_array_literal() {
+fn test_error_reference_element_requires_a_local_variable() {
     expect_error(
-        "<?php $first = 1; $r = [&$first];",
-        "Reference elements in array literals (`[&$x]`) are not supported",
+        "<?php $o = new stdClass; $o->p = 1; $r = [&$o->p];",
+        "Reference array elements currently require a local variable target",
+    );
+    expect_error(
+        "<?php $a = [1]; $r = [\"k\" => &$a[0]];",
+        "Reference array elements currently require a local variable target",
     );
 }
 
-/// Verifies the same diagnostic covers a keyed element and the legacy `array(...)` spelling.
+/// Verifies an automatic key cannot follow a spread or a runtime-derived key cursor.
 #[test]
-fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
+fn test_error_reference_element_after_runtime_auto_key() {
     expect_error(
-        "<?php $a = 1; $r = [\"k\" => &$a];",
-        "Reference elements in array literals (`[&$x]`) are not supported",
-    );
-    expect_error(
-        "<?php $a = 1; $r = array(&$a);",
-        "Reference elements in array literals (`[&$x]`) are not supported",
+        "<?php $a = 1; $r = [...[], &$a];",
+        "Reference elements after a spread or a runtime-derived key are not supported",
     );
 }
 
@@ -949,4 +951,16 @@ fn test_error_namespace_is_not_a_namespace_name() {
 fn test_error_lone_reserved_word_is_not_a_name() {
     expect_error("<?php Default::accent();", "Unexpected token");
     expect_error("<?php use Default\\{Palette};", "Expected imported name");
+}
+
+/// Static-property reference assignment accepts only a plain local source.
+///
+/// PHP allows any referenceable lvalue here; this compiler currently desugars the local form
+/// and names the unsupported source explicitly instead of failing later in lowering.
+#[test]
+fn test_error_static_property_reference_requires_a_local_source() {
+    expect_error(
+        "<?php class C { public static array $p = []; } C::$p = &make_value();",
+        "Static property reference assignment requires a local variable source",
+    );
 }

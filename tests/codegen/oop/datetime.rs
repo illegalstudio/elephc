@@ -2457,3 +2457,19 @@ echo ($a <=> $b);
     );
     assert_eq!(out, "101-1");
 }
+
+/// Regression: a fixed-offset `DateTimeZone` keeps the offset spelling as its name and reports a
+/// positive east-of-UTC offset instead of falling back to the process default zone.
+#[test]
+fn test_datetime_zone_fixed_offset_name_and_get_offset() {
+    let out = compile_and_run(
+        r#"<?php
+$east = new DateTimeZone("+04:05");
+echo $east->getName(), "|", $east->getOffset(new DateTime("2012-01-01 00:00:00"));
+echo "|";
+$west = new DateTimeZone("GMT-03:30");
+echo $west->getName(), "|", $west->getOffset(new DateTime("2012-01-01 00:00:00"));
+"#,
+    );
+    assert_eq!(out, "+04:05|14700|-03:30|-12600");
+}

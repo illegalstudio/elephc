@@ -30,6 +30,7 @@ const ICONV_BRIDGE: &[BuiltinRequirement] = &[
     BuiltinRequirement::MacOsLibrary("iconv"),
 ];
 const REGEX: &[BuiltinRequirement] = &[BuiltinRequirement::RuntimeCapability("pcre2")];
+const INTL: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_intl")];
 
 /// Returns fixed neutral requirements for one canonical shared contract ID.
 pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement] {
@@ -46,6 +47,11 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
         .any(|name| id == BuiltinId::from_canonical_name(name))
     {
         return GMP;
+    }
+    if crate::catalog_intl::contract_names()
+        .any(|name| id == BuiltinId::from_canonical_name(name))
+    {
+        return INTL;
     }
     if matches_name(
         id,

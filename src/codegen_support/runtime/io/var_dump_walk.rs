@@ -890,6 +890,14 @@ pub fn emit_var_dump_pad(emitter: &mut Emitter) {
     emitter.instruction("b __rt_vd_pad_loop");                                  // continue padding
 
     emitter.label("__rt_vd_pad_done");
+    abi::emit_symbol_address(emitter, "x13", "_vd_ref_pending");                // resolve the one-shot prefix flag
+    emitter.instruction("ldr x14, [x13]");                                      // is a reference prefix pending?
+    emitter.instruction("cbz x14, __rt_vd_pad_return");                         // no → ordinary line
+    emitter.instruction("str xzr, [x13]");                                      // consume the one-shot request
+    abi::emit_symbol_address(emitter, "x1", "_vd_ref_prefix");                  // the single `&` byte
+    emitter.instruction("mov x2, #1");                                          // write exactly one byte
+    emitter.instruction("bl __rt_vd_write");                                    // emit `&` after the indent
+    emitter.label("__rt_vd_pad_return");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the pad frame
     emitter.instruction("ret");                                                 // return to caller
@@ -922,6 +930,15 @@ fn emit_var_dump_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_vd_pad_loop_x86");                            // continue padding
 
     emitter.label("__rt_vd_pad_done_x86");
+    abi::emit_symbol_address(emitter, "r10", "_vd_ref_pending");                // resolve the one-shot prefix flag
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // is a reference prefix pending?
+    emitter.instruction("test r11, r11");                                       // zero means an ordinary line
+    emitter.instruction("jz __rt_vd_pad_return_x86");                           // no → ordinary line
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // consume the one-shot request
+    abi::emit_symbol_address(emitter, "rsi", "_vd_ref_prefix");                 // the single `&` byte
+    emitter.instruction("mov rdx, 1");                                          // write exactly one byte
+    emitter.instruction("call __rt_vd_write");                                  // emit `&` after the indent
+    emitter.label("__rt_vd_pad_return_x86");
     emitter.instruction("add rsp, 16");                                         // release the pad frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
@@ -1095,6 +1112,40 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #0]");                                    // save the value low word
     emitter.instruction("str x2, [sp, #8]");                                    // save the value high word
 
+    // -- a reference property carries `14 | declared_tag << 8` and a cell pointer --
+    emitter.instruction("and x10, x0, #255");                                   // low byte = reference marker?
+    emitter.instruction("cmp x10, #14");                                        // is this a reference cell?
+    emitter.instruction("b.ne __rt_vd_val_dispatch");                           // ordinary tags skip the dereference
+    emitter.instruction("cbz x1, __rt_vd_val_null");                            // an absent cell renders NULL
+    emitter.instruction("ldr x9, [x1, #-8]");                                   // read the cell's payload descriptor
+    emitter.instruction("ubfx x9, x9, #8, #7");                                 // isolate the stored payload tag
+    emitter.instruction("cmp x9, #7");                                          // is the payload a boxed Mixed cell?
+    emitter.instruction("b.ne __rt_vd_ref_raw");                                // raw string/array/object payloads keep their words
+    emitter.instruction("ldr x0, [x1]");                                        // dereference the boxed Mixed cell
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0=inner tag, x1=lo, x2=hi
+    emitter.instruction("mov x9, x0");                                          // dispatch the boxed payload tag
+    emitter.instruction("b __rt_vd_ref_store");                                 // keep the unboxed payload words
+    emitter.label("__rt_vd_ref_raw");
+    emitter.instruction("lsr x9, x0, #8");                                      // use the declared runtime tag
+    emitter.instruction("and x9, x9, #255");                                    // isolate the declared tag
+    emitter.instruction("ldr x10, [x1]");                                       // cell low word = payload
+    emitter.instruction("ldr x11, [x1, #8]");                                   // cell high word = payload length/pointer
+    emitter.instruction("cmp x9, #12");                                         // an inline tagged scalar keeps its tag in the high word
+    emitter.instruction("b.ne __rt_vd_ref_words");                              // ordinary scalars use the declared tag
+    emitter.instruction("mov x9, x11");                                         // tagged scalar: high word is the runtime tag
+    emitter.instruction("mov x11, #0");                                         // and carries no payload high word
+    emitter.label("__rt_vd_ref_words");
+    emitter.instruction("mov x1, x10");                                         // payload low word → store slot
+    emitter.instruction("mov x2, x11");                                         // payload high word → store slot
+    emitter.label("__rt_vd_ref_store");
+    emitter.instruction("str x1, [sp, #0]");                                    // replace the saved low word
+    emitter.instruction("str x2, [sp, #8]");                                    // replace the saved high word
+    abi::emit_symbol_address(emitter, "x10", "_vd_ref_pending");                // resolve the one-shot prefix flag
+    emitter.instruction("mov x11, #1");                                         // request the `&` on the next pad
+    emitter.instruction("str x11, [x10]");                                      // publish the prefix request
+    emitter.instruction("mov x0, x9");                                          // dispatch the dereferenced payload tag
+
+    emitter.label("__rt_vd_val_dispatch");
     emitter.instruction("cmp x0, #7");                                          // boxed Mixed cell?
     emitter.instruction("b.eq __rt_vd_val_mixed");                              // unbox then redispatch
     emitter.instruction("cmp x0, #0");                                          // tag 0 = int
@@ -1233,7 +1284,42 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the value low word
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the value high word
     emitter.instruction("mov rax, rdi");                                        // tag → dispatch register
+    emitter.instruction("mov rcx, rax");                                        // copy the tag for the reference test
+    emitter.instruction("and rcx, 255");                                        // low byte = reference marker?
+    emitter.instruction("cmp rcx, 14");                                         // is this a reference cell?
+    emitter.instruction("jne __rt_vd_val_dispatch_x86");                        // ordinary tags skip the dereference
+    emitter.instruction("test rsi, rsi");                                       // does the cell pointer exist?
+    emitter.instruction("jz __rt_vd_val_null_x86");                             // an absent cell renders NULL
+    emitter.instruction("mov r9, QWORD PTR [rsi - 8]");                         // read the cell's payload descriptor
+    emitter.instruction("shr r9, 8");                                           // move the payload descriptor down
+    emitter.instruction("and r9, 127");                                         // isolate the stored payload tag
+    emitter.instruction("cmp r9, 7");                                           // is the payload a boxed Mixed cell?
+    emitter.instruction("jne __rt_vd_ref_raw_x86");                             // raw string/array/object payloads keep their words
+    emitter.instruction("mov rax, QWORD PTR [rsi]");                            // dereference the boxed Mixed cell
+    emitter.instruction("call __rt_mixed_unbox");                               // rax=inner tag, rdi=lo, rdx=hi
+    emitter.instruction("mov r9, rax");                                         // dispatch the boxed payload tag
+    emitter.instruction("mov rsi, rdx");                                        // high word → the store slot
+    emitter.instruction("jmp __rt_vd_ref_store_x86");                           // keep the unboxed payload words
+    emitter.label("__rt_vd_ref_raw_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rsi]");                            // cell low word = payload
+    emitter.instruction("mov r10, QWORD PTR [rsi + 8]");                        // cell high word = payload length/pointer
+    emitter.instruction("shr rax, 8");                                          // use the declared runtime tag
+    emitter.instruction("and rax, 255");                                        // isolate the declared tag
+    emitter.instruction("cmp rax, 12");                                         // an inline tagged scalar keeps its tag in the high word
+    emitter.instruction("jne __rt_vd_ref_words_x86");                           // ordinary scalars use the declared tag
+    emitter.instruction("mov rax, r10");                                        // tagged scalar: high word is the runtime tag
+    emitter.instruction("xor r10d, r10d");                                      // and carries no payload high word
+    emitter.label("__rt_vd_ref_words_x86");
+    emitter.instruction("mov r9, rax");                                         // dispatch the decoded tag
+    emitter.instruction("mov rsi, r10");                                        // payload high word → store slot
+    emitter.label("__rt_vd_ref_store_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // replace the saved low word
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // replace the saved high word
+    abi::emit_symbol_address(emitter, "r11", "_vd_ref_pending");                // resolve the one-shot prefix flag
+    emitter.instruction("mov QWORD PTR [r11], 1");                              // request the `&` on the next pad
+    emitter.instruction("mov rax, r9");                                         // dispatch the dereferenced payload tag
 
+    emitter.label("__rt_vd_val_dispatch_x86");
     emitter.instruction("cmp rax, 7");                                          // boxed Mixed cell?
     emitter.instruction("je __rt_vd_val_mixed_x86");                            // unbox then redispatch
     emitter.instruction("cmp rax, 0");                                          // tag 0 = int

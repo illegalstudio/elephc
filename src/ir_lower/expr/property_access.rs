@@ -115,6 +115,11 @@ pub(crate) fn lower_ref_assign_property(
     let ExprKind::PropertyAccess { object, property } = &source.kind else {
         return;
     };
+    // Call-boundary rewrites re-read the receiver to write the property back. A plain
+    // variable (or `$this`) stays addressable for the alias lifetime; any other receiver is
+    // lowered once and not recorded, because re-evaluating it would not name the same object.
+    let stable_object = matches!(object.kind, ExprKind::Variable(_) | ExprKind::This)
+        .then(|| (**object).clone());
     let object = lower_expr(ctx, object);
     let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
     let owns_cell = match ctx.builder.value_php_type(object.value).codegen_repr() {
@@ -146,6 +151,18 @@ pub(crate) fn lower_ref_assign_property(
         release_owning_receiver_temporary(ctx, object, span);
     } else {
         ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    }
+    if let Some(stable_object) = stable_object {
+        ctx.property_ref_alias_sources.insert(
+            target.to_string(),
+            Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(stable_object),
+                    property: property.clone(),
+                },
+                source.span,
+            ),
+        );
     }
 }
 

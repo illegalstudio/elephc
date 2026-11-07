@@ -54,6 +54,7 @@ where
                     && expr_is_eir_constant_array_value_safe(value)
             }
             ArrayEntry::Value(value) => expr_is_eir_constant_array_value_safe(value),
+            ArrayEntry::Reference(_) | ArrayEntry::KeyedReference(_, _) => false,
         }),
         _ => false,
     }
@@ -84,6 +85,7 @@ pub(super) fn expr_is_eir_constant_array_value_safe(expr: &Expr) -> bool {
                     && expr_is_eir_constant_array_value_safe(value)
             }
             ArrayEntry::Value(value) => expr_is_eir_constant_array_value_safe(value),
+            ArrayEntry::Reference(_) | ArrayEntry::KeyedReference(_, _) => false,
         }),
         _ => false,
     }

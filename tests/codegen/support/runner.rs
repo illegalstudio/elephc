@@ -173,6 +173,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         package: "elephc-xml",
         php_extensions: &["xml", "xmlwriter", "SimpleXML"],
     },
+    TestBridgeStaticlib {
+        lib_name: "elephc_intl",
+        package: "elephc-intl",
+        php_extensions: &["intl"],
+    },
 ];
 
 /// Default timeout for executing one compiled codegen fixture binary.
@@ -1351,6 +1356,20 @@ fn test_link_plan(
     if named.contains("elephc_fileinfo") {
         if let Some(archives) = super::fileinfo_native::archives() {
             for archive in archives { plan.push(LinkItem::managed_archive(archive, "libmagic")); }
+        }
+    }
+    // Intl is the same shape: the Rust bridge reaches ICU through the managed shim and the
+    // three ICU static archives, then the target C++ runtime. The harness reads the durable
+    // cache structurally because it has no project manifest to resolve against.
+    if named.contains("elephc_intl") {
+        if let Some(archives) = super::intl_native::archives() {
+            for archive in archives { plan.push(LinkItem::managed_archive(archive, "icu")); }
+            for library in super::intl_native::system_libraries() {
+                plan.push(LinkItem::NamedLibrary {
+                    name: (*library).to_string(),
+                    origin: elephc::link_plan::LinkOrigin::Runtime,
+                });
+            }
         }
     }
     if named.contains("elephc_xml") && !xml_pushed {

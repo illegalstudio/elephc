@@ -46,15 +46,22 @@ impl SourceArchive {
     /// Derives the archive format from the catalog URL suffix, failing closed on any other suffix
     /// so an unrecognised container can never reach the extractor.
     pub fn format(&self) -> Result<ArchiveFormat, NativeError> {
-        [ArchiveFormat::TarGz, ArchiveFormat::TarXz]
-            .into_iter()
-            .find(|format| self.https_url.ends_with(&format!(".{}", format.extension())))
-            .ok_or_else(|| {
-                NativeError::new(
-                    NativeErrorKind::Catalog,
-                    format!("catalog source URL '{}' has no supported archive suffix (.tar.gz, .tar.xz)", self.https_url),
-                )
-            })
+        // `.tgz` is the same gzip-compressed tar container as `.tar.gz`; upstream ICU's release
+        // assets use that spelling. The content-addressed cache still keys on `tar.gz` so one
+        // decompressor and one cache extension describe both spellings.
+        if self.https_url.ends_with(".tar.gz") || self.https_url.ends_with(".tgz") {
+            return Ok(ArchiveFormat::TarGz);
+        }
+        if self.https_url.ends_with(".tar.xz") {
+            return Ok(ArchiveFormat::TarXz);
+        }
+        Err(NativeError::new(
+            NativeErrorKind::Catalog,
+            format!(
+                "catalog source URL '{}' has no supported archive suffix (.tar.gz, .tgz, .tar.xz)",
+                self.https_url
+            ),
+        ))
     }
 }
 
@@ -69,6 +76,8 @@ pub struct PackageVersion {
     pub ordered_link_outputs: &'static [&'static str],
     pub retained_headers: &'static [&'static str],
     pub provides: &'static [&'static str],
+    /// Target-specific system ABI libraries appended after the managed archives.
+    pub system_libraries: &'static [(&'static str, &'static [&'static str])],
 }
 
 /// A named package and its default exact version.
@@ -213,6 +222,7 @@ const PCRE2_VERSIONS: &[PackageVersion] = &[PackageVersion {
     ordered_link_outputs: PCRE2_ARCHIVES,
     retained_headers: PCRE2_HEADERS,
     provides: &["pcre2"],
+    system_libraries: &[],
 }];
 const ZLIB_VERSIONS: &[PackageVersion] = &[PackageVersion {
     version: "1.3.2",
@@ -229,6 +239,7 @@ const ZLIB_VERSIONS: &[PackageVersion] = &[PackageVersion {
     ordered_link_outputs: ZLIB_ARCHIVES,
     retained_headers: ZLIB_HEADERS,
     provides: &["zlib"],
+    system_libraries: &[],
 }];
 /// Frozen source identity copied verbatim from `scripts/docs/curl_surface.json`. OpenSSL
 /// is used only as libcurl's TLS backend; `openssl_encrypt`/`hash()` stay on `elephc-crypto`.
@@ -247,6 +258,7 @@ const OPENSSL_VERSIONS: &[PackageVersion] = &[PackageVersion {
     ordered_link_outputs: OPENSSL_ARCHIVES,
     retained_headers: OPENSSL_HEADERS,
     provides: &["openssl"],
+    system_libraries: &[],
 }];
 /// The libcrypto-only OpenSSL build used by the cipher bridge. It is deliberately
 /// separate from curl's 3.5.8 TLS pin: PHP 8.5's 135-cipher default-provider list
@@ -279,6 +291,7 @@ const OPENSSL_CRYPTO_VERSIONS: &[PackageVersion] = &[PackageVersion {
     ordered_link_outputs: OPENSSL_CRYPTO_ARCHIVES,
     retained_headers: OPENSSL_CRYPTO_HEADERS,
     provides: &["openssl-crypto"],
+    system_libraries: &[],
 }];
 /// libcurl's HTTP/2 framing library. Built `--enable-lib-only`, which is why it has no
 /// dependencies of its own: only nghttp2's *applications* need zlib/OpenSSL/libev/c-ares.
@@ -297,6 +310,7 @@ const NGHTTP2_VERSIONS: &[PackageVersion] = &[PackageVersion {
     ordered_link_outputs: NGHTTP2_ARCHIVES,
     retained_headers: NGHTTP2_HEADERS,
     provides: &["nghttp2"],
+    system_libraries: &[],
 }];
 /// libcurl's SSH transport, backing the `scp://` and `sftp://` protocol handlers. Built
 /// against the managed `openssl` (crypto backend) and `zlib` (SSH channel compression),
@@ -316,6 +330,7 @@ const LIBSSH2_VERSIONS: &[PackageVersion] = &[PackageVersion {
     ordered_link_outputs: LIBSSH2_ARCHIVES,
     retained_headers: LIBSSH2_HEADERS,
     provides: &["libssh2"],
+    system_libraries: &[],
 }];
 /// Frozen source identity copied verbatim from `scripts/docs/curl_surface.json`. Statically
 /// linked against the managed `openssl`, `zlib`, `nghttp2` and `libssh2` packages; never a
@@ -342,6 +357,7 @@ const CURL_VERSIONS: &[PackageVersion] = &[PackageVersion {
     ordered_link_outputs: CURL_ARCHIVES,
     retained_headers: CURL_HEADERS,
     provides: &["curl"],
+    system_libraries: &[],
 }];
 const ONIGURUMA_VERSIONS: &[PackageVersion] = &[PackageVersion {
     version: elephc_builtin_contract::mbstring_abi::regex::ONIGURUMA_VERSION,
@@ -357,6 +373,7 @@ const ONIGURUMA_VERSIONS: &[PackageVersion] = &[PackageVersion {
     ordered_link_outputs: &["lib/libelephc_oniguruma_shim.a", "lib/libonig.a"],
     retained_headers: &["include/oniguruma.h", "include/oniggnu.h", "include/elephc_oniguruma.h"],
     provides: &["oniguruma"],
+    system_libraries: &[],
 }];
 
 /// The XML parser behind the `elephc_xml` bridge (`xml_*` push parser, XMLWriter). The first
@@ -377,6 +394,7 @@ const LIBXML2_VERSIONS: &[PackageVersion] = &[PackageVersion {
     ordered_link_outputs: LIBXML2_ARCHIVES,
     retained_headers: LIBXML2_HEADERS,
     provides: &["libxml2"],
+    system_libraries: &[],
 }];
 /// GNU MP 6.3.0 is the exact library PHP 8.5's GMP extension is exercised
 /// against in this repository. It has no catalogued dependencies: the bridge
@@ -396,6 +414,7 @@ const GMP_VERSIONS: &[PackageVersion] = &[PackageVersion {
     ordered_link_outputs: GMP_ARCHIVES,
     retained_headers: GMP_HEADERS,
     provides: &["gmp"],
+    system_libraries: &[],
 }];
 /// Pinned file/libmagic with a database embedded by the reviewed recipe.
 const LIBMAGIC_VERSIONS: &[PackageVersion] = &[PackageVersion {
@@ -412,6 +431,39 @@ const LIBMAGIC_VERSIONS: &[PackageVersion] = &[PackageVersion {
     ordered_link_outputs: &["lib/libelephc_magic_database.a", "lib/libmagic.a"],
     retained_headers: &["include/magic.h"],
     provides: &["libmagic"],
+    system_libraries: &[],
+}];
+/// ICU's C ABI calls C++ implementation code; every target records its runtime.
+///
+/// The shim archive precedes the ICU archives because it references their symbols.
+/// ICU ships its own full data archive (`libicudata.a`), so locale, timezone, and
+/// rule-based data are self-contained at run time.
+const ICU_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "78.3",
+    source: SourceArchive {
+        https_url: "https://github.com/unicode-org/icu/releases/download/release-78.3/icu4c-78.3-sources.tgz",
+        sha256: "3a2e7a47604ba702f345878308e6fefeca612ee895cf4a5f222e7955fabfe0c0",
+        exact_size: 27_977_255,
+        body_limit: 64 * 1024 * 1024,
+    },
+    recipe_revision: 39,
+    dependencies: &[],
+    supported_targets: TARGETS,
+    ordered_link_outputs: &[
+        "lib/libelephc_icu_intl_shim.a",
+        "lib/libicui18n.a",
+        "lib/libicuuc.a",
+        "lib/libicudata.a",
+    ],
+    retained_headers: &["include/elephc_icu_intl_shim.h"],
+    provides: &["icu"],
+    system_libraries: &[
+        ("macos-aarch64", &["c++"]),
+        ("ios-arm64", &["c++"]),
+        ("ios-sim-arm64", &["c++"]),
+        ("linux-aarch64", &["stdc++", "m", "dl", "pthread"]),
+        ("linux-x86_64", &["stdc++", "m", "dl", "pthread"]),
+    ],
 }];
 const PACKAGES: &[PackageSpec] = &[
     PackageSpec { name: "libmagic", default_version: "5.46", versions: LIBMAGIC_VERSIONS },
@@ -464,6 +516,11 @@ const PACKAGES: &[PackageSpec] = &[
         name: "gmp",
         default_version: "6.3.0",
         versions: GMP_VERSIONS,
+    },
+    PackageSpec {
+        name: "icu",
+        default_version: "78.3",
+        versions: ICU_VERSIONS,
     },
 ];
 
@@ -587,7 +644,7 @@ mod tests {
     fn catalog_rejects_unknown_selection() {
         assert_eq!(
             package("libfoo").unwrap_err().to_string(),
-            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, openssl-crypto, nghttp2, libssh2, curl, oniguruma, libxml2, gmp"
+            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, openssl-crypto, nghttp2, libssh2, curl, oniguruma, libxml2, gmp, icu"
         );
         assert!(version("pcre2", Some("10.46")).is_err());
     }
@@ -744,7 +801,11 @@ mod tests {
                 let format = version.source.format().unwrap_or_else(|error| {
                     panic!("{} {}: {error}", package.name, version.version)
                 });
-                assert!(version.source.https_url.ends_with(format.extension()));
+                assert!(
+                    version.source.https_url.ends_with(format.extension())
+                        || (format == ArchiveFormat::TarGz
+                            && version.source.https_url.ends_with(".tgz"))
+                );
             }
         }
         assert_eq!(version("zlib", None).unwrap().source.format().unwrap(), ArchiveFormat::TarGz);
