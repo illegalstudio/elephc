@@ -19,8 +19,8 @@
 
 use crate::support::*;
 
-/// Emits the `main` function body for one fixture in the requested optimizer mode.
-fn emit_main_ir(source: &str, ir_opt: bool) -> String {
+/// Emits the complete EIR for one fixture in the requested optimizer mode.
+fn emit_ir(source: &str, ir_opt: bool) -> String {
     let dir = make_cli_test_dir("elephc_stored_numeric_map_ir");
     let path = dir.join("main.php");
     fs::write(&path, source).expect("write stored numeric map fixture");
@@ -37,16 +37,20 @@ fn emit_main_ir(source: &str, ir_opt: bool) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     let text = String::from_utf8(output.stdout).expect("EIR is UTF-8");
-    let main = text
+    let _ = fs::remove_dir_all(dir);
+    text
+}
+
+/// Emits the `main` function body for one fixture in the requested optimizer mode.
+fn emit_main_ir(source: &str, ir_opt: bool) -> String {
+    emit_ir(source, ir_opt)
         .split("function main(")
         .nth(1)
         .expect("EIR contains main")
         .split("\n  function ")
         .next()
         .expect("main body")
-        .to_string();
-    let _ = fs::remove_dir_all(dir);
-    main
+        .to_string()
 }
 
 /// Compiles and runs one fixture through the CLI with an explicit EIR optimizer mode.
@@ -965,6 +969,159 @@ function floatShapes(int $seed): float {
     $div = array_map(fn($v) => $v / 2.0, [1, 2, 3]);
     $lit = array_map(fn($v) => $v * 1.5, [1, 2, 3]);
     return array_sum($add) + array_sum($div) + array_sum($lit) + $seed;
+}
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let assembly = emit_target_assembly(source, target);
+        assert!(assembly.contains("__rt_array_map_float_affine"), "{target}");
+        assert!(assembly.contains("__rt_array_map_float_div"), "{target}");
+        assert!(assembly.contains("__rt_array_map_float_scale"), "{target}");
+        assert!(!assembly.contains("__rt_array_map_boxed"), "{target}");
+    }
+}
+
+/// Function-local `array<int>` sources inferred by the lowering context fuse like main-level
+/// ones, including `range` locals, reassignments, merged branches, and stepped ranges.
+#[test]
+fn test_stored_numeric_map_function_local_sources() {
+    let source = r#"<?php
+function mappedRange(): float {
+    $values = range(1, 10);
+    $mapped = array_map(fn($v) => $v * 1.5, $values);
+    return array_sum($mapped);
+}
+function mappedLiteral(): float {
+    $values = [1, 2, 3];
+    $mapped = array_map(fn($v) => $v + 1.5, $values);
+    return array_sum($mapped);
+}
+function mappedDiv(): float {
+    $values = [2, 4, 5];
+    $mapped = array_map(fn($v) => $v / 2.0, $values);
+    return array_sum($mapped);
+}
+function reassigned(): float {
+    $values = [1, 2, 3];
+    $values = [4, 5];
+    $mapped = array_map(fn($v) => $v + 1.5, $values);
+    return array_sum($mapped);
+}
+function branchInt(int $flag): float {
+    if ($flag) {
+        $values = [1, 2, 3];
+    } else {
+        $values = [4, 5];
+    }
+    $mapped = array_map(fn($v) => $v + 1.5, $values);
+    return array_sum($mapped);
+}
+function stepped(): float {
+    $values = range(1, 10, 2);
+    $mapped = array_map(fn($v) => $v * 1.5, $values);
+    return array_sum($mapped);
+}
+echo mappedRange(), "|", mappedLiteral(), "|", mappedDiv(), "|", reassigned(), "|";
+echo branchInt(1), "|", branchInt(0), "|", stepped(), "\n";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "82.5|10.5|5.5|12|10.5|12|37.5\n"
+    );
+    let eir = emit_ir(source, true);
+    assert!(eir.contains("runtime.array_map_float_scale"), "{eir}");
+    assert!(eir.contains("runtime.array_map_float_affine"), "{eir}");
+    assert!(eir.contains("runtime.array_map_float_div"), "{eir}");
+    assert!(!eir.contains("runtime.array_map "), "{eir}");
+}
+
+/// A function-local source whose flow type is not `array<int>` falls back to the generic map
+/// instead of trusting the marker's shape scan.
+#[test]
+fn test_stored_numeric_map_function_local_mixed_source_falls_back() {
+    let source = r#"<?php
+function mixedSource(array $values): float {
+    $mapped = array_map(fn($v) => $v + 1.5, $values);
+    return array_sum($mapped);
+}
+echo mixedSource([1, 2, 3]), "\n";
+"#;
+    assert_eq!(compile_and_run(source), "10.5\n");
+    let eir = emit_ir(source, true);
+    assert_eq!(eir.matches("runtime.array_map ").count(), 1, "{eir}");
+    assert!(!eir.contains("runtime.array_map_float_affine"), "{eir}");
+}
+
+/// A reference alias disqualifies the source before lowering, so the generic map runs.
+#[test]
+fn test_stored_numeric_map_function_local_alias_falls_back() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+$alias =& $values;
+$mapped = array_map(fn($v) => $v + 1, $values);
+echo implode(",", $mapped), "\n";
+"#;
+    assert_eq!(compile_and_run(source), "2,3,4\n");
+    let eir = emit_ir(source, true);
+    assert_eq!(eir.matches("runtime.array_map ").count(), 1, "{eir}");
+    assert!(!eir.contains("runtime.array_map_numeric"), "{eir}");
+}
+
+/// Function-local fused maps release their sources and results cleanly.
+#[test]
+fn test_stored_numeric_map_function_local_heap_debug_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function mapped(): float {
+    $values = range(1, 10);
+    $add = array_map(fn($v) => $v + 1.5, $values);
+    $div = array_map(fn($v) => $v / 2.0, $values);
+    return array_sum($add) + array_sum($div);
+}
+echo mapped(), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "97.5\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Function-local fused maps produce the same output with the EIR optimizer on and off.
+#[test]
+fn test_stored_numeric_map_function_local_ir_opt_parity() {
+    let source = r#"<?php
+function mapped(int $n): float {
+    $values = range(1, $n);
+    $add = array_map(fn($v) => $v + 1.5, $values);
+    $div = array_map(fn($v) => $v / 2.0, $values);
+    return array_sum($add) + array_sum($div);
+}
+echo mapped(10), "\n";
+"#;
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "97.5\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "97.5\n");
+}
+
+/// Every supported target emits the fused kernels for a function-local source.
+#[test]
+fn test_stored_numeric_map_function_local_emits_all_supported_targets() {
+    let source = r#"<?php
+#[Export]
+function localFloat(int $seed): float {
+    $values = range(1, 10);
+    $add = array_map(fn($v) => $v + 1.5, $values);
+    $div = array_map(fn($v) => $v / 2.0, $values);
+    $scale = array_map(fn($v) => $v * 1.5, $values);
+    return array_sum($add) + array_sum($div) + array_sum($scale) + $seed;
 }
 "#;
     for target in [

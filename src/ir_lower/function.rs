@@ -1845,7 +1845,6 @@ fn lower_body_into_function(
         );
         crate::ir_lower::stmt::stored_numeric_map::mark_stored_numeric_maps(
             &mut fused_body,
-            &env,
             &by_ref_param_names,
             functions,
         );

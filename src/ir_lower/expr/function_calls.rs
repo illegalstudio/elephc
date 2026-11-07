@@ -12,8 +12,14 @@ use super::*;
 /// Lowers a direct function, builtin, or extern call.
 pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
     if name.as_str() == crate::ir_lower::stmt::stored_numeric_map::STORED_NUMERIC_MAP {
-        return lower_stored_numeric_map(ctx, name, args, expr)
-            .expect("stored numeric map marker must retain its checked shape");
+        if let Some(value) = lower_stored_numeric_map(ctx, name, args, expr) {
+            return value;
+        }
+        // The marker is only an optimization. If the flow-sensitive source proof fails at
+        // this call site, lower the ordinary `array_map()` shape instead of trusting the
+        // earlier AST scan.
+        let array_map = Name::unqualified("array_map");
+        return lower_function_call(ctx, &array_map, args, expr);
     }
     let value = lower_function_call_unviewed(ctx, name, args, expr);
     // A call returning a promotable `array<int>` may hand back hash storage; where the checker

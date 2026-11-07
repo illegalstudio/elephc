@@ -11,6 +11,10 @@
 //! Key details:
 //! - The marker is a synthetic call name consumed by `lower_function_call`; the checker
 //!   has already typed the original call, so the rewrite changes no PHP-visible type.
+//! - A variable source's packed `array<int>` proof is deferred to lowering, where the
+//!   flow-sensitive local type is known (so function-local assignments fuse too). A failed
+//!   proof falls back to the ordinary `array_map()` lowering. Non-empty all-int array
+//!   literals are proven here.
 //! - A candidate is marked only when every use of its destination local and value aliases
 //!   is one of: indexed reads, value-`foreach`, read-only aliasing, or a whitelisted
 //!   storage-neutral builtin. Any element write, direct or through an alias, keeps the
@@ -22,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 use crate::names::Name;
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use crate::span::Span;
-use crate::types::{FunctionSig, PhpType, TypeEnv};
+use crate::types::FunctionSig;
 
 use super::map_read_fusion::{aliased_locals, expr_mentions, stmt_mentions};
 
@@ -32,7 +36,6 @@ pub(crate) const STORED_NUMERIC_MAP: &str = "__elephc_stored_numeric_map";
 /// Marks every safe stored numeric map in one function body.
 pub(crate) fn mark_stored_numeric_maps(
     body: &mut [Stmt],
-    env: &TypeEnv,
     by_ref_params: &HashSet<String>,
     functions: &HashMap<String, FunctionSig>,
 ) {
@@ -41,21 +44,21 @@ pub(crate) fn mark_stored_numeric_maps(
     }
     let analysis = body.to_vec();
     let aliased = aliased_locals(&analysis, by_ref_params);
-    mark_block(body, &analysis, env, &aliased);
+    mark_block(body, &analysis, &aliased);
 }
 
 /// Rewrites candidates in one block and recurses into nested blocks.
-fn mark_block(stmts: &mut [Stmt], analysis: &[Stmt], env: &TypeEnv, aliased: &HashSet<String>) {
+fn mark_block(stmts: &mut [Stmt], analysis: &[Stmt], aliased: &HashSet<String>) {
     for stmt in stmts.iter_mut() {
-        mark_stmt(stmt, analysis, env, aliased);
+        mark_stmt(stmt, analysis, aliased);
     }
 }
 
 /// Rewrites one candidate statement and recurses into its nested bodies.
-fn mark_stmt(stmt: &mut Stmt, analysis: &[Stmt], env: &TypeEnv, aliased: &HashSet<String>) {
+fn mark_stmt(stmt: &mut Stmt, analysis: &[Stmt], aliased: &HashSet<String>) {
     let candidate = match &stmt.kind {
         StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
-            stored_map_shape(value, env, aliased).map(|_| name.clone())
+            stored_map_shape(value, aliased).map(|_| name.clone())
         }
         _ => None,
     };
@@ -78,37 +81,37 @@ fn mark_stmt(stmt: &mut Stmt, analysis: &[Stmt], env: &TypeEnv, aliased: &HashSe
         | StmtKind::Foreach { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. }
         | StmtKind::NamespaceBlock { body, .. }
-        | StmtKind::Synthetic(body) => mark_block(body, analysis, env, aliased),
+        | StmtKind::Synthetic(body) => mark_block(body, analysis, aliased),
         StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
-            mark_block(then_body, analysis, env, aliased);
+            mark_block(then_body, analysis, aliased);
             for (_, body) in elseif_clauses {
-                mark_block(body, analysis, env, aliased);
+                mark_block(body, analysis, aliased);
             }
             if let Some(body) = else_body {
-                mark_block(body, analysis, env, aliased);
+                mark_block(body, analysis, aliased);
             }
         }
         StmtKind::IfDef { then_body, else_body, .. } => {
-            mark_block(then_body, analysis, env, aliased);
+            mark_block(then_body, analysis, aliased);
             if let Some(body) = else_body {
-                mark_block(body, analysis, env, aliased);
+                mark_block(body, analysis, aliased);
             }
         }
         StmtKind::Switch { cases, default, .. } => {
             for (_, body) in cases {
-                mark_block(body, analysis, env, aliased);
+                mark_block(body, analysis, aliased);
             }
             if let Some(body) = default {
-                mark_block(body, analysis, env, aliased);
+                mark_block(body, analysis, aliased);
             }
         }
         StmtKind::Try { try_body, catches, finally_body } => {
-            mark_block(try_body, analysis, env, aliased);
+            mark_block(try_body, analysis, aliased);
             for catch in catches {
-                mark_block(&mut catch.body, analysis, env, aliased);
+                mark_block(&mut catch.body, analysis, aliased);
             }
             if let Some(body) = finally_body {
-                mark_block(body, analysis, env, aliased);
+                mark_block(body, analysis, aliased);
             }
         }
         _ => {}
@@ -472,8 +475,13 @@ fn literal_i64(expr: &Expr) -> Option<i64> {
     }
 }
 
-/// Validates a candidate map call and its source local.
-fn stored_map_shape(value: &Expr, env: &TypeEnv, aliased: &HashSet<String>) -> Option<()> {
+/// Validates a candidate map call and its source.
+///
+/// A variable source is only checked for reference aliasing here; its packed-`array<int>`
+/// type is proven by the lowering context at the actual call site, which is flow-sensitive
+/// and therefore also works for locals assigned inside user functions. A failed proof falls
+/// back to the ordinary `array_map` lowering.
+fn stored_map_shape(value: &Expr, aliased: &HashSet<String>) -> Option<()> {
     let ExprKind::FunctionCall { name, args } = &value.kind else {
         return None;
     };
@@ -482,10 +490,7 @@ fn stored_map_shape(value: &Expr, env: &TypeEnv, aliased: &HashSet<String>) -> O
     }
     match &args[1].kind {
         ExprKind::Variable(source) => {
-            if env.get(source).map(PhpType::codegen_repr)
-                != Some(PhpType::Array(Box::new(PhpType::Int)))
-                || aliased.contains(source)
-            {
+            if aliased.contains(source) {
                 return None;
             }
         }
