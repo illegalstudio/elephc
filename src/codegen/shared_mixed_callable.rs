@@ -58,40 +58,43 @@ fn instruction_scope(function: &Function, index: usize) -> Option<&str> {
     }
 }
 
+/// `name` and its ancestors, without leading backslashes.
+fn class_lineage<'a>(module: &'a Module, name: &'a str) -> impl Iterator<Item = &'a str> {
+    std::iter::successors(Some(name.trim_start_matches('\\')), move |class| {
+        module
+            .class_infos
+            .get(*class)
+            .and_then(|info| info.parent.as_deref())
+            .map(|parent| parent.trim_start_matches('\\'))
+    })
+}
+
 /// Class names whose own scope can reach a `protected` or `private` method: the classes that
-/// declare one and every ancestor (a parent reaches a protected method its descendant declares).
+/// declare one, their ancestors (a parent reaches a protected method its descendant declares) and
+/// their descendants (a class that made an inherited method public still reaches its siblings'
+/// protected copy, through the prototype they share).
 fn scope_sensitive_classes(module: &Module) -> std::collections::HashSet<String> {
-    let mut sensitive = std::collections::HashSet::new();
+    let mut declaring = std::collections::HashSet::new();
     for (name, info) in &module.class_infos {
         let non_public = info
             .method_visibilities
             .values()
             .chain(info.static_method_visibilities.values())
             .any(|visibility| !matches!(visibility, crate::parser::ast::Visibility::Public));
-        if !non_public {
-            continue;
-        }
-        let mut current = Some(name.as_str());
-        while let Some(class_name) = current {
-            if !sensitive.insert(class_name.trim_start_matches('\\').to_string()) {
-                break;
-            }
-            current = module
-                .class_infos
-                .get(class_name.trim_start_matches('\\'))
-                .and_then(|class| class.parent.as_deref());
+        if non_public {
+            declaring.insert(name.trim_start_matches('\\'));
         }
     }
+    let mut sensitive = std::collections::HashSet::new();
+    for name in module.class_infos.keys() {
+        if class_lineage(module, name).any(|class| declaring.contains(class)) {
+            sensitive.insert(name.trim_start_matches('\\').to_string());
+        }
+    }
+    for name in &declaring {
+        sensitive.extend(class_lineage(module, name).map(str::to_string));
+    }
     sensitive
-}
-
-/// The class scope a callable search of `ctx` has to be emitted for: its lexical class when that
-/// class reaches a non-public method, `None` when it sees exactly what the global scope sees.
-pub(super) fn reach_scope(ctx: &FunctionContext<'_>) -> Option<String> {
-    let scope = ctx.function.lexical_class.as_deref()?.trim_start_matches('\\');
-    let sharing = ctx.shared.mixed_callable_sharing();
-    let decided = sharing.global.iter().any(Option::is_some);
-    (!decided || sharing.sensitive.contains(scope)).then(|| scope.to_string())
 }
 
 /// The scope-specific helper class of a site: `Some` when its scope reaches non-public methods.
