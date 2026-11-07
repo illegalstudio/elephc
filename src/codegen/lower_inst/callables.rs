@@ -29,7 +29,10 @@ use crate::parser::ast::Visibility;
 use crate::types::{FunctionSig, PhpType};
 
 use super::super::context::FunctionContext;
-use super::super::shared_state::RuntimeInstanceMethodDescriptorTemplate;
+use super::super::shared_state::{
+    CallableResolverMiss, CallableResolverSpec, DynamicPropHelperKind,
+    RuntimeInstanceMethodDescriptorTemplate,
+};
 use super::{
     class_method_already_emitted, class_method_body_exists, direct_call_stack_pad_bytes,
     emit_call_arg_temp_cleanups, emit_direct_resolved_method_call,
@@ -722,7 +725,152 @@ pub(in crate::codegen) fn emit_runtime_unary_callback_descriptor_value(
 }
 
 /// Implements boxed callable descriptor selection with a configurable string-name miss path.
+#[allow(clippy::too_many_arguments)]
 fn emit_runtime_mixed_callable_descriptor_value_impl(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    op_name: &str,
+    retain_existing_descriptor: bool,
+    strict_php: bool,
+    string_type_error: Option<&'static str>,
+    invalid_type_error: Option<&'static str>,
+    arity: Option<usize>,
+    inaccessible_override: Option<InaccessibleMethodError>,
+) -> Result<()> {
+    let miss = match &inaccessible_override {
+        None => Some(None),
+        Some(InaccessibleMethodError::Ignore) => Some(Some(CallableResolverMiss::Ignore)),
+        Some(InaccessibleMethodError::InvalidCallback(prefix)) => {
+            Some(Some(CallableResolverMiss::InvalidCallback(prefix.clone())))
+        }
+        Some(InaccessibleMethodError::DirectCall) => Some(Some(CallableResolverMiss::DirectCall)),
+        // Names a value of the frame it runs in, which a shared body does not have.
+        Some(InaccessibleMethodError::Dynamic(_)) => None,
+    };
+    if let Some(miss) = miss.filter(|_| callable_resolver_is_shareable(ctx, callable)) {
+        let spec = CallableResolverSpec {
+            op_name: op_name.to_string(),
+            retain_existing_descriptor,
+            strict_php,
+            string_type_error,
+            invalid_type_error,
+            arity,
+            miss,
+        };
+        let scope = ctx
+            .function
+            .lexical_class
+            .as_deref()
+            .map(|class| class.trim_start_matches('\\').to_string());
+        let key = format!("{}:{:?}:{}", CALLABLE_RESOLVER_PREFIX, spec, scope.as_deref().unwrap_or(""));
+        let label = ctx.keyed_global_label(&key, CALLABLE_RESOLVER_PREFIX);
+        ctx.shared.request_dynamic_prop_helper(
+            &key,
+            &label,
+            DynamicPropHelperKind::MixedCallableResolver(Box::new(spec)),
+            scope.as_deref(),
+        );
+        ctx.load_value_to_result(callable)?;
+        abi::emit_call_label(ctx.emitter, &label);
+        return Ok(());
+    }
+    emit_inline_mixed_callable_descriptor_value(
+        ctx,
+        callable,
+        op_name,
+        retain_existing_descriptor,
+        strict_php,
+        string_type_error,
+        invalid_type_error,
+        arity,
+        inaccessible_override,
+    )
+}
+
+/// Readable part of the shared resolver's entry symbol.
+const CALLABLE_RESOLVER_PREFIX: &str = "callable_resolve";
+
+/// Whether a boxed callable may be resolved by a shared body.
+///
+/// The body is the inline sequence, so everything it reads must be a fact of the module or of the
+/// helper's key (see [`CallableResolverSpec`]). What keeps a site inline is what ties the sequence
+/// to its frame: the eval fallbacks read the frame's context, a finite set of callable names is
+/// known about this value only, and a closure's runtime scope is a local of its body.
+fn callable_resolver_is_shareable(ctx: &FunctionContext<'_>, callable: ValueId) -> bool {
+    !ctx.module.required_runtime_features.eval_bridge
+        && !super::builtins::has_eval_context(ctx)
+        && !crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(
+            ctx.module,
+        )
+        && ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL).is_none()
+        && ctx.function.name != super::callable_argument_normalizer::CALLABLE_ARGUMENT_NORMALIZER
+        && !crate::codegen::shared_mixed_callable::is_shared_helper_name(&ctx.function.name)
+        && ctx.runtime_callable_candidates(callable).is_none()
+        && matches!(
+            ctx.value_php_type(callable).map(|ty| ty.codegen_repr()),
+            Ok(PhpType::Mixed | PhpType::Union(_))
+        )
+}
+
+/// Emits one shared resolver: the inline sequence around a frame that gives its boxed callable a
+/// home, returning the descriptor and its ownership flag in the registers the sequence leaves
+/// them in. Takes the boxed callable in the integer result register.
+pub(in crate::codegen) fn emit_mixed_callable_resolver(
+    module: &crate::ir::Module,
+    emitter: &mut crate::codegen_support::emit::Emitter,
+    data: &mut crate::codegen::data_section::DataSection,
+    shared: &mut crate::codegen::shared_state::SharedCodegenState,
+    label: &str,
+    scope: Option<&str>,
+    spec: &CallableResolverSpec,
+) -> Result<()> {
+    use crate::codegen::shared_helper::{helper_function, helper_value};
+
+    let mut function = helper_function(label, PhpType::Callable);
+    function.lexical_class = scope.map(str::to_string);
+    let layout = crate::codegen::frame::layout_for_function(
+        &function, emitter.target, false, false, false,
+    );
+    let saved_nested_offset = layout.frame_size - 8;
+    let frame_size = layout.frame_size + 16;
+    let mut ctx = FunctionContext::new(
+        module, &function, emitter, data, shared, layout, false, false, false, None,
+    );
+    ctx.emitter.blank();
+    ctx.emitter.comment(&format!("--- shared callable resolver: {} ---", label));
+    ctx.emitter.label(label);
+    abi::emit_frame_prologue(ctx.emitter, frame_size);
+    let nested = abi::nested_call_reg(ctx.emitter);
+    abi::store_at_offset(ctx.emitter, nested, saved_nested_offset);
+    ctx.store_result_value(helper_value())?;
+    let inaccessible = spec.miss.as_ref().map(|miss| match miss {
+        CallableResolverMiss::Ignore => InaccessibleMethodError::Ignore,
+        CallableResolverMiss::InvalidCallback(prefix) => {
+            InaccessibleMethodError::InvalidCallback(prefix.clone())
+        }
+        CallableResolverMiss::DirectCall => InaccessibleMethodError::DirectCall,
+    });
+    emit_inline_mixed_callable_descriptor_value(
+        &mut ctx,
+        helper_value(),
+        &spec.op_name,
+        spec.retain_existing_descriptor,
+        spec.strict_php,
+        spec.string_type_error,
+        spec.invalid_type_error,
+        spec.arity,
+        inaccessible,
+    )?;
+    abi::load_at_offset(ctx.emitter, nested, saved_nested_offset);
+    abi::emit_frame_restore(ctx.emitter, frame_size);
+    abi::emit_return(ctx.emitter);
+    Ok(())
+}
+
+/// Emits the resolution sequence itself; [`emit_runtime_mixed_callable_descriptor_value_impl`]
+/// decides whether it runs at the site or in a shared body.
+#[allow(clippy::too_many_arguments)]
+fn emit_inline_mixed_callable_descriptor_value(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
     op_name: &str,
@@ -1443,11 +1591,7 @@ fn emit_magic_call_forwarder(ctx: &mut FunctionContext<'_>, done_label: &str) ->
         .map(|info| info.class_id)
         .collect::<Vec<_>>();
     if classes.is_empty()
-        || !ctx
-            .module
-            .functions
-            .iter()
-            .any(|function| function.name == crate::magic_call_prelude::MAGIC_CALLABLE_HELPER_NAME)
+        || !ctx.module.has_function_named(crate::magic_call_prelude::MAGIC_CALLABLE_HELPER_NAME)
     {
         return Ok(());
     }

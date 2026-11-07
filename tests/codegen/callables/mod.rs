@@ -9,6 +9,7 @@
 
 mod boxed_calls;
 mod branch_reach;
+mod resolver_sharing;
 mod inaccessible_callbacks;
 mod callable_param_values;
 mod callable_strings;

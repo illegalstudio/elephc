@@ -339,6 +339,17 @@ pub(in crate::codegen) fn emit_pending_dynamic_property_helpers(
                     module, emitter, data, shared, &pending,
                 )
             }
+            DynamicPropHelperKind::MixedCallableResolver(spec) => {
+                crate::codegen::lower_inst::callables::emit_mixed_callable_resolver(
+                    module,
+                    emitter,
+                    data,
+                    shared,
+                    &pending.label,
+                    pending.scope.as_deref(),
+                    &spec,
+                )
+            }
         };
         emitter.comment(HELPER_MARKER_CLOSE);
         emitted?;

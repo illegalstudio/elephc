@@ -636,6 +636,8 @@ fn finalize_user_asm(
         &mut shared,
         regalloc_linear,
     )?;
+    // The module-level helpers above resolve callables too, so they can ask for a shared body.
+    lower_inst::emit_pending_property_guard_helpers(module, &mut emitter, &mut data, &mut shared)?;
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();
     let user_functions = runtime_user_function_sigs(module);

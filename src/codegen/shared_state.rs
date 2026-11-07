@@ -293,6 +293,38 @@ pub(crate) enum DynamicPropHelperKind {
     },
     /// `$mixed->method(...)` on an untyped receiver, emitted as a synthetic function.
     MixedMethodCall,
+    /// A boxed callable resolved to its descriptor, emitted with a frame of its own.
+    MixedCallableResolver(Box<CallableResolverSpec>),
+}
+
+/// Everything a shared callable resolver's code depends on, beside the module and the scope.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CallableResolverSpec {
+    /// The operation php-facing diagnostics and labels name.
+    pub(crate) op_name: String,
+    /// Whether a value that already is a descriptor comes back retained.
+    pub(crate) retain_existing_descriptor: bool,
+    /// Whether extension-only callables stay out of reach.
+    pub(crate) strict_php: bool,
+    /// The `TypeError` a string that names nothing raises, instead of the undefined fatal.
+    pub(crate) string_type_error: Option<&'static str>,
+    /// The `TypeError` any other refused shape raises, instead of the not-callable fatal.
+    pub(crate) invalid_type_error: Option<&'static str>,
+    /// The argument count, when the site narrows the string cases by it.
+    pub(crate) arity: Option<usize>,
+    /// How a method the scope cannot reach is reported; `None` derives it from the errors above.
+    pub(crate) miss: Option<CallableResolverMiss>,
+}
+
+/// The frame-independent ways to report a callable method the scope cannot reach.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CallableResolverMiss {
+    /// No dedicated diagnostic.
+    Ignore,
+    /// php's callback validation, with this prefix.
+    InvalidCallback(String),
+    /// php's direct call wording.
+    DirectCall,
 }
 
 /// One runtime-name property helper waiting for its body to be emitted.
