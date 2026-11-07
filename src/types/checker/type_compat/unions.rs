@@ -80,7 +80,7 @@ impl Checker {
                 if matches!(expected, PhpType::Object(_))
                     && members.iter().all(|member| matches!(
                         member,
-                        PhpType::Object(_) | PhpType::False
+                        PhpType::Object(_) | PhpType::False | PhpType::Void
                     ))
                 {
                     return members
@@ -212,7 +212,7 @@ impl Checker {
                 PhpType::Union(members)
                     if members.iter().all(|member| matches!(
                         member,
-                        PhpType::Object(_) | PhpType::False
+                        PhpType::Object(_) | PhpType::False | PhpType::Void
                     )) =>
                 {
                     members

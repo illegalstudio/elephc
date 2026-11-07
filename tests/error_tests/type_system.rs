@@ -366,6 +366,15 @@ fn test_undefined_variable_read_warns_at_runtime() {
     expect_no_error("<?php echo $x;");
 }
 
+/// Verifies a nullable object union is accepted at an `object` parameter: PHP only throws
+/// when the value is actually null at run time, while a nullable return stays a compile error.
+#[test]
+fn test_nullable_object_union_is_accepted_at_an_object_parameter() {
+    expect_no_error(
+        "<?php function take_object(object $value): void {} function maybe(): ?stdClass { return null; } take_object(maybe());",
+    );
+}
+
 /// Verifies that a plain self-referential assignment is not mistaken for `+=`; the self-read
 /// is PHP 8's null-plus-warning read, not a compile error.
 #[test]
