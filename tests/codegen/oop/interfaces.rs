@@ -849,3 +849,62 @@ echo label(null), " ", label(5), " ", label(new Other()), "\n";
     );
     assert_eq!(out, "impl int 4 other\nnone int 5 other\n");
 }
+
+/// Interface dispatch keeps the fifth and sixth integer argument registers intact.
+#[test]
+fn test_interface_dispatch_preserves_fifth_and_sixth_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+interface Five { public function sum(int $a, int $b, int $c, int $d, int $e): string; }
+interface Six { public function all(int $a, int $b, int $c, int $d, int $e, int $f): string; }
+class Calc implements Five, Six {
+    public function sum(int $a, int $b, int $c, int $d, int $e): string { return "$a,$b,$c,$d,$e"; }
+    public function all(int $a, int $b, int $c, int $d, int $e, int $f): string { return "$a,$b,$c,$d,$e,$f"; }
+}
+function viaFive(Five $five): string { return $five->sum(1, 2, 3, 4, 5); }
+function viaSix(Six $six): string { return $six->all(1, 2, 3, 4, 5, 6); }
+echo viaFive(new Calc()), "|", viaSix(new Calc());
+"#,
+    );
+    assert_eq!(out, "1,2,3,4,5|1,2,3,4,5,6");
+}
+
+/// A second string argument keeps its length through interface dispatch.
+#[test]
+fn test_interface_dispatch_preserves_second_string_argument() {
+    let out = compile_and_run(
+        r#"<?php
+interface Pair { public function join(string $first, string $second): string; }
+class Joiner implements Pair {
+    public function join(string $first, string $second): string { return $first . "|" . $second . "|" . strlen($second); }
+}
+function viaPair(Pair $pair): string { return $pair->join("G", "English"); }
+echo viaPair(new Joiner());
+"#,
+    );
+    assert_eq!(out, "G|English|7");
+}
+
+/// A registry filled through its interface stores the exact strings it was given.
+#[test]
+fn test_interface_dispatch_registry_keeps_stored_strings() {
+    let out = compile_and_run(
+        r#"<?php
+interface Registry { public function tag(string $type, string $id): void; }
+class Tags implements Registry {
+    private array $tags = [];
+    public function tag(string $type, string $id): void { $this->tags[$type] = [$id]; }
+    public function dump(): string {
+        $out = "";
+        foreach ($this->tags as $type => $ids) { foreach ($ids as $id) { $out .= $type . "=" . $id . ";"; } }
+        return $out;
+    }
+}
+function wire(Registry $registry): void { $registry->tag("Greeter", "English"); $registry->tag("Logger", "Stderr"); }
+$tags = new Tags();
+wire($tags);
+echo $tags->dump();
+"#,
+    );
+    assert_eq!(out, "Greeter=English;Logger=Stderr;");
+}
