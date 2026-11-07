@@ -143,6 +143,27 @@ echo run(new B(), 'hidden'), "\n";
     );
 }
 
+/// A class name reaches what the scope sees, not only public statics.
+#[test]
+fn a_class_name_reaches_the_protected_static_of_its_scope() {
+    let output = compile_and_run(
+        r#"<?php
+abstract class P {
+    protected static function s(): string { return "P::s"; }
+    private static function p(): string { return "P::p"; }
+    public function viaStatic(string $m): string { return call_user_func([static::class, $m]); }
+    public function viaName(string $m): string { return call_user_func([self::class, $m]); }
+}
+class D extends P {
+    public function viaChild(string $m): string { return call_user_func([D::class, $m]); }
+}
+$d = new D();
+echo $d->viaStatic('s'), "\n", $d->viaChild('s'), "\n", $d->viaName('p'), "\n";
+"#,
+    );
+    assert_eq!(output, "P::s\nP::s\nP::p\n");
+}
+
 /// One resolver per scope reports php's refusal from the right class, and each scope reaches its
 /// own private method.
 #[test]

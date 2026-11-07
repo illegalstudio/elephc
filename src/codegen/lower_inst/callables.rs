@@ -3324,7 +3324,9 @@ fn lower_runtime_string_callable_array_descriptor_invoke(
         return restore_typed_callable_array_after_mixed_use(ctx, callable);
     }
 
-    let static_cases = runtime_static_method_descriptor_cases(ctx, None);
+    let mut static_cases = runtime_static_method_descriptor_cases(ctx, None);
+    // A class name reaches what this scope sees too; see `emit_inline_callable_array_lookup`.
+    static_cases.extend(runtime_scope_visible_static_method_cases(ctx));
     if static_cases.is_empty() {
         return Err(CodegenIrError::unsupported(
             "callable_descriptor_invoke for runtime string callable array with no static targets",
@@ -4789,7 +4791,7 @@ fn emit_inline_callable_array_lookup(
         || !scope_static_cases.is_empty()
         || reports_inaccessible)
     .then(|| ctx.next_label("callable_array_lookup_instance"));
-    let static_label = (!static_cases.is_empty())
+    let static_label = (!static_cases.is_empty() || !scope_static_cases.is_empty())
         .then(|| ctx.next_label("callable_array_lookup_static"));
     let done_label = ctx.next_label("callable_array_lookup_done");
     emit_branch_if_stack_tag_mismatch(
@@ -4871,33 +4873,40 @@ fn emit_inline_callable_array_lookup(
 
     if let Some(label) = &static_label {
         ctx.emitter.label(label);
-        if static_cases.len() > INLINE_LOOKUP_LIMIT {
-            emit_runtime_static_lookup_table(
-                ctx,
-                static_cases,
-                MIXED_RECEIVER_PAYLOAD_OFFSET,
-                MIXED_RECEIVER_PAYLOAD_OFFSET + 8,
-                MIXED_METHOD_PAYLOAD_OFFSET,
-                MIXED_METHOD_PAYLOAD_OFFSET + 8,
-            )?;
-            emit_branch_if_lookup_missed(ctx, miss_label);
-            emit_runtime_descriptor_owned_flag(ctx, false);
-            abi::emit_jump(ctx.emitter, &done_label);
-        } else {
-            for case in static_cases {
-                let next_label = ctx.next_label("callable_array_static_next");
-                emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
-                abi::emit_symbol_address(
-                    ctx.emitter,
-                    abi::int_result_reg(ctx.emitter),
-                    &case.case.descriptor_label,
-                );
+        // A class NAME reaches the public statics, then what this scope sees: php accepts
+        // `[static::class, 'protectedStatic']` from inside the hierarchy.
+        let sets = [static_cases, scope_static_cases.as_slice()];
+        for cases in sets.into_iter().filter(|cases| !cases.is_empty()) {
+            let next_set = ctx.next_label("callable_array_static_next_set");
+            if cases.len() > INLINE_LOOKUP_LIMIT {
+                emit_runtime_static_lookup_table(
+                    ctx,
+                    cases,
+                    MIXED_RECEIVER_PAYLOAD_OFFSET,
+                    MIXED_RECEIVER_PAYLOAD_OFFSET + 8,
+                    MIXED_METHOD_PAYLOAD_OFFSET,
+                    MIXED_METHOD_PAYLOAD_OFFSET + 8,
+                )?;
+                emit_branch_if_lookup_missed(ctx, &next_set);
                 emit_runtime_descriptor_owned_flag(ctx, false);
                 abi::emit_jump(ctx.emitter, &done_label);
-                ctx.emitter.label(&next_label);
+            } else {
+                for case in cases {
+                    let next_label = ctx.next_label("callable_array_static_next");
+                    emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
+                    abi::emit_symbol_address(
+                        ctx.emitter,
+                        abi::int_result_reg(ctx.emitter),
+                        &case.case.descriptor_label,
+                    );
+                    emit_runtime_descriptor_owned_flag(ctx, false);
+                    abi::emit_jump(ctx.emitter, &done_label);
+                    ctx.emitter.label(&next_label);
+                }
             }
-            abi::emit_jump(ctx.emitter, miss_label);
+            ctx.emitter.label(&next_set);
         }
+        abi::emit_jump(ctx.emitter, miss_label);
     }
 
     ctx.emitter.label(&done_label);
