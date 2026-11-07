@@ -30,9 +30,10 @@ pub(super) fn lower_enum_interface_call(
     let object_type = ctx.builder.value_php_type(object.value);
     let (interface, _) = singular_object_class(&object_type)?;
     if !ctx.interfaces.contains_key(interface) { return None; }
-    let mut candidates: Vec<_> = ctx.classes.iter()
-        .filter(|(name, info)| ctx.enums.contains_key(*name)
-            && info.interfaces.iter().any(|name| name == interface))
+    // From the enums, not the classes: this runs per method call on an interface receiver.
+    let mut candidates: Vec<_> = ctx.enums.keys()
+        .filter_map(|name| ctx.classes.get_key_value(name))
+        .filter(|(_, info)| info.interfaces.iter().any(|name| name == interface))
         .map(|(name, info)| (info.class_id, name.clone())).collect();
     if candidates.is_empty() { return None; }
     candidates.sort();

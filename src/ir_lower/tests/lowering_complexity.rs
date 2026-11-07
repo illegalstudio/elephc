@@ -654,3 +654,44 @@ $f->resume();
     assert_eq!((count, plain, guarded, raw_cells), (5, 1, 2, 2), "owner table entries: {entries:?}");
     assert!(entries.iter().all(|entry| entry[0] != 0), "every owner has a frame offset: {entries:?}");
 }
+
+/// `count` interface-typed calls and quiet reads of a mixed element.
+fn many_interface_sites(count: usize) -> String {
+    let mut source = String::from(
+        "<?php\ninterface Runs { public function run(int $n): int; }\n\
+         final class A implements Runs { public function run(int $n): int { return $n; } }\n\
+         final class B implements Runs { public function run(int $n): int { return $n + 1; } }\n\
+         final class Bag implements ArrayAccess {\n\
+             public function offsetExists(mixed $o): bool { return false; }\n\
+             public function offsetGet(mixed $o): mixed { return 1; }\n\
+             public function offsetSet(mixed $o, mixed $v): void {}\n\
+             public function offsetUnset(mixed $o): void {}\n}\n\
+         function f(Runs $r, Bag $b, mixed $m, string $k): int {\n    $t = 0;\n",
+    );
+    for index in 0..count {
+        source.push_str(&format!(
+            "    $t += $r->run({index});\n    if (isset($m[$k])) {{ $t += {index}; }}\n    \
+             $t += (int) $b[$k];\n"
+        ));
+    }
+    source.push_str("    return $t;\n}\necho f(new A(), new Bag(), [], 'k'), \"\\n\";\n");
+    source
+}
+
+/// Whole-table walks for class-against-interface questions while lowering `source`.
+fn class_table_walks(source: &str) -> usize {
+    use crate::ir_lower::expr::array_access_types::CLASS_TABLE_WALKS;
+    CLASS_TABLE_WALKS.with(|walks| walks.set(0));
+    let _module = lower_source(source);
+    CLASS_TABLE_WALKS.with(|walks| walks.get())
+}
+
+/// These questions cover every class and come from each call site: a tenth of the lowering of a
+/// Symfony build walked parents and interface trees per class per site.
+#[test]
+fn interface_questions_walk_the_class_table_once_not_per_site() {
+    let small = class_table_walks(&many_interface_sites(4));
+    let large = class_table_walks(&many_interface_sites(64));
+    assert!(small > 0, "the fixture no longer asks a class table question");
+    assert_eq!(small, large, "class table walks grew with the sites: {small} vs {large}");
+}

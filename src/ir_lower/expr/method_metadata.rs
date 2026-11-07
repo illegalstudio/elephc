@@ -225,6 +225,7 @@ thread_local! {
 pub(crate) fn reset_method_signature_memos() {
     NARROWED_SIGNATURES.with(|cell| *cell.borrow_mut() = None);
     COMMON_SIGNATURES.with(|cell| *cell.borrow_mut() = None);
+    super::array_access_types::reset_class_table_facts();
 }
 
 /// Returns the memoized answer for `(scope, method_key)`, computing it once per class table.

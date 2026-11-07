@@ -247,11 +247,7 @@ pub(super) fn program_may_hold_array_access_objects(ctx: &LoweringContext<'_, '_
         || ctx.eval_executed()
         || ctx.can_resolve_runtime_dynamic_functions()
         || ctx.program_loads_code_at_run_time()
-        || ctx.classes.keys().any(|class| {
-            elephc_builtin_contract::lookup_class(class).is_none()
-                && !class.trim_start_matches('\\').to_ascii_lowercase().starts_with("__elephc")
-                && class_implements_interface_for_ir(ctx, class, "ArrayAccess")
-        })
+        || super::array_access_types::program_declares_array_access(ctx)
 }
 
 /// Lowers `isset($mixed[$k])` for a receiver whose kind is known only at run time.

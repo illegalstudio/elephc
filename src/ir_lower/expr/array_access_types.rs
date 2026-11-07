@@ -51,8 +51,95 @@ pub(super) fn object_name_satisfies_interface_for_ir(
     class_implements_interface_for_ir(ctx, normalized, interface_name)
 }
 
+/// What lowering asks of the whole class table, tagged with the table it was computed from
+/// (address and size).
+#[derive(Default)]
+struct ClassTableFacts {
+    address: usize,
+    len: usize,
+    /// Interface, as spelled by the question, to every class implementing it.
+    implementors: crate::fast_hash::FastMap<String, crate::fast_hash::FastSet<String>>,
+    /// Whether a class the program declared itself implements `ArrayAccess`.
+    declares_array_access: Option<bool>,
+}
+
+thread_local! {
+    static CLASS_TABLE_FACTS: std::cell::RefCell<ClassTableFacts> =
+        std::cell::RefCell::new(ClassTableFacts::default());
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Whole-table walks answering [`class_implements_interface_for_ir`] and
+    /// [`program_declares_array_access`].
+    pub(crate) static CLASS_TABLE_WALKS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// Forgets the facts; a later program's class table could reuse an address and a size.
+pub(crate) fn reset_class_table_facts() {
+    CLASS_TABLE_FACTS.with(|facts| *facts.borrow_mut() = ClassTableFacts::default());
+}
+
+/// Runs `read` on the facts of this context's class table, which is fixed while a program lowers.
+fn with_class_table_facts<T>(
+    ctx: &LoweringContext<'_, '_>,
+    read: impl FnOnce(&mut ClassTableFacts) -> T,
+) -> T {
+    let (address, len) = (ctx.classes as *const _ as usize, ctx.classes.len());
+    CLASS_TABLE_FACTS.with(|facts| {
+        let mut facts = facts.borrow_mut();
+        if (facts.address, facts.len) != (address, len) {
+            *facts = ClassTableFacts { address, len, ..ClassTableFacts::default() };
+        }
+        read(&mut facts)
+    })
+}
+
 /// Returns whether a lowered class implements an interface, following parents.
+///
+/// Whole-program questions ask this of every class per call site, each answer walking parents
+/// and interface trees, so the classes of one interface are collected once.
 pub(in crate::ir_lower) fn class_implements_interface_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    interface_name: &str,
+) -> bool {
+    with_class_table_facts(ctx, |facts| {
+        if !facts.implementors.contains_key(interface_name) {
+            #[cfg(test)]
+            CLASS_TABLE_WALKS.with(|walks| walks.set(walks.get() + 1));
+            let classes = ctx
+                .classes
+                .keys()
+                .filter(|class| class_walk_implements_interface(ctx, class, interface_name))
+                .cloned()
+                .collect();
+            facts.implementors.insert(interface_name.to_string(), classes);
+        }
+        facts.implementors[interface_name].contains(class_name.trim_start_matches('\\'))
+    })
+}
+
+/// Whether a class the program declared itself implements `ArrayAccess`: the built-in containers
+/// and the compiler's own `__Elephc*` subclasses of them do not count.
+pub(super) fn program_declares_array_access(ctx: &LoweringContext<'_, '_>) -> bool {
+    if let Some(known) = with_class_table_facts(ctx, |facts| facts.declares_array_access) {
+        return known;
+    }
+    #[cfg(test)]
+    CLASS_TABLE_WALKS.with(|walks| walks.set(walks.get() + 1));
+    let declares = ctx.classes.keys().any(|class| {
+        elephc_builtin_contract::lookup_class(class).is_none()
+            && !class.trim_start_matches('\\').to_ascii_lowercase().starts_with("__elephc")
+            && class_implements_interface_for_ir(ctx, class, "ArrayAccess")
+    });
+    with_class_table_facts(ctx, |facts| facts.declares_array_access = Some(declares));
+    declares
+}
+
+/// Walks one class's parents and interface trees.
+fn class_walk_implements_interface(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
     interface_name: &str,
