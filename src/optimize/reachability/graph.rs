@@ -1251,22 +1251,27 @@ impl GraphState {
 
     /// Returns the oldest ancestor that still occupies the same virtual slot.
     fn vtable_lineage_root(&self, class: &str, method: &str, is_static: bool) -> String {
-        let mut current = class.to_string();
-        let mut seen = HashSet::default();
+        // One key rewritten per hop: this runs per kept method per fixed-point round.
+        let mut key = (String::new(), method.to_string(), is_static);
+        let mut seen: Vec<&str> = Vec::new();
+        let mut current = class;
         loop {
-            if !seen.insert(current.clone()) {
-                return current;
+            if seen.contains(&current) {
+                return current.to_string();
             }
+            seen.push(current);
             let Some(parent) = self
                 .index
                 .classes
-                .get(&current)
-                .and_then(|node| node.parent.clone())
+                .get(current)
+                .and_then(|node| node.parent.as_deref())
             else {
-                return current;
+                return current.to_string();
             };
-            if !self.has_vtable_slot(&parent, method, is_static) {
-                return current;
+            key.0.clear();
+            key.0.push_str(parent);
+            if !self.vtable_slots.contains(&key) {
+                return current.to_string();
             }
             current = parent;
         }

@@ -263,6 +263,20 @@ impl Checker {
             chain(a).contains(&php_symbol_key(b.trim_start_matches('\\')))
                 || chain(b).contains(&php_symbol_key(a.trim_start_matches('\\')))
         };
+        // The bodies a call can name, so a call site is compared with those alone and not with
+        // every body of the program.
+        let mut functions_by_scope: HashMap<&str, Vec<&RefBody<'_>>> = HashMap::new();
+        let mut methods_by_name: HashMap<String, Vec<&RefBody<'_>>> = HashMap::new();
+        for body in &bodies {
+            match body.class.as_deref() {
+                None => functions_by_scope.entry(body.scope.as_str()).or_default().push(body),
+                Some(_) => {
+                    if let Some((_, method)) = body.scope.rsplit_once("::") {
+                        methods_by_name.entry(method.to_ascii_lowercase()).or_default().push(body);
+                    }
+                }
+            }
+        }
         // Whether `body` hands its by-reference `param` to a callee parameter `is_target` names.
         let forwards_into = |body: &RefBody<'_>,
                              param: &str,
@@ -277,7 +291,16 @@ impl Checker {
                     if !matches!(&arg.kind, ExprKind::Variable(name) if name == param) {
                         continue;
                     }
-                    forwards |= bodies.iter().any(|callee| {
+                    let candidates = match &call.target {
+                        CallTarget::Function(name) => self
+                            .canonical_function_name_folded(name)
+                            .and_then(|key| functions_by_scope.get(key.as_str())),
+                        CallTarget::Method { method, .. } => {
+                            methods_by_name.get(&method.to_ascii_lowercase())
+                        }
+                        CallTarget::RefCapture(_) => None,
+                    };
+                    forwards |= candidates.into_iter().flatten().any(|callee| {
                         let target_matches = match &call.target {
                             CallTarget::Function(name) => {
                                 callee.class.is_none()

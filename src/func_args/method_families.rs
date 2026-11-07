@@ -72,26 +72,46 @@ fn spread_capabilities(
         }
     }
 
-    let mut required: HashMap<String, HashSet<MethodCapability>> = HashMap::new();
+    // One walk per component, not per (owner, capability): a whole component gets every capability
+    // any member brought, and Symfony's largest components hold thousands of classes.
+    let mut owners_by_name: HashMap<&str, Vec<&OwnerInfo>> = HashMap::new();
     for owner in owners {
-        for capability in capabilities_of(owner) {
-            let mut queue = VecDeque::from([owner.name.clone()]);
-            let mut visited = HashSet::new();
-            while let Some(name) = queue.pop_front() {
-                if !visited.insert(name.clone()) {
-                    continue;
-                }
-                required
-                    .entry(name.clone())
-                    .or_default()
-                    .insert(capability.clone());
-                if let Some(neighbors) = adjacency.get(&name) {
-                    queue.extend(neighbors.iter().cloned());
-                }
+        owners_by_name.entry(owner.name.as_str()).or_default().push(owner);
+    }
+    let mut required: HashMap<String, HashSet<MethodCapability>> = HashMap::new();
+    let mut visited: HashSet<&str> = HashSet::new();
+    for owner in owners {
+        if capabilities_of(owner).is_empty() || visited.contains(owner.name.as_str()) {
+            continue;
+        }
+        let mut members: Vec<&str> = Vec::new();
+        let mut capabilities: HashSet<MethodCapability> = HashSet::new();
+        let mut queue = VecDeque::from([owner.name.as_str()]);
+        while let Some(name) = queue.pop_front() {
+            if !visited.insert(name) {
+                continue;
             }
+            #[cfg(test)]
+            FAMILY_VISITS.with(|visits| visits.set(visits.get() + 1));
+            members.push(name);
+            for member in owners_by_name.get(name).into_iter().flatten() {
+                capabilities.extend(capabilities_of(member).iter().cloned());
+            }
+            if let Some(neighbors) = adjacency.get(name) {
+                queue.extend(neighbors.iter().map(String::as_str));
+            }
+        }
+        for member in members {
+            required.insert(member.to_string(), capabilities.clone());
         }
     }
     required
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Classes visited by [`spread_capabilities`].
+    static FAMILY_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Collects class-like declarations recursively from every statement body.
@@ -352,5 +372,48 @@ fn add_hidden_tail(method: &mut ClassMethod) {
     method.variadic_type = Some(TypeExpr::Named(crate::names::Name::unqualified("mixed")));
     if method.param_attributes.len() == method.params.len() {
         method.param_attributes.push(Vec::new());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `count` classes in one inheritance chain, each bringing a capability of its own.
+    fn chain(count: usize) -> Vec<OwnerInfo> {
+        (0..count)
+            .map(|index| OwnerInfo {
+                name: format!("c{index}"),
+                related: (index > 0).then(|| format!("c{}", index - 1)).into_iter().collect(),
+                hidden_methods: vec![(format!("m{index}"), false)],
+                source_variadic_methods: Vec::new(),
+            })
+            .collect()
+    }
+
+    /// Every class of a component gets what any member brought, and the component is walked once.
+    #[test]
+    fn a_component_is_walked_once_and_shares_every_capability() {
+        let owners = chain(50);
+        FAMILY_VISITS.with(|visits| visits.set(0));
+        let required = spread_capabilities(&owners, |owner| &owner.hidden_methods);
+        assert_eq!(FAMILY_VISITS.with(std::cell::Cell::get), 50);
+        assert_eq!(required.len(), 50);
+        assert!(required.values().all(|capabilities| capabilities.len() == 50));
+    }
+
+    /// A component with no capability stays out, and two components do not mix.
+    #[test]
+    fn capabilities_stay_inside_their_component() {
+        let mut owners = chain(2);
+        owners.push(OwnerInfo {
+            name: "alone".to_string(),
+            related: Vec::new(),
+            hidden_methods: Vec::new(),
+            source_variadic_methods: Vec::new(),
+        });
+        let required = spread_capabilities(&owners, |owner| &owner.hidden_methods);
+        assert!(!required.contains_key("alone"));
+        assert_eq!(required["c0"].len(), 2);
     }
 }

@@ -1085,15 +1085,15 @@ fn table_addressable_classes_not_routed(
 ) -> Vec<u64> {
     let mut ids = ctx
         .module
-        .class_infos
+        .name_addressable_hash_classes()
         .iter()
-        .filter(|(name, info)| {
-            info.dynamic_property_hash_is_name_addressable()
-                && !crate::types::checker::builtin_stdclass::is_stdclass(name)
+        .filter_map(|name| {
+            let info = ctx.module.class_infos.get(name)?;
+            (!crate::types::checker::builtin_stdclass::is_stdclass(name)
                 && !routed.contains(&info.class_id)
-                && !dispatched.contains(&info.class_id)
+                && !dispatched.contains(&info.class_id))
+            .then_some(info.class_id)
         })
-        .map(|(_, info)| info.class_id)
         .collect::<Vec<_>>();
     ids.sort_unstable();
     ids
