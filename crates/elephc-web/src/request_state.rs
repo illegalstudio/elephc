@@ -108,11 +108,7 @@ pub unsafe extern "C" fn elephc_web_write(ptr: *const u8, len: usize) {
     }
     if !*core::ptr::addr_of!(RESPONSE_COMMITTED) {
         core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_COMMITTED), true);
-        let cookie = request_header_owned("cookie");
-        let host = request_header_owned("host");
         if crate::trans_sid::prepare_streaming_response(
-            cookie.as_deref(),
-            host.as_deref(),
             &mut *core::ptr::addr_of_mut!(RESPONSE_HEADERS),
         ) {
             core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_TRANS_SID_BUFFERED), true);
@@ -161,14 +157,7 @@ pub(crate) fn finish_response_stream() -> bool {
         let mut complete = !failed;
         if complete && (buffered || !committed) {
             let mut headers = take_headers();
-            let cookie = request_header_owned("cookie");
-            let host = request_header_owned("host");
-            let body = crate::trans_sid::maybe_rewrite_response(
-                cookie.as_deref(),
-                host.as_deref(),
-                &mut headers,
-                take_body(),
-            );
+            let body = crate::trans_sid::maybe_rewrite_response(&mut headers, take_body());
             complete = crate::handler_ipc::write_response_start(
                 fd,
                 *core::ptr::addr_of!(RESPONSE_STATUS),
@@ -339,7 +328,7 @@ pub fn take_headers() -> Vec<(String, String)> {
 }
 
 /// Returns an owned request-header value using an ASCII-insensitive name match.
-fn request_header_owned(name: &str) -> Option<String> {
+pub(crate) fn request_header_owned(name: &str) -> Option<String> {
     unsafe {
         (&*core::ptr::addr_of!(REQ_HEADERS))
             .iter()
@@ -369,31 +358,119 @@ static mut REQ_TIME: i64 = 0;
 
 /// Connection/server metadata passed to `set_request` alongside the HTTP fields.
 pub(crate) struct RequestMeta {
-    pub remote_addr: String,
+    pub remote_addr: CString,
     pub remote_port: u16,
-    pub server_addr: String,
-    pub server_port: u16,
     /// HTTP protocol string, e.g. "HTTP/1.1".
-    pub protocol: String,
+    pub protocol: CString,
+}
+
+/// Stores the bound server address and port once per worker process.
+///
+/// The values are fixed for the life of a `--web` worker, so refreshing them on
+/// every request only churned allocations. Isolated handler children receive
+/// them with each request snapshot and call this before `set_request`.
+pub(crate) fn set_server_addr(addr: &str, port: u16) {
+    unsafe {
+        drop(core::ptr::replace(
+            core::ptr::addr_of_mut!(REQ_SERVER_ADDR),
+            Some(cstring(addr.as_bytes())),
+        ));
+        core::ptr::write(core::ptr::addr_of_mut!(REQ_SERVER_PORT), port as i64);
+    }
+}
+
+/// Builds a NUL-terminated C string from raw bytes in one allocation.
+///
+/// Interior NUL bytes cannot survive in a `CString`; HTTP field values and the
+/// request target are token/text bytes where a NUL is invalid, so dropping one
+/// (the previous behaviour) is only a defensive fallback. The hot path pays a
+/// single allocation instead of the old `String` + `replace` + `CString` chain.
+pub(crate) fn cstring(bytes: &[u8]) -> CString {
+    let mut buffer = Vec::with_capacity(bytes.len() + 1);
+    buffer.extend_from_slice(bytes);
+    if buffer.contains(&0) {
+        buffer.retain(|byte| *byte != 0);
+    }
+    buffer.push(0);
+    // SAFETY: the buffer ends in exactly one NUL and contains no interior NUL.
+    unsafe { CString::from_vec_with_nul_unchecked(buffer) }
+}
+
+/// Builds a NUL-terminated C string from a `Display` value in one allocation.
+///
+/// Used for the request URI, where `Uri::to_string()` would allocate once for
+/// the temporary `String` and then again for the `CString`.
+pub(crate) fn cstring_display(value: impl std::fmt::Display) -> CString {
+    use std::fmt::Write;
+
+    /// `fmt::Write` sink over the final allocation.
+    struct Buffer(Vec<u8>);
+
+    impl Write for Buffer {
+        /// Appends one rendered fragment.
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            self.0.extend_from_slice(text.as_bytes());
+            Ok(())
+        }
+    }
+
+    let mut buffer = Buffer(Vec::with_capacity(128));
+    let _ = write!(buffer, "{value}");
+    if buffer.0.contains(&0) {
+        buffer.0.retain(|byte| *byte != 0);
+    }
+    buffer.0.push(0);
+    // SAFETY: the buffer ends in exactly one NUL and contains no interior NUL.
+    unsafe { CString::from_vec_with_nul_unchecked(buffer.0) }
+}
+
+/// Formats an IP address into a C string without a heap-allocated intermediate
+/// `String`. IPv4 and IPv6 rendering both fit in 64 bytes.
+pub(crate) fn ip_cstring(ip: std::net::IpAddr) -> CString {
+    use std::fmt::Write;
+
+    /// Stack buffer implementing `fmt::Write` so `Display` writes straight into it.
+    struct StackText {
+        bytes: [u8; 64],
+        len: usize,
+    }
+
+    impl Write for StackText {
+        /// Appends one formatted fragment, reporting overflow as a formatting error.
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            let end = self.len.checked_add(text.len()).ok_or(std::fmt::Error)?;
+            let slot = self.bytes.get_mut(self.len..end).ok_or(std::fmt::Error)?;
+            slot.copy_from_slice(text.as_bytes());
+            self.len = end;
+            Ok(())
+        }
+    }
+
+    let mut text = StackText {
+        bytes: [0; 64],
+        len: 0,
+    };
+    // `Display` for an IP address cannot fail or overflow 64 bytes; the fallback
+    // above keeps the function total without unwinding.
+    if std::fmt::write(&mut text, format_args!("{ip}")).is_err() {
+        return CString::default();
+    }
+    cstring(&text.bytes[..text.len])
 }
 
 /// Stores the parsed request for the current worker thread. Called by the
-/// worker before invoking the PHP handler. Non-UTF8 / interior-NUL bytes in
-/// header values are replaced (CString cannot hold a NUL), which is acceptable
-/// for HTTP tokens; the raw body keeps every byte (it is exposed binary-safe).
+/// worker before invoking the PHP handler. Interior NUL bytes are dropped
+/// (`CString` cannot hold one); every other byte is preserved, and the raw body
+/// keeps every byte (it is exposed binary-safe).
 pub(crate) fn set_request(
-    method: String,
-    uri: String,
-    path: String,
-    query: String,
-    headers: Vec<(String, String)>,
+    method: CString,
+    uri: CString,
+    path: CString,
+    query: CString,
+    headers: Vec<(CString, CString)>,
     body: Vec<u8>,
     meta: RequestMeta,
 ) {
-    /// Converts request metadata into a NUL-free C string for the exported request slots.
-    fn cstr(s: &str) -> CString {
-        CString::new(s.replace('\0', "")).unwrap_or_default()
-    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -401,37 +478,30 @@ pub(crate) fn set_request(
     unsafe {
         drop(core::ptr::replace(
             core::ptr::addr_of_mut!(REQ_METHOD),
-            Some(cstr(&method)),
+            Some(method),
         ));
         drop(core::ptr::replace(
             core::ptr::addr_of_mut!(REQ_URI),
-            Some(cstr(&uri)),
+            Some(uri),
         ));
         drop(core::ptr::replace(
             core::ptr::addr_of_mut!(REQ_PATH),
-            Some(cstr(&path)),
+            Some(path),
         ));
         drop(core::ptr::replace(
             core::ptr::addr_of_mut!(REQ_QUERY),
-            Some(cstr(&query)),
+            Some(query),
         ));
-        let hs: Vec<(CString, CString)> =
-            headers.iter().map(|(n, v)| (cstr(n), cstr(v))).collect();
-        drop(core::ptr::replace(core::ptr::addr_of_mut!(REQ_HEADERS), hs));
+        drop(core::ptr::replace(core::ptr::addr_of_mut!(REQ_HEADERS), headers));
         drop(core::ptr::replace(core::ptr::addr_of_mut!(REQ_BODY), body));
         drop(core::ptr::replace(
             core::ptr::addr_of_mut!(REQ_REMOTE_ADDR),
-            Some(cstr(&meta.remote_addr)),
+            Some(meta.remote_addr),
         ));
         core::ptr::write(core::ptr::addr_of_mut!(REQ_REMOTE_PORT), meta.remote_port as i64);
         drop(core::ptr::replace(
-            core::ptr::addr_of_mut!(REQ_SERVER_ADDR),
-            Some(cstr(&meta.server_addr)),
-        ));
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_SERVER_PORT), meta.server_port as i64);
-        drop(core::ptr::replace(
             core::ptr::addr_of_mut!(REQ_PROTOCOL),
-            Some(cstr(&meta.protocol)),
+            Some(meta.protocol),
         ));
         core::ptr::write(core::ptr::addr_of_mut!(REQ_TIME), now);
         // Invalidate the lazily-parsed multipart cache: it belongs to the prior request.
@@ -702,19 +772,18 @@ mod tests {
     #[test]
     fn request_getters_round_trip() {
         use std::ffi::CStr;
+        set_server_addr("127.0.0.1", 8080);
         set_request(
-            "POST".into(),
-            "/p?x=1".into(),
-            "/p".into(),
-            "x=1".into(),
-            vec![("Content-Type".into(), "text/plain".into())],
+            cstring(b"POST"),
+            cstring(b"/p?x=1"),
+            cstring(b"/p"),
+            cstring(b"x=1"),
+            vec![(cstring(b"Content-Type"), cstring(b"text/plain"))],
             b"hello".to_vec(),
             RequestMeta {
-                remote_addr: "10.0.0.7".into(),
+                remote_addr: cstring(b"10.0.0.7"),
                 remote_port: 54321,
-                server_addr: "127.0.0.1".into(),
-                server_port: 8080,
-                protocol: "HTTP/1.1".into(),
+                protocol: cstring(b"HTTP/1.1"),
             },
         );
         unsafe {
@@ -735,6 +804,44 @@ mod tests {
             assert_eq!(CStr::from_ptr(elephc_web_protocol()).to_str().unwrap(), "HTTP/1.1");
             assert!(elephc_web_request_time() > 0);
         }
+    }
+
+    /// Verifies cstring preserves every byte except an interior NUL.
+    #[test]
+    fn cstring_drops_only_interior_nul() {
+        assert_eq!(cstring(b"a\0b").as_bytes(), b"ab");
+        assert_eq!(cstring(b"\xff\xfe").as_bytes(), b"\xff\xfe");
+    }
+
+    /// `cstring_display` renders in one allocation and strips interior NULs.
+    #[test]
+    fn cstring_display_renders_and_strips_nul() {
+        assert_eq!(cstring_display("/a?b=1").as_bytes(), b"/a?b=1");
+        assert_eq!(cstring_display("a\0b").as_bytes(), b"ab");
+        assert_eq!(
+            cstring_display(std::net::Ipv4Addr::LOCALHOST).as_bytes(),
+            b"127.0.0.1"
+        );
+    }
+
+    /// IPv4 and IPv6 both format into the stack buffer without truncation.
+    #[test]
+    fn ip_cstring_formats_both_families() {
+        use std::net::IpAddr;
+        assert_eq!(
+            ip_cstring("127.0.0.1".parse::<IpAddr>().unwrap()).to_str().unwrap(),
+            "127.0.0.1"
+        );
+        assert_eq!(
+            ip_cstring("::1".parse::<IpAddr>().unwrap()).to_str().unwrap(),
+            "::1"
+        );
+        assert_eq!(
+            ip_cstring("2001:db8::ff00:42:8329".parse::<IpAddr>().unwrap())
+                .to_str()
+                .unwrap(),
+            "2001:db8::ff00:42:8329"
+        );
     }
 
     /// Verifies the bridge response logic matches PHP header()/http_response_code().

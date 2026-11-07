@@ -74,6 +74,54 @@ pub(crate) fn program_observes_environment(program: &[Stmt]) -> bool {
     environment::is_observable(program, &usage::collect_environment(program))
 }
 
+/// Which request superglobals the handler body can actually observe.
+///
+/// The prelude used to build every one of them on every request. That is the
+/// PHP-FPM model, but most of the work is invisible to the program: a handler
+/// that never names `$_REQUEST` cannot tell whether it was populated. The scan
+/// is the same conservative channel set as `environment::is_observable`, so
+/// `$GLOBALS`, storage aliases, `compact`, eval, and unknown callables all keep
+/// the value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SuperglobalNeeds {
+    /// Build `$_ENV` from the process environment.
+    pub(crate) env: bool,
+    /// Build `$_REQUEST` by merging `$_GET` and `$_POST`.
+    pub(crate) request: bool,
+}
+
+impl SuperglobalNeeds {
+    /// Every superglobal, used where the source cannot be scanned (printing
+    /// round-trips, parity gates).
+    #[cfg(test)]
+    pub(crate) const ALL: Self = Self {
+        env: true,
+        request: true,
+    };
+}
+
+/// Decides which superglobals a scanned program can observe.
+///
+/// Environment observability is owned by `environment::is_observable`, which
+/// covers storage variables, aliases, callables, and eval. `$_REQUEST` uses the
+/// same conservative channels because every one of them can hand the whole
+/// variable table to code this walk cannot see.
+fn superglobal_needs(program: &[Stmt], usage: &usage::Usage) -> SuperglobalNeeds {
+    SuperglobalNeeds {
+        env: environment::is_observable(program, usage),
+        request: ["_REQUEST", "GLOBALS"].iter().any(|name| {
+            usage.variables.contains(*name) || usage.storage_variables.contains(*name)
+        }) || ["eval", "get_defined_vars", "compact"]
+            .iter()
+            .any(|name| usage.references(name))
+            || ["eval", "get_defined_vars"]
+                .iter()
+                .any(|name| usage.literals.contains(*name))
+            || (usage.callable_names.has_unknown_target()
+                && usage::has_reachable_unknown_callable(program, usage)),
+    }
+}
+
 /// The catch-all wrapper: the whole handler body goes inside its `try` so an uncaught exception
 /// becomes a 500 before response commitment, or aborts an already-streaming response, instead of
 /// crashing the worker (the process would otherwise die and the master would respawn it, dropping
@@ -246,12 +294,14 @@ fn inject_if_web_on_compiler_stack(
     }
     let program = lift_preload_to_startup(program, preload_path);
     let user_usage = usage::collect_environment(&program);
+    let superglobals = superglobal_needs(&program, &user_usage);
     let needs_callable_session_handler = user_usage.references("session_set_save_handler")
         || user_usage.dynamic_function_call;
     let mut combined = build::web_declarations_with_environment(
         php_version,
         ini_overrides,
-        autoload_observes_environment || environment::is_observable(&program, &user_usage),
+        superglobals.env || autoload_observes_environment,
+        superglobals.request,
     );
     if !needs_callable_session_handler {
         combined.retain(|stmt| !is_callable_session_handler_decl(&stmt.kind));
@@ -375,6 +425,86 @@ mod tests {
     fn parse(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         crate::parser::parse(&tokens).expect("fixture must parse")
+    }
+
+    /// Returns the superglobal build decisions for one source fixture.
+    fn needs(source: &str) -> SuperglobalNeeds {
+        let program = parse(source);
+        let usage = usage::collect_environment(&program);
+        superglobal_needs(&program, &usage)
+    }
+
+    /// A handler that never names `$_ENV` or `$_REQUEST` must not pay to build them.
+    #[test]
+    fn plain_handler_skips_invisible_superglobals() {
+        assert_eq!(
+            needs("<?php echo 'ok';"),
+            SuperglobalNeeds {
+                env: false,
+                request: false,
+            }
+        );
+    }
+
+    /// Spelling a superglobal in the source keeps its bootstrap.
+    #[test]
+    fn spelled_superglobals_are_built() {
+        assert_eq!(
+            needs("<?php echo $_ENV['HOME'];"),
+            SuperglobalNeeds {
+                env: true,
+                request: false,
+            }
+        );
+        assert_eq!(
+            needs("<?php echo $_REQUEST['q'];"),
+            SuperglobalNeeds {
+                env: false,
+                request: true,
+            }
+        );
+    }
+
+    /// A string subscript or `compact()` names the superglobal without spelling it.
+    #[test]
+    fn literal_references_keep_the_superglobal() {
+        assert_eq!(
+            needs("<?php print_r(compact('_ENV'));"),
+            SuperglobalNeeds {
+                env: true,
+                request: true,
+            }
+        );
+        assert_eq!(
+            needs("<?php echo compact('_REQUEST')['_REQUEST'];"),
+            SuperglobalNeeds {
+                env: true,
+                request: true,
+            }
+        );
+    }
+
+    /// Every channel that enumerates globals must see the complete set.
+    #[test]
+    fn global_enumeration_forces_every_superglobal() {
+        for source in [
+            "<?php foreach ($GLOBALS as $name => $value) {}",
+            "<?php print_r(get_defined_vars());",
+            "<?php $code = 'echo 1;'; eval($code);",
+        ] {
+            assert_eq!(needs(source), SuperglobalNeeds::ALL, "{source}");
+        }
+    }
+
+    /// Any eval can reach the whole variable table, so it keeps both superglobals.
+    #[test]
+    fn eval_keeps_every_superglobal() {
+        for source in [
+            "<?php eval('echo 1;');",
+            "<?php eval('echo $_ENV[\"HOME\"];');",
+        ] {
+            assert_eq!(needs(source), SuperglobalNeeds::ALL, "{source}");
+        }
     }
 
     /// Every maintained profile in declaration order, for exhaustive table checks.

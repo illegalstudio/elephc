@@ -222,8 +222,13 @@ process lifetime; see [Concurrency model](#concurrency-model).
 
 ## Concurrency model
 
-All models start with a prefork master and `--workers N` `SO_REUSEPORT` web
-workers. The compile-time isolation model decides where PHP executes:
+All models start with a prefork master and `--workers N` web workers. On Linux,
+each worker binds its own `SO_REUSEPORT` socket and the kernel hashes new
+connections across the group. On Apple targets the master binds one listener
+before forking and the workers accept on inherited duplicates: Darwin's
+`SO_REUSEPORT` sends every connection from one client address to the same
+socket, so per-worker sockets leave all but one core idle. The compile-time
+isolation model decides where PHP executes:
 
 | Model | PHP process lifetime | Maximum parallel handlers | Response | Operational trade-off |
 |---|---|---:|---|---|

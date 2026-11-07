@@ -1211,7 +1211,7 @@ mod tests {
             );
             round_trip(
                 "web",
-                &crate::web_prelude::build::web_declarations(version, &[]),
+                &crate::web_prelude::build::web_declarations(version, &[], crate::web_prelude::SuperglobalNeeds::ALL),
             );
         }
         round_trip("web wrapper", &vec![crate::web_prelude::web_wrap_stmt()]);

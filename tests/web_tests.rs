@@ -1080,6 +1080,43 @@ fn web_server_multiple_workers() {
     assert!(r2.ends_with("ok"), "second response: {:?}", r2);
 }
 
+/// Two workers must actually share the listening socket.
+///
+/// Darwin's `SO_REUSEPORT` sends every connection from one client address to
+/// the same socket, so per-worker sockets answered the whole suite from one
+/// process while the other workers idled. The shared listener is only useful if
+/// it distributes work, which this asserts by collecting the PHP process id from
+/// concurrent responses.
+#[test]
+fn web_workers_share_the_listener() {
+    let dir = make_test_dir("web_workers_share");
+    let bin = compile_web(&dir, "<?php echo getmypid();", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "2");
+    let mut pids = std::collections::HashSet::new();
+    for _ in 0..4 {
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let addr = addr.clone();
+                std::thread::spawn(move || http_get(&addr, "/"))
+            })
+            .collect();
+        for handle in handles {
+            let response = handle.join().expect("request thread panicked");
+            if let Some(body) = response.split("\r\n\r\n").nth(1) {
+                pids.insert(body.trim().to_string());
+            }
+        }
+        if pids.len() >= 2 {
+            break;
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(pids.len() >= 2, "only one worker served requests: {pids:?}");
+}
+
 /// Sends one HTTP/1.1 request and returns it with any complete chunked body decoded.
 fn http_request(addr: &str, method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> String {
     use std::io::{Read, Write};

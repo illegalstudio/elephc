@@ -579,12 +579,20 @@ pub(crate) fn initialize_config() {
 /// unless progress is enabled, the body is a `multipart/form-data` upload with a
 /// boundary, and the request supplies a valid session ID through an allowed
 /// Cookie, query, or multipart form source.
-pub(crate) fn begin(headers: &[(String, String)], query: &str) -> Option<Tracker> {
+///
+/// The caller already walks the request headers once for its own Cookie/Host/
+/// Traceparent lookups, so it passes the three values this function needs rather
+/// than making it scan a second materialized copy.
+pub(crate) fn begin(
+    content_type: Option<&str>,
+    cookie: Option<&str>,
+    content_length: Option<&str>,
+    query: &str,
+) -> Option<Tracker> {
     if !config_enabled() {
         return None;
     }
-    let content_type = header_value(headers, "content-type")?;
-    let boundary = extract_boundary(&content_type)?;
+    let boundary = extract_boundary(content_type?)?;
 
     // SAFETY: `worker::serve` materializes lazy config before Tokio starts, so
     // concurrent request tasks only read immutable process-static values here.
@@ -606,8 +614,8 @@ pub(crate) fn begin(headers: &[(String, String)], query: &str) -> Option<Tracker
         _ => return None,
     };
 
-    let cookie_sid = header_value(headers, "cookie")
-        .and_then(|cookie| cookie_value(&cookie, &name_cookie))
+    let cookie_sid = cookie
+        .and_then(|cookie| cookie_value(cookie, &name_cookie))
         .and_then(|value| percent_decode(&value));
     let allow_non_cookie = !config_use_only_cookies();
     let query_sid = if allow_non_cookie {
@@ -620,7 +628,7 @@ pub(crate) fn begin(headers: &[(String, String)], query: &str) -> Option<Tracker
         return None;
     }
 
-    let content_length = header_value(headers, "content-length")
+    let content_length = content_length
         .and_then(|v| v.trim().parse::<i64>().ok())
         .unwrap_or(-1);
     let now = std::time::SystemTime::now()
@@ -686,15 +694,6 @@ unsafe fn getter_string(ptr: *const std::ffi::c_char) -> String {
         return String::new();
     }
     CStr::from_ptr(ptr).to_string_lossy().into_owned()
-}
-
-/// Returns the first request header value whose name matches `name`
-/// case-insensitively.
-fn header_value(headers: &[(String, String)], name: &str) -> Option<String> {
-    headers
-        .iter()
-        .find(|(n, _)| n.eq_ignore_ascii_case(name))
-        .map(|(_, v)| v.clone())
 }
 
 /// Extracts the `<name>=<value>` cookie for `name` from a `Cookie` header,

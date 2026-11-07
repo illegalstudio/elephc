@@ -1,6 +1,6 @@
 //! Purpose:
-//! Isolated per-worker HTTP serving: prestart a threadless handler broker, build a
-//! SO_REUSEPORT listener, and stream isolated PHP responses through Tokio.
+//! Isolated per-worker HTTP serving: prestart a threadless handler broker, take
+//! the worker listening socket, and stream isolated PHP responses through Tokio.
 //!
 //! Called from:
 //! - `crate::server::spawn_worker` for pool- and request-isolated children.
@@ -8,7 +8,8 @@
 //! Key details:
 //! - PHP runs only in persistent-pool or disposable-request handler children.
 //! - Connection tasks perform async IPC and never fork or consume a blocking pool.
-//! - SO_REUSEPORT lets every worker bind the same port; the kernel balances.
+//! - The listener follows `crate::listener`: per-worker `SO_REUSEPORT` on Linux,
+//!   one inherited socket on Apple targets.
 
 use std::convert::Infallible;
 use std::fmt;
@@ -26,7 +27,6 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
 
@@ -34,29 +34,19 @@ use crate::handler_broker::{BrokerMode, HandlerBroker, HandlerResponse, Prestart
 use crate::handler_ipc::{HandlerRequest, ResponseFrame, MAX_REQUEST_BODY_BYTES};
 use crate::session::upload_progress;
 
-/// Pending-connection backlog for each worker's listening socket.
-const LISTEN_BACKLOG: i32 = 1024;
-
-/// Builds a listening std::net::TcpListener with SO_REUSEPORT set, bound to `addr`.
-fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
-    let domain = if addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
-    let sock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
-    sock.set_reuse_address(true)?;
-    sock.set_reuse_port(true)?;
-    sock.set_nonblocking(true)?;
-    sock.bind(&addr.into())?;
-    sock.listen(LISTEN_BACKLOG)?;
-    Ok(sock.into())
-}
-
 /// Number of requests this worker has served, used by `--max-requests` recycling.
 /// Process-local (each forked worker has its own copy starting at 0).
 static SERVED: AtomicUsize = AtomicUsize::new(0);
 
 /// Records one completed isolated handler and broadcasts a graceful recycle at the quota.
 fn record_completed_request(max_requests: usize, recycle: &watch::Sender<bool>) {
+    // Unbounded recycling is the default; do not pay an atomic read-modify-write
+    // per request when the counter cannot trigger anything.
+    if max_requests == 0 {
+        return;
+    }
     let served = SERVED.fetch_add(1, Ordering::Relaxed) + 1;
-    if max_requests > 0 && served >= max_requests {
+    if served >= max_requests {
         let _ = recycle.send(true);
     }
 }
@@ -221,12 +211,21 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             std::process::exit(1);
         }
     };
-    let std_listener = match reuseport_listener(addr) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("elephc-web: failed to bind {}: {}", addr, e);
-            std::process::exit(1);
-        }
+    let std_listener = match crate::listener::worker_listener() {
+        Some(listener) => match listener {
+            Ok(listener) => listener,
+            Err(e) => {
+                eprintln!("elephc-web: failed to inherit the shared listener: {}", e);
+                std::process::exit(1);
+            }
+        },
+        None => match crate::listener::reuseport(addr) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("elephc-web: failed to bind {}: {}", addr, e);
+                std::process::exit(1);
+            }
+        },
     };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -274,6 +273,8 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                 Ok(pair) => pair,
                 Err(_) => continue,
             };
+            // Small response writes must leave immediately; see `worker::serve_inner`.
+            let _ = stream.set_nodelay(true);
             let io = TokioIo::new(stream);
             let broker = broker.clone();
             let request_recycle = recycle.clone();
@@ -312,38 +313,47 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     // is drained frame-by-frame so progress can be written to the session
                     // file as bytes arrive, while still buffering the complete body the
                     // handler sees. Non-tracked requests keep the simple fast path.
-                    let collect_body = async {
-                        if let Some(mut tracker) = upload_progress::begin(&headers, &query) {
-                            drain_with_progress(req.into_body(), max_body, &mut tracker).await
-                        } else if max_body == 0 {
-                            req.into_body()
-                                .collect()
-                                .await
-                                .map(|c| c.to_bytes().to_vec())
-                                .map_err(|_| ())
+                    let body = if crate::worker::request_declares_body(req.headers()) {
+                        let collect_body = async {
+                            if let Some(mut tracker) = upload_progress::begin(
+                                req.headers().get("content-type").and_then(|v| v.to_str().ok()),
+                                req.headers().get("cookie").and_then(|v| v.to_str().ok()),
+                                req.headers().get("content-length").and_then(|v| v.to_str().ok()),
+                                &query,
+                            ) {
+                                drain_with_progress(req.into_body(), max_body, &mut tracker).await
+                            } else if max_body == 0 {
+                                req.into_body()
+                                    .collect()
+                                    .await
+                                    .map(|c| c.to_bytes().to_vec())
+                                    .map_err(|_| ())
+                            } else {
+                                Limited::new(req.into_body(), max_body)
+                                    .collect()
+                                    .await
+                                    .map(|c| c.to_bytes().to_vec())
+                                    .map_err(|_| ())
+                            }
+                        };
+                        let collected = if body_read_secs == 0 {
+                            Ok(collect_body.await)
                         } else {
-                            Limited::new(req.into_body(), max_body)
-                                .collect()
+                            tokio::time::timeout(Duration::from_secs(body_read_secs), collect_body)
                                 .await
-                                .map(|c| c.to_bytes().to_vec())
                                 .map_err(|_| ())
+                        };
+                        match collected {
+                            Err(()) => {
+                                return Ok::<_, Infallible>(fixed_response(408, b"Request Timeout"));
+                            }
+                            Ok(Ok(body)) => body,
+                            Ok(Err(_)) => {
+                                return Ok::<_, Infallible>(fixed_response(413, b"Payload Too Large"));
+                            }
                         }
-                    };
-                    let collected = if body_read_secs == 0 {
-                        Ok(collect_body.await)
                     } else {
-                        tokio::time::timeout(Duration::from_secs(body_read_secs), collect_body)
-                            .await
-                            .map_err(|_| ())
-                    };
-                    let body = match collected {
-                        Err(()) => {
-                            return Ok::<_, Infallible>(fixed_response(408, b"Request Timeout"));
-                        }
-                        Ok(Ok(body)) => body,
-                        Ok(Err(_)) => {
-                            return Ok::<_, Infallible>(fixed_response(413, b"Payload Too Large"));
-                        }
+                        Vec::new()
                     };
                     if body.len() > MAX_REQUEST_BODY_BYTES {
                         return Ok::<_, Infallible>(fixed_response(413, b"Payload Too Large"));

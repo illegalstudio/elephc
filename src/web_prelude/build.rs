@@ -1182,19 +1182,28 @@ fn decl_stmt_bootstrap_29() -> Stmt {
 }
 
 /// `bootstrap 30` — transcribed from the PHP form.
-fn decl_stmt_bootstrap_30() -> Stmt {
+fn decl_stmt_bootstrap_30(populate_request: bool) -> Stmt {
+    if !populate_request {
+        return s_expr(e_int(0));
+    }
     s_assign("_REQUEST", e_array(vec![]))
 }
 
 /// `bootstrap 31` — transcribed from the PHP form.
-fn decl_stmt_bootstrap_31() -> Stmt {
+fn decl_stmt_bootstrap_31(populate_request: bool) -> Stmt {
+    if !populate_request {
+        return s_expr(e_int(0));
+    }
     s_foreach(e_var("_GET"), Some("__elephc_rqk"), "__elephc_rqv", vec![
         s_array_assign("_REQUEST", e_var("__elephc_rqk"), e_var("__elephc_rqv")),
     ])
 }
 
 /// `bootstrap 32` — transcribed from the PHP form.
-fn decl_stmt_bootstrap_32() -> Stmt {
+fn decl_stmt_bootstrap_32(populate_request: bool) -> Stmt {
+    if !populate_request {
+        return s_expr(e_int(0));
+    }
     s_foreach(e_var("_POST"), Some("__elephc_rqk"), "__elephc_rqv", vec![
         s_array_assign("_REQUEST", e_var("__elephc_rqk"), e_var("__elephc_rqv")),
     ])
@@ -5137,16 +5146,19 @@ fn decl_stmt_bootstrap_44() -> Stmt {
 pub(crate) fn web_declarations(
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],
+    needs: super::SuperglobalNeeds,
 ) -> Program {
-    web_declarations_with_environment(php_version, ini_overrides, true)
+    web_declarations_with_environment(php_version, ini_overrides, needs.env, needs.request)
 }
 
-/// Builds the web surface, copying the environment only when user code can observe it.
-/// The empty array remains available for internal session callback storage in either case.
+/// Builds the web surface, copying the environment and merging `$_REQUEST` only
+/// when user code can observe them. The empty `$_ENV` array remains available for
+/// internal session callback storage in either case.
 pub(crate) fn web_declarations_with_environment(
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],
     populate_environment: bool,
+    populate_request: bool,
 ) -> Program {
     internal_declarations(|| {
         let mut declarations: Program = vec![
@@ -5287,9 +5299,9 @@ pub(crate) fn web_declarations_with_environment(
             decl_stmt_bootstrap_27(),
             decl_stmt_bootstrap_28(),
             decl_stmt_bootstrap_29(),
-            decl_stmt_bootstrap_30(),
-            decl_stmt_bootstrap_31(),
-            decl_stmt_bootstrap_32(),
+            decl_stmt_bootstrap_30(populate_request),
+            decl_stmt_bootstrap_31(populate_request),
+            decl_stmt_bootstrap_32(populate_request),
             decl_stmt_bootstrap_33(),
         ];
         if populate_environment {

@@ -108,6 +108,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             crate::web_prelude::build::web_declarations(
                 crate::web_prelude::PhpVersion::Php85,
                 &[],
+                crate::web_prelude::SuperglobalNeeds::ALL,
             ),
         ),
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),

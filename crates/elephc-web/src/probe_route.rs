@@ -42,6 +42,15 @@ type TraceFn = unsafe extern "C" fn(*const u8, usize, *const u8, usize);
 type RequestFn = unsafe extern "C" fn(u32);
 type VerifyFn = unsafe extern "C" fn(*const u8, usize) -> u32;
 
+/// Whether the sampling probe is linked into this binary.
+///
+/// Callers use this to skip building a route label at all: shaping the path is
+/// pure overhead when no probe will consume it, and a production binary has no
+/// probe.
+pub fn active() -> bool {
+    resolve().is_some()
+}
+
 /// The route-tagging function, or `None` when the slot is empty because the
 /// binary was built without the probe.
 fn resolve() -> Option<SetRouteFn> {
@@ -182,6 +191,18 @@ pub fn query_is_authentic(value: &str) -> bool {
     }
     let verify = unsafe { std::mem::transmute::<usize, VerifyFn>(addr) };
     (unsafe { verify(value.as_ptr(), value.len()) }) != 0
+}
+
+/// Whether the exact profiler's trace hook is linked.
+pub fn trace_available() -> bool {
+    let addr = unsafe { std::ptr::addr_of!(elephc_instr_trace_fn).read() };
+    addr != 0
+}
+
+/// Whether the signed profiling-query verifier is linked.
+pub fn query_available() -> bool {
+    let addr = unsafe { std::ptr::addr_of!(elephc_probe_verify_fn).read() };
+    addr != 0
 }
 
 /// Starts or ends this request's own profile, when the binary carries hooks.

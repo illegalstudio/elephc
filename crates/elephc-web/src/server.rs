@@ -269,6 +269,20 @@ fn run_server(
         ParsedArgs::Exit(code) => return code,
     };
     install_signal_handlers();
+    // Bind the shared listener before forking. On Apple targets each worker
+    // accepts on an inherited duplicate; on Linux this is a no-op and workers
+    // keep their per-process SO_REUSEPORT sockets.
+    let listen_addr = match args.listen.parse::<std::net::SocketAddr>() {
+        Ok(addr) => addr,
+        Err(_) => {
+            eprintln!("elephc-web: invalid --listen address {:?}", args.listen);
+            return 2;
+        }
+    };
+    if let Err(error) = crate::listener::install_shared(listen_addr) {
+        eprintln!("elephc-web: failed to bind {}: {}", listen_addr, error);
+        return 2;
+    }
     // Fork workers BEFORE creating any tokio runtime. Track each worker's spawn
     // time so a crash-on-startup loop (e.g. a failed bind) can be detected.
     let mut children: Vec<(libc::pid_t, Instant)> = Vec::new();

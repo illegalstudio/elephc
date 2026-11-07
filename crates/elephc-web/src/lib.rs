@@ -16,6 +16,7 @@
 mod handler_broker;
 mod handler_ipc;
 mod isolated_worker;
+mod listener;
 mod multipart;
 mod probe_route;
 mod request_state;
