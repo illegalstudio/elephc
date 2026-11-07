@@ -57,6 +57,7 @@ pub(in crate::interpreter) use member_api::*;
 pub(in crate::interpreter) use member_construction::*;
 use member_metadata::*;
 use owner_materialization::*;
+pub(in crate::interpreter) use owner_materialization::eval_reflection_full_class_object_result;
 use parameter_construction::*;
 use parameter_lazy_defaults::*;
 use parameter_metadata::*;

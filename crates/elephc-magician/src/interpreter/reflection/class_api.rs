@@ -253,7 +253,6 @@ pub(in crate::interpreter) fn eval_reflection_class_basic_metadata_result(
             eval_reflection_related_class_result(
                 EVAL_REFLECTION_OWNER_CLASS,
                 metadata.parent_class_name.as_deref(),
-                true,
                 context,
                 values,
             )
@@ -264,7 +263,6 @@ pub(in crate::interpreter) fn eval_reflection_class_basic_metadata_result(
             eval_reflection_constructor_object_result(
                 EVAL_REFLECTION_OWNER_CLASS,
                 &metadata.resolved_name,
-                true,
                 context,
                 values,
             )

@@ -237,6 +237,26 @@ fn execute_context_try_allocate_object_inner(
     }
 }
 
+/// Builds a fresh, complete `ReflectionClass` for a member reflector's lazy class slot.
+///
+/// The compiled `getDeclaringClass()` / `ReflectionParameter::getClass()` getters reach this
+/// through `__elephc_eval_reflection_class_build_v1` with the class name an eval-built
+/// reflector stored. Each call builds and registers a NEW reflector, so two calls never share
+/// an object (as in php) and the eval reflection registry always knows the returned identity.
+/// A class that no longer resolves yields `false`, the value an unresolved slot held before.
+pub fn execute_context_reflection_class_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    match eval_reflection_full_class_object_result(name, context, values) {
+        Ok(value) => Ok(EvalOutcome::Value(value)),
+        Err(EvalStatus::UncaughtThrowable) => context.take_pending_throw()
+            .map(EvalOutcome::Throwable).ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
 /// Publishes a lookup error without evaluating arguments or invoking the method.
 pub fn execute_context_abstract_method_guard_outcome(
     context: &mut ElephcEvalContext, object: RuntimeCellHandle, method: &str,

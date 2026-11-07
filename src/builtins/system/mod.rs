@@ -29,6 +29,7 @@ pub mod __elephc_builtin_deprecated;
 pub mod __elephc_builtin_warning;
 pub mod __elephc_class_has_constructor;
 pub mod __elephc_class_is_abstract;
+pub mod __elephc_eval_reflection_class_build;
 pub mod __elephc_gmmktime_raw;
 pub mod __elephc_initialize_pdo_statement;
 pub mod __elephc_invoke_pdo_statement_constructor;

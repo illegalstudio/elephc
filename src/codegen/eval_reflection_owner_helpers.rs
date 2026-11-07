@@ -31,8 +31,6 @@ struct ReflectionOwnerLayout {
     /// Whether `$name` / `$class` are object-owned reference properties (bound with `=&`).
     public_name_owns_reference: bool,
     public_class_owns_reference: bool,
-    related_class_name_lo: usize,
-    related_class_name_hi: usize,
     short_name_lo: Option<usize>,
     short_name_hi: Option<usize>,
     namespace_name_lo: Option<usize>,
@@ -201,63 +199,28 @@ fn module_uses_eval(module: &Module) -> bool {
 
 /// Returns the Reflection owner object layouts from class metadata.
 fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
-    let class_info = module.class_infos.get("ReflectionClass")?;
-    let related_class_name_lo = reflection_property_offset(class_info, "__name")?;
+    let layout = |class_name: &str, has_name: bool| {
+        reflection_owner_layout(module.class_infos.get(class_name)?, has_name)
+    };
     Some(ReflectionOwnerLayouts {
-        class: reflection_owner_layout(class_info, true, related_class_name_lo)?,
-        object_class: reflection_owner_layout(
-            module.class_infos.get("ReflectionObject")?, true, related_class_name_lo,
-        )?,
-        enum_class: reflection_owner_layout(
-            module.class_infos.get("ReflectionEnum")?, true, related_class_name_lo,
-        )?,
-        function: reflection_owner_layout(
-            module.class_infos.get("ReflectionFunction")?, true, related_class_name_lo,
-        )?,
-        method: reflection_owner_layout(
-            module.class_infos.get("ReflectionMethod")?, true, related_class_name_lo,
-        )?,
-        property: reflection_owner_layout(
-            module.class_infos.get("ReflectionProperty")?, true, related_class_name_lo,
-        )?,
-        class_constant: reflection_owner_layout(
-            module.class_infos.get("ReflectionClassConstant")?,
-            true,
-            related_class_name_lo,
-        )?,
-        enum_unit_case: reflection_owner_layout(
-            module.class_infos.get("ReflectionEnumUnitCase")?,
-            true,
-            related_class_name_lo,
-        )?,
-        enum_backed_case: reflection_owner_layout(
-            module.class_infos.get("ReflectionEnumBackedCase")?,
-            true,
-            related_class_name_lo,
-        )?,
-        parameter: reflection_owner_layout(
-            module.class_infos.get("ReflectionParameter")?, true, related_class_name_lo,
-        )?,
-        named_type: reflection_owner_layout(
-            module.class_infos.get("ReflectionNamedType")?, true, related_class_name_lo,
-        )?,
-        union_type: reflection_owner_layout(
-            module.class_infos.get("ReflectionUnionType")?, false, related_class_name_lo,
-        )?,
-        intersection_type: reflection_owner_layout(
-            module.class_infos.get("ReflectionIntersectionType")?,
-            false,
-            related_class_name_lo,
-        )?,
+        class: layout("ReflectionClass", true)?,
+        object_class: layout("ReflectionObject", true)?,
+        enum_class: layout("ReflectionEnum", true)?,
+        function: layout("ReflectionFunction", true)?,
+        method: layout("ReflectionMethod", true)?,
+        property: layout("ReflectionProperty", true)?,
+        class_constant: layout("ReflectionClassConstant", true)?,
+        enum_unit_case: layout("ReflectionEnumUnitCase", true)?,
+        enum_backed_case: layout("ReflectionEnumBackedCase", true)?,
+        parameter: layout("ReflectionParameter", true)?,
+        named_type: layout("ReflectionNamedType", true)?,
+        union_type: layout("ReflectionUnionType", false)?,
+        intersection_type: layout("ReflectionIntersectionType", false)?,
     })
 }
 
 /// Returns one Reflection owner layout from class metadata.
-fn reflection_owner_layout(
-    info: &ClassInfo,
-    has_name: bool,
-    related_class_name_lo: usize,
-) -> Option<ReflectionOwnerLayout> {
+fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<ReflectionOwnerLayout> {
     let attrs_lo = reflection_property_offset(info, "__attrs")?;
     let name_lo = has_name
         .then(|| reflection_property_offset(info, "__name"))
@@ -339,8 +302,6 @@ fn reflection_owner_layout(
             && super::eval_reflection_mirrors::reflection_property_owns_reference(info, "name"),
         public_class_owns_reference:
             super::eval_reflection_mirrors::reflection_property_owns_reference(info, "class"),
-        related_class_name_lo,
-        related_class_name_hi: related_class_name_lo + 8,
         short_name_lo,
         short_name_hi: short_name_lo.map(|offset| offset + 8),
         namespace_name_lo,
@@ -2394,7 +2355,10 @@ fn emit_set_owner_constructor_property_x86_64(
     abi::emit_store_zero_to_address(emitter, "r10", high);
 }
 
-/// Stores a retained ARM64 boxed parent ReflectionClass-or-false cell.
+/// Stores a retained ARM64 boxed parent or declaring-class cell.
+///
+/// A class owner's cell holds its parent `ReflectionClass` or `false`; a member owner's holds
+/// its declaring class's name, which also seeds the member's public `class` mirror.
 fn emit_set_owner_parent_class_property_aarch64(
     emitter: &mut Emitter,
     layout: &ReflectionOwnerLayout,
@@ -2414,14 +2378,10 @@ fn emit_set_owner_parent_class_property_aarch64(
     let Some(public_low) = layout.public_class_lo else {
         return;
     };
-    emitter.instruction("ldr x0, [sp, #136]");                                  // reload the boxed declaring ReflectionClass value
-    emitter.instruction("bl __rt_mixed_unbox");                                 // expose its object payload and runtime tag
-    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means object
+    emitter.instruction("ldr x0, [sp, #136]");                                  // reload the boxed declaring-class name
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the name's pointer, length and runtime tag
+    emitter.instruction("cmp x0, #1");                                          // runtime tag 1 means string
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed declaring-class metadata
-    abi::emit_load_from_address(emitter, "x10", "x1", layout.related_class_name_lo);
-    abi::emit_load_from_address(emitter, "x11", "x1", layout.related_class_name_hi);
-    emitter.instruction("mov x1, x10");                                         // pass the declaring-class name pointer for an independent copy
-    emitter.instruction("mov x2, x11");                                         // pass the declaring-class name length for an independent copy
     emitter.instruction("bl __rt_str_persist");                                 // give the mutable public class mirror independent storage
     super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
         emitter,
@@ -2434,7 +2394,10 @@ fn emit_set_owner_parent_class_property_aarch64(
     );
 }
 
-/// Stores a retained x86_64 boxed parent ReflectionClass-or-false cell.
+/// Stores a retained x86_64 boxed parent or declaring-class cell.
+///
+/// A class owner's cell holds its parent `ReflectionClass` or `false`; a member owner's holds
+/// its declaring class's name, which also seeds the member's public `class` mirror.
 fn emit_set_owner_parent_class_property_x86_64(
     emitter: &mut Emitter,
     layout: &ReflectionOwnerLayout,
@@ -2455,14 +2418,11 @@ fn emit_set_owner_parent_class_property_x86_64(
     let Some(public_low) = layout.public_class_lo else {
         return;
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp - 144]");                      // reload the boxed declaring ReflectionClass value
-    emitter.instruction("call __rt_mixed_unbox");                               // expose its object payload and runtime tag
-    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means object
+    emitter.instruction("mov rax, QWORD PTR [rbp - 144]");                      // reload the boxed declaring-class name
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the name's pointer, length and runtime tag
+    emitter.instruction("cmp rax, 1");                                          // runtime tag 1 means string
     emitter.instruction(&format!("jne {}", fail_label));                        // reject malformed declaring-class metadata
-    abi::emit_load_from_address(emitter, "r8", "rdi", layout.related_class_name_lo);
-    abi::emit_load_from_address(emitter, "r9", "rdi", layout.related_class_name_hi);
-    emitter.instruction("mov rax, r8");                                         // pass the declaring-class name pointer for an independent copy
-    emitter.instruction("mov rdx, r9");                                         // pass the declaring-class name length for an independent copy
+    emitter.instruction("mov rax, rdi");                                        // pass the declaring-class name pointer for an independent copy
     emitter.instruction("call __rt_str_persist");                               // give the mutable public class mirror independent storage
     super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
         emitter,
