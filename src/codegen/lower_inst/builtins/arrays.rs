@@ -93,9 +93,9 @@ use in_array_coercions::*;
 use in_array_strings::*;
 
 pub(crate) use keyed_kernels::{
-    lower_array_filter_count_mod, lower_array_map_affine, lower_array_map_numeric,
-    lower_array_map_square, lower_array_map_square_affine, lower_array_map_sum_add,
-    lower_array_map_sum_add_int,
+    lower_array_filter_count_mod, lower_array_map_affine, lower_array_map_float_scale,
+    lower_array_map_numeric, lower_array_map_square, lower_array_map_square_affine,
+    lower_array_map_sum_add, lower_array_map_sum_add_int,
     lower_array_map_sum_add_int_cached, lower_array_map_sum_add_safe,
     lower_array_map_sum_probe_int,
 };

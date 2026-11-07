@@ -1,7 +1,8 @@
 //! Purpose:
 //! End-to-end coverage for the stored `array_map(fn($v) => $v + C | $v - C | $v * C |
-//! $v * A + B | $v * $v | $v * $v + C, $ints)` kernels that keep a raw `array<int>`
-//! when no element overflows.
+//! $v * A + B | $v * $v | $v * $v + C | $v * F, $ints)` kernels. Integer callbacks keep
+//! a raw `array<int>` when no element overflows; the float-scale callback keeps a raw
+//! `array<float>`.
 //!
 //! Called from:
 //! - The codegen optimizer suite through `optimizer`.
@@ -569,4 +570,121 @@ echo $sum, "\n";
 "#;
     assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "1015350\n");
     assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "1015350\n");
+}
+
+/// A float-literal scale maps every int element to a raw double and feeds neutral consumers.
+#[test]
+fn test_stored_numeric_map_float_scale_shapes_and_consumers() {
+    let source = r#"<?php
+$values = [1, 2, 3, 4];
+$a = array_map(fn($v) => $v * 1.5, $values);
+$b = array_map(fn($v) => 2.5 * $v, $values);
+$c = array_map(fn($v) => $v * -0.5, $values);
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", array_sum($a), "|";
+foreach ($a as $v) { echo gettype($v), ":", $v, ","; }
+echo "\n";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "1.5,3,4.5,6|2.5,5,7.5,10|-0.5,-1,-1.5,-2|15|double:1.5,double:3,double:4.5,double:6,\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_float_scale").count(), 3, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// Large integers and identity scales stay in the float domain, matching PHP's conversion.
+#[test]
+fn test_stored_numeric_map_float_scale_large_and_identity_scales() {
+    let source = r#"<?php
+$big = [PHP_INT_MAX, PHP_INT_MIN, 0];
+$mapped = array_map(fn($v) => $v * 1.5, $big);
+foreach ($mapped as $v) { echo gettype($v), ":", $v, "|"; }
+echo "\n";
+$small = [1, 2, 3];
+$one = array_map(fn($v) => $v * 1.0, $small);
+echo implode(",", $one), "|", gettype($one[0]), "|";
+$zero = array_map(fn($v) => $v * 0.0, $small);
+echo implode(",", $zero), "|", gettype($zero[0]), "\n";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "double:1.3835058055282E+19|double:-1.3835058055282E+19|double:0|\n\
+         1,2,3|double|0,0,0|double\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_float_scale").count(), 3, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// JSON, direct reads and the boxed aggregate read the raw float slots exactly.
+#[test]
+fn test_stored_numeric_map_float_scale_json_and_direct_reads() {
+    let source = r#"<?php
+$values = range(1, 3);
+$mapped = array_map(fn($v) => $v * 1.5, $values);
+echo json_encode($mapped), "|", count($mapped), "|", array_sum($mapped), "|";
+var_dump($mapped[1]);
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "[1.5,3,4.5]|3|9|float(3)\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_float_scale").count(), 1, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// Element writes keep the generic boxed map for float-scale callbacks.
+///
+/// The generic untyped float-callback map currently crashes at run time on a pre-existing
+/// backend bug (reproduced with the compiler built before the float-scale kernel), so this
+/// regression pins the fallback decision in EIR instead of executing that unrelated path.
+#[test]
+fn test_stored_numeric_map_float_scale_element_writes_keep_generic_map() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+$mapped = array_map(fn($v) => $v * 1.5, $values);
+$copy = $mapped;
+$copy[0] = 9.5;
+echo $mapped[0], "|", $copy[0], "\n";
+"#;
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map ").count(), 1, "{main}");
+    assert!(!main.contains("runtime.array_map_float_scale"), "{main}");
+}
+
+/// The raw float result releases without leaks.
+#[test]
+fn test_stored_numeric_map_float_scale_heap_debug_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = range(1, 5);
+$mapped = array_map(fn($v) => $v * 1.5, $values);
+echo array_sum($mapped), "|", implode(",", $mapped), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "22.5|1.5,3,4.5,6,7.5\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// The float-scale kernel produces the same output with the EIR optimizer on and off.
+#[test]
+fn test_stored_numeric_map_float_scale_ir_opt_parity() {
+    let source = r#"<?php
+$values = range(1, 100);
+$sum = 0;
+for ($i = 0; $i < 3; $i++) {
+    $mapped = array_map(fn($v) => $v * 1.5, $values);
+    $sum += array_sum($mapped);
+}
+echo $sum, "\n";
+"#;
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "22725\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "22725\n");
 }

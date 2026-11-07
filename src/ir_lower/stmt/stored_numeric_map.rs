@@ -1,6 +1,6 @@
 //! Purpose:
 //! Marks `array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v |
-//! $v * $v + C, $ints)` assignments whose
+//! $v * $v + C | $v * F, $ints)` assignments whose
 //! result is only observed through storage-neutral consumers, so lowering may build
 //! a raw `array<int>` instead of boxing one Mixed cell per element.
 //!
@@ -115,7 +115,7 @@ fn mark_stmt(stmt: &mut Stmt, analysis: &[Stmt], env: &TypeEnv, aliased: &HashSe
 }
 
 /// One safe stored numeric map callback shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum StoredNumericMapShape {
     /// `$v + C`, `$v - C`, or `$v * C` (with the literal on either side for `+` and `*`).
     Single { constant: i64, op: StoredNumericMapOp },
@@ -125,6 +125,8 @@ pub(crate) enum StoredNumericMapShape {
     Square,
     /// `$v * $v + C` (or `C + $v * $v`, `$v * $v - C`), squared then offset.
     SquareAffine { offset: i64 },
+    /// `$v * F` (or `F * $v`) with a floating-point literal scale.
+    FloatScale { scale: f64 },
 }
 
 /// The single-operation map selector carried in `StoredNumericMapShape::Single`.
@@ -147,6 +149,37 @@ pub(crate) fn parse_stored_numeric_map(
         .or_else(|| parse_square(left, op, right, param))
         .or_else(|| parse_square_affine(left, op, right, param))
         .or_else(|| parse_affine(left, op, right, param))
+        .or_else(|| parse_float_scale(left, op, right, param))
+}
+
+/// Parses `$v * F` or `F * $v` with a floating-point literal scale.
+fn parse_float_scale(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    param: &str,
+) -> Option<StoredNumericMapShape> {
+    if !matches!(op, BinOp::Mul) {
+        return None;
+    }
+    let scale = match (&left.kind, &right.kind) {
+        (ExprKind::Variable(name), _) if name == param => literal_f64(right)?,
+        (_, ExprKind::Variable(name)) if name == param => literal_f64(left)?,
+        _ => return None,
+    };
+    Some(StoredNumericMapShape::FloatScale { scale })
+}
+
+/// Returns a floating-point literal, including a parser-level unary negation.
+fn literal_f64(expr: &Expr) -> Option<f64> {
+    match &expr.kind {
+        ExprKind::FloatLiteral(value) => Some(*value),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::FloatLiteral(value) => Some(-value),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Parses `$v * $v + C`, `C + $v * $v`, and `$v * $v - C`.
@@ -645,6 +678,7 @@ fn neutral_builtin(name: &str) -> bool {
         name,
         "count"
             | "sizeof"
+            | "gettype"
             | "var_dump"
             | "print_r"
             | "implode"

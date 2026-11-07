@@ -199,14 +199,20 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
     emit_cleanup(emitter, prefix);
 }
 
-/// Emits the packed int-array fast path for `array_sum` before the generic fold.
+/// Emits the packed int/float-array fast path for `array_sum` before the generic fold.
 ///
-/// `array<int>` is the common aggregate receiver. Its header is an indexed array with
-/// 8-byte int slots, so the typed reduction helper can sum it without an iterator,
-/// per-element Mixed boxes, warning bookkeeping or an exception boundary. Every other
-/// storage shape falls through to the generic fold.
+/// `array<int>` and the stored-map `array<float>` are the common aggregate receivers. Their
+/// headers are indexed arrays with 8-byte slots, so the typed reduction helper can sum the int
+/// form and a double loop can sum the float form without an iterator, per-element Mixed boxes,
+/// warning bookkeeping or an exception boundary. Every other storage shape falls through to the
+/// generic fold.
 fn emit_packed_int_sum_fast_path(emitter: &mut Emitter, prefix: &str) {
     let generic = format!("{prefix}_generic");
+    let int_path = format!("{prefix}_packed_int");
+    let float_path = format!("{prefix}_packed_float");
+    let float_loop = format!("{prefix}_packed_float_loop");
+    let float_done = format!("{prefix}_packed_float_done");
+    let float_empty = format!("{prefix}_packed_float_empty");
     abi::load_at_offset(emitter, abi::int_result_reg(emitter), PAYLOAD);
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -214,34 +220,107 @@ fn emit_packed_int_sum_fast_path(emitter: &mut Emitter, prefix: &str) {
             emitter.instruction("and w9, w9, #0xff");                           // isolate the storage kind
             emitter.instruction("cmp w9, #2");                                  // kind 2 = indexed packed array
             emitter.instruction(&format!("b.ne {generic}"));                    // other storage keeps the generic fold
+            emitter.instruction("ldr x9, [x0, #16]");                           // load the element size
+            emitter.instruction("cmp x9, #8");                                  // packed int/float slots are one 8-byte word
+            emitter.instruction(&format!("b.ne {generic}"));                    // widened slots keep the generic fold
             emitter.instruction("ldr x9, [x0, #-8]");                           // reload the metadata for the value type
             emitter.instruction("ubfx x9, x9, #8, #7");                         // isolate the element value type
-            emitter.instruction(&format!("cbnz x9, {generic}"));                // only int-shaped slots take the fast path
-            emitter.instruction("ldr x9, [x0, #16]");                           // load the element size
-            emitter.instruction("cmp x9, #8");                                  // int slots are one 8-byte word
-            emitter.instruction(&format!("b.ne {generic}"));                    // widened slots keep the generic fold
-            emitter.instruction("ldr x2, [x0]");                                // exclusive end = array length
-            emitter.instruction("mov x1, #0");                                  // start at the first element
-            emitter.instruction("mov x3, #0");                                  // the empty seed is int zero
-            abi::emit_call_label(emitter, "__rt_array_sum_int_i64");
+            emitter.instruction("cmp x9, #0");                                  // is this a raw int array?
+            emitter.instruction(&format!("b.eq {int_path}"));                   // use the raw int reducer
+            emitter.instruction("cmp x9, #2");                                  // is this a raw float array?
+            emitter.instruction(&format!("b.eq {float_path}"));                 // use the raw double reducer
+            emitter.instruction(&format!("b {generic}"));                       // every other layout keeps the generic fold
         }
         Arch::X86_64 => {
             emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // load the packed array metadata
             emitter.instruction("and r10d, 0xff");                              // isolate the storage kind
             emitter.instruction("cmp r10d, 2");                                 // kind 2 = indexed packed array
             emitter.instruction(&format!("jne {generic}"));                     // other storage keeps the generic fold
+            emitter.instruction("mov r10, QWORD PTR [rax + 16]");               // load the element size
+            emitter.instruction("cmp r10, 8");                                  // packed int/float slots are one 8-byte word
+            emitter.instruction(&format!("jne {generic}"));                     // widened slots keep the generic fold
             emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // reload the metadata for the value type
             emitter.instruction("shr r10, 8");                                  // move the value type into the low bits
             emitter.instruction("and r10d, 0x7f");                              // ignore the persistent COW flag
-            emitter.instruction(&format!("jnz {generic}"));                     // only int-shaped slots take the fast path
-            emitter.instruction("mov r10, QWORD PTR [rax + 16]");               // load the element size
-            emitter.instruction("cmp r10, 8");                                  // int slots are one 8-byte word
-            emitter.instruction(&format!("jne {generic}"));                     // widened slots keep the generic fold
+            emitter.instruction("cmp r10d, 0");                                 // is this a raw int array?
+            emitter.instruction(&format!("je {int_path}"));                     // use the raw int reducer
+            emitter.instruction("cmp r10d, 2");                                 // is this a raw float array?
+            emitter.instruction(&format!("je {float_path}"));                   // use the raw double reducer
+            emitter.instruction(&format!("jmp {generic}"));                     // every other layout keeps the generic fold
+        }
+    }
+
+    emitter.label(&int_path);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x2, [x0]");                                // exclusive end = array length
+            emitter.instruction("mov x1, #0");                                  // start at the first element
+            emitter.instruction("mov x3, #0");                                  // the empty seed is int zero
+            abi::emit_call_label(emitter, "__rt_array_sum_int_i64");
+        }
+        Arch::X86_64 => {
             emitter.instruction("mov rdi, rax");                                // pass the packed array
             emitter.instruction("xor esi, esi");                                // start at the first element
             emitter.instruction("mov rdx, QWORD PTR [rax]");                    // exclusive end = array length
             emitter.instruction("xor ecx, ecx");                                // the empty seed is int zero
             abi::emit_call_label(emitter, "__rt_array_sum_int_i64");
+        }
+    }
+    abi::emit_frame_restore(emitter, FRAME);
+    abi::emit_return(emitter);
+
+    emitter.label(&float_path);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x2, [x0]");                                // x2 = array length
+            emitter.instruction(&format!("cbz x2, {float_empty}"));             // an empty array sums to int zero
+            emitter.instruction("add x10, x0, #24");                            // skip the array header to the payload base
+            emitter.instruction("mov x11, xzr");                                // x11 = element index
+            emitter.instruction("fmov d0, xzr");                                // start the accumulator at 0.0
+            emitter.label(&float_loop);
+            emitter.instruction("cmp x11, x2");                                 // has every element been added?
+            emitter.instruction(&format!("b.ge {float_done}"));                 // finish the double reduction
+            emitter.instruction("ldr d1, [x10, x11, lsl #3]");                  // load the current raw double
+            emitter.instruction("fadd d0, d0, d1");                             // add it in PHP's left-to-right order
+            emitter.instruction("add x11, x11, #1");                            // advance to the next element
+            emitter.instruction(&format!("b {float_loop}"));                    // continue until the array is exhausted
+            emitter.label(&float_done);
+            emitter.instruction("mov x0, #2");                                  // Mixed tag 2 = float
+            emitter.instruction("fmov x1, d0");                                 // float bits as the payload word
+            emitter.instruction("mov x2, xzr");                                 // scalar payloads do not use a second word
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");             // box the float sum
+            abi::emit_frame_restore(emitter, FRAME);
+            abi::emit_return(emitter);
+            emitter.label(&float_empty);
+            emitter.instruction("mov x0, #0");                                  // Mixed tag 0 = integer
+            emitter.instruction("mov x1, #0");                                  // PHP's empty array sum is int zero
+            emitter.instruction("mov x2, #0");                                  // scalar payloads do not use a second word
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");             // box the integer zero
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rdx, QWORD PTR [rax]");                    // rdx = array length
+            emitter.instruction(&format!("test rdx, rdx"));                     // is the array empty?
+            emitter.instruction(&format!("jz {float_empty}"));                  // an empty array sums to int zero
+            emitter.instruction("lea r10, [rax + 24]");                         // skip the array header to the payload base
+            emitter.instruction("xor ecx, ecx");                                // rcx = element index
+            emitter.instruction("pxor xmm0, xmm0");                             // start the accumulator at 0.0
+            emitter.label(&float_loop);
+            emitter.instruction("movsd xmm1, QWORD PTR [r10 + rcx * 8]");       // load the current raw double
+            emitter.instruction("addsd xmm0, xmm1");                            // add it in PHP's left-to-right order
+            emitter.instruction("add rcx, 1");                                  // advance to the next element
+            emitter.instruction("cmp rcx, rdx");                                // has every element been added?
+            emitter.instruction(&format!("jl {float_loop}"));                   // continue until the array is exhausted
+            emitter.instruction("movq rdi, xmm0");                              // float bits as the payload word
+            emitter.instruction("xor esi, esi");                                // scalar payloads do not use a second word
+            emitter.instruction("mov eax, 2");                                  // Mixed tag 2 = float
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");             // box the float sum
+            abi::emit_frame_restore(emitter, FRAME);
+            abi::emit_return(emitter);
+            emitter.label(&float_empty);
+            emitter.instruction("xor edi, edi");                                // PHP's empty array sum is int zero
+            emitter.instruction("xor esi, esi");                                // scalar payloads do not use a second word
+            emitter.instruction("xor eax, eax");                                // Mixed tag 0 = integer
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");             // box the integer zero
         }
     }
     abi::emit_frame_restore(emitter, FRAME);
