@@ -335,16 +335,16 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("jmp {mixed_store_float}"));                   // box the promoted double
 
     emitter.label(mixed_store_int);
-    emitter.instruction("mov rsi, rax");                                        // integer payload
-    emitter.instruction("xor edi, edi");                                        // Mixed tag 0 = integer
-    emitter.instruction("xor edx, edx");                                        // scalar payloads do not use a second word
+    emitter.instruction("mov rdi, rax");                                        // integer payload word
+    emitter.instruction("xor esi, esi");                                        // scalar payloads do not use a second word
+    emitter.instruction("xor eax, eax");                                        // Mixed tag 0 = integer
     emitter.instruction("call __rt_mixed_from_value");                          // allocate the boxed integer cell
-    emitter.instruction(&format!("jmp {mixed_store_float}"));                   // share the destination store
+    emitter.instruction("jmp __rt_array_map_numeric_mixed_store_cell_x86");     // share the destination store
 
     emitter.label(mixed_store_float);
-    emitter.instruction("movq rsi, xmm0");                                      // move the float bits into the payload word
-    emitter.instruction("mov edi, 2");                                          // Mixed tag 2 = float
-    emitter.instruction("xor edx, edx");                                        // scalar payloads do not use a second word
+    emitter.instruction("movq rdi, xmm0");                                      // move the float bits into the payload word
+    emitter.instruction("xor esi, esi");                                        // scalar payloads do not use a second word
+    emitter.instruction("mov eax, 2");                                          // Mixed tag 2 = float
     emitter.instruction("call __rt_mixed_from_value");                          // allocate the boxed float cell
 
     emitter.label("__rt_array_map_numeric_mixed_store_cell_x86");
@@ -390,6 +390,15 @@ mod tests {
             assert!(asm.contains("__rt_array_new"), "{target}");
             assert!(asm.contains("__rt_mixed_from_value"), "{target}");
             assert!(asm.contains("__rt_decref_array"), "{target}");
+            if target == "linux-x86_64" {
+                assert!(asm.contains("mov rdi, rax"), "{target}");
+                assert!(asm.contains("movq rdi, xmm0"), "{target}");
+                assert!(asm.contains("mov eax, 2"), "{target}");
+                assert!(asm.contains("xor eax, eax"), "{target}");
+            } else {
+                assert!(asm.contains("fmov x1, d0"), "{target}");
+                assert!(asm.contains("mov x0, #2"), "{target}");
+            }
         }
     }
 }

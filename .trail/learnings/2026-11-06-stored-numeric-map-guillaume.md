@@ -60,3 +60,9 @@
   elephc 1.413 ms vs PHP 16.187, PHP+JIT 17.070, C -O2 0.643. Neighbouring rows:
   `array_map_foreach` 3.601 vs 17.869 / 16.889 / 1.007; `array_map_mul_reads` 1.902 vs
   15.931 / 15.918 / 0.469.
+- x86_64 validation: the first mixed-overflow implementation used the AArch64
+  `__rt_mixed_from_value` register convention. The x86 helper expects `rax` = tag,
+  `rdi` = payload, `rsi` = high; the corrected kernel was cross-compiled with
+  `--target linux-x86_64` and run under `qemu-x86_64`. The stored benchmark printed
+  `75750000` and the overflow fixture matched PHP
+  (`integer:9223372036854775806|integer:9223372036854775807|double:9.2233720368548E+18|...`).
