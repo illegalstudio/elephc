@@ -930,3 +930,24 @@ echo implode(",", StaticReferenceOwner::$items);
     );
     assert_eq!(out, "3,1,2,4|3,1,2,4,5");
 }
+
+/// `var_dump` marks a reference property with `&`, including typed string properties.
+///
+/// The property descriptor flag is the runtime contract between the checker's promotion and
+/// the object walker; the walker must request the one-shot `&` prefix before resolving the
+/// cell payload.
+#[test]
+fn test_var_dump_marks_a_reference_property() {
+    let out = compile_and_run(
+        r#"<?php
+class ReferencePropertyDump { public string $value = "hello"; }
+$object = new ReferencePropertyDump();
+$alias = &$object->value;
+var_dump($object);
+"#,
+    );
+    assert_eq!(
+        out,
+        "object(ReferencePropertyDump)#1 (1) {\n  [\"value\"]=>\n  &string(5) \"hello\"\n}\n"
+    );
+}
