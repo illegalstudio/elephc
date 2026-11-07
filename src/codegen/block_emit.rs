@@ -565,21 +565,33 @@ fn drop_duplicate_helpers(text: &str, seen: &mut HashSet<String>) -> Option<Stri
     let mut depth = 0usize;
     // The depth at which the region being dropped opened, while one is.
     let mut dropping_at: Option<usize> = None;
+    // A shared body found inside a dropped region: where it starts, and the depth it opened at.
+    let mut rescuing: Option<(usize, usize)> = None;
     for (at, open) in markers {
         if open {
+            let end = line_end(at);
+            let key = text[at + HELPER_MARKER_OPEN.len()..end].trim();
             if dropping_at.is_none() {
-                let end = line_end(at);
-                let key = text[at + HELPER_MARKER_OPEN.len()..end].trim();
                 if !seen.insert(key.to_string()) {
                     dropping_at = Some(depth);
                     let start = line_start(at);
                     out.get_or_insert_with(|| String::with_capacity(text.len()))
                         .push_str(&text[copied_until..start]);
                 }
+            } else if rescuing.is_none() && key.starts_with("_eir_") && seen.insert(key.to_string()) {
+                // A content-shared body stands alone. The stub it sat behind is a duplicate, but
+                // the emitter already counts this body as written, so every later stub with the
+                // same content jumps to it and no other copy will ever exist.
+                rescuing = Some((line_start(at), depth));
             }
             depth += 1;
         } else {
             depth = depth.saturating_sub(1);
+            if let Some((start, opened_at)) = rescuing.filter(|(_, opened_at)| *opened_at == depth) {
+                debug_assert_eq!(opened_at, depth);
+                out.get_or_insert_with(String::new).push_str(&text[start..line_end(at)]);
+                rescuing = None;
+            }
             if dropping_at == Some(depth) {
                 dropping_at = None;
                 copied_until = line_end(at);
@@ -3170,5 +3182,31 @@ mod backend_inventory_tests {
         assert!(report.contains("2 of 2 scanned bodies"), "{report}");
         assert!(report.contains("a"), "{report}");
         assert!(report.contains("b"), "{report}");
+    }
+}
+
+#[cfg(test)]
+mod duplicate_helper_tests {
+    use super::drop_duplicate_helpers;
+    use std::collections::HashSet;
+
+    /// A stub already emitted elsewhere goes, and the body written behind it stays: the emitter
+    /// counts that body as written, so the next stub of the same content jumps to it.
+    #[test]
+    fn a_dropped_stub_leaves_its_shared_body_behind() {
+        let text = "a\n; @helper key=stub\nb stub\n; @helper key=_eir_cbody_1\nbody\n; @endhelper\n; @endhelper\nz\n";
+        let mut seen: HashSet<String> = ["stub".to_string()].into_iter().collect();
+        let kept = drop_duplicate_helpers(text, &mut seen).unwrap();
+        assert_eq!(kept, "a\n; @helper key=_eir_cbody_1\nbody\n; @endhelper\nz\n");
+        assert!(seen.contains("_eir_cbody_1"));
+    }
+
+    /// A body some earlier region already holds goes with its stub.
+    #[test]
+    fn a_body_already_kept_is_not_kept_twice() {
+        let text = "; @helper key=stub\n; @helper key=_eir_cbody_1\nbody\n; @endhelper\n; @endhelper\n";
+        let mut seen: HashSet<String> =
+            ["stub".to_string(), "_eir_cbody_1".to_string()].into_iter().collect();
+        assert_eq!(drop_duplicate_helpers(text, &mut seen).unwrap(), "");
     }
 }

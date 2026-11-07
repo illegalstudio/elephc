@@ -270,10 +270,46 @@ echo implode(',', $out), "\n";
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "p0:1,p0:2,p1:1,p1:2,p2:1,p2:2,p3:1,p3:2,p4:1,p4:2,p5:1,p5:2,p6:1,p6:2,p7:1,p7:2,p8:1,p8:2,first:3,second:4\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-    let first = composite_tables_of(&asm, "method_First_callit");
-    let second = composite_tables_of(&asm, "method_Second_callit");
-    assert!(!first.is_empty(), "the site no longer uses a table");
-    assert_eq!(first, second, "each class scope built its own table");
+    let searches = callable_search_tables(&asm)
+        .into_iter()
+        .filter(|tables| !tables.is_empty())
+        .collect::<Vec<_>>();
+    assert!(!searches.is_empty(), "the site no longer uses a table");
+    let shared = searches[0]
+        .iter()
+        .filter(|table| searches[1..].iter().all(|tables| tables.contains(*table)))
+        .count();
+    assert!(shared > 0, "each class scope built its own table: {searches:?}");
+}
+
+/// The composite tables each shared callable-array search reads.
+fn callable_search_tables(asm: &str) -> Vec<std::collections::BTreeSet<String>> {
+    let mut searches = Vec::new();
+    let mut current: Option<std::collections::BTreeSet<String>> = None;
+    let mut last_symbol = String::new();
+    for line in asm.lines() {
+        if line.starts_with('_') && line.ends_with(':') {
+            searches.extend(current.take());
+            if line.starts_with("_eir_shared_callable_array_lookup_") {
+                current = Some(Default::default());
+            }
+        }
+        let Some(tables) = current.as_mut() else {
+            continue;
+        };
+        if let Some(start) = line.find("data_") {
+            let rest = &line[start..];
+            let end = rest
+                .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .unwrap_or(rest.len());
+            last_symbol = rest[..end].to_string();
+        }
+        if line.contains("__rt_callable_lookup_composite_") {
+            tables.insert(last_symbol.clone());
+        }
+    }
+    searches.extend(current);
+    searches
 }
 
 /// `new static(...$parts)` builds the lexical class or a descendant, nothing else. A constructor

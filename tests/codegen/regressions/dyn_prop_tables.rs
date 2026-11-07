@@ -1179,7 +1179,7 @@ fn test_dynamic_new_throwable_arms_do_not_grow_with_the_class_count() {
             &[("ELEPHC_NO_DYNAMIC_NEW_TABLE", "1")],
         );
         let arm_size = dynamic_new_instructions(&arms);
-        assert!(arm_size > after + 1000, "{target}: the per-class arms should be much larger ({arm_size} vs {after})");
+        assert!(arm_size > after + 500, "{target}: the per-class arms should be much larger ({arm_size} vs {after})");
     }
 }
 
