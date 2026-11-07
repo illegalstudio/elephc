@@ -48,6 +48,7 @@ mod array_map_sum_add_int_sink;
 mod array_map_read_fusion;
 mod mb_chr_len_local_sink;
 mod stored_numeric_map;
+mod reduce_sum_seed;
 mod array_map_count_fusion;
 #[path = "optimizer/array_filter_count_hoist.rs"]
 mod array_filter_count_hoist;

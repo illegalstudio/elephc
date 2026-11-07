@@ -311,12 +311,13 @@ pub(super) fn instance_callable_signature(target: &StaticCallableBinding) -> Opt
     }
 }
 
-/// Lowers `array_reduce($ints, fn($carry, $item) => $carry + $item, 0)` to the typed int sum.
+/// Lowers `array_reduce($ints, fn($carry, $item) => $carry + $item, C)` to a raw int sum.
 ///
-/// The closure is an untyped pure addition of its two parameters and the initial value is the
-/// additive identity, so PHP's left-to-right reduction and `array_sum()` perform the same
-/// integer additions with the same overflow-to-float promotion. A declared return type, a
-/// capture, a different initial value, or any other body keeps the generic reduce path.
+/// The closure is an untyped pure addition of its two parameters. With initial zero, PHP's
+/// left-to-right reduction and `array_sum()` perform the same integer additions with the same
+/// overflow-to-float promotion. With a nonzero literal initial, `ArrayReduceSumSeed` seeds the
+/// same raw reducer so the carry never boxes a Mixed cell per element. A declared return type,
+/// a capture, a non-literal initial, or any other body keeps the generic reduce path.
 pub(super) fn lower_reduce_sum(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -340,9 +341,7 @@ pub(super) fn lower_reduce_sum(
     {
         return None;
     }
-    if !matches!(args[2].kind, ExprKind::IntLiteral(0)) {
-        return None;
-    }
+    let initial = integer_literal(&args[2])?;
     let ExprKind::Closure {
         params,
         variadic: None,
@@ -379,16 +378,48 @@ pub(super) fn lower_reduce_sum(
         return None;
     }
     let source = lower_expr(ctx, &args[0]);
+    if initial == 0 {
+        return Some(ctx.emit_value(
+            Op::RuntimeCall,
+            vec![source.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::ArraySum,
+            ))),
+            PhpType::Mixed,
+            crate::ir::RuntimeFnId::ArraySum.intrinsic_effects(),
+            Some(expr.span),
+        ));
+    }
+    let initial = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(initial)),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(expr.span),
+    );
     Some(ctx.emit_value(
         Op::RuntimeCall,
-        vec![source.value],
+        vec![source.value, initial.value],
         Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-            crate::ir::RuntimeFnId::ArraySum,
+            crate::ir::RuntimeFnId::ArrayReduceSumSeed,
         ))),
         PhpType::Mixed,
-        crate::ir::RuntimeFnId::ArraySum.intrinsic_effects(),
+        crate::ir::RuntimeFnId::ArrayReduceSumSeed.intrinsic_effects(),
         Some(expr.span),
     ))
+}
+
+/// Returns an integer literal, including a parser-level unary negation.
+fn integer_literal(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => value.checked_neg(),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Lowers `count(explode($separator, $subject))` to `substr_count($subject, $separator) + 1`.

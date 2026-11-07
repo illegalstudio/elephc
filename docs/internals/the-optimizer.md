@@ -602,6 +602,18 @@ float-promoting chain as `$cell = $row * $columns + $column`. Casting the local
 before that suffix would change PHP's answer after overflow, so the pass fuses the
 complete expression at each cast and removes the now-unobserved boxed storage.
 
+## Reduce sum fusion
+
+`src/ir_lower/expr/static_array_callbacks.rs` fuses
+`array_reduce($ints, fn($carry, $item) => $carry + $item, C)` when `$ints` is a
+local `array<int>` and `C` is an integer literal. Zero lowers to `ArraySum`; any
+other literal lowers to `ArrayReduceSumSeed`, which calls the same
+`__rt_array_sum_int_i64` reducer with the literal seed. The carry stays a raw
+integer until the first overflow, then continues as a double exactly like PHP's
+left-to-right addition, and only the final int-or-float result is boxed. A
+declared parameter/return type, a capture, a non-add body, a float or non-literal
+initial, or a non-variable source keeps the generic boxed reduce.
+
 ## Loop-invariant array caches
 
 `src/ir_passes/array_sum_int_bounds.rs` proves a raw `array_sum()` receiver is a
