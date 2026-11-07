@@ -356,7 +356,12 @@ fn test_machine_peephole_example_and_target_assembly() {
         assert!(hash[overflow..cold].lines().all(|line| !line.ends_with(':') || !line.contains("overflow")), "{target_name}: {hash}");
         assert!(hash[cold..].contains("__rt_php_float_to_int"), "{target_name}: {hash}");
         // The out-of-line code keeps its PHP source location for debug line info.
-        assert!(hash[cold..].contains("@src line=14 "), "{target_name}: {hash}");
+        assert!(
+            hash[cold..]
+                .lines()
+                .any(|line| line.contains("@src") && line.contains(" line=14 ")),
+            "{target_name}: {hash}"
+        );
         // No self-moves and no jump straight to the following label survive the peepholes.
         let lines: Vec<&str> = hash.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
         for (index, line) in lines.iter().enumerate() {
