@@ -328,6 +328,10 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
 
     emitter.label("__rt_object_free_deep_no_dyn_props");
+    if features.eval_bridge {
+        emitter.instruction("ldr x0, [sp, #0]");                                // remove eval identity metadata immediately before storage can be reused
+        emitter.bl_c("__elephc_eval_dynamic_object_forget");
+    }
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer before freeing it
     emitter.instruction("bl __rt_heap_free");                                   // return the object storage to the heap allocator
     emitter.label("__rt_object_free_deep_resurrected");
@@ -763,6 +767,35 @@ mod tests {
         assert!(asm.contains("cmp x15, #10\n"));
         assert!(asm.contains("__rt_object_free_deep_release_callable:\n"));
         assert!(asm.contains("__rt_callable_descriptor_release") && asm.contains("__rt_cleanup_invoke"));
+    }
+
+    /// Both targets clear a freed object's eval metadata (dynamic objects and registered
+    /// reflectors) before its storage can be reused, and only when the program links the eval
+    /// bridge, so a program without Magician references no `__elephc_eval_*` symbol.
+    #[test]
+    fn object_free_forgets_eval_identity_only_with_the_eval_bridge() {
+        for (platform, arch, call) in [
+            (Platform::MacOS, Arch::AArch64, "bl ___elephc_eval_dynamic_object_forget\n"),
+            (Platform::Linux, Arch::AArch64, "bl __elephc_eval_dynamic_object_forget\n"),
+            (Platform::Linux, Arch::X86_64, "call __elephc_eval_dynamic_object_forget\n"),
+        ] {
+            let mut with = Emitter::new(Target::new(platform, arch));
+            emit_object_free_deep(&mut with, RuntimeFeatures::all());
+            let with = with.output();
+            let forget = with.find(call).unwrap_or_else(|| panic!("{arch:?}: forget call missing"));
+            assert!(
+                with[forget..].contains("__rt_heap_free"),
+                "{arch:?}: the forget call must precede the heap free"
+            );
+            let mut without = Emitter::new(Target::new(platform, arch));
+            let mut features = RuntimeFeatures::all();
+            features.eval_bridge = false;
+            emit_object_free_deep(&mut without, features);
+            assert!(
+                !without.output().contains("__elephc_eval_dynamic_object_forget"),
+                "{arch:?}: no eval symbol without the bridge"
+            );
+        }
     }
 
     /// The stack-releasing arms appear only for a program that has the classes, and the guard has

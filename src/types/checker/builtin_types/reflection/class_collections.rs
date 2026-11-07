@@ -350,26 +350,33 @@ pub(super) fn builtin_reflection_class_object_method(
     }
 }
 
-/// `is_int($this->{property}) ? __elephc_reflection_class_build($this->{property}) : $this->{property}`.
+/// `is_int($this->{p}) ? __elephc_reflection_class_build($this->{p})
+///     : (is_string($this->{p}) ? __elephc_eval_reflection_class_build($this->{p}) : $this->{p})`.
 ///
-/// Codegen fills a member reflector's declaring-class (and a parameter's class-type) slot with
-/// the address of a compiled builder for that class, not with a `ReflectionClass`: php builds
-/// a new, complete reflector on every `getDeclaringClass()` / `getClass()` call, and holding
-/// one per member would cost the class's property arrays per member or, shared, form a cycle
-/// with the class's own members. Eval-built reflectors store the object itself, and a member
-/// with no class stores `false`/`null`; both come back unchanged.
+/// A member reflector's declaring-class (and a parameter's class-type) slot never holds a
+/// `ReflectionClass`: php builds a new, complete reflector on every `getDeclaringClass()` /
+/// `getClass()` call, and holding one per member would cost the class's property arrays per
+/// member or, shared, form a cycle with the class's own members. Codegen stores the address
+/// of a compiled builder for the class; an eval-built reflector stores the class's name,
+/// which the eval bridge turns into a fresh reflector it registers. A member with no class
+/// stores `false`/`null`, which comes back unchanged.
 pub(super) fn reflection_lazy_class_read(property: &str) -> Expr {
     let span = crate::span::Span::dummy();
     let slot = || super::class_relations::reflection_this_property(property, span);
+    let call = |name: &str| super::class_relations::function_call(name, vec![slot()], span);
+    let eval_read = Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(call("is_string")),
+            then_expr: Box::new(call("__elephc_eval_reflection_class_build")),
+            else_expr: Box::new(slot()),
+        },
+        span,
+    );
     Expr::new(
         ExprKind::Ternary {
-            condition: Box::new(super::class_relations::function_call("is_int", vec![slot()], span)),
-            then_expr: Box::new(super::class_relations::function_call(
-                "__elephc_reflection_class_build",
-                vec![slot()],
-                span,
-            )),
-            else_expr: Box::new(slot()),
+            condition: Box::new(call("is_int")),
+            then_expr: Box::new(call("__elephc_reflection_class_build")),
+            else_expr: Box::new(eval_read),
         },
         span,
     )

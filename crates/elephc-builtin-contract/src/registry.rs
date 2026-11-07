@@ -171,7 +171,9 @@ mod tests {
         // statistics, warnings, change_user, ssl_set, statement attributes, and so on).
         // +1: `__elephc_reflection_class_build`, the internal call that runs a compiled
         // per-class `ReflectionClass` builder for `getDeclaringClass()`.
-        assert_eq!(contracts().len(), 1277 + curl_surface);
+        // +1: `__elephc_eval_reflection_class_build`, its eval twin for the class names
+        // eval-built member reflectors store.
+        assert_eq!(contracts().len(), 1278 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }
