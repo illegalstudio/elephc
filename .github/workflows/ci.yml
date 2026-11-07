@@ -848,18 +848,19 @@ jobs:
   # tests consumed 76% of the macOS non-codegen time while 11,400 sub-second tests
   # consumed the rest. Hash partitioning spread both classes over every shard, so
   # each of eight serial shards ran 20-32 minutes. The CLI suites now run in their
-  # own `cli-tests-*` jobs below. Share the remaining source/EIR suite across eight
-  # shards while retaining the 30-minute deadline and the existing test filters.
+  # own `cli-tests-*` jobs below. Share the remaining source/EIR suite across sixteen
+  # shards with at most eight concurrent jobs, retaining the deadline and test filters.
   non-codegen-tests-macos-aarch64:
-    name: Non-Codegen Tests (macos-aarch64 ${{ matrix.shard }}/8)
+    name: Non-Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-macos-aarch64]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      max-parallel: 8
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - uses: actions/checkout@v7
 
@@ -902,7 +903,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
-            --partition hash:${{ matrix.shard }}/8 \
+            --partition hash:${{ matrix.shard }}/16 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 3
