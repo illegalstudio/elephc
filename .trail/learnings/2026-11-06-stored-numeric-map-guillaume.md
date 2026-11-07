@@ -66,3 +66,7 @@
   `--target linux-x86_64` and run under `qemu-x86_64`. The stored benchmark printed
   `75750000` and the overflow fixture matched PHP
   (`integer:9223372036854775806|integer:9223372036854775807|double:9.2233720368548E+18|...`).
+- After the read-only revert, a fresh full `runtime_gc::` rerun reached 637 passed / 0 failed
+  before the 1-hour harness timeout; the remaining `runtime_gc::regressions::` module then passed
+  177 / 0. `pointer_read_owners` contains only the pre-existing fileinfo test, whose 24-byte
+  string leak is reproduced exactly with the parent compiler.
