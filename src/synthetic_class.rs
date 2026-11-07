@@ -1887,6 +1887,10 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
             audit_expr(index, out);
             audit_expr(value, out);
         }
+        StmtKind::NestedArrayAssign { target, value } => {
+            audit_expr(target, out);
+            audit_expr(value, out);
+        }
         StmtKind::ArrayPush { value, .. } => audit_expr(value, out),
         StmtKind::PropertyArrayPush { object, value, .. } => {
             audit_expr(object, out);

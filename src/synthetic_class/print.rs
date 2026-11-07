@@ -377,6 +377,10 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             expression(index),
             expression(value)
         ),
+        // `$a[$i][$j] = v;` / `C::$p[$i][$j] = v;`: the target is the whole access chain.
+        StmtKind::NestedArrayAssign { target, value } => {
+            format!("{indent}{} = {};", expression(target), expression(value))
+        }
         StmtKind::ArrayPush { array, value } => {
             format!("{indent}${array}[] = {};", expression(value))
         }
