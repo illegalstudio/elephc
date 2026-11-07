@@ -228,6 +228,16 @@ pub(super) fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver:
     // formatter, whose `Utils` is declared by the interpreter. Only a program that can load PHP
     // at run time can meet such a class; anywhere else the read keeps php's `Class not found`
     // without linking the interpreter.
+    // A closed world that never declares the class: php's `Class "X" not found` (catchable), or,
+    // for a class the usage manifest left out of the build, the closed-world violation. It used
+    // to reach the backend as a constant of no class, which refused it.
+    if matches!(receiver, StaticReceiver::Named(_))
+        && crate::closed_world::class_is_absent(normalized_class_name, |name| {
+            ctx.classes.contains_key(name) || ctx.interfaces.contains_key(name) || ctx.enums.contains_key(name)
+        })
+    {
+        return super::late_bound_call::lower_closed_world_class_not_found(ctx, normalized_class_name, expr);
+    }
     if matches!(receiver, StaticReceiver::Named(_))
         && (ctx.program_loads_code_at_run_time() || ctx.has_eval_barrier())
         && !ctx.classes.contains_key(normalized_class_name)

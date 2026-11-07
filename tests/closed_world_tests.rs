@@ -2227,12 +2227,15 @@ fn usage_fixture(prefix: &str) -> PathBuf {
         dir.join("vendor/acme/lib/src/Listed.php"),
         format!(
             "{header}{}{}",
-            declare("Listed", "public function later(): object { return new Unused(); }"),
+            declare(
+                "Listed",
+                "public function later(): object { return new Unused(); } public function code(): string { return Unused::CODE; }"
+            ),
             declare("Sidecar", "")
         ),
     )
     .unwrap();
-    fs::write(dir.join("vendor/acme/lib/src/Unused.php"), format!("{header}{}", declare("Unused", "public static function make(): void {}"))).unwrap();
+    fs::write(dir.join("vendor/acme/lib/src/Unused.php"), format!("{header}{}", declare("Unused", "const CODE = 'unused'; public static function make(): void {}"))).unwrap();
     fs::write(
         dir.join("main.php"),
         r#"<?php
@@ -2244,7 +2247,11 @@ $name = 'Acme\Lib\\' . ($argc > 5 ? 'Other' : 'Listed');
 echo (new $name)->markerListed(), "\n";
 if ($argc > 1) {
     try {
-        $argv[1] === 'new' ? (new $name)->later() : \Acme\Lib\Unused::make();
+        match ($argv[1]) {
+            'new' => (new $name)->later(),
+            'const' => (new $name)->code(),
+            default => \Acme\Lib\Unused::make(),
+        };
     } catch (\Error $e) {
         echo get_class($e), ': ', $e->getMessage(), "\n";
     }
@@ -2334,7 +2341,7 @@ fn closed_world_usage_manifest_escape_is_a_violation_not_class_not_found() {
     let dir = usage_fixture("cw_usage_escape");
     fs::write(dir.join("usage.txt"), "elephc-usage 1\nclass Acme\\Lib\\Listed\n").unwrap();
     compile_ok(&dir, &["--closed-world", "--usage-manifest", "usage.txt"]);
-    for path in ["new", "static"] {
+    for path in ["new", "static", "const"] {
         let output = Command::new(dir.join("main")).arg(path).current_dir(&dir).output().unwrap();
         let all = format!("{}{}", text(&output.stdout), text(&output.stderr));
         assert!(!output.status.success(), "{path}: {all}");
