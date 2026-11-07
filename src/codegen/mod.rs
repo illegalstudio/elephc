@@ -30,6 +30,7 @@ mod eval_value_helpers;
 mod eval_property_helpers;
 mod eval_ref_arg_helpers;
 mod eval_reflection_helpers;
+mod eval_reflection_mirrors;
 mod eval_reflection_owner_helpers;
 mod eval_static_property_helpers;
 mod eval_status_helper;

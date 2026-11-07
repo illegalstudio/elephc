@@ -27,9 +27,10 @@ struct ReflectionOwnerLayout {
     name_lo: Option<usize>,
     name_hi: Option<usize>,
     public_name_lo: Option<usize>,
-    public_name_hi: Option<usize>,
     public_class_lo: Option<usize>,
-    public_class_hi: Option<usize>,
+    /// Whether `$name` / `$class` are object-owned reference properties (bound with `=&`).
+    public_name_owns_reference: bool,
+    public_class_owns_reference: bool,
     related_class_name_lo: usize,
     related_class_name_hi: usize,
     short_name_lo: Option<usize>,
@@ -333,9 +334,11 @@ fn reflection_owner_layout(
         name_lo,
         name_hi: name_lo.map(|offset| offset + 8),
         public_name_lo,
-        public_name_hi: public_name_lo.map(|offset| offset + 8),
         public_class_lo,
-        public_class_hi: public_class_lo.map(|offset| offset + 8),
+        public_name_owns_reference: has_name
+            && super::eval_reflection_mirrors::reflection_property_owns_reference(info, "name"),
+        public_class_owns_reference:
+            super::eval_reflection_mirrors::reflection_property_owns_reference(info, "class"),
         related_class_name_lo,
         related_class_name_hi: related_class_name_lo + 8,
         short_name_lo,
@@ -1015,15 +1018,19 @@ fn emit_set_owner_name_property_aarch64(emitter: &mut Emitter, layout: &Reflecti
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", name_lo);
     abi::emit_store_to_address(emitter, "x2", "x9", name_hi);
-    if let (Some(public_name_lo), Some(public_name_hi)) =
-        (layout.public_name_lo, layout.public_name_hi)
-    {
+    if let Some(public_name_lo) = layout.public_name_lo {
         emitter.instruction("ldr x1, [sp, #8]");                                // reload the original name pointer for the public mirror copy
         emitter.instruction("ldr x2, [sp, #16]");                               // reload the original name length for the public mirror copy
         emitter.instruction("bl __rt_str_persist");                             // give the mutable public mirror independent string storage
-        emitter.instruction("ldr x9, [sp, #32]");                               // reload the Reflection owner object pointer
-        abi::emit_store_to_address(emitter, "x1", "x9", public_name_lo);
-        abi::emit_store_to_address(emitter, "x2", "x9", public_name_hi);
+        super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+            emitter,
+            "x9",
+            public_name_lo,
+            layout.public_name_owns_reference,
+            |emitter| {
+                emitter.instruction("ldr x9, [sp, #32]");                       // reload the Reflection owner object pointer
+            },
+        );
     }
     let (
         Some(short_name_lo),
@@ -1115,15 +1122,19 @@ fn emit_set_owner_name_property_x86_64(emitter: &mut Emitter, layout: &Reflectio
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", name_hi);
-    if let (Some(public_name_lo), Some(public_name_hi)) =
-        (layout.public_name_lo, layout.public_name_hi)
-    {
+    if let Some(public_name_lo) = layout.public_name_lo {
         emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                   // reload the original name pointer for the public mirror copy
         emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                   // reload the original name length for the public mirror copy
         emitter.instruction("call __rt_str_persist");                           // give the mutable public mirror independent string storage
-        emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                   // reload the Reflection owner object pointer
-        abi::emit_store_to_address(emitter, "rax", "r10", public_name_lo);
-        abi::emit_store_to_address(emitter, "rdx", "r10", public_name_hi);
+        super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+            emitter,
+            "r10",
+            public_name_lo,
+            layout.public_name_owns_reference,
+            |emitter| {
+                emitter.instruction("mov r10, QWORD PTR [rbp - 40]");           // reload the Reflection owner object pointer
+            },
+        );
     }
     let (
         Some(short_name_lo),
@@ -2400,9 +2411,7 @@ fn emit_set_owner_parent_class_property_aarch64(
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", low);
     abi::emit_store_zero_to_address(emitter, "x9", high);
-    let (Some(public_low), Some(public_high)) =
-        (layout.public_class_lo, layout.public_class_hi)
-    else {
+    let Some(public_low) = layout.public_class_lo else {
         return;
     };
     emitter.instruction("ldr x0, [sp, #136]");                                  // reload the boxed declaring ReflectionClass value
@@ -2414,9 +2423,15 @@ fn emit_set_owner_parent_class_property_aarch64(
     emitter.instruction("mov x1, x10");                                         // pass the declaring-class name pointer for an independent copy
     emitter.instruction("mov x2, x11");                                         // pass the declaring-class name length for an independent copy
     emitter.instruction("bl __rt_str_persist");                                 // give the mutable public class mirror independent storage
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection member object pointer
-    abi::emit_store_to_address(emitter, "x1", "x9", public_low);
-    abi::emit_store_to_address(emitter, "x2", "x9", public_high);
+    super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+        emitter,
+        "x9",
+        public_low,
+        layout.public_class_owns_reference,
+        |emitter| {
+            emitter.instruction("ldr x9, [sp, #32]");                           // reload the Reflection member object pointer
+        },
+    );
 }
 
 /// Stores a retained x86_64 boxed parent ReflectionClass-or-false cell.
@@ -2437,9 +2452,7 @@ fn emit_set_owner_parent_class_property_x86_64(
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", low);
     abi::emit_store_zero_to_address(emitter, "r10", high);
-    let (Some(public_low), Some(public_high)) =
-        (layout.public_class_lo, layout.public_class_hi)
-    else {
+    let Some(public_low) = layout.public_class_lo else {
         return;
     };
     emitter.instruction("mov rax, QWORD PTR [rbp - 144]");                      // reload the boxed declaring ReflectionClass value
@@ -2451,9 +2464,15 @@ fn emit_set_owner_parent_class_property_x86_64(
     emitter.instruction("mov rax, r8");                                         // pass the declaring-class name pointer for an independent copy
     emitter.instruction("mov rdx, r9");                                         // pass the declaring-class name length for an independent copy
     emitter.instruction("call __rt_str_persist");                               // give the mutable public class mirror independent storage
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection member object pointer
-    abi::emit_store_to_address(emitter, "rax", "r10", public_low);
-    abi::emit_store_to_address(emitter, "rdx", "r10", public_high);
+    super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+        emitter,
+        "r10",
+        public_low,
+        layout.public_class_owns_reference,
+        |emitter| {
+            emitter.instruction("mov r10, QWORD PTR [rbp - 40]");               // reload the Reflection member object pointer
+        },
+    );
 }
 
 /// Stores a retained ARM64 boxed declaring ReflectionFunction/Method cell.
