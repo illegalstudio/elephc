@@ -944,6 +944,11 @@ pub fn s_array_assign(array: &str, index: Expr, value: Expr) -> Stmt {
     )
 }
 
+/// Builds a parser-generated synthetic statement group (nested append lowering).
+pub fn s_synthetic(body: Vec<Stmt>) -> Stmt {
+    Stmt::new(StmtKind::Synthetic(body), Span::dummy())
+}
+
 /// `if (…) { … } elseif (…) { … } else { … }`.
 ///
 /// `elseif_clauses` is for the ONE-WORD `elseif` keyword. PHP's two-word `else if` is a
