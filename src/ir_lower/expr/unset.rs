@@ -32,14 +32,19 @@ pub(super) fn lower_unset_locals(
     let mut changed = None;
     let mut unconditional = false;
     // Unsetting a plain object local only drops one root. PHP does not run the cycle collector
-    // there, so keeping the object's cycle for the next explicit `gc_collect_cycles()` is what
-    // makes the collector's result match PHP. Array/property removals keep their safe point.
-    let mut object_local_only = true;
+    // there, so keeping a destructor-less object's cycle for the next explicit
+    // `gc_collect_cycles()` is what makes the collector's result match PHP. A class with a
+    // `__destruct` keeps the eager safe point: the runtime's destructor-resurrection paths
+    // observe the receiver before the next explicit collection. Array/property removals keep
+    // their ordinary safe point either way.
+    let mut defer_object_cycle_collection = true;
     for arg in args {
         let removal = match &arg.kind {
             ExprKind::Variable(name) => {
-                if !matches!(ctx.local_type(name).codegen_repr(), PhpType::Object(_)) {
-                    object_local_only = false;
+                match ctx.local_type(name).codegen_repr() {
+                    PhpType::Object(class_name)
+                        if !object_class_has_destructor(ctx, &class_name) => {}
+                    _ => defer_object_cycle_collection = false,
                 }
                 ctx.unset_local(name, null, Some(arg.span));
                 None
@@ -59,18 +64,36 @@ pub(super) fn lower_unset_locals(
             _ => None,
         };
         if let Some(removal) = removal {
-            object_local_only = false;
+            defer_object_cycle_collection = false;
             changed = Some(super::unset_collection::combine_removals(ctx, changed, removal, arg.span));
         } else if !matches!(arg.kind, ExprKind::Variable(_)) {
             unconditional = true;
-        } else if !object_local_only {
-            // A mixed/local array unset may expose a cycle; keep the ordinary safe point.
         }
     }
-    if !object_local_only {
+    if !defer_object_cycle_collection {
         super::unset_collection::collect_after_unset(ctx, changed, unconditional, expr.span);
     }
     Some(null)
+}
+
+/// Returns whether an object class declares or inherits a PHP `__destruct`.
+fn object_class_has_destructor(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let key = crate::names::php_symbol_key("__destruct");
+    let mut current = Some(class_name.trim_start_matches('\\').to_string());
+    while let Some(name) = current {
+        let Some(info) = ctx.classes.get(name.as_str()) else {
+            return false;
+        };
+        if info
+            .methods
+            .keys()
+            .any(|method| crate::names::php_symbol_key(method) == key)
+        {
+            return true;
+        }
+        current = info.parent.clone();
+    }
+    false
 }
 
 /// Returns true when an `unset(...)` target has direct EIR lowering.

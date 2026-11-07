@@ -108,7 +108,11 @@ pub(super) fn declarations() -> Program {
             s_typed_assign(t_array(), "__maps", e_static_call("WeakMap", "__elephc_array", vec![registry()])), remove(registry()),
             s_typed_assign(t_nullable(t_class("Throwable")), "__pending", e_null()),
             s_foreach(e_var("__maps"), None, "__weak", vec![
-                s_assign("__map", e_method_call(e_var("__weak"), "get", vec![])),
+                // Keep this receiver Mixed: WeakReference::get() is object|null, and
+                // resolving `get` against an unrelated class with a `get` method (for
+                // example Intl's ResourceBundle) would pin __map to that class and make
+                // the following private WeakMap call look undefined.
+                s_typed_assign(t_mixed(), "__map", e_method_call(e_var("__weak"), "get", vec![])),
                 s_if(e_binop(e_var("__map"), BinOp::StrictNotEq, e_null()), vec![
                     s_try(vec![s_expr(e_method_call(e_var("__map"), "__elephc_forget", vec![e_var("__id")]))],
                         vec![(vec!["Throwable"], Some("__error"), vec![s_assign("__pending", e_var("__error"))])], None),

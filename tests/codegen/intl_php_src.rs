@@ -461,3 +461,23 @@ pub(super) fn assert_regex(actual: &str, expected: &str) {
 
 
 
+
+/// Intl object introspection must not be captured by the WeakMap prelude's dynamic dispatch.
+///
+/// The prelude resolves `WeakReference::get()` on a Mixed receiver. Without an explicit Mixed
+/// annotation, the checker could select an unrelated class's `get` signature once the Intl
+/// surface is present (Intl's `ResourceBundle::get` returns `ResourceBundle`), pin the receiver
+/// to that class, and reject the following private `WeakMap::__elephc_forget()` call.
+#[test]
+fn test_intl_object_introspection_does_not_capture_the_weak_map_prelude() {
+    let out = run_case(
+        "<?php\nclass C extends UConverter {}\n$c = new C('ascii', 'utf-8');\nvar_dump(method_exists($c, 'convert'));\nvar_dump(method_exists($c, 'nope'));\n$classes = ['ResourceBundle', 'WeakMap'];\nforeach ($classes as $class) {\n    $methods = get_class_methods($class);\n    var_dump(is_array($methods));\n    var_dump(in_array('get', $methods, true));\n}\n",
+        "",
+        &[],
+        &[],
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)"
+    );
+}
