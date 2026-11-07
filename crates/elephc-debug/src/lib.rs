@@ -807,6 +807,8 @@ struct Debugger {
     next_variable_ref: i64,
     /// Whether the DAP launch requested a stop on entry.
     dap_stop_on_entry: bool,
+    /// Client-to-server source path mappings from the DAP launch arguments.
+    path_mappings: Vec<dap::PathMapping>,
     /// Coroutine pointer → stable DAP thread-like id.
     fiber_threads: HashMap<u64, i64>,
     /// DAP thread-like id → coroutine pointer; 1 is always the main thread.
@@ -878,6 +880,7 @@ impl Debugger {
             variable_refs: HashMap::new(),
             next_variable_ref: 1,
             dap_stop_on_entry: false,
+            path_mappings: Vec::new(),
             fiber_threads: HashMap::new(),
             thread_fibers: HashMap::new(),
             next_fiber_thread: 2,

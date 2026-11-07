@@ -35,8 +35,8 @@ the DAP channel closes and remains on the adapter stderr.
 
 | Request | Behavior |
 |---|---|
-| `initialize` | Reports supported capabilities, including configurationDone, function/data breakpoints, exception filters, stepping and frame selection. |
-| `launch` | Starts the selected source or debug binary. The `program` field is informational when the adapter command already names the target. |
+| `initialize` | Reports supported capabilities, including configurationDone, function/data breakpoints, exception filters, `exceptionInfo`, `source`/`loadedSources`, path mappings, stepping and frame selection. |
+| `launch` | Starts the selected source or debug binary and consumes `stopOnEntry` plus optional `pathMappings`. The `program` field is informational when the adapter command already names the target. |
 | `attach` | Connects to a runtime waiting on `ELEPHC_DEBUG_DAP_LISTEN` (one-shot mode-0600 Unix socket plus `<socket>.pid`), or to a loopback TCP runtime with `--attach-tcp HOST:PORT --key FILE`. |
 | `setBreakpoints` | Arms every site on the requested line. Expression and hit conditions are validated before arming; a stale source hash rejects the breakpoint with a message. |
 | `setFunctionBreakpoints` | Stops when a named PHP function is entered. |
@@ -45,7 +45,9 @@ the DAP channel closes and remains on the adapter stderr.
 | `dataBreakpointInfo` / `setDataBreakpoints` | Watches a frame local, a declared object property, or a dynamic-property hash entry. |
 | `configurationDone` | Releases the entry stop and lets the program run to the first breakpoint. |
 | `threads` | Lists the main execution plus live fibers/generators as thread-like stacks. |
-| `stackTrace` | Returns PHP frames for a thread. A frame carries its function, source path and current source line. |
+| `stackTrace` | Returns PHP frames for a thread. A frame carries its function, mapped source path, `sourceReference` and current source line. |
+| `source` | Returns compiler-recorded file content by `sourceReference` or by a mapped `source.path`. |
+| `loadedSources` | Lists every compiled source with its mapped path and `sourceReference`. |
 | `scopes` / `variables` | Enumerates the Locals scope and read-only value children. |
 | `evaluate` | Evaluates a read-only expression in the selected frame: locals, object properties, array/hash entries, `count`/`strlen`/`gettype`, scalar predicates, arithmetic and comparisons. Assignments and user/method calls are refused. |
 | `continue` / `next` / `stepIn` / `stepOut` | Resume, step over, step into or step out of the current frame. |
@@ -71,6 +73,22 @@ disk is rejected as stale rather than binding to different code.
 A virtual property (hooks with no backing slot) is refused as a data-breakpoint
 target: reading it would execute its getter. A backed hooked property keeps its
 raw slot and remains watchable.
+
+## Sources and path mappings
+
+Launch and attach requests accept DAP `pathMappings`, an object whose keys are
+client (local) prefixes and whose values are server (compiler-recorded)
+prefixes. The longest matching prefix wins, and `/` and `\` are treated as
+equivalent separators. Mappings apply to breakpoint paths, stack-frame sources,
+the entry/stop description and the loaded-source listing. The reverse mapping is
+used when a server path is reported to the client.
+
+Each frame `source` carries a non-zero `sourceReference`. `source` returns the
+compiler-recorded file content by reference or by a mapped `source.path` and
+labels it `text/x-php`; a missing file is reported as an error. `loadedSources`
+lists every compiled source after applying the reverse mapping. Source hashes
+still guard breakpoint arming: `source` returns the current file content, while
+`setBreakpoints` rejects a file that changed after compilation.
 
 ## Pause and attach
 

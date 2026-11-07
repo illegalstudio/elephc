@@ -76,8 +76,11 @@ The terminal client supports:
 DAP adds line, conditional, hit-count, function and local/object write data
 breakpoints, caller-frame selection, caught/uncaught/throw exception filters
 that can be narrowed to an exception class, `exceptionInfo`, and stepping
-over/into/out. A source hash is checked before a breakpoint is armed; a stale
-`.edbg.json` is rejected rather than silently binding to different code.
+over/into/out. Launch/attach `pathMappings` translate client paths to recorded
+source paths in both directions, and `source`/`loadedSources` return the
+compiler-recorded files for clients that cannot read the server filesystem. A
+source hash is checked before a breakpoint is armed; a stale `.edbg.json` is
+rejected rather than silently binding to different code.
 
 DAP `evaluate` is read-only and supports locals, object properties, array/hash
 entries, `count()`/`strlen()`/`gettype()`, scalar predicates, arithmetic and

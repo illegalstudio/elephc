@@ -7042,6 +7042,119 @@ fn test_cli_debug_dap_exception_class_filter_and_info() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies launch path mappings translate breakpoints, stack paths and loaded
+/// sources, and that `source` returns compiler-recorded content by reference and
+/// by mapped path.
+#[test]
+fn test_cli_debug_dap_path_mappings_source_and_loaded_sources() {
+    let dir = make_cli_test_dir("elephc_cli_debug_dap_path_mappings");
+    let source_text = "<?php\n$value = 1;\n$value = $value + 1;\necho $value, \"\\n\";\n";
+    fs::write(dir.join("main.php"), source_text).expect("write DAP path-mapping fixture");
+    let client_root = "/workspace/project";
+    let server_root = dir.to_str().expect("path-mapping fixture path");
+    let client_source = format!("{client_root}/main.php");
+
+    let mut client = DapClient::spawn(
+        elephc_cli_command(&dir).args(["debug", "--dap", "main.php"]),
+    );
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    let response = client.response(seq);
+    assert_eq!(response["body"]["supportsLoadedSourcesRequest"], true);
+    assert_eq!(response["body"]["supportsExceptionInfoRequest"], true);
+    client.event("initialized");
+
+    let mut mappings = serde_json::Map::new();
+    mappings.insert(
+        client_root.to_string(),
+        serde_json::Value::String(server_root.to_string()),
+    );
+    let mut launch = serde_json::json!({"program": "main.php", "stopOnEntry": false});
+    launch["pathMappings"] = serde_json::Value::Object(mappings);
+    let seq = client.send("launch", Some(launch));
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"path": client_source},
+            "breakpoints": [{"line": 3}],
+        })),
+    );
+    let response = client.response(seq);
+    assert_eq!(
+        response["body"]["breakpoints"][0]["verified"], true,
+        "{response}"
+    );
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+    let stopped = client.event("stopped");
+    assert!(
+        stopped["body"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains(&client_source)),
+        "{stopped}"
+    );
+
+    let seq = client.send("stackTrace", None);
+    let response = client.response(seq);
+    let frame = &response["body"]["stackFrames"][0];
+    assert_eq!(
+        frame["source"]["path"].as_str(),
+        Some(client_source.as_str()),
+        "{response}"
+    );
+    let frame_reference = frame["source"]["sourceReference"]
+        .as_i64()
+        .expect("frame sourceReference");
+    assert!(frame_reference > 0, "{response}");
+
+    let seq = client.send("loadedSources", None);
+    let response = client.response(seq);
+    let loaded = response["body"]["sources"]
+        .as_array()
+        .expect("loadedSources");
+    let loaded_source = loaded
+        .iter()
+        .find(|source| source["path"].as_str() == Some(client_source.as_str()))
+        .unwrap_or_else(|| panic!("missing mapped loaded source: {response}"));
+    assert_eq!(loaded_source["sourceReference"], frame_reference, "{response}");
+
+    let seq = client.send(
+        "source",
+        Some(serde_json::json!({
+            "source": {"path": client_source, "sourceReference": frame_reference},
+            "sourceReference": frame_reference,
+        })),
+    );
+    let response = client.response(seq);
+    assert_eq!(response["body"]["content"], source_text, "{response}");
+    assert_eq!(response["body"]["mimeType"], "text/x-php", "{response}");
+
+    let seq = client.send(
+        "source",
+        Some(serde_json::json!({
+            "source": {"path": client_source},
+            "sourceReference": 0,
+        })),
+    );
+    let response = client.response(seq);
+    assert_eq!(response["body"]["content"], source_text, "{response}");
+
+    client.continue_to_terminated();
+    let status = client.child.wait().expect("wait for path-mapping adapter");
+    assert!(status.success(), "path-mapping adapter failed");
+    let output = client.program_output();
+    assert!(output.contains("2\n"), "{output}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--debug` refuses interactive iOS executables with actionable
 /// capture-tool guidance, while compile-only `--emit-asm` builds emit the same
 /// debug metadata on both iOS targets.

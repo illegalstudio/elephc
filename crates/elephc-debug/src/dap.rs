@@ -94,6 +94,159 @@ impl HitCondition {
     }
 }
 
+/// One DAP `pathMappings` entry, mapping a client prefix to a server prefix.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PathMapping {
+    /// Prefix as seen by the editor/DAP client.
+    client: String,
+    /// Prefix as recorded by the compiler in debug metadata.
+    server: String,
+}
+
+impl PathMapping {
+    /// Builds a mapping, rejecting empty roots and trimming trailing separators.
+    pub(crate) fn new(client: &str, server: &str) -> Option<Self> {
+        let client = trim_mapping_root(client);
+        let server = trim_mapping_root(server);
+        if client.is_empty() || server.is_empty() {
+            return None;
+        }
+        Some(Self { client, server })
+    }
+
+    /// Returns the client prefix length, used for longest-prefix selection.
+    pub(crate) fn client_root_len(&self) -> usize {
+        self.client.len()
+    }
+
+    /// Returns the server prefix length, used for longest-prefix selection.
+    pub(crate) fn server_root_len(&self) -> usize {
+        self.server.len()
+    }
+
+    /// Maps a client path into the server namespace when the prefix matches.
+    pub(crate) fn to_server(&self, path: &str) -> Option<String> {
+        map_path_prefix(path, &self.client, &self.server)
+    }
+
+    /// Maps a server path back into the client namespace when the prefix matches.
+    pub(crate) fn to_client(&self, path: &str) -> Option<String> {
+        map_path_prefix(path, &self.server, &self.client)
+    }
+}
+
+/// Maps `path` through the longest matching client prefix.
+pub(crate) fn map_client_path(mappings: &[PathMapping], path: &str) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for mapping in mappings {
+        if let Some(mapped) = mapping.to_server(path) {
+            if best
+                .as_ref()
+                .is_none_or(|(length, _)| mapping.client_root_len() >= *length)
+            {
+                best = Some((mapping.client_root_len(), mapped));
+            }
+        }
+    }
+    best.map(|(_, mapped)| mapped)
+}
+
+/// Maps `path` through the longest matching server prefix.
+pub(crate) fn map_server_path(mappings: &[PathMapping], path: &str) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for mapping in mappings {
+        if let Some(mapped) = mapping.to_client(path) {
+            if best
+                .as_ref()
+                .is_none_or(|(length, _)| mapping.server_root_len() >= *length)
+            {
+                best = Some((mapping.server_root_len(), mapped));
+            }
+        }
+    }
+    best.map(|(_, mapped)| mapped)
+}
+
+/// Trims surrounding whitespace and redundant trailing path separators.
+fn trim_mapping_root(path: &str) -> String {
+    let path = path.trim();
+    let bytes = path.as_bytes();
+    let mut end = path.len();
+    while end > 1 {
+        let last = bytes[end - 1];
+        if last != b'/' && last != b'\\' {
+            break;
+        }
+        // Preserve a filesystem root such as `/` or `C:\`.
+        if end == 1 || (end == 3 && bytes[1] == b':') {
+            break;
+        }
+        end -= 1;
+    }
+    path[..end].to_string()
+}
+
+/// Replaces a matched prefix, accepting `/` and `\` as equivalent separators.
+fn map_path_prefix(path: &str, from: &str, to: &str) -> Option<String> {
+    if path.len() < from.len() || !prefix_matches(path, from) {
+        return None;
+    }
+    let rest = &path[from.len()..];
+    if !rest.is_empty() && !is_path_separator(rest.as_bytes()[0]) {
+        return None;
+    }
+    let mut mapped = to.to_string();
+    let rest = rest.trim_start_matches(['/', '\\']);
+    if !rest.is_empty() {
+        if !mapped.ends_with('/') && !mapped.ends_with('\\') {
+            mapped.push(mapping_separator(to));
+        }
+        mapped.push_str(rest);
+    }
+    Some(mapped)
+}
+
+/// Picks the separator style used by one path root.
+fn mapping_separator(root: &str) -> char {
+    if root.contains('\\') && !root.contains('/') {
+        '\\'
+    } else if root.contains('/') && !root.contains('\\') {
+        '/'
+    } else {
+        std::path::MAIN_SEPARATOR
+    }
+}
+
+/// Compares two path prefixes with separator normalization.
+///
+/// A Windows drive root is matched case-insensitively; the rest of the prefix
+/// stays case-sensitive so Unix paths keep their exact spelling.
+fn prefix_matches(path: &str, prefix: &str) -> bool {
+    let path_bytes = path.as_bytes();
+    let prefix_bytes = prefix.as_bytes();
+    if path_bytes.len() < prefix_bytes.len() {
+        return false;
+    }
+    let windows_root = prefix_bytes.len() >= 2 && prefix_bytes[1] == b':';
+    path_bytes
+        .iter()
+        .zip(prefix_bytes)
+        .enumerate()
+        .all(|(index, (left, right))| {
+            left == right
+                || (is_path_separator(*left) && is_path_separator(*right))
+                || (windows_root
+                    && index < 2
+                    && left.is_ascii_alphabetic()
+                    && left.eq_ignore_ascii_case(right))
+        })
+}
+
+/// Returns whether `byte` is a forward or backward path separator.
+fn is_path_separator(byte: u8) -> bool {
+    byte == b'/' || byte == b'\\'
+}
+
 /// Details of the exception currently presented to the DAP client.
 #[derive(Clone, Debug)]
 pub(crate) struct CurrentException {
@@ -447,8 +600,8 @@ impl Debugger {
                     let path = self
                         .sources
                         .get(&site.source_id)
-                        .map(String::as_str)
-                        .unwrap_or("<unknown>");
+                        .map(|path| display_source_path(&self.path_mappings, path))
+                        .unwrap_or_else(|| "<unknown>".to_string());
                     format!(" at {path}:{}", site.line)
                 })
                 .unwrap_or_default()
@@ -591,8 +744,8 @@ impl Debugger {
             let path = self
                 .sources
                 .get(&site.source_id)
-                .map(String::as_str)
-                .unwrap_or("<unknown>");
+                .map(|path| display_source_path(&self.path_mappings, path))
+                .unwrap_or_else(|| "<unknown>".to_string());
             body["description"] = json!(format!(
                 "Stopped at {}:{}:{} ({})",
                 path,
@@ -627,6 +780,8 @@ impl Debugger {
                         "supportsFunctionBreakpoints": true,
                         "supportsDataBreakpoints": true,
                         "supportsExceptionFilterOptions": true,
+                        "supportsExceptionInfoRequest": true,
+                        "supportsLoadedSourcesRequest": true,
                         "exceptionBreakpointFilters": [
                             {"filter": "uncaught", "label": "Uncaught Exceptions", "default": true},
                             {"filter": "caught", "label": "Caught Exceptions"},
@@ -641,10 +796,12 @@ impl Debugger {
                 DapAction::Stay
             }
             "launch" => {
-                self.dap_stop_on_entry = request["arguments"]
+                let arguments = &request["arguments"];
+                self.dap_stop_on_entry = arguments
                     .get("stopOnEntry")
                     .and_then(JsonValue::as_bool)
                     .unwrap_or(false);
+                self.set_path_mappings(arguments);
                 self.dap_respond(request, Some(json!({})));
                 DapAction::Stay
             }
@@ -694,6 +851,14 @@ impl Debugger {
             }
             "evaluate" => {
                 self.dap_evaluate(request);
+                DapAction::Stay
+            }
+            "source" => {
+                self.dap_source_request(request);
+                DapAction::Stay
+            }
+            "loadedSources" => {
+                self.dap_loaded_sources(request);
                 DapAction::Stay
             }
             "pause" => {
@@ -799,23 +964,29 @@ impl Debugger {
         ))
     }
 
+    /// Maps a DAP client path into the compiler-recorded source namespace.
+    fn client_source_path(&self, path: &str) -> String {
+        map_client_path(&self.path_mappings, path).unwrap_or_else(|| path.to_string())
+    }
+
     /// Arms the sites requested by one DAP `setBreakpoints` request.
     fn dap_set_breakpoints(&mut self, request: &JsonValue) {
         let arguments = &request["arguments"];
-        let path = arguments
+        let requested = arguments
             .get("source")
             .and_then(|source| source.get("path"))
             .and_then(JsonValue::as_str)
             .unwrap_or("");
+        let path = self.client_source_path(requested);
         let matching_sources: Vec<u64> = self
             .sources
             .iter()
-            .filter(|(id, _)| source_matches(&self.sources, **id, path))
+            .filter(|(id, _)| source_matches(&self.sources, **id, &path))
             .map(|(id, _)| *id)
             .collect();
         let stale = matching_sources
             .iter()
-            .find_map(|id| self.stale_source_message(*id, path));
+            .find_map(|id| self.stale_source_message(*id, &path));
         let remove: Vec<u32> = self
             .break_sites
             .iter()
@@ -823,7 +994,7 @@ impl Debugger {
             .filter(|id| {
                 self.sites
                     .get(id)
-                    .is_some_and(|site| source_matches(&self.sources, site.source_id, path))
+                    .is_some_and(|site| source_matches(&self.sources, site.source_id, &path))
             })
             .collect();
         for id in remove {
@@ -847,7 +1018,7 @@ impl Debugger {
                     .iter()
                     .filter(|(_, site)| {
                         site.line == line
-                            && source_matches(&self.sources, site.source_id, path)
+                            && source_matches(&self.sources, site.source_id, &path)
                     })
                     .map(|(id, _)| *id)
                     .collect();
@@ -1480,23 +1651,13 @@ impl Debugger {
                 dap_frame["line"] = json!(site.line);
                 dap_frame["column"] = json!(site.column);
                 if let Some(path) = self.sources.get(&site.source_id) {
-                    let resolved = dap_source_path(path);
-                    let file = Path::new(&resolved)
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or(&resolved);
-                    dap_frame["source"] = json!({"name": file, "path": resolved});
+                    dap_frame["source"] = self.dap_source(site.source_id, path);
                 }
             } else if let Some(function) = function {
                 if let (Some(source_id), Some(line)) = (function.source_id, function.line_start) {
                     dap_frame["line"] = json!(line);
                     if let Some(path) = self.sources.get(&source_id) {
-                        let resolved = dap_source_path(path);
-                        let file = Path::new(&resolved)
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or(&resolved);
-                        dap_frame["source"] = json!({"name": file, "path": resolved});
+                        dap_frame["source"] = self.dap_source(source_id, path);
                     }
                 }
             }
@@ -1506,6 +1667,129 @@ impl Debugger {
             request,
             Some(json!({"stackFrames": frames, "totalFrames": total})),
         );
+    }
+
+    /// Replaces client-to-server path mappings from one launch request.
+    fn set_path_mappings(&mut self, arguments: &JsonValue) {
+        let mut mappings = Vec::new();
+        if let Some(object) = arguments
+            .get("pathMappings")
+            .and_then(JsonValue::as_object)
+        {
+            for (client, server) in object {
+                if let Some(mapping) =
+                    server.as_str().and_then(|server| PathMapping::new(client, server))
+                {
+                    mappings.push(mapping);
+                }
+            }
+        }
+        self.path_mappings = mappings;
+    }
+
+    /// Finds the compiler source id for one client- or server-spelled path.
+    fn source_id_for_path(&self, path: &str) -> Option<u64> {
+        if path.is_empty() {
+            return None;
+        }
+        let mut best: Option<(u64, usize)> = None;
+        for (id, source) in &self.sources {
+            if source == path {
+                return Some(*id);
+            }
+            if source_matches(&self.sources, *id, path)
+                && best.is_none_or(|(_, length)| source.len() < length)
+            {
+                best = Some((*id, source.len()));
+            }
+        }
+        best.map(|(id, _)| id)
+    }
+
+    /// Builds the DAP `source` descriptor for one compiler source id.
+    fn dap_source(&self, source_id: u64, path: &str) -> JsonValue {
+        let resolved = display_source_path(&self.path_mappings, path);
+        let file = Path::new(&resolved)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&resolved);
+        json!({
+            "name": file,
+            "path": resolved,
+            "sourceReference": source_id.saturating_add(1),
+        })
+    }
+
+    /// Returns the compiler-recorded content for one `source` request.
+    fn dap_source_request(&mut self, request: &JsonValue) {
+        let arguments = &request["arguments"];
+        let source = &arguments["source"];
+        let reference = arguments
+            .get("sourceReference")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0)
+            .max(
+                source
+                    .get("sourceReference")
+                    .and_then(JsonValue::as_i64)
+                    .unwrap_or(0),
+            );
+        let requested = source
+            .get("path")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("");
+        let mapped = self.client_source_path(requested);
+        let source_id = if reference > 0 {
+            u64::try_from(reference - 1)
+                .ok()
+                .filter(|id| self.sources.contains_key(id))
+        } else {
+            self.source_id_for_path(&mapped).or_else(|| {
+                if requested == mapped {
+                    None
+                } else {
+                    self.source_id_for_path(requested)
+                }
+            })
+        };
+        let Some(source_id) = source_id else {
+            self.dap_respond_error(request, "unknown source reference");
+            return;
+        };
+        let recorded = self.sources.get(&source_id).cloned().unwrap_or_default();
+        let bytes = [recorded.as_str(), mapped.as_str(), requested]
+            .into_iter()
+            .find_map(|path| std::fs::read(path).ok());
+        let Some(bytes) = bytes else {
+            self.dap_respond_error(
+                request,
+                &format!("cannot read source '{recorded}'"),
+            );
+            return;
+        };
+        self.dap_respond(
+            request,
+            Some(json!({
+                "content": String::from_utf8_lossy(&bytes),
+                "mimeType": "text/x-php",
+            })),
+        );
+    }
+
+    /// Lists every compiler source visible through the active path mappings.
+    fn dap_loaded_sources(&mut self, request: &JsonValue) {
+        let mut sources: Vec<JsonValue> = self
+            .sources
+            .iter()
+            .map(|(id, path)| self.dap_source(*id, path))
+            .collect();
+        sources.sort_by(|left, right| {
+            left["path"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(right["path"].as_str().unwrap_or(""))
+        });
+        self.dap_respond(request, Some(json!({"sources": sources})));
     }
 
     /// Sends one Locals scope for the requested frame.
@@ -2069,11 +2353,19 @@ fn decode_frame_id(id: i64) -> Option<(i64, usize)> {
 /// record a relative entry path. Terminal output keeps the recorded spelling;
 /// only the DAP `stackTrace` source object is resolved. A synthetic source that
 /// does not exist on disk keeps its recorded path.
-fn dap_source_path(path: &str) -> String {
+pub(crate) fn dap_source_path(path: &str) -> String {
     std::fs::canonicalize(path)
         .ok()
         .and_then(|path| path.to_str().map(str::to_string))
         .unwrap_or_else(|| path.to_string())
+}
+
+/// Resolves a recorded server source path and maps it into the client namespace.
+pub(crate) fn display_source_path(mappings: &[PathMapping], path: &str) -> String {
+    let resolved = dap_source_path(path);
+    map_server_path(mappings, &resolved)
+        .or_else(|| map_server_path(mappings, path))
+        .unwrap_or(resolved)
 }
 
 /// Matches a requested DAP source path against the metadata source table.
@@ -2228,6 +2520,46 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
+    /// Verifies path mappings translate both directions and prefer the longest root.
+    #[test]
+    fn path_mappings_translate_client_and_server_paths() {
+        let mapping = PathMapping::new("/workspace/app/", "/srv/app/").expect("mapping");
+        assert_eq!(
+            mapping.to_server("/workspace/app/src/main.php").as_deref(),
+            Some("/srv/app/src/main.php")
+        );
+        assert_eq!(
+            mapping.to_server("/workspace/app").as_deref(),
+            Some("/srv/app")
+        );
+        assert_eq!(mapping.to_server("/workspace/application/main.php"), None);
+        assert_eq!(
+            mapping.to_client("/srv/app/lib.php").as_deref(),
+            Some("/workspace/app/lib.php")
+        );
+
+        let mappings = vec![
+            PathMapping::new("/workspace", "/srv").expect("root mapping"),
+            PathMapping::new("/workspace/app", "/srv/nested").expect("nested mapping"),
+        ];
+        assert_eq!(
+            map_client_path(&mappings, "/workspace/app/main.php").as_deref(),
+            Some("/srv/nested/main.php")
+        );
+        assert_eq!(
+            map_server_path(&mappings, "/srv/nested/main.php").as_deref(),
+            Some("/workspace/app/main.php")
+        );
+
+        let windows = PathMapping::new("C:\\work\\app", "C:\\srv\\app").expect("windows mapping");
+        assert_eq!(
+            windows.to_server("c:/work/app/main.php").as_deref(),
+            Some("C:\\srv\\app\\main.php")
+        );
+        assert!(PathMapping::new("", "/srv").is_none());
+        assert!(PathMapping::new("/workspace", "").is_none());
+    }
+
     /// Verifies DAP hit conditions parse their operator and compare hit counts.
     #[test]
     fn hit_conditions_parse_and_match() {
