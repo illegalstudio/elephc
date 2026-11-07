@@ -1,9 +1,9 @@
 //! Purpose:
 //! End-to-end coverage for the stored `array_map(fn($v) => $v + C | $v - C | $v * C |
 //! $v * A + B | $v * $v | $v * $v + C | $v * F | $v * F + G | $v + F | $v - F |
-//! $v / F, $ints)` kernels, including non-empty all-int array-literal sources. Integer
-//! callbacks keep a raw `array<int>` when no element overflows; float callbacks keep a raw
-//! `array<float>`.
+//! $v / F, $ints)` kernels, including non-empty all-int array-literal sources, direct
+//! `range()` sources, and key-renumbering `array_slice()` sources. Integer callbacks keep a
+//! raw `array<int>` when no element overflows; float callbacks keep a raw `array<float>`.
 //!
 //! Called from:
 //! - The codegen optimizer suite through `optimizer`.
@@ -1135,6 +1135,140 @@ function localFloat(int $seed): float {
         assert!(assembly.contains("__rt_array_map_float_affine"), "{target}");
         assert!(assembly.contains("__rt_array_map_float_div"), "{target}");
         assert!(assembly.contains("__rt_array_map_float_scale"), "{target}");
+        assert!(!assembly.contains("__rt_array_map_boxed"), "{target}");
+    }
+}
+
+/// Direct side-effect-free sources: `range()` with int literals, `array_slice()` over a
+/// proven packed source, nested slices, and slices of array literals.
+#[test]
+fn test_stored_numeric_map_direct_packed_sources() {
+    let source = r#"<?php
+$a = array_map(fn($v) => $v + 1.5, range(1, 5));
+$b = array_map(fn($v) => $v * 1.5, range(1, 10, 2));
+$c = array_map(fn($v) => $v / 2.0, array_slice(range(1, 10), 2, 3));
+$d = array_map(fn($v) => $v + 1, range(1, 5));
+$e = array_map(fn($v) => $v + 1.5, array_slice(range(1, 10), 2, 3, false));
+$f = array_map(fn($v) => $v * 1.5, array_slice([1, 2, 3, 4], 1));
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|";
+echo implode(",", $d), "|", implode(",", $e), "|", implode(",", $f), "\n";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "2.5,3.5,4.5,5.5,6.5|1.5,4.5,7.5,10.5,13.5|1.5,2,2.5|\
+         2,3,4,5,6|4.5,5.5,6.5|3,4.5,6\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_float_affine").count(), 2, "{main}");
+    assert_eq!(main.matches("runtime.array_map_float_scale").count(), 2, "{main}");
+    assert_eq!(main.matches("runtime.array_map_float_div").count(), 1, "{main}");
+    assert_eq!(main.matches("runtime.array_map_numeric").count(), 1, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// A direct slice over a variable and nested slices keep the packed-int proof.
+#[test]
+fn test_stored_numeric_map_direct_slice_over_variable() {
+    let source = r#"<?php
+$values = range(1, 10);
+$mapped = array_map(fn($v) => $v + 1.5, array_slice($values, 2, 3));
+$nested = array_map(fn($v) => $v * 1.5, array_slice(array_slice($values, 1), 1, 4));
+echo implode(",", $mapped), "|", implode(",", $nested), "\n";
+"#;
+    assert_eq!(compile_and_run(source), "4.5,5.5,6.5|4.5,6,7.5,9\n");
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_float_affine").count(), 1, "{main}");
+    assert_eq!(main.matches("runtime.array_map_float_scale").count(), 1, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// Unproven direct sources keep the generic map and are evaluated exactly once.
+#[test]
+fn test_stored_numeric_map_direct_sources_fall_back() {
+    let source = r#"<?php
+$start = $argc + 1;
+$dynamic = array_map(fn($v) => $v + 1.5, range($start, 5));
+echo implode(",", $dynamic), "|";
+$mixed = ["a", "b", "c"];
+$i = 0;
+$sliced = array_map(fn($v) => $v . "!", array_slice($mixed, $i++));
+echo implode(",", $sliced), "|", $i, "|";
+$values = range(1, 5);
+$keys = array_map(fn($v) => $v + 1.5, array_slice($values, 2, null, true));
+echo implode(",", $keys), "\n";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "3.5,4.5,5.5,6.5|a!,b!,c!|1|4.5,5.5,6.5\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map ").count(), 3, "{main}");
+    assert!(!main.contains("runtime.array_map_float_affine"), "{main}");
+    assert!(!main.contains("runtime.array_map_numeric"), "{main}");
+}
+
+/// Direct source temporaries and result arrays release cleanly.
+#[test]
+fn test_stored_numeric_map_direct_sources_heap_debug_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = range(1, 10);
+$a = array_map(fn($v) => $v + 1.5, range(1, 5));
+$b = array_map(fn($v) => $v * 1.5, array_slice($values, 2, 3));
+$c = array_map(fn($v) => $v / 2.0, array_slice(range(1, 10), 1, 4));
+$d = array_map(fn($v) => $v + 1, array_slice([1, 2, 3, 4], 1));
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implode(",", $d), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "2.5,3.5,4.5,5.5,6.5|4.5,6,7.5|1,1.5,2,2.5|3,4,5\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Direct fused sources produce the same output with the EIR optimizer on and off.
+#[test]
+fn test_stored_numeric_map_direct_sources_ir_opt_parity() {
+    let source = r#"<?php
+$sum = 0;
+for ($i = 0; $i < 3; $i++) {
+    $a = array_map(fn($v) => $v + 1.5, range(1, 10));
+    $b = array_map(fn($v) => $v / 2.0, array_slice(range(1, 10), 2, 3));
+    $sum += array_sum($a) + array_sum($b);
+}
+echo $sum, "\n";
+"#;
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "228\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "228\n");
+}
+
+/// Every supported target emits the fused kernels for direct range/slice sources.
+#[test]
+fn test_stored_numeric_map_direct_sources_emit_all_supported_targets() {
+    let source = r#"<?php
+#[Export]
+function directSources(int $seed): float {
+    $a = array_map(fn($v) => $v + 1.5, range(1, 10));
+    $b = array_map(fn($v) => $v / 2.0, array_slice(range(1, 10), 2, 3));
+    return array_sum($a) + array_sum($b) + $seed;
+}
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let assembly = emit_target_assembly(source, target);
+        assert!(assembly.contains("__rt_array_map_float_affine"), "{target}");
+        assert!(assembly.contains("__rt_array_map_float_div"), "{target}");
         assert!(!assembly.contains("__rt_array_map_boxed"), "{target}");
     }
 }

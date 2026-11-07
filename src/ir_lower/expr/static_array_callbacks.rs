@@ -665,6 +665,51 @@ pub(super) fn lower_count_explode(
 /// overflows, then rebuilds an ordinary boxed Mixed array so PHP's per-element int/float result
 /// is preserved. The static result type stays `array<mixed>`, which is exactly what the checker
 /// promises; narrowed runtime storage is handled by the generic Mixed readers.
+/// Conservative proof that a stored-map source lowers to a packed `array<int>`.
+///
+/// Variables use the lowering context's flow-sensitive type. Array literals, `range()` with
+/// integer-literal arguments, and key-renumbering `array_slice()` over another proven source
+/// are proven structurally. The marker accepts the same shapes; when this proof fails before
+/// any emission, the dispatcher falls back to the ordinary `array_map()` lowering.
+fn lowering_packed_int_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(name) => {
+            !ctx.is_ref_bound_local(name)
+                && !ctx.is_borrowed_element_ref_local(name)
+                && ctx.local_type(name).codegen_repr()
+                    == PhpType::Array(Box::new(PhpType::Int))
+        }
+        ExprKind::ArrayLiteral(_) => {
+            crate::ir_lower::stmt::stored_numeric_map::is_int_literal_array(expr)
+        }
+        ExprKind::FunctionCall { name, args } => {
+            let key = php_symbol_key(name.as_str().trim_start_matches('\\'));
+            if ctx.functions.contains_key(key.as_str())
+                || args.iter().any(|arg| {
+                    matches!(arg.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. })
+                })
+            {
+                return false;
+            }
+            match key.as_str() {
+                "range" => {
+                    (2..=3).contains(&args.len())
+                        && args.iter().all(|arg| integer_literal(arg).is_some())
+                }
+                "array_slice" => {
+                    (2..=4).contains(&args.len())
+                        && crate::ir_lower::stmt::stored_numeric_map::slice_preserves_packed_layout(
+                            args.get(3),
+                        )
+                        && lowering_packed_int_source(ctx, &args[0])
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn lower_stored_numeric_map(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -678,32 +723,19 @@ pub(super) fn lower_stored_numeric_map(
     {
         return None;
     }
-    let source_is_variable = match &args[1].kind {
-        ExprKind::Variable(source_name) => {
-            if ctx.local_type(source_name).codegen_repr()
-                != PhpType::Array(Box::new(PhpType::Int))
-            {
-                return None;
-            }
-            true
-        }
-        ExprKind::ArrayLiteral(_)
-            if crate::ir_lower::stmt::stored_numeric_map::is_int_literal_array(&args[1]) =>
-        {
-            false
-        }
-        _ => return None,
-    };
+    let source_is_variable = matches!(args[1].kind, ExprKind::Variable(_));
+    if !lowering_packed_int_source(ctx, &args[1]) {
+        return None;
+    }
     let (param, body) = scalar_single_param_closure(&args[0], false)?;
     let shape =
         crate::ir_lower::stmt::stored_numeric_map::parse_stored_numeric_map(body, param)?;
     let source = lower_expr(ctx, &args[1]);
-    if ctx.builder.value_php_type(source.value).codegen_repr()
-        != PhpType::Array(Box::new(PhpType::Int))
-    {
-        debug_assert!(!source_is_variable, "a variable source was already proven array<int>");
-        return None;
-    }
+    debug_assert!(
+        ctx.builder.value_php_type(source.value).codegen_repr()
+            == PhpType::Array(Box::new(PhpType::Int)),
+        "a proven packed-int source must lower to array<int>"
+    );
     let result = match shape {
         crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::Single {
             constant,

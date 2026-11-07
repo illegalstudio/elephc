@@ -690,11 +690,14 @@ scale, and `$v / F` uses a dedicated division kernel; integer divisors and zero
 divisors keep the generic map so PHP's per-element int/float result and
 `DivisionByZeroError` stay exact. A non-empty array literal whose items are all
 integer literals is a proven packed `array<int>` source too, and the lowered
-literal temporary is released after the map call. For a variable source, the
-packed `array<int>` proof runs in the lowering context at the actual call site,
-where the flow-sensitive local type is known; function-local assignments from
-`range()` or array literals therefore fuse like main-level ones, and a failed
-proof falls back to the ordinary `array_map()` lowering. The boxed
+source temporary is released after the map call. Direct `range()` calls with
+integer-literal arguments and `array_slice()` calls that keep PHP's default key
+renumbering are proven recursively; `array_slice(..., preserve_keys: true)` stays
+generic because the result may be a hash. For a variable source, the packed
+`array<int>` proof runs in the lowering context at the actual call site, where the
+flow-sensitive local type is known; function-local assignments from `range()` or
+array literals therefore fuse like main-level ones, and a failed proof falls back
+to the ordinary `array_map()` lowering. The boxed
 `array_sum()` aggregate recognizes the raw-float value_type and reduces the slots
 with a double loop, boxing only the final float. Any
 element write, direct or through an alias, keeps the generic boxed map so

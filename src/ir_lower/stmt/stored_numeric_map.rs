@@ -13,8 +13,10 @@
 //!   has already typed the original call, so the rewrite changes no PHP-visible type.
 //! - A variable source's packed `array<int>` proof is deferred to lowering, where the
 //!   flow-sensitive local type is known (so function-local assignments fuse too). A failed
-//!   proof falls back to the ordinary `array_map()` lowering. Non-empty all-int array
-//!   literals are proven here.
+//!   proof falls back to the ordinary `array_map()` lowering.
+//! - Non-empty all-int array literals, `range()` calls with integer-literal arguments, and
+//!   key-renumbering `array_slice()` calls over another packed-int source are proven
+//!   structurally (recursively for slices).
 //! - A candidate is marked only when every use of its destination local and value aliases
 //!   is one of: indexed reads, value-`foreach`, read-only aliasing, or a whitelisted
 //!   storage-neutral builtin. Any element write, direct or through an alias, keeps the
@@ -44,21 +46,31 @@ pub(crate) fn mark_stored_numeric_maps(
     }
     let analysis = body.to_vec();
     let aliased = aliased_locals(&analysis, by_ref_params);
-    mark_block(body, &analysis, &aliased);
+    mark_block(body, &analysis, &aliased, functions);
 }
 
 /// Rewrites candidates in one block and recurses into nested blocks.
-fn mark_block(stmts: &mut [Stmt], analysis: &[Stmt], aliased: &HashSet<String>) {
+fn mark_block(
+    stmts: &mut [Stmt],
+    analysis: &[Stmt],
+    aliased: &HashSet<String>,
+    functions: &HashMap<String, FunctionSig>,
+) {
     for stmt in stmts.iter_mut() {
-        mark_stmt(stmt, analysis, aliased);
+        mark_stmt(stmt, analysis, aliased, functions);
     }
 }
 
 /// Rewrites one candidate statement and recurses into its nested bodies.
-fn mark_stmt(stmt: &mut Stmt, analysis: &[Stmt], aliased: &HashSet<String>) {
+fn mark_stmt(
+    stmt: &mut Stmt,
+    analysis: &[Stmt],
+    aliased: &HashSet<String>,
+    functions: &HashMap<String, FunctionSig>,
+) {
     let candidate = match &stmt.kind {
         StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
-            stored_map_shape(value, aliased).map(|_| name.clone())
+            stored_map_shape(value, aliased, functions).map(|_| name.clone())
         }
         _ => None,
     };
@@ -81,37 +93,37 @@ fn mark_stmt(stmt: &mut Stmt, analysis: &[Stmt], aliased: &HashSet<String>) {
         | StmtKind::Foreach { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. }
         | StmtKind::NamespaceBlock { body, .. }
-        | StmtKind::Synthetic(body) => mark_block(body, analysis, aliased),
+        | StmtKind::Synthetic(body) => mark_block(body, analysis, aliased, functions),
         StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
-            mark_block(then_body, analysis, aliased);
+            mark_block(then_body, analysis, aliased, functions);
             for (_, body) in elseif_clauses {
-                mark_block(body, analysis, aliased);
+                mark_block(body, analysis, aliased, functions);
             }
             if let Some(body) = else_body {
-                mark_block(body, analysis, aliased);
+                mark_block(body, analysis, aliased, functions);
             }
         }
         StmtKind::IfDef { then_body, else_body, .. } => {
-            mark_block(then_body, analysis, aliased);
+            mark_block(then_body, analysis, aliased, functions);
             if let Some(body) = else_body {
-                mark_block(body, analysis, aliased);
+                mark_block(body, analysis, aliased, functions);
             }
         }
         StmtKind::Switch { cases, default, .. } => {
             for (_, body) in cases {
-                mark_block(body, analysis, aliased);
+                mark_block(body, analysis, aliased, functions);
             }
             if let Some(body) = default {
-                mark_block(body, analysis, aliased);
+                mark_block(body, analysis, aliased, functions);
             }
         }
         StmtKind::Try { try_body, catches, finally_body } => {
-            mark_block(try_body, analysis, aliased);
+            mark_block(try_body, analysis, aliased, functions);
             for catch in catches {
-                mark_block(&mut catch.body, analysis, aliased);
+                mark_block(&mut catch.body, analysis, aliased, functions);
             }
             if let Some(body) = finally_body {
-                mark_block(body, analysis, aliased);
+                mark_block(body, analysis, aliased, functions);
             }
         }
         _ => {}
@@ -481,25 +493,72 @@ fn literal_i64(expr: &Expr) -> Option<i64> {
 /// type is proven by the lowering context at the actual call site, which is flow-sensitive
 /// and therefore also works for locals assigned inside user functions. A failed proof falls
 /// back to the ordinary `array_map` lowering.
-fn stored_map_shape(value: &Expr, aliased: &HashSet<String>) -> Option<()> {
+fn stored_map_shape(
+    value: &Expr,
+    aliased: &HashSet<String>,
+    functions: &HashMap<String, FunctionSig>,
+) -> Option<()> {
     let ExprKind::FunctionCall { name, args } = &value.kind else {
         return None;
     };
     if name.as_str().trim_start_matches('\\') != "array_map" || args.len() != 2 {
         return None;
     }
-    match &args[1].kind {
-        ExprKind::Variable(source) => {
-            if aliased.contains(source) {
-                return None;
-            }
-        }
-        ExprKind::ArrayLiteral(_) if is_int_literal_array(&args[1]) => {}
-        _ => return None,
+    if !is_packed_int_source_candidate(&args[1], functions)
+        || aliased.iter().any(|name| expr_mentions(&args[1], name))
+    {
+        return None;
     }
     let (param, body) = single_param_closure(&args[0])?;
     parse_stored_numeric_map(body, param)?;
     Some(())
+}
+
+/// Returns whether an `array_slice()` fourth argument keeps the packed-list layout.
+///
+/// PHP renumbers keys by default; `preserve_keys: true` can turn a slice that no longer
+/// starts at key 0 into a hash, which the stored-map kernels cannot read as packed slots.
+pub(crate) fn slice_preserves_packed_layout(arg: Option<&Expr>) -> bool {
+    arg.is_none_or(|arg| matches!(arg.kind, ExprKind::BoolLiteral(false)))
+}
+
+/// Returns whether the expression is a side-effect-free source shape the stored-map marker
+/// may consider: a variable, an all-int array literal, `range()` with int literals, or
+/// `array_slice()` over one of those with default key renumbering.
+///
+/// A variable's actual `array<int>` proof is deferred to lowering, which sees the
+/// flow-sensitive local type. Every other nested source is proven here structurally.
+pub(crate) fn is_packed_int_source_candidate(
+    expr: &Expr,
+    functions: &HashMap<String, FunctionSig>,
+) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) => true,
+        ExprKind::ArrayLiteral(_) => is_int_literal_array(expr),
+        ExprKind::FunctionCall { name, args } => {
+            let key = crate::names::php_symbol_key(name.as_str().trim_start_matches('\\'));
+            if functions.contains_key(key.as_str())
+                || args.iter().any(|arg| {
+                    matches!(arg.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. })
+                })
+            {
+                return false;
+            }
+            match key.as_str() {
+                "range" => {
+                    (2..=3).contains(&args.len())
+                        && args.iter().all(|arg| literal_i64(arg).is_some())
+                }
+                "array_slice" => {
+                    (2..=4).contains(&args.len())
+                        && slice_preserves_packed_layout(args.get(3))
+                        && is_packed_int_source_candidate(&args[0], functions)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 /// Returns whether the expression is a non-empty array literal whose items are all integer
