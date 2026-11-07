@@ -113,7 +113,7 @@ use static_property_helpers::*;
 
 pub(crate) use control_exit::{
     lower_throw_access_error, lower_throw_access_error_expr, lower_throw_access_error_expr_as,
-    lower_throw_access_exception,
+    lower_throw_access_exception, lower_throw_access_exception_expr_as,
     lower_throw_access_error_message,
 };
 pub(crate) use control_exit::terminate_return;

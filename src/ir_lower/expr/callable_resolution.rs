@@ -48,6 +48,11 @@ pub(super) fn static_callable_call_lowers_directly(
 fn callable_argument_static_type(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> PhpType {
     match &arg.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
+        ExprKind::This => ctx
+            .current_class
+            .as_ref()
+            .map(|class| PhpType::Object(class.trim_start_matches('\\').to_string()))
+            .unwrap_or(PhpType::Object(String::new())),
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,
         ExprKind::FloatLiteral(_) => PhpType::Float,
@@ -90,6 +95,16 @@ fn callable_argument_is_clearly_incompatible(
             PhpType::Object(actual) => {
                 let target = target.trim_start_matches('\\');
                 let actual = actual.trim_start_matches('\\');
+                if target.is_empty() {
+                    // A bare `object` parameter accepts every object; this arm already
+                    // established that the actual storage is an object.
+                    return false;
+                }
+                if actual.is_empty() {
+                    // The checker could not name the receiver's class here. That is an unknown,
+                    // not a proof of incompatibility; the callee still guards its own boundary.
+                    return false;
+                }
                 if actual.eq_ignore_ascii_case(target)
                     || crate::ir_lower::expr::class_extends_class(ctx, actual, target)
                 {
@@ -161,8 +176,9 @@ pub(super) fn lower_static_callable_call(
                         .then_some(usize::MAX)
                         .unwrap_or(crate::types::call_args::regular_param_count(sig));
                     if callback_args.len() < required || callback_args.len() > maximum {
-                        return Some(crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+                        return Some(crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
                             ctx,
+                            "ArgumentCountError",
                             &format!(
                                 "{}() expects {} arguments, {} given",
                                 function_name, required, callback_args.len()
@@ -186,8 +202,9 @@ pub(super) fn lower_static_callable_call(
                         })
                 })
             }) {
-                return Some(crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+                return Some(crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
                     ctx,
+                    "TypeError",
                     &format!(
                         "{}() received an argument of an incompatible type",
                         function_name
@@ -276,9 +293,14 @@ pub(super) fn lower_static_callable_call(
             // count cannot bind, leave the call to the runtime descriptor path so PHP's
             // ArgumentCountError is raised at execution time instead of failing codegen. Named
             // and spread calls keep the direct planner, which owns their binding rules.
+            //
+            // `clone` is a language-construct builtin: its runtime op validates both operands and
+            // must observe argument side effects before raising TypeError, so it stays on the
+            // descriptor path instead of the direct-call guard.
+            let enforce_signature = function_name != "clone";
             let statically_positional = !crate::types::call_args::has_named_args(callback_args)
                 && !callback_args.iter().any(is_spread_arg);
-            if statically_positional {
+            if enforce_signature && statically_positional {
                 if let Some(sig) = sig.as_ref() {
                     let required = crate::types::call_args::required_param_count(sig);
                     let maximum = sig
@@ -287,8 +309,9 @@ pub(super) fn lower_static_callable_call(
                         .then_some(usize::MAX)
                         .unwrap_or(sig.params.len());
                     if callback_args.len() < required || callback_args.len() > maximum {
-                        return Some(crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+                        return Some(crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
                             ctx,
+                            "ArgumentCountError",
                             &format!(
                                 "{}() expects {} arguments, {} given",
                                 function_name, required, callback_args.len()
@@ -299,7 +322,7 @@ pub(super) fn lower_static_callable_call(
                     }
                 }
             }
-            if statically_positional && sig.as_ref().is_some_and(|sig| {
+            if enforce_signature && statically_positional && sig.as_ref().is_some_and(|sig| {
                 let regular = crate::types::call_args::regular_param_count(sig);
                 callback_args.iter().enumerate().any(|(index, arg)| {
                     index < regular
@@ -312,8 +335,9 @@ pub(super) fn lower_static_callable_call(
                         })
                 })
             }) {
-                return Some(crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+                return Some(crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
                     ctx,
+                    "TypeError",
                     &format!(
                         "{}() received an argument of an incompatible type",
                         function_name

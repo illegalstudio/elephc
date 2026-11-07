@@ -44,7 +44,12 @@ pub(super) fn lower_unset_locals(
                 match ctx.local_type(name).codegen_repr() {
                     PhpType::Object(class_name)
                         if !object_class_has_destructor(ctx, &class_name) => {}
-                    _ => defer_object_cycle_collection = false,
+                    _ => {
+                        // Arrays, scalars, and destructor-bearing objects are root drops that
+                        // may expose a cycle; keep the ordinary unconditional safe point.
+                        defer_object_cycle_collection = false;
+                        unconditional = true;
+                    }
                 }
                 ctx.unset_local(name, null, Some(arg.span));
                 None
@@ -68,6 +73,7 @@ pub(super) fn lower_unset_locals(
             changed = Some(super::unset_collection::combine_removals(ctx, changed, removal, arg.span));
         } else if !matches!(arg.kind, ExprKind::Variable(_)) {
             unconditional = true;
+            defer_object_cycle_collection = false;
         }
     }
     if !defer_object_cycle_collection {
