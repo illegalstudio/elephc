@@ -6003,32 +6003,74 @@ fn build_collator_class() -> Stmt {
     }
     // Sorting methods mutate their by-reference array. ICU performs the comparison in the
     // shim, so the generated method only publishes the sorted copy.
-    for (php_name, bridge_name) in [
-        ("sort", "sort"),
-        ("asort", "asort"),
-        ("sortWithSortKeys", "sort_with_sort_keys"),
+    for (php_name, preserve_keys, sort_with_keys) in [
+        ("sort", false, false),
+        ("asort", true, false),
+        ("sortWithSortKeys", false, true),
     ] {
         let params = if php_name == "sortWithSortKeys" {
             vec![("array", t_mixed(), None, true)]
         } else {
             vec![("array", t_mixed(), None, true), ("flags", TypeExpr::Int, Some(e_int(0)), false)]
         };
-        let mut bridge_args = vec![e_var("array")];
-        if php_name != "sortWithSortKeys" {
-            bridge_args.push(e_var("flags"));
-        }
+        let flags = if sort_with_keys { e_int(0) } else { e_var("flags") };
+        let collect = crate::synthetic_class::s_foreach(
+            e_var("_snapshot"),
+            Some("_key"),
+            "_value",
+            vec![
+                crate::synthetic_class::s_array_push("_original_keys", e_var("_key")),
+                crate::synthetic_class::s_array_push("_values", e_var("_value")),
+                crate::synthetic_class::s_array_push(
+                    "_sort_keys",
+                    e_cast(CastType::String, e_var("_value")),
+                ),
+            ],
+        );
+        let reorder_body = if preserve_keys {
+            vec![crate::synthetic_class::s_array_assign(
+                "_sorted",
+                e_index(e_var("_original_keys"), e_var("_position")),
+                e_index(e_var("_values"), e_var("_position")),
+            )]
+        } else {
+            vec![crate::synthetic_class::s_array_push(
+                "_sorted",
+                e_index(e_var("_values"), e_var("_position")),
+            )]
+        };
         builder = builder.method(instance_method(
             php_name,
             params,
             vec![
-                s_assign("_result", e_method_call(e_var("this"), "__elephc_call", vec![
-                    e_str(bridge_name), e_array(bridge_args),
+                s_assign("_snapshot", e_var("array")),
+                s_assign("_original_keys", e_array(vec![])),
+                s_assign("_values", e_array(vec![])),
+                s_assign("_sort_keys", e_array(vec![])),
+                collect,
+                s_assign("_order", e_method_call(e_var("this"), "__elephc_call", vec![
+                    e_str("sort_indices"),
+                    e_array(vec![
+                        e_var("_sort_keys"),
+                        flags,
+                        crate::synthetic_class::e_bool(sort_with_keys),
+                    ]),
                 ])),
-                s_if(e_binop(e_var("_result"), BinOp::StrictEq, crate::synthetic_class::e_bool(false)), vec![
-                    s_return(crate::synthetic_class::e_bool(false)),
-                ], vec![], None),
-                s_assign("array", e_index(e_var("_result"), e_int(1))),
-                s_return(e_index(e_var("_result"), e_int(0))),
+                s_if(
+                    e_binop(e_var("_order"), BinOp::StrictEq, crate::synthetic_class::e_bool(false)),
+                    vec![s_return(crate::synthetic_class::e_bool(false))],
+                    vec![],
+                    None,
+                ),
+                s_assign("_sorted", e_array(vec![])),
+                crate::synthetic_class::s_foreach(
+                    e_var("_order"),
+                    None,
+                    "_position",
+                    reorder_body,
+                ),
+                s_assign("array", e_var("_sorted")),
+                s_return(crate::synthetic_class::e_bool(true)),
             ],
         ));
     }

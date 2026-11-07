@@ -1242,6 +1242,85 @@ struct CollatorObject : IntlObject {
                                                  size_t(key_length)));
             return U_ZERO_ERROR;
         }
+        if (method == "sort_indices") {
+            const Value *values = nullptr;
+            if (!argument_array(args, 0, values)) return U_ILLEGAL_ARGUMENT_ERROR;
+            int64_t sort_flags = 0;
+            optional_int(args, 1, 0, sort_flags);
+            bool sort_keys = false;
+            optional_bool(args, 2, false, sort_keys);
+            auto value_text = [](const Value &value) -> UnicodeString {
+                switch (value.type) {
+                    case Value::Type::Str: return from_utf8(value.text);
+                    case Value::Type::Int: return UnicodeString::fromUTF8(std::to_string(value.integer));
+                    case Value::Type::Float: return UnicodeString::fromUTF8(php_number_to_string(value.number));
+                    case Value::Type::True: return UnicodeString("1");
+                    case Value::Type::Array: return UnicodeString("Array");
+                    default: return UnicodeString();
+                }
+            };
+            auto value_number = [](const Value &value, double &out) -> bool {
+                switch (value.type) {
+                    case Value::Type::Int: out = double(value.integer); return true;
+                    case Value::Type::Float: out = value.number; return true;
+                    case Value::Type::True: out = 1.0; return true;
+                    case Value::Type::False:
+                    case Value::Type::Null: out = 0.0; return true;
+                    case Value::Type::Str: {
+                        size_t begin = value.text.find_first_not_of(" \t\n\r\v\f");
+                        if (begin == std::string::npos) return false;
+                        size_t end_pos = value.text.find_last_not_of(" \t\n\r\v\f");
+                        std::string text = value.text.substr(begin, end_pos - begin + 1);
+                        char *end = nullptr;
+                        double parsed = std::strtod(text.c_str(), &end);
+                        if (end == text.c_str() || *end != '\0') return false;
+                        out = parsed;
+                        return true;
+                    }
+                    default: return false;
+                }
+            };
+            std::vector<size_t> order(values->entries.size());
+            for (size_t index = 0; index < order.size(); index++) order[index] = index;
+            UErrorCode compare_status = U_ZERO_ERROR;
+            auto compare_entries = [&](size_t left, size_t right) {
+                const Value &left_value = values->entries[left].second;
+                const Value &right_value = values->entries[right].second;
+                UnicodeString left_text = value_text(left_value);
+                UnicodeString right_text = value_text(right_value);
+                if (sort_keys) {
+                    icu::CollationKey left_key, right_key;
+                    collator->getCollationKey(left_text, left_key, compare_status);
+                    collator->getCollationKey(right_text, right_key, compare_status);
+                    return left_key.compareTo(right_key) < 0;
+                }
+                if (sort_flags == 2) {
+                    double left_number = 0.0, right_number = 0.0;
+                    bool left_ok = value_number(left_value, left_number);
+                    bool right_ok = value_number(right_value, right_number);
+                    if (left_ok && right_ok) return left_number < right_number;
+                } else if (sort_flags == 0) {
+                    double left_number = 0.0, right_number = 0.0;
+                    bool left_ok = value_number(left_value, left_number);
+                    bool right_ok = value_number(right_value, right_number);
+                    if (left_ok && right_ok) return left_number < right_number;
+                }
+                return collator->compare(left_text, right_text, compare_status) == UCOL_LESS;
+            };
+            std::stable_sort(order.begin(), order.end(), compare_entries);
+            if (U_FAILURE(compare_status)) {
+                record_error(*this, compare_status, "Collator sorting");
+                out = Value::boolean(false);
+                return compare_status;
+            }
+            Value result = Value::array();
+            for (size_t index = 0; index < order.size(); index++) {
+                result.entries.push_back({Value::from_int(int64_t(index)),
+                                          Value::from_int(int64_t(order[index]))});
+            }
+            out = std::move(result);
+            return U_ZERO_ERROR;
+        }
         if (method == "sort" || method == "asort" || method == "sort_with_sort_keys") {
             const Value *values = nullptr;
             if (!argument_array(args, 0, values)) return U_ILLEGAL_ARGUMENT_ERROR;

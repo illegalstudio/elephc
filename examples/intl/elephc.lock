@@ -4,7 +4,7 @@ schema = 1
 [[package]]
 name = "icu"
 version = "78.3"
-recipe = 38
+recipe = 39
 dependencies = []
 provides = ["icu"]
 
