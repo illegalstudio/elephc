@@ -2001,12 +2001,18 @@ fn lower_body_into_function(
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
     ctx.lower_with_final_string_storage(|ctx| {
-        if !eager_parameters { super::object_boundaries::guard_parameters(ctx); }
+        if !eager_parameters {
+            super::object_boundaries::guard_parameters(ctx, &reference_entry_guards);
+        }
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
-            for (display, position, name, php_type) in &reference_entry_guards {
-                crate::ir_lower::expr::guard_reference_parameter_entry(ctx, display, *position, name, php_type);
+            if eager_parameters {
+                // Generators check their parameters eagerly elsewhere; these keep their
+                // place at the start of the body.
+                for (display, position, name, php_type) in &reference_entry_guards {
+                    crate::ir_lower::expr::guard_reference_parameter_entry(ctx, display, *position, name, php_type);
+                }
             }
             crate::ir_lower::numeric_storage::lower_body(ctx, body);
         }

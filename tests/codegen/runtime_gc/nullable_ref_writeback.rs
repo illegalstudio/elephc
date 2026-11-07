@@ -871,3 +871,28 @@ run();
     );
     assert_clean(out, "nnn|2|2\n");
 }
+
+/// The by-reference union checks and the by-reference object checks run in one pass in
+/// parameter order (php's RECV): with two invalid arguments the `TypeError` names the first,
+/// whichever family checks it. Each argument is invalidated only after the caller checked it.
+/// Expected output is php 8.5's.
+#[test]
+fn test_reference_entry_guards_follow_parameter_order() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class NeedObject {}
+function unionFirst(?array &$a, NeedObject &$b, int $n): void {}
+function objectFirst(NeedObject &$b, ?array &$a, int $n): void {}
+function replace(mixed &$b): int { $b = new stdClass(); return 0; }
+function run(mixed $a, mixed $b, mixed $c): void {
+    try { unionFirst($a, $b, replace($b)); } catch (TypeError $e) { echo explode(", called", $e->getMessage())[0], "|"; }
+    try { objectFirst($c, $a, replace($c)); } catch (TypeError $e) { echo explode(", called", $e->getMessage())[0], "\n"; }
+}
+run("wrong", new NeedObject(), new NeedObject());
+"#,
+    );
+    assert_clean(
+        out,
+        "unionFirst(): Argument #1 ($a) must be of type ?array, string given|objectFirst(): Argument #1 ($b) must be of type NeedObject, stdClass given\n",
+    );
+}
