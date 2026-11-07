@@ -186,6 +186,12 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_load_temporary_stack_slot(e, scratch, LEVEL);
     ins(e, "and x0, x0, x10", "and rax, r10");
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_release");
+    if e.phpext_output {
+        // Under `--emit phpext`, `__rt_diag_write` forwards each write to the host
+        // PHP error handler. The host adds the newline and source location itself,
+        // exactly as for an internal PHP diagnostic, so send only the raw message.
+        abi::emit_jump(e, "__rt_warning_plain_message");
+    } else {
     // php-src prefixes every displayed diagnostic with one newline.
     if arm {
         abi::emit_symbol_address(e, a1, "_rt_diag_leading_newline");
@@ -231,6 +237,7 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_call_label(e, "__rt_diag_write");
     emit_diag_static(e, "_rt_diag_newline", 1);
     abi::emit_jump(e, "__rt_warning_release");
+    }
     e.label("__rt_warning_plain_message");
     if arm {
         arg(e, 1, BUFFER);
