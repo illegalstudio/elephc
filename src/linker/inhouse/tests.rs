@@ -12,6 +12,15 @@ fn ascii_operands_decode_the_emitted_escapes() {
     assert!(decode_ascii(r#""unterminated"#, &mut Vec::new()).is_none());
 }
 
+/// A `.quad` above the signed range is a bit pattern: the Demo's data has `u64::MAX`.
+#[test]
+fn integers_cover_the_whole_unsigned_range() {
+    assert_eq!(integer("18446744073709551615"), Some(-1));
+    assert_eq!(integer("-1"), Some(-1));
+    assert_eq!(integer("0xffffffffffffffff"), Some(-1));
+    assert_eq!(integer("18446744073709551616"), None);
+}
+
 /// Numeric labels resolve forward and backward from the referencing line.
 #[test]
 fn numeric_labels_resolve_by_direction() {

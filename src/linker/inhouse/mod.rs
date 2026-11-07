@@ -174,7 +174,7 @@ fn integer(text: &str) -> Option<i64> {
     };
     let value = match digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")) {
         Some(hex) => u64::from_str_radix(hex, 16).ok()? as i64,
-        None => digits.parse::<i64>().ok()?,
+        None => digits.parse::<u64>().ok()? as i64,
     };
     Some(if negative { value.wrapping_neg() } else { value })
 }
