@@ -479,6 +479,90 @@ var_dump($s instanceof Stringable);
     assert_eq!(out, "[hi]bool(true)\n");
 }
 
+/// Verifies an object whose class declares `__toString()` is accepted where `Stringable` is
+/// declared: a parameter (plain, nullable, in a union, promoted), a return, inside a function
+/// body, with an untyped `__toString()` and one inherited from a parent class.
+#[test]
+fn test_implicit_stringable_satisfies_declared_stringable_types() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+
+final class Text
+{
+    public function __toString(): string
+    {
+        return 'text';
+    }
+}
+
+class Loose
+{
+    public function __toString()
+    {
+        return 'loose';
+    }
+}
+
+class Child extends Loose
+{
+}
+
+final class Label
+{
+    public function __construct(public Stringable $value)
+    {
+    }
+
+    public function show(): string
+    {
+        return 'label ' . $this->value;
+    }
+}
+
+function str(Stringable $s): string
+{
+    return 'got ' . $s;
+}
+
+function maybe(?Stringable $s): string
+{
+    return $s === null ? 'null' : (string) $s;
+}
+
+function either(Stringable|string $s): string
+{
+    return (string) $s;
+}
+
+function pick(bool $loose): Stringable
+{
+    return $loose ? new Loose() : new Text();
+}
+
+function inside(): string
+{
+    return str(new Child()) . ' ' . maybe(new Text());
+}
+
+echo str(new Text()), "\n";
+echo str(new Loose()), "\n";
+echo str(new Child()), "\n";
+echo maybe(new Text()), "\n";
+echo maybe(null), "\n";
+echo either(new Loose()), "\n";
+echo either('plain'), "\n";
+echo (new Label(new Child()))->show(), "\n";
+echo pick(true), ' ', pick(false), "\n";
+echo inside(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "got text\ngot loose\ngot loose\ntext\nnull\nloose\nplain\nlabel loose\nloose text\ngot loose text\n"
+    );
+}
+
 /// Verifies `JsonSerializable` implementer typechecks and `jsonSerialize()` is callable.
 #[test]
 fn test_json_serializable_interface_typechecks() {
@@ -1092,4 +1176,22 @@ echo $hits, "\n";
         "expected clean heap, got: {}",
         out.stderr
     );
+}
+
+/// Verifies a string conversion of an object typed by an interface or a non-final class runs
+/// the `__toString()` of its runtime class, and throws PHP's catchable `Error` naming that
+/// class when it declares none.
+#[test]
+fn test_string_conversion_dispatches_on_the_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+interface I {} class A implements I {} class B implements I { public function __toString(): string { return 'b'; } }
+abstract class Base {} final class Kid extends Base { public function __toString(): string { return 'kid'; } }
+function s(I $i): string { try { return (string) $i; } catch (Error $e) { return $e->getMessage(); } }
+function e(Base $b): void { echo $b, "\n"; }
+echo s(new B()), '|', s(new A()), "\n";
+e(new Kid());
+"#,
+    );
+    assert_eq!(out, "b|Object of class A could not be converted to string\nkid\n");
 }
