@@ -140,6 +140,10 @@ fn run_inner(command: TestCommand) -> Result<i32, String> {
             &output_stem,
             coverage_format,
             coverage_out.as_deref(),
+            &coverage::CoverageFilters::new(
+                command.coverage_include.clone(),
+                command.coverage_exclude.clone(),
+            ),
         )
     } else {
         Command::new(&binary)
@@ -160,6 +164,7 @@ fn run_with_coverage(
     output_stem: &str,
     format: coverage::CoverageFormat,
     out: Option<&str>,
+    filters: &coverage::CoverageFilters,
 ) -> Result<std::process::ExitStatus, String> {
     let output = Command::new(binary)
         .env("ELEPHC_DEBUG_SITES", "1")
@@ -175,7 +180,7 @@ fn run_with_coverage(
         .map_err(|error| format!("coverage metadata '{}' is missing: {error}", metadata_path.display()))?;
     let metadata: serde_json::Value = serde_json::from_str(&metadata)
         .map_err(|error| format!("coverage metadata '{}' is invalid: {error}", metadata_path.display()))?;
-    let report = coverage::collect(&metadata, &counts)?;
+    let report = coverage::collect(&metadata, &counts, filters)?;
     match out {
         Some(path) => {
             let contents = coverage::render(&report, format);

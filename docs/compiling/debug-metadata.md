@@ -276,7 +276,9 @@ tests are not compiled and therefore are absent from the denominator.
 
 `--coverage-format text|lcov|cobertura|html` and `--coverage-out FILE` export the
 same line/branch data as a text summary, LCOV records, Cobertura XML or a
-self-contained HTML page. Logical-condition leaves and switch cases are source
+self-contained HTML page. Repeatable `--coverage-filter PATH` and
+`--coverage-exclude PATH` roots select report sources; excluded sources and
+their branches are removed before totals are computed. Logical-condition leaves and switch cases are source
 edges in the `branches` table; full condition/path coverage is separate work
 tracked outside this schema.
 

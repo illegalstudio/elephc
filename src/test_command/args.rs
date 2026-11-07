@@ -35,6 +35,10 @@ pub(crate) struct TestCommand {
     pub(crate) coverage_format: Option<CoverageFormat>,
     /// Path of the coverage report to write, when requested.
     pub(crate) coverage_out: Option<String>,
+    /// Source roots included in the coverage report (repeatable).
+    pub(crate) coverage_include: Vec<String>,
+    /// Source roots excluded from the coverage report (repeatable).
+    pub(crate) coverage_exclude: Vec<String>,
     /// Ordinary compile options forwarded to the compiler.
     pub(crate) compile_args: Vec<String>,
     /// `-h` / `--help` was given: print usage and exit.
@@ -63,6 +67,8 @@ Options:
   --coverage-format FMT   Coverage report format: text (default), lcov, cobertura or html
   --coverage-out FILE     Write the coverage report to FILE (format inferred from
                           .lcov/.info/.xml/.html unless --coverage-format overrides it)
+  --coverage-filter PATH  Report only sources under PATH (repeatable; implies --coverage)
+  --coverage-exclude PATH Omit sources under PATH (repeatable; implies --coverage)
   -h, --help              Show this help
 
 Compile options such as --strict-php, --with-<crate>, --heap-size, --php-version,
@@ -95,6 +101,8 @@ pub(crate) fn parse_args(args: &[String]) -> Result<TestCommand, String> {
     let mut coverage = false;
     let mut coverage_format = None;
     let mut coverage_out = None;
+    let mut coverage_include = Vec::new();
+    let mut coverage_exclude = Vec::new();
     let mut compile_args = Vec::new();
     let mut help = false;
     let mut i = 0;
@@ -151,6 +159,28 @@ pub(crate) fn parse_args(args: &[String]) -> Result<TestCommand, String> {
         } else if let Some(value) = arg.strip_prefix("--coverage-out=") {
             coverage_out = Some(value.to_string());
             coverage = true;
+        } else if arg == "--coverage-filter" {
+            coverage_include.push(
+                args.get(i + 1)
+                    .ok_or("--coverage-filter needs a path")?
+                    .clone(),
+            );
+            coverage = true;
+            i += 1;
+        } else if let Some(value) = arg.strip_prefix("--coverage-filter=") {
+            coverage_include.push(value.to_string());
+            coverage = true;
+        } else if arg == "--coverage-exclude" {
+            coverage_exclude.push(
+                args.get(i + 1)
+                    .ok_or("--coverage-exclude needs a path")?
+                    .clone(),
+            );
+            coverage = true;
+            i += 1;
+        } else if let Some(value) = arg.strip_prefix("--coverage-exclude=") {
+            coverage_exclude.push(value.to_string());
+            coverage = true;
         } else if let Some((flag, reason)) = refused(arg) {
             return Err(format!("{flag} is not accepted by `elephc test`: {reason}"));
         } else if arg.starts_with('-') && arg.len() > 1 {
@@ -182,6 +212,8 @@ pub(crate) fn parse_args(args: &[String]) -> Result<TestCommand, String> {
         coverage,
         coverage_format,
         coverage_out,
+        coverage_include,
+        coverage_exclude,
         compile_args,
         help,
     })
@@ -254,6 +286,8 @@ mod tests {
                 coverage: false,
                 coverage_format: None,
                 coverage_out: None,
+                coverage_include: vec![],
+                coverage_exclude: vec![],
                 compile_args: vec![],
                 help: false
             }
@@ -277,6 +311,27 @@ mod tests {
         assert_eq!(html.coverage_format, Some(CoverageFormat::Html));
         assert!(parse_args(&args(&["--coverage-format", "markdown"])).is_err());
         assert!(parse_args(&args(&["--coverage-out"])).is_err());
+
+        let filtered = parse_args(&args(&[
+            "--coverage-filter",
+            "src",
+            "--coverage-filter=vendor",
+            "--coverage-exclude",
+            "src/generated",
+            "--coverage-exclude=vendor/cache",
+        ]))
+        .expect("coverage filters parse");
+        assert!(
+            filtered.coverage,
+            "filters must imply --coverage instead of being silently ignored"
+        );
+        assert_eq!(filtered.coverage_include, args(&["src", "vendor"]));
+        assert_eq!(
+            filtered.coverage_exclude,
+            args(&["src/generated", "vendor/cache"])
+        );
+        assert!(parse_args(&args(&["--coverage-filter"])).is_err());
+        assert!(parse_args(&args(&["--coverage-exclude"])).is_err());
     }
 
     /// The path, both `--filter` spellings, and compile options are separated correctly,

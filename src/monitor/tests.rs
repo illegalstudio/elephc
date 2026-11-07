@@ -344,6 +344,86 @@
         assert_eq!(leaf_paths, 2, "leaf should appear once per caller path");
     }
 
+    /// Cachegrind export keeps function self time and per-edge call counts.
+    ///
+    /// Xdebug 3 writes nanoseconds under `events: Time`; this asserts both the
+    /// function cost lines and the caller→callee record that KCachegrind needs
+    /// to reconstruct inclusive time without double-counting a shared callee.
+    #[test]
+    fn cachegrind_export_keeps_function_and_edge_costs() {
+        use crate::call_graph::{CallGraph, GraphEdge, GraphNode};
+
+        /// A graph node with only the two time dimensions set.
+        fn node(name: &str, inclusive: u64, exclusive: u64) -> GraphNode {
+            GraphNode {
+                name: name.to_string(),
+                inclusive,
+                exclusive,
+                call_count: None,
+                alloc_inclusive: 0,
+                alloc_exclusive: 0,
+                io_inclusive: 0,
+                io_exclusive: 0,
+                retained_inclusive: 0,
+                retained_exclusive: 0,
+                wait_inclusive: 0,
+                wait_exclusive: 0,
+                network_inclusive: 0,
+                network_exclusive: 0,
+                network_wait_inclusive: 0,
+                network_wait_exclusive: 0,
+                causes: Vec::new(),
+            }
+        }
+
+        let graph = CallGraph {
+            nodes: vec![node("root", 1000, 300), node("leaf", 500, 500)],
+            edges: vec![GraphEdge {
+                from: 0,
+                to: 1,
+                weight: 500,
+                count: Some(2),
+            }],
+            total: 1000,
+            queries: Vec::new(),
+            lines: None,
+            trace: None,
+        };
+        let path = std::env::temp_dir().join(format!(
+            "elephc_cachegrind_{}.out",
+            process::id()
+        ));
+        write_cachegrind(path.to_str().expect("cachegrind path"), &graph, "app.php")
+            .expect("write cachegrind");
+        let text = std::fs::read_to_string(&path).expect("read cachegrind");
+        assert!(text.starts_with("version: 1\n"), "{text}");
+        assert!(text.contains("events: Time\n"), "{text}");
+        assert!(text.contains("fl=app.php\nfn=root\n1 300\n"), "{text}");
+        assert!(text.contains("fl=app.php\nfn=leaf\n1 500\n"), "{text}");
+        assert!(text.contains("cfn=leaf\ncalls=2 1\n1 500\n"), "{text}");
+        assert!(text.trim_end().ends_with("summary: 1000"), "{text}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// `--cachegrind` needs a one-shot exact capture, so the modes without call
+    /// counts are refused instead of silently writing nothing.
+    #[test]
+    fn cachegrind_export_is_refused_outside_an_exact_launch_capture() {
+        let parse = |args: &[&str]| {
+            let argv: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+            parse_monitor_args(&argv)
+        };
+        let cmd = parse(&["app.php", "--cachegrind", "out.cachegrind"])
+            .expect("cachegrind parses");
+        assert_eq!(cmd.cachegrind_out.as_deref(), Some("out.cachegrind"));
+        assert!(parse(&["app.php", "--cachegrind=out.cachegrind"]).is_ok());
+        assert!(parse(&["app.php", "--cachegrind"]).is_err());
+        assert!(parse(&["app.php", "--cachegrind", "out", "--calls"]).is_err());
+        assert!(parse(&["app.php", "--cachegrind", "out", "--live"]).is_err());
+        assert!(parse(&["--attach", "123", "--cachegrind", "out"]).is_err());
+        assert!(parse(&["--stitch", "a.log", "--cachegrind", "out"]).is_err());
+    }
+
     /// A Speedscope export must be recognizable as the wrong kind of baseline.
     ///
     /// This is the detector behind the only error message that can rescue the
@@ -756,6 +836,12 @@ Total number in stack (recursive counted multiple, when >=5):
             flags(&["--assert-file", "budgets.elephc"]).as_deref(),
             Some("--assert-file"),
             "a budget file is a budget"
+        );
+
+        assert_eq!(
+            flags(&["--cachegrind", "out.cachegrind"]).as_deref(),
+            Some("--cachegrind"),
+            "a sampled service answer has no call counts to export"
         );
 
         // Modes a service cannot honour: it answers once, through its endpoint.

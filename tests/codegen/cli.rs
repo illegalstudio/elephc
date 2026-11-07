@@ -68,6 +68,50 @@ fn test_cli_monitor_profiles_a_top_level_only_program() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `--cachegrind` writes the exact launch capture as a profile that
+/// KCachegrind/QCachegrind can open, with function self time and call edges.
+#[test]
+fn test_cli_monitor_writes_cachegrind_profile() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_cachegrind");
+    fs::write(
+        dir.join("cg.php"),
+        "<?php\nfunction work(int $n): int { $sum = 0; for ($i = 0; $i < $n; $i++) { $sum += $i; } return $sum; }\necho work(20000), \"\\n\";\n",
+    )
+    .expect("write cachegrind fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args([
+            "monitor",
+            "cg.php",
+            "--cachegrind",
+            "cg.cachegrind",
+        ])
+        .output()
+        .expect("run cachegrind monitor");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "cachegrind monitor failed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(stdout.contains("wrote cg.cachegrind"), "{stdout}");
+
+    let profile = fs::read_to_string(dir.join("cg.cachegrind")).expect("cachegrind profile");
+    assert!(profile.starts_with("version: 1\n"), "{profile}");
+    assert!(profile.contains("events: Time\n"), "{profile}");
+    assert!(profile.contains("fn={main}\n"), "{profile}");
+    assert!(profile.contains("fn=work\n1 "), "{profile}");
+    assert!(profile.contains("cfn=work\ncalls=1 1\n"), "{profile}");
+    let summary = profile
+        .lines()
+        .find_map(|line| line.strip_prefix("summary: "))
+        .and_then(|value| value.parse::<u64>().ok())
+        .expect("cachegrind summary");
+    assert!(summary > 0, "cachegrind summary must carry measured time: {profile}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// End-to-end `elephc monitor`: compiles a busy fixture, activates exact
 /// instrumentation through the control channel, and writes a two-view
 /// Speedscope document whose frames are PHP names — not EIR block labels or

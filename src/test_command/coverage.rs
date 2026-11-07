@@ -60,6 +60,79 @@ impl CoverageFormat {
     }
 }
 
+/// Include/exclude path prefixes applied before the report is built.
+///
+/// A source is reported when it is under at least one include root (or no
+/// include root was given) and under no exclude root. Matching is path-prefix
+/// based on resolved absolute paths, so `--coverage-filter src` works whether
+/// the compiler recorded `src/Foo.php` or `/project/src/Foo.php`.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CoverageFilters {
+    /// Only sources under one of these roots are reported.
+    include: Vec<String>,
+    /// Sources under one of these roots are omitted.
+    exclude: Vec<String>,
+}
+
+impl CoverageFilters {
+    /// Builds filters from raw `--coverage-filter`/`--coverage-exclude` values.
+    pub(crate) fn new(include: Vec<String>, exclude: Vec<String>) -> Self {
+        Self {
+            include: include.iter().map(|root| resolve_path(root)).collect(),
+            exclude: exclude.iter().map(|root| resolve_path(root)).collect(),
+        }
+    }
+
+    /// Returns whether no filter was requested.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.include.is_empty() && self.exclude.is_empty()
+    }
+
+    /// Returns whether one recorded source path survives the filters.
+    pub(crate) fn allows(&self, path: &str) -> bool {
+        if self.is_empty() {
+            return true;
+        }
+        let resolved = resolve_path(path);
+        let included = self.include.is_empty()
+            || self
+                .include
+                .iter()
+                .any(|root| path_is_under(&resolved, root));
+        included
+            && !self
+                .exclude
+                .iter()
+                .any(|root| path_is_under(&resolved, root))
+    }
+}
+
+/// Resolves a source or filter path to an absolute path when possible.
+fn resolve_path(path: &str) -> String {
+    let path = Path::new(path);
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    std::fs::canonicalize(&absolute)
+        .ok()
+        .and_then(|path| path.to_str().map(str::to_string))
+        .unwrap_or_else(|| absolute.to_string_lossy().into_owned())
+}
+
+/// Returns whether `path` equals `root` or sits inside it.
+fn path_is_under(path: &str, root: &str) -> bool {
+    if path == root {
+        return true;
+    }
+    path.strip_prefix(root).is_some_and(|rest| {
+        rest.starts_with('/') || rest.starts_with('\\') || rest.starts_with(std::path::MAIN_SEPARATOR)
+    })
+}
+
 /// One source file's line-hit counts, sorted by line.
 pub(crate) struct SourceCoverage {
     /// Source id as recorded by the compiler.
@@ -253,6 +326,7 @@ pub(crate) fn parse_site_counts(stderr: &str) -> (HashMap<u32, u64>, Vec<String>
 pub(crate) fn collect(
     metadata: &serde_json::Value,
     counts: &HashMap<u32, u64>,
+    filters: &CoverageFilters,
 ) -> Result<CoverageReport, String> {
     let sources: HashMap<u64, String> = metadata
         .get("sources")
@@ -303,7 +377,7 @@ pub(crate) fn collect(
         .into_iter()
         .filter_map(|(source_id, lines)| {
             let path = sources.get(&source_id)?.clone();
-            if path.ends_with(".elephc-test.lfc") {
+            if path.ends_with(".elephc-test.lfc") || !filters.allows(&path) {
                 return None;
             }
             Some(SourceCoverage {
@@ -318,7 +392,10 @@ pub(crate) fn collect(
         .collect();
     sources_out.sort_by(|left, right| left.path.cmp(&right.path));
     if sources_out.is_empty() {
-        return Err("debug metadata has no executable sites".to_string());
+        if filters.is_empty() {
+            return Err("debug metadata has no executable sites".to_string());
+        }
+        return Err("coverage filters excluded every executable source".to_string());
     }
     let user_source_ids: std::collections::HashSet<u64> =
         sources_out.iter().map(|source| source.source_id).collect();
@@ -1114,7 +1191,7 @@ mod tests {
     #[test]
     fn renders_text_line_coverage() {
         let counts = HashMap::from([(1, 1), (2, 1), (4, 1), (20, 1), (21, 1), (22, 1)]);
-        let report = collect(&metadata(), &counts).expect("coverage report");
+        let report = collect(&metadata(), &counts, &CoverageFilters::default()).expect("coverage report");
         let text = render(&report, CoverageFormat::Text);
         assert!(text.contains("Coverage: 2/3 lines (66.7%)"), "{text}");
         assert!(text.contains("Branches: 3/4 (75.0%)"), "{text}");
@@ -1124,11 +1201,47 @@ mod tests {
         assert!(text.contains("lib.php: 1/1 (100.0%)"), "{text}");
     }
 
+    /// Verifies include/exclude filters remove whole sources and their branches.
+    #[test]
+    fn filters_select_and_exclude_whole_sources() {
+        let counts = HashMap::from([(1, 1), (2, 1), (4, 1), (20, 1), (21, 1), (22, 1)]);
+        let include = CoverageFilters::new(vec!["main.php".to_string()], Vec::new());
+        let report = collect(&metadata(), &counts, &include).expect("included report");
+        assert_eq!(report.sources.len(), 1, "only main.php survives");
+        assert_eq!(report.sources[0].path, "main.php");
+        assert_eq!(report.branch_total(), 4, "main.php keeps its two branch points");
+
+        let exclude = CoverageFilters::new(Vec::new(), vec!["main.php".to_string()]);
+        let report = collect(&metadata(), &counts, &exclude).expect("excluded report");
+        assert_eq!(report.sources.len(), 1, "main.php is omitted");
+        assert_eq!(report.sources[0].path, "lib.php");
+        assert_eq!(report.branch_total(), 0, "omitted sources lose their branches");
+
+        let both = CoverageFilters::new(
+            vec!["main.php".to_string()],
+            vec!["main.php".to_string()],
+        );
+        let error = match collect(&metadata(), &counts, &both) {
+            Ok(_) => panic!("an empty filtered report must be an error"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("coverage filters excluded every executable source"),
+            "{error}"
+        );
+
+        let partial = CoverageFilters::new(vec!["mai".to_string()], Vec::new());
+        assert!(
+            collect(&metadata(), &counts, &partial).is_err(),
+            "a partial path component must not match main.php"
+        );
+    }
+
     /// Verifies LCOV records sum hits per line and carry the expected totals.
     #[test]
     fn renders_lcov_line_records() {
         let counts = HashMap::from([(1, 1), (2, 1), (4, 1), (20, 1), (21, 1), (22, 1)]);
-        let report = collect(&metadata(), &counts).expect("coverage report");
+        let report = collect(&metadata(), &counts, &CoverageFilters::default()).expect("coverage report");
         let lcov = render(&report, CoverageFormat::Lcov);
         assert!(lcov.contains("SF:main.php\n"), "{lcov}");
         assert!(lcov.contains("DA:2,2\n"), "{lcov}");
@@ -1156,7 +1269,7 @@ mod tests {
             ]
         });
         let counts = HashMap::from([(1, 1), (10, 1)]);
-        let report = collect(&metadata, &counts).expect("coverage report");
+        let report = collect(&metadata, &counts, &CoverageFilters::default()).expect("coverage report");
         assert_eq!(report.branch_total(), 3);
         assert_eq!(report.branch_covered(), 1);
         let text = render(&report, CoverageFormat::Text);
@@ -1194,7 +1307,7 @@ mod tests {
                 {"source_id": 0, "line": 2, "kind": "switch", "edges": [10, 11]}
             ]
         });
-        let report = collect(&metadata, &HashMap::new()).expect("coverage report");
+        let report = collect(&metadata, &HashMap::new(), &CoverageFilters::default()).expect("coverage report");
         let lcov = render(&report, CoverageFormat::Lcov);
         assert!(lcov.contains("BRDA:2,0,0,-\n"), "{lcov}");
         assert!(lcov.contains("BRDA:2,0,1,-\n"), "{lcov}");
@@ -1230,7 +1343,7 @@ mod tests {
             ]
         });
         let counts = HashMap::from([(1, 1), (2, 1), (10, 1), (20, 1), (22, 1)]);
-        let report = collect(&metadata, &counts).expect("coverage report");
+        let report = collect(&metadata, &counts, &CoverageFilters::default()).expect("coverage report");
         assert_eq!(report.branch_total(), 3, "branch total unchanged");
         assert_eq!(report.branch_covered(), 1, "branch covered unchanged");
         assert_eq!(report.path_total(), 6);
@@ -1288,7 +1401,7 @@ mod tests {
     #[test]
     fn renders_cobertura_xml() {
         let counts = HashMap::from([(1, 1), (2, 1), (4, 1), (20, 1), (21, 1), (22, 1)]);
-        let report = collect(&metadata(), &counts).expect("coverage report");
+        let report = collect(&metadata(), &counts, &CoverageFilters::default()).expect("coverage report");
         let xml = render(&report, CoverageFormat::Cobertura);
         assert!(xml.starts_with("<?xml version=\"1.0\" ?>"), "{xml}");
         assert!(
@@ -1313,7 +1426,7 @@ mod tests {
     #[test]
     fn renders_cobertura_relative_source_root() {
         let counts = HashMap::from([(1, 1)]);
-        let report = collect(&metadata(), &counts).expect("coverage report");
+        let report = collect(&metadata(), &counts, &CoverageFilters::default()).expect("coverage report");
         let xml = render(&report, CoverageFormat::Cobertura);
         assert!(xml.contains("<source>.</source>"), "{xml}");
         assert!(xml.contains("filename=\"main.php\""), "{xml}");
@@ -1348,7 +1461,7 @@ mod tests {
             ]
         });
         let counts = HashMap::from([(1, 1), (2, 1), (3, 1), (20, 1)]);
-        let report = collect(&metadata, &counts).expect("coverage report");
+        let report = collect(&metadata, &counts, &CoverageFilters::default()).expect("coverage report");
         let html = render(&report, CoverageFormat::Html);
         assert!(html.starts_with("<!doctype html>"), "{html}");
         assert!(html.contains("<title>elephc coverage report</title>"), "{html}");
@@ -1371,7 +1484,7 @@ mod tests {
             "sources": [{"id": 0, "path": "a&b.php"}],
             "sites": [{"id": 1, "source_id": 0, "line": 1}]
         });
-        let report = collect(&metadata, &HashMap::from([(1, 1)])).expect("coverage report");
+        let report = collect(&metadata, &HashMap::from([(1, 1)]), &CoverageFilters::default()).expect("coverage report");
         let xml = render(&report, CoverageFormat::Cobertura);
         assert!(xml.contains("filename=\"a&amp;b.php\""), "{xml}");
     }

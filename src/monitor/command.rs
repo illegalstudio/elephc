@@ -70,6 +70,8 @@ pub(crate) struct MonitorCommand {
     pub calls_mode: CallCaptureMode,
     /// Write the raw call events as one JSON object per line.
     pub calls_out: Option<String>,
+    /// Xdebug-compatible cachegrind export path for an exact capture.
+    pub cachegrind_out: Option<String>,
     /// Explicit performance-budget file; without it, the nearest `.elephc`
     /// above the profiled source is picked up automatically.
     pub assert_file: Option<String>,
@@ -78,6 +80,7 @@ pub(crate) struct MonitorCommand {
 /// Usage text for `elephc monitor`, printed on parameter errors and `--help`.
 pub(crate) const MONITOR_USAGE: &str = "Usage: elephc monitor <program|source.php> [--live] [--duration <seconds>] [--out <file.speedscope.json>]
        elephc monitor <program|source.php> [--pprof <file.pb.gz>] [--dot <file.dot>] [--html <file.html>]
+                      [--cachegrind <file.cachegrind>]
        elephc monitor <program|source.php> [--trace <f.json>] [--assert <spec>]... [--assert-file <file>]
        elephc monitor <program|source.php> --live --html <file.html> [--serve <host:port>]
        elephc monitor <program|source.php> [--baseline <prior.json>] [--fail-on-regression <points>]
@@ -149,6 +152,12 @@ segments tabs. Calls mode always carries the exact --with-monitoring capture:
 one run prints the exact per-function profile before the call values, and --trace
 still writes the Chrome/Perfetto timeline. Run --exact without --calls for the
 profile-only HTML page.
+
+--cachegrind writes an Xdebug-compatible cachegrind profile from an exact launch
+capture: function self time, call counts and per-edge inclusive time in
+nanoseconds, readable by KCachegrind, QCachegrind and Webgrind. It needs the
+instrumented exact capture, so it is refused with --calls, --live, --attach and
+service targets; a sampled view has no call counts to export.
 
 --pprof writes the capture as a gzip pprof profile. --dot writes a Graphviz call
 graph (`dot -Tsvg`); --html writes a self-contained, interactive call graph (one
@@ -233,6 +242,7 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
     let mut calls = false;
     let mut calls_mode = CallCaptureMode::Full;
     let mut calls_out = None;
+    let mut cachegrind_out = None;
     let mut assert_file = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -289,6 +299,16 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
             }
             "--baseline" => {
                 baseline = Some(it.next().ok_or("--baseline needs a file path")?.clone());
+            }
+            "--cachegrind" => {
+                cachegrind_out = Some(
+                    it.next()
+                        .ok_or("--cachegrind needs a file path")?
+                        .clone(),
+                );
+            }
+            value if value.starts_with("--cachegrind=") => {
+                cachegrind_out = Some(value["--cachegrind=".len()..].to_string());
             }
             "--prometheus" => {
                 prom_out = Some(it.next().ok_or("--prometheus needs a file path")?.clone());
@@ -369,6 +389,25 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
     if calls && !stitch.is_empty() {
         return Err("--calls and --stitch are different capture modes".to_string());
     }
+    if cachegrind_out.is_some() {
+        let unsupported: Vec<&str> = [
+            ("--calls", calls),
+            ("--live", live),
+            ("--attach", attach_pid.is_some()),
+            ("--stitch", !stitch.is_empty()),
+        ]
+        .iter()
+        .filter(|(_, given)| *given)
+        .map(|(name, _)| *name)
+        .collect();
+        if !unsupported.is_empty() {
+            return Err(format!(
+                "--cachegrind needs a one-shot exact capture; it cannot be combined with {}. \
+                 Point monitor at a --with-monitoring program and drop the other mode.",
+                unsupported.join(", ")
+            ));
+        }
+    }
     // The exporters read the sampled capture, and `--exact` against a service
     // returns the per-function table only. This used to warn and exit 0, which
     // told automation it had an artifact it did not have.
@@ -378,6 +417,7 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
             ("--pprof", pprof_out.is_some()),
             ("--dot", dot_out.is_some()),
             ("--html", html_out.is_some()),
+            ("--cachegrind", cachegrind_out.is_some()),
         ]
         .iter()
         .filter(|(_, given)| *given)
@@ -420,6 +460,7 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
         calls,
         calls_mode,
         calls_out,
+        cachegrind_out,
         assert_file,
     })
 }

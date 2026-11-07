@@ -102,6 +102,7 @@ pub(crate) fn unhonoured_service_flags(cmd: &MonitorCommand) -> Option<String> {
         ("--fail-on-regression", cmd.fail_on_regression.is_some()),
         ("--save", cmd.save.is_some()),
         ("--trace", cmd.trace.is_some()),
+        ("--cachegrind", cmd.cachegrind_out.is_some()),
         ("--prometheus", cmd.prom_out.is_some()),
         ("--otlp", cmd.otlp.is_some()),
         // `--out`, `--pprof`, `--dot` and `--html` are all written by the
@@ -215,6 +216,13 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     // shortcut here, it is the whole job. macOS has `/usr/bin/sample` for that;
     // on Linux this tool does it itself, with `ptrace`.
     if let Some(pid) = cmd.attach_pid {
+        if cmd.cachegrind_out.is_some() {
+            eprintln!(
+                "elephc monitor: --cachegrind needs an instrumented exact capture; an attached \
+                 process carries no call counts"
+            );
+            return 2;
+        }
         let mut image = match attach_image(pid) {
             Ok(image) => image,
             Err(reason) => {

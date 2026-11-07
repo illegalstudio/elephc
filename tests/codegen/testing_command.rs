@@ -792,6 +792,71 @@ fn test_cli_test_coverage_writes_html() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// `--coverage-filter` and `--coverage-exclude` select whole sources, imply
+/// `--coverage`, and keep omitted files and their branches out of the report.
+#[test]
+fn test_cli_test_coverage_filters_select_sources() {
+    let dir = make_cli_test_dir("elephc_cli_test_coverage_filters");
+    write_project(&dir);
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "CounterTest",
+            "--coverage-format",
+            "lcov",
+            "--coverage-filter",
+            "src",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    let records: Vec<&str> = stdout.split("end_of_record").collect();
+    assert!(
+        records.iter().any(|record| record.contains("Counter.php")),
+        "included source missing: {stdout}"
+    );
+    assert!(
+        !records.iter().any(|record| record.contains("CounterTest.php")),
+        "excluded test source present: {stdout}"
+    );
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "CounterTest",
+            "--coverage-format",
+            "lcov",
+            "--coverage-exclude",
+            "src",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    let records: Vec<&str> = stdout.split("end_of_record").collect();
+    assert!(
+        records.iter().any(|record| record.contains("CounterTest.php")),
+        "non-excluded test source missing: {stdout}"
+    );
+    assert!(
+        !records.iter().any(|record| record.contains("Counter.php")),
+        "excluded src source present: {stdout}"
+    );
+
+    // A filter alone enables coverage; without that, the flag would parse and
+    // then be ignored by the ordinary test run.
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &["--filter", "CounterTest", "--coverage-filter", "src"],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("Coverage:"), "{stdout}");
+    assert!(stdout.contains("Counter.php"), "{stdout}");
+    assert!(!stdout.contains("CounterTest.php"), "{stdout}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// `--coverage` records both edges of source-level conditionals and emits
 /// LCOV `BRDA`/`BRF`/`BRH` plus Cobertura `branch`/`conditions` records.
 #[test]

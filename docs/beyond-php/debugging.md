@@ -295,9 +295,13 @@ Coverage belongs to the test command:
 elephc test --coverage --coverage-format lcov --coverage-out coverage.lcov
 elephc test --coverage --coverage-format cobertura --coverage-out coverage.xml
 elephc test --coverage --coverage-format html --coverage-out coverage.html
+elephc test --coverage --coverage-filter src --coverage-exclude src/generated
 ```
 
-The suite runs in one process so site counters are not lost across forks.
+Repeatable `--coverage-filter` and `--coverage-exclude` roots select which
+compiled sources enter the report; exclusion wins, and either flag implies
+`--coverage`. Omitted files also leave the branch/path totals. The suite runs in
+one process so site counters are not lost across forks.
 Reports include line coverage, every source-level `&&`/`||`/`!`/switch decision,
 and full reachable short-circuit path combinations for logical conditions and
 switch dispatch. LCOV emits `DA`/`BRDA`/`BRF`/`BRH` plus the elephc `PATH`/`PTF`/
