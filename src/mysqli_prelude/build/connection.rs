@@ -2495,12 +2495,28 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .method(
             method("__elephcReportGiven")
                 .private()
+                .static_()
                 .param("message", TypeExpr::Str)
                 .param("errno", TypeExpr::Int)
                 .param("sqlstate", TypeExpr::Str)
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_expr(e_method_call(e_this(), "report", vec![e_var("message"), e_var("errno"), e_var("sqlstate")])),
+                    s_if(
+                        e_binop(e_binop(e_static_prop("mysqli", "reportMode"), BinOp::BitAnd, e_int(2)), BinOp::NotEq, e_int(0)),
+                        vec![
+                            s_throw(e_static_call("mysqli_sql_exception", "__elephcCreate", vec![e_var("message"), e_var("errno"), e_var("sqlstate")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_binop(e_static_prop("mysqli", "reportMode"), BinOp::BitAnd, e_int(1)), BinOp::NotEq, e_int(0)),
+                        vec![
+                            s_expr(e_static_call("mysqli", "__elephcWarn", vec![e_binop(e_binop(e_binop(e_binop(e_binop(e_str("("), BinOp::Concat, e_var("sqlstate")), BinOp::Concat, e_str("/")), BinOp::Concat, e_var("errno")), BinOp::Concat, e_str("): ")), BinOp::Concat, e_var("message"))])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                 ]),
         )
         .method(

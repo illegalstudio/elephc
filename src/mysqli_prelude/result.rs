@@ -67,7 +67,6 @@ class mysqli_result implements IteratorAggregate {
     // Set once the link moved on from this set (reconnect, close): every fetch then fails
     // with mysqlnd's 2014, reported without touching the link's own error.
     private bool $streamStale = false;
-    private ?mysqli $streamReportLink = null;
 
     // mysqlnd statistics: the connection statistics slot the rows are counted on (-1: not
     // counted; the producing connection's, without keeping its mysqli object alive),
@@ -608,10 +607,7 @@ class mysqli_result implements IteratorAggregate {
     // (mysqlnd's 2014, reported on the result alone; php returns false).
     private function streamRow(): ?array {
         if ($this->streamDetachedIfStale() || $this->streamStale) {
-            $_link = $this->streamReportLink;
-            if ($_link !== null) {
-                $_link->__elephcReportGiven("Commands out of sync; you can't run this command now", 2014, "HY000");
-            }
+            mysqli::__elephcReportGiven("Commands out of sync; you can't run this command now", 2014, "HY000");
             return null;
         }
         // 2 = the next row was not read yet: like mysqlnd, read it only now.
@@ -691,8 +687,8 @@ class mysqli_result implements IteratorAggregate {
     }
 
     // A set whose link moved on (a reconnect or close finalized its statement) is stale:
-    // it is detached without touching the link, and every later fetch fails. True when
-    // this call found it stale.
+    // it is detached without touching the link (and keeps no reference to it), and every
+    // later fetch fails. True when this call found it stale.
     private function streamDetachedIfStale(): bool {
         if ($this->streamStmt < 0) {
             return false;
@@ -703,7 +699,6 @@ class mysqli_result implements IteratorAggregate {
         }
         $this->streamStmt = -1;
         $this->streamLink = null;
-        $this->streamReportLink = $_link;
         $this->streamStale = true;
         $this->lengths = null;
         return true;

@@ -88,7 +88,6 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
         .private_prop("streamKinds", t_array(), Some(e_array(vec![])))
         .private_prop("streamRows", TypeExpr::Int, Some(e_int(0)))
         .private_prop("streamStale", TypeExpr::Bool, Some(e_bool(false)))
-        .private_prop("streamReportLink", t_nullable(t_class("mysqli")), Some(e_null()))
         .private_prop("statId", TypeExpr::Int, Some(e_neg(e_int(1))))
         .private_prop("statBinary", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("statKeys", t_array(), Some(e_array(vec![])))
@@ -926,15 +925,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_method_call(e_this(), "streamDetachedIfStale", vec![]), BinOp::Or, e_this_prop("streamStale")),
                         vec![
-                            s_assign("_link", e_this_prop("streamReportLink")),
-                            s_if(
-                                e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
-                                vec![
-                                    s_expr(e_method_call(e_var("_link"), "__elephcReportGiven", vec![e_str("Commands out of sync; you can't run this command now"), e_int(2014), e_str("HY000")])),
-                                ],
-                                vec![],
-                                None,
-                            ),
+                            s_expr(e_static_call("mysqli", "__elephcReportGiven", vec![e_str("Commands out of sync; you can't run this command now"), e_int(2014), e_str("HY000")])),
                             s_return(e_null()),
                         ],
                         vec![],
@@ -1093,7 +1084,6 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     ),
                     s_prop_assign(e_this(), "streamStmt", e_neg(e_int(1))),
                     s_prop_assign(e_this(), "streamLink", e_null()),
-                    s_prop_assign(e_this(), "streamReportLink", e_var("_link")),
                     s_prop_assign(e_this(), "streamStale", e_bool(true)),
                     s_prop_assign(e_this(), "lengths", e_null()),
                     s_return(e_bool(true)),

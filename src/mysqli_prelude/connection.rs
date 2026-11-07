@@ -1620,10 +1620,15 @@ class mysqli {
         return $stmt >= 0 && $this->liveStmt == $stmt;
     }
 
-    // Dispatches mysqli_report for an error that is not the link's own (a stale result's),
-    // leaving the link's recorded error untouched.
-    private function __elephcReportGiven(string $message, int $errno, string $sqlstate): void {
-        $this->report($message, $errno, $sqlstate);
+    // Dispatches mysqli_report for an error that is not a link's own (a stale result's): it
+    // needs no link, so the result keeps none, and no link's recorded error changes.
+    private static function __elephcReportGiven(string $message, int $errno, string $sqlstate): void {
+        if ((mysqli::$reportMode & 2) != 0) {
+            throw mysqli_sql_exception::__elephcCreate($message, $errno, $sqlstate);
+        }
+        if ((mysqli::$reportMode & 1) != 0) {
+            mysqli::__elephcWarn("(" . $sqlstate . "/" . $errno . "): " . $message);
+        }
     }
 
     // Adds $by to one mysqlnd statistic: the connection's and the process-wide

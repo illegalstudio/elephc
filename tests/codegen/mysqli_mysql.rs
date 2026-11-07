@@ -3419,3 +3419,37 @@ echo ":", $db->errno, "|", $db->query("SELECT 5")->fetch_row()[0], "\n";
     ));
     assert_eq!(out, "NULL:NULL:NULL:false:0:0|throw:2014:Commands out of sync; you can't run this command now:HY000:1146|5\n");
 }
+
+/// A stale MYSQLI_USE_RESULT result (its link reconnected) keeps no reference to the link:
+/// freeing it, or failing a fetch on it, and then unsetting the mysqli object closes the
+/// replacement connection at once, as in php. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stale_result_does_not_keep_the_replacement_link_alive() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function sd_threads(string $h, string $u, string $p, string $d, int $port): int {
+    $m = new mysqli($h, $u, $p, $d, $port);
+    $row = $m->query("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER = '" . $u . "'")->fetch_row();
+    $m->close();
+    return (int) $row[0];
+}
+$base = sd_threads($host, $user, $pass, $dbname, $port);
+$db2 = new mysqli($host, $user, $pass, $dbname, $port);
+$u = $db2->query("SELECT 1 AS a UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+$db2->real_connect($host, $user, $pass, $dbname, $port);
+echo "a:", sd_threads($host, $user, $pass, $dbname, $port) - $base, "|";
+$u->free();
+unset($db2);
+echo "b:", sd_threads($host, $user, $pass, $dbname, $port) - $base, "|";
+$db3 = new mysqli($host, $user, $pass, $dbname, $port);
+$w = $db3->query("SELECT 1 AS a UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+$db3->real_connect($host, $user, $pass, $dbname, $port);
+echo var_export($w->fetch_column(), true), "|";
+unset($db3);
+echo "c:", sd_threads($host, $user, $pass, $dbname, $port) - $base, "\n";
+"#,
+    ));
+    assert_eq!(out, "a:1|b:0|false|c:0\n");
+}
