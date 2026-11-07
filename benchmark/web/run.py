@@ -112,38 +112,80 @@ def parse_wrk(text: str) -> dict[str, Any]:
     return result
 
 
+def aggregate_wrk_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merges one or more concurrent wrk reports into one aggregate sample.
+
+    Aggregate throughput is the sum. Latency is not additive, so the report
+    keeps the mean average latency and the worst p99 across clients; the
+    per-client reports remain available under `per_client`.
+    """
+    if len(results) == 1:
+        merged = dict(results[0])
+        merged["clients"] = 1
+        return merged
+    average_latencies = [
+        float(result["latency_avg_ms"])
+        for result in results
+        if "latency_avg_ms" in result
+    ]
+    p99_latencies = [
+        float(result["latency_p99_ms"])
+        for result in results
+        if "latency_p99_ms" in result
+    ]
+    return {
+        "clients": len(results),
+        "requests_per_sec": sum(float(result["requests_per_sec"]) for result in results),
+        "latency_avg_ms": statistics.mean(average_latencies) if average_latencies else 0.0,
+        "latency_p99_ms": max(p99_latencies) if p99_latencies else None,
+        "per_client": results,
+        "raw": "\n".join(result.get("raw", "") for result in results),
+    }
+
+
 def run_wrk(
     url: str,
     threads: int,
     connections: int,
     duration: str,
     timeout: float,
+    clients: int = 1,
 ) -> dict[str, Any]:
-    """Runs one wrk measurement and returns its parsed report."""
-    command = [
-        "wrk",
-        "--latency",
-        "-t",
-        str(threads),
-        "-c",
-        str(connections),
-        "-d",
-        duration,
-        url,
+    """Runs one or more concurrent wrk measurements and returns their aggregate."""
+    commands = [
+        [
+            "wrk",
+            "--latency",
+            "-t",
+            str(threads),
+            "-c",
+            str(connections),
+            "-d",
+            duration,
+            url,
+        ]
+        for _ in range(clients)
     ]
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    if completed.returncode != 0:
-        raise SystemExit(
-            f"wrk exited with {completed.returncode}:\n{completed.stderr or completed.stdout}"
+    processes = [
+        subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
-    parsed = parse_wrk(completed.stdout)
-    parsed["command"] = " ".join(command)
-    return parsed
+        for command in commands
+    ]
+    results: list[dict[str, Any]] = []
+    for command, process in zip(commands, processes):
+        stdout, stderr = process.communicate(timeout=timeout)
+        if process.returncode != 0:
+            raise SystemExit(
+                f"wrk exited with {process.returncode}:\n{stderr or stdout}"
+            )
+        parsed = parse_wrk(stdout)
+        parsed["command"] = " ".join(command)
+        results.append(parsed)
+    return aggregate_wrk_results(results)
 
 
 def run_k6(
@@ -278,7 +320,7 @@ def markdown_report(results: dict[str, Any]) -> str:
         "",
         f"- Server: `elephc --web`, workers={results['workers']}",
         f"- Load: `wrk -t{results['threads']} -c{results['connections']} "
-        f"-d{results['duration']}`",
+        f"-d{results['duration']}` x{results.get('clients', 1)} client(s)",
         f"- Platform: {results['environment']['platform']} "
         f"({results['environment']['cpu_count']} CPUs)",
         "",
@@ -335,6 +377,7 @@ def run_php_baseline(
     connections: int,
     duration: str,
     timeout: float,
+    clients: int,
 ) -> dict[str, Any]:
     """Measures the fixture under PHP's single-process built-in server."""
     php = shutil.which("php")
@@ -355,7 +398,7 @@ def run_php_baseline(
         )
         try:
             wait_for_server(process, url, log_path)
-            round_ = run_wrk(url, threads, connections, duration, timeout)
+            round_ = run_wrk(url, threads, connections, duration, timeout, clients)
         finally:
             process.terminate()
             try:
@@ -390,6 +433,7 @@ def main() -> int:
     parser.add_argument("--compiler", type=Path)
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--clients", type=int, default=1)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--connections", type=int, default=100)
     parser.add_argument("--duration", default="10s")
@@ -404,6 +448,10 @@ def main() -> int:
 
     if shutil.which("wrk") is None:
         raise SystemExit("wrk is required: install it (brew install wrk) and retry")
+    if args.clients < 1:
+        raise SystemExit("--clients must be at least 1")
+    if args.repeat < 1:
+        raise SystemExit("--repeat must be at least 1")
 
     compiler = (args.compiler or build_compiler(args.no_build)).resolve()
     fixture = args.fixture.resolve()
@@ -432,9 +480,23 @@ def main() -> int:
             try:
                 wait_for_server(process, url, log_path)
                 if args.warmup != "0":
-                    run_wrk(url, args.threads, args.connections, args.warmup, args.timeout)
+                    run_wrk(
+                        url,
+                        args.threads,
+                        args.connections,
+                        args.warmup,
+                        args.timeout,
+                        args.clients,
+                    )
                 rounds = [
-                    run_wrk(url, args.threads, args.connections, args.duration, args.timeout)
+                    run_wrk(
+                        url,
+                        args.threads,
+                        args.connections,
+                        args.duration,
+                        args.timeout,
+                        args.clients,
+                    )
                     for _ in range(args.repeat)
                 ]
                 k6_results = [
@@ -451,6 +513,7 @@ def main() -> int:
         results: dict[str, Any] = {
             "fixture": str(fixture),
             "workers": args.workers,
+            "clients": args.clients,
             "threads": args.threads,
             "connections": args.connections,
             "duration": args.duration,
@@ -467,6 +530,7 @@ def main() -> int:
                 args.connections,
                 args.duration,
                 args.timeout,
+                args.clients,
             )
 
     report = markdown_report(results)

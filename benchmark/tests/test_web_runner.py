@@ -38,6 +38,18 @@ class WebRunnerTests(unittest.TestCase):
         self.assertEqual(parsed["latency_p99_ms"], 1.0)
         self.assertEqual(parsed["transfer_per_sec"], "341.00KB")
 
+    def test_aggregate_sums_throughput_across_clients(self):
+        first = run.parse_wrk(WRK_SAMPLE)
+        second = dict(first)
+        second["requests_per_sec"] = 666.67
+        second["latency_avg_ms"] = 2.0
+        second["latency_p99_ms"] = 3.0
+        merged = run.aggregate_wrk_results([first, second])
+        self.assertEqual(merged["clients"], 2)
+        self.assertAlmostEqual(merged["requests_per_sec"], 1000.0)
+        self.assertAlmostEqual(merged["latency_avg_ms"], (0.76901 + 2.0) / 2)
+        self.assertEqual(merged["latency_p99_ms"], 3.0)
+
     def test_summarize_reports_median_and_spread(self):
         summary = run.summarize(
             [

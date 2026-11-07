@@ -244,6 +244,7 @@ the historical dashboard:
 ```bash
 python3 benchmark/web/run.py
 python3 benchmark/web/run.py --workers 4 --threads 4 --connections 100 --duration 10s
+python3 benchmark/web/run.py --workers 8 --clients 3 --threads 4 --connections 200
 python3 benchmark/web/run.py --no-build --compiler target/release/elephc \
   --json web-results.json --markdown web-results.md
 python3 benchmark/web/run.py --k6 vus --k6 constant
@@ -253,7 +254,9 @@ The default fixture, `benchmark/web/hello.php`, is the minimal handler from the
 [FrankenPHP vs PHP-FPM article](https://vulovic.me/frankenphp-vs-php-fpm-benchmarks-surprises-and-one-clear-winner-173231cb1ad5):
 one `echo` and one `$_SERVER['SERVER_SOFTWARE']` read. The runner compiles it
 with `--web`, starts the server on an ephemeral port, warms up with `wrk`, then
-takes repeated measurements and reports the median. `--php-baseline` measures the
+takes repeated measurements and reports the median. `--clients N` starts N
+concurrent `wrk` processes and reports aggregate throughput (useful for proving
+whether one load generator is the bottleneck); `--php-baseline` measures the
 same fixture under `php -S` (single process, not PHP-FPM), and `--k6` runs the
 article's 100-VU and 5,000 req/s shapes.
 
