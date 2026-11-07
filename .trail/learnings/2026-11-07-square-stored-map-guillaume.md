@@ -36,3 +36,11 @@ PHP and the C baseline both print `1691750000`.
   `hrtime`, 5000 maps of 100 ints: parent 21.855 / 22.529 / 24.100 / 24.936 /
   34.165 ms; new 0.749 / 0.841 / 0.842 / 0.846 / 0.910 ms. Both printed
   `1691750000` (median about 24.1 -> 0.842 ms, about 29x).
+
+## Full ownership suite
+
+A fresh full `runtime_gc::` run after all three performance blocks (mb_chr, affine,
+square) finished with **1437 passed / 1 failed**. The only failure is
+`runtime_gc::pointer_read_owners::test_fileinfo_pointer_read_string_alias_owners`, the
+pre-existing 24-byte string leak that reproduces byte-for-byte with the parent compiler
+(recorded in `2026-11-06-stored-numeric-map-guillaume.md`).
