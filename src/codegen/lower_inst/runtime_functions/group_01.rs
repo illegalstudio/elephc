@@ -43,6 +43,9 @@ pub(super) fn lower(
         RuntimeFnId::ArraySumIntCached => Some({
             crate::codegen::lower_inst::arrays::lower_array_sum_int_cached(ctx, inst)
         }),
+        RuntimeFnId::ArrayMapNumeric => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_numeric(ctx, inst)
+        }),
         RuntimeFnId::ArrayMapSumAdd => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add(ctx, inst)
         }),

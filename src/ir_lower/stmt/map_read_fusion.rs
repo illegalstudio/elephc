@@ -51,7 +51,7 @@ pub(crate) fn fuse_map_reads(
 /// The indexed-read fusion defers a source read that PHP's `array_map()` performed at the
 /// assignment. A reference, global, static binding, or by-reference parameter can change that
 /// source between the two points, so those sources keep the materialized map.
-fn aliased_locals(
+pub(super) fn aliased_locals(
     body: &[Stmt],
     by_ref_params: &std::collections::HashSet<String>,
 ) -> std::collections::HashSet<String> {
@@ -901,7 +901,7 @@ pub(super) fn stmt_mentions(stmt: &Stmt, name: &str) -> bool {
 }
 
 /// Reports whether an expression may mention one local, conservatively.
-fn expr_mentions(expr: &Expr, name: &str) -> bool {
+pub(super) fn expr_mentions(expr: &Expr, name: &str) -> bool {
     match &expr.kind {
         ExprKind::Variable(local) => local == name,
         ExprKind::ArrayAccess { array, index } => {

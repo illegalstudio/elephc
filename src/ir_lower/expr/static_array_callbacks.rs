@@ -479,6 +479,86 @@ pub(super) fn lower_count_explode(
     ))
 }
 
+/// Lowers a stored `array_map(fn($v) => $v + C | $v - C | $v * C, $ints)` into one kernel.
+///
+/// The callback is a total single-operation arithmetic tree over a packed-int source, so it has
+/// no observable effects. The runtime kernel builds a raw `array<int>` while no element
+/// overflows, then rebuilds an ordinary boxed Mixed array so PHP's per-element int/float result
+/// is preserved. The static result type stays `array<mixed>`, which is exactly what the checker
+/// promises; narrowed runtime storage is handled by the generic Mixed readers.
+pub(super) fn lower_stored_numeric_map(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if name != crate::ir_lower::stmt::stored_numeric_map::STORED_NUMERIC_MAP
+        || args.len() != 2
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let ExprKind::Variable(source_name) = &args[1].kind else {
+        return None;
+    };
+    if ctx.local_type(source_name).codegen_repr()
+        != PhpType::Array(Box::new(PhpType::Int))
+    {
+        return None;
+    }
+    let (param, body) = scalar_single_param_closure(&args[0], false)?;
+    let ExprKind::BinaryOp { left, op, right } = &body.kind else {
+        return None;
+    };
+    let constant = match op {
+        BinOp::Add => additive_literal(left, right, param)?,
+        BinOp::Sub => match (&left.kind, &right.kind) {
+            (ExprKind::Variable(name), ExprKind::IntLiteral(value)) if name == param => *value,
+            _ => return None,
+        },
+        BinOp::Mul => match (&left.kind, &right.kind) {
+            (ExprKind::Variable(name), ExprKind::IntLiteral(value)) if name == param => *value,
+            (ExprKind::IntLiteral(value), ExprKind::Variable(name)) if name == param => *value,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let op_code = match op {
+        BinOp::Add => 0i64,
+        BinOp::Sub => 1i64,
+        BinOp::Mul => 2i64,
+        _ => unreachable!("the stored numeric map only accepts add, subtract, and multiply"),
+    };
+    let source = lower_expr(ctx, &args[1]);
+    let constant = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(constant)),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(expr.span),
+    );
+    let op_code = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(op_code)),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(expr.span),
+    );
+    Some(ctx.emit_value(
+        Op::RuntimeCall,
+        vec![source.value, constant.value, op_code.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::ArrayMapNumeric,
+        ))),
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        crate::ir::RuntimeFnId::ArrayMapNumeric.intrinsic_effects(),
+        Some(expr.span),
+    ))
+}
+
 /// Lowers `array_sum(array_map(fn($x) => $x + $c, $ints))` into one packed-int kernel.
 ///
 /// The closure has no captures, no declared return type, and a single untyped parameter, so

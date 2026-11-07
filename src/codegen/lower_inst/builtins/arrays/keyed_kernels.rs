@@ -16,6 +16,33 @@ use crate::ir::Instruction;
 
 use super::{expect_operand, store_if_result};
 
+/// Lowers the stored `$x + C`, `$x - C`, or `$x * C` map over a packed int array.
+///
+/// The runtime kernel builds a raw int array until an element overflows; it then rebuilds an
+/// ordinary boxed Mixed array so PHP's per-element int/float result is preserved.
+pub(crate) fn lower_array_map_numeric(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let constant = expect_operand(inst, 1)?;
+    let op = expect_operand(inst, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(constant, "x1")?;
+            ctx.load_value_to_reg(op, "x2")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(constant, "rsi")?;
+            ctx.load_value_to_reg(op, "rdx")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_map_numeric");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `array_map_sum_add(array, offset)` into the fused runtime kernel.
 pub(crate) fn lower_array_map_sum_add(
     ctx: &mut FunctionContext<'_>,

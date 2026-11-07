@@ -1843,6 +1843,12 @@ fn lower_body_into_function(
             &env,
             &by_ref_param_names,
         );
+        crate::ir_lower::stmt::stored_numeric_map::mark_stored_numeric_maps(
+            &mut fused_body,
+            &env,
+            &by_ref_param_names,
+            functions,
+        );
     }
     let body: &[Stmt] = &fused_body;
     // The constructor calls this ordinary EIR function before allocating a coroutine.

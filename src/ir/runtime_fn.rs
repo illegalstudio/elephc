@@ -114,6 +114,11 @@ pub enum RuntimeFnId {
     /// Boxes the last value of an array in insertion order for `array_last()`.
     ArrayLast,
     ArrayMap,
+    /// Stored `array_map(fn($x) => $x + C | $x - C | $x * C, $packedInts)` kernel.
+    ///
+    /// The result is a raw `array<int>` while the literal operation cannot overflow; a
+    /// per-element promotion falls back to an ordinary boxed Mixed array.
+    ArrayMapNumeric,
     /// Fused `array_sum(array_map(fn($x) => $x + $literal, $packedInts))` scalar kernel.
     ArrayMapSumAdd,
     /// Raw-int observation of the fused map+sum kernel; avoids boxing the result.
@@ -991,6 +996,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
             RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumAddInt | RuntimeFnId::ArrayMapSumProbeInt | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),
+            RuntimeFnId::ArrayMapNumeric => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSumAddIntCached => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSumAddSafe => Some((2, Some(2))),
             RuntimeFnId::ArrayElementTypeCheck => Some((3, Some(3))),
@@ -1895,6 +1901,10 @@ impl RuntimeFnId {
         use crate::ir::Effects as E;
         match self {
             RuntimeFnId::ArrayMap => {
+                E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
+            }
+            // The stored numeric map reads the packed source and allocates the destination array.
+            RuntimeFnId::ArrayMapNumeric => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
             // The fused map+sum kernel walks a packed payload and boxes one result cell.
@@ -3230,6 +3240,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeys => "array_keys",
             RuntimeFnId::ArrayLast => "array_last",
             RuntimeFnId::ArrayMap => "array_map",
+            RuntimeFnId::ArrayMapNumeric => "array_map_numeric",
             RuntimeFnId::ArrayMapSumAdd => "array_map_sum_add",
             RuntimeFnId::ArrayMapSumAddInt => "array_map_sum_add_int",
             RuntimeFnId::ArrayMapSumProbeInt => "array_map_sum_probe_int",
