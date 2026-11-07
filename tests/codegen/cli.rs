@@ -2790,14 +2790,7 @@ fn test_cli_debug_dap_conditional_breakpoint_stops_only_when_true() {
     }
     let status = client.child.wait().expect("wait for conditional adapter");
     assert!(status.success(), "conditional adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read conditional stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with("10"),
         "conditional program output missing: {stderr}"
@@ -2879,21 +2872,24 @@ fn test_cli_debug_dap_exception_filters_stop_caught_and_uncaught() {
     assert_eq!(client.response(seq)["success"], true);
 
     // The uncaught report exits with PHP's 255 status; the DAP transport closes
-    // before a `terminated` event can be emitted.
+    // before a `terminated` event can be emitted. Drain any output events that
+    // were queued before the close.
+    client.drain_until_closed();
     let status = client.child.wait().expect("wait for exception adapter");
     assert_eq!(status.code(), Some(255), "uncaught exception exit status");
-    let mut stderr = String::new();
+    let output = client.program_output();
+    assert!(output.contains("caught"), "caught handler output missing: {output}");
+    let mut report = String::new();
     {
         use std::io::Read as _;
         client
             .stderr
-            .read_to_string(&mut stderr)
-            .expect("read exception stderr");
+            .read_to_string(&mut report)
+            .expect("read exception adapter stderr");
     }
-    assert!(stderr.contains("caught"), "caught handler output missing: {stderr}");
     assert!(
-        stderr.contains("RuntimeException"),
-        "uncaught Throwable report missing: {stderr}"
+        report.contains("RuntimeException"),
+        "uncaught Throwable report missing: {report}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -2963,23 +2959,25 @@ fn test_cli_debug_dap_exception_stops_in_destructor() {
 
     let seq = client.send("continue", None);
     assert_eq!(client.response(seq)["success"], true);
+    client.drain_until_closed();
     let status = client.child.wait().expect("wait for destructor adapter");
     assert_eq!(status.code(), Some(255), "uncaught destructor exit status");
-    let mut stderr = String::new();
+    let output = client.program_output();
+    let mut report = String::new();
     {
         use std::io::Read as _;
         client
             .stderr
-            .read_to_string(&mut stderr)
-            .expect("read destructor stderr");
+            .read_to_string(&mut report)
+            .expect("read destructor adapter stderr");
     }
     assert!(
-        stderr.contains("RuntimeException") && stderr.contains("dtor"),
-        "uncaught destructor report missing: {stderr}"
+        report.contains("RuntimeException") && report.contains("dtor"),
+        "uncaught destructor report missing: {report}"
     );
     assert!(
-        !stderr.contains("after"),
-        "statements after the uncaught destructor must not run: {stderr}"
+        !output.contains("after") && !report.contains("after"),
+        "statements after the uncaught destructor must not run: {output}{report}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -3119,14 +3117,7 @@ fn test_cli_debug_dap_data_breakpoint_stops_on_write() {
     }
     let status = client.child.wait().expect("wait for data adapter");
     assert!(status.success(), "data adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read data stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with("3"),
         "data program output missing: {stderr}"
@@ -3282,14 +3273,7 @@ fn test_cli_debug_dap_property_hooks_and_virtual_properties() {
         .wait()
         .expect("wait for property hook adapter");
     assert!(status.success(), "property hook adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read property hook stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with("50 8"),
         "property hook program output missing: {stderr}"
@@ -3452,14 +3436,7 @@ fn test_cli_debug_dap_dynamic_properties_and_debug_info() {
     }
     let status = client.child.wait().expect("wait for dynamic adapter");
     assert!(status.success(), "dynamic adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read dynamic stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with("745"),
         "dynamic program output missing: {stderr}"
@@ -3587,12 +3564,7 @@ fn test_cli_debug_tcp_attach_rejects_wrong_key_then_accepts_correct_key() {
     let status = client.child.wait().expect("wait TCP attach adapter");
     assert!(status.success(), "TCP attach adapter failed");
 
-    use std::io::Read as _;
-    let mut stdout = debuggee.child.stdout.take().expect("debuggee stdout");
-    let mut output = String::new();
-    stdout
-        .read_to_string(&mut output)
-        .expect("read debuggee stdout");
+    let output = client.program_output();
     assert!(
         output.contains("5"),
         "TCP attach program output missing: {output}"
@@ -3677,14 +3649,7 @@ fn test_cli_debug_dap_elephc_break_stops_at_call_site() {
     }
     let status = client.child.wait().expect("wait for elephc_break adapter");
     assert!(status.success(), "elephc_break adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read elephc_break stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with("after"),
         "elephc_break program output missing: {stderr}"
@@ -3948,14 +3913,7 @@ fn test_cli_debug_dap_safe_debug_info_projection() {
     }
     let status = client.child.wait().expect("wait for safe debug info adapter");
     assert!(status.success(), "safe debug info adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read safe debug info stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         !stderr.contains("COMPUTED_CALLED"),
         "the debugger executed a runtime-only __debugInfo(): {stderr}"
@@ -4143,14 +4101,7 @@ fn test_cli_debug_dap_dynamic_property_data_breakpoint_stops_on_write() {
     }
     let status = client.child.wait().expect("wait for dynamic data adapter");
     assert!(status.success(), "dynamic data adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read dynamic data stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.contains("7"),
         "dynamic data program output missing: {stderr}"
@@ -4337,14 +4288,7 @@ fn test_cli_debug_dap_object_property_data_breakpoint_stops_on_write() {
     }
     let status = client.child.wait().expect("wait for object data adapter");
     assert!(status.success(), "object data adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read object data stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with('2'),
         "object data program output missing: {stderr}"
@@ -4456,14 +4400,7 @@ fn test_cli_debug_dap_function_breakpoint_stops_on_entry() {
     }
     let status = client.child.wait().expect("wait for function adapter");
     assert!(status.success(), "function adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read function stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with("14"),
         "function program output missing: {stderr}"
@@ -4573,14 +4510,7 @@ fn test_cli_debug_dap_inspects_object_class_and_properties() {
     }
     let status = client.child.wait().expect("wait for object DAP adapter");
     assert!(status.success(), "object DAP adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read object DAP stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with('2'),
         "object program output missing: {stderr}"
@@ -4685,14 +4615,7 @@ fn test_cli_debug_dap_breakpoint_in_included_file() {
     }
     let status = client.child.wait().expect("wait for included DAP adapter");
     assert!(status.success(), "included DAP adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read included DAP stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with('5'),
         "included program output missing: {stderr}"
@@ -4776,14 +4699,7 @@ fn test_cli_debug_dap_rejects_stale_included_source() {
     }
     let status = client.child.wait().expect("wait for stale-source adapter");
     assert!(status.success(), "stale-source adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read stale-source stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with('5'),
         "stale-source program output missing: {stderr}"
@@ -5522,17 +5438,7 @@ fn test_cli_debug_attach_connects_to_listening_binary() {
     }
     let adapter_status = client.child.wait().expect("wait for attach adapter");
     assert!(adapter_status.success(), "attach adapter failed");
-    let mut stdout = String::new();
-    {
-        use std::io::Read as _;
-        debuggee
-            .child
-            .stdout
-            .as_mut()
-            .expect("attach debuggee stdout")
-            .read_to_string(&mut stdout)
-            .expect("read attach debuggee stdout");
-    }
+    let stdout = client.program_output();
     let debuggee_status = debuggee.child.wait().expect("wait for attach debuggee");
     assert!(debuggee_status.success(), "attach debuggee failed");
     assert!(stdout.trim_end().ends_with('5'), "attach output: {stdout}");
@@ -5635,14 +5541,7 @@ fn test_cli_debug_dap_fiber_switch_keeps_call_chain() {
     }
     let status = client.child.wait().expect("wait for fiber adapter");
     assert!(status.success(), "fiber adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read fiber stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with("fiber"),
         "fiber program output missing: {stderr}"
@@ -5769,14 +5668,7 @@ fn test_cli_debug_dap_fiber_thread_selection() {
     }
     let status = client.child.wait().expect("wait for fiber thread adapter");
     assert!(status.success(), "fiber thread adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read fiber thread stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with("done"),
         "fiber thread program output missing: {stderr}"
@@ -5871,14 +5763,7 @@ fn test_cli_debug_dap_generator_switch_keeps_call_chain() {
     }
     let status = client.child.wait().expect("wait for generator adapter");
     assert!(status.success(), "generator adapter failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read generator stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         stderr.trim_end().ends_with("done"),
         "generator program output missing: {stderr}"
@@ -6088,14 +5973,7 @@ fn test_cli_debug_attach_pause_stops_outside_started_debuggee() {
         .wait()
         .expect("wait for attach pause debuggee");
     assert!(debuggee_status.success(), "attach pause debuggee failed");
-    let mut stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut stderr)
-            .expect("read attach pause stderr");
-    }
+    let stderr = client.program_output();
     assert!(
         !stderr.contains("no attach pid file"),
         "attach pause did not use the published pid: {stderr}"
@@ -6260,6 +6138,8 @@ struct DapClient {
     stdout: std::io::BufReader<std::process::ChildStdout>,
     stderr: std::process::ChildStderr,
     seq: i64,
+    output_stdout: String,
+    output_stderr: String,
 }
 
 impl DapClient {
@@ -6281,6 +6161,8 @@ impl DapClient {
             stdout,
             stderr,
             seq: 0,
+            output_stdout: String::new(),
+            output_stderr: String::new(),
         }
     }
 
@@ -6304,14 +6186,95 @@ impl DapClient {
         self.seq
     }
 
-    /// Reads one framed DAP message.
+    /// Reads one framed DAP message, collecting output events transparently.
     fn recv(&mut self) -> serde_json::Value {
+        loop {
+            let message = self.recv_raw();
+            if self.collect_output(&message) {
+                continue;
+            }
+            return message;
+        }
+    }
+
+    /// Drains the DAP stream until the adapter closes it, collecting output.
+    fn drain_until_closed(&mut self) {
+        while let Some(message) = self.recv_raw_optional() {
+            let _ = self.collect_output(&message);
+        }
+    }
+
+    /// Collects one output event, returning whether it was consumed.
+    fn collect_output(&mut self, message: &serde_json::Value) -> bool {
+        if message["type"] != "event" || message["event"] != "output" {
+            return false;
+        }
+        let text = message["body"]["output"].as_str().unwrap_or("");
+        match message["body"]["category"].as_str().unwrap_or("") {
+            "stdout" => self.output_stdout.push_str(text),
+            "stderr" => self.output_stderr.push_str(text),
+            _ => {}
+        }
+        true
+    }
+
+    /// Returns the program output collected from DAP `output` events.
+    fn program_output(&self) -> String {
+        let mut output = self.output_stdout.clone();
+        output.push_str(&self.output_stderr);
+        output
+    }
+
+    /// Returns the stdout portion collected from DAP `output` events.
+    fn program_stdout(&self) -> &str {
+        &self.output_stdout
+    }
+    /// Sends one `evaluate` request and returns its full response.
+    fn evaluate(&mut self, frame_id: i64, expression: &str) -> serde_json::Value {
+        let seq = self.send(
+            "evaluate",
+            Some(serde_json::json!({
+                "expression": expression,
+                "frameId": frame_id,
+            })),
+        );
+        self.response(seq)
+    }
+
+    /// Sends `continue` and drains messages until the terminated event.
+    fn continue_to_terminated(&mut self) {
+        let seq = self.send("continue", None);
+        assert_eq!(self.response(seq)["success"], true);
+        loop {
+            let message = self.recv();
+            if message["type"] == "event" && message["event"] == "terminated" {
+                break;
+            }
+        }
+    }
+
+
+    /// Returns the stderr portion collected from DAP `output` events.
+    fn program_stderr(&self) -> &str {
+        &self.output_stderr
+    }
+
+    /// Reads one framed DAP message without filtering output events.
+    fn recv_raw(&mut self) -> serde_json::Value {
+        self.recv_raw_optional()
+            .expect("DAP adapter closed stdout")
+    }
+
+    /// Reads one framed DAP message, returning `None` at EOF.
+    fn recv_raw_optional(&mut self) -> Option<serde_json::Value> {
         use std::io::{BufRead as _, Read as _};
         let mut length = None;
         loop {
             let mut line = String::new();
             let read = self.stdout.read_line(&mut line).expect("read DAP header");
-            assert!(read > 0, "DAP adapter closed stdout");
+            if read == 0 {
+                return None;
+            }
             let line = line.trim_end_matches(|ch| ch == '\r' || ch == '\n');
             if line.is_empty() {
                 break;
@@ -6323,7 +6286,7 @@ impl DapClient {
         let length = length.expect("DAP message has no Content-Length");
         let mut body = vec![0u8; length];
         self.stdout.read_exact(&mut body).expect("read DAP body");
-        serde_json::from_slice(&body).expect("parse DAP message")
+        Some(serde_json::from_slice(&body).expect("parse DAP message"))
     }
 
     /// Reads one DAP message only if it arrives within `timeout`.
@@ -6546,17 +6509,198 @@ fn test_cli_debug_dap_launch_breakpoints_stack_and_variables() {
     }
     let status = client.child.wait().expect("wait for DAP adapter");
     assert!(status.success(), "DAP adapter failed");
-    let mut stderr = String::new();
+    let stderr = client.program_output();
+    assert!(
+        stderr.trim_end().ends_with('5'),
+        "program output missing from stderr: {stderr}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies read-only evaluate covers locals, object properties, array/hash
+/// entries, scalar builtins and arithmetic while refusing mutation and calls.
+#[test]
+fn test_cli_debug_dap_evaluate_properties_indices_and_scalars() {
+    let dir = make_cli_test_dir("elephc_cli_debug_dap_evaluate_expressions");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nclass EvalPoint {\n    public int $x = 4;\n    public string $label = \"hi\";\n    public array $items = [10, 20];\n}\nfunction evaluateProbe(): int {\n    $point = new EvalPoint();\n    $items = [\"a\" => 1, 1 => 2];\n    $n = 3;\n    $s = \"hello\";\n    return $point->x + $items[1] + $n;\n}\necho evaluateProbe(), \"\\n\";\n",
+    )
+    .expect("write DAP evaluate fixture");
+
+    let mut client = DapClient::spawn(
+        elephc_cli_command(&dir).args(["debug", "--dap", "main.php"]),
+    );
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("initialized");
+    let seq = client.send(
+        "launch",
+        Some(serde_json::json!({"program": "main.php", "stopOnEntry": false})),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"path": "main.php"},
+            "breakpoints": [{"line": 12}],
+        })),
+    );
+    assert_eq!(client.response(seq)["body"]["breakpoints"][0]["verified"], true);
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("stopped");
+    let seq = client.send("stackTrace", None);
+    let response = client.response(seq);
+    let frame_id = response["body"]["stackFrames"][0]["id"]
+        .as_i64()
+        .expect("evaluate frame id");
+
+    let response = client.evaluate(frame_id, "$point->x");
+    assert_eq!(response["success"], true, "{response}");
+    assert_eq!(response["body"]["result"], "int(4)");
+    assert_eq!(response["body"]["type"], "int");
+
+    let response = client.evaluate(frame_id, "$point->label");
+    assert_eq!(response["body"]["result"], "string(2) \"hi\"");
+    assert_eq!(response["body"]["type"], "string");
+
+    let response = client.evaluate(frame_id, "$point->items[1]");
+    assert_eq!(response["body"]["result"], "int(20)");
+
+    let response = client.evaluate(frame_id, "$items[\"a\"]");
+    assert_eq!(response["body"]["result"], "int(1)");
+
+    let response = client.evaluate(frame_id, "$items[1]");
+    assert_eq!(response["body"]["result"], "int(2)");
+
+    let response = client.evaluate(frame_id, "$items");
+    assert_eq!(response["body"]["result"], "array(2)");
+    let items_ref = response["body"]["variablesReference"]
+        .as_i64()
+        .expect("evaluate items reference");
+    assert!(items_ref > 0, "{response}");
+    let seq = client.send(
+        "variables",
+        Some(serde_json::json!({"variablesReference": items_ref})),
+    );
+    let response = client.response(seq);
+    let children = response["body"]["variables"]
+        .as_array()
+        .expect("evaluate items children");
+    assert!(
+        children.iter().any(|child| child["name"] == "[\"a\"]" && child["value"] == "int(1)"),
+        "{response}"
+    );
+
+    for (expression, expected) in [
+        ("count($items)", "int(2)"),
+        ("strlen($s)", "int(5)"),
+        ("gettype($items)", "string(5) \"array\""),
+        ("$n + 4", "int(7)"),
+        ("$n * 2", "int(6)"),
+        ("$n === 3", "bool(true)"),
+        ("$n < 4 && $s === \"hello\"", "bool(true)"),
+    ] {
+        let response = client.evaluate(frame_id, expression);
+        assert_eq!(response["success"], true, "{expression}: {response}");
+        assert_eq!(
+            response["body"]["result"], expected,
+            "{expression}: {response}"
+        );
+    }
+
+    for expression in [
+        "$point->missing",
+        "$items[\"missing\"]",
+        "$missing",
+        "$n = 4",
+        "mystery($n)",
+    ] {
+        let response = client.evaluate(frame_id, expression);
+        assert_eq!(
+            response["success"], false,
+            "{expression} must fail closed: {response}"
+        );
+    }
+
+    client.continue_to_terminated();
+    let status = client.child.wait().expect("wait for evaluate adapter");
+    assert!(status.success(), "evaluate adapter failed");
+    let output = client.program_output();
+    assert!(
+        output.trim_end().ends_with('9'),
+        "evaluate program output missing: {output}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies stdout and stderr chunks are forwarded as DAP output events while
+/// the protocol stream stays free of raw program output.
+#[test]
+fn test_cli_debug_dap_streams_program_output() {
+    let dir = make_cli_test_dir("elephc_cli_debug_dap_output_events");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\necho \"stdout-1\\n\";\nfwrite(STDERR, \"stderr-1\\n\");\necho \"stdout-2\\n\";\n",
+    )
+    .expect("write DAP output fixture");
+
+    let mut client = DapClient::spawn(
+        elephc_cli_command(&dir).args(["debug", "--dap", "main.php"]),
+    );
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("initialized");
+    let seq = client.send(
+        "launch",
+        Some(serde_json::json!({"program": "main.php", "stopOnEntry": false})),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+    loop {
+        let message = client.recv();
+        if message["type"] == "event" && message["event"] == "terminated" {
+            break;
+        }
+    }
+    let status = client.child.wait().expect("wait for output adapter");
+    assert!(status.success(), "output adapter failed");
+    let stdout = client.program_stdout();
+    let stderr = client.program_stderr();
+    assert!(stdout.contains("stdout-1"), "stdout missing: {stdout:?}");
+    assert!(stdout.contains("stdout-2"), "stdout missing: {stdout:?}");
+    assert!(stderr.contains("stderr-1"), "stderr missing: {stderr:?}");
+    let mut adapter_stderr = String::new();
     {
         use std::io::Read as _;
         client
             .stderr
-            .read_to_string(&mut stderr)
-            .expect("read DAP adapter stderr");
+            .read_to_string(&mut adapter_stderr)
+            .expect("read adapter stderr");
     }
     assert!(
-        stderr.trim_end().ends_with('5'),
-        "program output missing from stderr: {stderr}"
+        !adapter_stderr.contains("stdout-1")
+            && !adapter_stderr.contains("stdout-2")
+            && !adapter_stderr.contains("stderr-1"),
+        "program output leaked to adapter stderr: {adapter_stderr:?}"
     );
     let _ = fs::remove_dir_all(&dir);
 }

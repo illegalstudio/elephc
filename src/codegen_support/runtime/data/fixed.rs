@@ -508,6 +508,15 @@ pub(crate) fn emit_runtime_data_fixed(
         8,
         target,
     ));
+    // elephc_debug_flush_fn: filled with the debugger output flush hook when a
+    // --debug program starts a DAP session; the uncaught report calls it after
+    // flushing PHP output buffers, so captured stdout/stderr reaches the IDE and
+    // the report itself goes to the restored descriptor. Null in a normal binary.
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_debug_flush_fn"),
+        8,
+        target,
+    ));
     // elephc_debug_web_request_fn / end_fn: installed once by the --debug --web
     // master boot, before the prefork. Each worker calls the route hook before a
     // request handler and the teardown after it; null in a non-debug web binary,

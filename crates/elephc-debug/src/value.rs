@@ -1648,6 +1648,256 @@ pub(crate) fn render(description: &Description) -> String {
     }
 }
 
+
+/// Unboxes nested Mixed cells and inline tagged containers for read-only access.
+pub(crate) fn unbox_value(value: Value) -> Option<Value> {
+    match value.tag {
+        TAG_MIXED => unsafe { mixed_cell(value.lo) },
+        TAGGED_SCALAR_ARRAY | TAGGED_SCALAR_PROPERTY => unbox_value(Value {
+            tag: value.hi as i64,
+            lo: value.lo,
+            hi: 0,
+            by_ref: value.by_ref,
+        }),
+        _ => Some(value),
+    }
+}
+
+/// Reads one array element or hash entry by an integer/string key.
+///
+/// The lookup is borrowed: it never copies the container and never invokes PHP
+/// code. Object keys are rejected because `ArrayAccess` would require executing
+/// user code.
+pub(crate) fn element_at(value: Value, key: &Scalar) -> Option<Value> {
+    let value = unbox_value(value)?;
+    match value.tag {
+        TAG_ARRAY => {
+            if unsafe { heap_kind(value.lo) } == Some(HEAP_KIND_HASH) {
+                return hash_element_at(value.lo, key);
+            }
+            let Scalar::Int(index) = key else {
+                return None;
+            };
+            if *index < 0 || *index as usize >= MAX_ARRAY_ELEMENTS {
+                return None;
+            }
+            let address = usize::try_from(value.lo).ok().filter(|addr| *addr >= MIN_VALID_ADDRESS)?;
+            let length = unsafe { word(address) }?.min(MAX_ARRAY_ELEMENTS as u64) as usize;
+            let index = *index as usize;
+            if index >= length {
+                return None;
+            }
+            let value_type = unsafe { array_value_type(value.lo) }.unwrap_or(0);
+            let stride = if value_type == TAG_STRING || value_type == TAGGED_SCALAR_ARRAY {
+                16
+            } else {
+                8
+            };
+            let slot = address
+                .checked_add(24)?
+                .checked_add(index.checked_mul(stride)?)?;
+            Some(match value_type {
+                TAG_STRING => Value::string(
+                    unsafe { word(slot) }.unwrap_or(0),
+                    unsafe { word(slot + 8) }.unwrap_or(0),
+                ),
+                TAGGED_SCALAR_ARRAY => Value {
+                    tag: unsafe { word(slot + 8) }.unwrap_or(TAG_NULL as u64) as i64,
+                    lo: unsafe { word(slot) }.unwrap_or(0),
+                    hi: 0,
+                    by_ref: false,
+                },
+                TAG_MIXED => match unsafe { word(slot) } {
+                    Some(cell) if cell != 0 => unsafe { mixed_cell(cell) }.unwrap_or_else(Value::null),
+                    _ => Value::null(),
+                },
+                TAG_POINTER => Value {
+                    tag: TAG_POINTER,
+                    lo: unsafe { word(slot) }.unwrap_or(0),
+                    hi: 0,
+                    by_ref: false,
+                },
+                tag => Value {
+                    tag: tag as i64,
+                    lo: unsafe { word(slot) }.unwrap_or(0),
+                    hi: 0,
+                    by_ref: false,
+                },
+            })
+        }
+        TAG_HASH => hash_element_at(value.lo, key),
+        TAG_STRING => {
+            let Scalar::Int(index) = key else {
+                return None;
+            };
+            let length = value.hi as i64;
+            let index = if *index < 0 { length + *index } else { *index };
+            if index < 0 || index >= length {
+                return None;
+            }
+            Some(Value::string(value.lo + index as u64, 1))
+        }
+        _ => None,
+    }
+}
+
+/// Looks up one hash entry by key without materializing its children.
+fn hash_element_at(pointer: u64, key: &Scalar) -> Option<Value> {
+    let address = usize::try_from(pointer)
+        .ok()
+        .filter(|addr| *addr >= MIN_VALID_ADDRESS)?;
+    let count = unsafe { word(address) }? as usize;
+    let capacity = unsafe { word(address + 8) }?;
+    if capacity == 0 || capacity > MAX_HASH_ENTRIES as u64 {
+        return None;
+    }
+    let capacity = capacity as usize;
+    let head = unsafe { word(address + 24) }? as usize;
+    let entries = unsafe { word(address + 40) }?;
+    if entries == 0 {
+        return None;
+    }
+    let mut slot = head;
+    let mut visited = std::collections::HashSet::new();
+    let mut seen = 0usize;
+    while seen < count && slot < capacity && visited.insert(slot) {
+        let entry = usize::try_from(entries)
+            .ok()?
+            .checked_add(slot.checked_mul(64)?)?;
+        if unsafe { word(entry) }? != 1 {
+            break;
+        }
+        let key_pointer = unsafe { word(entry + 8) }?;
+        let key_length = unsafe { word(entry + 16) }? as i64;
+        let matches = match key {
+            Scalar::Int(value) => key_length == -1 && key_pointer as i64 == *value,
+            Scalar::String(value) => {
+                key_length >= 0
+                    && unsafe { string_bytes(key_pointer, key_length as u64) }.as_deref()
+                        == Some(value.as_str())
+            }
+            _ => false,
+        };
+        if matches {
+            let tag = unsafe { word(entry + 40) }? as i64;
+            let lo = unsafe { word(entry + 24) }?;
+            let hi = unsafe { word(entry + 32) }?;
+            return Some(decode_hash_value(tag, lo, hi));
+        }
+        let next = unsafe { word(entry + 56) }? as i64;
+        if next < 0 {
+            break;
+        }
+        slot = next as usize;
+        seen += 1;
+    }
+    None
+}
+
+/// Returns the exact array/hash element count for `count()`.
+pub(crate) fn count(value: Value) -> Result<usize, String> {
+    let value = unbox_value(value).ok_or_else(|| "count() expects an array".to_string())?;
+    match value.tag {
+        TAG_ARRAY => {
+            if unsafe { heap_kind(value.lo) } == Some(HEAP_KIND_HASH) {
+                return hash_count(value.lo);
+            }
+            let address = usize::try_from(value.lo)
+                .ok()
+                .filter(|addr| *addr >= MIN_VALID_ADDRESS)
+                .ok_or_else(|| "count() received an invalid array".to_string())?;
+            let length = unsafe { word(address) }
+                .ok_or_else(|| "count() received an invalid array".to_string())?;
+            usize::try_from(length).map_err(|_| "array length is out of range".to_string())
+        }
+        TAG_HASH => hash_count(value.lo),
+        _ => Err("count() expects an array".to_string()),
+    }
+}
+
+/// Returns one hash's element count after validating its pointer.
+fn hash_count(pointer: u64) -> Result<usize, String> {
+    let address = usize::try_from(pointer)
+        .ok()
+        .filter(|addr| *addr >= MIN_VALID_ADDRESS)
+        .ok_or_else(|| "count() received an invalid array".to_string())?;
+    let count = unsafe { word(address) }
+        .ok_or_else(|| "count() received an invalid array".to_string())?;
+    usize::try_from(count).map_err(|_| "array length is out of range".to_string())
+}
+
+/// Returns a string's byte length for `strlen()`.
+pub(crate) fn strlen(value: Value) -> Result<usize, String> {
+    let value = unbox_value(value).ok_or_else(|| "strlen() expects a string".to_string())?;
+    if value.tag != TAG_STRING {
+        return Err("strlen() expects a string".to_string());
+    }
+    usize::try_from(value.hi).map_err(|_| "string length is out of range".to_string())
+}
+
+/// Returns PHP's `gettype()` spelling for one borrowed value.
+pub(crate) fn gettype(value: Value) -> &'static str {
+    let Some(value) = unbox_value(value) else {
+        return "unknown type";
+    };
+    match value.tag {
+        TAG_INT => "integer",
+        TAG_FLOAT => "double",
+        TAG_BOOL => "boolean",
+        TAG_NULL => "NULL",
+        TAG_STRING => "string",
+        TAG_ARRAY | TAG_HASH => "array",
+        TAG_OBJECT => "object",
+        TAG_RESOURCE => "resource",
+        TAG_CALLABLE => "callable",
+        TAG_POINTER => "integer",
+        TAG_UNINITIALIZED => "uninitialized",
+        _ => "unknown type",
+    }
+}
+
+/// Builds the display description for one computed scalar evaluation result.
+pub(crate) fn describe_scalar(scalar: &Scalar) -> Description {
+    match scalar {
+        Scalar::Int(value) => Description {
+            display: value.to_string(),
+            type_name: "int".to_string(),
+            by_ref: false,
+            has_children: false,
+        },
+        Scalar::Float(value) => Description {
+            display: format!("{value}"),
+            type_name: "float".to_string(),
+            by_ref: false,
+            has_children: false,
+        },
+        Scalar::Bool(value) => Description {
+            display: if *value { "true" } else { "false" }.to_string(),
+            type_name: "bool".to_string(),
+            by_ref: false,
+            has_children: false,
+        },
+        Scalar::Null => Description {
+            display: "null".to_string(),
+            type_name: "null".to_string(),
+            by_ref: false,
+            has_children: false,
+        },
+        Scalar::String(value) => Description {
+            display: format!("string({}) \"{}\"", value.len(), escape_string(value)),
+            type_name: "string".to_string(),
+            by_ref: false,
+            has_children: false,
+        },
+        Scalar::Other => Description {
+            display: "<non-scalar>".to_string(),
+            type_name: "mixed".to_string(),
+            by_ref: false,
+            has_children: false,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -27,8 +27,9 @@ binary is refused rather than debugged without metadata.
 
 `stopOnEntry` controls whether the launch stops before the first user site. The
 adapter holds the entry stop until `configurationDone`, matching the normal DAP
-launch sequence. Program stdout is forwarded to stderr so the DAP channel stays
-clean.
+launch sequence. Program stdout/stderr are forwarded as DAP `output` events so
+the protocol channel stays clean. An uncaught-exception report is written after
+the DAP channel closes and remains on the adapter stderr.
 
 ## Requests
 
@@ -45,7 +46,7 @@ clean.
 | `threads` | Lists the main execution plus live fibers/generators as thread-like stacks. |
 | `stackTrace` | Returns PHP frames for a thread. A frame carries its function, source path and current source line. |
 | `scopes` / `variables` | Enumerates the Locals scope and read-only value children. |
-| `evaluate` | Evaluates a simple local expression in the selected frame. |
+| `evaluate` | Evaluates a read-only expression in the selected frame: locals, object properties, array/hash entries, `count`/`strlen`/`gettype`, scalar predicates, arithmetic and comparisons. Assignments and user/method calls are refused. |
 | `continue` / `next` / `stepIn` / `stepOut` | Resume, step over, step into or step out of the current frame. |
 | `pause` | Requests a stop at the next executed site; a pause signal while already stopped does not create a second stop. |
 | `disconnect` | Resumes and detaches the debuggee. |
@@ -280,8 +281,11 @@ SMOKE OK
 - Interactive debugging needs an attachable host process. iOS targets are
   library-only and `--debug` refuses them with a message pointing to
   `elephc monitor --calls` / `elephc test --coverage` on a host target.
-- Per-request web worker/route selection is not part of v1; use `elephc monitor`
-  for web profiling.
+- Per-request web worker/route selection is available through `elephc debug
+  --web`. stdout/stderr `output` events cover launch and attach sessions; web
+  route sessions keep server output on the server stderr.
+- `evaluate` is deliberately read-only. It never runs user code, getters,
+  `ArrayAccess` or assignments; `setVariable` is not advertised.
 - `--debug` disables EIR optimization to preserve source-mapped statements. Use a
   normal optimized build for production performance, and a debug build for
   inspection.

@@ -78,6 +78,12 @@ caller-frame selection, caught/uncaught/throw exception filters, and stepping
 over/into/out. A source hash is checked before a breakpoint is armed; a stale
 `.edbg.json` is rejected rather than silently binding to different code.
 
+DAP `evaluate` is read-only and supports locals, object properties, array/hash
+entries, `count()`/`strlen()`/`gettype()`, scalar predicates, arithmetic and
+comparisons. It refuses assignments, user/method calls, magic accessors and
+`ArrayAccess`; `setVariable` is not advertised. Program stdout/stderr appear as
+DAP `output` events in launch and attach sessions.
+
 A stop is attributed to the caller's source line. The elephc-native source
 helpers are transparent frames, so `bt` and DAP `stackTrace` do not show
 `elephc_break()` or the dump/trace wrappers.

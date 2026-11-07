@@ -40,6 +40,8 @@ use serde::Deserialize;
 
 mod condition;
 mod dap;
+mod dap_output;
+mod eval;
 mod value;
 
 /// Maximum distinct site counters/flags held in fixed storage.
@@ -434,6 +436,20 @@ fn report_incomplete_trace_segments() {
     }
 }
 
+/// Flushes captured stdout/stderr into DAP output events before a fatal report.
+///
+/// Called through the nullable `elephc_debug_flush_fn` slot by the uncaught
+/// exception report. It restores the original descriptors after draining the
+/// pump, so the report itself is written to the process stdout as usual.
+#[no_mangle]
+pub extern "C" fn elephc_debug_flush_output() {
+    if let Ok(mut guard) = DEBUGGER.lock() {
+        if let Some(debugger) = guard.as_mut() {
+            debugger.flush_dap_output();
+        }
+    }
+}
+
 /// Native entry point for one dump or trace-segment capture event.
 ///
 /// Input: kind 0 = dump, 1 = segment start, 2 = segment end; a boxed `Mixed`
@@ -588,6 +604,8 @@ struct Debugger {
     selected_frame: Option<usize>,
     /// DAP transport when the program was launched by `elephc debug --dap`.
     dap: Option<dap::DapConnection>,
+    /// stdout/stderr capture active for the current DAP session.
+    dap_output: Option<dap_output::DapOutputPump>,
     /// Whether this DAP session belongs to one `--web` request. A disconnect
     /// must resume that request instead of exiting the worker process.
     web_session: bool,
@@ -668,7 +686,8 @@ impl Debugger {
             data_breakpoints: Vec::new(),
             exception_filters: ExceptionFilters::default(),
             dap: None,
-        web_session: false,
+            dap_output: None,
+            web_session: false,
             variable_refs: HashMap::new(),
             next_variable_ref: 1,
             dap_stop_on_entry: false,
@@ -676,6 +695,33 @@ impl Debugger {
             thread_fibers: HashMap::new(),
             next_fiber_thread: 2,
         })
+    }
+
+    /// Attaches one DAP connection and starts forwarding the program's stdout/stderr.
+    fn attach_dap(&mut self, connection: dap::DapConnection) {
+        unsafe {
+            elephc_debug_flush_fn = elephc_debug_flush_output as *const () as usize;
+        }
+        match dap_output::DapOutputPump::install(connection.output_handle()) {
+            Ok(pump) => self.dap_output = Some(pump),
+            Err(error) => {
+                eprintln!("elephc-debug: cannot capture program output for DAP: {error}");
+            }
+        }
+        self.dap = Some(connection);
+    }
+
+    /// Drains captured output and restores the original stdout/stderr.
+    fn flush_dap_output(&mut self) {
+        if let Some(pump) = self.dap_output.take() {
+            drop(pump);
+        }
+    }
+
+    /// Restores the original stdout/stderr and drops the current DAP channel.
+    fn close_dap(&mut self) {
+        self.flush_dap_output();
+        self.dap = None;
     }
 
     /// Arms the sites matching `ELEPHC_DEBUG_BREAK` and returns whether any
@@ -1231,6 +1277,8 @@ impl Debugger {
 extern "C" {
     /// Nullable throw-helper slot; set by boot to the debugger exception hook.
     static mut elephc_debug_exception_fn: usize;
+    /// Nullable uncaught-report output flush hook; set when a DAP pump starts.
+    static mut elephc_debug_flush_fn: usize;
     /// Nullable coroutine switch-in hook; set by boot for fiber-aware stacks.
     static mut elephc_debug_coroutine_enter_fn: usize;
     /// Nullable coroutine suspend hook; set by boot for fiber-aware stacks.
@@ -1505,7 +1553,7 @@ pub extern "C" fn elephc_debug_boot(
         };
         match connection {
             Ok(connection) => {
-                debugger.dap = Some(connection);
+                debugger.attach_dap(connection);
                 debugger.stop_at_first = true;
             }
             Err(error) => {
@@ -1758,7 +1806,7 @@ pub extern "C" fn elephc_debug_web_request_end() {
     set_web_site_flags(false);
     if let Ok(mut guard) = DEBUGGER.lock() {
         if let Some(debugger) = guard.as_mut() {
-            debugger.dap = None;
+            debugger.close_dap();
             debugger.web_session = false;
             debugger.stop_at_first = false;
             debugger.step = None;

@@ -20,18 +20,19 @@
 //!   socket until the next stop; pause-while-running is deliberately unsupported.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Error as IoError, ErrorKind, Read, Write};
+use std::io::{self, BufRead, BufReader, Error as IoError, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::{FileTypeExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::FromRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
 
-use super::{condition, value, Debugger, StepMode, StepState};
+use super::{condition, eval, value, Debugger, StepMode, StepState};
 
 /// Maximum DAP body accepted from a client.
 const MAX_DAP_BODY: usize = 16 * 1024 * 1024;
@@ -97,8 +98,48 @@ enum DapAction {
 /// Framed DAP transport over the inherited control socket.
 pub(crate) struct DapConnection {
     reader: Box<dyn BufRead + Send>,
+    writer: Arc<Mutex<DapWriter>>,
+}
+
+/// Serialized writer shared by request responses and asynchronous output pumps.
+struct DapWriter {
     writer: Box<dyn Write + Send>,
     next_seq: i64,
+}
+
+/// Cloneable handle used by the stdout/stderr pumps.
+#[derive(Clone)]
+pub(crate) struct DapOutputHandle {
+    writer: Arc<Mutex<DapWriter>>,
+}
+
+impl DapWriter {
+    /// Writes one framed DAP message.
+    fn send(&mut self, message: &JsonValue) -> io::Result<()> {
+        let body = serde_json::to_vec(message)
+            .map_err(|error| IoError::new(ErrorKind::InvalidData, error))?;
+        write!(self.writer, "Content-Length: {}\r\n\r\n", body.len())?;
+        self.writer.write_all(&body)?;
+        self.writer.flush()
+    }
+
+    /// Allocates the next adapter-wide sequence number.
+    fn next_seq(&mut self) -> i64 {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        seq
+    }
+
+    /// Sends one DAP event and allocates its sequence number.
+    fn event(&mut self, event: &str, body: JsonValue) -> io::Result<()> {
+        let seq = self.next_seq();
+        self.send(&json!({
+            "seq": seq,
+            "type": "event",
+            "event": event,
+            "body": body,
+        }))
+    }
 }
 
 impl DapConnection {
@@ -116,8 +157,10 @@ impl DapConnection {
         let reader = Box::new(BufReader::new(stream.try_clone()?));
         Ok(Self {
             reader,
-            writer: Box::new(stream),
-            next_seq: 1,
+            writer: Arc::new(Mutex::new(DapWriter {
+                writer: Box::new(stream),
+                next_seq: 1,
+            })),
         })
     }
 
@@ -126,8 +169,10 @@ impl DapConnection {
         let reader = Box::new(BufReader::new(stream.try_clone()?));
         Ok(Self {
             reader,
-            writer: Box::new(stream),
-            next_seq: 1,
+            writer: Arc::new(Mutex::new(DapWriter {
+                writer: Box::new(stream),
+                next_seq: 1,
+            })),
         })
     }
 
@@ -163,63 +208,82 @@ impl DapConnection {
         Ok(Some(message))
     }
 
-    /// Writes one framed DAP message.
-    fn send(&mut self, message: &JsonValue) -> std::io::Result<()> {
-        let body = serde_json::to_vec(message)
-            .map_err(|error| IoError::new(ErrorKind::InvalidData, error))?;
-        write!(self.writer, "Content-Length: {}\r\n\r\n", body.len())?;
-        self.writer.write_all(&body)?;
-        self.writer.flush()
+    /// Returns a cloneable output handle for the stdout/stderr pumps.
+    pub(crate) fn output_handle(&self) -> DapOutputHandle {
+        DapOutputHandle {
+            writer: Arc::clone(&self.writer),
+        }
+    }
+
+    /// Runs one closure with the serialized writer.
+    fn with_writer<T>(
+        &self,
+        write: impl FnOnce(&mut DapWriter) -> io::Result<T>,
+    ) -> io::Result<T> {
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| IoError::new(ErrorKind::Other, "DAP writer is poisoned"))?;
+        write(&mut writer)
     }
 
     /// Sends a successful response to `request`.
-    fn respond(&mut self, request: &JsonValue, body: Option<JsonValue>) -> std::io::Result<()> {
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        let mut message = json!({
-            "seq": seq,
-            "type": "response",
-            "request_seq": request.get("seq").and_then(JsonValue::as_i64).unwrap_or(0),
-            "success": true,
-            "command": request.get("command").and_then(JsonValue::as_str).unwrap_or(""),
-        });
-        if let Some(body) = body {
-            message["body"] = body;
-        }
-        self.send(&message)
+    fn respond(&mut self, request: &JsonValue, body: Option<JsonValue>) -> io::Result<()> {
+        self.with_writer(|writer| {
+            let seq = writer.next_seq();
+            let mut message = json!({
+                "seq": seq,
+                "type": "response",
+                "request_seq": request.get("seq").and_then(JsonValue::as_i64).unwrap_or(0),
+                "success": true,
+                "command": request.get("command").and_then(JsonValue::as_str).unwrap_or(""),
+            });
+            if let Some(body) = body {
+                message["body"] = body;
+            }
+            writer.send(&message)
+        })
     }
 
     /// Sends a failed response to `request`.
-    fn respond_error(&mut self, request: &JsonValue, message: &str) -> std::io::Result<()> {
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        let response = json!({
-            "seq": seq,
-            "type": "response",
-            "request_seq": request.get("seq").and_then(JsonValue::as_i64).unwrap_or(0),
-            "success": false,
-            "command": request.get("command").and_then(JsonValue::as_str).unwrap_or(""),
-            "message": message,
-        });
-        self.send(&response)
+    fn respond_error(&mut self, request: &JsonValue, message: &str) -> io::Result<()> {
+        self.with_writer(|writer| {
+            let seq = writer.next_seq();
+            let response = json!({
+                "seq": seq,
+                "type": "response",
+                "request_seq": request.get("seq").and_then(JsonValue::as_i64).unwrap_or(0),
+                "success": false,
+                "command": request.get("command").and_then(JsonValue::as_str).unwrap_or(""),
+                "message": message,
+            });
+            writer.send(&response)
+        })
     }
 
     /// Sends one DAP event.
-    fn event(&mut self, event: &str, body: JsonValue) -> std::io::Result<()> {
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        self.send(&json!({
-            "seq": seq,
-            "type": "event",
-            "event": event,
-            "body": body,
-        }))
+    fn event(&mut self, event: &str, body: JsonValue) -> io::Result<()> {
+        self.with_writer(|writer| writer.event(event, body))
+    }
+}
+
+impl DapOutputHandle {
+    /// Sends one stdout/stderr chunk to the DAP client.
+    pub(crate) fn output(&self, category: &str, text: &str) -> io::Result<()> {
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| IoError::new(ErrorKind::Other, "DAP writer is poisoned"))?;
+        writer.event("output", json!({"category": category, "output": text}))
     }
 }
 
 impl Debugger {
     /// Sends the DAP exit/terminated events and closes the remote channel.
     pub(crate) fn dap_terminated(&mut self) {
+        // Drain and restore stdout/stderr before the terminal events so the
+        // client receives every captured chunk ahead of `terminated`.
+        self.flush_dap_output();
         if let Some(dap) = self.dap.as_mut() {
             let _ = dap.event("exited", json!({"exitCode": 0}));
             let _ = dap.event("terminated", json!({}));
@@ -344,14 +408,14 @@ impl Debugger {
                         // handler instead of killing the worker that also serves
                         // every subsequent request.
                         if self.web_session {
-                            self.dap = None;
+                            self.close_dap();
                             return;
                         }
                         std::process::exit(0)
                     }
                     Err(error) => {
                         if self.web_session {
-                            self.dap = None;
+                            self.close_dap();
                             return;
                         }
                         eprintln!("elephc-debug: DAP read failed: {error}");
@@ -386,7 +450,7 @@ impl Debugger {
                 DapAction::Stay => {}
                 DapAction::Resume => return,
                 DapAction::Exit => {
-                    self.dap = None;
+                    self.close_dap();
                     if self.web_session {
                         return;
                     }
@@ -1365,14 +1429,13 @@ impl Debugger {
         self.dap_respond(request, Some(json!({"variables": variables})));
     }
 
-    /// Evaluates a simple local name in the requested frame.
+    /// Evaluates a read-only expression in the requested frame.
     fn dap_evaluate(&mut self, request: &JsonValue) {
         let arguments = &request["arguments"];
         let expression = arguments
             .get("expression")
             .and_then(JsonValue::as_str)
             .unwrap_or("");
-        let name = expression.trim().trim_start_matches('$');
         let frame_id = arguments
             .get("frameId")
             .and_then(JsonValue::as_i64)
@@ -1385,31 +1448,48 @@ impl Debugger {
             self.dap_respond_error(request, "frame is no longer active");
             return;
         };
-        let value = {
-            let Some(local) = self
+        let evaluated = {
+            let locals = self
                 .locals
                 .get(&(frame.function_id as u64))
-                .and_then(|locals| locals.iter().find(|local| local.name == name))
-            else {
-                self.dap_respond_error(request, &format!("no local '${name}'"));
-                return;
-            };
-            value::local_value(local, frame.frame)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            eval::evaluate(expression, locals, frame.frame, &self.classes)
         };
-        let description = value::describe_with(value, &self.classes);
-        let variables_reference = if description.has_children {
-            self.dap_value_ref(value)
-        } else {
-            0
-        };
-        self.dap_respond(
-            request,
-            Some(json!({
-                "result": value::render(&description),
-                "type": description.type_name,
-                "variablesReference": variables_reference,
-            })),
-        );
+        match evaluated {
+            Ok(eval::EvalValue::Borrowed { value, note }) => {
+                let description = value::describe_with(value, &self.classes);
+                let variables_reference = if description.has_children {
+                    self.dap_value_ref(value)
+                } else {
+                    0
+                };
+                let mut result = value::render(&description);
+                if let Some(note) = note {
+                    result.push_str(&note);
+                }
+                self.dap_respond(
+                    request,
+                    Some(json!({
+                        "result": result,
+                        "type": description.type_name,
+                        "variablesReference": variables_reference,
+                    })),
+                );
+            }
+            Ok(eval::EvalValue::Scalar(scalar)) => {
+                let description = value::describe_scalar(&scalar);
+                self.dap_respond(
+                    request,
+                    Some(json!({
+                        "result": value::render(&description),
+                        "type": description.type_name,
+                        "variablesReference": 0,
+                    })),
+                );
+            }
+            Err(message) => self.dap_respond_error(request, &message),
+        }
     }
 
     /// Allocates or records one frame variables reference.
