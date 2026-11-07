@@ -91,3 +91,30 @@ probe();
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A compiled class's declaring-class reflector keeps its catalog-backed metadata (here its
+/// attributes) when the only live eval context ran a metadata-free fragment and so deferred
+/// the native catalog: the build moves to a context that holds it. Expected output is php 8.5's.
+#[test]
+fn test_eval_reflector_declaring_class_skips_catalog_less_contexts() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+#[Attribute] class Mark { public function __construct(public int $n) {} }
+#[Mark(4)]
+class Annotated { #[Mark(5)] public function run(): void {} }
+function makeAot() {
+    return eval('return new ReflectionMethod("Annotated", "run");');
+}
+function outer(int $times): void {
+    $sum = 0;
+    eval(str_repeat('$sum = $sum + 3;', $times));
+    $class = makeAot()->getDeclaringClass();
+    echo $sum, ':', count($class->getAttributes()), ':', count($class->getMethods()[0]->getAttributes()), "\n";
+}
+outer($argc);
+"#,
+    );
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "3:1:1\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

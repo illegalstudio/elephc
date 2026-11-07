@@ -9,10 +9,11 @@
 //!
 //! Key details:
 //! - The getters own no eval local, so the context is the active interpreter frame's, the
-//!   request owner declaring the class, or (for a compiled class) any live request owner.
-//! - A reflector can outlive every context that saw its class (it escaped the function whose
-//!   eval declared it). Eval declarations are process-global, so the build then runs in a
-//!   transient context attached to the module's native catalog, freed before returning.
+//!   request owner declaring the class, or (for a compiled class) a live request owner that
+//!   holds the native catalog; one that deferred it has no attributes or property defaults.
+//! - Otherwise (a reflector that outlived every context that saw its class, or only catalog-less
+//!   contexts alive) the build runs in a transient context attached to the module's native
+//!   catalog and freed before returning; eval declarations are process-global, so it sees them.
 //! - Every call registers a new reflector identity, so no caller ever receives a copy the eval
 //!   reflection registry does not know.
 //! - Returns -1 when no context can be created; the generated caller then yields `false`.
@@ -20,7 +21,8 @@
 use super::util::{abi_name_to_string, clear_result, write_outcome};
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
 use crate::context::{
-    any_live_native_context, live_native_context_for_class, native_frame_active_eval_context,
+    catalog_ready_live_native_context, live_native_context_for_class,
+    native_frame_active_eval_context,
 };
 use crate::errors::EvalStatus;
 use crate::interpreter;
@@ -62,7 +64,7 @@ unsafe fn reflection_class_build_inner(
         };
         let live = native_frame_active_eval_context()
             .or_else(|| live_native_context_for_class(&name))
-            .or_else(|| any_live_native_context());
+            .or_else(|| catalog_ready_live_native_context());
         if let Some(context) = live {
             return build_in_context(context, &name, out);
         }

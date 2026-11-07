@@ -40,15 +40,21 @@ pub(crate) unsafe fn live_native_context_for_class(name: &str) -> Option<*mut El
     None
 }
 
-/// Finds any live request owner, for work on compiled classes that no eval context declares.
+/// Finds a live request owner holding the module's native catalog, for work on compiled
+/// classes that no eval context declares.
+///
+/// A context that only ran metadata-free fragments defers the catalog and keeps empty native
+/// metadata (attributes, property defaults, signatures), so it cannot describe a compiled
+/// class; callers fall back to a context they attach the catalog to themselves.
 ///
 /// # Safety
 /// Context handles must be registered and removed on their owning thread before reclamation.
-pub(crate) unsafe fn any_live_native_context() -> Option<*mut ElephcEvalContext> {
+pub(crate) unsafe fn catalog_ready_live_native_context() -> Option<*mut ElephcEvalContext> {
     let contexts = LIVE_NATIVE_CONTEXTS.with(|contexts| contexts.borrow().clone());
     contexts.into_iter().find(|context| {
-        unsafe { context.as_ref() }
-            .is_some_and(|owner| owner.has_abi_owners() && !owner.teardown_active())
+        unsafe { context.as_ref() }.is_some_and(|owner| {
+            owner.has_abi_owners() && !owner.teardown_active() && owner.native_catalog_is_ready()
+        })
     })
 }
 
@@ -197,21 +203,23 @@ mod active_context_tests {
     use super::*;
 
     /// Factories and class-name lookups reuse a live ABI owner and never return a handle after
-    /// its final reclamation.
+    /// its final reclamation; the catalog lookup also skips an owner whose catalog is deferred.
     #[test]
     fn class_factory_context_lookup_tracks_retained_abi_lifetimes() {
         let context = crate::ffi::__elephc_eval_context_new();
         unsafe {
             assert!((*context).define_class(EvalClass::new("LiveFactoryContextNode", vec![], vec![])));
             assert_eq!(live_native_context_for_class("\\livefactorycontextnode"), Some(context));
-            assert_eq!(any_live_native_context(), Some(context));
+            assert_eq!(catalog_ready_live_native_context(), None);
+            (*context).native_catalog_ready = true;
+            assert_eq!(catalog_ready_live_native_context(), Some(context));
             assert_eq!(crate::ffi::__elephc_eval_context_retain(context), 0);
             crate::ffi::__elephc_eval_context_free(context);
             assert_eq!(live_native_context_for_class("LiveFactoryContextNode"), Some(context));
-            assert_eq!(any_live_native_context(), Some(context));
+            assert_eq!(catalog_ready_live_native_context(), Some(context));
             crate::ffi::__elephc_eval_context_free(context);
             assert_eq!(live_native_context_for_class("LiveFactoryContextNode"), None);
-            assert_eq!(any_live_native_context(), None);
+            assert_eq!(catalog_ready_live_native_context(), None);
         }
     }
 
