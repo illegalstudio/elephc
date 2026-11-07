@@ -50,12 +50,16 @@ impl Detector {
         })
     }
 
-    /// A stream wrapper class is named by a string literal, not a class position.
+    /// A stream wrapper class is named by a string literal or a class constant.
+    ///
+    /// The PDO prelude registers its own blob wrapper with `self::class`; treating every
+    /// opaque second argument as XML pulled the whole XML bridge into every PDO program.
+    /// Only a literal XML class or an expression that itself references XML injects it.
     pub(super) fn stream_wrapper_refs_xml(&self, name: &Name, args: &[Expr]) -> bool {
         if php_symbol_key(name.as_str()) != "stream_wrapper_register" { return false; }
         args.get(1).is_some_and(|target| match &target.kind {
             ExprKind::StringLiteral(value) => super::class_string_is_xml(value),
-            _ => true,
+            _ => self.expr_refs_xml(target),
         })
     }
 

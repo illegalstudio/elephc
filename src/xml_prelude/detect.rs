@@ -736,6 +736,23 @@ mod tests {
         )));
     }
 
+    /// A stream wrapper registration pulls XML only for an XML target class.
+    ///
+    /// The PDO prelude registers its own blob wrapper with `self::class`; that must not
+    /// inject the XML bridge into every PDO program.
+    #[test]
+    fn stream_wrapper_registration_only_pulls_xml_for_xml_targets() {
+        assert!(!program_uses_xml(&parse(
+            "<?php class PdoBlobWrapper { public static function register(): void { stream_wrapper_register('pdo', self::class); } }"
+        )));
+        assert!(program_uses_xml(&parse(
+            "<?php stream_wrapper_register('xml', 'SimpleXMLElement');"
+        )));
+        assert!(program_uses_xml(&parse(
+            "<?php stream_wrapper_register('xml', SimpleXMLElement::class);"
+        )));
+    }
+
     /// An aliased import is detected through the import name.
     #[test]
     fn detects_aliased_use_import() {
