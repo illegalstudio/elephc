@@ -203,5 +203,10 @@ curl = ["elephc-magician/curl", "elephc-builtin-contract/curl"]
 [profile.dev]
 debug = "line-tables-only"
 
+# The compiler's own speed: a Symfony build spends minutes in it, across every crate at once.
+[profile.release]
+codegen-units = 1
+lto = "fat"
+
 [workspace.dependencies]
 elephc-fileinfo = { path = "crates/elephc-fileinfo" }
