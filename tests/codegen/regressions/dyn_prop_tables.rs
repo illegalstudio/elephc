@@ -1707,6 +1707,40 @@ fn test_named_setter_shared_arm_writes_every_class() {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// `count` subclasses inheriting one typed property, and a write of it on an untyped receiver.
+fn typed_setter_program(count: usize) -> String {
+    let mut source = String::from("<?php\nclass Base { public int $value = 0; }\n");
+    for index in 0..count {
+        source.push_str(&format!("class T{index} extends Base {{}}\n"));
+    }
+    source.push_str("function put(mixed $o, mixed $v): void { $o->value = $v; }\n");
+    for index in 0..count {
+        source.push_str(&format!(
+            "$o = new T{index}(); put($o, 1);\n\
+             try {{ put($o, 'x'); }} catch (\\TypeError $e) {{ echo $e->getMessage(), \"\\n\"; }}\n"
+        ));
+    }
+    source
+}
+
+/// Subclasses inheriting a typed slot share its arm, and the `TypeError` still names the class
+/// that declares the property, as php does.
+#[test]
+fn test_named_setter_typed_arm_is_shared_by_its_subclasses() {
+    for target in ["macos-aarch64", "linux-x86_64"] {
+        let small = emit_asm_with_env("elephc_typed_set_small", &typed_setter_program(10), target, &[]);
+        let large = emit_asm_with_env("elephc_typed_set_large", &typed_setter_program(100), target, &[]);
+        assert_eq!(
+            named_setter_instructions(&small),
+            named_setter_instructions(&large),
+            "{target}: the arms grew",
+        );
+    }
+    let out = compile_and_run(&typed_setter_program(2));
+    let message = "Cannot assign string to property Base::$value of type int\n";
+    assert_eq!(out, message.repeat(2));
+}
+
 /// A class outside the run, one with a typed slot, and a readonly one keep their own behaviour.
 #[test]
 fn test_named_setter_keeps_typed_and_readonly_classes_apart() {

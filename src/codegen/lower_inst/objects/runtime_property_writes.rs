@@ -403,6 +403,10 @@ pub(super) fn lower_mixed_named_prop_set(
                 emit_refined_untyped_tag_guarded_store(ctx, value, slot, message, 0, 16, &done_label)?;
             }
             MixedPropertyWriteAction::Slot(slot) => {
+                // The arm can answer a whole subtree, so its diagnostics name the declaring class.
+                let mut slot = slot.clone();
+                slot.class_name = message_class_for_slot(ctx, &slot);
+                let slot = &slot;
                 super::readonly_guard::emit_readonly_slot_guard(
                     ctx,
                     slot,
@@ -1208,21 +1212,25 @@ pub(super) fn emit_branch_if_stacked_object_class_matches(
 
 /// For each arm of a literal-name write ladder, the index of the first arm with the same code.
 ///
-/// Only a store that cannot fail shares: an untyped slot of a class with no guard on it, whose
-/// code is the same at the same offset whatever the class. Anything that can raise names its own
-/// class in the message. A Symfony build carried 177 MB of these arms, one per class declaring a
-/// common name.
+/// A plain store to an untyped slot is the same at one offset on any class. Any other slot store
+/// depends on the slot alone, so the subclasses that inherit it share its declaring class's arm
+/// ([`write_arm_key`]); that is most of Symfony, whose properties are typed. A Symfony build
+/// carried 177 MB of these arms, one per class declaring or inheriting a common name.
 fn shared_named_set_arm_owners(
     ctx: &FunctionContext<'_>,
     candidates: &[MixedPropertyWriteCandidate],
 ) -> Vec<usize> {
-    let mut first_for_offset: crate::fast_hash::FastMap<usize, usize> = Default::default();
+    let no_names = crate::fast_hash::FastMap::default();
+    let mut first_for_key: crate::fast_hash::FastMap<String, usize> = Default::default();
     candidates
         .iter()
         .enumerate()
         .map(|(index, candidate)| match &candidate.action {
             MixedPropertyWriteAction::Slot(slot) if store_cannot_refuse(ctx, slot) => {
-                *first_for_offset.entry(slot.offset).or_insert(index)
+                *first_for_key.entry(format!("plain|{}", slot.offset)).or_insert(index)
+            }
+            MixedPropertyWriteAction::Slot(_) => {
+                *first_for_key.entry(write_arm_key(ctx, &no_names, candidate)).or_insert(index)
             }
             _ => index,
         })
