@@ -909,3 +909,24 @@ echo $en;
     );
     assert_eq!(out, "fr|it");
 }
+
+/// `C::$items = &$local` aliases the static slot to the local in both directions.
+///
+/// The static-property parser desugars the reference form into the value store PHP performs
+/// when the reference set is created, then binds the local to the static ref slot. Mutating
+/// either name must therefore be visible through the other, including array appends.
+#[test]
+fn test_static_property_reference_assignment_aliases_a_local() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticReferenceOwner { public static array $items = []; }
+$values = [3, 1, 2];
+StaticReferenceOwner::$items = &$values;
+StaticReferenceOwner::$items[] = 4;
+echo implode(",", $values), "|";
+$values[] = 5;
+echo implode(",", StaticReferenceOwner::$items);
+"#,
+    );
+    assert_eq!(out, "3,1,2,4|3,1,2,4,5");
+}

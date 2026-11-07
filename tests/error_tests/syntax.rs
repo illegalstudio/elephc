@@ -952,3 +952,15 @@ fn test_error_lone_reserved_word_is_not_a_name() {
     expect_error("<?php Default::accent();", "Unexpected token");
     expect_error("<?php use Default\\{Palette};", "Expected imported name");
 }
+
+/// Static-property reference assignment accepts only a plain local source.
+///
+/// PHP allows any referenceable lvalue here; this compiler currently desugars the local form
+/// and names the unsupported source explicitly instead of failing later in lowering.
+#[test]
+fn test_error_static_property_reference_requires_a_local_source() {
+    expect_error(
+        "<?php class C { public static array $p = []; } C::$p = &make_value();",
+        "Static property reference assignment requires a local variable source",
+    );
+}
