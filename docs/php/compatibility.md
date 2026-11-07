@@ -175,6 +175,10 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `class_attribute_args()` | Class | Returns the constructor arguments of a named attribute applied to a class. |
 | `class_attribute_names()` | Class | Returns the list of attribute names applied to a class. |
 | `class_get_attributes()` | Class | Returns an array of ReflectionAttribute objects for all attributes of a class. |
+| `elephc_break()` | Debug | Stops at the caller's source line when an interactive or DAP debugger is attached; a no-op otherwise. |
+| `elephc_dump()` | Debug | In a --debug build, records a bounded, formatted value snapshot in a capture or writes it to stderr; an invalid destination raises ValueError. |
+| `elephc_trace_end()` | Debug | In a --debug build, closes one named trace segment opened by elephc_trace_start(). |
+| `elephc_trace_start()` | Debug | In a --debug build, opens a named, nestable trace segment in an active capture. |
 | `read_exif_data()` | Image | Alias of exif_read_data(). |
 | `clamp()` | Math | Clamps a value to be within a specified range. *(No PHP equivalent (not in PHP 8.4/8.5))* |
 | `log2()` | Math | Returns the base-2 logarithm of a number. *(No PHP equivalent (PHP has log(), log10(), log1p()))* |

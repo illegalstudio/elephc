@@ -59,6 +59,22 @@
         "name": "class_get_attributes"
       },
       {
+        "area": "Debug",
+        "name": "elephc_break"
+      },
+      {
+        "area": "Debug",
+        "name": "elephc_dump"
+      },
+      {
+        "area": "Debug",
+        "name": "elephc_trace_end"
+      },
+      {
+        "area": "Debug",
+        "name": "elephc_trace_start"
+      },
+      {
         "area": "String",
         "name": "grapheme_strrev"
       },
