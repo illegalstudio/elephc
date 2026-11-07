@@ -40,8 +40,13 @@ static SERVED: AtomicUsize = AtomicUsize::new(0);
 
 /// Records one completed isolated handler and broadcasts a graceful recycle at the quota.
 fn record_completed_request(max_requests: usize, recycle: &watch::Sender<bool>) {
+    // Unbounded recycling is the default; do not pay an atomic read-modify-write
+    // per request when the counter cannot trigger anything.
+    if max_requests == 0 {
+        return;
+    }
     let served = SERVED.fetch_add(1, Ordering::Relaxed) + 1;
-    if max_requests > 0 && served >= max_requests {
+    if served >= max_requests {
         let _ = recycle.send(true);
     }
 }
@@ -308,43 +313,47 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     // is drained frame-by-frame so progress can be written to the session
                     // file as bytes arrive, while still buffering the complete body the
                     // handler sees. Non-tracked requests keep the simple fast path.
-                    let collect_body = async {
-                        if let Some(mut tracker) = upload_progress::begin(
-                            req.headers().get("content-type").and_then(|v| v.to_str().ok()),
-                            req.headers().get("cookie").and_then(|v| v.to_str().ok()),
-                            req.headers().get("content-length").and_then(|v| v.to_str().ok()),
-                            &query,
-                        ) {
-                            drain_with_progress(req.into_body(), max_body, &mut tracker).await
-                        } else if max_body == 0 {
-                            req.into_body()
-                                .collect()
-                                .await
-                                .map(|c| c.to_bytes().to_vec())
-                                .map_err(|_| ())
+                    let body = if crate::worker::request_declares_body(req.headers()) {
+                        let collect_body = async {
+                            if let Some(mut tracker) = upload_progress::begin(
+                                req.headers().get("content-type").and_then(|v| v.to_str().ok()),
+                                req.headers().get("cookie").and_then(|v| v.to_str().ok()),
+                                req.headers().get("content-length").and_then(|v| v.to_str().ok()),
+                                &query,
+                            ) {
+                                drain_with_progress(req.into_body(), max_body, &mut tracker).await
+                            } else if max_body == 0 {
+                                req.into_body()
+                                    .collect()
+                                    .await
+                                    .map(|c| c.to_bytes().to_vec())
+                                    .map_err(|_| ())
+                            } else {
+                                Limited::new(req.into_body(), max_body)
+                                    .collect()
+                                    .await
+                                    .map(|c| c.to_bytes().to_vec())
+                                    .map_err(|_| ())
+                            }
+                        };
+                        let collected = if body_read_secs == 0 {
+                            Ok(collect_body.await)
                         } else {
-                            Limited::new(req.into_body(), max_body)
-                                .collect()
+                            tokio::time::timeout(Duration::from_secs(body_read_secs), collect_body)
                                 .await
-                                .map(|c| c.to_bytes().to_vec())
                                 .map_err(|_| ())
+                        };
+                        match collected {
+                            Err(()) => {
+                                return Ok::<_, Infallible>(fixed_response(408, b"Request Timeout"));
+                            }
+                            Ok(Ok(body)) => body,
+                            Ok(Err(_)) => {
+                                return Ok::<_, Infallible>(fixed_response(413, b"Payload Too Large"));
+                            }
                         }
-                    };
-                    let collected = if body_read_secs == 0 {
-                        Ok(collect_body.await)
                     } else {
-                        tokio::time::timeout(Duration::from_secs(body_read_secs), collect_body)
-                            .await
-                            .map_err(|_| ())
-                    };
-                    let body = match collected {
-                        Err(()) => {
-                            return Ok::<_, Infallible>(fixed_response(408, b"Request Timeout"));
-                        }
-                        Ok(Ok(body)) => body,
-                        Ok(Err(_)) => {
-                            return Ok::<_, Infallible>(fixed_response(413, b"Payload Too Large"));
-                        }
+                        Vec::new()
                     };
                     if body.len() > MAX_REQUEST_BODY_BYTES {
                         return Ok::<_, Infallible>(fixed_response(413, b"Payload Too Large"));

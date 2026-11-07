@@ -108,11 +108,7 @@ pub unsafe extern "C" fn elephc_web_write(ptr: *const u8, len: usize) {
     }
     if !*core::ptr::addr_of!(RESPONSE_COMMITTED) {
         core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_COMMITTED), true);
-        let cookie = request_header_owned("cookie");
-        let host = request_header_owned("host");
         if crate::trans_sid::prepare_streaming_response(
-            cookie.as_deref(),
-            host.as_deref(),
             &mut *core::ptr::addr_of_mut!(RESPONSE_HEADERS),
         ) {
             core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_TRANS_SID_BUFFERED), true);
@@ -161,14 +157,7 @@ pub(crate) fn finish_response_stream() -> bool {
         let mut complete = !failed;
         if complete && (buffered || !committed) {
             let mut headers = take_headers();
-            let cookie = request_header_owned("cookie");
-            let host = request_header_owned("host");
-            let body = crate::trans_sid::maybe_rewrite_response(
-                cookie.as_deref(),
-                host.as_deref(),
-                &mut headers,
-                take_body(),
-            );
+            let body = crate::trans_sid::maybe_rewrite_response(&mut headers, take_body());
             complete = crate::handler_ipc::write_response_start(
                 fd,
                 *core::ptr::addr_of!(RESPONSE_STATUS),
@@ -339,7 +328,7 @@ pub fn take_headers() -> Vec<(String, String)> {
 }
 
 /// Returns an owned request-header value using an ASCII-insensitive name match.
-fn request_header_owned(name: &str) -> Option<String> {
+pub(crate) fn request_header_owned(name: &str) -> Option<String> {
     unsafe {
         (&*core::ptr::addr_of!(REQ_HEADERS))
             .iter()

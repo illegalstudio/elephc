@@ -68,8 +68,13 @@ pub(crate) fn with_application_signals_blocked<T>(callback: impl FnOnce() -> T) 
 
 /// Records one completed handler and broadcasts a graceful recycle at the quota.
 fn record_completed_request(max_requests: usize, recycle: &watch::Sender<bool>) {
+    // Unbounded recycling is the default; do not pay an atomic read-modify-write
+    // per request when the counter cannot trigger anything.
+    if max_requests == 0 {
+        return;
+    }
     let served = SERVED.fetch_add(1, Ordering::Relaxed) + 1;
-    if max_requests > 0 && served >= max_requests {
+    if served >= max_requests {
         let _ = recycle.send(true);
     }
 }
@@ -270,7 +275,10 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     // before the handler, so both phases see identical values and
                     // no request can inherit the prior request's session settings.
                     unsafe { crate::session::elephc_web_session_reset() };
-                    let started = Instant::now();
+                    // Only the access log needs the request clock. Reading it on
+                    // every request costs a `mach_absolute_time`/vDSO call even
+                    // when no log line will be written.
+                    let started = access_log.then(Instant::now);
                     // Capture the request head once, as NUL-terminated strings the
                     // prelude getters can hand to PHP. `cstring` allocates once per
                     // value; the old `String` + `replace` + `CString` chain allocated
@@ -293,10 +301,26 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     };
                     let content_type = header("content-type");
                     let content_length = header("content-length");
-                    let req_cookie = header("cookie");
-                    let req_host = header("host");
-                    let req_traceparent = header("traceparent");
-                    let profile_header = header("x-elephc-query");
+                    // Upload progress only needs the Cookie header for a
+                    // multipart/form-data body; materialize it only for that
+                    // rare shape.
+                    let req_cookie = if content_type.as_deref().is_some_and(|value| {
+                        contains_ascii_case_insensitive(value.as_bytes(), b"multipart/form-data")
+                    }) {
+                        header("cookie")
+                    } else {
+                        None
+                    };
+                    let req_traceparent = if probe_route::trace_available() {
+                        header("traceparent")
+                    } else {
+                        None
+                    };
+                    let profile_header = if probe_route::query_available() {
+                        header("x-elephc-query")
+                    } else {
+                        None
+                    };
                     // Signed, not merely present: the value is
                     // `t=<unix seconds>,v=<hmac>` over the build key, so a header
                     // captured from a log stops working within minutes and one
@@ -353,48 +377,65 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     // stalled plain body, a size-limited one, and a tracked multipart upload
                     // are all ways to hold a connection open forever otherwise (issue #887).
                     // Expiry answers 408 and does not keep the connection alive.
-                    let collect_body = async {
-                        if let Some(mut tracker) = upload_progress::begin(
-                            content_type.as_deref(),
-                            req_cookie.as_deref(),
-                            content_length.as_deref(),
-                            &query_text,
-                        ) {
-                            drain_with_progress(req.into_body(), max_body, &mut tracker).await
-                        } else if max_body == 0 {
-                            req.into_body().collect().await.map(|c| c.to_bytes().to_vec()).map_err(|_| ())
+                    // A request without Content-Length or Transfer-Encoding has
+                    // no body (RFC 9112 §6.3). Short-circuit before building the
+                    // body future and its read deadline: this is every GET and
+                    // HEAD served by a healthy keep-alive client.
+                    let request_has_body = request_declares_body(req.headers());
+                    let body = if request_has_body {
+                        let collect_body = async {
+                            if let Some(mut tracker) = upload_progress::begin(
+                                content_type.as_deref(),
+                                req_cookie.as_deref(),
+                                content_length.as_deref(),
+                                &query_text,
+                            ) {
+                                drain_with_progress(req.into_body(), max_body, &mut tracker).await
+                            } else if max_body == 0 {
+                                req.into_body()
+                                    .collect()
+                                    .await
+                                    .map(|c| c.to_bytes().to_vec())
+                                    .map_err(|_| ())
+                            } else {
+                                Limited::new(req.into_body(), max_body)
+                                    .collect()
+                                    .await
+                                    .map(|c| c.to_bytes().to_vec())
+                                    .map_err(|_| ())
+                            }
+                        };
+                        let collected = if body_read_secs == 0 {
+                            Ok(collect_body.await)
                         } else {
-                            Limited::new(req.into_body(), max_body)
-                                .collect()
+                            tokio::time::timeout(Duration::from_secs(body_read_secs), collect_body)
                                 .await
-                                .map(|c| c.to_bytes().to_vec())
                                 .map_err(|_| ())
+                        };
+                        match collected {
+                            Ok(Ok(b)) => b,
+                            Err(()) => {
+                                let resp = Response::builder()
+                                    .status(408)
+                                    .header(hyper::header::CONNECTION, "close")
+                                    .body(Full::new(Bytes::from_static(b"Request Timeout")))
+                                    .unwrap_or_else(|_| {
+                                        Response::new(Full::new(Bytes::from_static(b"")))
+                                    });
+                                return Ok::<_, Infallible>(resp);
+                            }
+                            Ok(Err(_)) => {
+                                let resp = Response::builder()
+                                    .status(413)
+                                    .body(Full::new(Bytes::from_static(b"Payload Too Large")))
+                                    .unwrap_or_else(|_| {
+                                        Response::new(Full::new(Bytes::from_static(b"")))
+                                    });
+                                return Ok::<_, Infallible>(resp);
+                            }
                         }
-                    };
-                    let collected = if body_read_secs == 0 {
-                        Ok(collect_body.await)
                     } else {
-                        tokio::time::timeout(Duration::from_secs(body_read_secs), collect_body)
-                            .await
-                            .map_err(|_| ())
-                    };
-                    let body = match collected {
-                        Ok(Ok(b)) => b,
-                        Err(()) => {
-                            let resp = Response::builder()
-                                .status(408)
-                                .header(hyper::header::CONNECTION, "close")
-                                .body(Full::new(Bytes::from_static(b"Request Timeout")))
-                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b""))));
-                            return Ok::<_, Infallible>(resp);
-                        }
-                        Ok(Err(_)) => {
-                            let resp = Response::builder()
-                                .status(413)
-                                .body(Full::new(Bytes::from_static(b"Payload Too Large")))
-                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b""))));
-                            return Ok::<_, Infallible>(resp);
-                        }
+                        Vec::new()
                     };
                     let meta = request_state::RequestMeta {
                         remote_addr: request_state::ip_cstring(peer.ip()),
@@ -432,8 +473,6 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     // `session.use_trans_sid` is active (no-op otherwise). Runs on the
                     // plaintext body, before the gzip decision below.
                     let resp_body = crate::trans_sid::maybe_rewrite_response(
-                        req_cookie.as_deref(),
-                        req_host.as_deref(),
                         &mut resp_headers,
                         resp_body,
                     );
@@ -473,7 +512,7 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                             m,
                             p,
                             status,
-                            started.elapsed().as_millis()
+                            started.map(|start| start.elapsed().as_millis()).unwrap_or_default()
                         );
                     }
                     record_completed_request(max_requests, &request_recycle);
@@ -496,6 +535,20 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
             let _ = connection.await;
         }
     });
+}
+
+/// Returns whether an HTTP/1 request declares a body.
+///
+/// RFC 9112 §6.3: without `Content-Length` or `Transfer-Encoding`, the request
+/// has no body. This is the fast path for every GET and HEAD served by a healthy
+/// keep-alive client; it lets the worker skip constructing the body future and
+/// its read deadline entirely. A `Content-Length: 0` also declares an empty body.
+pub(crate) fn request_declares_body(headers: &hyper::HeaderMap) -> bool {
+    headers
+        .get(hyper::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.trim() != "0")
+        || headers.contains_key(hyper::header::TRANSFER_ENCODING)
 }
 
 /// Returns whether `haystack` contains `needle`, ignoring ASCII case.
@@ -592,6 +645,29 @@ mod tests {
         assert!(contains_ascii_case_insensitive(b"br, GZip", b"gzip"));
         assert!(!contains_ascii_case_insensitive(b"br, deflate", b"gzip"));
         assert!(!contains_ascii_case_insensitive(b"", b"gzip"));
+    }
+
+    /// Body presence follows HTTP/1 framing, not the method name.
+    #[test]
+    fn body_presence_follows_framing_headers() {
+        let mut headers = hyper::HeaderMap::new();
+        assert!(!request_declares_body(&headers));
+        headers.insert(
+            hyper::header::CONTENT_LENGTH,
+            hyper::header::HeaderValue::from_static("0"),
+        );
+        assert!(!request_declares_body(&headers));
+        headers.insert(
+            hyper::header::CONTENT_LENGTH,
+            hyper::header::HeaderValue::from_static("5"),
+        );
+        assert!(request_declares_body(&headers));
+        let mut chunked = hyper::HeaderMap::new();
+        chunked.insert(
+            hyper::header::TRANSFER_ENCODING,
+            hyper::header::HeaderValue::from_static("chunked"),
+        );
+        assert!(request_declares_body(&chunked));
     }
 
     /// The PHP-facing protocol string covers every Hyper version the server can see.

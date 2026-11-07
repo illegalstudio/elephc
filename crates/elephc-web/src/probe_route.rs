@@ -193,6 +193,18 @@ pub fn query_is_authentic(value: &str) -> bool {
     (unsafe { verify(value.as_ptr(), value.len()) }) != 0
 }
 
+/// Whether the exact profiler's trace hook is linked.
+pub fn trace_available() -> bool {
+    let addr = unsafe { std::ptr::addr_of!(elephc_instr_trace_fn).read() };
+    addr != 0
+}
+
+/// Whether the signed profiling-query verifier is linked.
+pub fn query_available() -> bool {
+    let addr = unsafe { std::ptr::addr_of!(elephc_probe_verify_fn).read() };
+    addr != 0
+}
+
 /// Starts or ends this request's own profile, when the binary carries hooks.
 ///
 /// A production binary can ship instrumented and dormant (`ELEPHC_INSTR_OFF=1`),
