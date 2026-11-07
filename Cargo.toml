@@ -103,6 +103,7 @@ elephc-pcntl = { path = "crates/elephc-pcntl" }
 # dependency, consistent with flate2/bzip2-rs above.
 indicatif = "0.17"
 console = "0.15"
+mimalloc = { version = "0.1.52", default-features = false }
 
 # build.rs generates the hosted-extension C header from crates/elephc-zend's
 # Rust ABI definitions (see crates/elephc-zend/abi_header.rs).
