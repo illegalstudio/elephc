@@ -936,6 +936,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
                 process::exit(1);
             }
         };
+    autoload::forget_loaded_files();
     timings.record_since("autoload-run", phase_started);
     decl_trace("after autoload-run", &ast);
     // Uses of a class whose file-scope code was hoisted into an initializer call it first.

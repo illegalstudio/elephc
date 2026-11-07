@@ -67,9 +67,10 @@ fn include_temporary_id(program: &[crate::parser::ast::Stmt]) -> Option<usize> {
     })
 }
 
-/// A probe preserves real-file and anonymous-class naming without recycling its include temporary.
+/// A probe hands its parsed files to the real walk, which then names them as the probe did, and
+/// never gives out one of their identities again.
 #[test]
-fn probe_restores_local_identities_but_keeps_include_temporaries_monotonic() {
+fn probe_hands_its_files_to_the_real_walk_without_recycling_identities() {
     let project = ProbeProject::new();
     let defines = std::collections::HashSet::new();
     let seed = crate::resolver::resolve_collecting_includes_continuing(
@@ -87,16 +88,21 @@ fn probe_restores_local_identities_but_keeps_include_temporaries_monotonic() {
     let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
 
     assert!(groups.contains("pdo"));
-    assert_eq!(crate::parser::anonymous_class_counter(), anonymous_class);
-    assert_eq!(Span::fresh_source_id(), source_id);
-    assert_eq!(Span::fresh_synthetic_source_id(), synthetic_source_id);
+    assert!(crate::parser::anonymous_class_counter() > anonymous_class);
+    assert!(Span::fresh_source_id() > source_id);
+    assert!(Span::fresh_synthetic_source_id() >= synthetic_source_id);
+    let parses = crate::autoload::AUTOLOAD_PARSES.with(std::cell::Cell::get);
     let resolved = crate::name_resolver::resolve(program).unwrap();
     let (loaded, _) = crate::autoload::run_collecting_included_with_defines(
         resolved, &project.0, &registry, &defines,
     ).unwrap();
+    assert_eq!(
+        crate::autoload::AUTOLOAD_PARSES.with(std::cell::Cell::get),
+        parses,
+        "the real walk parsed a file the probe already had",
+    );
     let actual_temporary = include_temporary_id(&loaded).expect("real autoload include temporary");
-    assert!(actual_temporary > previous_temporary + 1,
-        "the probe's discarded include temporary must not be reused");
+    assert!(actual_temporary > previous_temporary, "an earlier include temporary was reused");
     let expected_anonymous = format!("class@anonymous#{anonymous_class}");
     assert!(loaded.iter().any(|stmt| matches!(&stmt.kind,
         StmtKind::ClassDecl { name, .. } if name.ends_with(&expected_anonymous))),

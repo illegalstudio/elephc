@@ -41,7 +41,7 @@ use crate::span::Span;
 use walk::{collect_declared_fqns, collect_reference_points};
 
 /// Physical source paths for declarations introduced by static source loading.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct DeclarationSourceFiles {
     pub class_likes: HashMap<String, String>,
     pub functions: HashMap<String, String>,
@@ -1129,7 +1129,65 @@ fn load_autoloaded_file(
     path: &Path,
     base_dir: &Path,
     defines: &HashSet<String>,
-) -> Result<(Program, Vec<PathBuf>, DeclarationSourceFiles), AutoloadFileError> {
+) -> Result<LoadedAutoloadFile, AutoloadFileError> {
+    let remembered = LOADED_FILES.with(|files| files.borrow_mut().remove(path));
+    if let Some((loaded_with, loaded)) = remembered {
+        if loaded_with == *defines {
+            return Ok(loaded);
+        }
+    }
+    #[cfg(test)]
+    AUTOLOAD_PARSES.with(|parses| parses.set(parses.get() + 1));
+    let loaded = parse_autoloaded_file(path, base_dir, defines)?;
+    if REMEMBER_LOADED_FILES.with(std::cell::Cell::get) {
+        LOADED_FILES.with(|files| {
+            files.borrow_mut().insert(path.to_path_buf(), (defines.clone(), loaded.clone()));
+        });
+    }
+    Ok(loaded)
+}
+
+/// One file of the closure: its statements, its includes and what it declares.
+type LoadedAutoloadFile = (Program, Vec<PathBuf>, DeclarationSourceFiles);
+
+thread_local! {
+    /// Files the prelude probe parsed, until the real walk takes each one.
+    ///
+    /// The probe walks the whole closure to learn which preludes it needs, then the real walk
+    /// loads the same files again: on Symfony that was every vendor file lexed and parsed twice.
+    static LOADED_FILES: std::cell::RefCell<
+        crate::fast_hash::FastMap<PathBuf, (HashSet<String>, LoadedAutoloadFile)>,
+    > = std::cell::RefCell::new(Default::default());
+    /// Whether a load keeps a copy for the next walk: only while the probe runs.
+    static REMEMBER_LOADED_FILES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Files actually parsed by [`load_autoloaded_file`].
+    pub(crate) static AUTOLOAD_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Runs `walk`, keeping what it parses for the walk that follows.
+pub(crate) fn remembering_loaded_files<R>(walk: impl FnOnce() -> R) -> R {
+    forget_loaded_files();
+    REMEMBER_LOADED_FILES.with(|remember| remember.set(true));
+    let result = walk();
+    REMEMBER_LOADED_FILES.with(|remember| remember.set(false));
+    result
+}
+
+/// Drops what the probe parsed and no walk took.
+pub(crate) fn forget_loaded_files() {
+    LOADED_FILES.with(|files| files.borrow_mut().clear());
+}
+
+/// Lexes, parses and resolves one autoloaded file.
+fn parse_autoloaded_file(
+    path: &Path,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+) -> Result<LoadedAutoloadFile, AutoloadFileError> {
     let content = crate::source::read_physical_source(path).map_err(|e| {
         CompileError::new(
             Span::dummy(),

@@ -15,9 +15,8 @@
 //!   result with each prelude's own detector, and hands back the groups found. The real pass then
 //!   injects them exactly as if the entry file had used them, so the outcome is the one
 //!   `--with-<crate>` gives, without forcing the whole surface past reachability pruning.
-//! - The copy's work is discarded, restoring thread-local source IDs and anonymous-class
-//!   numbers so the real parse keeps those identities. Process-global synthetic spans and
-//!   include temporaries remain monotonic, preserving identities other threads allocated.
+//! - The files the copy parsed are kept for the real walk, which takes them instead of parsing
+//!   them again, so their source IDs and anonymous-class numbers stay taken and are not reused.
 //! - A probe failure is not reported here: the real pass hits the same error and reports it.
 //! - The web environment group retains process entries when an autoloaded file observes them.
 
@@ -25,7 +24,6 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::parser::ast::{Program, Stmt};
-use crate::span::Span;
 
 use super::Registry;
 
@@ -62,13 +60,13 @@ pub fn autoloaded_prelude_groups(
     if registry.is_empty() {
         return HashSet::new();
     }
-    let span_counters = Span::counters_checkpoint();
-    let anonymous_classes = crate::parser::anonymous_class_counter();
-    let closure = crate::name_resolver::resolve(program.clone())
-        .ok()
-        .and_then(|resolved| {
+    // What this walk parses is kept for the real walk, spans and anonymous class names included,
+    // so its source identities stay taken: the two walks must never hand one out twice.
+    let closure = super::remembering_loaded_files(|| {
+        crate::name_resolver::resolve(program.clone()).ok().and_then(|resolved| {
             super::run_collecting_included_with_defines(resolved, base_dir, registry, defines).ok()
-        });
+        })
+    });
     let groups = closure.map_or_else(HashSet::new, |(closure, _)| {
         PROBED_GROUPS
             .iter()
@@ -76,8 +74,5 @@ pub fn autoloaded_prelude_groups(
             .map(|(group, _)| *group)
             .collect()
     });
-    // Usage detectors may parse literal eval fragments, so their identities are discarded too.
-    Span::restore_counters(span_counters);
-    crate::parser::restore_anonymous_class_counter(anonymous_classes);
     groups
 }
