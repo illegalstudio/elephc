@@ -2232,7 +2232,7 @@ fn usage_fixture(prefix: &str) -> PathBuf {
         ),
     )
     .unwrap();
-    fs::write(dir.join("vendor/acme/lib/src/Unused.php"), format!("{header}{}", declare("Unused", ""))).unwrap();
+    fs::write(dir.join("vendor/acme/lib/src/Unused.php"), format!("{header}{}", declare("Unused", "public static function make(): void {}"))).unwrap();
     fs::write(
         dir.join("main.php"),
         r#"<?php
@@ -2242,10 +2242,37 @@ spl_autoload_register(function (string $class): void {
 });
 $name = 'Acme\Lib\\' . ($argc > 5 ? 'Other' : 'Listed');
 echo (new $name)->markerListed(), "\n";
+if ($argc > 1) {
+    try {
+        $argv[1] === 'new' ? (new $name)->later() : \Acme\Lib\Unused::make();
+    } catch (\Error $e) {
+        echo get_class($e), ': ', $e->getMessage(), "\n";
+    }
+}
 "#,
     )
     .unwrap();
     dir
+}
+
+/// A path no recorded run took reaches `Unused`, which php would autoload but the manifest left out
+/// of the build: the program stops with the closed-world violation, which no `catch` swallows,
+/// instead of php's catchable "Class not found" for a class that exists.
+#[test]
+fn closed_world_usage_manifest_escape_is_a_violation_not_class_not_found() {
+    let dir = usage_fixture("cw_usage_escape");
+    fs::write(dir.join("usage.txt"), "elephc-usage 1\nclass Acme\\Lib\\Listed\n").unwrap();
+    compile_ok(&dir, &["--closed-world", "--usage-manifest", "usage.txt"]);
+    for path in ["new", "static"] {
+        let output = Command::new(dir.join("main")).arg(path).current_dir(&dir).output().unwrap();
+        let all = format!("{}{}", text(&output.stdout), text(&output.stderr));
+        assert!(!output.status.success(), "{path}: {all}");
+        assert_eq!(text(&output.stdout), "Listed\n", "{path}: nothing after the violation runs");
+        assert!(
+            all.contains("closed-world violation: class \"Acme\\Lib\\Unused\" was not recorded in the usage manifest"),
+            "{path}: {all}"
+        );
+    }
 }
 
 /// With a usage manifest, a closed world roots the classes the application was seen loading

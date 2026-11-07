@@ -15,10 +15,12 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::sync::Arc;
 
 thread_local! {
     static CLOSED_WORLD: Cell<bool> = const { Cell::new(false) };
     static USAGE_MANIFEST: RefCell<Option<Rc<UsageManifest>>> = const { RefCell::new(None) };
+    static LOADABLE_CLASSES: RefCell<Option<Arc<HashSet<String>>>> = const { RefCell::new(None) };
 }
 
 /// The first line of a usage manifest file.
@@ -109,6 +111,32 @@ pub fn add_usage_classes(names: &[String]) {
             }
         }
     });
+}
+
+/// Records the class keys (`php_symbol_key`) the autoloader of the program could load, read by
+/// [`escapes_manifest`]; `None` clears them.
+pub fn set_loadable_classes(keys: Option<HashSet<String>>) {
+    LOADABLE_CLASSES.with(|cell| *cell.borrow_mut() = keys.map(Arc::new));
+}
+
+/// The class keys php could autoload, under a usage manifest only.
+pub fn loadable_classes() -> Option<Arc<HashSet<String>>> {
+    usage_manifest()?;
+    LOADABLE_CLASSES.with(|cell| cell.borrow().clone())
+}
+
+/// Whether reaching class-like `name`, which the build does not declare, is a closed-world
+/// violation: php would have autoloaded it, but no recorded run did, so it was not compiled.
+pub fn escapes_manifest(name: &str) -> bool {
+    loadable_classes().is_some_and(|keys| keys.contains(&crate::names::php_symbol_key(name.trim_start_matches('\\'))))
+}
+
+/// The fatal a closed-world program prints when it reaches a class its usage manifest left out.
+pub fn manifest_escape_message(name: &str) -> String {
+    format!(
+        "Fatal error: closed-world violation: class \"{}\" was not recorded in the usage manifest, so this build did not compile it; record a run that reaches it and rebuild\n",
+        name.trim_start_matches('\\')
+    )
 }
 
 /// The usage manifest of a closed-world compilation, when one was given.

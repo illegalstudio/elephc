@@ -191,6 +191,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         None => None,
     };
     crate::closed_world::set_usage_manifest(usage_manifest);
+    crate::closed_world::set_loadable_classes(None);
     let filename = filename.as_str();
     crate::progress::init(quiet);
     // Reject incompatible options before check/EIR output can return without the backend.

@@ -321,6 +321,11 @@ fn run_collecting_included_on_compiler_stack(
     // name three times). A namespaced declaration is excluded: PHP falls back to the global
     // namespace only, never to another one.
 
+    // What php could autoload: under a manifest, reaching one of these the build left out is a
+    // closed-world violation (`closed_world::escapes_manifest`).
+    if crate::closed_world::usage_manifest().is_some() {
+        crate::closed_world::set_loadable_classes(Some(registry.psr4().class_keys()));
+    }
     // A recorded file stands for the classes the index maps to it, resolved once: the manifest
     // then names them like any recorded class.
     if let Some(manifest) = crate::closed_world::usage_manifest().filter(|manifest| !manifest.files.is_empty()) {

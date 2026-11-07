@@ -65,6 +65,11 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             ctx.emitter.label(&native_done_label);
             return Ok(());
         }
+        if ctx.module.usage_escapes.as_ref().is_some_and(|keys| keys.contains(&php_symbol_key(&class_name))) {
+            let message = crate::closed_world::manifest_escape_message(&class_name);
+            super::dynamic_factory::emit_fatal_message(ctx, message.as_bytes());
+            return Ok(());
+        }
         exceptions::emit_error(ctx, &format!("Class \"{}\" not found", class_name));
         return Ok(());
     }

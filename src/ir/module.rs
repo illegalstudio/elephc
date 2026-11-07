@@ -131,6 +131,9 @@ pub struct Module {
     /// answered from the compiled-source table (`__rt_closed_include`) and never reaches the
     /// eval bridge.
     pub closed_world: bool,
+    /// Under a usage manifest, the class keys (`php_symbol_key`) php could autoload: a site that
+    /// reaches one the build left out is a closed-world violation, not php's "Class not found".
+    pub usage_escapes: Option<std::sync::Arc<HashSet<String>>>,
     /// What a runtime include of each compiled source does in a closed-world build; `None` when
     /// the program has no runtime include (or is not closed-world). One record per catalog source.
     pub closed_includes: Option<Vec<ClosedInclude>>,
@@ -387,6 +390,7 @@ impl Module {
             preincluded_sources: Default::default(),
             include_units: Vec::new(),
             closed_world: false,
+            usage_escapes: None,
             closed_includes: None,
             deferred_class_loads: Default::default(),
             runtime_bound_functions: Default::default(),

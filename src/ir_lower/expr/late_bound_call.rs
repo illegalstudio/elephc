@@ -107,14 +107,33 @@ pub(super) fn lower_closed_world_eval_unavailable(
     ctx.box_value_as_mixed(null, crate::types::PhpType::Mixed, Some(span))
 }
 
+/// Ends the current block with the closed-world violation fatal when `class_name` is a class php
+/// could autoload but the usage manifest left out of the build, and continues lowering in an
+/// unreachable block. Returns whether it did.
+pub(super) fn terminate_manifest_escape(ctx: &mut LoweringContext<'_, '_>, class_name: &str) -> bool {
+    if !crate::closed_world::escapes_manifest(class_name) {
+        return false;
+    }
+    let message = ctx.intern_string(&crate::closed_world::manifest_escape_message(class_name));
+    ctx.builder.terminate(crate::ir::Terminator::Fatal { message });
+    let after = ctx.builder.create_named_block("closed_world.manifest_escape.after", Vec::new());
+    ctx.builder.position_at_end(after);
+    true
+}
+
 /// Lowers a static call on a class that is not part of a closed-world build to php's own
-/// `Error: Class "X" not found`.
+/// `Error: Class "X" not found`, or, for a class only the usage manifest left out, to the
+/// closed-world violation fatal.
 pub(super) fn lower_closed_world_class_not_found(
     ctx: &mut LoweringContext<'_, '_>,
     class_name: &str,
     call_expr: &Expr,
 ) -> LoweredValue {
     let span = call_expr.span;
+    if terminate_manifest_escape(ctx, class_name) {
+        let null = super::lower_null(ctx, call_expr);
+        return ctx.box_value_as_mixed(null, crate::types::PhpType::Mixed, Some(span));
+    }
     let message = format!("Class \"{}\" not found", class_name.trim_start_matches('\\'));
     let new_error_expr = Expr::new(
         ExprKind::NewObject {
