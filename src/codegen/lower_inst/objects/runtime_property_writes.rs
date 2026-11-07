@@ -325,6 +325,11 @@ pub(super) fn lower_mixed_named_prop_set(
     property: &str,
     inst: &Instruction,
 ) -> Result<()> {
+    // A later site of a name reaches the helper its first site asked for, without searching the
+    // whole program for arms it will not emit.
+    if try_lower_outlined_named_mixed_prop_set(ctx, inst, object, value, property, None)? {
+        return Ok(());
+    }
     let candidates = declared_mixed_named_property_set_candidates(ctx, value, property, inst)?;
     if candidates.is_empty() {
         return lower_mixed_prop_set(ctx, object, value, property, inst);
@@ -334,7 +339,7 @@ pub(super) fn lower_mixed_named_prop_set(
     // carried 35,608 of them in `VarCloner::doClone` alone. Those classes share one table-driven
     // block (`emit_table_dynamic_hash_write`); only the classes this site must keep away from it
     // still get an explicit comparison.
-    if try_lower_outlined_named_mixed_prop_set(ctx, inst, object, value, property, candidates.len())? {
+    if try_lower_outlined_named_mixed_prop_set(ctx, inst, object, value, property, Some(candidates.len()))? {
         return Ok(());
     }
     let (candidates, table_routed) =

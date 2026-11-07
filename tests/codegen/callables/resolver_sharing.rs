@@ -30,8 +30,8 @@ fn fixture(count: usize) -> String {
     source
 }
 
-/// Assembly lines emitted for `source`.
-fn assembly_lines(source: &str) -> usize {
+/// Assembly emitted for `source`.
+fn assembly(source: &str) -> String {
     let dir = make_cli_test_dir("elephc_callable_resolver_sharing");
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).expect("write the fixture");
@@ -47,7 +47,12 @@ fn assembly_lines(source: &str) -> usize {
     );
     let assembly = fs::read_to_string(php_path.with_extension("s")).expect("read the assembly");
     let _ = fs::remove_dir_all(dir);
-    assembly.lines().count()
+    assembly
+}
+
+/// Assembly lines emitted for `source`.
+fn assembly_lines(source: &str) -> usize {
+    assembly(source).lines().count()
 }
 
 /// Sixty more sites cost a call each, not one more search each.
@@ -57,6 +62,39 @@ fn a_boxed_callable_site_costs_a_call_not_a_search() {
     let large = assembly_lines(&fixture(64));
     let per_site = (large - small) / 60;
     assert!(per_site < 140, "each site added {per_site} assembly lines");
+}
+
+/// A class whose method calls `count` callable arrays built on the spot.
+fn array_fixture(count: usize) -> String {
+    let mut source = String::from(
+        "<?php\nclass T { public function m(): int { return 1; } }\n\
+         class C {\n    public function run($o, $m): int {\n        $n = 0;\n",
+    );
+    for _ in 0..count {
+        source.push_str("        $n += [$o, $m]();\n");
+    }
+    source.push_str(
+        "        return $n;\n    }\n}\necho (new C())->run(new T(), $argc > 1 ? 'x' : 'm'), \"\\n\";\n",
+    );
+    source
+}
+
+/// Every callable array site of a scope calls its one search.
+#[test]
+fn callable_array_sites_call_one_search() {
+    let text = assembly(&array_fixture(64));
+    let definitions = text
+        .lines()
+        .filter(|line| line.starts_with("_eir_shared_callable_array_lookup_"))
+        .count();
+    let calls = text
+        .lines()
+        .filter(|line| line.contains("_eir_shared_callable_array_lookup_") && !line.ends_with(':'))
+        .filter(|line| line.trim_start().starts_with("bl ") || line.trim_start().starts_with("call "))
+        .collect::<Vec<_>>();
+    assert!(calls.len() >= 64, "only {} sites call the search", calls.len());
+    let unique = calls.iter().collect::<std::collections::HashSet<_>>().len();
+    assert!(definitions < 8 && unique < 8, "{definitions} searches for {unique} call targets");
 }
 
 /// One resolver per scope reports php's refusal from the right class, and each scope reaches its

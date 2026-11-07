@@ -302,6 +302,10 @@ pub(in crate::codegen) fn emit_pending_dynamic_property_helpers(
 ) -> Result<bool> {
     let mut emitted_any = false;
     for pending in shared.take_pending_dynamic_prop_helpers() {
+        if shared.postpones_helper(&pending) {
+            shared.postpone_helper(pending);
+            continue;
+        }
         emitted_any = true;
         emitter.comment(&format!(
             "{}{:012x}",
@@ -337,6 +341,17 @@ pub(in crate::codegen) fn emit_pending_dynamic_property_helpers(
             DynamicPropHelperKind::MixedMethodCall => {
                 crate::codegen::lower_inst::emit_mixed_method_call_helper(
                     module, emitter, data, shared, &pending,
+                )
+            }
+            DynamicPropHelperKind::MixedCallableArrayLookup(miss) => {
+                crate::codegen::lower_inst::callables::emit_callable_array_lookup_helper(
+                    module,
+                    emitter,
+                    data,
+                    shared,
+                    &pending.label,
+                    pending.scope.as_deref(),
+                    &miss,
                 )
             }
             DynamicPropHelperKind::MixedCallableResolver(spec) => {
@@ -786,6 +801,9 @@ const NAMED_GET_MIN_ARMS: usize = 3;
 /// holding the one instruction, so the existing lowering -- ladder, eval-owner fallback, refusal
 /// and undefined-property diagnostics -- runs unchanged inside it.
 ///
+/// `arm_count` is `None` when the arms are not counted yet: only a site whose helper already
+/// exists goes through then, and it skips the whole-program search of the arms it would not emit.
+///
 /// Key: the name, the opcode (plain or nullsafe read) and, only when the name resolves
 /// differently by scope, the lexical class. A name is scope-sensitive when some class declares it
 /// non-public or keeps more than one slot under it (an ancestor's hidden private); otherwise
@@ -795,10 +813,10 @@ pub(super) fn try_lower_outlined_named_mixed_prop_get(
     inst: &Instruction,
     object: ValueId,
     property: &str,
-    arm_count: usize,
+    arm_count: Option<usize>,
 ) -> Result<bool> {
     if outlining_disabled()
-        || arm_count < NAMED_GET_MIN_ARMS
+        || arm_count.is_some_and(|count| count < NAMED_GET_MIN_ARMS)
         || inside_function_helper(ctx, NAMED_GET_PREFIX)
         || ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL).is_some()
         || inst.result_php_type.codegen_repr() != PhpType::Mixed
@@ -825,6 +843,9 @@ pub(super) fn try_lower_outlined_named_mixed_prop_get(
         mode,
         scope.as_deref().unwrap_or("")
     );
+    if arm_count.is_none() && !ctx.shared.dynamic_prop_helper_requested(&key) {
+        return Ok(false);
+    }
     let label = ctx.keyed_global_label(&key, NAMED_GET_PREFIX);
     ctx.shared.request_dynamic_prop_helper(
         &key,
@@ -864,10 +885,10 @@ pub(super) fn try_lower_outlined_named_mixed_prop_set(
     object: ValueId,
     value: ValueId,
     property: &str,
-    arm_count: usize,
+    arm_count: Option<usize>,
 ) -> Result<bool> {
     if outlining_disabled()
-        || arm_count < NAMED_GET_MIN_ARMS
+        || arm_count.is_some_and(|count| count < NAMED_GET_MIN_ARMS)
         || inst.op != Op::PropSet
         || inside_function_helper(ctx, NAMED_SET_PREFIX)
         || ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL).is_some()
@@ -886,6 +907,9 @@ pub(super) fn try_lower_outlined_named_mixed_prop_set(
         None
     };
     let key = format!("{}:{}:{}", NAMED_SET_PREFIX, property, scope.as_deref().unwrap_or(""));
+    if arm_count.is_none() && !ctx.shared.dynamic_prop_helper_requested(&key) {
+        return Ok(false);
+    }
     let label = ctx.keyed_global_label(&key, NAMED_SET_PREFIX);
     ctx.shared.request_dynamic_prop_helper(
         &key,

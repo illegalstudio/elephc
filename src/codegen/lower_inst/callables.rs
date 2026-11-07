@@ -3491,7 +3491,7 @@ pub(super) fn emit_runtime_mixed_instance_callable_array_descriptor_value(
     emit_mixed_callable_array_selector_slots(ctx, &CallableArraySource::RawArray(callable))?;
     let done_label = ctx.next_label("callable_array_instance_descriptor_done");
     let miss_label = ctx.next_label(&format!("{}_callable_array_instance_missing", op_name));
-    emit_mixed_callable_array_descriptor_lookup(
+    emit_inline_callable_array_lookup(
         ctx,
         &targets,
         &[],
@@ -4592,8 +4592,139 @@ fn emit_object_selector_static_arms(
     Ok(())
 }
 
-/// Resolves a saved mixed callable-array selector to a descriptor and ownership flag.
+/// Readable part of the shared callable-array search's entry symbol.
+const CALLABLE_ARRAY_LOOKUP_PREFIX: &str = "callable_array_lookup";
+/// What the shared search leaves in the ownership flag register when nothing matched.
+const CALLABLE_ARRAY_LOOKUP_MISS: i64 = 2;
+
+/// Resolves a saved mixed callable-array selector to a descriptor and ownership flag, against
+/// every descriptor target the scope reaches.
+///
+/// The search is the same for every site of a scope, and ran through a whole-program table
+/// build at each one: a tenth of a Symfony build. So it lives in one body per scope and how it
+/// reports a miss. The selector stays on the site's temporary stack and the body works on a copy.
 fn emit_mixed_callable_array_descriptor_lookup(
+    ctx: &mut FunctionContext<'_>,
+    instance_targets: &[RuntimeArrayInstanceMethodTarget],
+    static_cases: &[callable_dispatch::RuntimeStaticMethodCallableCase],
+    miss_label: &str,
+    inaccessible: &InaccessibleMethodError,
+) -> Result<()> {
+    let miss = match inaccessible {
+        InaccessibleMethodError::Ignore => CallableResolverMiss::Ignore,
+        InaccessibleMethodError::InvalidCallback(prefix) => {
+            CallableResolverMiss::InvalidCallback(prefix.clone())
+        }
+        InaccessibleMethodError::DirectCall => CallableResolverMiss::DirectCall,
+        InaccessibleMethodError::Dynamic(_) => {
+            return emit_inline_callable_array_lookup(
+                ctx, instance_targets, static_cases, miss_label, inaccessible,
+            );
+        }
+    };
+    if ctx.function.name.contains(CALLABLE_ARRAY_LOOKUP_PREFIX)
+        || ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL).is_some()
+    {
+        return emit_inline_callable_array_lookup(
+            ctx, instance_targets, static_cases, miss_label, inaccessible,
+        );
+    }
+    let scope = ctx
+        .function
+        .lexical_class
+        .as_deref()
+        .map(|class| class.trim_start_matches('\\').to_string());
+    let key = format!("{}:{:?}:{}", CALLABLE_ARRAY_LOOKUP_PREFIX, miss, scope.as_deref().unwrap_or(""));
+    let label = ctx.keyed_global_label(&key, CALLABLE_ARRAY_LOOKUP_PREFIX);
+    ctx.shared.request_dynamic_prop_helper(
+        &key,
+        &label,
+        DynamicPropHelperKind::MixedCallableArrayLookup(miss),
+        scope.as_deref(),
+    );
+    abi::emit_call_label(ctx.emitter, &label);
+    let flag_reg = runtime_descriptor_owned_flag_reg(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #{}", flag_reg, CALLABLE_ARRAY_LOOKUP_MISS)); // did the search find nothing?
+            abi::emit_branch_if_equal_wide(ctx.emitter, miss_label);            // nothing matched
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", flag_reg, CALLABLE_ARRAY_LOOKUP_MISS)); // did the search find nothing?
+            ctx.emitter.instruction(&format!("je {}", miss_label));             // nothing matched
+        }
+    }
+    Ok(())
+}
+
+/// Emits one shared callable-array search over a copy of the caller's 64-byte selector block.
+pub(in crate::codegen) fn emit_callable_array_lookup_helper(
+    module: &crate::ir::Module,
+    emitter: &mut crate::codegen_support::emit::Emitter,
+    data: &mut crate::codegen::data_section::DataSection,
+    shared: &mut crate::codegen::shared_state::SharedCodegenState,
+    label: &str,
+    scope: Option<&str>,
+    miss: &CallableResolverMiss,
+) -> Result<()> {
+    let mut function = crate::codegen::shared_helper::helper_function(label, PhpType::Callable);
+    function.lexical_class = scope.map(str::to_string);
+    let layout = crate::codegen::frame::layout_for_function(
+        &function, emitter.target, false, false, false,
+    );
+    let saved_nested_offset = layout.frame_size - 8;
+    let frame_size = layout.frame_size + 16;
+    let mut ctx = FunctionContext::new(
+        module, &function, emitter, data, shared, layout, false, false, false, None,
+    );
+    ctx.emitter.blank();
+    ctx.emitter.comment(&format!("--- shared callable array search: {} ---", label));
+    ctx.emitter.label(label);
+    abi::emit_frame_prologue(ctx.emitter, frame_size);
+    let nested = abi::nested_call_reg(ctx.emitter);
+    abi::store_at_offset(ctx.emitter, nested, saved_nested_offset);
+    abi::emit_reserve_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
+    for offset in (0..MIXED_SELECTOR_BYTES).step_by(8) {
+        let source = frame_size + MIXED_SELECTOR_BYTES + offset;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("ldr x9, [sp, #{}]", source)); // read the caller's selector word
+                ctx.emitter.instruction(&format!("str x9, [sp, #{}]", offset)); // keep it where the search expects it
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", source)); // read the caller's selector word
+                ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", offset)); // keep it where the search expects it
+            }
+        }
+    }
+    let inaccessible = match miss {
+        CallableResolverMiss::Ignore => InaccessibleMethodError::Ignore,
+        CallableResolverMiss::InvalidCallback(prefix) => {
+            InaccessibleMethodError::InvalidCallback(prefix.clone())
+        }
+        CallableResolverMiss::DirectCall => InaccessibleMethodError::DirectCall,
+    };
+    let instance_targets = runtime_array_instance_method_targets_for_descriptor(&ctx);
+    let static_cases = runtime_static_method_descriptor_cases(&mut ctx, None);
+    let miss_label = ctx.next_label("callable_array_lookup_miss");
+    let done_label = ctx.next_label("callable_array_lookup_found");
+    emit_inline_callable_array_lookup(
+        &mut ctx, &instance_targets, &static_cases, &miss_label, &inaccessible,
+    )?;
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&miss_label);
+    let flag_reg = runtime_descriptor_owned_flag_reg(&ctx);
+    abi::emit_load_int_immediate(ctx.emitter, flag_reg, CALLABLE_ARRAY_LOOKUP_MISS);
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
+    abi::load_at_offset(ctx.emitter, nested, saved_nested_offset);
+    abi::emit_frame_restore(ctx.emitter, frame_size);
+    abi::emit_return(ctx.emitter);
+    Ok(())
+}
+
+/// Emits the search itself, at the site or in its shared body.
+fn emit_inline_callable_array_lookup(
     ctx: &mut FunctionContext<'_>,
     instance_targets: &[RuntimeArrayInstanceMethodTarget],
     static_cases: &[callable_dispatch::RuntimeStaticMethodCallableCase],

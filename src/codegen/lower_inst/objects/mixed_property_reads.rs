@@ -239,6 +239,13 @@ pub(super) fn lower_union_object_prop_get(
     store_if_result(ctx, inst)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Whole-program searches for the arms of a `$mixed->name` read.
+    pub(crate) static MIXED_READ_SEARCHES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
 /// Lowers `$mixed->property` through the shared stdClass-aware runtime helper.
 pub(super) fn lower_mixed_prop_get(
     ctx: &mut FunctionContext<'_>,
@@ -249,7 +256,16 @@ pub(super) fn lower_mixed_prop_get(
     if builtins::has_eval_context(ctx) {
         return builtins::lower_eval_property_get(ctx, inst, object, property);
     }
+    // A later site of a name reaches the helper its first site asked for, without searching the
+    // whole program for arms it will not emit.
+    if super::outlined_dynamic_property::try_lower_outlined_named_mixed_prop_get(
+        ctx, inst, object, property, None,
+    )? {
+        return Ok(());
+    }
     let mode = property_fetch_mode(inst);
+    #[cfg(test)]
+    MIXED_READ_SEARCHES.with(|searches| searches.set(searches.get() + 1));
     let candidates = declared_mixed_property_candidates(ctx, property, mode, inst)?;
     // A user class may answer this name exclusively from its per-instance property hash. Such
     // a class contributes no declared candidate, but still needs the class-id ladder below. A
@@ -265,7 +281,7 @@ pub(super) fn lower_mixed_prop_get(
         inst,
         object,
         property,
-        candidates.len() + hash_arm_count + magic_groups.len(),
+        Some(candidates.len() + hash_arm_count + magic_groups.len()),
     )? {
         return Ok(());
     }

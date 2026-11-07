@@ -695,3 +695,35 @@ fn interface_questions_walk_the_class_table_once_not_per_site() {
     assert!(small > 0, "the fixture no longer asks a class table question");
     assert_eq!(small, large, "class table walks grew with the sites: {small} vs {large}");
 }
+
+/// `count` reads of one name on untyped receivers, with enough classes declaring it for a helper.
+fn many_mixed_reads(count: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..4 {
+        source.push_str(&format!("class R{index} {{ public $value = {index}; }}\n"));
+    }
+    source.push_str("function f(mixed $o): int {\n    $n = 0;\n");
+    for _ in 0..count {
+        source.push_str("    $n += (int) $o->value;\n");
+    }
+    source.push_str("    return $n;\n}\necho f(new R0()), f(new R1()), f(new R2()), f(new R3());\n");
+    source
+}
+
+/// Whole-program arm searches of `$mixed->name` reads while generating code for `source`.
+fn mixed_read_searches(source: &str) -> usize {
+    let module = lower_source(source);
+    crate::codegen::MIXED_READ_SEARCHES.with(|count| count.set(0));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    crate::codegen::MIXED_READ_SEARCHES.with(|count| count.get())
+}
+
+/// The arms of a name are searched for its first site only: the helper serves the others, and
+/// each search walks every class of the program.
+#[test]
+fn mixed_reads_of_one_name_search_the_program_once() {
+    let small = mixed_read_searches(&many_mixed_reads(4));
+    let large = mixed_read_searches(&many_mixed_reads(64));
+    assert!(small > 0, "the fixture no longer reaches the named read");
+    assert_eq!(small, large, "arm searches grew with the sites: {small} vs {large}");
+}

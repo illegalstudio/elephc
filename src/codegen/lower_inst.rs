@@ -64,6 +64,8 @@ mod offset_unset;
 mod closure_binding;
 mod iterators;
 mod objects;
+#[cfg(test)]
+pub(crate) use objects::MIXED_READ_SEARCHES;
 mod ownership;
 mod pointers;
 mod scalar_widths;

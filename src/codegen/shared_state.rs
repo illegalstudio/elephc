@@ -239,6 +239,8 @@ pub(crate) struct SharedCodegenState {
     dynamic_prop_requested: HashSet<String>,
     /// Requested runtime-name property helpers whose bodies are not emitted yet.
     dynamic_prop_pending: Vec<PendingDynamicPropHelper>,
+    /// Helpers a parallel worker left to the compiling thread.
+    postponed_helpers: Vec<PendingDynamicPropHelper>,
     /// The opcode and name immediate each named-read helper repeats, by helper key.
     pub(super) named_get_templates:
         crate::fast_hash::FastMap<String, (crate::ir::Op, Option<crate::ir::Immediate>)>,
@@ -295,6 +297,8 @@ pub(crate) enum DynamicPropHelperKind {
     MixedMethodCall,
     /// A boxed callable resolved to its descriptor, emitted with a frame of its own.
     MixedCallableResolver(Box<CallableResolverSpec>),
+    /// The search of one scope's callable-array targets over a selector on the caller's stack.
+    MixedCallableArrayLookup(CallableResolverMiss),
 }
 
 /// Everything a shared callable resolver's code depends on, beside the module and the scope.
@@ -619,6 +623,7 @@ impl SharedCodegenState {
             property_guard_pending: Vec::new(),
             dynamic_prop_requested: HashSet::default(),
             dynamic_prop_pending: Vec::new(),
+            postponed_helpers: Vec::new(),
             named_get_templates: Default::default(),
             method_call_templates: Default::default(),
             owner_call_site_facts: Default::default(),
@@ -803,6 +808,36 @@ impl SharedCodegenState {
     }
 
     /// Takes the runtime-name property helpers requested since the last drain.
+    /// Whether a parallel worker must leave this helper to the compiling thread.
+    ///
+    /// The callable searches name descriptors and tables of every method a scope reaches, all
+    /// interned into the worker's data section, where a deferred body rolls them back while the
+    /// memos naming them stay. Their entry symbols come from their keys, so bodies call them
+    /// wherever they end up, and the compiling thread emits each one once.
+    pub(super) fn postpones_helper(&self, pending: &PendingDynamicPropHelper) -> bool {
+        self.deferral_watermark.is_some()
+            && matches!(
+                pending.kind,
+                DynamicPropHelperKind::MixedCallableResolver(_)
+                    | DynamicPropHelperKind::MixedCallableArrayLookup(_)
+            )
+    }
+
+    /// Keeps one helper for the compiling thread; see [`Self::postpones_helper`].
+    pub(super) fn postpone_helper(&mut self, pending: PendingDynamicPropHelper) {
+        self.postponed_helpers.push(pending);
+    }
+
+    /// Hands over the helpers this worker left to the compiling thread.
+    pub(super) fn take_postponed_helpers(&mut self) -> Vec<PendingDynamicPropHelper> {
+        std::mem::take(&mut self.postponed_helpers)
+    }
+
+    /// Whether this state already asked for the helper of `key`.
+    pub(super) fn dynamic_prop_helper_requested(&self, key: &str) -> bool {
+        self.dynamic_prop_requested.contains(key)
+    }
+
     pub(super) fn take_pending_dynamic_prop_helpers(&mut self) -> Vec<PendingDynamicPropHelper> {
         std::mem::take(&mut self.dynamic_prop_pending)
     }

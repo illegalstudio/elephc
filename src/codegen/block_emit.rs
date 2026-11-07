@@ -299,6 +299,7 @@ pub(super) fn emit_module(
         let mut data_index = data.merge_index();
         let data_base = data.base();
         let (mut kept, mut deferred_bytes) = (0usize, 0usize);
+        let mut postponed_helpers = Vec::new();
         serial_bodies.clear();
         // Chunks arrive in any order and are merged in chunk order, each as soon as every earlier
         // one is in: the text reaches the spill file while the workers are still running, instead
@@ -315,6 +316,7 @@ pub(super) fn emit_module(
                 kept += chunk.text.len();
                 deferred_bytes += chunk.deferred_bytes;
                 serial_bodies.extend(chunk.deferred.iter().copied());
+                postponed_helpers.extend(chunk.postponed_helpers);
                 // A helper reached by two chunks was emitted twice, spelling the same symbols
                 // both times. Keep the first copy and drop the rest, or the assembler sees a
                 // duplicate definition; every reference resolves to the survivor either way.
@@ -326,6 +328,14 @@ pub(super) fn emit_module(
                 data.merge_indexed(chunk.data, &mut data_index);
             },
         )?;
+        for helper in postponed_helpers {
+            shared.request_dynamic_prop_helper(
+                &helper.key,
+                &helper.label,
+                helper.kind,
+                helper.scope.as_deref(),
+            );
+        }
         let worker_pass = worker_pass_started.elapsed();
         if count_shared_touches {
             eprintln!(
@@ -706,6 +716,8 @@ const CODEGEN_CHUNKS: usize = 256;
 /// What one chunk produced: the text of the bodies it could emit alone, and the indexes of the
 /// ones that reached a shared cache and must be re-emitted serially.
 struct ChunkOutput {
+    /// Shared helpers its bodies call and the compiling thread has to emit.
+    postponed_helpers: Vec<super::shared_state::PendingDynamicPropHelper>,
     /// The kept bodies' assembly, in module order.
     text: String,
     /// Bytes emitted for bodies that were then deferred; see `ELEPHC_CODEGEN_SHARED_TOUCHES`.
@@ -850,6 +862,7 @@ fn emit_chunk<'a>(
         }
     }
     Ok(ChunkOutput {
+        postponed_helpers: shared.take_postponed_helpers(),
         text: emitter.text_with_out_of_line(),
         deferred_bytes,
         deferred,

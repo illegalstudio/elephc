@@ -236,6 +236,8 @@ mod dynamic_class_flags;
 mod property_defaults;
 mod known_property_reads;
 mod mixed_property_reads;
+#[cfg(test)]
+pub(crate) use mixed_property_reads::MIXED_READ_SEARCHES;
 mod dynamic_property_read_entry;
 mod dynamic_property_read_resolution;
 mod runtime_property_writes;

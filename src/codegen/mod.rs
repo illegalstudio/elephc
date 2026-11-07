@@ -56,6 +56,8 @@ mod mbstring_configuration;
 pub(crate) mod lower_inst;
 #[cfg(test)]
 pub(crate) use lower_inst::callables::INSTANCE_TARGET_BUILDS;
+#[cfg(test)]
+pub(crate) use lower_inst::MIXED_READ_SEARCHES;
 mod lower_term;
 mod machine_peephole;
 mod parallel_moves;
