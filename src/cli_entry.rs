@@ -56,7 +56,6 @@ fn run_inner() {
         cli::Command::Native(command) => run_native(command),
         cli::Command::PhpExt(command) => run_php_ext(command),
         cli::Command::Monitor(command) => std::process::exit(monitor::run(command)),
-        cli::Command::UsageRecord(command) => std::process::exit(crate::usage_record::run(command)),
         cli::Command::Test(command) => std::process::exit(test_command::run(command)),
     }
 }

@@ -2262,50 +2262,6 @@ if ($argc > 1) {
     dir
 }
 
-/// `elephc usage-record` runs php with its recorder: the manifest it writes builds a program that
-/// runs the recorded scenario, leaves out what php never loaded, and grows when a second scenario
-/// reaches more.
-#[test]
-fn usage_record_writes_a_manifest_the_build_accepts() {
-    let dir = usage_fixture("cw_usage_record");
-    let record = |args: &[&str]| {
-        let output = Command::new(elephc_bin())
-            .args(["usage-record", "usage.txt", "--", "php", "main.php"])
-            .args(args)
-            .current_dir(&dir)
-            .output()
-            .expect("failed to spawn elephc usage-record");
-        assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
-        assert!(text(&output.stdout).starts_with("Listed\n"), "the command's own output passes through");
-    };
-    let mentions = |needle: &str| {
-        let binary = fs::read(dir.join("main")).unwrap();
-        binary.windows(needle.len()).any(|window| window == needle.as_bytes())
-    };
-
-    record(&[]);
-    let manifest = fs::read_to_string(dir.join("usage.txt")).unwrap();
-    assert!(manifest.starts_with("elephc-usage 1\n"), "{manifest}");
-    assert!(manifest.contains("class Acme\\Lib\\Listed\n"), "{manifest}");
-    assert!(!manifest.contains("Acme\\Lib\\Unused"), "{manifest}");
-    compile_ok(&dir, &["--closed-world", "--usage-manifest", "usage.txt"]);
-    assert_eq!(text(&run(&dir).stdout), "Listed\n");
-    assert!(!mentions("markerunused"));
-
-    // A scenario that reaches `Unused` adds it to what earlier runs recorded; the header is not
-    // repeated.
-    let mut earlier = fs::read_to_string(dir.join("usage.txt")).unwrap();
-    earlier.push_str("class Acme\\Lib\\FromAnEarlierRun\n");
-    fs::write(dir.join("usage.txt"), earlier).unwrap();
-    record(&["new"]);
-    let manifest = fs::read_to_string(dir.join("usage.txt")).unwrap();
-    assert_eq!(manifest.matches("elephc-usage 1").count(), 1, "{manifest}");
-    assert!(manifest.contains("class Acme\\Lib\\FromAnEarlierRun\n"), "{manifest}");
-    assert!(manifest.contains("class Acme\\Lib\\Unused\n"), "{manifest}");
-    compile_ok(&dir, &["--closed-world", "--usage-manifest", "usage.txt"]);
-    assert!(mentions("markerunused"));
-}
-
 /// Under a usage manifest, a runtime include of a file that exists but that no recorded run
 /// included, so the build did not compile it, stops with the closed-world violation naming it; a
 /// file that does not exist still fails to open the way php reports it.

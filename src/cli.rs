@@ -299,8 +299,6 @@ pub(crate) enum Command {
     Monitor(crate::monitor::MonitorCommand),
     /// One `elephc test` run: compile the suite under a path and run it.
     Test(crate::test_command::TestCommand),
-    /// One `elephc usage-record` run: a php command recorded into a usage manifest.
-    UsageRecord(crate::usage_record::UsageRecordCommand),
 }
 
 /// Dispatches exact top-level subcommand selectors before falling back to compilation.
@@ -319,15 +317,6 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
             Ok(command) => Command::Test(command),
             Err(error) => {
                 eprintln!("{error}\n\n{}", crate::test_command::HELP);
-                process::exit(1);
-            }
-        };
-    }
-    if args.get(1).map(String::as_str) == Some("usage-record") {
-        return match crate::usage_record::parse_args(&args[2..]) {
-            Ok(command) => Command::UsageRecord(command),
-            Err(error) => {
-                eprintln!("{error}\n\n{}", crate::usage_record::HELP);
                 process::exit(1);
             }
         };

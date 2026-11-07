@@ -55,18 +55,12 @@ impl UsageManifest {
             None => return Err(format!("empty manifest, expected `{USAGE_MANIFEST_HEADER}`")),
         }
         let mut manifest = Self::default();
-        let mut seen_files = HashSet::new();
         for (n, line) in lines {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
             match line.split_once(char::is_whitespace) {
-                Some(("file", path)) => {
-                    let path: std::path::PathBuf = path.trim().into();
-                    if seen_files.insert(path.clone()) {
-                        manifest.files.push(path);
-                    }
-                }
+                Some(("file", path)) => manifest.files.push(path.trim().into()),
                 Some(("class", name)) => {
                     let name = name.trim().trim_start_matches('\\');
                     if name.is_empty() || name.contains(char::is_whitespace) {
