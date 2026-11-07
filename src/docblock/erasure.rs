@@ -163,34 +163,39 @@ pub fn implicated_files(
     if adopted.is_empty() {
         return Vec::new();
     }
-    let mut out: Vec<PathBuf> = Vec::new();
-    let mut consider = |path: PathBuf| {
-        if adopted.contains(&path) && !erased_files().contains(&path) && !out.contains(&path) {
-            out.push(path);
-        }
-    };
-    for error in errors.flatten() {
-        // A parent that nothing provides stays missing with the written types too. Erasing for
-        // it re-ran the whole compiler for nothing: PHPUnit's `TestCase` is absent from a
-        // production vendor tree, and two templated `Test/` classes of symfony/validator cost
-        // every first build a seventh of its time.
-        if error.message.contains(MISSING_PARENT_REFUSAL) {
-            continue;
-        }
-        if let Some(path) = error.span.source_path() {
-            consider(canonical(Path::new(&path)));
-        }
-        if let Some(path) = &error.file {
-            consider(canonical(Path::new(path)));
-        }
-        let names = error
-            .declaration
-            .iter()
-            .cloned()
-            .chain(class_names_in(&error.message));
-        for name in names {
+    let paths_of = |error: &CompileError, names: bool| -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        paths.extend(error.span.source_path().map(|path| canonical(Path::new(&path))));
+        paths.extend(error.file.as_ref().map(|path| canonical(Path::new(path))));
+        let declared = error.declaration.iter().cloned();
+        let named = names.then(|| class_names_in(&error.message)).into_iter().flatten();
+        for name in declared.chain(named) {
             if let Some(path) = crate::autoload::deferral::class_file_path(class_files, &name) {
-                consider(canonical(Path::new(path)));
+                paths.push(canonical(Path::new(path)));
+            }
+        }
+        paths
+    };
+    // A parent that nothing provides stays missing with the written types too, so a file refused
+    // for one leaves the program whatever else the round says about it. Erasing it re-ran the
+    // whole compiler for nothing: PHPUnit's `TestCase` is absent from a production vendor tree,
+    // and two templated `Test/` classes of symfony/validator cost every first build a seventh of
+    // its time.
+    let flattened = errors.flatten();
+    let leaving: HashSet<PathBuf> = flattened
+        .iter()
+        .filter(|error| error.message.contains(MISSING_PARENT_REFUSAL))
+        .flat_map(|error| paths_of(error, false))
+        .collect();
+    let mut out: Vec<PathBuf> = Vec::new();
+    for error in flattened.iter().filter(|error| !error.message.contains(MISSING_PARENT_REFUSAL)) {
+        for path in paths_of(error, true) {
+            if adopted.contains(&path)
+                && !leaving.contains(&path)
+                && !erased_files().contains(&path)
+                && !out.contains(&path)
+            {
+                out.push(path);
             }
         }
     }
@@ -322,6 +327,9 @@ mod tests {
         assert!(implicated_files(&missing, &HashMap::new()).is_empty());
         let generic = refusal("Method 'Box<int>::get' return type expects int, got string");
         assert_eq!(implicated_files(&generic, &HashMap::new()), vec![path.clone()]);
+        let mut both = missing;
+        both.related.push(generic);
+        assert!(implicated_files(&both, &HashMap::new()).is_empty());
         adopted().lock().unwrap().remove(&path);
         std::fs::remove_file(&path).unwrap();
     }
