@@ -2217,17 +2217,22 @@ fn usage_fixture(prefix: &str) -> PathBuf {
     )
     .unwrap();
     // `Listed.php` also declares `Sidecar`, which loading the file brings into the program; only a
-    // run-time class name could reach it.
-    let declare = |class: &str| {
-        format!("class {class} {{ public function marker{class}(): string {{ return '{class}'; }} }}\n")
+    // run-time class name could reach it. `Listed::later()` names `Unused` in a `new` the program
+    // never runs, so php never loads `Unused`.
+    let declare = |class: &str, extra: &str| {
+        format!("class {class} {{ public function marker{class}(): string {{ return '{class}'; }} {extra} }}\n")
     };
     let header = "<?php\nnamespace Acme\\Lib;\n";
     fs::write(
         dir.join("vendor/acme/lib/src/Listed.php"),
-        format!("{header}{}{}", declare("Listed"), declare("Sidecar")),
+        format!(
+            "{header}{}{}",
+            declare("Listed", "public function later(): object { return new Unused(); }"),
+            declare("Sidecar", "")
+        ),
     )
     .unwrap();
-    fs::write(dir.join("vendor/acme/lib/src/Unused.php"), format!("{header}{}", declare("Unused"))).unwrap();
+    fs::write(dir.join("vendor/acme/lib/src/Unused.php"), format!("{header}{}", declare("Unused", ""))).unwrap();
     fs::write(
         dir.join("main.php"),
         r#"<?php
