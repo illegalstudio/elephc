@@ -35,13 +35,20 @@ impl Drop for ForceGmpGuard {
 /// the message text without the volatile path. The leading newline PHP prints before each
 /// diagnostic is dropped too, matching assertions written before location framing existed.
 pub(crate) fn normalize_diagnostic_text(stderr: &str) -> String {
-    static LOCATION: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let location = LOCATION.get_or_init(|| {
-        regex::Regex::new(r" in [^\n]* on line \d+").expect("diagnostic location regex")
-    });
-    let stripped = location.replace_all(stderr, "");
+    // Remove only the trailing ` in FILE on line N` suffix. A blanket " in ... on line"
+    // regex would also swallow message text such as mb_split's
+    // "mbregex search failure in mbsplit(): ..." because the message itself contains " in ".
+    fn strip_location(line: &str) -> &str {
+        let Some(on_line) = line.rfind(" on line ") else { return line; };
+        let suffix = &line[on_line + " on line ".len()..];
+        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            return line;
+        }
+        line[..on_line].rfind(" in ").map_or(line, |in_pos| &line[..in_pos])
+    }
     let mut normalized = String::new();
-    for line in stripped.lines() {
+    for line in stderr.lines() {
+        let line = strip_location(line).trim_start_matches('\n');
         if line.is_empty() {
             continue;
         }

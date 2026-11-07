@@ -437,10 +437,9 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_amr_ea_object");                                        // raw object pointer from the hash entry
     emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // existing value low word is the object pointer
     emitter.label("__rt_amr_ea_object_convert");                                // materialize PHP's object-to-array projection
-    emitter.instruction("mov rdi, rax");                                        // pass the object pointer to the projection helper
-    emitter.instruction("mov rsi, 1");                                          // cast mode keeps visibility-mangled property keys
-    emitter.instruction("mov rdx, -1");                                         // project from global scope
-    emitter.instruction("call __rt_object_to_hash");                            // rax = fresh property hash
+    emitter.instruction("mov rdx, 1");                                          // cast mode keeps visibility-mangled property keys
+    emitter.instruction("mov rcx, -1");                                         // project from global scope
+    emitter.instruction("call __rt_object_to_hash");                            // custom ABI: object in rax, mode in rdx, scope in rcx
     emitter.instruction("mov QWORD PTR [rbp - 128], rax");                      // use the projection as the existing operand
     emitter.instruction("mov QWORD PTR [rbp - 144], 1");                        // release it after the merge
     emitter.instruction("jmp __rt_amr_na");                                     // build the new operand next
@@ -484,10 +483,9 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_amr_na_object");                                        // raw object pointer from the hash entry
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // new value low word is the object pointer
     emitter.label("__rt_amr_na_object_convert");                                // materialize PHP's object-to-array projection
-    emitter.instruction("mov rdi, rax");                                        // pass the object pointer to the projection helper
-    emitter.instruction("mov rsi, 1");                                          // cast mode keeps visibility-mangled property keys
-    emitter.instruction("mov rdx, -1");                                         // project from global scope
-    emitter.instruction("call __rt_object_to_hash");                            // rax = fresh property hash
+    emitter.instruction("mov rdx, 1");                                          // cast mode keeps visibility-mangled property keys
+    emitter.instruction("mov rcx, -1");                                         // project from global scope
+    emitter.instruction("call __rt_object_to_hash");                            // custom ABI: object in rax, mode in rdx, scope in rcx
     emitter.instruction("mov QWORD PTR [rbp - 136], rax");                      // use the projection as the new operand
     emitter.instruction("mov QWORD PTR [rbp - 152], 1");                        // release it after the merge
     emitter.instruction("jmp __rt_amr_merge");                                  // merge the two operands

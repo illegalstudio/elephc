@@ -331,11 +331,11 @@ pub(super) fn lower_null_property_write(target: &Expr, rhs: Option<&Expr>, span:
         ), args: vec![message],
     }, span);
 
+    let append_statements = append[boundary..].to_vec();
     if let Some(rhs_temp) = rhs_temp {
-        let append_statements = append[boundary..].to_vec();
         if let Some(container) = append_container(&append_statements) {
             let is_array = append_helper_call("is_array", vec![container.clone()]);
-            let mut else_body = append_statements;
+            let mut else_body = append_statements.clone();
             let appended = appended_element(&mut else_body, container.clone(), span);
             let lvalue = appended_write_target(appended, bound_steps, span);
             if let Ok(store) = crate::parser::stmt::assignment_target_store_stmt(lvalue, rhs_temp.clone(), span) {
@@ -387,6 +387,8 @@ pub(super) fn lower_null_property_write(target: &Expr, rhs: Option<&Expr>, span:
                 }, span));
             }
         }
+        // The fallback still performs the append before its catchable property error.
+        prelude.extend_from_slice(&append_statements);
         prelude.push(unset_temp(&rhs_temp, span));
         let throw = Expr::new(ExprKind::Throw(Box::new(error)), span);
         let dummy_name = crate::names::generated_local_name(&format!(
@@ -402,6 +404,8 @@ pub(super) fn lower_null_property_write(target: &Expr, rhs: Option<&Expr>, span:
         }, span));
     }
 
+    // Increment/decrement paths also append the null element before their property failure.
+    prelude.extend_from_slice(&append_statements);
     let error_name = crate::names::generated_local_name(&format!(
         "__elephc_append_property_error_{}_{}", span.line, span.col,
     ));

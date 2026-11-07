@@ -190,7 +190,11 @@ pub(super) fn lower_array_access_with_missing_warning(
     let array_value = if warn_on_missing {
         lower_element_receiver(ctx, array)
     } else {
-        lower_subscript_receiver_silently(ctx, array)
+        // A silent subscript probe never warns about a never-declared chain root.
+        ctx.begin_quiet_undefined_reads();
+        let value = lower_subscript_receiver_silently(ctx, array);
+        ctx.end_quiet_undefined_reads();
+        value
     };
     lower_array_access_from_receiver(ctx, array_value, index, expr, warn_on_missing)
 }

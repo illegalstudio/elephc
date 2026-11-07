@@ -337,6 +337,11 @@ fn lower_undefined_variable_read(
     name: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    // `isset()` and the left operand of `??` are PHP's silent probes: they name storage that
+    // may never have been declared, and answer null/false without an Undefined variable warning.
+    if ctx.suppresses_undefined_reads() {
+        return lower_null(ctx, expr);
+    }
     let message = format!("Warning: Undefined variable ${name}\n");
     let data = ctx.intern_string(&message);
     let warning = ctx.emit_value(
@@ -381,7 +386,13 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
                 // point pre-populates, is a real local. A name the checker only learned from
                 // a later assignment has no storage yet, so it takes PHP's undefined-variable
                 // warning path instead of reading an uninitialized frame slot.
-                if ctx.has_local_slot(name) || entry_initialized_local(ctx, name) {
+                // An eval-scope read has no frame slot by design; its storage lives in the
+                // active eval scope, so it is initialized even when `has_local_slot` is false.
+                if ctx.has_local_slot(name)
+                    || ctx.reads_from_eval_scope(name)
+                    || ctx.has_eval_barrier()
+                    || entry_initialized_local(ctx, name)
+                {
                     lower_local_value(ctx, name, expr.span)
                 } else {
                     lower_undefined_variable_read(ctx, name, expr)
