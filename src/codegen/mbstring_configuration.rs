@@ -135,14 +135,14 @@ fn diagnostic(emitter: &mut Emitter, data: &mut DataSection) {
     abi::emit_symbol_address(emitter, if arm { "x1" } else { "rdi" }, &deprecated);
     emitter.instruction(if arm { "mov x2, #12" } else { "mov esi, 12" });       // provide the complete deprecation prefix length
     emitter.label(&write_prefix);
-    abi::emit_call_label(emitter, "__rt_diag_warning");
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
     if arm {
         emitter.instruction("ldp x1, x2, [sp, #16]");                           // restore the borrowed complete message descriptor
     } else {
         emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // restore the binary message pointer after prefix output
         emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                    // restore the original byte count without C-string truncation
     }
-    abi::emit_call_label(emitter, "__rt_diag_warning");
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
     abi::emit_symbol_address(emitter, if arm { "x1" } else { "rdi" }, &newline);
     emitter.instruction(if arm { "mov x2, #1" } else { "mov esi, 1" });         // terminate the startup diagnostic with exactly one newline
     abi::emit_call_label(emitter, "__rt_diag_warning");

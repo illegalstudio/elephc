@@ -211,7 +211,7 @@ fn test_error_mbstring_array_contracts() {
         ("<?php mb_str_split([]);", "mb_str_split() string argument must be string"),
         ("<?php mb_str_split(\"a\", []);", "mb_str_split() length argument must be int"),
         ("<?php mb_list_encodings(1);", "mb_list_encodings() takes no arguments"),
-        ("<?php mb_list_encodings(...$missing);", "Undefined variable: $missing"),
+        ("<?php mb_list_encodings(...$missing);", "Spread operator requires an array"),
         ("<?php mb_list_encodings(...42);", "Spread operator requires an array"),
         ("<?php mb_encoding_aliases();", "mb_encoding_aliases() takes exactly 1 argument"),
         ("<?php mb_encoding_aliases([]);", "mb_encoding_aliases() encoding argument must be string"),

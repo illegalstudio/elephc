@@ -420,7 +420,7 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_amr_ea_mixed");                                // inspect the boxed payload tag
     emitter.instruction("jmp __rt_amr_ea_box");                                 // other tags keep the scalar wrap path
     emitter.label("__rt_amr_ea_mixed");                                         // boxed values may hold arrays or objects
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 104]");                      // boxed Mixed cell pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // boxed Mixed cell pointer enters the unbox ABI in rax
     emitter.instruction("call __rt_mixed_unbox");                               // rax = payload tag, rdi = payload low word
     emitter.instruction("cmp rax, 5");                                          // is the boxed payload an associative array?
     emitter.instruction("je __rt_amr_ea_mixed_array");                          // reuse it as the existing operand
@@ -466,7 +466,7 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_amr_na_mixed");                                // inspect the boxed payload tag
     emitter.instruction("jmp __rt_amr_na_box");                                 // other tags keep the scalar wrap path
     emitter.label("__rt_amr_na_mixed");                                         // boxed values may hold arrays or objects
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // boxed Mixed cell pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // boxed Mixed cell pointer enters the unbox ABI in rax
     emitter.instruction("call __rt_mixed_unbox");                               // rax = payload tag, rdi = payload low word
     emitter.instruction("cmp rax, 5");                                          // is the boxed payload an associative array?
     emitter.instruction("je __rt_amr_na_mixed_array");                          // reuse it as the new operand
@@ -589,3 +589,40 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the merged hash in rax
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::emit_array_merge_recursive;
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies the linux-x86_64 object-projection arms feed `__rt_mixed_unbox` through its ABI.
+    ///
+    /// The helper reads the boxed cell from `rax` and answers the payload low word in `rdi`.
+    /// Loading the cell into `rdi` made the helper dereference the payload register as a
+    /// pointer, which crashed every colliding object projection on linux-x86_64.
+    #[test]
+    fn x86_64_object_projection_unboxes_through_rax_on_both_operands() {
+        let target = Target::parse("linux-x86_64").expect("supported target");
+        let mut emitter = Emitter::new(target);
+        emit_array_merge_recursive(&mut emitter);
+        let asm = emitter.output();
+        let lines: Vec<&str> = asm.lines().collect();
+        let mut calls = 0;
+        for (index, line) in lines.iter().enumerate() {
+            if !line.trim().ends_with("call __rt_mixed_unbox") {
+                continue;
+            }
+            calls += 1;
+            let previous = lines
+                .get(index.wrapping_sub(1))
+                .map(|line| line.trim())
+                .unwrap_or_default();
+            assert!(
+                previous.starts_with("mov rax, QWORD PTR [rbp - "),
+                "the boxed cell must enter the unbox ABI in rax, got: {previous}"
+            );
+        }
+        assert_eq!(calls, 2, "both projection directions unbox exactly once");
+    }
+}

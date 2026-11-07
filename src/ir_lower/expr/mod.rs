@@ -388,10 +388,20 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
                 // warning path instead of reading an uninitialized frame slot.
                 // An eval-scope read has no frame slot by design; its storage lives in the
                 // active eval scope, so it is initialized even when `has_local_slot` is false.
+                // A read the checker typed as anything but null is a loop-carried binding whose
+                // store (a `for` update, for example) has not been lowered yet. Allocate its
+                // slot from that typed read instead of warning: the checker already decided the
+                // assignment reaches every read that matters.
+                let checker_read = ctx.local_value_read_types.get(&(
+                    ctx.loop_storage_scope.clone(),
+                    expr.span,
+                    name.to_string(),
+                ));
                 if ctx.has_local_slot(name)
                     || ctx.reads_from_eval_scope(name)
                     || ctx.has_eval_barrier()
                     || entry_initialized_local(ctx, name)
+                    || checker_read.is_some_and(|ty| *ty != PhpType::Void)
                 {
                     lower_local_value(ctx, name, expr.span)
                 } else {
@@ -1023,11 +1033,11 @@ fn rewrite_literal_param_bindings(sig: &FunctionSig, args: &[Expr]) -> Option<Ve
 /// `ArrayPtrSeek` to compute the new cursor, stores it back, and then boxes the value at
 /// the new position — the same two-step shape PHP's own implementations use.
 ///
-/// Returns `None` for anything this path cannot own (named/spread arguments, a wrong
-/// argument count, or a receiver that is not a plain variable) so the generic builtin path
-/// still runs. The checker has already rejected those shapes with a source-level
-/// diagnostic (`crate::builtins::array::internal_pointer`), so reaching the generic path
-/// in a successful compile is not possible.
+/// Returns `None` for anything this path cannot own (named/spread arguments or a wrong
+/// argument count) so the generic builtin path still runs. The checker has already rejected
+/// addressable receivers such as properties and array elements with a source-level diagnostic
+/// (`crate::builtins::array::internal_pointer`); temporary call/match/ternary results reach
+/// this path and are materialized into a hidden local above.
 fn lower_array_internal_pointer(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,

@@ -64,7 +64,7 @@ fn parsed_prelude() -> Program {
             .expect("dom html prelude must tokenize");
             let mut program = crate::parser::parse_internal(&tokens)
                 .expect("dom html prelude must parse");
-            program.push(modern_dom_declaration());
+            program.push(modern_dom_declaration(source_id));
             program
         })
         .clone()
@@ -75,8 +75,8 @@ fn parsed_prelude() -> Program {
 /// SimpleXML's `simplexml_import_dom()` tests construct a modern document and mutate it
 /// through the imported view. Extending the prelude's legacy `DOMDocument` keeps one live
 /// libxml tree, which is what the import path already shares.
-fn modern_dom_declaration() -> crate::parser::ast::Stmt {
-    class("Dom\\XMLDocument")
+fn modern_dom_declaration(source_id: u32) -> crate::parser::ast::Stmt {
+    let mut declaration = class("Dom\\XMLDocument")
         .extends("\\DOMDocument")
         .method(method("createFromFile")
             .static_()
@@ -144,7 +144,10 @@ fn modern_dom_declaration() -> crate::parser::ast::Stmt {
                 ),
                 s_return(e_var("document")),
             ]))
-        .build()
+        .build();
+    let synthetic = crate::span::Span::synthetic();
+    declaration.span = crate::span::Span::new_in_source(synthetic.line, synthetic.col, source_id);
+    declaration
 }
 
 /// Prepends the Termwind DOM HTML prelude when the program names a DOM class.
@@ -381,6 +384,7 @@ mod tests {
                 "DOMText",
                 "DOMComment",
                 "DOMProcessingInstruction",
+                "Dom\\XMLDocument",
             ]
         );
     }

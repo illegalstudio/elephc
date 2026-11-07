@@ -44,7 +44,8 @@ impl Checker {
                     // PHP 8 reads an undefined variable as `null` and raises E_WARNING. The
                     // warning is emitted by EIR lowering at the read site so it carries the
                     // caller's file/line and participates in `@` suppression and handlers.
-                    Err(error) if error.message.starts_with("Undefined variable: $") => PhpType::Void,
+                    Err(error) if !self.strict_locals
+                        && error.message.starts_with("Undefined variable: $") => PhpType::Void,
                     Err(error) => return Err(error),
                 };
                 let ty = self.promotable_array_value_view(name, expr.span, ty);

@@ -108,8 +108,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);            // publish the TypeError for the unwinder
 
     emitter.instruction("mov r12, QWORD PTR [rbp - 8]");                        // restore the callee-saved register
-    emitter.instruction("mov rsp, rbp");                                        // release the helper frame
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("mov rsp, rbp");                                        // release the helper frame; rsp stays 16-byte aligned
     abi::emit_call_label(emitter, "__rt_throw_current");                        // unwind to the nearest PHP catch handler
     emitter.instruction("ret");                                                 // unreachable: throw_current does not return here
 }

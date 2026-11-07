@@ -767,6 +767,11 @@ mod tests {
     #[test]
     fn ignores_user_owned_global_dom_classes() {
         for name in DOM_HTML_CLASSES {
+            // `Dom\XMLDocument` is namespaced; the namespace/import ownership test below
+            // covers that spelling. This test builds a syntactically valid global declaration.
+            if name.contains('\\') {
+                continue;
+            }
             let source = format!(
                 "<?php class {name} {{}} function f({name} $x): {name} {{ return $x; }} $x = new \\{}();",
                 name.to_ascii_lowercase(),
