@@ -464,6 +464,7 @@ pub enum RuntimeFnId {
     ElephcOpcacheRtInFileCache,
     ElephcOpcacheRtStat,
     ElephcOpcacheRtSwap,
+    ElephcReflectionClassBuild,
     ElephcPtrGet,
     ElephcPtrIsNull,
     ElephcPtrReadString,
@@ -1685,6 +1686,14 @@ impl RuntimeFnId {
             // not be folded into the first.
             RuntimeFnId::ElephcOpcacheRtReset => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            // Every call allocates a FRESH reflector (php never hands out the same one twice),
+            // so two calls must not be folded into one. Its metadata snapshots read the
+            // class's live static properties.
+            RuntimeFnId::ElephcReflectionClassBuild => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits(),
             ),
             // The three path-taking runtime-tier operations. `is_cached` only reads, but
             // `discard` and `compile` MUTATE the process-wide cache, and neither may be
@@ -3560,6 +3569,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtInFileCache => "__elephc_opcache_rt_in_file_cache",
             RuntimeFnId::ElephcOpcacheRtStat => "__elephc_opcache_rt_stat",
             RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",
+            RuntimeFnId::ElephcReflectionClassBuild => "__elephc_reflection_class_build",
             RuntimeFnId::ElephcPtrGet => "__elephc_ptr_get",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",

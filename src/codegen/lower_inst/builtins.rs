@@ -64,6 +64,7 @@ pub(crate) mod math;
 pub(crate) mod memory;
 pub(crate) mod object_props;
 pub(crate) mod opcache_runtime;
+pub(crate) mod reflection_class_build;
 pub(crate) mod openssl;
 pub(crate) mod output_buffering;
 pub(crate) mod pcntl;

@@ -151,6 +151,8 @@ mod object_supertype_rebind;
 mod boxed_property_defaults;
 #[path = "runtime_gc/by_ref_place_args.rs"]
 mod by_ref_place_args;
+#[path = "runtime_gc/nullable_ref_writeback.rs"]
+mod nullable_ref_writeback;
 #[path = "runtime_gc/by_ref_variadic_writeback.rs"]
 mod by_ref_variadic_writeback;
 #[path = "runtime_gc/variadic_key_writes.rs"]

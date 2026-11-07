@@ -297,25 +297,6 @@ pub(super) fn reflection_class_metadata_for_name(
     Ok(empty_reflection_metadata())
 }
 
-/// Resolves class metadata for nested declaring-class slots without recursive member objects.
-pub(super) fn reflection_shallow_class_metadata_for_name(
-    ctx: &FunctionContext<'_>,
-    reflected_class: &str,
-) -> Result<ReflectionOwnerMetadata> {
-    let mut metadata = reflection_class_metadata_for_name(ctx, reflected_class)?;
-    metadata.method_names.clear();
-    metadata.property_names.clear();
-    metadata.constant_names.clear();
-    metadata.constant_members.clear();
-    metadata.constant_reflection_members.clear();
-    metadata.enum_case_members.clear();
-    metadata.method_members.clear();
-    metadata.property_members.clear();
-    metadata.constructor_member = None;
-    metadata.parent_class_name = None;
-    Ok(metadata)
-}
-
 /// Resolves `ReflectionEnum` metadata for nested enum-case slots.
 pub(super) fn reflection_enum_metadata_for_name(
     ctx: &FunctionContext<'_>,

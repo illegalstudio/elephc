@@ -213,6 +213,15 @@ pub(super) fn emit_module(
     // method or closure may call, so they must exist in every emit kind — including
     // `Emit::Cdylib`, which returns before the main function is emitted.
     super::enum_singletons::emit_enum_case_materializers(emitter, module, data);
+    // Builders the bodies asked for (and those they ask for in turn). `main` can request
+    // more, so the queue is drained again after it.
+    super::lower_inst::emit_pending_reflection_class_builders(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
     if emit.is_library() {
         return Ok(shared);
     }
@@ -233,6 +242,13 @@ pub(super) fn emit_module(
         regalloc_linear,
         web,
         web_isolation,
+    )?;
+    super::lower_inst::emit_pending_reflection_class_builders(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
     )?;
     // Generate the per-request reset routine only for `--web`, and only after the
     // handler body is emitted so every function static local (including any in the

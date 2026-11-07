@@ -160,7 +160,7 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
             builtin_reflection_slot_getter("isArray", "__is_array_type", TypeExpr::Bool),
             builtin_reflection_slot_getter("isCallable", "__is_callable_type", TypeExpr::Bool),
             builtin_reflection_slot_getter("getType", "__type", mixed_type()),
-            builtin_reflection_slot_getter("getClass", "__class", mixed_type()),
+            super::class_collections::builtin_reflection_lazy_class_getter("getClass", "__class"),
             builtin_reflection_class_string_method("__toString", "__string"),
             builtin_reflection_owner_get_attributes_method("ReflectionParameter"),
             builtin_reflection_slot_getter(
@@ -171,7 +171,7 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
             builtin_reflection_parameter_is_default_value_constant_method(),
             builtin_reflection_parameter_get_default_value_constant_name_method(),
             builtin_reflection_parameter_get_default_value_method(),
-            builtin_reflection_slot_getter("getDeclaringClass", "__declaring_class", mixed_type()),
+            super::class_collections::builtin_reflection_lazy_class_getter("getDeclaringClass", "__declaring_class"),
             builtin_reflection_slot_getter(
                 "getDeclaringFunction",
                 "__declaring_function",
