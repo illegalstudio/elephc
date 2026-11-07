@@ -130,38 +130,57 @@ def _libproc() -> ctypes.CDLL | None:
     return _LIBPROC
 
 
-def _darwin_process_cpu_seconds(pid: int) -> float:
-    """Reads one process's user+system CPU time from `proc_pid_rusage`."""
+def _darwin_process_cpu_split(pid: int) -> tuple[float, float]:
+    """Reads one process's user and system CPU seconds from `proc_pid_rusage`."""
     libproc = _libproc()
     if libproc is None:
-        return 0.0
+        return 0.0, 0.0
     buffer = ctypes.create_string_buffer(256)
     # RUSAGE_INFO_V4: ri_user_time at byte 16, ri_system_time at byte 24.
     # Both are in mach absolute time units, not nanoseconds.
     if libproc.proc_pid_rusage(pid, 4, buffer) != 0:
-        return 0.0
+        return 0.0, 0.0
     user = ctypes.c_uint64.from_buffer(buffer, 16).value
     system = ctypes.c_uint64.from_buffer(buffer, 24).value
     numer, denom = _mach_timebase()
-    return (user + system) * numer / denom / 1_000_000_000.0
+    scale = numer / denom / 1_000_000_000.0
+    return user * scale, system * scale
+
+
+def process_cpu_split(pid: int) -> tuple[float, float]:
+    """Returns one process's `(user, system)` CPU seconds, best effort."""
+    if sys.platform == "darwin":
+        return _darwin_process_cpu_split(pid)
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        fields = stat[stat.rfind(")") + 2 :].split()
+        ticks = os.sysconf("SC_CLK_TCK")
+        return int(fields[11]) / ticks, int(fields[12]) / ticks
+    except (OSError, IndexError, ValueError):
+        return 0.0, 0.0
 
 
 def process_cpu_seconds(pid: int) -> float:
     """Returns one process's user+system CPU time in seconds, best effort."""
-    if sys.platform == "darwin":
-        return _darwin_process_cpu_seconds(pid)
-    try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
-        fields = stat[stat.rfind(")") + 2 :].split()
-        ticks = int(fields[11]) + int(fields[12])
-        return ticks / os.sysconf("SC_CLK_TCK")
-    except (OSError, IndexError, ValueError):
-        return 0.0
+    user, system = process_cpu_split(pid)
+    return user + system
+
+
+def server_cpu_split(master: int) -> tuple[float, float]:
+    """Sums `(user, system)` CPU seconds over the server master and workers."""
+    user = 0.0
+    system = 0.0
+    for pid in process_tree(master):
+        part_user, part_system = process_cpu_split(pid)
+        user += part_user
+        system += part_system
+    return user, system
 
 
 def server_cpu_seconds(master: int) -> float:
-    """Sums the CPU time of the server master and its worker descendants."""
-    return sum(process_cpu_seconds(pid) for pid in process_tree(master))
+    """Sums the user+system CPU time of the master and its worker descendants."""
+    user, system = server_cpu_split(master)
+    return user + system
 
 
 def wait_for_server(process: subprocess.Popen[str], url: str, log_path: Path) -> None:
@@ -421,6 +440,16 @@ def summarize(rounds: list[dict[str, Any]]) -> dict[str, Any]:
         for round_ in rounds
         if "server_cpu_us_per_request" in round_
     ]
+    user_cpu = [
+        float(round_["server_user_us_per_request"])
+        for round_ in rounds
+        if "server_user_us_per_request" in round_
+    ]
+    system_cpu = [
+        float(round_["server_system_us_per_request"])
+        for round_ in rounds
+        if "server_system_us_per_request" in round_
+    ]
     return {
         "rounds": len(rounds),
         "requests_per_sec_median": median(rps),
@@ -429,6 +458,8 @@ def summarize(rounds: list[dict[str, Any]]) -> dict[str, Any]:
         "latency_avg_ms_median": median(avg),
         "latency_p99_ms_median": median(p99),
         "server_cpu_us_per_request_median": median(cpu),
+        "server_user_us_per_request_median": median(user_cpu),
+        "server_system_us_per_request_median": median(system_cpu),
     }
 
 
@@ -467,8 +498,14 @@ def markdown_report(results: dict[str, Any]) -> str:
         ]
     )
     if cpu_median is not None:
+        user_median = summary.get("server_user_us_per_request_median") or 0.0
+        system_median = summary.get("server_system_us_per_request_median") or 0.0
         lines.extend(
-            [f"Server CPU: **{cpu_median:.2f} µs/request** (median).", ""]
+            [
+                f"Server CPU: **{cpu_median:.2f} µs/request** "
+                f"(user {user_median:.2f}, sys {system_median:.2f}; median).",
+                "",
+            ]
         )
     if results.get("k6"):
         lines.extend(["## k6", "", "| Scenario | HTTP req/s | avg | p95 | failed |", "|---|---:|---:|---:|---:|"])
@@ -615,7 +652,9 @@ def main() -> int:
                     )
                 rounds = []
                 for _ in range(args.repeat):
-                    before = server_cpu_seconds(process.pid) if args.cpu else 0.0
+                    before_user, before_system = (
+                        server_cpu_split(process.pid) if args.cpu else (0.0, 0.0)
+                    )
                     round_ = run_wrk(
                         url,
                         args.threads,
@@ -625,13 +664,19 @@ def main() -> int:
                         args.clients,
                     )
                     if args.cpu:
-                        after = server_cpu_seconds(process.pid)
-                        round_["server_cpu_seconds"] = max(0.0, after - before)
+                        after_user, after_system = server_cpu_split(process.pid)
+                        user = max(0.0, after_user - before_user)
+                        system = max(0.0, after_system - before_system)
+                        round_["server_user_cpu_seconds"] = user
+                        round_["server_system_cpu_seconds"] = system
+                        round_["server_cpu_seconds"] = user + system
                         requests = float(round_.get("requests", 0))
                         if requests:
                             round_["server_cpu_us_per_request"] = (
                                 round_["server_cpu_seconds"] / requests * 1e6
                             )
+                            round_["server_user_us_per_request"] = user / requests * 1e6
+                            round_["server_system_us_per_request"] = system / requests * 1e6
                     rounds.append(round_)
                 k6_results = [
                     run_k6(scenario, url, args.duration, work_dir, args.timeout)
