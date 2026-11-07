@@ -38,6 +38,9 @@ const ORIGINAL_ERROR_ENV: &str = "ELEPHC_DOCBLOCK_ORIGINAL_ERROR";
 /// Counts erasure re-runs, so a build whose refusals keep moving still ends.
 const ERASURE_ROUND_ENV: &str = "ELEPHC_DOCBLOCK_ERASURE_ROUND";
 
+/// A refusal no annotation can have caused: the class a declaration extends does not exist.
+const MISSING_PARENT_REFUSAL: &str = "Unknown class referenced during inheritance flattening";
+
 /// The most erasure re-runs one build takes before a refusal is reported as it is.
 const MAX_ERASURE_ROUNDS: u32 = 8;
 
@@ -167,6 +170,13 @@ pub fn implicated_files(
         }
     };
     for error in errors.flatten() {
+        // A parent that nothing provides stays missing with the written types too. Erasing for
+        // it re-ran the whole compiler for nothing: PHPUnit's `TestCase` is absent from a
+        // production vendor tree, and two templated `Test/` classes of symfony/validator cost
+        // every first build a seventh of its time.
+        if error.message.contains(MISSING_PARENT_REFUSAL) {
+            continue;
+        }
         if let Some(path) = error.span.source_path() {
             consider(canonical(Path::new(&path)));
         }
@@ -294,6 +304,26 @@ mod tests {
         for expected in ["Ns\\Norm", "Ns\\Node", "Ns\\Expr"] {
             assert!(names.iter().any(|name| name == expected), "{expected} in {names:?}");
         }
+    }
+
+    /// A missing parent is refused with the written types too, so it erases nothing.
+    #[test]
+    fn a_missing_parent_implicates_no_file() {
+        let path = std::env::temp_dir().join(format!("elephc-erasure-{}.php", std::process::id()));
+        std::fs::write(&path, "<?php").unwrap();
+        let path = canonical(&path);
+        adopted().lock().unwrap().insert(path.clone());
+        let refusal = |message: &str| {
+            let mut error = CompileError::new(crate::span::Span::dummy(), message);
+            error.file = Some(path.display().to_string());
+            error
+        };
+        let missing = refusal("Unknown class referenced during inheritance flattening: A\\B");
+        assert!(implicated_files(&missing, &HashMap::new()).is_empty());
+        let generic = refusal("Method 'Box<int>::get' return type expects int, got string");
+        assert_eq!(implicated_files(&generic, &HashMap::new()), vec![path.clone()]);
+        adopted().lock().unwrap().remove(&path);
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
