@@ -452,6 +452,10 @@ fn literal_range(function: &Function, value: ValueId) -> Option<IntRange> {
 /// the Unicode scalar ceiling, so a loop counter added to them stays in i64.
 fn runtime_string_metric_range(id: RuntimeFnId) -> Option<IntRange> {
     match id {
+        // The first-byte observation is one UTF-8 lead byte; the packed form also carries a
+        // 1..4 byte length above it.
+        RuntimeFnId::MbChrFirst => Some(IntRange { lo: 0, hi: 255 }),
+        RuntimeFnId::MbChrPacked => Some(IntRange { lo: 0, hi: 0x4FF }),
         RuntimeFnId::MbStrlen
         | RuntimeFnId::MbStrwidth
         | RuntimeFnId::MbSubstrCount

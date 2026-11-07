@@ -61,6 +61,8 @@ pub(super) fn is_whitelisted_target(target: RuntimeFnId) -> bool {
             | RuntimeFnId::MbStrrichrLen
             | RuntimeFnId::MbStrimwidthLen
             | RuntimeFnId::MbChrLen
+            | RuntimeFnId::MbChrFirst
+            | RuntimeFnId::MbChrPacked
             | RuntimeFnId::MbConvertEncodingLen
             | RuntimeFnId::MbSplitCount
             | RuntimeFnId::MbEregReplaceLen
@@ -195,7 +197,7 @@ pub(super) fn is_hoistable_mbstring_call(
                 })
                 && encoding_arg(4)
         }
-        RuntimeFnId::MbChrLen => {
+        RuntimeFnId::MbChrLen | RuntimeFnId::MbChrFirst | RuntimeFnId::MbChrPacked => {
             inst.operands.len() == 2
                 && inst.operands.first().is_some_and(|&value| {
                     function.value(value).is_some_and(|value| {

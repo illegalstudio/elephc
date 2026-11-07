@@ -1,15 +1,18 @@
 //! Purpose:
-//! Verifies that a local assigned from `mb_chr()` and observed only through `strlen()` is
-//! retargeted to the allocation-free `MbChrLen` runtime call.
+//! Verifies that a local assigned from `mb_chr()` and observed only through `strlen()` or
+//! `ord($local[0])` is retargeted to the allocation-free observation kernels.
 //!
 //! Called from:
 //! - The codegen optimizer suite through `optimizer`.
 //!
 //! Key details:
-//! - Multiple `strlen()` observations share one retargeted call; UTF-16 and invalid codepoints
-//!   keep PHP's byte length and `false` result.
-//! - Any observation of the string value, including `echo` or an identity check, keeps the
-//!   boxed `mb_chr()` path.
+//! - Multiple `strlen()` observations share one retargeted `MbChrLen` call; `ord($local[0])`
+//!   observations use `MbChrFirst`, and a mixed local uses `MbChrPacked` so both observations
+//!   share one encoding pass.
+//! - UTF-16, U+0000, invalid codepoints, and the bridge fallback keep PHP's byte length and
+//!   first-byte values.
+//! - Any value observation (`echo $local`, identity checks) or a nonzero string offset keeps
+//!   the boxed `mb_chr()` path.
 
 use crate::support::*;
 
@@ -99,4 +102,210 @@ echo strlen($x), "|", $x === false ? "false" : "string";
     let main = emit_main_ir(source);
     assert_eq!(main.matches("runtime.mb_chr ").count(), 1, "{main}");
     assert!(!main.contains("runtime.mb_chr_len"), "{main}");
+}
+
+/// `ord($local[0])` observations share one allocation-free first-byte call.
+#[test]
+fn test_mb_chr_ord_local_sink_fuses_first_byte() {
+    let source = r#"<?php
+$a = mb_chr(0x20AC, "UTF-8");
+echo ord($a[0]), "|", ord($a[0]), "|";
+$b = mb_chr(0x1F600, "UTF-8");
+echo ord($b[0]), "|";
+$c = mb_chr(65, "UTF-8");
+echo ord($c[0]);
+"#;
+    assert_eq!(compile_and_run(source), "226|226|240|65");
+    let main = emit_main_ir(source);
+    assert_eq!(main.matches("runtime.mb_chr_first").count(), 3, "{main}");
+    assert!(!main.contains("runtime.mb_chr "), "{main}");
+}
+
+/// A mixed `strlen($local) + ord($local[0])` shape uses one packed call and extracts each half.
+#[test]
+fn test_mb_chr_packed_local_sink_fuses_length_and_first_byte() {
+    let source = r#"<?php
+$codepoints = [0x41, 0xA9, 0x20AC, 0x1F600];
+$n = 0;
+for ($i = 0; $i < 4; $i++) {
+    $x = mb_chr($codepoints[$i], "UTF-8");
+    $n += strlen($x) + ord($x[0]);
+}
+echo $n;
+"#;
+    assert_eq!(compile_and_run(source), "735");
+    let main = emit_main_ir(source);
+    assert_eq!(main.matches("runtime.mb_chr_packed").count(), 1, "{main}");
+    assert!(!main.contains("runtime.mb_chr "), "{main}");
+    assert_eq!(main.matches("ishr_a").count(), 1, "{main}");
+    assert_eq!(main.matches("ibit_and").count(), 1, "{main}");
+}
+
+/// U+0000 stays a one-byte string, invalid codepoints stay false, and the non-UTF-8 bridge
+/// still reports PHP's byte length and first byte.
+#[test]
+fn test_mb_chr_packed_handles_nul_invalid_and_non_utf8() {
+    let source = r#"<?php
+$x = mb_chr(0, "UTF-8");
+echo strlen($x), ":", ord($x[0]), "|";
+$y = mb_chr(-1, "UTF-8");
+echo strlen($y), ":", ord($y[0]), "|";
+$z = mb_chr(65, "UTF-16");
+echo strlen($z), ":", ord($z[0]);
+"#;
+    assert_eq!(compile_and_run(source), "1:0|0:0|2:0");
+    let main = emit_main_ir(source);
+    assert_eq!(main.matches("runtime.mb_chr_packed").count(), 3, "{main}");
+    assert!(!main.contains("runtime.mb_chr "), "{main}");
+}
+
+/// Echoing the string value keeps the boxed call because the observation no longer returns it.
+#[test]
+fn test_mb_chr_ord_local_sink_keeps_value_observation() {
+    let source = r#"<?php
+$x = mb_chr(65, "UTF-8");
+echo ord($x[0]), "|", $x;
+"#;
+    assert_eq!(compile_and_run(source), "65|A");
+    let main = emit_main_ir(source);
+    assert_eq!(main.matches("runtime.mb_chr ").count(), 1, "{main}");
+    assert!(!main.contains("runtime.mb_chr_first"), "{main}");
+    assert!(!main.contains("runtime.mb_chr_packed"), "{main}");
+}
+
+/// A nonzero offset observes a later byte, so the first-byte sink must not apply.
+#[test]
+fn test_mb_chr_ord_local_sink_keeps_nonzero_offset() {
+    let source = r#"<?php
+$x = mb_chr(0x20AC, "UTF-8");
+echo ord($x[1]);
+"#;
+    assert_eq!(compile_and_run(source), "130");
+    let main = emit_main_ir(source);
+    assert_eq!(main.matches("runtime.mb_chr ").count(), 1, "{main}");
+    assert!(!main.contains("runtime.mb_chr_first"), "{main}");
+    assert!(!main.contains("runtime.mb_chr_packed"), "{main}");
+}
+
+/// The first-byte and packed kernels release the bridge result and every temporary cleanly.
+#[test]
+fn test_mb_chr_observation_heap_debug_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = mb_chr(0x20AC, "UTF-8");
+$b = mb_chr(-1, "UTF-8");
+$c = mb_chr(65, "UTF-16");
+echo strlen($a) + ord($a[0]), "|", strlen($b) + ord($b[0]), "|", strlen($c) + ord($c[0]);
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "229|0|2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Compiles and runs one fixture through the CLI with an explicit EIR optimizer mode.
+fn run_with_ir_opt(source: &str, mode: &str) -> String {
+    let dir = make_cli_test_dir("elephc_mb_chr_observation_ir_opt");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).expect("write mb_chr observation IR-opt fixture");
+    let compiled = elephc_cli_command(&dir)
+        .arg(mode)
+        .arg(&php_path)
+        .output()
+        .expect("compile mb_chr observation IR-opt fixture");
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let output = std::process::Command::new(dir.join("main"))
+        .output()
+        .expect("run mb_chr observation IR-opt fixture");
+    let _ = fs::remove_dir_all(dir);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("mb_chr observation output is UTF-8")
+}
+
+/// The packed observation produces the same output with the EIR optimizer on and off.
+#[test]
+fn test_mb_chr_observation_ir_opt_parity() {
+    let source = r#"<?php
+$codepoints = [0x41, 0xA9, 0x20AC, 0x1F600, 0];
+$n = 0;
+for ($i = 0; $i < 5; $i++) {
+    $x = mb_chr($codepoints[$i], "UTF-8");
+    $n += strlen($x) + ord($x[0]);
+}
+echo $n, "\n";
+"#;
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "736\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "736\n");
+}
+
+/// Emits target assembly for one fixture, using staticlib output for the iOS targets.
+fn emit_target_assembly(source: &str, target: &str) -> String {
+    let dir = make_cli_test_dir("elephc_mb_chr_observation_targets");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).expect("write mb_chr observation target fixture");
+    let mut command = elephc_cli_command(&dir);
+    command.args(["--emit", "staticlib"]);
+    command
+        .arg("--emit-asm")
+        .arg("--target")
+        .arg(target)
+        .arg(&php_path);
+    let output = command.output().expect("run elephc --emit-asm");
+    assert!(
+        output.status.success(),
+        "emit-asm for {target} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let assembly = fs::read_to_string(php_path.with_extension("s"))
+        .expect("read mb_chr observation target assembly");
+    let _ = fs::remove_dir_all(dir);
+    assembly
+}
+
+/// Every supported target emits the lead-byte classifiers and the bridge fallback.
+#[test]
+fn test_mb_chr_observation_emits_all_supported_targets() {
+    let source = r#"<?php
+#[Export]
+function observe(int $cp): int {
+    $x = mb_chr($cp, "UTF-8");
+    $y = mb_chr(65, "UTF-16");
+    return strlen($x) + ord($x[0]) + strlen($y) + ord($y[0]);
+}
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let assembly = emit_target_assembly(source, target);
+        assert!(assembly.contains("mb_chr_observation_two"), "{target}");
+        assert!(assembly.contains("mb_chr_observation_three"), "{target}");
+        assert!(assembly.contains("mb_chr_observation_four"), "{target}");
+        assert!(assembly.contains("__rt_mixed_unbox"), "{target}");
+        assert!(assembly.contains("__rt_mbstring_native"), "{target}");
+        if target == "linux-x86_64" {
+            assert!(assembly.contains("or r10, 0xC0"), "{target}");
+            assert!(assembly.contains("or r10, 0xF0"), "{target}");
+            assert!(assembly.contains("add rax, 0x200"), "{target}");
+        } else {
+            assert!(assembly.contains("orr x0, x9, #0xC0"), "{target}");
+            assert!(assembly.contains("orr x0, x9, #0xF0"), "{target}");
+            assert!(assembly.contains("add x0, x0, #0x200"), "{target}");
+        }
+    }
 }

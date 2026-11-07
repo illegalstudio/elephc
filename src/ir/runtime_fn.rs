@@ -735,6 +735,11 @@ pub enum RuntimeFnId {
     MbChr,
     /// Allocation-free `strlen(mb_chr(...))` observed only through the string length.
     MbChrLen,
+    /// Allocation-free `ord(mb_chr(...)[0])` observed only through the first UTF-8 byte.
+    MbChrFirst,
+    /// Allocation-free `strlen(mb_chr(...))` plus `ord(mb_chr(...)[0])` shape returning
+    /// `(byte_length << 8) | first_byte`, so both observations share one encoding pass.
+    MbChrPacked,
     MbStrpos,
     MbStripos,
     MbStrrpos,
@@ -1024,7 +1029,9 @@ impl RuntimeFnId {
             | RuntimeFnId::MbSubstituteCharacterInt => Some((1, Some(1))),
             RuntimeFnId::MbSplitCount => Some((2, Some(2))),
             RuntimeFnId::MbEregReplaceLen => Some((3, Some(3))),
-            RuntimeFnId::MbChrLen => Some((2, Some(2))),
+            RuntimeFnId::MbChrLen | RuntimeFnId::MbChrFirst | RuntimeFnId::MbChrPacked => {
+                Some((2, Some(2)))
+            }
             RuntimeFnId::MbStrimwidthLen => Some((5, Some(5))),
             RuntimeFnId::MbConvertEncodingLen => Some((3, Some(3))),
             RuntimeFnId::MbEncodeNumericentityLen
@@ -1961,7 +1968,9 @@ impl RuntimeFnId {
             RuntimeFnId::MbSubstituteCharacterInt => RuntimeFnId::MbSubstituteCharacter.effects(),
             RuntimeFnId::MbSplitCount => RuntimeFnId::MbSplit.effects(),
             RuntimeFnId::MbEregReplaceLen => RuntimeFnId::MbEregReplace.effects(),
-            RuntimeFnId::MbChrLen => RuntimeFnId::MbChr.effects(),
+            RuntimeFnId::MbChrLen | RuntimeFnId::MbChrFirst | RuntimeFnId::MbChrPacked => {
+                RuntimeFnId::MbChr.effects()
+            }
             RuntimeFnId::MbStrimwidthLen => RuntimeFnId::MbStrimwidth.effects(),
             RuntimeFnId::MbConvertEncodingLen => RuntimeFnId::MbConvertEncoding.effects(),
             RuntimeFnId::MbEncodeNumericentityLen => RuntimeFnId::MbEncodeNumericentity.effects(),
@@ -2733,6 +2742,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayMapSumAddIntCached
                 | RuntimeFnId::ArrayMapSumAddSafe
                 | RuntimeFnId::AbsInt
+                // The mb_chr observation sinks return a bare integer, never string storage.
+                | RuntimeFnId::MbChrFirst
+                | RuntimeFnId::MbChrPacked
                 | RuntimeFnId::Base64EncodedLen
                 | RuntimeFnId::StrposInt
                 | RuntimeFnId::StriposInt
@@ -3756,6 +3768,8 @@ impl RuntimeFnId {
             RuntimeFnId::MbOrdInt => "mb_ord_int",
             RuntimeFnId::MbChr => "mb_chr",
             RuntimeFnId::MbChrLen => "mb_chr_len",
+            RuntimeFnId::MbChrFirst => "mb_chr_first",
+            RuntimeFnId::MbChrPacked => "mb_chr_packed",
             RuntimeFnId::MbStrpos => "mb_strpos",
             RuntimeFnId::MbStripos => "mb_stripos",
             RuntimeFnId::MbStrrpos => "mb_strrpos",

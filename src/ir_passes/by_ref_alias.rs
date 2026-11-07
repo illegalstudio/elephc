@@ -228,6 +228,8 @@ pub(crate) fn runtime_call_observes_scalar_by_value(inst: &crate::ir::Instructio
             | crate::ir::RuntimeFnId::MbStrrichrLen
             | crate::ir::RuntimeFnId::MbStrimwidthLen
             | crate::ir::RuntimeFnId::MbChrLen
+            | crate::ir::RuntimeFnId::MbChrFirst
+            | crate::ir::RuntimeFnId::MbChrPacked
             | crate::ir::RuntimeFnId::MbConvertEncodingLen
             | crate::ir::RuntimeFnId::MbSplitCount
             | crate::ir::RuntimeFnId::MbEregReplaceLen

@@ -174,6 +174,24 @@ pub(crate) fn lower_mb_chr_len(
     mbstring_fast::lower_chr_len(ctx, inst)
 }
 
+/// Lowers an allocation-free `ord(mb_chr(...)[0])` selected by the first-byte sink.
+pub(crate) fn lower_mb_chr_first(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_chr_first(ctx, inst)
+}
+
+/// Lowers the packed `strlen(mb_chr(...)) + ord(mb_chr(...)[0])` observation.
+pub(crate) fn lower_mb_chr_packed(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_chr_packed(ctx, inst)
+}
+
 /// Lowers an allocation-free mbstring trim-width length selected by the length sink.
 pub(crate) fn lower_mb_strimwidth_len(
     ctx: &mut FunctionContext<'_>,

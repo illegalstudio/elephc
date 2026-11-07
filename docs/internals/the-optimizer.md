@@ -776,14 +776,20 @@ length-only mode of `__rt_inet_pton`: the address is still validated and IPv4/IP
 return 4/16, while an invalid address returns zero for `strlen(false)`. A value
 observation, including an `=== false` check, keeps the boxed helper.
 
-`src/ir_passes/mb_chr_len_local_sink.rs` handles the local form
-`$x = mb_chr($codepoint, "UTF-8"); strlen($x)`. It traces the boxed call through its
-clone/acquire/store scaffolding to the single local slot, proves every load feeds
-one `Cast` to `Str` and one `StrLen`, then retargets the call to `MbChrLen` and
-retires the local. Multiple `strlen()` observations share one retargeted call;
-UTF-16, malformed codepoints, and the bridge fallback keep PHP's byte length and
-`false` result. Echoing the string, an identity check, or any other value observer
-keeps the boxed `mb_chr()`.
+`src/ir_passes/mb_chr_len_local_sink.rs` handles the local forms
+`$x = mb_chr($codepoint, "UTF-8"); strlen($x)` and
+`$x = mb_chr($codepoint, "UTF-8"); ord($x[0])`. It traces the boxed call through
+its clone/acquire/store scaffolding to the single local slot, then proves every
+load feeds one length chain (`Cast` to `Str` then `StrLen`) or one first-byte chain
+(`$x[0]` with a constant zero index and warning flag, a `Cast` to `Str`, then
+`ord`). A length-only local retargets the call to `MbChrLen`; a first-byte-only
+local uses `MbChrFirst`; when both observations appear, one `MbChrPacked` call
+returns `(byte_length << 8) | first_byte`, and each terminal becomes a shift or a
+mask. This keeps one encoding pass and never re-evaluates the argument values that
+the original call already consumed. Multiple observations share the call, while
+UTF-16, U+0000, malformed codepoints, and the bridge fallback keep PHP's byte
+length and first-byte values. Echoing the string, an identity check, a nonzero
+offset, or any other value observer keeps the boxed `mb_chr()`.
 
 `src/ir_passes/strip_tags_len_sink.rs` folds `strlen(strip_tags(...))` into the
 count mode of `__rt_strip_tags`. The scanner still evaluates the subject and the
@@ -874,7 +880,8 @@ user-code argument falls back to the ordinary owner ledger.
 
 The optimized string paths are pinned by deterministic IR assertions rather than
 wall-clock thresholds: `tests/codegen/optimizer/mb_chr_len_local_sink.rs` pins the local
-`mb_chr()` length retarget and its value-observation fallbacks; `strpos_int_sink.rs` checks the raw
+`mb_chr()` length/first-byte retargets, the packed mixed observation, and their
+value-observation fallbacks; `strpos_int_sink.rs` checks the raw
 integer variants for all four searches, `strstr_len_sink.rs` checks the length helper
 and the absence of the haystack owner pin, and `string_len_sink.rs` checks the
 length-only folds for `strtr`, `chunk_split`, the case transforms and `ucwords`;
