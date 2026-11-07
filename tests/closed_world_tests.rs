@@ -2198,3 +2198,106 @@ try { $f = \Missing\Tool::make(...); } catch (\Error $e) { echo get_class($e), '
     compile_ok(&dir, &["--closed-world"]);
     assert_eq!(text(&run(&dir).stdout), "/x\nError: Class \"Missing\\Tool\" not found\n");
 }
+
+/// Writes a project whose dependency holds a class the program builds by name (`Listed`) and one
+/// nothing ever loads (`Unused`), both production classes of an installed package.
+fn usage_fixture(prefix: &str) -> PathBuf {
+    let dir = make_test_dir(prefix);
+    fs::create_dir_all(dir.join("vendor/acme/lib/src")).unwrap();
+    fs::create_dir_all(dir.join("vendor/composer")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\\\":"src/"}}}"#).unwrap();
+    fs::write(
+        dir.join("vendor/composer/installed.json"),
+        r#"{"packages":[{"name":"acme/lib","autoload":{"psr-4":{"Acme\\Lib\\":"src/"}},"install-path":"../acme/lib"}]}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/acme/lib/composer.json"),
+        r#"{"name":"acme/lib","autoload":{"psr-4":{"Acme\\Lib\\":"src/"}}}"#,
+    )
+    .unwrap();
+    // `Listed.php` also declares `Sidecar`, which loading the file brings into the program; only a
+    // run-time class name could reach it.
+    let declare = |class: &str| {
+        format!("class {class} {{ public function marker{class}(): string {{ return '{class}'; }} }}\n")
+    };
+    let header = "<?php\nnamespace Acme\\Lib;\n";
+    fs::write(
+        dir.join("vendor/acme/lib/src/Listed.php"),
+        format!("{header}{}{}", declare("Listed"), declare("Sidecar")),
+    )
+    .unwrap();
+    fs::write(dir.join("vendor/acme/lib/src/Unused.php"), format!("{header}{}", declare("Unused"))).unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+spl_autoload_register(function (string $class): void {
+    $file = __DIR__ . '/vendor/acme/lib/src/' . substr($class, strlen('Acme\Lib\\')) . '.php';
+    if (is_file($file)) { require $file; }
+});
+$name = 'Acme\Lib\\' . ($argc > 5 ? 'Other' : 'Listed');
+echo (new $name)->markerListed(), "\n";
+"#,
+    )
+    .unwrap();
+    dir
+}
+
+/// With a usage manifest, a closed world roots the classes the application was seen loading
+/// instead of every production class: `Unused` is compiled without one and left out with one,
+/// while `Listed`, reached only through a class name built at run time, still runs.
+#[test]
+fn closed_world_usage_manifest_compiles_only_the_classes_the_app_used() {
+    let dir = usage_fixture("cw_usage_manifest");
+    let mentions = |dir: &Path, needle: &str| {
+        let binary = fs::read(dir.join("main")).unwrap();
+        binary.windows(needle.len()).any(|window| window == needle.as_bytes())
+    };
+
+    compile_ok(&dir, &["--closed-world"]);
+    assert_eq!(text(&run(&dir).stdout), "Listed\n");
+    assert!(mentions(&dir, "markerunused"), "without a manifest every production class is compiled");
+
+    fs::write(dir.join("usage.txt"), "elephc-usage 1\n# recorded under php\nclass Acme\\Lib\\Listed\n").unwrap();
+    compile_ok(&dir, &["--closed-world", "--usage-manifest", "usage.txt"]);
+    assert_eq!(text(&run(&dir).stdout), "Listed\n");
+    assert!(mentions(&dir, "markerlisted"), "the used class is compiled");
+    assert!(!mentions(&dir, "markerunused"), "a class the application never loaded is left out");
+    assert!(
+        !mentions(&dir, "markersidecar"),
+        "a run-time class name reaches only the recorded classes, not every class of the program"
+    );
+
+    // A recorded file stands for the class the autoload index maps to it: an autoloader includes
+    // the file before php knows whether its class can be declared.
+    let unused = dir.join("vendor/acme/lib/src/Unused.php");
+    fs::write(
+        dir.join("usage.txt"),
+        format!("elephc-usage 1\nclass Acme\\Lib\\Listed\nfile {}\n", unused.display()),
+    )
+    .unwrap();
+    compile_ok(&dir, &["--closed-world", "--usage-manifest", "usage.txt"]);
+    assert_eq!(text(&run(&dir).stdout), "Listed\n");
+    assert!(mentions(&dir, "markerunused"), "the class of a recorded file is compiled");
+}
+
+/// A manifest that is not one fails the build with the line at fault, and the flag means nothing
+/// without a closed world.
+#[test]
+fn closed_world_usage_manifest_rejects_a_malformed_file() {
+    let dir = usage_fixture("cw_usage_manifest_bad");
+    fs::write(dir.join("usage.txt"), "class Acme\\Lib\\Listed\n").unwrap();
+    let output = compile(&dir, &["--closed-world", "--usage-manifest", "usage.txt"]);
+    assert!(!output.status.success());
+    assert!(text(&output.stderr).contains("line 1: expected `elephc-usage 1`"), "{}", text(&output.stderr));
+
+    fs::write(dir.join("usage.txt"), "elephc-usage 1\nmethod Acme\\Lib\\Listed::markerListed\n").unwrap();
+    let output = compile(&dir, &["--closed-world", "--usage-manifest", "usage.txt"]);
+    assert!(!output.status.success());
+    assert!(text(&output.stderr).contains("line 2: unknown entry"), "{}", text(&output.stderr));
+
+    fs::write(dir.join("usage.txt"), "elephc-usage 1\n").unwrap();
+    let output = compile(&dir, &["--usage-manifest", "usage.txt"]);
+    assert!(!output.status.success());
+    assert!(text(&output.stderr).contains("--usage-manifest requires --closed-world"), "{}", text(&output.stderr));
+}

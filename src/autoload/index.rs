@@ -136,6 +136,21 @@ impl AutoloadIndex {
         classes
     }
 
+    /// The classes the index maps to one of `files` (canonical paths) and that the file declares.
+    pub fn classes_in_files(&self, files: &HashSet<PathBuf>) -> Vec<String> {
+        let mut classes: Vec<String> = self
+            .fqn_to_path
+            .iter()
+            .filter(|(name, path)| {
+                let path = crate::source::canonical(path).unwrap_or_else(|_| path.to_path_buf());
+                files.contains(&path) && file_declares_class(&path, name)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        classes.sort();
+        classes
+    }
+
     /// True when the index has no PSR-4 mappings and no files entries.
     pub fn is_empty(&self) -> bool {
         self.fqn_to_path.is_empty() && self.files_to_include.is_empty()
