@@ -804,6 +804,24 @@ pub(super) fn lower_stored_numeric_map(
                 expr.span,
             )
         }
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::IntDiv {
+            divisor,
+        } => {
+            let divisor = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(divisor)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            );
+            emit_stored_map_call(
+                ctx,
+                vec![source.value, divisor.value],
+                crate::ir::RuntimeFnId::ArrayMapIntDiv,
+                expr.span,
+            )
+        }
         crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::FloatDiv {
             divisor,
         } => {

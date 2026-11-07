@@ -996,6 +996,9 @@ pub enum Op {
     ICheckedAdd,
     ICheckedSub,
     ICheckedMul,
+    /// Divides two integers with PHP's exact-result rule: an integer when the division is
+    /// exact and fits, a double otherwise. A zero divisor raises `DivisionByZeroError`.
+    ICheckedDiv,
     /// Adds two integers with PHP overflow promotion, then applies PHP's integer cast
     /// without materializing the intermediate boxed `Mixed` value.
     ICheckedAddToInt,
@@ -1502,6 +1505,9 @@ impl Op {
             IShl | IShrA | FDiv => E::MAY_THROW,
             PtrCheckNonnull => E::MAY_FATAL,
             ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedPow => E::ALLOC_HEAP | E::READS_HEAP,
+            // The quotient is boxed like the other checked operations and a zero divisor
+            // raises a catchable DivisionByZeroError.
+            ICheckedDiv => E::ALLOC_HEAP | E::READS_HEAP | E::MAY_THROW | E::MAY_FATAL,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
@@ -1917,6 +1923,7 @@ impl Op {
             ICheckedAdd => "ichecked_add",
             ICheckedSub => "ichecked_sub",
             ICheckedMul => "ichecked_mul",
+            ICheckedDiv => "ichecked_div",
             ICheckedAddToInt => "ichecked_add_to_int",
             ICheckedSubToInt => "ichecked_sub_to_int",
             ICheckedMulToInt => "ichecked_mul_to_int",

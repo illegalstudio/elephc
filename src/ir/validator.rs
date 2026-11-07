@@ -949,7 +949,7 @@ fn validate_opcode_rules(
                 _ => Err(ValidationError::UnexpectedImmediate(inst_id)),
             }
         }
-        ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt | ICheckedSubToInt
+        ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedDiv | ICheckedAddToInt | ICheckedSubToInt
         | ICheckedMulToInt | ICheckedPow => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
         }

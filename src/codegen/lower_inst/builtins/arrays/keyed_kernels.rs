@@ -168,6 +168,27 @@ pub(crate) fn lower_array_map_float_div(
     store_if_result(ctx, inst)
 }
 
+/// Lowers the stored `$x / C` integer-division map over a packed int array.
+pub(crate) fn lower_array_map_int_div(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let divisor = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(divisor, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(divisor, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_map_int_div");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `array_map_sum_add(array, offset)` into the fused runtime kernel.
 pub(crate) fn lower_array_map_sum_add(
     ctx: &mut FunctionContext<'_>,

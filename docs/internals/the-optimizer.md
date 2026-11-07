@@ -686,9 +686,11 @@ IEEE-754 slots; every element is a double, matching PHP without boxing. The
 affine form `$v * F + G` (including `G + $v * F`, `$v * F - G`, and
 `G - $v * F`) does the multiply and add entirely in double precision. The float
 add/sub forms `$v + F` (or `F + $v`) and `$v - F` reuse that kernel with a unit
-scale, and `$v / F` uses a dedicated division kernel; integer divisors and zero
-divisors keep the generic map so PHP's per-element int/float result and
-`DivisionByZeroError` stay exact. A non-empty array literal whose items are all
+scale, and `$v / F` uses a dedicated float-division kernel. An integer divisor
+`$v / C` uses the exact integer-division kernel: it keeps a raw `array<int>` while
+every quotient fits and the division is exact, and rebuilds a boxed Mixed array
+at the first inexact element or `PHP_INT_MIN / -1`. Zero divisors keep the generic
+map so `DivisionByZeroError` is preserved. A non-empty array literal whose items are all
 integer literals is a proven packed `array<int>` source too, and the lowered
 source temporary is released after the map call. Direct `range()` calls with
 integer-literal arguments and `array_slice()` calls that keep PHP's default key

@@ -845,8 +845,10 @@ try {
     );
     let main = emit_main_ir(source, true);
     assert_eq!(main.matches("runtime.array_map_float_div").count(), 3, "{main}");
-    // The int-divisor map and both zero-divisor maps stay generic.
-    assert_eq!(main.matches("runtime.array_map ").count(), 3, "{main}");
+    // The integer-divisor map now uses the exact int-division kernel; both zero-divisor
+    // maps stay generic.
+    assert_eq!(main.matches("runtime.array_map_int_div").count(), 1, "{main}");
+    assert_eq!(main.matches("runtime.array_map ").count(), 2, "{main}");
 }
 
 /// Non-empty all-int array literals are proven packed `array<int>` sources and use the raw
@@ -1269,6 +1271,141 @@ function directSources(int $seed): float {
         let assembly = emit_target_assembly(source, target);
         assert!(assembly.contains("__rt_array_map_float_affine"), "{target}");
         assert!(assembly.contains("__rt_array_map_float_div"), "{target}");
+        assert!(!assembly.contains("__rt_array_map_boxed"), "{target}");
+    }
+}
+
+/// An integer divisor keeps a raw `array<int>` while every quotient is exact and rebuilds a
+/// Mixed array at the first inexact element.
+#[test]
+fn test_stored_numeric_map_int_div_exact_and_mixed() {
+    let source = r#"<?php
+$values = [1, 2, 3, 4, 5];
+$mapped = array_map(fn($v) => $v / 2, $values);
+foreach ($mapped as $v) { var_dump($v); }
+$exact = array_map(fn($v) => $v / 2, [2, 4, 6]);
+foreach ($exact as $v) { var_dump($v); }
+echo implode(",", $mapped), "|", implode(",", $exact), "\n";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "float(0.5)\nint(1)\nfloat(1.5)\nint(2)\nfloat(2.5)\n\
+         int(1)\nint(2)\nint(3)\n\
+         0.5,1,1.5,2,2.5|1,2,3\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_int_div").count(), 2, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// Negative divisors, INT_MIN / -1, INT_MIN / 1 and INT_MIN / -2 follow PHP exactly.
+#[test]
+fn test_stored_numeric_map_int_div_edge_divisors() {
+    let source = r#"<?php
+$min = [PHP_INT_MIN];
+$minusOne = array_map(fn($v) => $v / -1, $min);
+var_dump($minusOne[0]);
+$one = array_map(fn($v) => $v / 1, $min);
+var_dump($one[0]);
+$minusTwo = array_map(fn($v) => $v / -2, $min);
+var_dump($minusTwo[0]);
+$neg = array_map(fn($v) => $v / -2, [5, 6, -7]);
+foreach ($neg as $v) { var_dump($v); }
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "float(9.223372036854776E+18)\n\
+         int(-9223372036854775808)\n\
+         int(4611686018427387904)\n\
+         float(-2.5)\nint(-3)\nfloat(3.5)\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_int_div").count(), 4, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// Zero divisors keep the generic map and its DivisionByZeroError; float divisors keep the
+/// raw float kernel; an empty source stays generic.
+#[test]
+fn test_stored_numeric_map_int_div_fallbacks() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+try {
+    array_map(fn($v) => $v / 0, $values);
+} catch (DivisionByZeroError $e) {
+    echo "zero|";
+}
+$float = array_map(fn($v) => $v / 2.0, $values);
+echo implode(",", $float), "|";
+$empty = array_map(fn($v) => $v / 3, []);
+echo count($empty), "\n";
+"#;
+    assert_eq!(compile_and_run(source), "zero|0.5,1,1.5|0\n");
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_float_div").count(), 1, "{main}");
+    assert_eq!(main.matches("runtime.array_map ").count(), 2, "{main}");
+    assert!(!main.contains("runtime.array_map_int_div"), "{main}");
+}
+
+/// The raw and Mixed integer-division results release cleanly.
+#[test]
+fn test_stored_numeric_map_int_div_heap_debug_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = [1, 2, 3, 4];
+$exact = [2, 4, 6];
+$mapped = array_map(fn($v) => $v / 2, $values);
+$raw = array_map(fn($v) => $v / 2, $exact);
+$min = [PHP_INT_MIN];
+$overflow = array_map(fn($v) => $v / -1, $min);
+echo implode(",", $mapped), "|", implode(",", $raw), "|", gettype($overflow[0]), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "0.5,1,1.5,2|1,2,3|double\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Integer-division maps produce the same output with the EIR optimizer on and off.
+#[test]
+fn test_stored_numeric_map_int_div_ir_opt_parity() {
+    let source = r#"<?php
+$sum = 0;
+for ($i = 0; $i < 3; $i++) {
+    $mixed = array_map(fn($v) => $v / 2, [1, 2, 3, 4]);
+    $raw = array_map(fn($v) => $v / 2, [2, 4, 6]);
+    $sum += array_sum($mixed) + array_sum($raw);
+}
+echo $sum, "\n";
+"#;
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "33\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "33\n");
+}
+
+/// Every supported target emits the integer-division map kernel.
+#[test]
+fn test_stored_numeric_map_int_div_emits_all_supported_targets() {
+    let source = r#"<?php
+#[Export]
+function intDivMap(int $seed): int {
+    $values = range(2, 20, 2);
+    $mapped = array_map(fn($v) => $v / 2, $values);
+    return (int)array_sum($mapped) + $seed;
+}
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let assembly = emit_target_assembly(source, target);
+        assert!(assembly.contains("__rt_array_map_int_div"), "{target}");
         assert!(!assembly.contains("__rt_array_map_boxed"), "{target}");
     }
 }

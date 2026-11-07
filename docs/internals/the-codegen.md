@@ -807,6 +807,12 @@ literal, a parameter, or the same expression folded at compile time is not. That
 asymmetry is why a missing stage looks like a defect that only happens inside a
 method (issue #502).
 
+An integer `/` follows the same rule, but keeps an integer only when the division
+is exact and the quotient fits. `ICheckedDiv` boxes the int-or-float quotient and
+raises `DivisionByZeroError` for a zero divisor; `PHP_INT_MIN / -1` takes the
+float path because its quotient is not representable. A Mixed operand keeps the
+established float-path behavior until a Mixed division helper exists.
+
 ### Callable descriptors and invokers
 
 `PhpType::Callable` stays one pointer wide, but the pointer targets a

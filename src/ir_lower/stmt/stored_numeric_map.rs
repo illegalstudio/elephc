@@ -1,6 +1,6 @@
 //! Purpose:
 //! Marks `array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v |
-//! $v * $v + C | $v * F | $v * F + G | $v + F | $v - F | $v / F, $ints)`
+//! $v * $v + C | $v * F | $v * F + G | $v + F | $v - F | $v / F | $v / C, $ints)`
 //! assignments whose result is only observed through storage-neutral consumers, so
 //! lowering may build a raw `array<int>` or `array<float>` instead of boxing one
 //! Mixed cell per element.
@@ -148,6 +148,10 @@ pub(crate) enum StoredNumericMapShape {
     FloatAffine { scale: f64, offset: f64 },
     /// `$v / F` with a nonzero floating-point literal divisor.
     FloatDiv { divisor: f64 },
+    /// `$v / C` with a nonzero integer literal divisor.
+    ///
+    /// PHP keeps an int for exact division and promotes to float otherwise.
+    IntDiv { divisor: i64 },
 }
 
 /// The single-operation map selector carried in `StoredNumericMapShape::Single`.
@@ -172,8 +176,30 @@ pub(crate) fn parse_stored_numeric_map(
         .or_else(|| parse_affine(left, op, right, param))
         .or_else(|| parse_float_affine(left, op, right, param))
         .or_else(|| parse_float_add(left, op, right, param))
+        .or_else(|| parse_int_div(left, op, right, param))
         .or_else(|| parse_float_div(left, op, right, param))
         .or_else(|| parse_float_scale(left, op, right, param))
+}
+
+/// Parses `$v / C` with a nonzero integer literal divisor.
+///
+/// A zero divisor keeps the generic map so PHP's `DivisionByZeroError` is preserved.
+fn parse_int_div(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    param: &str,
+) -> Option<StoredNumericMapShape> {
+    if !matches!(op, BinOp::Div)
+        || !matches!(&left.kind, ExprKind::Variable(name) if name == param)
+    {
+        return None;
+    }
+    let divisor = literal_i64(right)?;
+    if divisor == 0 {
+        return None;
+    }
+    Some(StoredNumericMapShape::IntDiv { divisor })
 }
 
 /// Parses `$v + F`, `F + $v`, and `$v - F` with a floating-point literal operand.

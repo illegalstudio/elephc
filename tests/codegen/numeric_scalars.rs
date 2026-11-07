@@ -62,6 +62,30 @@ fn test_float_multiplication() {
     assert_eq!(out, "7.5");
 }
 
+/// PHP keeps an int when an int/int division is exact and promotes only inexact quotients.
+/// Zero divisors raise a catchable `DivisionByZeroError`.
+#[test]
+fn test_int_division_preserves_php_int_float_types() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 6; $b = 3;
+var_dump($a / $b);
+$c = 7;
+var_dump($c / $b);
+var_dump(PHP_INT_MIN / -1);
+var_dump(PHP_INT_MIN / 1);
+var_dump(-6 / -2);
+var_dump(-7 / 2);
+try { $a / 0; } catch (DivisionByZeroError $e) { echo "zero:", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(2)\nfloat(2.3333333333333335)\nfloat(9.223372036854776E+18)\n\
+         int(-9223372036854775808)\nint(3)\nfloat(-3.5)\nzero:Division by zero\n"
+    );
+}
+
 /// Verifies that float division (7.5 / 2.5) produces 3.
 #[test]
 fn test_float_division() {

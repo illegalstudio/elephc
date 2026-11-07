@@ -2016,6 +2016,19 @@ echo implode(",", $mapped), "\n";
     assert_eq!(out, "2,1.5,1.5\n");
 }
 
+/// An untyped `$v / 2` callback must preserve PHP's per-element int/float result: exact
+/// quotients stay integers and only inexact ones become doubles.
+#[test]
+fn test_array_map_untyped_int_division_preserves_int_and_float() {
+    let out = compile_and_run(
+        r#"<?php
+$mapped = array_map(fn($v) => $v / 2, [1, 2, 3, 4]);
+foreach ($mapped as $v) { var_dump($v); }
+"#,
+    );
+    assert_eq!(out, "float(0.5)\nint(1)\nfloat(1.5)\nint(2)\n");
+}
+
 /// Verifies a callback returning an ARRAY — also outside the narrowable set — survives the return
 /// boundary and can be indexed twice.
 #[test]
