@@ -609,5 +609,3 @@ pub(super) fn push_unique_listed_constant_member(
         members.push(member);
     }
 }
-
-

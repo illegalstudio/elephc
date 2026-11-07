@@ -663,9 +663,9 @@ echo "|", (new ReflectionFunction("mysqli_affected_rows"))->getReturnType();
 }
 
 /// One `ReflectionClass` per mysqli class (and a user subclass) fits the 8 MB test heap:
-/// every method, parameter, and property reflector shares its declaring class's shallow
-/// `ReflectionClass` instead of allocating a copy of mysqli's default/static property
-/// arrays per member (about 3.7 MB for `mysqli` alone before).
+/// every method, parameter, and property reflector stores only the address of its declaring
+/// class's `ReflectionClass` builder instead of a reflector carrying a copy of mysqli's
+/// default/static property arrays per member (about 3.7 MB for `mysqli` alone before).
 #[test]
 fn test_mysqli_reflection_fits_a_small_heap() {
     let out = compile_and_run(

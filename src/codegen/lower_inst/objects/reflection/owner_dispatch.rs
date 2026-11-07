@@ -54,14 +54,12 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
             class_name
         ))
     })?;
-    super::member_properties_emit::with_shared_reflection_classes(ctx, |ctx| {
-        if let Some(object_operand) = reflection_object_operand(ctx, &owner_class_name, inst)? {
-            emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)
-        } else {
-            let metadata = reflection_owner_metadata(ctx, &owner_class_name, inst)?;
-            emit_reflection_owner_object(ctx, class_name, &metadata)
-        }
-    })?;
+    if let Some(object_operand) = reflection_object_operand(ctx, &owner_class_name, inst)? {
+        emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)?;
+    } else {
+        let metadata = reflection_owner_metadata(ctx, &owner_class_name, inst)?;
+        emit_reflection_owner_object(ctx, class_name, &metadata)?;
+    }
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
@@ -82,20 +80,18 @@ pub(in crate::codegen::lower_inst::objects) fn populate_reflection_owner_new(
         ))
     })?;
     clear_reflection_owner_prefix(ctx, &owner_class_name, result)?;
-    super::member_properties_emit::with_shared_reflection_classes(ctx, |ctx| {
-        if let Some(object_operand) = reflection_object_operand(ctx, &owner_class_name, inst)? {
-            emit_reflection_owner_from_runtime_object_into(
-                ctx,
-                class_name,
-                object_operand,
-                Some(result),
-            )
-        } else {
-            let metadata = reflection_owner_metadata(ctx, &owner_class_name, inst)?;
-            ctx.load_value_to_result(result)?;
-            emit_reflection_owner_metadata(ctx, class_name, &metadata)
-        }
-    })
+    if let Some(object_operand) = reflection_object_operand(ctx, &owner_class_name, inst)? {
+        emit_reflection_owner_from_runtime_object_into(
+            ctx,
+            class_name,
+            object_operand,
+            Some(result),
+        )
+    } else {
+        let metadata = reflection_owner_metadata(ctx, &owner_class_name, inst)?;
+        ctx.load_value_to_result(result)?;
+        emit_reflection_owner_metadata(ctx, class_name, &metadata)
+    }
 }
 
 /// Returns the constructor object operand for ReflectionClass/Object object reflection.

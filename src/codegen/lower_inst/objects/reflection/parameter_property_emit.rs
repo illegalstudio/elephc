@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
-//! - Fresh declaring-class, function, and type objects transfer ownership into their cells.
+//! - Fresh declaring-function and type objects transfer ownership into their cells; the
+//!   declaring-class and class-type slots hold a `ReflectionClass` builder address instead.
 
 use super::*;
 use crate::codegen::lower_inst::emit_runtime_callable_invoker_with_string_owner;
@@ -335,11 +336,7 @@ pub(super) fn emit_reflection_parameter_declaring_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(declaring_class_name) = parameter.declaring_class_name.as_deref() {
-        emit_shared_reflection_class(ctx, declaring_class_name, true)?;
-        emit_box_current_owned_value_as_mixed(
-            ctx.emitter,
-            &PhpType::Object("ReflectionClass".to_string()),
-        );
+        emit_reflection_class_builder_address_as_mixed(ctx, declaring_class_name);
     } else {
         emit_boxed_null_literal_to_result(ctx);
     }
@@ -379,11 +376,7 @@ pub(super) fn emit_reflection_parameter_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(class_name) = reflection_parameter_class_name(parameter) {
-        emit_shared_reflection_class(ctx, class_name, false)?;
-        emit_box_current_owned_value_as_mixed(
-            ctx.emitter,
-            &PhpType::Object("ReflectionClass".to_string()),
-        );
+        emit_reflection_class_builder_address_as_mixed(ctx, class_name);
     } else {
         emit_boxed_null_literal_to_result(ctx);
     }

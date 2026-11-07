@@ -416,8 +416,8 @@ echo (new ReflectionMethod("ReflectCasingEvalDeclared", "evalmatch"))->getName()
 
 /// `getDeclaringClass()` / `getParentClass()` return complete reflectors, like php: their
 /// own `getMethods()`, `getProperties()`, `getConstants()` and nested `getDeclaringClass()`
-/// work, two calls return distinct objects, and the declaring classes of a class's members
-/// share one reflector per class (memory stays bounded). Expected output is php 8.3's.
+/// work, two calls return distinct objects, and members hold only a builder address, so
+/// memory stays bounded. Expected output is php 8.3's.
 #[test]
 fn test_declaring_class_reflectors_are_complete() {
     let out = compile_and_run(
@@ -497,4 +497,35 @@ echo implode(",", get_class_methods("C6")), "\n";
             "own@C6,outer@C6,nested@C6,p@P2\nown,outer,nested,p\n",
         )
     );
+}
+
+/// Declaring-class reflectors are built per call and own no back-reference: a member never
+/// keeps its `ReflectionClass` (nor that class's members) alive, so repeated lookups through
+/// methods, properties, constants and parameters free everything when the function returns.
+/// Expected output is php 8.5's.
+#[test]
+fn test_declaring_class_reflectors_are_fresh_and_heap_clean() {
+    let out = crate::support::compile_and_run_with_heap_debug(
+        r#"<?php
+class HeapBase { const K = 1; public int $a = 1; public static int $s = 7; public function f(HeapBase $b): void {} }
+class HeapChild extends HeapBase { public function g(): void {} }
+function heapProbe(): void {
+    $class = new ReflectionClass("HeapChild");
+    for ($i = 0; $i < 3; $i++) {
+        $m = $class->getMethod("f");
+        $first = $m->getDeclaringClass();
+        echo $first === $m->getDeclaringClass() ? "same" : "fresh", ":";
+        echo count($first->getMethod("f")->getDeclaringClass()->getMethods()), ":";
+        echo $class->getProperty("a")->getDeclaringClass()->getName(), ":";
+        echo $class->getReflectionConstant("K")->getDeclaringClass()->getName(), ":";
+        echo $m->getParameters()[0]->getDeclaringClass()->getName(), ":";
+        echo (new ReflectionProperty("HeapChild", "s"))->getValue(), "|";
+    }
+}
+heapProbe();
+"#,
+    );
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "fresh:1:HeapBase:HeapBase:HeapBase:7|".repeat(3));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

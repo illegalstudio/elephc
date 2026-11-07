@@ -397,8 +397,9 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        // Also includes the SimpleXML allocation and diagnostic adapters.
-        assert_eq!(eval_internal, 136);
+        // Also includes the SimpleXML allocation and diagnostic adapters, and
+        // `__elephc_reflection_class_build`, which only compiled reflectors call.
+        assert_eq!(eval_internal, 137);
         // 30 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 382);
@@ -410,8 +411,9 @@ mod tests {
         // The tokenizer location helper is a typed ordinary registry operation.
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
-        // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
-        assert_eq!(aot_registry, 826);
+        // The PHP 8.5 array value-edge pair adds two AOT-only registry entries, and the
+        // compiled `ReflectionClass` builder call one more.
+        assert_eq!(aot_registry, 827);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 450 + curl_surface);
@@ -468,7 +470,7 @@ mod tests {
         // interpreter adapters, plus the GMP and SimpleXML forwarding homes.
         assert_eq!(interpreter_adapter, 663 + curl_surface);
         // Internal compiler surfaces and pending eval bindings remain unavailable.
-        assert_eq!(unsupported, 518);
+        assert_eq!(unsupported, 519);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

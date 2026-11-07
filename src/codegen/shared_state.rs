@@ -72,6 +72,12 @@ pub(crate) struct SharedCodegenState {
     /// name table `elephc_instr_init` reads; main is emitted last, so it is
     /// complete by then.
     instr_registry: Vec<String>,
+    /// Classes whose module-level complete `ReflectionClass` builder was requested, as
+    /// `(php symbol key, class name, label)` in request order. Builders are emitted after the
+    /// module's bodies, and emitting one can request more (its members' declaring classes).
+    reflection_class_builders: Vec<(String, String, String)>,
+    /// How many of `reflection_class_builders` have been emitted.
+    reflection_class_builders_emitted: usize,
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -111,6 +117,34 @@ struct RuntimeCallWrapperCacheEntry {
 }
 
 impl SharedCodegenState {
+    /// Returns the global label of `class_name`'s complete `ReflectionClass` builder,
+    /// queuing the builder for emission the first time the class is asked for.
+    pub(super) fn request_reflection_class_builder(&mut self, class_name: &str) -> String {
+        let key = crate::names::php_symbol_key(class_name);
+        if let Some((_, _, label)) =
+            self.reflection_class_builders.iter().find(|(existing, _, _)| *existing == key)
+        {
+            return label.clone();
+        }
+        let label = format!(
+            "__elephc_reflection_class_builder_{}_{}",
+            self.reflection_class_builders.len(),
+            crate::names::label_fragment(&key)
+        );
+        self.reflection_class_builders
+            .push((key, class_name.to_string(), label.clone()));
+        label
+    }
+
+    /// Takes the next requested `ReflectionClass` builder that has not been emitted yet,
+    /// as `(class name, label)`.
+    pub(super) fn next_pending_reflection_class_builder(&mut self) -> Option<(String, String)> {
+        let (_, class_name, label) =
+            self.reflection_class_builders.get(self.reflection_class_builders_emitted)?.clone();
+        self.reflection_class_builders_emitted += 1;
+        Some((class_name, label))
+    }
+
     /// Records dependencies introduced by a synthetic wrapper that was not present during the
     /// module's original EIR feature scan.
     pub(super) fn record_generated_runtime_features(&mut self, function: &Function) {

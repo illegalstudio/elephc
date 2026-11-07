@@ -160,7 +160,7 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
             builtin_reflection_slot_getter("isArray", "__is_array_type", TypeExpr::Bool),
             builtin_reflection_slot_getter("isCallable", "__is_callable_type", TypeExpr::Bool),
             builtin_reflection_slot_getter("getType", "__type", mixed_type()),
-            reflection_fresh_class_slot_getter("getClass", "__class"),
+            super::class_collections::builtin_reflection_lazy_class_getter("getClass", "__class"),
             builtin_reflection_class_string_method("__toString", "__string"),
             builtin_reflection_owner_get_attributes_method("ReflectionParameter"),
             builtin_reflection_slot_getter(
@@ -171,7 +171,7 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
             builtin_reflection_parameter_is_default_value_constant_method(),
             builtin_reflection_parameter_get_default_value_constant_name_method(),
             builtin_reflection_parameter_get_default_value_method(),
-            reflection_fresh_class_slot_getter("getDeclaringClass", "__declaring_class"),
+            super::class_collections::builtin_reflection_lazy_class_getter("getDeclaringClass", "__declaring_class"),
             builtin_reflection_slot_getter(
                 "getDeclaringFunction",
                 "__declaring_function",
@@ -506,18 +506,4 @@ pub(super) fn builtin_reflection_parameter_can_be_passed_by_value_method() -> Cl
         span: dummy_span,
         attributes: Vec::new(),
     }
-}
-
-/// A `mixed` slot getter that hands out a fresh copy of a stored `ReflectionClass` (and the
-/// stored value as is when it holds `null`), like php's per-call reflectors.
-fn reflection_fresh_class_slot_getter(method_name: &str, property: &str) -> ClassMethod {
-    let mut method = builtin_reflection_slot_getter(method_name, property, mixed_type());
-    method.body = vec![Stmt::new(
-        StmtKind::Return(Some(super::class_collections::reflection_fresh_object_read(
-            property,
-            "ReflectionClass",
-        ))),
-        crate::span::Span::dummy(),
-    )];
-    method
 }

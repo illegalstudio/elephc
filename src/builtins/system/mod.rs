@@ -45,6 +45,7 @@ pub mod __elephc_opcache_rt_in_file_cache;
 pub mod __elephc_opcache_rt_reset;
 pub mod __elephc_opcache_rt_stat;
 pub mod __elephc_opcache_rt_swap;
+pub mod __elephc_reflection_class_build;
 pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
 pub mod __elephc_simplexml_warning;
