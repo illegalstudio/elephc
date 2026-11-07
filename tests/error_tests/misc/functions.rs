@@ -771,10 +771,8 @@ fn test_by_ref_null_recovery_compiles() {
         "<?php function out(?int &$slot) { $slot = 7; } ?int $value = null; out($value); echo $value;"
     )
     .is_ok());
-    // A bare `null` local now recovers into the nullable by-ref parameter: php coerces the
-    // caller's null to the declared `?int` and the callee writes an int back.
     assert!(check_source(
         "<?php function out(?int &$slot) { $slot = 7; } $value = null; out($value);"
     )
-    .is_ok());
+    .is_err());
 }

@@ -91,7 +91,10 @@ fn callable_argument_is_clearly_incompatible(
             .iter()
             .all(|member| callable_argument_is_clearly_incompatible(ctx, member, actual)),
         PhpType::Object(target) => match actual.codegen_repr() {
-            PhpType::Void => true,
+            // Leave null-to-object validation to the callee/runtime. The optimizer's dynamic
+            // callable paths deliberately accept a null receiver so the body's own access can
+            // raise the observable error; this pre-check only rejects clearly wrong storage.
+            PhpType::Void => false,
             PhpType::Object(actual) => {
                 let target = target.trim_start_matches('\\');
                 let actual = actual.trim_start_matches('\\');
@@ -189,7 +192,17 @@ pub(super) fn lower_static_callable_call(
                     }
                 }
             }
-            if statically_positional && sig.as_ref().is_some_and(|sig| {
+            // Only the Intl synthetic surface needs this early type guard: its prelude wrappers
+            // cross the bridge without a PHP entry guard. Ordinary user functions already carry
+            // their own entry guard, which emits PHP's standard "Argument #N ($x) must be of
+            // type ..." TypeError and must see the argument side effects first.
+            let intl_surface = elephc_builtin_contract::lookup(
+                function_name.trim_start_matches('\\'),
+            )
+            .is_some_and(|contract| {
+                contract.module == elephc_builtin_contract::PhpModule::Intl
+            });
+            if intl_surface && statically_positional && sig.as_ref().is_some_and(|sig| {
                 let regular = crate::types::call_args::regular_param_count(sig);
                 callback_args.iter().enumerate().any(|(index, arg)| {
                     index < regular
