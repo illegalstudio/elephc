@@ -880,7 +880,11 @@ per-request isolation.
 Some lowerings emit a wrapper or invoker in the middle of the enclosing
 function and jump over it: the `array_map()` and `preg_replace_callback()`
 descriptor callback wrappers, the direct-callback argument adapter, and the
-runtime-callable invokers. Their `label_global()` opens the wrapper's own
+runtime-callable invokers. The direct-closure `array_map()` adapter boxes the
+closure's actual EIR return value (a raw `F64`, for example) before a Mixed map
+helper reads it; the closure's declared return type alone is not enough because
+an untyped closure can narrow to a non-Mixed representation. Their
+`label_global()` opens the wrapper's own
 `.text.<symbol>` section on ELF, so the lowering captures
 `Emitter::current_text_section()` before the wrapper and calls
 `reopen_text_section()` after it. Without that, the rest of the enclosing

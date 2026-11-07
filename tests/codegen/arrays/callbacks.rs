@@ -1974,6 +1974,48 @@ echo c([1, 3])[1];
     assert_eq!(out, "1.5");
 }
 
+/// Verifies an untyped closure that infers a raw `F64` return is boxed before the Mixed map
+/// helper stores it. Regression: the direct-closure wrapper tail-called the closure and the map
+/// helper read the stale `x0` as a Mixed pointer, crashing on `array_sum()`.
+#[test]
+fn test_array_map_untyped_float_callback_boxes_raw_result() {
+    let out = compile_and_run(
+        r#"<?php
+$sum = array_sum(array_map(fn($v) => $v * 1.5, [1, 2, 3]));
+echo $sum, "\n";
+"#,
+    );
+    assert_eq!(out, "9\n");
+}
+
+/// The same untyped float callback through a materialized map and an element write must survive
+/// the generic map path, where the stored-map sink deliberately falls back.
+#[test]
+fn test_array_map_untyped_float_callback_materialized_write() {
+    let out = compile_and_run(
+        r#"<?php
+$values = [1, 2, 3];
+$mapped = array_map(fn($v) => $v * 1.5, $values);
+$mapped[0] = 9.5;
+echo $mapped[0], "|", array_sum($mapped), "\n";
+"#,
+    );
+    assert_eq!(out, "9.5|17\n");
+}
+
+/// A ternary untyped callback can return either an int or a float; the wrapper boxes whichever
+/// representation the closure actually produced.
+#[test]
+fn test_array_map_untyped_mixed_return_callback_boxes_raw_result() {
+    let out = compile_and_run(
+        r#"<?php
+$mapped = array_map(fn($v) => $v > 1 ? 1.5 : 2, [1, 2, 3]);
+echo implode(",", $mapped), "\n";
+"#,
+    );
+    assert_eq!(out, "2,1.5,1.5\n");
+}
+
 /// Verifies a callback returning an ARRAY — also outside the narrowable set — survives the return
 /// boundary and can be indexed twice.
 #[test]
