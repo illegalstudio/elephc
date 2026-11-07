@@ -646,18 +646,20 @@ existing vector/scalar body but skips the Mixed box; a promoted map or running s
 terminates in PHP's warned float-to-int conversion.
 
 `src/ir_lower/stmt/stored_numeric_map.rs` marks a stored
-`$mapped = array_map(fn($v) => $v + C | $v - C | $v * C, $ints)` when every
-use of `$mapped` and its value aliases is storage-neutral: indexed reads,
-value-`foreach`, read-only aliasing, or a whitelisted builtin such as `count`,
-`array_sum`, `implode`, `json_encode`, `var_dump`, `array_values`, or
-`array_keys`. Any element write, direct or through an alias, keeps the generic
-boxed map so copy-on-write and ownership stay on the established path. The marker becomes a synthetic call consumed by lowering, so the
-checker's `array<mixed>` type is unchanged. The runtime kernel builds a raw
-8-byte `array<int>` while the literal operation cannot overflow; the first
-overflowing element makes it release that array and rebuild an ordinary boxed
-Mixed array, preserving PHP's per-element int/float result. Any consumer that may
-assume boxed Mixed slots (`array_merge`, `array_push`, user calls, unsupported
-expressions) keeps the generic map.
+`$mapped = array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B, $ints)`
+when every use of `$mapped` and its value aliases is storage-neutral: indexed
+reads, value-`foreach`, read-only aliasing, or a whitelisted builtin such as
+`count`, `array_sum`, `implode`, `json_encode`, `var_dump`, `array_values`, or
+`array_keys`. The affine form also accepts `B + $v * A`, `B - $v * A`,
+`$v * A - B`, and literal negation, and is evaluated multiply-then-add. Any
+element write, direct or through an alias, keeps the generic boxed map so
+copy-on-write and ownership stay on the established path. The marker becomes a
+synthetic call consumed by lowering, so the checker's `array<mixed>` type is
+unchanged. The runtime kernel builds a raw 8-byte `array<int>` while the literal
+operations cannot overflow; the first overflowing element makes it release that
+array and rebuild an ordinary boxed Mixed array, preserving PHP's per-element
+int/float result. Any consumer that may assume boxed Mixed slots (`array_merge`,
+`array_push`, user calls, unsupported expressions) keeps the generic map.
 
 `src/ir_lower/stmt/map_foreach_fusion.rs`, called by the same pre-lowering pass, fuses
 a value-`foreach` over the same pure map: it iterates the source with an

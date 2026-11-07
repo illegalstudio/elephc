@@ -119,6 +119,11 @@ pub enum RuntimeFnId {
     /// The result is a raw `array<int>` while the literal operation cannot overflow; a
     /// per-element promotion falls back to an ordinary boxed Mixed array.
     ArrayMapNumeric,
+    /// Stored `array_map(fn($x) => $x * A + B, $packedInts)` affine kernel.
+    ///
+    /// Multiplication and addition are checked in source order; any promoted element rebuilds
+    /// the whole result as a boxed Mixed array with PHP's exact per-element int/float types.
+    ArrayMapAffine,
     /// Fused `array_sum(array_map(fn($x) => $x + $literal, $packedInts))` scalar kernel.
     ArrayMapSumAdd,
     /// Raw-int observation of the fused map+sum kernel; avoids boxing the result.
@@ -1001,7 +1006,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
             RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumAddInt | RuntimeFnId::ArrayMapSumProbeInt | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),
-            RuntimeFnId::ArrayMapNumeric => Some((3, Some(3))),
+            RuntimeFnId::ArrayMapNumeric | RuntimeFnId::ArrayMapAffine => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSumAddIntCached => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSumAddSafe => Some((2, Some(2))),
             RuntimeFnId::ArrayElementTypeCheck => Some((3, Some(3))),
@@ -1910,8 +1915,8 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMap => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
-            // The stored numeric map reads the packed source and allocates the destination array.
-            RuntimeFnId::ArrayMapNumeric => {
+            // The stored numeric maps read the packed source and allocate the destination array.
+            RuntimeFnId::ArrayMapNumeric | RuntimeFnId::ArrayMapAffine => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
             // The fused map+sum kernel walks a packed payload and boxes one result cell.
@@ -3253,6 +3258,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayLast => "array_last",
             RuntimeFnId::ArrayMap => "array_map",
             RuntimeFnId::ArrayMapNumeric => "array_map_numeric",
+            RuntimeFnId::ArrayMapAffine => "array_map_affine",
             RuntimeFnId::ArrayMapSumAdd => "array_map_sum_add",
             RuntimeFnId::ArrayMapSumAddInt => "array_map_sum_add_int",
             RuntimeFnId::ArrayMapSumProbeInt => "array_map_sum_probe_int",

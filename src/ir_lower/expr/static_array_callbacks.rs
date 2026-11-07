@@ -508,55 +508,78 @@ pub(super) fn lower_stored_numeric_map(
         return None;
     }
     let (param, body) = scalar_single_param_closure(&args[0], false)?;
-    let ExprKind::BinaryOp { left, op, right } = &body.kind else {
-        return None;
-    };
-    let constant = match op {
-        BinOp::Add => additive_literal(left, right, param)?,
-        BinOp::Sub => match (&left.kind, &right.kind) {
-            (ExprKind::Variable(name), ExprKind::IntLiteral(value)) if name == param => *value,
-            _ => return None,
-        },
-        BinOp::Mul => match (&left.kind, &right.kind) {
-            (ExprKind::Variable(name), ExprKind::IntLiteral(value)) if name == param => *value,
-            (ExprKind::IntLiteral(value), ExprKind::Variable(name)) if name == param => *value,
-            _ => return None,
-        },
-        _ => return None,
-    };
-    let op_code = match op {
-        BinOp::Add => 0i64,
-        BinOp::Sub => 1i64,
-        BinOp::Mul => 2i64,
-        _ => unreachable!("the stored numeric map only accepts add, subtract, and multiply"),
-    };
+    let shape =
+        crate::ir_lower::stmt::stored_numeric_map::parse_stored_numeric_map(body, param)?;
     let source = lower_expr(ctx, &args[1]);
-    let constant = ctx.emit_value(
-        Op::ConstI64,
-        Vec::new(),
-        Some(Immediate::I64(constant)),
-        PhpType::Int,
-        Op::ConstI64.default_effects(),
-        Some(expr.span),
-    );
-    let op_code = ctx.emit_value(
-        Op::ConstI64,
-        Vec::new(),
-        Some(Immediate::I64(op_code)),
-        PhpType::Int,
-        Op::ConstI64.default_effects(),
-        Some(expr.span),
-    );
-    Some(ctx.emit_value(
-        Op::RuntimeCall,
-        vec![source.value, constant.value, op_code.value],
-        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-            crate::ir::RuntimeFnId::ArrayMapNumeric,
-        ))),
-        PhpType::Array(Box::new(PhpType::Mixed)),
-        crate::ir::RuntimeFnId::ArrayMapNumeric.intrinsic_effects(),
-        Some(expr.span),
-    ))
+    match shape {
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::Single {
+            constant,
+            op,
+        } => {
+            let op_code = match op {
+                crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapOp::Add => 0i64,
+                crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapOp::Sub => 1i64,
+                crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapOp::Mul => 2i64,
+            };
+            let constant = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(constant)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            );
+            let op_code = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(op_code)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            );
+            Some(ctx.emit_value(
+                Op::RuntimeCall,
+                vec![source.value, constant.value, op_code.value],
+                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::ArrayMapNumeric,
+                ))),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                crate::ir::RuntimeFnId::ArrayMapNumeric.intrinsic_effects(),
+                Some(expr.span),
+            ))
+        }
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::Affine {
+            scale,
+            offset,
+        } => {
+            let scale = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(scale)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            );
+            let offset = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(offset)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            );
+            Some(ctx.emit_value(
+                Op::RuntimeCall,
+                vec![source.value, scale.value, offset.value],
+                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::ArrayMapAffine,
+                ))),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                crate::ir::RuntimeFnId::ArrayMapAffine.intrinsic_effects(),
+                Some(expr.span),
+            ))
+        }
+    }
 }
 
 /// Lowers `array_sum(array_map(fn($x) => $x + $c, $ints))` into one packed-int kernel.

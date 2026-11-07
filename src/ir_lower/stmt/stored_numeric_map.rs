@@ -1,5 +1,5 @@
 //! Purpose:
-//! Marks `array_map(fn($v) => $v + C | $v - C | $v * C, $ints)` assignments whose
+//! Marks `array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B, $ints)` assignments whose
 //! result is only observed through storage-neutral consumers, so lowering may build
 //! a raw `array<int>` instead of boxing one Mixed cell per element.
 //!
@@ -113,6 +113,129 @@ fn mark_stmt(stmt: &mut Stmt, analysis: &[Stmt], env: &TypeEnv, aliased: &HashSe
     }
 }
 
+/// One safe stored numeric map callback shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StoredNumericMapShape {
+    /// `$v + C`, `$v - C`, or `$v * C` (with the literal on either side for `+` and `*`).
+    Single { constant: i64, op: StoredNumericMapOp },
+    /// `$v * A + B` (and its commutative/negated forms), evaluated multiply-then-add.
+    Affine { scale: i64, offset: i64 },
+}
+
+/// The single-operation map selector carried in `StoredNumericMapShape::Single`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StoredNumericMapOp {
+    Add,
+    Sub,
+    Mul,
+}
+
+/// Parses one capture-free callback body into a supported single-op or affine map.
+pub(crate) fn parse_stored_numeric_map(
+    body: &Expr,
+    param: &str,
+) -> Option<StoredNumericMapShape> {
+    let ExprKind::BinaryOp { left, op, right } = &body.kind else {
+        return None;
+    };
+    parse_single(left, op, right, param).or_else(|| parse_affine(left, op, right, param))
+}
+
+/// Parses the original single-operation shapes.
+fn parse_single(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    param: &str,
+) -> Option<StoredNumericMapShape> {
+    match op {
+        BinOp::Add => Some(StoredNumericMapShape::Single {
+            constant: additive_literal(left, right, param)?,
+            op: StoredNumericMapOp::Add,
+        }),
+        BinOp::Sub => {
+            if !matches!(&left.kind, ExprKind::Variable(name) if name == param) {
+                return None;
+            }
+            Some(StoredNumericMapShape::Single {
+                constant: literal_i64(right)?,
+                op: StoredNumericMapOp::Sub,
+            })
+        }
+        BinOp::Mul => {
+            let constant = match (&left.kind, &right.kind) {
+                (ExprKind::Variable(name), _) if name == param => literal_i64(right)?,
+                (_, ExprKind::Variable(name)) if name == param => literal_i64(left)?,
+                _ => return None,
+            };
+            Some(StoredNumericMapShape::Single {
+                constant,
+                op: StoredNumericMapOp::Mul,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Parses `$v * A + B`, `$v * A - B`, `B + $v * A`, and `B - $v * A`.
+fn parse_affine(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    param: &str,
+) -> Option<StoredNumericMapShape> {
+    match op {
+        BinOp::Add => {
+            if let (Some(scale), Some(offset)) = (scale_literal(left, param), literal_i64(right)) {
+                return Some(StoredNumericMapShape::Affine { scale, offset });
+            }
+            if let (Some(offset), Some(scale)) = (literal_i64(left), scale_literal(right, param)) {
+                return Some(StoredNumericMapShape::Affine { scale, offset });
+            }
+        }
+        BinOp::Sub => {
+            if let (Some(scale), Some(offset)) = (scale_literal(left, param), literal_i64(right)) {
+                return Some(StoredNumericMapShape::Affine {
+                    scale,
+                    offset: offset.checked_neg()?,
+                });
+            }
+            if let (Some(offset), Some(scale)) = (literal_i64(left), scale_literal(right, param)) {
+                return Some(StoredNumericMapShape::Affine {
+                    scale: scale.checked_neg()?,
+                    offset,
+                });
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+/// Returns the literal scale in `$v * A` or `A * $v`.
+fn scale_literal(expr: &Expr, param: &str) -> Option<i64> {
+    let ExprKind::BinaryOp { left, op: BinOp::Mul, right } = &expr.kind else {
+        return None;
+    };
+    match (&left.kind, &right.kind) {
+        (ExprKind::Variable(name), _) if name == param => literal_i64(right),
+        (_, ExprKind::Variable(name)) if name == param => literal_i64(left),
+        _ => None,
+    }
+}
+
+/// Returns an integer literal, including a parser-level unary negation.
+fn literal_i64(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => value.checked_neg(),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Validates a candidate map call and its source local.
 fn stored_map_shape(value: &Expr, env: &TypeEnv, aliased: &HashSet<String>) -> Option<()> {
     let ExprKind::FunctionCall { name, args } = &value.kind else {
@@ -131,32 +254,7 @@ fn stored_map_shape(value: &Expr, env: &TypeEnv, aliased: &HashSet<String>) -> O
         return None;
     }
     let (param, body) = single_param_closure(&args[0])?;
-    let ExprKind::BinaryOp { left, op, right } = &body.kind else {
-        return None;
-    };
-    match op {
-        BinOp::Add => {
-            additive_literal(left, right, param)?;
-        }
-        BinOp::Sub => {
-            if !matches!(
-                (&left.kind, &right.kind),
-                (ExprKind::Variable(name), ExprKind::IntLiteral(_)) if name == param
-            ) {
-                return None;
-            }
-        }
-        BinOp::Mul => {
-            if !matches!(
-                (&left.kind, &right.kind),
-                (ExprKind::Variable(name), ExprKind::IntLiteral(_))
-                    | (ExprKind::IntLiteral(_), ExprKind::Variable(name)) if name == param
-            ) {
-                return None;
-            }
-        }
-        _ => return None,
-    }
+    parse_stored_numeric_map(body, param)?;
     Some(())
 }
 
@@ -195,8 +293,8 @@ fn single_param_closure(expr: &Expr) -> Option<(&str, &Expr)> {
 /// Returns `$param + $literal` or `$literal + $param`.
 fn additive_literal(left: &Expr, right: &Expr, param: &str) -> Option<i64> {
     match (&left.kind, &right.kind) {
-        (ExprKind::Variable(name), ExprKind::IntLiteral(value)) if name == param => Some(*value),
-        (ExprKind::IntLiteral(value), ExprKind::Variable(name)) if name == param => Some(*value),
+        (ExprKind::Variable(name), _) if name == param => literal_i64(right),
+        (_, ExprKind::Variable(name)) if name == param => literal_i64(left),
         _ => None,
     }
 }

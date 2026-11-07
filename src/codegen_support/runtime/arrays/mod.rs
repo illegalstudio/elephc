@@ -64,6 +64,7 @@ mod array_key_exists;
 mod array_key_exists_mixed_key;
 mod array_map;
 mod array_map_boxed;
+mod array_map_affine;
 mod array_map_mixed;
 mod array_map_numeric;
 mod array_map_str;
@@ -375,6 +376,7 @@ pub use array_sum_probe_small::emit_array_sum_probe_small;
 pub use array_sum_int::emit_array_sum_int;
 pub use array_type_check::emit_array_type_check;
 pub use keyed_kernels::emit_keyed_kernels;
+pub use array_map_affine::emit_array_map_affine;
 pub use array_map_numeric::emit_array_map_numeric;
 pub use array_numeric_aggregate::{emit_array_numeric_aggregate, ARRAY_AGGREGATE_MESSAGES};
 /// Emit array product helper.
