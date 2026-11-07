@@ -37,6 +37,74 @@ use super::{condition, eval, value, Debugger, StepMode, StepState};
 /// Maximum DAP body accepted from a client.
 const MAX_DAP_BODY: usize = 16 * 1024 * 1024;
 
+/// DAP hit-count condition for one line breakpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HitCondition {
+    op: HitConditionOp,
+    value: u64,
+}
+
+/// Supported hit-count comparisons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HitConditionOp {
+    GreaterThan,
+    GreaterOrEqual,
+    Equal,
+    MultipleOf,
+}
+
+impl HitCondition {
+    /// Parses DAP's hit-condition string (`> 3`, `>= 3`, `== 3`, `% 3`, or `3`).
+    pub(crate) fn parse(text: &str) -> Result<Self, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("hit condition is empty".to_string());
+        }
+        let (op, rest) = if let Some(rest) = text.strip_prefix(">=") {
+            (HitConditionOp::GreaterOrEqual, rest)
+        } else if let Some(rest) = text.strip_prefix('>') {
+            (HitConditionOp::GreaterThan, rest)
+        } else if let Some(rest) = text.strip_prefix("==") {
+            (HitConditionOp::Equal, rest)
+        } else if let Some(rest) = text.strip_prefix('=') {
+            (HitConditionOp::Equal, rest)
+        } else if let Some(rest) = text.strip_prefix('%') {
+            (HitConditionOp::MultipleOf, rest)
+        } else {
+            (HitConditionOp::GreaterOrEqual, text)
+        };
+        let value = rest
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| format!("invalid hit-condition value: '{text}'"))?;
+        if op == HitConditionOp::MultipleOf && value == 0 {
+            return Err("hit-condition modulo value must be greater than zero".to_string());
+        }
+        Ok(Self { op, value })
+    }
+
+    /// Returns whether the current hit count satisfies this condition.
+    pub(crate) fn matches(self, hits: u64) -> bool {
+        match self.op {
+            HitConditionOp::GreaterThan => hits > self.value,
+            HitConditionOp::GreaterOrEqual => hits >= self.value,
+            HitConditionOp::Equal => hits == self.value,
+            HitConditionOp::MultipleOf => self.value != 0 && hits % self.value == 0,
+        }
+    }
+}
+
+/// Details of the exception currently presented to the DAP client.
+#[derive(Clone, Debug)]
+pub(crate) struct CurrentException {
+    /// PHP exception class name.
+    pub(crate) class: String,
+    /// Exception message, if readable.
+    pub(crate) message: String,
+    /// Whether the exception had an active handler.
+    pub(crate) caught: bool,
+}
+
 /// One active DAP write watch.
 pub(crate) struct DataBreakpoint {
     /// What the watch resolves at each site transition.
@@ -289,6 +357,7 @@ impl Debugger {
             let _ = dap.event("terminated", json!({}));
         }
         self.dap = None;
+        self.current_exception = None;
     }
 
     /// Runs the DAP request loop while the program is stopped.
@@ -307,9 +376,10 @@ impl Debugger {
         self.dap_wait_for_commands(entry, entry.then_some(site_id));
     }
 
-    /// Replaces the selected DAP exception filters.
+    /// Replaces the selected DAP exception filters, including class conditions.
     fn dap_set_exception_breakpoints(&mut self, request: &JsonValue) {
-        let filters: Vec<String> = request["arguments"]
+        let arguments = &request["arguments"];
+        let filters: Vec<String> = arguments
             .get("filters")
             .and_then(JsonValue::as_array)
             .into_iter()
@@ -317,7 +387,25 @@ impl Debugger {
             .filter_map(JsonValue::as_str)
             .map(str::to_string)
             .collect();
-        self.exception_filters = super::ExceptionFilters::from_names(&filters);
+        let options: Vec<(String, Option<String>)> = arguments
+            .get("filterOptions")
+            .and_then(JsonValue::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|option| {
+                let filter = option.get("filterId").and_then(JsonValue::as_str)?;
+                let class = option
+                    .get("condition")
+                    .and_then(JsonValue::as_str)
+                    .map(str::to_string);
+                Some((filter.to_string(), class))
+            })
+            .collect();
+        self.exception_filters = if options.is_empty() {
+            super::ExceptionFilters::from_names(&filters)
+        } else {
+            super::ExceptionFilters::from_options(&options)
+        };
         super::EXCEPTION_BREAKS_ACTIVE.store(
             !self.exception_filters.is_empty(),
             std::sync::atomic::Ordering::Relaxed,
@@ -328,14 +416,26 @@ impl Debugger {
     /// Stops when the throw helper sees an exception matching the active filters.
     pub(crate) fn dap_exception_stopped(&mut self, throwable: usize, caught: bool) {
         self.variable_refs.clear();
-        let value = value::Value {
-            tag: value::TAG_OBJECT,
-            lo: throwable as u64,
-            hi: 0,
-            by_ref: false,
-        };
-        let description = value::describe_with(value, &self.classes);
-        let class = description.type_name;
+        let details = value::throwable_details(throwable as u64, &self.classes);
+        let class = details
+            .as_ref()
+            .map(|details| details.class.clone())
+            .unwrap_or_else(|| "Throwable".to_string());
+        if !self
+            .exception_filters
+            .should_stop_exception(caught, Some(&class), &self.classes)
+        {
+            return;
+        }
+        let message = details
+            .as_ref()
+            .map(|details| details.message.clone())
+            .unwrap_or_default();
+        self.current_exception = Some(CurrentException {
+            class: class.clone(),
+            message,
+            caught,
+        });
         let label = if caught { "caught" } else { "uncaught" };
         let location = super::ACTIVATIONS.with(|stack| {
             stack
@@ -365,6 +465,26 @@ impl Debugger {
             }),
         );
         self.dap_wait_for_commands(false, None);
+    }
+
+    /// Returns the exception currently paused in `exceptionInfo`.
+    fn dap_exception_info(&mut self, request: &JsonValue) {
+        let Some(exception) = self.current_exception.clone() else {
+            self.dap_respond_error(request, "no exception is currently stopped");
+            return;
+        };
+        self.dap_respond(
+            request,
+            Some(json!({
+                "exceptionId": exception.class,
+                "description": exception.message,
+                "breakMode": if exception.caught { "always" } else { "unhandled" },
+                "details": {
+                    "message": exception.message,
+                    "typeName": exception.class,
+                },
+            })),
+        );
     }
 
     /// Stops on entry to a DAP function breakpoint.
@@ -503,9 +623,10 @@ impl Debugger {
                         "supportsEvaluateForHovers": true,
                         "supportsSetVariable": false,
                         "supportsConditionalBreakpoints": true,
+                        "supportsHitConditionalBreakpoints": true,
                         "supportsFunctionBreakpoints": true,
                         "supportsDataBreakpoints": true,
-                        "supportsExceptionFilterOptions": false,
+                        "supportsExceptionFilterOptions": true,
                         "exceptionBreakpointFilters": [
                             {"filter": "uncaught", "label": "Uncaught Exceptions", "default": true},
                             {"filter": "caught", "label": "Caught Exceptions"},
@@ -551,6 +672,10 @@ impl Debugger {
                 self.dap_set_exception_breakpoints(request);
                 DapAction::Stay
             }
+            "exceptionInfo" => {
+                self.dap_exception_info(request);
+                DapAction::Stay
+            }
             "threads" => {
                 self.dap_threads(request);
                 DapAction::Stay
@@ -580,6 +705,7 @@ impl Debugger {
             }
             "continue" => {
                 self.step = None;
+                self.current_exception = None;
                 self.dap_respond(request, Some(json!({"allThreadsContinued": true})));
                 DapAction::Resume
             }
@@ -599,6 +725,7 @@ impl Debugger {
                 DapAction::Resume
             }
             "disconnect" | "terminate" => {
+                self.current_exception = None;
                 self.dap_respond(request, Some(json!({})));
                 DapAction::Exit
             }
@@ -702,6 +829,8 @@ impl Debugger {
         for id in remove {
             self.break_sites.remove(&id);
             self.breakpoint_conditions.remove(&id);
+            self.breakpoint_hit_conditions.remove(&id);
+            self.breakpoint_hits.remove(&id);
         }
         let mut results = Vec::new();
         if let Some(breakpoints) = arguments
@@ -729,8 +858,19 @@ impl Debugger {
                     .filter(|condition| !condition.is_empty());
                 let condition_error =
                     condition.and_then(|condition| condition::validate(condition).err());
-                let verified =
-                    stale.is_none() && condition_error.is_none() && !matching.is_empty();
+                let hit_condition = breakpoint
+                    .get("hitCondition")
+                    .and_then(JsonValue::as_str)
+                    .map(str::trim)
+                    .filter(|hit| !hit.is_empty())
+                    .map(HitCondition::parse)
+                    .transpose();
+                let hit_error = hit_condition.as_ref().err().cloned();
+                let hit_condition = hit_condition.unwrap_or(None);
+                let verified = stale.is_none()
+                    && condition_error.is_none()
+                    && hit_error.is_none()
+                    && !matching.is_empty();
                 let breakpoint_id = matching.first().copied();
                 if verified {
                     for id in &matching {
@@ -740,13 +880,24 @@ impl Debugger {
                         } else {
                             self.breakpoint_conditions.remove(id);
                         }
+                        if let Some(hit_condition) = hit_condition {
+                            self.breakpoint_hit_conditions.insert(*id, hit_condition);
+                            self.breakpoint_hits.insert(*id, 0);
+                        } else {
+                            self.breakpoint_hit_conditions.remove(id);
+                            self.breakpoint_hits.remove(id);
+                        }
                     }
                 }
                 let mut result = json!({"verified": verified, "line": line});
                 if let Some(id) = breakpoint_id.filter(|_| verified) {
                     result["id"] = json!(id);
                 }
-                if let Some(message) = stale.as_ref().or(condition_error.as_ref()) {
+                if let Some(message) = stale
+                    .as_ref()
+                    .or(condition_error.as_ref())
+                    .or(hit_error.as_ref())
+                {
                     result["message"] = json!(message);
                 }
                 results.push(result);
@@ -1572,6 +1723,7 @@ impl Debugger {
 
     /// Records the depth and mode of the next stepping command.
     fn dap_start_step(&mut self, mode: StepMode) {
+        self.current_exception = None;
         let (depth, function_id, source_id, line) = super::ACTIVATIONS.with(|stack| {
             let stack = stack.borrow();
             let frame = stack.last();
@@ -2075,5 +2227,19 @@ mod tests {
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+    /// Verifies DAP hit conditions parse their operator and compare hit counts.
+    #[test]
+    fn hit_conditions_parse_and_match() {
+        assert!(HitCondition::parse(">= 3").unwrap().matches(3));
+        assert!(!HitCondition::parse("> 3").unwrap().matches(3));
+        assert!(HitCondition::parse("> 3").unwrap().matches(4));
+        assert!(HitCondition::parse("== 2").unwrap().matches(2));
+        assert!(!HitCondition::parse("== 2").unwrap().matches(3));
+        assert!(HitCondition::parse("% 2").unwrap().matches(4));
+        assert!(!HitCondition::parse("% 2").unwrap().matches(5));
+        assert!(HitCondition::parse("4").unwrap().matches(4));
+        assert!(HitCondition::parse("% 0").is_err());
+        assert!(HitCondition::parse("not-a-number").is_err());
     }
 }

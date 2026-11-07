@@ -73,8 +73,9 @@ The terminal client supports:
 | `p <name>` | print one local (`$` optional) |
 | `quit`, `q` | terminate the debuggee |
 
-DAP adds line, conditional, function and local/object write data breakpoints,
-caller-frame selection, caught/uncaught/throw exception filters, and stepping
+DAP adds line, conditional, hit-count, function and local/object write data
+breakpoints, caller-frame selection, caught/uncaught/throw exception filters
+that can be narrowed to an exception class, `exceptionInfo`, and stepping
 over/into/out. A source hash is checked before a breakpoint is armed; a stale
 `.edbg.json` is rejected rather than silently binding to different code.
 

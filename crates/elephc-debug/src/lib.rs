@@ -617,7 +617,7 @@ pub(crate) fn display_function_name(name: &str) -> &str {
 }
 
 /// DAP exception filters selected by `setExceptionBreakpoints`.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct ExceptionFilters {
     /// Stop on a throw that an active handler will catch.
     caught: bool,
@@ -625,10 +625,22 @@ struct ExceptionFilters {
     uncaught: bool,
     /// Stop on every throw, caught or not.
     throw_all: bool,
+    /// Whether `caught` was narrowed to `caught_classes`.
+    caught_filtered: bool,
+    /// Whether `uncaught` was narrowed to `uncaught_classes`.
+    uncaught_filtered: bool,
+    /// Whether `throw_all` was narrowed to `throw_classes`.
+    throw_filtered: bool,
+    /// Class names accepted for caught throws.
+    caught_classes: Vec<String>,
+    /// Class names accepted for uncaught throws.
+    uncaught_classes: Vec<String>,
+    /// Class names accepted for every throw.
+    throw_classes: Vec<String>,
 }
 
 impl ExceptionFilters {
-    /// Builds the filter set from DAP filter names.
+    /// Builds the filter set from DAP filter names without class conditions.
     fn from_names(names: &[String]) -> Self {
         let mut filters = Self::default();
         for name in names {
@@ -642,6 +654,50 @@ impl ExceptionFilters {
         filters
     }
 
+    /// Builds class-aware filters from DAP `filterOptions`.
+    fn from_options(options: &[(String, Option<String>)]) -> Self {
+        let mut filters = Self::default();
+        for (name, class) in options {
+            let (enabled, filtered, classes) = match name.as_str() {
+                "caught" => (
+                    &mut filters.caught,
+                    &mut filters.caught_filtered,
+                    &mut filters.caught_classes,
+                ),
+                "uncaught" => (
+                    &mut filters.uncaught,
+                    &mut filters.uncaught_filtered,
+                    &mut filters.uncaught_classes,
+                ),
+                "throw" | "all" => (
+                    &mut filters.throw_all,
+                    &mut filters.throw_filtered,
+                    &mut filters.throw_classes,
+                ),
+                _ => continue,
+            };
+            *enabled = true;
+            match class
+                .as_deref()
+                .map(str::trim)
+                .filter(|class| !class.is_empty())
+            {
+                Some(class) => {
+                    if !*filtered {
+                        *filtered = true;
+                        classes.clear();
+                    }
+                    classes.push(class.to_string());
+                }
+                None => {
+                    *filtered = false;
+                    classes.clear();
+                }
+            }
+        }
+        filters
+    }
+
     /// Returns whether no exception category is selected.
     fn is_empty(&self) -> bool {
         !self.caught && !self.uncaught && !self.throw_all
@@ -650,6 +706,64 @@ impl ExceptionFilters {
     /// Returns whether a throw with this caught state should stop.
     fn should_stop(&self, caught: bool) -> bool {
         self.throw_all || if caught { self.caught } else { self.uncaught }
+    }
+
+    /// Returns whether a throw of `class` should stop under the active filters.
+    fn should_stop_exception(
+        &self,
+        caught: bool,
+        class: Option<&str>,
+        classes: &HashMap<u64, value::Class>,
+    ) -> bool {
+        let (enabled, filtered, allowed) = if self.throw_all {
+            (true, self.throw_filtered, &self.throw_classes)
+        } else if caught {
+            (self.caught, self.caught_filtered, &self.caught_classes)
+        } else {
+            (self.uncaught, self.uncaught_filtered, &self.uncaught_classes)
+        };
+        if !enabled {
+            return false;
+        }
+        if !filtered {
+            return true;
+        }
+        let Some(class) = class else {
+            return false;
+        };
+        allowed
+            .iter()
+            .any(|filter| exception_class_matches(filter, class, classes))
+    }
+}
+
+/// Returns whether `class` is `filter` or one of its PHP parents.
+fn exception_class_matches(
+    filter: &str,
+    class: &str,
+    classes: &HashMap<u64, value::Class>,
+) -> bool {
+    if filter.eq_ignore_ascii_case(class) {
+        return true;
+    }
+    let mut current = class.to_string();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(current.to_ascii_lowercase()) {
+            return false;
+        }
+        let parent = classes
+            .values()
+            .find(|candidate| candidate.name.eq_ignore_ascii_case(&current))
+            .map(|candidate| candidate.parent.clone())
+            .unwrap_or_default();
+        if parent.is_empty() {
+            return false;
+        }
+        if parent.eq_ignore_ascii_case(filter) {
+            return true;
+        }
+        current = parent;
     }
 }
 
@@ -675,6 +789,12 @@ struct Debugger {
     web_session: bool,
     /// Conditional expressions attached to breakpoint sites.
     breakpoint_conditions: HashMap<u32, String>,
+    /// Hit-count conditions attached to breakpoint sites.
+    breakpoint_hit_conditions: HashMap<u32, dap::HitCondition>,
+    /// Session hit counts for armed breakpoint sites.
+    breakpoint_hits: HashMap<u32, u64>,
+    /// Exception currently presented to the DAP client, for `exceptionInfo`.
+    current_exception: Option<dap::CurrentException>,
     /// Function-id → optional condition for DAP function breakpoints.
     function_breakpoints: HashMap<u32, Option<String>>,
     /// Active write watches for DAP data breakpoints.
@@ -746,6 +866,9 @@ impl Debugger {
             step: None,
             selected_frame: None,
             breakpoint_conditions: HashMap::new(),
+            breakpoint_hit_conditions: HashMap::new(),
+            breakpoint_hits: HashMap::new(),
+            current_exception: None,
             function_breakpoints: HashMap::new(),
             data_breakpoints: Vec::new(),
             exception_filters: ExceptionFilters::default(),
@@ -1967,6 +2090,9 @@ pub extern "C" fn elephc_debug_web_request(
     debugger.selected_frame = None;
     debugger.break_sites.clear();
     debugger.breakpoint_conditions.clear();
+    debugger.breakpoint_hit_conditions.clear();
+    debugger.breakpoint_hits.clear();
+    debugger.current_exception = None;
     debugger.function_breakpoints.clear();
     debugger.data_breakpoints.clear();
     debugger.variable_refs.clear();
@@ -2000,6 +2126,9 @@ pub extern "C" fn elephc_debug_web_request_end() {
             debugger.selected_frame = None;
             debugger.break_sites.clear();
             debugger.breakpoint_conditions.clear();
+            debugger.breakpoint_hit_conditions.clear();
+            debugger.breakpoint_hits.clear();
+            debugger.current_exception = None;
             debugger.function_breakpoints.clear();
             debugger.data_breakpoints.clear();
             debugger.variable_refs.clear();
@@ -2396,13 +2525,23 @@ pub extern "C" fn elephc_debug_site_inner(site_id: u32, frame: usize) {
             && !suppress_breakpoint
             && debugger.break_sites.contains(&site_id)
         {
-            match debugger.breakpoint_conditions.get(&site_id).cloned() {
-                Some(condition) => match debugger.evaluate_condition(&condition, frame) {
-                    Ok(true) => breakpoint_stop = true,
-                    Ok(false) => {}
-                    Err(error) => debugger.report_condition_error(&condition, &error),
-                },
-                None => breakpoint_stop = true,
+            // The hit count advances whenever the armed site is reached, even
+            // when the expression or hit condition then skips the stop.
+            let hit_condition = debugger.breakpoint_hit_conditions.get(&site_id).copied();
+            let hit_ok = {
+                let hits = debugger.breakpoint_hits.entry(site_id).or_insert(0);
+                *hits += 1;
+                hit_condition.map_or(true, |condition| condition.matches(*hits))
+            };
+            if hit_ok {
+                match debugger.breakpoint_conditions.get(&site_id).cloned() {
+                    Some(condition) => match debugger.evaluate_condition(&condition, frame) {
+                        Ok(true) => breakpoint_stop = true,
+                        Ok(false) => {}
+                        Err(error) => debugger.report_condition_error(&condition, &error),
+                    },
+                    None => breakpoint_stop = true,
+                }
             }
         }
         let should_stop = pause || entry || data_stop || breakpoint_stop || step_stop;
@@ -2517,6 +2656,38 @@ mod tests {
         assert!(web_claim_pid_alive(std::process::id()));
         release_web_session(&dir);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Verifies class-aware exception filters narrow the selected category.
+    #[test]
+    fn exception_filters_apply_class_conditions() {
+        let classes = HashMap::new();
+        let filters = ExceptionFilters::from_options(&[(
+            "uncaught".to_string(),
+            Some("RuntimeException".to_string()),
+        )]);
+        assert!(filters.should_stop_exception(
+            false,
+            Some("RuntimeException"),
+            &classes
+        ));
+        assert!(!filters.should_stop_exception(
+            false,
+            Some("LogicException"),
+            &classes
+        ));
+        assert!(!filters.should_stop_exception(
+            true,
+            Some("RuntimeException"),
+            &classes
+        ));
+        let all = ExceptionFilters::from_options(&[("throw".to_string(), None)]);
+        assert!(all.should_stop_exception(true, Some("LogicException"), &classes));
+        let reset = ExceptionFilters::from_options(&[
+            ("uncaught".to_string(), Some("RuntimeException".to_string())),
+            ("uncaught".to_string(), None),
+        ]);
+        assert!(reset.should_stop_exception(false, Some("LogicException"), &classes));
     }
 
     /// Verifies include-variant symbols display as their PHP-level function names.

@@ -38,9 +38,10 @@ the DAP channel closes and remains on the adapter stderr.
 | `initialize` | Reports supported capabilities, including configurationDone, function/data breakpoints, exception filters, stepping and frame selection. |
 | `launch` | Starts the selected source or debug binary. The `program` field is informational when the adapter command already names the target. |
 | `attach` | Connects to a runtime waiting on `ELEPHC_DEBUG_DAP_LISTEN` (one-shot mode-0600 Unix socket plus `<socket>.pid`), or to a loopback TCP runtime with `--attach-tcp HOST:PORT --key FILE`. |
-| `setBreakpoints` | Arms every site on the requested line. Conditions are validated before arming; a stale source hash rejects the breakpoint with a message. |
+| `setBreakpoints` | Arms every site on the requested line. Expression and hit conditions are validated before arming; a stale source hash rejects the breakpoint with a message. |
 | `setFunctionBreakpoints` | Stops when a named PHP function is entered. |
-| `setExceptionBreakpoints` | Selects caught, uncaught and/or throw filters. |
+| `setExceptionBreakpoints` | Selects caught, uncaught and/or throw filters. A `filterOptions[].condition` narrows a filter to one exception class or its PHP parent classes. |
+| `exceptionInfo` | Returns the class, message, caught mode and type name of the exception currently stopped. |
 | `dataBreakpointInfo` / `setDataBreakpoints` | Watches a frame local, a declared object property, or a dynamic-property hash entry. |
 | `configurationDone` | Releases the entry stop and lets the program run to the first breakpoint. |
 | `threads` | Lists the main execution plus live fibers/generators as thread-like stacks. |
@@ -55,9 +56,12 @@ the DAP channel closes and remains on the adapter stderr.
 
 Line breakpoints are keyed by source identity and line. Conditional breakpoints
 use the same restricted expression language as the terminal client; an invalid
-condition is reported without arming the site. Function breakpoints resolve a PHP
-function name to its entry hook. Data breakpoints snapshot the watched value at
-the stop and stop again when it changes.
+condition is reported without arming the site. Hit conditions accept `> N`,
+`>= N`, `== N`, `% N` and a bare `N`; the count advances each time the armed site
+is reached, including visits skipped by the expression condition. An invalid hit
+condition such as `% 0` is reported without arming the site. Function
+breakpoints resolve a PHP function name to its entry hook. Data breakpoints
+snapshot the watched value at the stop and stop again when it changes.
 
 A source path may be absolute in the client while the metadata records a relative
 path; the adapter resolves the canonical source path when possible and otherwise
@@ -186,9 +190,13 @@ not an unrelated suspended fiber.
 
 ## Exception stops
 
-`setExceptionBreakpoints` accepts caught, uncaught and throw filters. The runtime
-publishes the throwable object before unwinding, so the client can inspect its
-class, message, previous chain, properties and captured trace. With no filters
+`setExceptionBreakpoints` accepts caught, uncaught and throw filters. A
+`filterOptions` entry may add a `condition` naming an exception class; the filter
+then stops only for that class or one of its PHP parents. The runtime publishes
+the throwable object before unwinding, so the client can inspect its class,
+message, previous chain, properties and captured trace. While the stop is
+active, `exceptionInfo` reports the exception id, message, caught mode
+(`always` for caught, `unhandled` for uncaught) and type name. With no filters
 selected, the program behaves exactly as it would without a debugger, and the
 normal uncaught-exception report is unchanged.
 

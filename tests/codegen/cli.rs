@@ -6889,6 +6889,159 @@ fn test_cli_debug_dap_streams_program_output() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies DAP hit conditions stop on the requested iteration and reject an
+/// invalid modulo value before arming the site.
+#[test]
+fn test_cli_debug_dap_hit_condition_stops_on_exact_hit() {
+    let dir = make_cli_test_dir("elephc_cli_debug_dap_hit_condition");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nfor ($i = 0; $i < 5; $i++) {\n    $value = $i;\n}\necho \"done\\n\";\n",
+    )
+    .expect("write DAP hit-condition fixture");
+
+    let mut client = DapClient::spawn(
+        elephc_cli_command(&dir).args(["debug", "--dap", "main.php"]),
+    );
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    let response = client.response(seq);
+    assert_eq!(response["success"], true);
+    assert_eq!(
+        response["body"]["supportsHitConditionalBreakpoints"], true,
+        "{response}"
+    );
+    client.event("initialized");
+    let seq = client.send(
+        "launch",
+        Some(serde_json::json!({"program": "main.php", "stopOnEntry": false})),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"path": "main.php"},
+            "breakpoints": [{"line": 3, "hitCondition": "% 0"}],
+        })),
+    );
+    let response = client.response(seq);
+    assert_eq!(response["body"]["breakpoints"][0]["verified"], false, "{response}");
+    assert!(
+        response["body"]["breakpoints"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("modulo")),
+        "{response}"
+    );
+
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"path": "main.php"},
+            "breakpoints": [{"line": 3, "hitCondition": "== 3"}],
+        })),
+    );
+    assert_eq!(client.response(seq)["body"]["breakpoints"][0]["verified"], true);
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+    let stopped = client.event("stopped");
+    assert_eq!(stopped["body"]["reason"], "breakpoint", "{stopped}");
+    assert!(
+        stopped["body"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("main.php:3")),
+        "{stopped}"
+    );
+
+    client.continue_to_terminated();
+    let status = client.child.wait().expect("wait for hit-condition adapter");
+    assert!(status.success(), "hit-condition adapter failed");
+    let output = client.program_output();
+    assert!(output.trim_end().ends_with("done"), "{output}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies class-conditioned exception filters skip a non-matching caught throw
+/// and `exceptionInfo` describes the matching uncaught exception.
+#[test]
+fn test_cli_debug_dap_exception_class_filter_and_info() {
+    let dir = make_cli_test_dir("elephc_cli_debug_dap_exception_class_filter");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nfunction raise_logic(): void { throw new LogicException(\"boom\"); }\nfunction raise_runtime(): void { throw new RuntimeException(\"boom\"); }\ntry { raise_logic(); } catch (Throwable $error) { echo \"caught-logic\\n\"; }\nraise_runtime();\n",
+    )
+    .expect("write DAP exception-class fixture");
+
+    let mut client = DapClient::spawn(
+        elephc_cli_command(&dir).args(["debug", "--dap", "main.php"]),
+    );
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("initialized");
+    let seq = client.send(
+        "launch",
+        Some(serde_json::json!({"program": "main.php", "stopOnEntry": false})),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send(
+        "setExceptionBreakpoints",
+        Some(serde_json::json!({
+            "filterOptions": [
+                {"filterId": "caught", "condition": "RuntimeException"},
+                {"filterId": "uncaught", "condition": "RuntimeException"},
+            ],
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+
+    let stopped = client.event("stopped");
+    assert_eq!(stopped["body"]["reason"], "exception", "{stopped}");
+    assert_eq!(stopped["body"]["text"], "RuntimeException", "{stopped}");
+    assert!(
+        stopped["body"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("uncaught")),
+        "{stopped}"
+    );
+
+    let seq = client.send(
+        "exceptionInfo",
+        Some(serde_json::json!({"threadId": stopped["body"]["threadId"]})),
+    );
+    let info = client.response(seq);
+    assert_eq!(info["success"], true, "{info}");
+    assert_eq!(info["body"]["exceptionId"], "RuntimeException");
+    assert_eq!(info["body"]["description"], "boom");
+    assert_eq!(info["body"]["breakMode"], "unhandled");
+    assert_eq!(info["body"]["details"]["typeName"], "RuntimeException");
+
+    let seq = client.send("continue", None);
+    assert_eq!(client.response(seq)["success"], true);
+    client.drain_until_closed();
+    let status = client.child.wait().expect("wait for exception-class adapter");
+    assert_eq!(status.code(), Some(255), "uncaught exception exit status");
+    let output = client.program_output();
+    assert!(output.contains("caught-logic"), "{output}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--debug` refuses interactive iOS executables with actionable
 /// capture-tool guidance, while compile-only `--emit-asm` builds emit the same
 /// debug metadata on both iOS targets.
