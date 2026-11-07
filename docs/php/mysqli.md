@@ -558,15 +558,15 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`mysqli_execute()`](./builtins/database/mysqli_execute.md) | `(mixed $statement, ?array $params = null): bool` | `bool` | ✓ | - |
 | [`mysqli_execute_query()`](./builtins/database/mysqli_execute_query.md) | `(mixed $mysql, string $query, ?array $params = null): mixed` | `mixed` | ✓ | - |
 | [`mysqli_fetch_all()`](./builtins/database/mysqli_fetch_all.md) | `(mixed $result, int $mode = 2): array` | `array` | ✓ | - |
-| [`mysqli_fetch_array()`](./builtins/database/mysqli_fetch_array.md) | `(mixed $result, int $mode = 3): array|null|false` | `array|null|false` | ✓ | - |
-| [`mysqli_fetch_assoc()`](./builtins/database/mysqli_fetch_assoc.md) | `(mixed $result): array|null|false` | `array|null|false` | ✓ | - |
+| [`mysqli_fetch_array()`](./builtins/database/mysqli_fetch_array.md) | `(mixed $result, int $mode = 3): ?array` | `?array` | ✓ | - |
+| [`mysqli_fetch_assoc()`](./builtins/database/mysqli_fetch_assoc.md) | `(mixed $result): ?array` | `?array` | ✓ | - |
 | [`mysqli_fetch_column()`](./builtins/database/mysqli_fetch_column.md) | `(mixed $result, int $column = 0): mixed` | `mixed` | ✓ | - |
 | [`mysqli_fetch_field()`](./builtins/database/mysqli_fetch_field.md) | `(mixed $result): mixed` | `mixed` | ✓ | - |
 | [`mysqli_fetch_field_direct()`](./builtins/database/mysqli_fetch_field_direct.md) | `(mixed $result, int $index): mixed` | `mixed` | ✓ | - |
 | [`mysqli_fetch_fields()`](./builtins/database/mysqli_fetch_fields.md) | `(mixed $result): array` | `array` | ✓ | - |
 | [`mysqli_fetch_lengths()`](./builtins/database/mysqli_fetch_lengths.md) | `(mixed $result): mixed` | `mixed` | ✓ | - |
 | [`mysqli_fetch_object()`](./builtins/database/mysqli_fetch_object.md) | `(mixed $result, string $class = 'stdClass', array $constructor_args = []): mixed` | `mixed` | ✓ | - |
-| [`mysqli_fetch_row()`](./builtins/database/mysqli_fetch_row.md) | `(mixed $result): array|null|false` | `array|null|false` | ✓ | - |
+| [`mysqli_fetch_row()`](./builtins/database/mysqli_fetch_row.md) | `(mixed $result): ?array` | `?array` | ✓ | - |
 | [`mysqli_field_count()`](./builtins/database/mysqli_field_count.md) | `(mixed $mysql): int` | `int` | ✓ | - |
 | [`mysqli_field_seek()`](./builtins/database/mysqli_field_seek.md) | `(mixed $result, int $index): bool` | `bool` | ✓ | - |
 | [`mysqli_field_tell()`](./builtins/database/mysqli_field_tell.md) | `(mixed $result): int` | `int` | ✓ | - |
