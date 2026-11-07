@@ -158,6 +158,24 @@
       "internal": true,
       "kind": "class",
       "module": "elephc",
+      "name": "__ElephcSimpleXMLLease",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": false,
+      "internal": true,
+      "kind": "class",
+      "module": "elephc",
       "name": "__ElephcWeakMapIterator",
       "php_manual": null,
       "since": null
@@ -1527,6 +1545,24 @@
       "kind": "class",
       "module": "dom",
       "name": "DOMElement",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "dom",
+      "name": "DOMException",
       "php_manual": null,
       "since": null
     },
@@ -3960,6 +3996,42 @@
       "kind": "interface",
       "module": "session",
       "name": "SessionUpdateTimestampHandlerInterface",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "simplexml",
+      "name": "SimpleXMLElement",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "simplexml",
+      "name": "SimpleXMLIterator",
       "php_manual": null,
       "since": null
     },
@@ -20788,10 +20860,82 @@
       "extension": false,
       "internal": false,
       "module": "libxml",
+      "name": "LIBXML_BIGLINES",
+      "route": "predefined",
+      "since": null,
+      "value": 4194304
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
       "name": "LIBXML_COMPACT",
       "route": "predefined",
       "since": null,
       "value": 65536
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
+      "name": "LIBXML_DTDATTR",
+      "route": "predefined",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
+      "name": "LIBXML_DTDLOAD",
+      "route": "predefined",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
+      "name": "LIBXML_DTDVALID",
+      "route": "predefined",
+      "since": null,
+      "value": 16
     },
     {
       "aot": {
@@ -20842,6 +20986,42 @@
       "extension": false,
       "internal": false,
       "module": "libxml",
+      "name": "LIBXML_NOCDATA",
+      "route": "predefined",
+      "since": null,
+      "value": 16384
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
+      "name": "LIBXML_NOENT",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
       "name": "LIBXML_NOERROR",
       "route": "predefined",
       "since": null,
@@ -20860,10 +21040,118 @@
       "extension": false,
       "internal": false,
       "module": "libxml",
+      "name": "LIBXML_NONET",
+      "route": "predefined",
+      "since": null,
+      "value": 2048
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
+      "name": "LIBXML_NOWARNING",
+      "route": "predefined",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
       "name": "LIBXML_NOXMLDECL",
       "route": "predefined",
       "since": null,
       "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
+      "name": "LIBXML_NSCLEAN",
+      "route": "predefined",
+      "since": null,
+      "value": 8192
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
+      "name": "LIBXML_PARSEHUGE",
+      "route": "predefined",
+      "since": null,
+      "value": 524288
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
+      "name": "LIBXML_PEDANTIC",
+      "route": "predefined",
+      "since": null,
+      "value": 128
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
+      "name": "LIBXML_RECOVER",
+      "route": "predefined",
+      "since": "8.4",
+      "value": 1
     },
     {
       "aot": {

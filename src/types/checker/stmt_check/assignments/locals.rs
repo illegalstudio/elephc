@@ -452,6 +452,14 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
+        ExprKind::StaticPropertyAccess { .. } => {
+            let target_ty = checker.infer_type(source, env)?;
+            target_has_boxed_ref_provenance = target_ty.codegen_repr() == PhpType::Mixed;
+            env.insert(target.to_string(), target_ty);
+            checker.active_ref_params.insert(target.to_string());
+            clear_callable_metadata(checker, target);
+            Ok(())
+        }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::MethodCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
@@ -1416,7 +1424,14 @@ pub(super) fn check_typed_assign(
             return Err(error);
         }
     };
-    if !checker.type_accepts(&declared_ty, &value_ty) {
+    // A runtime-named constructor has no statically known class, so inference keeps its result
+    // as Mixed. The expression still either produces an object or throws before assignment, which
+    // is sufficient for the non-nominal `object` contract. Do not extend this exception to an
+    // arbitrary Mixed value or to a named class, because neither has a runtime nominal guard here.
+    let dynamic_new_satisfies_object =
+        matches!(&declared_ty, PhpType::Object(class) if class.is_empty())
+            && matches!(value.kind, ExprKind::NewDynamic { .. });
+    if !checker.type_accepts(&declared_ty, &value_ty) && !dynamic_new_satisfies_object {
         // The initializer typed successfully but violates the declared type. Poison
         // `$name` as `Mixed` for recovery so later uses do not cascade, then report
         // the initialization mismatch as the one real diagnostic.

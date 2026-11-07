@@ -47,6 +47,7 @@ pub mod __elephc_opcache_rt_stat;
 pub mod __elephc_opcache_rt_swap;
 pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
+pub mod __elephc_simplexml_warning;
 pub mod __elephc_strtotime_raw;
 pub mod __elephc_tokenizer_error_location;
 pub mod attr_support;

@@ -113,8 +113,8 @@ pub fn emit_return(emitter: &mut Emitter) {
 }
 
 /// Emits code that computes the address of a local frame slot and stores it in `dest`.
-/// Uses the frame pointer (x29/rbp) as the base. Large offsets on AArch64 are walked down in
-/// 4095-byte chunks to stay within immediate-add instructions.
+/// Uses the frame pointer (x29/rbp) as the base. AArch64 uses shifted 12-bit immediates
+/// for whole pages, then an unshifted remainder, keeping large frames compact.
 pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -123,12 +123,17 @@ pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize)
             } else if offset <= 4095 {
                 emitter.instruction(&format!("sub {}, x29, #{}", dest, offset)); // compute the local-slot address directly from the frame pointer
             } else {
-                emitter.instruction(&format!("mov {}, x29", dest));             // seed the destination register from the frame pointer for a far local-slot address
+                // -- address distant slots without a linear walk in byte-sized chunks --
                 let mut remaining = offset;
-                while remaining > 0 {
-                    let chunk = remaining.min(4095);
-                    emitter.instruction(&format!("sub {}, {}, #{}", dest, dest, chunk)); // walk the destination register down toward the distant local-slot address
-                    remaining -= chunk;
+                let mut base = "x29";
+                while remaining >= 4096 {
+                    let pages = (remaining >> 12).min(4095);
+                    emitter.instruction(&format!("sub {}, {}, #{}, lsl #12", dest, base, pages)); // cover whole pages with the architectural shifted immediate
+                    remaining -= pages << 12;
+                    base = dest;
+                }
+                if remaining != 0 {
+                    emitter.instruction(&format!("sub {}, {}, #{}", dest, base, remaining)); // account for the final bytes without clobbering another register
                 }
             }
         }

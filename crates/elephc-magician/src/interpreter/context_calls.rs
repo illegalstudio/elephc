@@ -43,7 +43,7 @@ pub fn execute_context_function_outcome(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
     let result = (|| {
-        let arguments = args.into_iter().map(|value| EvaluatedCallArg { name: None, value, ref_target: None }).collect::<Vec<_>>();
+        let arguments = args.into_iter().map(|value| EvaluatedCallArg { evaluation_owner: None, name: None, value, ref_target: None }).collect::<Vec<_>>();
         let function = match context.function(name).cloned() {
             Some(function) => function,
             None => generic_function_for_call(name, &arguments, context, values)?.ok_or(EvalStatus::UnsupportedConstruct)?,
@@ -132,6 +132,18 @@ pub fn execute_context_is_callable(
     eval_is_callable_value(callback, None, context, values)
 }
 
+/// Reads a selected callback's passing mode without evaluating any of its PHP arguments.
+pub fn execute_context_callable_parameter_is_by_ref(
+    context: &mut ElephcEvalContext, callback: RuntimeCellHandle,
+    name: Option<&str>, position: usize, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let callable = eval_callable(callback, context, values)?;
+    callable.with_probe(context, values, |callable, context, values| {
+        let modes = CallArgumentModes::for_callable(&callable, context, values)?;
+        Ok(modes.by_reference(name, position))
+    })
+}
+
 /// Constructs a class declared in the shared eval context with prepared positional arguments.
 pub fn execute_context_new_object_outcome(
     context: &mut ElephcEvalContext,
@@ -153,6 +165,7 @@ pub fn execute_context_try_new_object_outcome(
     let evaluated_args = args
         .into_iter()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value,
             ref_target: None,
@@ -171,6 +184,68 @@ pub fn execute_context_try_new_object_outcome(
             .map(EvalOutcome::Throwable)
             .map(Some)
             .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
+/// Attempts to allocate an eval class without invoking its PHP constructor.
+pub fn execute_context_try_allocate_object_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    execute_context_try_allocate_object_inner(context, name, values, false)
+}
+
+/// Native factories can materialize abstract wrappers without invoking user constructors.
+pub fn execute_context_try_allocate_native_object_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    execute_context_try_allocate_object_inner(context, name, values, true)
+}
+
+/// Keeps non-class refusals and throwable outcomes shared by both allocation policies.
+fn execute_context_try_allocate_object_inner(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+    native_factory: bool,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    let mut scope = ElephcEvalScope::new();
+    let result = (|| {
+        let native_abstract = native_factory && context.class(name).is_some_and(|class| class.is_abstract());
+        if !native_abstract {
+            if let Some(message) = eval_reflection_eval_instantiation_error_message(name, context) {
+                return eval_throw_error(&message, context, values);
+            }
+        }
+        let Some(class) = context.class(name).cloned() else { return Ok(None); };
+        let object = if native_factory {
+            eval_dynamic_class_allocate_native_object(&class, context, &mut scope, values)
+        } else {
+            eval_dynamic_class_allocate_object(&class, context, &mut scope, values)
+        };
+        object.map(Some)
+    })();
+    match result {
+        Ok(value) => Ok(value.map(EvalOutcome::Value)),
+        Err(EvalStatus::UncaughtThrowable) => context.take_pending_throw()
+            .map(EvalOutcome::Throwable).map(Some).ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
+/// Publishes a lookup error without evaluating arguments or invoking the method.
+pub fn execute_context_abstract_method_guard_outcome(
+    context: &mut ElephcEvalContext, object: RuntimeCellHandle, method: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    match eval_abstract_instance_method_guard(object, method, context, values) {
+        Ok(()) => Ok(None),
+        Err(EvalStatus::UncaughtThrowable) => context.take_pending_throw()
+            .map(EvalOutcome::Throwable).map(Some).ok_or(EvalStatus::UncaughtThrowable),
         Err(status) => Err(status),
     }
 }
@@ -223,6 +298,7 @@ pub fn execute_context_static_method_call_outcome(
     let evaluated_args = args
         .into_iter()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value,
             ref_target: None,
@@ -357,37 +433,6 @@ pub fn execute_context_object_is_a(
         || values.object_is_a(object, &resolved_target_class, exclude_self),
         Ok,
     )
-}
-
-/// Tests an object relation when the target is a runtime string or object cell.
-pub fn execute_context_object_is_a_dynamic(
-    context: &mut ElephcEvalContext,
-    object: RuntimeCellHandle,
-    target: RuntimeCellHandle,
-    exclude_self: bool,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    let target_class = match values.type_tag(target)? {
-        EVAL_TAG_STRING => {
-            let bytes = values.string_bytes(target)?;
-            let target = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-            target.trim_start_matches('\\').to_string()
-        }
-        EVAL_TAG_OBJECT => {
-            let identity = values.object_identity(target)?;
-            if let Some(class) = context.dynamic_object_class(identity) {
-                class.name().to_string()
-            } else {
-                let class_name = values.object_class_name(target)?;
-                let bytes = values.string_bytes(class_name);
-                values.release(class_name)?;
-                let class_name = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
-                class_name.trim_start_matches('\\').to_string()
-            }
-        }
-        _ => return Err(EvalStatus::RuntimeFatal),
-    };
-    execute_context_object_is_a(context, object, &target_class, exclude_self, values)
 }
 
 /// Tests whether a method or property exists through eval dynamic metadata.

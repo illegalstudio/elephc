@@ -47,6 +47,7 @@ pub(super) fn patch_initial_reflection_owner(class_name: &str, class_info: &mut 
                 class_name,
                 "ReflectionClass"
                     | "ReflectionObject"
+                    | "ReflectionEnum"
                     | "ReflectionFunction"
                     | "ReflectionMethod"
                     | "ReflectionProperty"

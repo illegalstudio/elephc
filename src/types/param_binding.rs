@@ -34,6 +34,10 @@ use crate::numeric_string::{scan_numeric_prefix, NumericScan};
 use crate::types::PhpType;
 
 mod union;
+mod native_selections;
+pub(crate) use native_selections::{
+    native_selection_reference_receiver, native_selection_reference_receiver_type,
+};
 pub(crate) use union::{
     runtime_int_binding_needs_diagnostics, runtime_scalar_param_binding,
     runtime_strict_param_acceptance, runtime_weak_int_param_acceptance,
@@ -156,6 +160,9 @@ pub(crate) fn classify_param_binding(
     // PHP at compile time; the call throws `TypeError` at runtime when the other alternative is
     // the one supplied. EIR lowering inserts that instance guard.
     if let PhpType::Object(expected_class) = expected {
+        if matches!(actual, PhpType::Mixed) {
+            return ParamBinding::ObjectGuard;
+        }
         if let PhpType::Union(members) = actual {
             let expected_object = PhpType::Object(expected_class.clone());
             let has_expected = members.iter().filter(|member| **member == expected_object).count() == 1;
@@ -632,7 +639,7 @@ mod tests {
         assert!(detail.contains("`(int)` cast"), "{}", detail);
     }
 
-    /// Verifies only an exact `Class|false` / `Class|null` union earns the runtime object guard.
+    /// Verifies Mixed and exact `Class|false` / `Class|null` unions earn the runtime object guard.
     #[test]
     fn object_union_binding_requires_the_declared_class_plus_false_or_null() {
         let arg = Expr::new(
@@ -640,6 +647,10 @@ mod tests {
             crate::span::Span::dummy(),
         );
         let class = PhpType::Object("Marker".to_string());
+        assert_eq!(
+            classify_param_binding(&class, &PhpType::Mixed, &arg),
+            ParamBinding::ObjectGuard
+        );
         assert_eq!(
             classify_param_binding(
                 &class,

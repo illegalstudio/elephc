@@ -1,0 +1,59 @@
+<?xml version="1.0"?>
+<r><a><b><c/></b></a><d><e><f/></e></d><text/></r>
+|<?xml version="1.0"?>
+<r><c>1</c></r>
+|<?xml version="1.0"?>
+<r a="5" b=""/>
+|0|8|<?xml version="1.0"?>
+<r><a><b>1</b></a><a><b>2</b></a></r>
+|get|get|set|count|int(11)
+get|get|direct|count|count|1110|gf|<?xml version="1.0"?>
+<r><a><c>1</c></a></r>
+kf|<?xml version="1.0"?>
+<r><a><c>1</c></a></r>
+gf|<?xml version="1.0"?>
+<r><a><list>1</list></a></r>
+kf|<?xml version="1.0"?>
+<r><a><c/></a></r>
+k|<?xml version="1.0"?>
+<r><a><c/></a></r>
+g|<?xml version="1.0"?>
+<r><a><b><c/></b></a></r>
+kf|1|kDreleased|kDreleased|kkNULL
+string(2) "aa"
+It's not possible to assign a complex type to properties, resource given|It's not possible to assign a complex type to attributes, resource given|It's not possible to assign a complex type to properties, resource given|It's not possible to assign a complex type to attributes, resource given|<?xml version="1.0"?>
+<r id="old"><a>old</a></r>
+|rhs|<?xml version="1.0"?>
+<r><new/></r>
+|rhs|<?xml version="1.0"?>
+<r><new><leaf>1</leaf></new></r>
+|rhs|name|<?xml version="1.0"?>
+<r><new><leaf>1</leaf></new><converted>1</converted></r>
+|g|f|str|~name|after-plain|g|str|~name|after-compound|g|str|~name|after-incdec|g|f|str|~name|~text|after-name-text|kkf|~text|after-text|g|~name|capture-rhs|g|f|str|~name|capture-name|g|str|~name|after-keep|g|str|f|str|~name|after-fallback|g|str|~name|after-loop|g|str|~name|after-loop|~key|after-key|end-captures|string(1) "6"
+string(1) "6"
+int(6)
+bool(true)
+string(16) "SimpleXMLElement"
+string(1) "8"
+string(1) "8"
+int(10)
+int(9)
+int(1)
+int(1)
+<?xml version="1.0"?>
+<r><c/><d/></r>
+|0|<?xml version="1.0"?>
+<r><a>0</a></r>
+|write-name|<?xml version="1.0"?>
+<r/>
+|0|<?xml version="1.0"?>
+<r><a>0</a></r>
+|write-name|<?xml version="1.0"?>
+<r/>
+|rhs-throw:0|2:main(): Cannot add element a number 1 when only 0 such elements exist|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Attempt to assign property "b" on null|<?xml version="1.0"?>
+<r><a/></r>
+|2:main(): Cannot add element a number 3 when only 1 such elements exist|<?xml version="1.0"?>
+<r><a/><a><b>3</b></a></r>
+|8:Indirect modification of overloaded element of ReviewNumericZeroXml has no effect|Attempt to assign property "b" on null|<?xml version="1.0"?>
+<r><a>1</a></r>
+|

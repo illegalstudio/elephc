@@ -714,7 +714,9 @@ pub(super) fn release_value_after_retaining_insert(
     ) {
         return;
     }
-    if ctx.value_is_owning_temporary(value) {
+    let detached_string = ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Str
+        && ctx.value_needs_release_after_use(value);
+    if ctx.value_is_owning_temporary(value) || detached_string {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
 }

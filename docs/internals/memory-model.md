@@ -36,8 +36,8 @@ at their request/call boundaries. See [PHP extensions](../beyond-php/phpext.md).
 │     String buffer            │  _concat_buf: heap-sized, scratch pad
 │  (temporary string results)  │  Reset at each statement
 ├─────────────────────────────┤
-│   Output capture buffers     │  _print_r_buf: 64KB inline return-mode capture,
-│  (print_r return mode, ob_*  │  _ob_ptrs/_lens/_caps + handler tables:
+│   Output capture buffers     │  _print_r_ptr/_cap: growable heap capture,
+│  (print_r rendering, ob_*    │  _ob_ptrs/_lens/_caps + handler tables:
 │   buffer-stack bookkeeping)  │  64 slots x 8B each (ob buffer bodies
 │                              │  are heap-allocated)
 ├─────────────────────────────┤
@@ -105,6 +105,15 @@ Each function has a stack frame. The [code generator](the-codegen.md) calculates
 - The total frame size is always 16-byte aligned (ARM64 ABI requirement)
 
 On the EIR backend the frame also reserves one save slot per callee-saved register that the linear-scan register allocator uses. Eligible scalar PHP locals are promoted to SSA values, so their repeated loads and stores can disappear and loop-carried values can live in registers. The frame still reserves local slots, and address-taken, by-reference, global/static, refcounted, and volatile locals continue to use them. See [The IR](the-ir.md) for scalar promotion and register allocation.
+
+Native return paths share their emitted epilogue by static or dynamic return
+ownership. Functions with multiple returns reserve a frame word selecting the
+local whose owner escapes. Cleanup skips that local without clearing storage
+that a sibling destructor can observe. Dynamic ownership markers move from
+their individual spill slots to an aligned temporary stack slot before cleanup,
+then return to the private status register after cleanup. This bounds the
+number of cleanup plans independently of the number of returns, while keeping
+the selected owner, cleanup order and exception handling intact.
 
 ### Frame-local numeric cells
 
@@ -340,7 +349,21 @@ Buffers created inside `eval()` do not use `_buffer_registry`. Magician keeps it
 
 `Fiber` objects own native stacks rather than borrowing the caller's stack. The runtime allocates each fiber stack through `mmap` (256 KiB usable by default, plus the guard page), protects the bottom 16 KiB with `mprotect(PROT_NONE)` as a guard page, and stores both the mapping base and total mapped size in the Fiber object so `__rt_fiber_free_stack` can later return it with `munmap`.
 
-The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, and `own_call_frame`), so `__rt_fiber_switch` can swap between main and fiber contexts without mixing exception or cleanup chains.
+Saved native frames also enumerate the actual owning entries of their materialized
+eval scopes through `__elephc_eval_scope_visit_owners_v1`. The Rust handle itself
+is opaque foreign storage. Each visible owned entry exposes the address of its
+native cell-pointer field, while borrowed and unset entries contribute no edge.
+The callback shares the collector's slot-identity context, invokes no PHP and
+changes no owner counts. Its inventory matches scope cleanup's owned entries.
+
+Magician's byte-fragment and included-token parser entry points use a temporary
+16 MiB stack through `stacker::grow`. Cold parsing can therefore start on a small
+native Fiber stack. The stack is selected explicitly because native context
+switches do not update the operating-system thread's stack bounds. Parsing calls
+no PHP and returns its owned program before interpreter execution begins; PHP
+suspension and saved-frame ownership continue on the native coroutine stack.
+
+The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. The main context also saves its magic-setter guard and deep-release GC suppression. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, `own_call_frame`, `own_magic_set_guard`, and `own_gc_release_suppressed`), so `__rt_fiber_switch` restores the execution context belonging to the selected stack.
 
 Every compiled function prologue also consults `_stack_limit`. The main-thread
 floor, derived from `RLIMIT_STACK`, is retained in `_stack_limit_main`; Fiber and
@@ -370,6 +393,13 @@ handler, or the window contains a direct throw terminator. Lowering
 first discovers those effects, then persists fresh transient strings and places the owner
 records before the window, retiring them after the consumer. This covers whole strings as well as persisted byte views;
 non-throwing scalar windows introduce no owner slots that could inhibit integer sinking or CSE.
+
+Ordinary property increment/decrement captures a boxed scalar union, such as
+`?float` or `int|float`, in compiler-managed hidden storage. The capture clones
+the old scalar cell before the property changes, and an operand-owner record
+protects it across a throwing write. A postfix result acquires its own owner
+before the snapshot is retired. Concrete scalar captures keep their existing
+storage, and opaque or object operands retain their ordinary dispatch path.
 
 ## The string buffer (scratch pad)
 
@@ -496,6 +526,13 @@ before propagating. The typed-property unset bridge has a versioned Throwable
 output argument so this propagation returns to Magician as an eval exception
 instead of jumping across Rust frames.
 
+Deep-release GC suppression is saved with its Fiber or Generator when that
+coroutine suspends. The resuming caller regains its own suppression state, so a
+paused destructor cannot block collection on the caller's stack. Resuming the
+coroutine restores its pending release protection before cleanup continues.
+The collector-wide `_gc_collecting` flag remains global across stack switches
+to prevent reentrant collection while the collector itself closes a coroutine.
+
 `__rt_cleanup_invoke` can release a validated scalar Mixed cell without creating
 a new jump buffer. It first authenticates the exact `__rt_decref_any` callback,
 managed heap storage, a live owner count, the Mixed heap kind, and an int, float,
@@ -545,11 +582,329 @@ propagating. This applies both to explicit retirement and function epilogues.
 Object-owned property reference cells use heap kind `8`, with their payload type
 in header bits `8..14`. Their two payload words remain the value's low word and
 its high word or string length. Class GC descriptor tag `11` identifies these
-owned cells; constructor-promoted borrowed reference addresses stay non-owning.
+owned cells. Exact `mixed` constructor-promoted references acquire an object owner
+for the actual caller cell. Borrowed eval argument slots first share a persistent
+PHP reference wrapper with a new owned native cell. The constructor publishes the
+retained binding before releasing its allocation-time placeholder. Other typed
+constructor reference payloads retain their separate borrowed representation.
+When eval stages an existing PHP reference for a native boxed reference parameter,
+an unconstrained binding uses a managed descriptor-`7` cell retaining that same
+wrapper. Duplicate arguments share one cell lease. Native reference returns and
+constructors can retain the cell beyond the staging frame. Retirement uses the
+protected generic release boundary; it never frees a Rust pointer slot retained
+by a callee. Generic contracts and by-value fallback arguments keep detached
+temporary staging and validate their writeback before publishing it.
+Numeric and named variadic marker writes update the wrapper's child, as do native
+builtin outputs. A property write fetch clones and replaces that child before
+releasing the old box, preserving the wrapper used by escaping eval aliases.
 Each alias owns the cell separately from the contained value. Rebinding acquires
 the new cell before retiring the previous local, which may own the source object.
 Cloning separates a singleton cell and shares one with live aliases, excluding
 temporary collector pins when making that decision.
+Object-to-array projection follows the same visible-owner rule. A shared owned
+`mixed` cell acquires its persistent PHP wrapper before `get_object_vars()` or an
+array cast retains that wrapper. This also preserves native aliases in programs
+that never export the property to eval. A singleton reference projects an
+independent value when neither the native cell nor its PHP wrapper has another
+visible owner.
+The serialization row separately marks eligible exact `mixed` backing storage.
+Projection uses that capability before creating a wrapper; a constrained union
+that also uses boxed storage retains its existing representation until its
+property type sources can accompany the shared reference.
+
+Scalar reference readers authenticate a canonical cell through the allocator's
+exact live-base index, heap kind `8`, descriptor `7`, and a live kind-`5` wrapper
+with nested tag `7` and reference marker `1`. Raw frames, interior addresses,
+uninitialized cells and raw `Iterable` payloads retain their existing ABI.
+The shape probe returns a borrowed wrapper and runs again on every read rather
+than caching a result across PHP callbacks. Typed scalar and union promotion
+still requires the matching assignment validators and property-source lifecycle.
+JSON and serialization/rendering rows separately mark owned scalar cells eligible
+for that shape check. Borrowed constructor slots have no such flag. These leaf
+walkers preserve their raw payload path and resolve a canonical scalar child as
+Mixed, without calls or unrelated register clobbers. Object projections recover
+the original managed cell before testing its visible owners; an interior wrapper
+child address must never be used as a cell header. Shared canonical scalars then
+retain the wrapper, while singleton wrappers copy their PHP value. Raw scalar
+projection never creates a wrapper through this path.
+A separated canonical cell contains a new persistent wrapper. Its descriptor
+remains `7`, so flattening the wrapper into a scalar value box would violate the
+physical shape required by scalar readers.
+
+The native type-source metadata ABI identifies each physical property binding
+with a distinct generation token. Clone bindings remain separate even when they
+name the same cell and validator. Rebinding, unset and arena reset invalidate old
+tokens. The native rebind ABI preserves a registered binding's immutable
+declaration while moving it to a newly published cell, without registering
+unknown storage or retaining the displaced cell. Native iteration copies records
+without keeping a borrowed iterator across PHP re-entry. Records own and
+dereference no receiver, cell, value or validator address. Binding hooks must
+remove each source after the receiver destructor and before releasing its cell;
+ordinary reference parameters add no property source. Publisher and lifecycle
+wiring is required before this registry can enforce typed canonical references.
+Selected EIR declaration callbacks have an explicit native-validator function role.
+User assembly emits immutable, aligned descriptors containing the native entry,
+class identifier, physical slot index and static flag. Owned instance binding
+rows contain a byte offset and descriptor pointer for each physical slot,
+including hidden parent-private slots. Borrowed slots have no owned-instance row;
+static declarations keep a separate descriptor namespace. Metadata emission
+rejects callbacks with PHP argument conventions. These rows are available for
+native lifecycle hooks to register the physical bindings.
+Weak indexes select sources by exact native cell or canonical PHP wrapper. Several
+cells may name one wrapper, and each physical property still contributes its own
+source token. Native hooks bind a property before reporting its authenticated
+wrapper shape. An unknown cell retains no address association, and removing its
+last binding clears that association before allocator reuse. Shape changes update
+the metadata epoch. A subsequent assignment queries from the start so an older
+source that joined the target wrapper after the previous snapshot is visited.
+A cursor from an earlier physical state does not describe the current source set.
+An unchanged metadata epoch does not prove that a native cell stayed raw across
+PHP re-entry; callers must recheck physical shape and previously unmatched cells.
+
+In a selected native-validation runtime, Mixed promotion authenticates the cell's
+current wrapper and reports that association to every registered binding of the
+cell. Property unset publishes its fresh uninitialized cell, rebinds the existing
+physical declaration to that cell, reports its current shape, then retires the
+displaced cell. The old wrapper therefore loses that property's constraint
+before a displaced destructor can assign through a surviving alias. Promotion of
+the replacement reports its new wrapper without registering unknown storage.
+These index mutations run no PHP and own no values. A rejected mutation aborts
+instead of allowing assignment with stale constraints. Runtimes without the
+capability emit none of these registry calls.
+
+Selected object allocation registers physical rows after all owned cells are
+initialized. Runtime by-name allocation registers after its property initializer
+thunk and before returning the object to hydration or reflection callers. Clone
+registers the completed copied cells as distinct bindings in both the shared
+boxed runtime adapter used by PHP `clone` and eval, and direct EIR clone emission,
+including when an external alias makes both objects share one cell. The final
+object walk unregisters each owned reference row immediately before releasing
+its cell. Other properties retain their constraints until their own iteration.
+The walk begins after resurrection checks, so a destructor that saves `$this`
+retains its original sources. The web boundary resets the registry after PHP
+shutdown callbacks and before recycling arena addresses. Static storage and the
+remaining typed native/eval call surfaces still need their complete lifecycle
+and ownership handoff before automatic canonical activation is enabled.
+
+The versioned native validation coordinator prepares property candidates without
+publishing a destination. It copies and physically checks the initial matching
+source set before PHP, then each selected property receives the same detached
+original RHS exactly once. Removing a property during its `__toString` does not
+undo that assignment's coercion or the already selected property checks. Newly
+attached sources constrain later assignments. The coordinator never rereads a
+receiver or cell after PHP; copied declaration validators outlive their receivers.
+It checks agreement after each coercion, before invoking a later source, and
+transfers one owned result to the publisher. Failure and conflict retire every
+candidate. Unchanged type acceptance
+retains the original cell so accepted `NaN` and recursive arrays do not require a
+non-reflexive or recursive value comparison. Native callbacks must contain throws
+before returning through Rust, keep probes/comparison free of PHP re-entry, and
+consume discarded candidates without starting a collection safe point. The caller
+keeps the original RHS and reference alive throughout validation. The generated
+publishers, protected callbacks, invisible keepalive pins and binding lifecycle
+still need integration before typed canonical references can be enabled.
+
+Native validation roots use caller-owned 32-byte records containing previous and
+next links, an owner pointer, and its authenticated allocation kind. Static boxed
+constants have kind zero and never grant permission to read an allocation header. Each record retains one boxed
+value or native cell owner. Cell clone and projection checks exclude native-cell
+roots as well as the wrapper roots excluded by value-sharing checks. Sharing
+checks subtract these artificial owners before deciding whether a PHP reference
+has another visible owner. The checks scan only
+active validation records and do not call PHP or acquire another owner. Records
+can retire in any order, allowing interleaved suspended activations. A record is
+unlinked before protected generic release can run a destructor. A final native
+cell root releases its descriptor-selected child and allocation. A cell kept alive
+only by temporary pins also contributes no visible owner of its boxed child.
+Sharing checks count each such cell once, even with several pins, and continue to
+count its child while a real native parameter or property binding owns the cell. Web request reset clears
+the registry before cleanup can inspect a retired request stack. Generated
+publishers still need to enter and leave these roots on every path; cancellation
+must retire a record before releasing its activation's stack.
+
+The native coercion adapter invokes a descriptor's explicit two-argument C entry
+inside `__rt_cleanup_invoke`. It clears the candidate output before calling user
+code, transfers one owned Mixed result on success, and contains a thrown native
+exception in the context's second word. The caller's active exception is restored
+separately. A context that already owns a contained Throwable stops before another
+validator runs. The descriptor entry must return a boxed owner without PHP hidden
+argument collectors or scalar-result markers. Scalar, array, iterable and native
+object declarations, including nullable and union types, have callbacks generated through the typed EIR
+`reference.property_coerce` operation when
+`ir_lower::enable_native_reference_validation` selects the capability. Ordinary
+lowering emits no unused callbacks for the opaque-eval class catalog. Selection
+is idempotent and validates the resulting EIR. They borrow their two inputs and return one
+owned boxed candidate. Context bit zero selects assignment-site strictness;
+strict assignments preserve exact members and permit integer-to-float widening.
+Weak candidates reuse the property guard's coercions and diagnostics. An explicit
+`mixed` declaration contributes the unchanged original candidate: it can conflict
+with a float or string source that would coerce that original value. An untyped
+property contributes no declaration constraint. Reference
+object candidates use the shared native class-acceptance plan; eval-defined
+class ancestry remains part of the activation audit. Reference
+errors name the original physical declaration independently of candidate storage
+or receiver class, including hidden parent-private slots and inherited statics. The
+native ABI harness calls a generated callback through the protected adapter.
+Instance binding hooks register these callbacks for completed physical cells.
+Canonical store lowering transfers a contained raw Throwable back to the native
+exception chain only after the publisher has retired its temporary roots.
+
+The native operation callbacks authenticate a source's current physical binding
+through `__rt_reference_cell_canonical`, compare borrowed PHP candidates, and
+retire discarded candidates through `__rt_cleanup_invoke`. The comparison output
+is a four-byte C `int`. Protected retirement accumulates a contained Throwable in
+the same context slot as coercion and returns status two across the Rust ABI.
+
+The optional `native_reference_validation` capability emits
+`__rt_reference_validate_native` and links the standalone `elephc_reference`
+bridge independently of the eval runtime. Its cache identity uses bit 16. The native bridge builds the
+version-one 48-byte operation table and borrows the publisher's context, roots
+and 72-byte outcome through the Rust call. The ABI fixture registers a real weak
+source and exercises weak success and strict failure through generated EIR.
+Production publishers still need to select this capability when their lifecycle
+and commit paths are connected.
+
+`__rt_reference_commit_native` consumes a validated boxed candidate and publishes
+its owner before protected retirement of the previous child. A pending validation
+exception consumes the supplied candidate without changing the wrapper. Failed
+wrapper checks also retire the candidate. The caller keeps its context, wrapper
+and original RHS rooted through the operation and propagates a contained
+Throwable only after retiring those roots. The ABI fixture checks successful
+publication and an unchanged value after strict rejection; generated property
+publishers still need to call this primitive from their complete lifecycle paths.
+
+`__rt_reference_publish_native(context, wrapper, owned_rhs, outcome)` combines validation
+and commit for a canonical reference. It consumes and detaches the original RHS before
+callbacks, roots that snapshot and the wrapper with invisible leases, and passes
+the same snapshot to every declaration validator. With no matching source, it
+publishes a separate owner of the snapshot. A chosen candidate is removed from
+the outcome before commit consumes it. The rooted commit entry publishes the
+candidate, then takes and releases the snapshot lease before retiring the old
+child. Keeping an extra RHS owner across that retirement can delay an incoming
+object's destructor when the displaced destructor overwrites the new value.
+Callers must transfer their RHS owner and clear its unwind parking slot before
+entry. Both roots are unlinked and retired under the protected context on every
+completed validation path. The helper returns the
+status and conflict metadata without raising a PHP exception across Rust or
+leaving stack records linked. The ABI fixture checks weak coercion, strict
+rejection, unchanged RHS representation, source removal and an empty root list.
+Two executable regressions also verify incoming destruction inside the displaced
+destructor and a Stringable snapshot destructor observing the published string
+before its exception returns through the protected context.
+On an inconsistent conversion, the publisher constructs an owned `TypeError` in
+`context.pending` before releasing the last RHS snapshot lease. A throwing RHS
+destructor can then chain that error as its previous exception. A conflict returns
+status three with that pending error; a newer cleanup throw returns status two.
+
+When an attached native reference is flushed into eval, codegen first probes its
+current canonical wrapper. Eval retains that wrapper directly, preserving its
+actual PHP tag and shared identity even when the native parameter's legacy
+physical payload type is scalar. Raw or unpromoted cells still box their typed
+payload through the ordinary fallback.
+
+AST effect and exception analysis treats writes through reference parameters or
+known aliases as fallible. Their property constraints can reject the original RHS
+or invoke a Stringable callback. Callable summaries, constant-flow pruning and
+catch elimination install the same lexical reference-parameter scope, so a
+same-frame handler survives even when the RHS itself is a scalar literal.
+Pre/post increments and decrements preserve those validation catches too.
+Direct closure calls and closure aliases install their own reference parameter
+and capture scope while summarizing the body.
+
+This helper remains behind the explicit capability until property lifecycle and
+store lowering select it together.
+
+Lowered `StoreRefCell` instructions preserve the original RHS and carry an
+explicit PHP bool operand for assignment-site strictness. The physical alias
+type remains separate. With the explicit capability selected, lowering first
+authenticates a managed canonical cell and passes the original boxed RHS and
+source mode to the publisher. Unpromoted and borrowed raw cells retain the
+legacy conversion path; hand-built EIR with only the RHS retains that path too.
+An optional third operand borrows the source expression's unwind parking slot.
+The canonical path clears and retires that extra owner while the replacement
+box still keeps its payload alive, before publication can run a displaced
+destructor. Normal post-store cleanup then observes the empty parking slot.
+Optimizers preserve this slot's address identity. Mutating container writeback
+keeps its existing consuming or acquired-owner convention.
+
+Native function parameter flags carry physical boxed-reference storage separately
+from declared PHP types and tagged nullable integers. Normal function object
+references use the normalized Mixed ABI. A closure descriptor can instead expose
+a raw object or container payload and receives detached concrete-box adaptation.
+Only a physical Mixed pointer slot can share the live staging wrapper.
+
+Eval-to-native Mixed argument staging initially keeps each temporary cell through
+an invisible root whose stable record is owned by Rust. Foreign mutation of the
+record uses `UnsafeCell`; the record remains allocated until the root is unlinked.
+Cleanup takes the root owner without running PHP, then retires that owner inside
+the eval ABI's boxed Throwable accumulator. A destructor cannot bypass Rust
+cleanup or leave a record referring to retired foreign storage.
+
+Eval method and constructor bridges share one callable argument resolver. Each
+site supplies its borrowed boxed callback and active eval context explicitly;
+the resolver preserves the existing static, receiver-bound and dynamic adapter
+ownership rules. A selected native invokable descriptor returns directly without
+falling through into dynamic adapter allocation. A successful cast transfers its
+fresh descriptor owner into a private bridge collection. The normalized argument
+array keeps the original callback alive; its owner does not cover that descriptor.
+The collection has a fixed native cleanup record, so it survives partial argument
+staging and is drained when a suspended Fiber frame is retired. Normal and failed
+bridge exits unlink this record and drain every descriptor under a protected
+cleanup boundary. Each node detaches before retirement, and cleanup exceptions
+return as pending native Throwables through the Rust bridge's usual failure path.
+The record's pure GC visitor enumerates each node's descriptor slot. The native
+kind-zero nodes themselves are outside the cycle collector's graph. Counting
+their descriptor owners as edges of the saved Fiber prevents an unreachable
+Fiber cycle from appearing to retain an external descriptor root.
+
+Source argument evaluation has its own owner in addition to native staging.
+Reference candidates carry shared Rust provenance for that exact owner; ordinary
+value arguments use their existing cleanup without a shared allocation. After
+binding and argument-container construction, registered AOT functions and callable
+descriptors replace matching source leases with pending owned roots. These roots
+remain PHP-visible through adapter coercion. After acquiring a formal parameter,
+native entry consumes the extra source owners naming that exact cell and retires
+its staging root. The parameter now owns the cell independently, so unsetting the
+last PHP binding runs its destructor at the unset, inside the native callee.
+A nested call using another native cell over the same PHP reference cannot claim
+the pending outer argument. Retiring the exact staging root cancels pending
+associations before its cell address can be reused. Pending bindings remain
+visible while later argument expressions and coercion callbacks execute.
+The original argument boundary unlinks consumed source records or retires still
+pending owners in the original cleanup position, including after throws and while
+other arguments run destructors. Repeated take of a consumed staging record is
+inert. Eager generator parameter validators acquire a temporary owner without
+claiming source or staging roots before the constructor captures the arguments.
+Repeated values keep distinct lease records, while forwarded metadata can refer
+to the same lease without retaining or releasing it twice.
+
+A native frame owns an incoming managed reference cell in a hidden owner slot
+for each regular by-reference parameter. The cell is authenticated before its
+owner is acquired; borrowed frame addresses leave the hidden owner empty.
+`unset`, normal return and unwinding retire that parameter binding independently
+of the caller and property owners. Hidden owners are appended after every ABI
+parameter slot, preserving argument positions. Variadic reference marker arrays
+keep their existing container path.
+
+Direct source-function calls pass eligible plain exact-Mixed properties through
+their live cell. A synthetic argument owner is visible while later arguments
+evaluate, so a later `clone` observes the pending PHP reference. Its tagged
+48-byte cleanup record keeps the owner-slot address at offset 16 and the final
+call's incoming stack pointer at offset 32. The record has no backtrace reader.
+Immediately before native entry, codegen activates only the owners named by that
+call's EIR operands. Parameter acquisition authenticates the cell and transfers
+the matching owner by clearing the caller slot before publishing the callee's
+owner. `unset` can therefore detach the formal parameter without an artificial
+caller binding preserving sharing. Nested calls use distinct activation keys;
+an exception before entry retires the pending owner through normal unwinding.
+Other call surfaces retain the existing independent parameter-owner path.
+
+Constructor, instance-method and static-method bridges likewise preserve an
+existing Mixed PHP wrapper instead of copying its child into detached staging.
+Native stores update that wrapper's child, and return cleanup releases the
+activation lease without legacy payload copyback. Call-local exact-Mixed
+reference defaults acquire a persistent wrapper before a constructor can retain
+them. Raw typed bridge slots keep their concrete-value writeback path.
 
 Resolved reference-returning callees produce two distinct things at the `return`,
 and keeping them apart is what makes the boundary correct. `AcquireRefCell`
@@ -557,9 +912,21 @@ materializes the returned cell address ONCE and publishes it as a typed `Pointer
 SSA result; the return terminator transports that snapshot. Separately, when the
 address owns a managed cell, the retained owner goes into a `ReturnRefCell` lease
 slot: normal return transfers it, while an exception during epilogue cleanup
-releases it, and a second `return` inside a `finally` publishes its replacement
-before retiring the superseded lease, because that retirement can run a throwing
-payload destructor.
+releases it. Each return site has its own lease, so a caught exception from an inner
+return's `finally` can resume the outer return without losing its owner. Normal
+epilogue cleanup transfers only the lease named by the selected snapshot and retires
+the cancelled pending returns; exceptional cleanup retires every lease.
+
+A reference return acquired under a native handler or `finally` also publishes its
+lease slot through a fixed 48-byte cleanup record in the PHP frame. An exception
+that cancels this return clears and releases the lease before entering a surviving
+same-frame catch. An outer pending return lies below the inner handler's saved
+activation boundary, so an inner cancellation leaves that outer lease attached.
+The record uses the ordinary owner-slot cleanup and GC visitor. It does not move
+the temporary stack: receiver and foreach records retain their original addresses.
+Removing one of those older temporary records splices its exact address out of the
+activation chain while preserving newer fixed return records. Normal frame teardown
+removes the remaining records after transferring the selected lease.
 
 Because the returned reference is the snapshot rather than a re-read of the
 variable, a `finally` that rebinds the returned variable and falls through cannot
@@ -576,8 +943,14 @@ the variable's identity.
 That promotion uses the DECLARED result's payload representation, not the local's
 narrower inferred storage: a concretely typed array local inside an `: array` function
 widens to `Mixed` before its cell exists, because the caller dereferences the cell with
-the declared shape and a later write through either alias has to keep meaning. Storage
-that other aliases ALREADY share cannot be re-shaped that way, so it is checked instead
+the declared shape and a later write through either alias has to keep meaning.
+For a concrete declared result, storage is staged in a dedicated typed local before promotion,
+then the original name is attached to that cell. This keeps the payload independent of
+the source slot's final frame layout, which can become `Mixed` after a nullable store
+lowered earlier or later in the function. A consuming container conversion receives an
+independent retained payload; alias publication can then retire the source slot without
+releasing the conversion's result a second time. Storage that other aliases ALREADY share cannot
+be re-shaped that way, so it is checked instead
 of widened:
 
 - A by-reference parameter's storage belongs to the caller. A payload representation
@@ -594,6 +967,78 @@ of widened:
 Compatibility is representation, not identity: two object classes share one pointer
 layout and are interchangeable here, while container element layouts are part of the
 payload and are compared recursively.
+
+Eval-to-native reference arguments also carry their physical storage shape. Native free
+function parameter registration uses reference flag bit0 for by-reference binding and
+bit1 for the compiled inline nullable-integer layout. A nullable PHP type alone does not
+select that layout, because the legacy null representation can use boxed storage instead.
+Inline nullable integers stage both `[payload, tag]` words under invoker source shape12.
+Marker value reads box the actual tag from the second word; writes publish the replacement
+value's tag there. Native writeback rebuilds the caller's boxed value and marks it dirty,
+including a change between integer zero and null. Ordinary reference flags0/1 retain their
+existing storage policy.
+
+Before materializing an eval scope, visible ref-bound locals are checked for unboxed
+indexed-array and associative-array value layouts in both their logical type and preserved frame type. A container
+conversion can change the logical view while another native alias still expects the original
+element representation. Such aliases receive an explicit lowering refusal; a top-level PHP
+array tag is insufficient proof that a normalized replacement has compatible elements.
+Union members and nested container views are checked, while already boxed Mixed aliases keep
+their supported path. Literal scope barriers restrict this check to their actual write names.
+
+Signature-unknown descriptor calls widen fresh, promotable caller locals to boxed `Mixed`
+before making their reference markers, including arguments of runtime-named methods. Existing
+shared aliases keep their physical layout. The selected invoker checks that layout before
+publishing an address: inline nullable integers require source shape12; a `Mixed` parameter
+requires a real box. Legacy source tag7 also describes raw `Iterable` pointers, so heap kind5
+selects a box and kinds2 through4 select raw iterable storage. A layout mismatch raises a
+catchable `Error`, rather than interpreting a box's `[low, high]` words as `[payload, tag]`.
+In particular, signature-unknown calls box fresh array/object locals too. A runtime-selected
+`Iterable` reference parameter refuses those boxes; existing raw `Iterable` aliases still pass.
+Forwarding just `box+8` would lose the PHP tag when the callee replaces the container with a
+different iterable kind, so supporting boxed callers requires a persistent adapter and retagging.
+When a variadic marker points at existing shape12 storage, indexed and named writes accept
+only actual PHP tags0 and8. Rejected replacements retire their owned payload before the error,
+and neither word of the caller's slot is modified. These refusals are compiler subset limits;
+PHP reference parameter types do not constrain later assignments to an untyped local alias.
+Shared hashes select shape12 marker writes before copy-on-write can consume the caller's old
+hash owner. The write leaves the marker and hash unchanged, so both success and refusal can
+use the original header. Unique hashes avoid the preliminary lookup. Callback-capable EIR stores
+retain full user-code effects because replacement cleanup can invoke PHP destructors or throw.
+Proven typed stores with destructor-free elements, scalar keys and matching replacements refine
+those defaults to storage effects before callable summaries are computed. Unknown Mixed stores
+keep their callback effects; concat reset analysis still applies its precise operand proof.
+For packed arrays with a runtime key, shape12 marker writes also validate and publish directly
+before indexed-to-hash promotion, including numeric strings normalized to integer keys.
+A refusal therefore leaves the destination owner intact;
+successful integer/null writes retain the same marker and retire the full replacement box.
+Reference-cell, static and global storebacks acquire a separate container owner for the
+consuming helper. Their setter entry marks that owner for retirement on shape12 refusal;
+ordinary raw-local transfers leave their stored owner intact. The flag follows already-hash
+destinations into the hash setter and stays independent from float-key diagnostic and shared
+payload flags, so successful writes retain their existing COW behavior.
+Concrete string keys use the same mixed-key writer for every Mixed-element local, including
+value copies of reference variadics. Marker validation therefore precedes any consuming
+indexed-to-hash conversion, leaving the copy and its owner intact after a refused write.
+The refusal creates its pending Error before retiring the rejected value or extra container
+owner. Both releases use protected cleanup, preserving the original Error in the previous
+chain if a destructor throws and completing the remaining cleanup before propagation.
+
+Native nested writes through ArrayObject and ArrayIterator use a private storage selector
+when the concrete offset getter is inherited from the internal SPL implementation. It first
+locates or inserts a boxed null slot, separates the raw values array in its property, and then
+detaches and returns the stored Mixed child for write. No PHP reference is created in the
+backing arrays, so getArrayCopy and object clones keep their normal value semantics. The
+runtime table checks the actual getter owner; an overridden offsetSet alone does not change
+the selector, while a user offsetGet keeps its own value or reference behavior. Read warnings
+and attached selection use independent mode bits, including across the boxed-key owner record.
+
+A nullable local returned by reference with a non-null object result is checked before
+promotion to an object-payload cell. The original local name stays attached, including
+during `finally`. A boxed replacement is checked and unboxed before publication, with
+its own object lease. This fixed representation cannot accept a later null or other
+incompatible replacement: it raises an explicit `TypeError` instead of changing the
+cell layout behind the caller's reference.
 
 A source that is none of the accepted shapes is refused during lowering with a source
 diagnostic instead of being lowered as a value. Those refusals describe this lowering's
@@ -1167,7 +1612,7 @@ Unlike arrays, objects are not resizable. The number of properties is fixed by t
 ## Generator coroutine layout
 
 `Generator` objects are heap-allocated object-kind blocks that reuse the
-232-byte Fiber payload. The first word is the built-in Generator class id, so
+248-byte Fiber payload. The first word is the built-in Generator class id, so
 ordinary `instanceof Generator` and `Iterator` checks still work. Offsets
 `8..176` retain the Fiber state, native stack ownership, saved stack pointer,
 callable/wrapper, caller, transfer and exception state, and seven boxed
@@ -1182,6 +1627,8 @@ Offset  Size  Field
 208      8    auto_key_counter
 216      8    delegated_iter pointer used by `yield from`
 224      8    unused reserved word
+232      8    saved magic-setter guard head
+240      8    saved deep-release GC suppression
 ```
 
 The constructor boxes the generator's parameters and closure captures into the
@@ -1219,7 +1666,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_spl_autoload_exts_default`, `_spl_autoload_exts_ptr`, `_spl_autoload_exts_len` — mutable SPL autoload extension state
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
-- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
+- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg`: runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
 - `_fiber_msg_*` — Fiber state-error message strings used when constructing `FiberError`
 - `_rt_diag_suppression`, `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
 - `_resource_id_prefix` — prefix used by resource display helpers
@@ -1243,6 +1690,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_generator_class_id` — per-program class id used to recognize Generator frames during object deep-free
 - `_json_exception_class_id`, `_stdclass_class_id` — per-program class ids used by JSON throw paths and stdClass dynamic-property helpers
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal descriptors used by object deep-free and cycle collection
+- `_class_array_projection_ptrs`: native property projection callbacks for SimpleXML objects and subclasses. Both `get_object_vars()` and `(array)` call the adapter with a borrowed receiver and receive an owned hash.
 - `_class_json_desc_ptrs`, `_class_json_desc_<id>`, `_class_json_pname_<id>_<slot>` — per-class JSON descriptors used by object encoding and JsonSerializable dispatch
 - `_class_tostring_count`, `_class_tostring_ptrs` — dense per-class `__toString` method table used by runtime string coercions of boxed `mixed` objects
 - `_class_iface_method_count` (plus per-interface method tables), `_class_serprop_declaring_ptrs`, `_class_serprop_declaring_missing`, `_class_serprop_declaring_<id>` — interface-method ordering and property declaring-class tables used by `get_object_vars()` visibility filtering and object-to-array projection
@@ -1343,13 +1791,38 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 
 ### Static properties (`ClassName::$prop`)
 
-Static properties are class-scoped storage rather than object fields. During `emit_runtime_data_user()`, each effective declaring class property gets one 16-byte BSS slot:
+Static properties are class-scoped storage rather than object fields. During `emit_runtime_data_user()`, each effective declaring class property gets one 24-byte BSS slot:
 
 ```asm
-.comm _static_prop_Counter_count, 16, 3 ; 16 bytes for Counter::$count
+.comm _static_prop_Counter_count, 24, 3 ; value, initialization and reference-layout words
 ```
 
 The naming pattern comes from `static_property_symbol(...)`. Inherited static properties point back to the declaring class slot, so `Base::$count` and `Child::$count` share storage when the property is declared only on `Base`. When a subclass redeclares the static property, that subclass receives its own slot and `static::$count` dispatches to it through the called-class id at runtime. `_main` evaluates static-property defaults before user statements run, and later reads/writes load from or store to the resolved slot directly.
+
+The optional native-reference runtime provides three C-ABI primitives for Mixed
+static bindings. `__rt_reference_static_mixed_promote(binding)` transfers the raw
+Mixed owner into an allocated managed cell and sets the layout word at byte 16.
+Repeated promotion returns the same cell. `__rt_reference_static_mixed_payload`
+returns either the raw binding or the managed cell as a borrowed payload address.
+`__rt_reference_static_mixed_release` clears the binding and layout word, restores
+the uninitialized marker and removes its weak type source before retiring the
+cell. Escaped native aliases keep that cell alive independently. The BSS address
+itself never has a managed header. With the capability selected, native,
+inherited, eval and Reflection reads resolve this layout before exposing the
+current borrowed PHP child. Process shutdown, request reset and application
+shutdown retire the static binding through its cell-aware release helper.
+Application root discovery already borrows the actual low-word owner, which is
+the cell for a promoted binding. Automatic promotion remains deferred until
+static writers and reference exports also use the validated publication path.
+Native and native Reflection Mixed stores already dispatch an existing managed
+binding through the canonical publisher, preserving the original boxed RHS.
+Their EIR carries the source-file strictness (weak for Reflection's internal
+setter) and an optional third operand identifying the transferred unwind owner.
+Raw bindings keep the existing store path; no writer promotes them automatically.
+Direct Mixed assignments box concrete temporaries and retire their source lease
+before publication. Reflection keeps a separate boxed argument owner through the
+setter call, then clears its unwind slot before releasing it. This preserves PHP's
+different destructor timing for an assignment and an internal method argument.
 
 A `buffer<T>`, `ptr` or `ptr<T>` static property keeps its handle or address in the slot's low word, as an instance property does. The word owns nothing: overwriting it frees no buffer, and shutdown releases nothing for it. Element writes (`Class::$buf[$i] = $v`) resolve the handle the slot holds and store into the buffer payload without writing the slot back. A typed pointer slot whose default is `null` is initialized to the zero word, while a typed buffer or pointer slot without a default carries the uninitialized marker in its high word until the first store.
 
@@ -1414,7 +1887,7 @@ read the same uniform heap header, including on the iOS targets.
 |---|---|---|
 | Stack | OS default (~8MB) | Stack overflow (crash) |
 | String buffer | `--heap-size` (default 128 MB) | Resets each statement, bounded by the program budget |
-| print_r capture | `_print_r_buf` = 64KB inline; `_print_r_base`/`_print_r_cap` track the current block; `_print_r_mode`, `_print_r_off` = 8 bytes each | `print_r($value, true)` renders into the capture buffer and grows past the inline block through `__rt_concat_grow`, so the full rendered string is returned |
+| print_r capture | `_print_r_ptr`, `_print_r_cap`, `_print_r_mode`, `_print_r_off` = 8 bytes each | Both return and echo modes render into growable raw heap storage. Finish persists the result with string metadata, frees the raw buffer, and clears state; cleanup releases abandoned captures |
 | Output-buffer (`ob_*`) stack | `_ob_level`, `_ob_in_handler`, `_ob_flushing`, `_ob_implicit_flush` = 8 bytes each; `_ob_ptrs`, `_ob_lens`, `_ob_caps`, `_ob_handler_stubs`, `_ob_handler_envs`, `_ob_name_ptrs`, `_ob_name_lens`, `_ob_chunk_sizes`, `_ob_flags`, `_ob_started` = 512 bytes each (64 slots) | Up to 64 nested `ob_start()` levels; the buffer bodies themselves are heap-allocated (16KB default capacity, page-aligned chunk size + 1 when a chunk size is set, grown by doubling) |
 | Web capture flag | `elephc_web_capture` = 8 bytes | `--web` bridge output-capture flag read by `__rt_stdout_write`; zero selects the plain `write(1, ...)` syscall path |
 | Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn`, `_elephc_eval_closure_bind_fn`, `_elephc_eval_wrap_callback_fn`, `_elephc_eval_object_gc_child_fn`, `_elephc_eval_object_release_fn`, `_elephc_eval_array_reference_retire_fn`, `_elephc_eval_object_clone_fn` = 8 bytes each | Late-bound Magician callbacks for eval-managed handlers, closures, callbacks, objects, references, and cloning |
@@ -1427,6 +1900,7 @@ read the same uniform heap header, including on the iOS targets.
 | Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_ptr`, `_rt_diag_pending_len`, `_php_diagnostic_file`, `_php_diagnostic_file_len`, `_php_diagnostic_line` = 8 bytes each | Warning suppression plus deferred diagnostic message and source-location state |
 | Resource inventory | `_resource_inventory_head`, `_resource_inventory_tail` = 16 bytes total | Heap-backed history used by `get_resources()`, including closed incarnations after descriptor reuse |
 | Unmanaged reference-borrow state | `_rt_unmanaged_ref_borrow_top` = 8 bytes | Active boxed array-walk borrow chain used to reject escaping unmanaged element references |
+| Reference validation roots | `_rt_reference_validation_pins_top` = 8 bytes | Active caller-owned root records excluded from PHP-visible reference-sharing counts |
 | JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc`, `_json_error_source_ptr`, `_json_error_source_len`, `_json_error_candidate_ptr`, `_json_error_location_active`, `_json_error_line`, `_json_error_column`, `_json_error_scan_count`, `_json_error_scan_bytes` = 136 bytes total | Fixed-size bookkeeping for JSON calls and decode error locations. The candidate pointer is recorded in constant time; line and column are scanned from the original source only when an error is recorded. |
 | Serialize/unserialize state | `_ser_value_counter`, `_ser_obj_count`, `_ser_legacy_active`, `_unser_count`, `_unser_legacy_active` = 8 bytes each; `_ser_obj_ptrs`, `_ser_obj_idxs`, `_unser_values` = 512KB each; `_unser_depth`, `_unser_allowed_mode`, `_unser_allowed_list`, `_unser_allowed_list_mixed`, `_unser_active`, `_unser_context` = 8 bytes each | `serialize()` object-dedup counters/maps and `unserialize()` reference registry, plus the decode depth limit, `allowed_classes` policy/list, active flag, and reentrancy snapshot; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref) and reentrant decodes restore the outer context while legacy Serializable callbacks share references |
 | Date/time state | `_strtotime_clock`, `_php_default_tz_len` = 8 bytes each; `_strtotime_iso_buf` = 64 bytes; `_php_tz_env`, `_php_tz_save` = 264 bytes each | `strtotime()` clock override, the scratch copy a one-digit-month/day ISO date is zero-padded into, plus default-timezone (`date_default_timezone_*`) env/save buffers and stored identifier length |

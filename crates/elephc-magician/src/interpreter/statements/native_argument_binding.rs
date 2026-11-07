@@ -20,6 +20,7 @@
 //!   and invisible to Reflection even if a caller reached this code with no shape at all.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Leaves Number scalar operands intact for its native internal string-or-integer adapter.
 /// Only this invocation's signature copy changes; reflection keeps the declared union.
@@ -46,7 +47,7 @@ pub(super) fn number_scalar_binding_signature(
 }
 
 /// Binds native AOT callable args using the selected by-reference degradation mode.
-pub(super) fn bind_native_callable_bound_args_with_mode(
+pub(in crate::interpreter) fn bind_native_callable_bound_args_with_mode(
     signature: Option<NativeCallableSignature>,
     mut args: Vec<EvaluatedCallArg>,
     by_ref_mode: EvalByRefBindingMode<'_>,
@@ -62,7 +63,9 @@ pub(super) fn bind_native_callable_bound_args_with_mode(
     if !signature.bridge_supported() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if signature.param_names().len() == signature.param_count() {
+    if signature.has_explicit_shape()
+        || signature.param_names().len() == signature.param_count()
+    {
         bind_native_signature_args(&signature, args, by_ref_mode, context, values)
     } else {
         positional_evaluated_bound_args(Some(&signature), args, by_ref_mode, context, values)
@@ -120,34 +123,29 @@ pub(in crate::interpreter) fn release_native_bound_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut result = Ok(());
-    for arg in args {
-        for (key, _) in &arg.variadic_ref_targets {
-            let released = release_expr_result(*key, context, values);
+    let owners = args.iter().flat_map(|arg|
+        arg.variadic_ref_targets.iter().map(|(key, _)| *key).chain(std::iter::once(arg.value)))
+        .map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    with_runtime_owners(&owners, || {
+        let mut result = Ok(());
+        for owner in &owners {
+            let released = release_expr_result(owner.take(), context, values);
             if result.is_ok() { result = released; }
         }
-        let released = release_expr_result(arg.value, context, values);
-        if result.is_ok() { result = released; }
-    }
-    result
+        result
+    })
 }
 
-/// Preserves a native result while releasing the activation's internal argument owners.
-pub(super) fn finish_native_bound_call(
+/// Preserves a call result while releasing the activation's internal argument owners.
+pub(in crate::interpreter) fn finish_native_bound_call(
     result: Result<RuntimeCellHandle, EvalStatus>,
     args: &[BoundMethodArg],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let released = release_native_bound_args(args, context, values);
-    match (result, released) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = release_expr_result(value, context, values);
-            Err(status)
-        }
-        (Ok(value), Ok(())) => Ok(value),
-    }
+    let owners = args.iter().flat_map(|arg|
+        arg.variadic_ref_targets.iter().map(|(key, _)| *key).chain(std::iter::once(arg.value)));
+    finish_eval_argument_values(result, owners, context, values)
 }
 
 /// Writes native AOT by-reference argument cells back to their eval caller targets.
@@ -184,6 +182,7 @@ fn write_back_native_ref_target(
         return Err(EvalStatus::RuntimeFatal);
     };
     if visible_scope_cell(context, scope, name) == Some(value) {
+        mark_scope_binding_changed(context, scope, name)?;
         return Ok(());
     }
     let retained = values.retain(value)?;
@@ -410,12 +409,34 @@ fn finish_native_argument_binding(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let bound = apply_native_callable_bound_arg_types(signature, &mut args, context, values)
-        .and_then(|()| copy_native_call_user_func_by_value_ref_args(signature, &mut args, by_ref_mode, values));
+        .and_then(|()| copy_native_call_user_func_by_value_ref_args(signature, &mut args, by_ref_mode, values))
+        .and_then(|()| promote_native_mixed_reference_temporaries(signature, &mut args, context, values));
     if let Err(status) = bound {
         let _ = release_native_bound_args(&args, context, values);
         return Err(status);
     }
     Ok(args)
+}
+
+/// Gives call-local Mixed reference values a persistent owner before native constructors retain them.
+/// These values have no caller target; raw typed and caller-backed references keep their existing ABI.
+fn promote_native_mixed_reference_temporaries(
+    signature: &NativeCallableSignature, args: &mut [BoundMethodArg],
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !values.supports_persistent_references() { return Ok(()); }
+    for (index, arg) in args.iter_mut().enumerate() {
+        if !signature.param_by_ref(index) || signature.param_variadic(index)
+            || arg.ref_target.is_some()
+        { continue; }
+        let mixed = signature.param_type(index).is_none_or(|ty|
+            !ty.is_intersection() && matches!(ty.variants(), [EvalParameterTypeVariant::Mixed]));
+        if !mixed || values.is_reference(arg.value)? { continue; }
+        let original = arg.value;
+        arg.value = values.reference_new(original)?;
+        release_expr_result(original, context, values)?;
+    }
+    Ok(())
 }
 
 /// Applies registered native AOT parameter types after argument binding and default filling.

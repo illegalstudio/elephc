@@ -34,6 +34,7 @@ mod checked_int_sink_bound_test;
 mod checked_numeric_chain_test;
 mod clobber_test;
 mod concat_reset_test;
+mod typed_container_concat_reset_test;
 mod const_fold_test;
 mod count_hoist_test;
 mod cse_test;

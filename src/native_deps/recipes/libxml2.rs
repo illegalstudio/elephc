@@ -3,7 +3,7 @@
 //! `elephc-xml` bridge links, and retains libxml2's complete public header set.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for libxml2 recipe revision 1.
+//! - `crate::native_deps::recipe::CuratedRecipes` for libxml2 recipe revision 9.
 //!
 //! Key details:
 //! - Out-of-tree autoconf build, static/PIC only. Python bindings, zlib, ICU, readline/history
@@ -34,7 +34,8 @@
 //!   through an error macro, bakes the builder's staging directory into `libxml2.a`, making
 //!   the artifact non-reproducible and leaking that path. gcc >= 8, clang >= 10 and Apple
 //!   clang all accept `-ffile-prefix-map`. The shim is compiled by hand with the same flags.
-//!   `recipe_revision` stays at 1: no artifact built without these flags was ever released.
+//! - The embedded shim combines SimpleXML tree, namespace, XPath, document-copy, base-URL
+//!   and DOM support from `libxml2_simplexml*.c` with the core shim in `SHIM_SOURCE`.
 
 use std::ffi::OsString;
 use std::fs;
@@ -48,7 +49,8 @@ use super::super::toolchain::run_checked;
 use super::util::{copy_regular, require_regular};
 
 /// Embedded shim source used by installed Elephc binaries without repository access.
-pub const SHIM_SOURCE: &str = include_str!("libxml2_shim.c");
+pub const SHIM_SOURCE: &str = concat!(include_str!("libxml2_shim.c"), "\n", include_str!("libxml2_simplexml.c"),
+    "\n", include_str!("libxml2_simplexml_tree.c"), "\n", include_str!("libxml2_simplexml_dom.c"));
 
 /// The exact configure switches revision 1 passes, in order, before the `CFLAGS=` operand and
 /// any cross `--host=`.

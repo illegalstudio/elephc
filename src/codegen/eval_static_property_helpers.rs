@@ -13,6 +13,8 @@
 //! - Null helper returns mean "no bridge match"; boxed PHP null is returned as
 //!   a real Mixed cell pointer.
 
+mod reference_getter;
+
 use std::collections::BTreeMap;
 
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
@@ -51,6 +53,7 @@ pub(super) fn emit_eval_static_property_helpers(
     emit_static_property_get_helper(module, emitter, data, &slots);
     emit_static_property_is_initialized_helper(module, emitter, data, &slots);
     emit_static_property_set_helper(module, emitter, data, &slots);
+    reference_getter::emit(module, emitter, data, &slots);
 }
 
 /// Returns whether this binary links the eval bridge, and therefore needs these helpers.
@@ -570,7 +573,7 @@ fn emit_x86_64_static_property_scope_check(
 /// Returns ARM64 stack offsets for the class-scope pointer and length.
 fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "is_initialized" => (32, 40),
+        "get" | "reference" | "is_initialized" => (32, 40),
         "set" => (40, 48),
         _ => unreachable!("eval static property helpers only use get/set/is_initialized modes"),
     }
@@ -579,7 +582,7 @@ fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
 /// Returns x86_64 frame offsets for the class-scope pointer and length.
 fn x86_64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "is_initialized" => (40, 48),
+        "get" | "reference" | "is_initialized" => (40, 48),
         "set" => (48, 56),
         _ => unreachable!("eval static property helpers only use get/set/is_initialized modes"),
     }
@@ -595,7 +598,7 @@ fn emit_aarch64_get_slot_bodies(
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "get"));
         emit_aarch64_uninitialized_guard(emitter, slot, done_label);
-        emit_aarch64_box_static_property_slot(emitter, slot);
+        emit_aarch64_box_static_property_slot(module, emitter, slot);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the static property value
     }
 }
@@ -610,7 +613,7 @@ fn emit_x86_64_get_slot_bodies(
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "get"));
         emit_x86_64_uninitialized_guard(emitter, slot, done_label);
-        emit_x86_64_box_static_property_slot(emitter, slot);
+        emit_x86_64_box_static_property_slot(module, emitter, slot);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the static property value
     }
 }
@@ -753,7 +756,7 @@ fn emit_x86_64_uninitialized_guard(
 }
 
 /// Boxes an ARM64 static property symbol payload into a Mixed cell.
-fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
+fn emit_aarch64_box_static_property_slot(module: &Module, emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
     match slot.ty.codegen_repr() {
         // A `?ptr<T>` word boxes by the declared union in `slot.ty`, address 0 as PHP null.
         PhpType::Int
@@ -788,7 +791,9 @@ fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStati
                 "{}_mixed_done",
                 slot_body_label_raw(slot, "get")
             );
-            abi::emit_load_symbol_to_reg(emitter, "x0", &slot.symbol, 0);
+            crate::codegen_support::runtime::reference_cells::load_mixed_static_value(
+                emitter, &slot.symbol, module.required_runtime_features.native_reference_validation,
+            );
             emitter.instruction(&format!("cbz x0, {}", null_label));            // null static storage reads as PHP null
             if slot.ty.is_php_array() {
                 emitter.instruction("bl __rt_mixed_clone");                     // detach the array zval so eval writes preserve static COW aliases
@@ -809,7 +814,7 @@ fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStati
 }
 
 /// Boxes an x86_64 static property symbol payload into a Mixed cell.
-fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
+fn emit_x86_64_box_static_property_slot(module: &Module, emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
     match slot.ty.codegen_repr() {
         // A `?ptr<T>` word boxes by the declared union in `slot.ty`, address 0 as PHP null.
         PhpType::Int
@@ -844,7 +849,9 @@ fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStatic
                 "{}_mixed_done_x",
                 slot_body_label_raw(slot, "get")
             );
-            abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
+            crate::codegen_support::runtime::reference_cells::load_mixed_static_value(
+                emitter, &slot.symbol, module.required_runtime_features.native_reference_validation,
+            );
             emitter.instruction("test rax, rax");                               // check whether static storage holds a Mixed cell
             emitter.instruction(&format!("jz {}", null_label));                 // null static storage reads as PHP null
             if slot.ty.is_php_array() {
@@ -890,9 +897,7 @@ fn emit_aarch64_store_static_property_slot(
         }
         PhpType::Str => {
             emitter.instruction("ldr x0, [sp, #32]");                           // reload the boxed eval value for string coercion
-            emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval value to a PHP string pair
-            abi::emit_store_reg_to_symbol(emitter, "x1", &slot.symbol, 0);
-            abi::emit_store_reg_to_symbol(emitter, "x2", &slot.symbol, 8);
+            emit_owned_static_string_store(module, emitter, slot);
         }
         PhpType::TaggedScalar => emit_aarch64_store_tagged_scalar_static_property(emitter, slot),
         PhpType::Array(_) => {
@@ -914,8 +919,7 @@ fn emit_aarch64_store_static_property_slot(
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("ldr x0, [sp, #32]");                           // reload the boxed eval value being assigned
             emitter.instruction("bl __rt_incref");                              // retain the Mixed cell for static-property ownership
-            abi::emit_store_reg_to_symbol(emitter, "x0", &slot.symbol, 0);
-            clear_uninitialized_marker_after_static_store(emitter, slot);
+            emit_publish_owned_static_property_slot(emitter, slot);
         }
         _ => {}
     }
@@ -946,9 +950,7 @@ fn emit_x86_64_store_static_property_slot(
         }
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval value for string coercion
-            emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval value to a PHP string pair
-            abi::emit_store_reg_to_symbol(emitter, "rax", &slot.symbol, 0);
-            abi::emit_store_reg_to_symbol(emitter, "rdx", &slot.symbol, 8);
+            emit_owned_static_string_store(module, emitter, slot);
         }
         PhpType::TaggedScalar => emit_x86_64_store_tagged_scalar_static_property(emitter, slot),
         PhpType::Array(_) => {
@@ -970,11 +972,38 @@ fn emit_x86_64_store_static_property_slot(
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval value being assigned
             emitter.instruction("call __rt_incref");                            // retain the Mixed cell for static-property ownership
-            abi::emit_store_reg_to_symbol(emitter, "rax", &slot.symbol, 0);
-            clear_uninitialized_marker_after_static_store(emitter, slot);
+            emit_publish_owned_static_property_slot(emitter, slot);
         }
         _ => {}
     }
+}
+
+/// Persists converted text and retires the previous string payload before replacing its pair.
+fn emit_owned_static_string_store(module: &Module, emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
+    let label = slot_body_label(module, slot, "set");
+    abi::emit_owned_mixed_string(emitter, &format!("{label}_string_payload"), &format!("{label}_string_persist"));
+    abi::emit_store_result_to_symbol(emitter, &slot.symbol, &slot.ty, true);
+}
+
+/// Publishes a retained heap owner before releasing the displaced value and its destructors.
+fn emit_publish_owned_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
+    let result = abi::int_result_reg(emitter);
+    if slot.ty.codegen_repr() == PhpType::Mixed {
+        let prefix = slot_body_label_raw(slot, "set_reference");
+        crate::codegen_support::runtime::reference_cells::publish_mixed_symbol(
+            emitter, &slot.symbol, true, None, &prefix,
+        );
+        return;
+    }
+    abi::emit_push_reg(emitter, result);
+    abi::emit_load_symbol_to_reg(emitter, result, &slot.symbol, 0);
+    abi::emit_push_reg(emitter, result);
+    abi::emit_load_temporary_stack_slot(emitter, result, 16);
+    abi::emit_store_reg_to_symbol(emitter, result, &slot.symbol, 0);
+    clear_uninitialized_marker_after_static_store(emitter, slot);
+    abi::emit_pop_reg(emitter, result);
+    abi::emit_decref_if_refcounted(emitter, &slot.ty.codegen_repr());
+    abi::emit_release_temporary_stack(emitter, 16);
 }
 
 /// Emits an ARM64 scalar static-property store after Mixed coercion.
@@ -1031,8 +1060,7 @@ fn emit_aarch64_store_heap_static_property_slot(
     emitter.instruction("mov x0, x1");                                          // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
     emit_static_pointer_array_conversion(emitter, &slot.ty);
-    abi::emit_store_reg_to_symbol(emitter, "x0", &slot.symbol, 0);
-    clear_uninitialized_marker_after_static_store(emitter, slot);
+    emit_publish_owned_static_property_slot(emitter, slot);
 }
 
 /// Validates and stores a boxed ARM64 eval object into an object static property symbol.
@@ -1072,8 +1100,7 @@ fn emit_x86_64_store_heap_static_property_slot(
     emitter.instruction("mov rax, rdi");                                        // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
     emit_static_pointer_array_conversion(emitter, &slot.ty);
-    abi::emit_store_reg_to_symbol(emitter, "rax", &slot.symbol, 0);
-    clear_uninitialized_marker_after_static_store(emitter, slot);
+    emit_publish_owned_static_property_slot(emitter, slot);
 }
 
 /// Validates and stores a boxed x86_64 eval object into an object static property symbol.

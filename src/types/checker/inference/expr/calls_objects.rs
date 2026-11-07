@@ -99,7 +99,15 @@ impl Checker {
             }
             ExprKind::BitNot(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                if let Some(class) = crate::types::object_operators::operator_class(&ty) {
+                if let Some(class) = crate::types::object_operators::operator_class(&ty)
+                    .or_else(|| crate::types::object_operators::cast_class_with_classes(&ty, &self.classes)) {
+                    if class.operators.is_some_and(|ops| ops.bit_not.is_some()) {
+                        return Ok(PhpType::Mixed);
+                    }
+                    if class.operators.is_some_and(|ops| ops.operand_dispatch
+                        == elephc_builtin_contract::ObjectOperandDispatch::NumericConversion) {
+                        return Err(CompileError::new(expr.span, "Bitwise NOT requires integer operand"));
+                    }
                     return Ok(PhpType::Object(class.name.to_string()));
                 }
                 if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -270,7 +278,7 @@ impl Checker {
                 // return Mixed.
                 // The unpack-after-named shape is syntactic in
                 // PHP, so it is still rejected without a known constructor.
-                self.require_no_spread_after_named_args(args, "Dynamic constructor")?;
+                self.require_valid_unresolved_call_argument_order(args, "Dynamic constructor")?;
                 for arg in args {
                     let value = match &arg.kind {
                         ExprKind::NamedArg { value, .. } => value.as_ref(),
@@ -483,6 +491,9 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        // Descriptor dispatch can select a reference parameter at runtime. Preserve the
+        // checked XML receiver before whole-program alias storage widens its local slot.
+        self.is_native_selection_reference_argument(expr, env)?;
         self.infer_runtime_iterated_call_arg_type(expr, env)
     }
 

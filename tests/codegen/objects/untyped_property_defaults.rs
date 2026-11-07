@@ -12,6 +12,60 @@
 
 use super::*;
 
+/// Real constructor, method and static integer overwrites still widen object storage.
+#[test]
+fn test_untyped_constructor_replay_keeps_real_integer_overwrites() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class RealUntypedPayload { public function __destruct() { echo 'drop|'; } }
+class RealConstructorOverwrite {
+    public $value;
+    public function __construct() { $this->value = new RealUntypedPayload(); $this->value = 7; }
+}
+class RealMethodOverwrite {
+    public $value;
+    public static $shared;
+    public function __construct() { $this->value = new RealUntypedPayload(); }
+    public function change(): void { $this->value = 8; }
+    public static function changeStatic(): void { self::$shared = new RealUntypedPayload(); self::$shared = 9; }
+}
+class RealInheritedOverwrite extends RealMethodOverwrite {}
+$first = new RealConstructorOverwrite();
+echo $first->value, '|';
+$second = new RealInheritedOverwrite();
+$second->change(); echo $second->value, '|';
+RealInheritedOverwrite::changeStatic(); echo RealMethodOverwrite::$shared, '|';
+unset($first, $second);
+"#);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "drop|7|drop|8|drop|9|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Instance and static untyped slots keep object and later array payloads independently owned.
+#[test]
+fn test_untyped_object_property_widens_for_later_array_writes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class UntypedObjectPayload { public string $name = 'object'; }
+class UntypedObjectParent { public $value; public static $shared; }
+class UntypedObjectChild extends UntypedObjectParent {}
+$holder = new UntypedObjectChild();
+var_dump($holder->value, UntypedObjectChild::$shared);
+$holder->value = new UntypedObjectPayload();
+UntypedObjectChild::$shared = new UntypedObjectPayload();
+echo $holder->value->name, ':', UntypedObjectChild::$shared->name, '|';
+$holder->value = [4];
+UntypedObjectChild::$shared = [6];
+$holder->value[0]++;
+UntypedObjectChild::$shared[0]++;
+echo json_encode($holder->value), ':', json_encode(UntypedObjectChild::$shared), '|';
+UntypedObjectParent::$shared = null;
+unset($holder);
+"#);
+    assert!(out.success, "status={} stdout={} stderr={}", out.status, out.stdout, out.stderr);
+    assert_eq!(out.stdout, "NULL\nNULL\nobject:object|[5]:[7]|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Named class constants fold before property storage, reflection and eval default registration.
 #[test]
 fn test_named_class_constant_defaults_fold_in_all_property_consumers() {

@@ -114,13 +114,18 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         return lower_array_cast(ctx, inner, expr);
     }
     let value = lower_expr(ctx, inner);
+    lower_scalar_cast_value(ctx, target, value, expr)
+}
+
+/// Converts an already evaluated scalar or object and retires its temporary owner.
+pub(super) fn lower_scalar_cast_value(
+    ctx: &mut LoweringContext<'_, '_>, target: &CastType, value: LoweredValue, expr: &Expr,
+) -> LoweredValue {
     let source_type = ctx.builder.value_php_type(value.value);
     let source_repr = source_type.codegen_repr();
     if matches!(target, CastType::Int | CastType::Float) {
         if let Some(result) = object_operators::lower_object_cast(ctx, value, target, expr) {
-            if ctx.value_is_owning_temporary(value) {
-                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
-            }
+            release_binary_operand_temporary(ctx, value, expr.span);
             return result;
         }
     }

@@ -57,13 +57,16 @@ pub(in crate::interpreter) fn bind_evaluated_native_function_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
-    bind_evaluated_native_function_args_with_mode(
+    let owners = evaluated_args.iter().filter_map(|arg| arg.evaluation_owner.clone()).collect();
+    let mut bound = bind_evaluated_native_function_args_with_mode(
         function,
         evaluated_args,
         EvalByRefBindingMode::RequireTarget,
         context,
         values,
-    )
+    )?;
+    bound.evaluation_owners = owners;
+    Ok(bound)
 }
 
 /// Binds native AOT function args for `call_user_func()` by-value by-ref degradation.
@@ -74,13 +77,16 @@ pub(in crate::interpreter) fn bind_evaluated_native_function_args_for_call_user_
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
-    bind_evaluated_native_function_args_with_mode(
+    let owners = evaluated_args.iter().filter_map(|arg| arg.evaluation_owner.clone()).collect();
+    let mut bound = bind_evaluated_native_function_args_with_mode(
         function,
         evaluated_args,
         EvalByRefBindingMode::WarnByValue { callable_name },
         context,
         values,
-    )
+    )?;
+    bound.evaluation_owners = owners;
+    Ok(bound)
 }
 
 /// Binds already evaluated native AOT function args using the selected by-reference mode.
@@ -500,10 +506,37 @@ fn apply_native_function_arg_types(
             continue;
         };
         let original = bound_arg.value;
+        if native_function_object_reference_defers_nominal_check(
+            function,
+            param_index,
+            param_type,
+            original,
+            values,
+        )? {
+            continue;
+        }
         bound_arg.value = eval_method_parameter_value(param_type, original, context, values)?;
         if bound_arg.value != original { release_expr_result(original, context, values)?; }
     }
     Ok(())
+}
+
+/// Leaves exact object-reference validation to the compiled callee entry guard.
+fn native_function_object_reference_defers_nominal_check(
+    function: &NativeFunction,
+    param_index: usize,
+    param_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if !function.param_by_ref(param_index)
+        || param_type.is_intersection()
+        || param_type.variants().len() != 1
+        || !matches!(param_type.variants().first(), Some(EvalParameterTypeVariant::Class(_)))
+    {
+        return Ok(false);
+    }
+    Ok(values.type_tag(value)? == EVAL_TAG_OBJECT)
 }
 
 /// Binds one named native AOT function argument to a non-variadic parameter slot.

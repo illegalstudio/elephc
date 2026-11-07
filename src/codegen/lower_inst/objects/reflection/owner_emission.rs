@@ -30,8 +30,8 @@ pub(super) fn clear_reflection_owner_prefix(
         .properties
         .iter()
         .enumerate()
-        .map(|(index, (name, ty))| {
-            let owned_reference = class_info.owned_reference_properties.contains(name);
+        .map(|(index, (_name, ty))| {
+            let owned_reference = class_info.property_slot_owns_reference(index);
             (8 + index * 16, ty.codegen_repr(), owned_reference)
         })
         .collect::<Vec<_>>();
@@ -97,7 +97,7 @@ pub(super) fn emit_reflection_owner_metadata(
         .unwrap_or_else(|| object_class_name.to_string());
     let class_name = owner_class_name.as_str();
     let is_reflection_class_owner =
-        matches!(class_name, "ReflectionClass" | "ReflectionObject");
+        matches!(class_name, "ReflectionClass" | "ReflectionObject" | "ReflectionEnum");
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
         let public_name_offset = ctx
@@ -189,12 +189,6 @@ pub(super) fn emit_reflection_owner_metadata(
             }) {
                 emit_reflection_owner_string_property_by_name(ctx, class_name, "__default_error", message)?;
             }
-            emit_reflection_static_property_array_property_by_name(
-                ctx,
-                class_name,
-                "__static_properties",
-                &metadata.static_property_members,
-            )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
                 class_name,

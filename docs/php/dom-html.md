@@ -40,14 +40,23 @@ foreach ($body->childNodes as $node) {
 |---|---|
 | `new DOMDocument()` | Empty document. Optional constructor args are accepted and ignored. |
 | `loadHTML(string $source, int $options = 0): bool` | Forgiving HTML fragment parse. Wraps element/text content in `html`/`body`; unmatched closing tags are ignored, and a matching ancestor closes its open descendants. Text and attributes decode HTML4 named entities, `&apos;`, and numeric references. Script/style content remains raw until its matching closing tag. This is not full HTML tree-repair semantics. |
-| `getElementsByTagName(string $name): DOMNodeList` | Document-order descendant elements. Names are compared literally after HTML parse lowercases tag names. `*` matches every element. |
+| `loadXML(string $source, int $options = 0): bool` | Parses XML through the managed libxml2 bridge, preserving namespaces and sharing mutations with imported SimpleXML views. Requires the managed `libxml2` package. |
+| `DOMDocument::$documentElement` | Returns the first document element, or `null` for a rootless document. |
+| `getElementsByTagName(string $name): DOMNodeList` | Document-order descendant elements. HTML names are compared literally after parsing lowercases tag names; XML-backed elements match their local name, as in legacy PHP DOM. `*` matches every element. |
 | `DOMNodeList::item(int $index)` / `$length` / `count()` / `foreach` | Indexed access, `Countable` counts, and independent `IteratorAggregate` traversals, including nested walks and descendant queries during a walk. |
-| `nodeName`, `nodeValue` | HTML tag names are lowercased. Element `nodeValue` is concatenated descendant text, excluding comments and processing instructions. Document `nodeValue` remains `null`. A `DOMComment` retains its own comment body and serializes normally. |
-| `childNodes`, `previousSibling`, `nextSibling`, `parentNode`, `ownerDocument` | Wired after parse. The document's `ownerDocument` is `null`; child nodes refer to their document. The tree is treated as immutable. |
-| `DOMElement::getAttribute(string $name): string` | Attribute names are lowercased on parse; duplicate names keep their first value. Queries are compared literally, so `class` matches parsed `CLASS`, but a query for `CLASS` does not. Missing attributes return `""`. |
+| `nodeName`, `nodeValue`, `textContent` | HTML tag names are lowercased; XML element `nodeName` includes its namespace prefix. Element `nodeValue` and `textContent` read concatenated descendant text, excluding comments and processing instructions. Document `nodeValue` is `null`; document `textContent` reads the document text. Document writes have no effect after value coercion. A `DOMComment` retains its own body and serializes normally. On XML-backed nodes, or HTML nodes bound by `simplexml_import_dom`, writing either text property updates the shared tree. Element `nodeValue` parses entity and character references; `textContent` writes literal text. Text, CDATA, comment and processing-instruction writes remain literal. Unbound HTML text writes do not rebuild descendant nodes. |
+| `childNodes`, `previousSibling`, `nextSibling`, `parentNode`, `ownerDocument` | Unbound HTML links are wired after parsing. Nodes in the shared native tree keep object identity across accesses; parent and sibling reads follow the current links, including detached nodes. Native `childNodes` reads enumerate the current children. The document's `ownerDocument` is `null`; child nodes refer to their document. |
+| `DOMElement::getAttribute(string $name): string` | HTML attribute names are lowercased on parse; duplicate names keep their first value. HTML queries are literal, so `class` matches parsed `CLASS`, but a query for `CLASS` does not. XML-backed queries resolve prefixes to namespace URIs and can read local namespace declarations. Missing attributes return `""`. |
+| `DOMElement::setAttribute(string $qualifiedName, string $value): bool` | Replaces an existing attribute or adds a new one. HTML-only nodes update their stored attributes; XML-backed nodes resolve qualified names and update the tree shared with SimpleXML. Existing namespace declarations return `false` without modification. Empty names throw `ValueError`; invalid XML names throw `DOMException` with code 5. |
 | `instanceof DOMElement` / `DOMText` / `DOMComment` / `DOMDocument` | Class hierarchy matches PHP (`DOMText`/`DOMComment` extend `DOMCharacterData` extend `DOMNode`). |
 | `DOMProcessingInstruction` | Extends `DOMNode`; parsed instructions preserve target case, `target`, `data`, `nodeName`, `nodeValue`, and ordinary node links. Serialization emits `<?target data?>`. Legacy HTML consumes through `>`, retaining a preceding `?` in the data. |
-| `saveXML(?DOMNode $node = null): string` | Serializes a node or the whole document. Text escapes `&`, `<`, `>`, and CR; double-quoted attributes also escape `"`, LF, and TAB, but not `'`. Non-ASCII attribute code points use uppercase hexadecimal references, while text stays UTF-8. Script/style raw text serializes as safely split CDATA. No XML declaration (Termwind passes `LIBXML_NOXMLDECL`). |
+| `saveXML(?DOMNode $node = null, int $options = 0): string` | Serializes a node or the whole document. Text escapes `&`, `<`, `>`, and CR; double-quoted attributes also escape `"`, LF, and TAB, but not `'`. Non-ASCII attribute code points use uppercase hexadecimal references, while text stays UTF-8. Script/style raw text serializes as safely split CDATA. Options are accepted for PHP signature compatibility and ignored: `LIBXML_NOEMPTYTAG` formatting is unavailable. HTML-backed documents have no XML declaration. HTML output keeps this legacy formatter before and after SimpleXML import. For documents loaded with `loadXML()`, the whole-document form uses the declared encoding; passing a node, including the document itself, writes UTF-8 bytes. |
+
+On HTML nodes, `setAttribute('xmlns', $uri)` creates a default namespace declaration
+and returns `false` on subsequent writes. It serializes before ordinary attributes,
+preserves UTF-8 URI bytes, and survives `simplexml_import_dom()`. An `xmlns` attribute
+present in HTML source remains a literal attribute, separate from this declaration.
+Legacy DOM namespace queries read declarations; SimpleXML offsets read the literal attributes.
 
 Leading comments and processing instructions remain document-level siblings before
 `html`. After an explicit `</html>`, trailing comments and instructions remain
@@ -98,7 +107,7 @@ These constants are always available (including inside a namespace, and in
 
 | Constant | Value | Effect here |
 |---|---|---|
-| `LIBXML_NOXMLDECL` | 2 | Save flag; parse ignores it. `saveXML()` never emits `<?xml …?>`. |
+| `LIBXML_NOXMLDECL` | 2 | Accepted save flag; save options are ignored. HTML-backed `saveXML()` output omits an XML declaration. |
 | `LIBXML_HTML_NODEFDTD` | 4 | No default doctype is added (none is added anyway). |
 | `LIBXML_NOERROR` | 32 | Parse is silent and forgiving. |
 | `LIBXML_NOBLANKS` | 256 | Drops trailing document-level whitespace padding and whitespace-only text that remains directly under `html` or `head` after body insertion. Whitespace moved into an implied body is retained, including between body siblings and after the last child. Whitespace inside `body`, `title`, and other elements remains. Without this flag, wrapper whitespace and trailing fragment padding are preserved; padding after an explicit `</html>` is always ignored. XML blank-node filtering is outside this HTML-only subset. |
@@ -118,13 +127,12 @@ Processing instructions follow that same legacy HTML tokenizer. For example,
 unterminated target such as `<?foo` becomes text, while an incomplete instruction
 with data is discarded.
 
-- No libxml2 or Lexbor engine, no `elephc-dom` crate, no XML `load()` / `loadXML()`.
+- HTML loading uses the built-in parser without libxml2 or Lexbor. `DOMDocument::loadXML()` and `simplexml_import_dom()` use the [SimpleXML/libxml2 bridge](xml.md), which requires the managed `libxml2` package. XML `load()` remains unimplemented.
 - No modern `Dom\` HTML API (`Dom\HTMLDocument`, `Dom\Element`, …).
 - No XPath, CSS selectors, DTD/schema validation, XInclude, C14N, or token lists.
-- No tree mutation (`appendChild`, `removeChild`, `setAttribute`, `createElement`, …).
+- No general tree construction or structural mutation (`appendChild`, `removeChild`, `createElement`, etc.). Attribute writes and XML-backed `nodeValue`/`textContent` writes are supported as described above.
 - No `DOMAttr` / `DOMNamedNodeMap`, `DOMCdataSection` / entity-node APIs, or notations. HTML entity decoding and script/style CDATA serialization are supported internally.
-- No `LIBXML_*` constants beyond the five Termwind flags.
-- No SimpleXML and no DOM ↔ SimpleXML import.
+- The HTML subset exposes the five Termwind `LIBXML_*` flags; the XML bridge also provides its XML parsing flags.
 - `loadHTMLFile()`, encoding detection, error collection (`libxml_use_internal_errors`), and default `<head>` insertion are unimplemented.
 - Specialized Termwind renderers that need richer markup (`<table>`, `<code>`, `<pre>` via `getHtml()` / `saveXML` of mixed subtrees) are not the goal of this subset; `saveXML` covers a simple element so those paths can be added later.
 - Opaque `eval()` source alone does not trigger DOM injection. Once static program references load the prelude, `eval()` can discover, construct, and query the registered DOM classes through native dispatch. This remains a limited HTML subset, not full PHP DOM.
@@ -138,6 +146,6 @@ against this subset; keep Termwind's sources in the application tree.
 
 Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
 
-Classes: `DOMCharacterData`, `DOMComment`, `DOMDocument`, `DOMElement`, `DOMNode`, `DOMNodeList`, `DOMProcessingInstruction`, `DOMText`.
+Classes: `DOMCharacterData`, `DOMComment`, `DOMDocument`, `DOMElement`, `DOMException`, `DOMNode`, `DOMNodeList`, `DOMProcessingInstruction`, `DOMText`.
 
 <!-- elephc:generated:symbols:end -->

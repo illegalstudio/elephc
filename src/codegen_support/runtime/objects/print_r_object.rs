@@ -98,6 +98,7 @@ pub fn emit_pr_obj_desc(emitter: &mut Emitter) {
 /// instance is already being walked.
 /// Input: AArch64 x0=object x1=base indent / x86_64 rdi=object rsi=base indent.
 pub fn emit_print_r_object(emitter: &mut Emitter) {
+    emit_print_r_object_header(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_print_r_object_linux_x86_64(emitter);
         return;
@@ -118,54 +119,13 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("add x9, x1, #4");                                      // entry indent = base + 4
     emitter.instruction("str x9, [sp, #16]");                                   // save the entry indent
 
-    // -- header: the class name from the shared class-id → (ptr, len) table --
-    emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
-    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
-    emitter.instruction("b.eq __rt_pr_obj_incomplete_name");                    // render the synthetic internal class name
-    abi::emit_symbol_address(emitter, "x10", "_class_name_count");              // resolve the class-name table extent
-    emitter.instruction("ldr x10, [x10]");                                      // load the number of named class ids
-    emitter.instruction("cmp x9, x10");                                         // is the class id within the name table?
-    emitter.instruction("b.hs __rt_pr_obj_anon");                               // an unknown class id writes no name
-    abi::emit_symbol_address(emitter, "x11", "_class_name_entries");            // resolve the class-name entry table
-    emitter.instruction("add x11, x11, x9, lsl #4");                            // each entry is a 16-byte (ptr, len) pair
-    emitter.instruction("ldr x1, [x11]");                                       // load the class-name pointer
-    emitter.instruction("ldr x2, [x11, #8]");                                   // load the class-name length
-    emitter.instruction("b __rt_pr_obj_name");                                  // write the resolved name
-    emitter.label("__rt_pr_obj_anon");
-    abi::emit_symbol_address(emitter, "x1", "_class_name_missing");             // fall back to the empty class-name slot
-    emitter.instruction("mov x2, #0");                                          // a zero-length write emits nothing
-    emitter.instruction("b __rt_pr_obj_name");                                  // write the empty name slot
-    emitter.label("__rt_pr_obj_incomplete_name");
-    abi::emit_symbol_address(emitter, "x1", "_incomplete_class_name");          // __PHP_Incomplete_Class
-    emitter.instruction("mov x2, #22");                                         // byte length of __PHP_Incomplete_Class
-    emitter.label("__rt_pr_obj_name");
-    emitter.instruction("bl __rt_pr_write");                                    // write the class name
-
-    // -- header suffix: PHP writes ` Object` for a class and ` Enum[:type]` for an enum --
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
-    emitter.instruction("bl __rt_obj_enum_kind");                               // x0 = 0 plain / 1 pure / 2 int-backed / 3 string-backed
-    emitter.instruction("cmp x0, #1");                                          // a pure enum prints ` Enum`
-    emitter.instruction("b.eq __rt_pr_obj_sfx_enum");                           // select the bare enum suffix
-    emitter.instruction("cmp x0, #2");                                          // an int-backed enum prints ` Enum:int`
-    emitter.instruction("b.eq __rt_pr_obj_sfx_enum_int");                       // select the int-backed enum suffix
-    emitter.instruction("cmp x0, #3");                                          // a string-backed enum prints ` Enum:string`
-    emitter.instruction("b.eq __rt_pr_obj_sfx_enum_str");                       // select the string-backed enum suffix
-    abi::emit_symbol_address(emitter, "x1", "_pr_object_suffix");               // load the ` Object\n` header suffix
-    emitter.instruction("mov x2, #8");                                          // len(" Object\n") = 8
-    emitter.instruction("b __rt_pr_obj_sfx_write");                             // write the selected suffix
-    emitter.label("__rt_pr_obj_sfx_enum");
-    abi::emit_symbol_address(emitter, "x1", "_pr_enum_suffix");                 // load the ` Enum\n` header suffix
-    emitter.instruction("mov x2, #6");                                          // len(" Enum\n") = 6
-    emitter.instruction("b __rt_pr_obj_sfx_write");                             // write the selected suffix
-    emitter.label("__rt_pr_obj_sfx_enum_int");
-    abi::emit_symbol_address(emitter, "x1", "_pr_enum_int_suffix");             // load the ` Enum:int\n` header suffix
-    emitter.instruction("mov x2, #10");                                         // len(" Enum:int\n") = 10
-    emitter.instruction("b __rt_pr_obj_sfx_write");                             // write the selected suffix
-    emitter.label("__rt_pr_obj_sfx_enum_str");
-    abi::emit_symbol_address(emitter, "x1", "_pr_enum_str_suffix");             // load the ` Enum:string\n` header suffix
-    emitter.instruction("mov x2, #13");                                         // len(" Enum:string\n") = 13
-    emitter.label("__rt_pr_obj_sfx_write");
-    emitter.instruction("bl __rt_pr_write");                                    // write the header suffix
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the receiver for native debug dispatch
+    emitter.instruction("ldr x1, [sp, #8]");                                    // preserve this object's base indentation
+    emitter.instruction("mov x2, #1");                                          // select the print_r renderer
+    emitter.instruction("bl __rt_try_native_debug_object");                     // render a native property snapshot when available
+    emitter.instruction("cbnz x0, __rt_pr_obj_exit");                           // native objects have already rendered their complete body
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the ordinary object receiver
+    emitter.instruction("bl __rt_print_r_object_header");                       // emit the shared class and enum header
 
     // -- a revisited instance renders ` *RECURSION*` instead of a body --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
@@ -214,7 +174,8 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("str x13, [sp, #56]");                                  // save the slot pointer across the calls
 
     // -- PHP omits an uninitialized typed property from print_r entirely --
-    emitter.instruction("ldr x14, [x13, #8]");                                  // load the slot's high word (the init marker)
+    emitter.instruction("ldr x0, [x11, #24]");                                  // load the logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x13", "x0", "x14", "__rt_pr_obj_marker");
     emit_uninit_sentinel_aarch64(emitter, "x15");                               // materialize the uninitialized-property marker
     emitter.instruction("cmp x14, x15");                                        // is this property still uninitialized?
     emitter.instruction("b.eq __rt_pr_obj_next");                               // skip it without emitting a line
@@ -229,6 +190,7 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #48]");                                  // reload the descriptor row pointer
     emitter.instruction("ldr x13, [sp, #56]");                                  // reload the property slot pointer
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x13", "x0", "x14", "__rt_pr_obj_payload");
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
@@ -326,53 +288,14 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rax, [rsi + 4]");                                  // entry indent = base + 4
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the entry indent
 
-    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
-    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
-    emitter.instruction("je __rt_pr_obj_incomplete_name_x86");                  // render the synthetic internal class name
-    abi::emit_symbol_address(emitter, "r10", "_class_name_count");              // resolve the class-name table extent
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of named class ids
-    emitter.instruction("cmp r9, r10");                                         // is the class id within the name table?
-    emitter.instruction("jae __rt_pr_obj_anon_x86");                            // an unknown class id writes no name
-    abi::emit_symbol_address(emitter, "r11", "_class_name_entries");            // resolve the class-name entry table
-    emitter.instruction("shl r9, 4");                                           // each entry is a 16-byte (ptr, len) pair
-    emitter.instruction("add r11, r9");                                         // advance to this class's entry
-    emitter.instruction("mov rsi, QWORD PTR [r11]");                            // load the class-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // load the class-name length
-    emitter.instruction("jmp __rt_pr_obj_name_x86");                            // write the resolved name
-    emitter.label("__rt_pr_obj_anon_x86");
-    abi::emit_symbol_address(emitter, "rsi", "_class_name_missing");            // fall back to the empty class-name slot
-    emitter.instruction("xor edx, edx");                                        // a zero-length write emits nothing
-    emitter.instruction("jmp __rt_pr_obj_name_x86");                            // write the empty name slot
-    emitter.label("__rt_pr_obj_incomplete_name_x86");
-    abi::emit_symbol_address(emitter, "rsi", "_incomplete_class_name");         // __PHP_Incomplete_Class
-    emitter.instruction("mov edx, 22");                                         // byte length of __PHP_Incomplete_Class
-    emitter.label("__rt_pr_obj_name_x86");
-    emitter.instruction("call __rt_pr_write");                                  // write the class name
-
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
-    emitter.instruction("call __rt_obj_enum_kind");                             // rax = 0 plain / 1 pure / 2 int-backed / 3 string-backed
-    emitter.instruction("cmp rax, 1");                                          // a pure enum prints ` Enum`
-    emitter.instruction("je __rt_pr_obj_sfx_enum_x86");                         // select the bare enum suffix
-    emitter.instruction("cmp rax, 2");                                          // an int-backed enum prints ` Enum:int`
-    emitter.instruction("je __rt_pr_obj_sfx_enum_int_x86");                     // select the int-backed enum suffix
-    emitter.instruction("cmp rax, 3");                                          // a string-backed enum prints ` Enum:string`
-    emitter.instruction("je __rt_pr_obj_sfx_enum_str_x86");                     // select the string-backed enum suffix
-    abi::emit_symbol_address(emitter, "rsi", "_pr_object_suffix");              // load the ` Object\n` header suffix
-    emitter.instruction("mov edx, 8");                                          // len(" Object\n") = 8
-    emitter.instruction("jmp __rt_pr_obj_sfx_write_x86");                       // write the selected suffix
-    emitter.label("__rt_pr_obj_sfx_enum_x86");
-    abi::emit_symbol_address(emitter, "rsi", "_pr_enum_suffix");                // load the ` Enum\n` header suffix
-    emitter.instruction("mov edx, 6");                                          // len(" Enum\n") = 6
-    emitter.instruction("jmp __rt_pr_obj_sfx_write_x86");                       // write the selected suffix
-    emitter.label("__rt_pr_obj_sfx_enum_int_x86");
-    abi::emit_symbol_address(emitter, "rsi", "_pr_enum_int_suffix");            // load the ` Enum:int\n` header suffix
-    emitter.instruction("mov edx, 10");                                         // len(" Enum:int\n") = 10
-    emitter.instruction("jmp __rt_pr_obj_sfx_write_x86");                       // write the selected suffix
-    emitter.label("__rt_pr_obj_sfx_enum_str_x86");
-    abi::emit_symbol_address(emitter, "rsi", "_pr_enum_str_suffix");            // load the ` Enum:string\n` header suffix
-    emitter.instruction("mov edx, 13");                                         // len(" Enum:string\n") = 13
-    emitter.label("__rt_pr_obj_sfx_write_x86");
-    emitter.instruction("call __rt_pr_write");                                  // write the header suffix
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the receiver for native debug dispatch
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // preserve this object's base indentation
+    emitter.instruction("mov rdx, 1");                                          // select the print_r renderer
+    emitter.instruction("call __rt_try_native_debug_object");                   // render a native property snapshot when available
+    emitter.instruction("test rax, rax");                                       // inspect whether native rendering handled the object
+    emitter.instruction("jnz __rt_pr_obj_exit_x86");                            // native objects have already rendered their complete body
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the ordinary object receiver
+    emitter.instruction("call __rt_print_r_object_header");                     // emit the shared class and enum header
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_vd_seen_find");                              // is this object already on the walk stack?
@@ -417,7 +340,8 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, QWORD PTR [rbp - 8]");                        // resolve the absolute property slot address
     emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // save the slot pointer across the calls
 
-    emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // load the slot's high word (the init marker)
+    emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // load the logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "rdi", "rax", "__rt_pr_obj_marker");
     emitter.instruction("movabs r8, 0x7ffffffffffffffd");                       // materialize the uninitialized-property marker
     emitter.instruction("cmp rax, r8");                                         // is this property still uninitialized?
     emitter.instruction("je __rt_pr_obj_next_x86");                             // skip it without emitting a line
@@ -430,6 +354,7 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the descriptor row pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // reload the property slot pointer
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "rdi", "r8", "__rt_pr_obj_payload");
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
@@ -497,4 +422,138 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 80");                                         // release the object-walk frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
+}
+
+/// Shares the class/enum heading between ordinary objects and native debug snapshots.
+fn emit_print_r_object_header(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.label_global("__rt_print_r_object_header");
+    abi::emit_frame_prologue(emitter, 32);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("str x0, [sp, #0]");                            // preserve the receiver through header writes
+    // -- header: the class name from the shared class-id → (ptr, len) table --
+    emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
+    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    emitter.instruction("b.eq __rt_pr_obj_incomplete_name");                    // render the synthetic internal class name
+    abi::emit_symbol_address(emitter, "x10", "_class_name_count");              // resolve the class-name table extent
+    emitter.instruction("ldr x10, [x10]");                                      // load the number of named class ids
+    emitter.instruction("cmp x9, x10");                                         // is the class id within the name table?
+    emitter.instruction("b.hs __rt_pr_obj_anon");                               // an unknown class id writes no name
+    abi::emit_symbol_address(emitter, "x11", "_class_name_entries");            // resolve the class-name entry table
+    emitter.instruction("add x11, x11, x9, lsl #4");                            // each entry is a 16-byte (ptr, len) pair
+    emitter.instruction("ldr x1, [x11]");                                       // load the class-name pointer
+    emitter.instruction("ldr x2, [x11, #8]");                                   // load the class-name length
+    emitter.instruction("b __rt_pr_obj_name");                                  // write the resolved name
+    emitter.label("__rt_pr_obj_anon");
+    abi::emit_symbol_address(emitter, "x1", "_class_name_missing");             // fall back to the empty class-name slot
+    emitter.instruction("mov x2, #0");                                          // a zero-length write emits nothing
+    emitter.instruction("b __rt_pr_obj_name");                                  // write the empty name slot
+    emitter.label("__rt_pr_obj_incomplete_name");
+    abi::emit_symbol_address(emitter, "x1", "_incomplete_class_name");          // __PHP_Incomplete_Class
+    emitter.instruction("mov x2, #22");                                         // byte length of __PHP_Incomplete_Class
+    emitter.label("__rt_pr_obj_name");
+    emitter.instruction("bl __rt_pr_write");                                    // write the class name
+
+    // -- header suffix: PHP writes ` Object` for a class and ` Enum[:type]` for an enum --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("bl __rt_obj_enum_kind");                               // x0 = 0 plain / 1 pure / 2 int-backed / 3 string-backed
+    emitter.instruction("cmp x0, #1");                                          // a pure enum prints ` Enum`
+    emitter.instruction("b.eq __rt_pr_obj_sfx_enum");                           // select the bare enum suffix
+    emitter.instruction("cmp x0, #2");                                          // an int-backed enum prints ` Enum:int`
+    emitter.instruction("b.eq __rt_pr_obj_sfx_enum_int");                       // select the int-backed enum suffix
+    emitter.instruction("cmp x0, #3");                                          // a string-backed enum prints ` Enum:string`
+    emitter.instruction("b.eq __rt_pr_obj_sfx_enum_str");                       // select the string-backed enum suffix
+    abi::emit_symbol_address(emitter, "x1", "_pr_object_suffix");               // load the ` Object\n` header suffix
+    emitter.instruction("mov x2, #8");                                          // len(" Object\n") = 8
+    emitter.instruction("b __rt_pr_obj_sfx_write");                             // write the selected suffix
+    emitter.label("__rt_pr_obj_sfx_enum");
+    abi::emit_symbol_address(emitter, "x1", "_pr_enum_suffix");                 // load the ` Enum\n` header suffix
+    emitter.instruction("mov x2, #6");                                          // len(" Enum\n") = 6
+    emitter.instruction("b __rt_pr_obj_sfx_write");                             // write the selected suffix
+    emitter.label("__rt_pr_obj_sfx_enum_int");
+    abi::emit_symbol_address(emitter, "x1", "_pr_enum_int_suffix");             // load the ` Enum:int\n` header suffix
+    emitter.instruction("mov x2, #10");                                         // len(" Enum:int\n") = 10
+    emitter.instruction("b __rt_pr_obj_sfx_write");                             // write the selected suffix
+    emitter.label("__rt_pr_obj_sfx_enum_str");
+    abi::emit_symbol_address(emitter, "x1", "_pr_enum_str_suffix");             // load the ` Enum:string\n` header suffix
+    emitter.instruction("mov x2, #13");                                         // len(" Enum:string\n") = 13
+    emitter.label("__rt_pr_obj_sfx_write");
+    emitter.instruction("bl __rt_pr_write");                                    // write the header suffix
+
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // preserve the receiver through header writes
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
+    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    emitter.instruction("je __rt_pr_obj_incomplete_name_x86");                  // render the synthetic internal class name
+    abi::emit_symbol_address(emitter, "r10", "_class_name_count");              // resolve the class-name table extent
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of named class ids
+    emitter.instruction("cmp r9, r10");                                         // is the class id within the name table?
+    emitter.instruction("jae __rt_pr_obj_anon_x86");                            // an unknown class id writes no name
+    abi::emit_symbol_address(emitter, "r11", "_class_name_entries");            // resolve the class-name entry table
+    emitter.instruction("shl r9, 4");                                           // each entry is a 16-byte (ptr, len) pair
+    emitter.instruction("add r11, r9");                                         // advance to this class's entry
+    emitter.instruction("mov rsi, QWORD PTR [r11]");                            // load the class-name pointer
+    emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // load the class-name length
+    emitter.instruction("jmp __rt_pr_obj_name_x86");                            // write the resolved name
+    emitter.label("__rt_pr_obj_anon_x86");
+    abi::emit_symbol_address(emitter, "rsi", "_class_name_missing");            // fall back to the empty class-name slot
+    emitter.instruction("xor edx, edx");                                        // a zero-length write emits nothing
+    emitter.instruction("jmp __rt_pr_obj_name_x86");                            // write the empty name slot
+    emitter.label("__rt_pr_obj_incomplete_name_x86");
+    abi::emit_symbol_address(emitter, "rsi", "_incomplete_class_name");         // __PHP_Incomplete_Class
+    emitter.instruction("mov edx, 22");                                         // byte length of __PHP_Incomplete_Class
+    emitter.label("__rt_pr_obj_name_x86");
+    emitter.instruction("call __rt_pr_write");                                  // write the class name
+
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("call __rt_obj_enum_kind");                             // rax = 0 plain / 1 pure / 2 int-backed / 3 string-backed
+    emitter.instruction("cmp rax, 1");                                          // a pure enum prints ` Enum`
+    emitter.instruction("je __rt_pr_obj_sfx_enum_x86");                         // select the bare enum suffix
+    emitter.instruction("cmp rax, 2");                                          // an int-backed enum prints ` Enum:int`
+    emitter.instruction("je __rt_pr_obj_sfx_enum_int_x86");                     // select the int-backed enum suffix
+    emitter.instruction("cmp rax, 3");                                          // a string-backed enum prints ` Enum:string`
+    emitter.instruction("je __rt_pr_obj_sfx_enum_str_x86");                     // select the string-backed enum suffix
+    abi::emit_symbol_address(emitter, "rsi", "_pr_object_suffix");              // load the ` Object\n` header suffix
+    emitter.instruction("mov edx, 8");                                          // len(" Object\n") = 8
+    emitter.instruction("jmp __rt_pr_obj_sfx_write_x86");                       // write the selected suffix
+    emitter.label("__rt_pr_obj_sfx_enum_x86");
+    abi::emit_symbol_address(emitter, "rsi", "_pr_enum_suffix");                // load the ` Enum\n` header suffix
+    emitter.instruction("mov edx, 6");                                          // len(" Enum\n") = 6
+    emitter.instruction("jmp __rt_pr_obj_sfx_write_x86");                       // write the selected suffix
+    emitter.label("__rt_pr_obj_sfx_enum_int_x86");
+    abi::emit_symbol_address(emitter, "rsi", "_pr_enum_int_suffix");            // load the ` Enum:int\n` header suffix
+    emitter.instruction("mov edx, 10");                                         // len(" Enum:int\n") = 10
+    emitter.instruction("jmp __rt_pr_obj_sfx_write_x86");                       // write the selected suffix
+    emitter.label("__rt_pr_obj_sfx_enum_str_x86");
+    abi::emit_symbol_address(emitter, "rsi", "_pr_enum_str_suffix");            // load the ` Enum:string\n` header suffix
+    emitter.instruction("mov edx, 13");                                         // len(" Enum:string\n") = 13
+    emitter.label("__rt_pr_obj_sfx_write_x86");
+    emitter.instruction("call __rt_pr_write");                                  // write the header suffix
+
+        }
+    }
+    abi::emit_frame_restore(emitter, 32);
+    abi::emit_return(emitter);
+}
+
+
+/// Shared native-debug headings preserve incomplete-object names on every supported target.
+#[test]
+fn print_r_shared_header_preserves_incomplete_class_names_on_all_targets() {
+    use crate::codegen_support::platform::Target;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let mut emitter = Emitter::new(Target::parse(name).unwrap());
+        emit_print_r_object_header(&mut emitter);
+        let assembly = emitter.output();
+        let branch = if name == "linux-x86_64" {
+            "je __rt_pr_obj_incomplete_name_x86"
+        } else {
+            "b.eq __rt_pr_obj_incomplete_name"
+        };
+        assert!(assembly.find(branch).unwrap() < assembly.find("_class_name_count").unwrap(),
+            "{name}: recognize the synthetic class before indexed class-name lookup");
+        assert!(assembly.contains("_incomplete_class_name"), "{name}: PHP synthetic class heading");
+    }
 }

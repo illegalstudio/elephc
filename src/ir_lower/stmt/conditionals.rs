@@ -13,8 +13,11 @@
 use super::*;
 use std::collections::HashMap;
 
-use crate::ir_lower::context::{IfArmExit, StaticCallableBinding};
+use crate::ir_lower::context::{IfArmExit, ReflectionBindings, StaticCallableBinding};
 use crate::types::TypeEnv;
+
+mod runtime_choice;
+pub(super) use runtime_choice::lower_runtime_choice;
 
 /// Lowers an `if` / `elseif` / `else` chain and joins all reachable arm types once.
 pub(super) fn lower_if(
@@ -43,8 +46,10 @@ pub(super) fn lower_if(
         ctx.builder.terminate(Terminator::Unreachable);
     }
     let joined_callables = ctx.static_callable_locals_snapshot();
+    let joined_reflection = ctx.reflection_bindings_snapshot();
     ctx.clear_static_callable_locals();
     ctx.restore_static_callable_locals(joined_callables);
+    ctx.restore_reflection_bindings(joined_reflection);
 }
 
 /// Recursively emits one condition node and records every reachable arm against one shared merge.
@@ -65,15 +70,18 @@ fn lower_if_chain(
     let split_initialized = ctx.initialized_slots_snapshot();
     let split_types = ctx.local_types_snapshot();
     let split_static_callables = ctx.static_callable_locals_snapshot();
+    let split_reflection = ctx.reflection_bindings_snapshot();
     // Interior-alias markers are a MAY fact, so the arms are unioned rather than sequenced.
     // Without this, `if (..) { $r = &$a[0]; } else { $r = &$o->p; }` would take whichever arm
     // was lowered last as the answer for both.
     let split_borrowed_refs = ctx.borrowed_element_ref_locals_snapshot();
+    let split_reference_marker_arrays = ctx.reference_marker_array_locals_snapshot();
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types.clone());
     ctx.restore_static_callable_locals(split_static_callables.clone());
+    ctx.restore_reflection_bindings(split_reflection.clone());
     lower_block(ctx, then_body);
     let then_initialized = ctx.initialized_slots_snapshot();
     let mut merge_reachable = false;
@@ -84,11 +92,14 @@ fn lower_if_chain(
     }
 
     let then_borrowed_refs = ctx.borrowed_element_ref_locals_snapshot();
+    let then_reference_marker_arrays = ctx.reference_marker_array_locals_snapshot();
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types);
     ctx.restore_static_callable_locals(split_static_callables);
+    ctx.restore_reflection_bindings(split_reflection);
     ctx.restore_borrowed_element_ref_locals(split_borrowed_refs);
+    ctx.restore_reference_marker_array_locals(split_reference_marker_arrays);
     let else_reachable =
         if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
             lower_if_chain(
@@ -121,9 +132,11 @@ fn lower_if_chain(
     merge_reachable |= else_reachable;
     if !else_reachable {
         ctx.restore_borrowed_element_ref_locals(HashSet::new());
+        ctx.restore_reference_marker_array_locals(HashSet::new());
     }
     if then_reachable {
         ctx.merge_borrowed_element_ref_locals(&then_borrowed_refs);
+        ctx.merge_reference_marker_array_locals(&then_reference_marker_arrays);
     }
     let else_initialized = ctx.initialized_slots_snapshot();
     ctx.restore_initialized_slots(merge_initialized_slots(
@@ -201,6 +214,7 @@ pub(super) fn pending_join_edge(ctx: &LoweringContext<'_, '_>, tail: BlockId) ->
         types: ctx.local_types_snapshot(),
         initialized: ctx.initialized_slots_snapshot(),
         static_callables: ctx.static_callable_locals_snapshot(),
+        reflection: ctx.reflection_bindings_snapshot(),
     }
 }
 
@@ -445,8 +459,10 @@ fn finish_type_join(
         if let Some(arm) = arms.first() {
             ctx.restore_local_types(arm.types.clone());
             ctx.restore_static_callable_locals(arm.static_callables.clone());
+            ctx.restore_reflection_bindings(arm.reflection.clone());
         } else {
             ctx.restore_static_callable_locals(HashMap::new());
+            ctx.restore_reflection_bindings(ReflectionBindings::default());
         }
         for arm in &arms {
             ctx.builder.position_at_end(arm.tail);
@@ -460,6 +476,10 @@ fn finish_type_join(
 
     let (joined, edge_boxed) = join_arm_types(ctx, &arms, containers);
     let joined_callables = join_arm_static_callables(&arms);
+    let mut joined_reflection = arms[0].reflection.clone();
+    for arm in &arms[1..] {
+        joined_reflection.intersect(&arm.reflection);
+    }
     let saved_types = ctx.local_types_snapshot();
     for arm in &arms {
         ctx.restore_local_types(arm.types.clone());
@@ -484,6 +504,7 @@ fn finish_type_join(
         }
     }
     ctx.restore_static_callable_locals(joined_callables);
+    ctx.restore_reflection_bindings(joined_reflection);
 }
 
 /// The arms of a lazily evaluated expression (`?:`, `??`, `&&`, `||`, `match`), joined like `if`.
@@ -499,6 +520,8 @@ pub(crate) struct ExprBranchJoin {
     split_types: TypeEnv,
     /// Compile-time callable targets valid at the split point.
     split_static_callables: HashMap<String, StaticCallableBinding>,
+    /// Reflection targets valid before either expression arm runs.
+    split_reflection: ReflectionBindings,
     /// The arms that still reach the merge, in lowering order.
     arms: Vec<IfArmExit>,
 }
@@ -509,6 +532,7 @@ impl ExprBranchJoin {
         Self {
             split_types: ctx.local_types_snapshot(),
             split_static_callables: ctx.static_callable_locals_snapshot(),
+            split_reflection: ctx.reflection_bindings_snapshot(),
             arms: Vec::new(),
         }
     }
@@ -517,6 +541,7 @@ impl ExprBranchJoin {
     pub(crate) fn enter_arm(&self, ctx: &mut LoweringContext<'_, '_>) {
         ctx.restore_local_types(self.split_types.clone());
         ctx.restore_static_callable_locals(self.split_static_callables.clone());
+        ctx.restore_reflection_bindings(self.split_reflection.clone());
     }
 
     /// Ends the arm being lowered, deferring its merge edge when it still reaches the merge.

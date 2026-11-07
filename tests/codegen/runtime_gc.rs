@@ -17,12 +17,35 @@ mod mixed_inc_dec_in_place;
 mod case_transform_owners;
 #[path = "runtime_gc/borrowed_numeric.rs"]
 mod borrowed_numeric;
+#[path = "runtime_gc/print_r_capture.rs"]
+mod print_r_capture;
+#[path = "runtime_gc/owned_tostring.rs"]
+mod owned_tostring;
 #[path = "runtime_gc/borrowed_string_reads.rs"]
 mod borrowed_string_reads;
+mod shared_property_reads;
+mod global_return_owners;
+mod native_raw_property_guards;
+mod late_string_arguments;
 #[path = "runtime_gc/ref_local_append.rs"]
 mod ref_local_append;
 #[path = "runtime_gc/string_offset_lifetime.rs"]
 mod string_offset_lifetime;
+#[path = "runtime_gc/stream_filter_owners.rs"]
+mod stream_filter_owners;
+mod leaf_array_cycles;
+mod eval_method_adapter_owners;
+mod eval_builtin_argument_operands;
+#[path = "runtime_gc/eval_call_adapter_owners.rs"]
+mod eval_call_adapter_owners;
+mod eval_reflection_factory_owners;
+mod method_receiver_owners;
+mod file_write_owners;
+mod eval_string_split_owners;
+mod eval_persistent_owners;
+#[path = "runtime_gc/static_eval_arrays.rs"]
+mod static_eval_arrays;
+mod scalar_widening_owners;
 #[path = "runtime_gc/json_decode_owners.rs"]
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]
@@ -33,6 +56,8 @@ mod bcmath_number;
 mod basics;
 #[path = "runtime_gc/branch_conditions.rs"]
 mod branch_conditions;
+#[path = "runtime_gc/conditional_assignment_owners.rs"]
+mod conditional_assignment_owners;
 #[path = "runtime_gc/receiver_parameter_owners.rs"]
 mod receiver_parameter_owners;
 mod guarded_interface_mutations;
@@ -60,6 +85,8 @@ mod nullable_string_return;
 mod nullable_flow_slots;
 #[path = "runtime_gc/nullable_array_read_owners.rs"]
 mod nullable_array_read_owners;
+#[path = "runtime_gc/nullable_native_isset.rs"]
+mod nullable_native_isset;
 #[path = "runtime_gc/iconv.rs"]
 mod iconv;
 #[path = "runtime_gc/mbstring.rs"]
@@ -108,6 +135,10 @@ mod assoc_chunk;
 mod literal_builtin_elements;
 #[path = "runtime_gc/mixed_receiver_property_writes.rs"]
 mod mixed_receiver_property_writes;
+mod property_dimension_fetch_modes;
+mod property_magic_dimension_guards;
+mod property_magic_appends;
+mod property_append_storage;
 #[path = "runtime_gc/assoc_literal_spreads.rs"]
 mod assoc_literal_spreads;
 mod nested_nullable_property_compound;
@@ -194,15 +225,35 @@ mod class_name_owners;
 mod handler_registration_owners;
 mod closure_reference_owners;
 mod boxed_array_call_results;
+mod compiled_method_results;
+#[path = "runtime_gc/class_override_results.rs"]
+mod class_override_results;
+mod intrinsic_method_results;
 mod mixed_parameters;
 mod issue_551_ownership;
 mod object_mixed_return_owners;
 mod native_string_arguments;
 mod native_property_unset;
+#[path = "runtime_gc/native_mixed_property_aliases.rs"]
+mod native_mixed_property_aliases;
+#[path = "runtime_gc/native_reference_validation_support.rs"]
+mod native_reference_validation_support;
+#[path = "runtime_gc/native_reference_publication.rs"]
+mod native_reference_publication;
+mod native_static_reference_cells;
+mod native_reference_object_constraints;
+mod native_reference_eval_snapshots;
+mod native_reference_body_views;
+#[path = "runtime_gc/native_reference_validation_pins.rs"]
+mod native_reference_validation_pins;
+#[path = "runtime_gc/native_reference_parameter_leases.rs"]
+mod native_reference_parameter_leases;
+mod shared_return_epilogues;
 mod eval_closure_receivers;
+mod eval_alias_unwind;
+mod eval_call_result_owners;
 mod eval_argument_lifetimes;
 mod eval_array_references;
-mod eval_method_adapter_owners;
 mod eval_operand_owners;
 mod eval_scope_writeback;
 mod unserialize_hydration_data;
@@ -238,7 +289,7 @@ mod string_offset_writes;
 mod gc_incoming_cache;
 #[path = "runtime_gc/unshift_reference_cow.rs"]
 mod unshift_reference_cow;
-
+mod native_callback_results;
 mod entity_slot_owners;
 
 #[path = "runtime_gc/heap_small_bins.rs"]
@@ -271,3 +322,5 @@ mod numeric_seed_cells;
 mod static_object_exports;
 #[path = "runtime_gc/gmp_exception_operands.rs"]
 mod gmp_exception_operands;
+
+mod eval_reference_escape;

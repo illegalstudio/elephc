@@ -11,6 +11,21 @@ use crate::support::*;
 
 mod polyfills;
 
+/// Static initializer class names use the enclosing namespace without another constructor site.
+#[test]
+fn test_namespaced_static_object_initializer_resolution() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+namespace StaticNames {
+    class Item { public string $value = 'kept'; }
+    function retained(): Item { static $item = new Item(); return $item; }
+    echo retained()->value, '|', retained() === retained() ? 'same' : 'different';
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "kept|same");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Namespaced constants ending in dedicated lexer tokens resolve by their qualified names.
 #[test]
 fn test_qualified_predefined_constant_names_read_local_values() {

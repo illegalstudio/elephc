@@ -380,6 +380,8 @@ pub struct ClassInfo {
     /// caller). The object allocates a cell per such property at construction and releases
     /// it on destruction.
     pub owned_reference_properties: HashSet<String>,
+    /// Physical indices of object-owned reference cells, including hidden ancestor slots.
+    pub owned_reference_property_slots: HashSet<usize>,
     pub promoted_properties: HashSet<String>,
     /// Per-layout-slot by-reference flags for instance properties.
     ///
@@ -784,6 +786,11 @@ impl ClassInfo {
             .get(index)
             .copied()
             .unwrap_or_else(|| self.declared_properties.contains(property))
+    }
+
+    /// Returns whether this physical slot owns its native reference-cell allocation.
+    pub fn property_slot_owns_reference(&self, index: usize) -> bool {
+        self.owned_reference_property_slots.contains(&index)
     }
 
     /// Returns whether the property visible by name has a declared PHP type.

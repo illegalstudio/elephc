@@ -202,7 +202,6 @@ pub(super) fn reflection_method_owner_metadata(
         constant_names: Vec::new(),
         constant_members: Vec::new(),
         default_property_members: Vec::new(),
-        static_property_members: Vec::new(),
         constant_reflection_members: Vec::new(),
         enum_case_members: Vec::new(),
         method_members: Vec::new(),

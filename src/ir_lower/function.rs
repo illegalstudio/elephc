@@ -207,6 +207,7 @@ pub(crate) fn lower_user_function(
     // callers; only the EIR body return type becomes Mixed so `return $x`
     // lowers to a plain boxed Mixed return instead of a Generator coercion.
     let body_return_type = generator_body_return_type(body, &eir_signature.return_type, signature.is_generator);
+    let body_signature = logical_object_reference_body_signature(signature, &eir_signature);
     let mut function = Function::new(
         name.to_string(),
         return_ir_type(&body_return_type),
@@ -242,7 +243,7 @@ pub(crate) fn lower_user_function(
         None,
         &mut module.data,
         body,
-        env_from_signature(&eir_signature, web),
+        env_from_signature(&body_signature, web),
         web_gated_global_env(&check_result.global_env, web),
         &check_result.functions,
         &check_result.extern_functions,
@@ -1525,6 +1526,7 @@ pub(crate) fn lower_closure_function(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    logical_captures: &[(String, PhpType, bool)],
     signature_captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
@@ -1549,6 +1551,7 @@ pub(crate) fn lower_closure_function(
         signature,
         body,
         captures,
+        logical_captures,
         self_ref_callable_capture,
         loop_storage_scope,
         None,
@@ -1573,6 +1576,7 @@ pub(crate) fn lower_closure_function_with_context(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    logical_captures: &[(String, PhpType, bool)],
     signature_captures: &[(String, PhpType, bool)],
     contextual_arg_types: &[PhpType],
     contextual_return_type: Option<&PhpType>,
@@ -1613,6 +1617,7 @@ pub(crate) fn lower_closure_function_with_context(
         signature,
         body,
         captures,
+        logical_captures,
         self_ref_callable_capture,
         loop_storage_scope,
         None,
@@ -1627,11 +1632,14 @@ fn lower_closure_function_with_signature(
     signature: FunctionSig,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    logical_captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     loop_storage_scope: String,
     callable_default: Option<Expr>,
 ) -> FunctionSig {
     closure_defaults::lower_helpers(parent, name, &signature);
+    // Closure descriptors adapt boxed eval reference markers to the declared payload slot.
+    // Keep the closure body on that same concrete ABI so descriptor and callee agree.
     // Generator closures lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
     let closure_body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
@@ -1658,13 +1666,13 @@ fn lower_closure_function_with_signature(
         body,
         signature.is_generator,
     );
-    let env = env_with_closure_captures(&signature, captures, parent.web);
-    let lowered_params = params_with_closure_captures(&signature, captures);
+    let env = env_with_closure_captures(&signature, logical_captures, parent.web);
+    let lowered_params = params_with_closure_captures(&signature, logical_captures);
     let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
         local_name: local_name.to_string(),
         closure_name: name.to_string(),
         signature: signature.clone(),
-        captures: captures
+        captures: logical_captures
             .iter()
             .map(|(capture_name, _, by_ref)| (capture_name.clone(), *by_ref))
             .collect(),
@@ -1808,13 +1816,55 @@ fn lower_body_into_function(
     )>,
     web: bool,
 ) -> Vec<Function> {
+    // The constructor calls this ordinary EIR function before allocating a coroutine.
+    // Reuse full lowering so reference/collector validation and exception cleanup stay shared.
+    let mut eager_validators = Vec::new();
+    if function.flags.is_generator && function.signature.as_ref().is_some_and(|signature|
+        super::object_boundaries::needs_parameter_guards(signature, classes, interfaces)) {
+        let mut validator = Function::new(crate::names::generator_parameter_guard_name(&function.name),
+            IrType::Void, PhpType::Void);
+        validator.params = function.params.clone();
+        validator.lexical_class = function.lexical_class.clone();
+        validator.display_name = Some(function.display_name.clone().unwrap_or_else(|| function.name.clone()));
+        validator.flags.is_internal = true;
+        validator.flags.is_synthetic = true;
+        validator.flags.is_eager_parameter_validator = true;
+        validator.signature = function.signature.clone();
+        if let Some(signature) = &mut validator.signature {
+            signature.is_generator = false;
+            signature.return_type = PhpType::Void;
+            signature.declared_return = false;
+            signature.by_ref_return = false;
+        }
+        eager_validators.extend(lower_body_into_function(
+            &mut validator, None, data, &[], env.clone(), top_level_env.clone(), functions,
+            extern_functions, extern_globals, callable_param_sigs, return_alias_summaries,
+            fiber_return_sigs, classes, enums, interfaces, declared_trait_names,
+            declared_trait_methods, declared_trait_properties, packed_classes, extern_classes,
+            throw_access_sites, builtin_call_types, closure_generator_spans,
+            array_push_property_plans, member_receiver_types, local_value_read_types,
+            boxed_reference_promotion_sites, first_class_builtin_call_types, generic_call_sites,
+            loop_storage_types, string_incdec_locals, bind_kill_sites, ref_detach_sites,
+            retype_sites, mixed_storage_store_sites, sparse_key_write_sites, promotable_arrays,
+            loop_storage_scope.clone(), constants,
+            current_class.clone(), PhpType::Void, false, params, None, false,
+            all_global_var_names.clone(), None, source_path.clone(), None, web,
+        ));
+        eager_validators.push(validator);
+    }
     let owner_name = function.name.clone();
+    let eager_parameters = function.flags.is_generator;
     let function_by_ref_return = function.flags.by_ref_return;
     let by_ref_params = function
         .params
         .iter()
         .map(|param| param.by_ref)
         .collect::<Vec<_>>();
+    let reference_variadic = function.signature.as_ref().and_then(|signature| {
+        let name = signature.variadic.as_ref()?;
+        let index = signature.params.iter().position(|(candidate, _)| candidate == name)?;
+        signature.ref_params.get(index).copied().unwrap_or(false).then(|| name.clone())
+    });
     let mut builder = Builder::new(function);
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);
@@ -1875,6 +1925,8 @@ fn lower_body_into_function(
             && property_initializers.is_none() && !body.is_empty()
             && !crate::ir_lower::body_contains_eval_call(body)
     };
+    ctx.eval_reference_snapshots = crate::ir_lower::body_contains_eval_call(body)
+        || eval_scope_reads.is_some() || property_initializers.is_some();
     ctx.by_ref_return = function_by_ref_return;
     ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
@@ -1886,6 +1938,15 @@ fn lower_body_into_function(
         if by_ref_params.get(index).copied().unwrap_or(false) {
             ctx.mark_ref_bound_local(name);
         }
+    }
+    // Parameter slots must remain the contiguous ABI prefix before hidden owners are appended.
+    for (index, (name, _)) in params.iter().enumerate() {
+        let incoming_cell = ctx.builder.function().params.get(index)
+            .is_some_and(|parameter| parameter.by_ref && !parameter.variadic);
+        if incoming_cell { ctx.retain_incoming_ref_cell(name); }
+    }
+    if let Some(name) = reference_variadic {
+        ctx.mark_reference_marker_array_local(&name);
     }
     // PHP passes arrays BY VALUE. The call site hands the callee a `+0` borrow of the caller's
     // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and
@@ -1914,6 +1975,7 @@ fn lower_body_into_function(
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
     ctx.lower_with_final_string_storage(|ctx| {
+        if !eager_parameters { super::object_boundaries::guard_parameters(ctx); }
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
@@ -1939,7 +2001,9 @@ fn lower_body_into_function(
     // releases have been pruned, so codegen can consume EIR metadata instead of
     // maintaining a second producer allow-list (issue #595).
     ctx.finalize_value_ownership_metadata();
-    ctx.into_closures()
+    let mut closures = ctx.into_closures();
+    closures.extend(eager_validators);
+    closures
 }
 
 /// Seeds a self-recursive closure capture as a static callable local inside its body.
@@ -2185,7 +2249,7 @@ pub(crate) fn eir_signature_with_php_param_contracts(
     signature: &FunctionSig,
     callable_param_sigs: &std::collections::HashMap<(String, String), FunctionSig>,
 ) -> FunctionSig {
-    let mut eir_signature = signature.clone();
+    let mut eir_signature = eir_signature_with_object_reference_contracts(signature);
     let mut has_dynamic_untyped_param = false;
     for (index, (name, php_type)) in eir_signature.params.iter_mut().enumerate() {
         let declared = signature
@@ -2195,9 +2259,18 @@ pub(crate) fn eir_signature_with_php_param_contracts(
             .unwrap_or(false);
         let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
         let variadic = signature.variadic.as_deref() == Some(name.as_str());
-        if by_ref && matches!(php_type, PhpType::Object(_)) {
-            *php_type = PhpType::Mixed;
+        if by_ref {
             continue;
+        }
+        if declared && index == 1
+            && owner_name.rsplit_once("::").is_some_and(|(_, method)|
+                matches!(php_symbol_key(method).as_str(), "__call" | "__callstatic"))
+            && matches!(php_type, PhpType::Array(element)
+                if matches!(element.as_ref(), PhpType::Never | PhpType::Void))
+        {
+            // Eval-only magic calls have no static argument evidence. Their array is populated
+            // at runtime, so its seed element type must never become a constant null read.
+            *php_type = PhpType::Array(Box::new(PhpType::Mixed));
         }
         if !declared && !by_ref && !variadic {
             if preserve_untyped_eir_param_contract(
@@ -2219,6 +2292,42 @@ pub(crate) fn eir_signature_with_php_param_contracts(
         );
     }
     eir_signature
+}
+
+/// Boxes declared object-reference parameters while retaining their source type metadata.
+fn eir_signature_with_object_reference_contracts(signature: &FunctionSig) -> FunctionSig {
+    let mut eir_signature = signature.clone();
+    for (index, (_, php_type)) in eir_signature.params.iter_mut().enumerate() {
+        if signature.ref_params.get(index).copied().unwrap_or(false)
+            && matches!(php_type, PhpType::Object(_))
+        {
+            *php_type = PhpType::Mixed;
+        }
+    }
+    eir_signature
+}
+
+/// Restores declared object-reference views for the body while retaining its boxed entry ABI.
+fn logical_object_reference_body_signature(
+    source_signature: &FunctionSig,
+    eir_signature: &FunctionSig,
+) -> FunctionSig {
+    let mut body_signature = eir_signature.clone();
+    for (index, (_, php_type)) in body_signature.params.iter_mut().enumerate() {
+        let Some((_, source_type)) = source_signature.params.get(index) else {
+            continue;
+        };
+        if source_signature
+            .ref_params
+            .get(index)
+            .copied()
+            .unwrap_or(false)
+            && matches!(source_type.codegen_repr(), PhpType::Object(_))
+        {
+            *php_type = source_type.clone();
+        }
+    }
+    body_signature
 }
 
 /// Marks boxed ABI parameters as materialization targets for reused runtime invokers.
@@ -2268,7 +2377,7 @@ fn magic_method_param_keeps_eir_contract(
             // The $args array keeps its contract only once call sites have
             // specialized the element type. The checker seeds it as
             // Array<Never>; eval-only magic calls never specialize it, and a
-            // Never element would lower every $args[N] read to an empty
+            // Never or normalized Void element would lower every $args[N] read to an empty
             // constant, so those fall back to the boxed Mixed widening.
             (param_index == 0 && matches!(php_type.codegen_repr(), PhpType::Str))
                 || (param_index == 1
@@ -2277,7 +2386,7 @@ fn magic_method_param_keeps_eir_contract(
                     // Never seed to Void and would hide it.
                     && !matches!(
                         php_type,
-                        PhpType::Array(elem) if matches!(elem.as_ref(), PhpType::Never)
+                        PhpType::Array(elem) if matches!(elem.as_ref(), PhpType::Never | PhpType::Void)
                     ))
         }
         _ => false,

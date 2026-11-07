@@ -222,6 +222,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::RuntimeCall(target) => {
             let _ = write!(out, " runtime.{}", target.as_eir());
+            if let crate::ir::RuntimeCallTarget::ReferencePropertyCoerce { class_id, slot, is_static } = target {
+                let _ = write!(out, " class={class_id} slot={slot} static={is_static}");
+            }
             if let crate::ir::RuntimeCallTarget::ProfiledFunction { target, strict_types, arguments, .. } = target {
                 if *arguments == crate::ir::RuntimeArgumentLayout::IndexedArray {
                     let _ = write!(out, " arguments=indexed-array");

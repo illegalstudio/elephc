@@ -575,10 +575,19 @@ fn prepare_write_only_output_local(
     parameter_index: usize,
     value: &Expr,
 ) -> Option<(String, PhpType)> {
-    let ty = match (canonical, parameter_index) {
-        ("preg_match", 2) => PhpType::Array(Box::new(PhpType::Str)),
-        ("preg_match_all", 2) => PhpType::Array(Box::new(PhpType::Mixed)),
-        _ => pcntl_output_type(canonical, parameter_index)?,
+    let boxed_output = crate::builtins::registry::lookup(canonical).is_some_and(|def| {
+        matches!(def.spec.semantics.argument_lowering,
+            crate::builtins::semantics::BuiltinArgumentLowering::WriteOnlyMixedOutputs(indices)
+                if indices.contains(&parameter_index))
+    });
+    let ty = if boxed_output {
+        PhpType::Mixed
+    } else {
+        match (canonical, parameter_index) {
+            ("preg_match", 2) => PhpType::Array(Box::new(PhpType::Str)),
+            ("preg_match_all", 2) => PhpType::Array(Box::new(PhpType::Mixed)),
+            _ => pcntl_output_type(canonical, parameter_index)?,
+        }
     };
     let ExprKind::Variable(name) = &value.kind else {
         return None;
@@ -595,7 +604,7 @@ fn prepare_write_only_output_local(
         // output argument. Earlier arguments must still see its original type.
         // Frame representation is whole-function metadata, not an evaluation:
         // expose it now so earlier narrowed loads receive their detached owner.
-        if ctx.local_type(name).codegen_repr() != ty.codegen_repr() {
+        if !ctx.is_ref_bound_local(name) && ctx.local_type(name).codegen_repr() != ty.codegen_repr() {
             if let Some(slot) = ctx.local_slots.get(name).copied() {
                 ctx.builder.widen_local_storage_type(slot, PhpType::Mixed);
             }
@@ -679,7 +688,11 @@ fn prepare_openssl_encrypt_tag_local(ctx: &mut LoweringContext<'_, '_>, args: &[
     else {
         return;
     };
-    ctx.set_local_type(name, PhpType::Str);
+    // A native reference can already expose a canonical value whose runtime tag differs
+    // from its entry declaration. Output preparation must preserve that boxed view.
+    if !ctx.is_ref_bound_local(name) || ctx.local_type(name).codegen_repr() != PhpType::Mixed {
+        ctx.set_local_type(name, PhpType::Str);
+    }
 }
 
 /// Lowers plain positional builtin operands without materializing omitted defaults or packing tails.

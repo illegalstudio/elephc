@@ -187,15 +187,15 @@
   ],
   "coverage": {
     "classes": {
-      "have": 185,
+      "have": 188,
       "total": 329
     },
     "constants": {
-      "have": 1349,
+      "have": 1361,
       "total": 3180
     },
     "functions": {
-      "have": 1053,
+      "have": 1056,
       "total": 2169
     }
   },
@@ -319,6 +319,16 @@
       ],
       "notes": "ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost",
       "php": "https://www.php.net/manual/en/book.xml.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/xml.md",
+      "feature": "SimpleXML",
+      "modules": [
+        "simplexml"
+      ],
+      "notes": "Three functions and two classes on the managed libxml2 bridge; supports element and attribute selections, mutation, namespace queries, XPath, and recursive iteration. Auto-linked or forced with --with-xml.",
+      "php": "https://www.php.net/manual/en/book.simplexml.php",
       "status": "supported"
     },
     {
@@ -674,8 +684,8 @@
     },
     {
       "classes": {
-        "eval": 8,
-        "have": 8,
+        "eval": 9,
+        "have": 9,
         "total": 50
       },
       "constants": {
@@ -970,8 +980,8 @@
         "total": 1
       },
       "constants": {
-        "eval": 5,
-        "have": 5,
+        "eval": 17,
+        "have": 17,
         "total": 28
       },
       "docs": null,
@@ -1343,16 +1353,16 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 2,
+        "have": 2,
         "total": 2
       },
       "constants": null,
-      "docs": null,
+      "docs": "docs/php/xml.md#functions",
       "extension": "simplexml",
       "functions": {
-        "eval": 0,
-        "have": 0,
+        "eval": 3,
+        "have": 3,
         "total": 3
       },
       "name": "simplexml",

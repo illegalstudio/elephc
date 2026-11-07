@@ -16,12 +16,17 @@ mod prefix;
 mod prefix_complex;
 mod pratt;
 
-pub(crate) use assignment_targets::{compound_assignment_expression, plain_assignment_expression};
+pub(crate) use assignment_targets::{compound_assignment_expression, plain_assignment_expression, desugar_scoped_lvalue_incdec};
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
+
+/// Parses a discarded computed property update with statement-owned capture names.
+pub(crate) fn parse_scoped_write_expr(tokens: &[SpannedToken], pos: &mut usize) -> Result<Expr, CompileError> {
+    pratt::parse_scoped_write_expr(tokens, pos)
+}
 
 /// Parses a PHP expression using a Pratt parser, starting at binding power 0.
 /// Returns the parsed expression or a compile error if syntax is invalid.

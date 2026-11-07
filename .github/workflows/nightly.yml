@@ -214,7 +214,7 @@ jobs:
       # list is guarded by `every_bridge_crate_is_in_the_build_lists`; a bridge
       # missing here ships a compiler that refuses the flag it advertises.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-openssl -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-curl -p elephc-zend
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-openssl -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-reference -p elephc-curl -p elephc-zend
 
       - name: Strip binary
         run: strip target/release/elephc
@@ -353,8 +353,6 @@ jobs:
         with:
           path: ~/.cache/elephc/native
           key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/**') }}
-          restore-keys: |
-            verify-native-${{ matrix.target }}-
 
       - name: Download the built tarball
         uses: actions/download-artifact@v8

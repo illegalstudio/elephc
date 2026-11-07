@@ -6,8 +6,8 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
-//! - Packed integer arrays are not swept graph nodes, so even the final sweep must release
-//!   their real owners normally. Other graph children retain sweep-only suppression.
+//! - Arrays outside the collector's graph element tags (4 through 7) release normally,
+//!   including empty, string and scalar arrays held by unreachable objects or Mixed cells.
 //! - Decrement helpers are release paths for refcounted values and must balance recursive frees with GC cycle collection.
 
 use crate::codegen_support::{abi, emit::Emitter};
@@ -55,7 +55,7 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("and x13, x11, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this a refcounted indexed array?
     emitter.instruction("b.lo __rt_decref_any_dispatch");                       // strings should still be freed immediately
-    // -- integer leaves are released normally because the collector never sweeps them --
+    // -- non-graph arrays are released normally because the collector never sweeps them --
     emitter.instruction("b.ne __rt_decref_any_graph_kind");                     // other heap kinds keep their existing graph classification
     emitter.instruction("ubfx x14, x11, #8, #7");                               // isolate array value_type without the COW or collector flags
     emitter.instruction("cmp x14, #4");                                         // only reference-bearing indexed arrays participate in the graph
@@ -168,7 +168,7 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("and r11d, 0xff");                                      // inspect the concrete heap kind
     emitter.instruction("cmp r11d, 2");                                         // strings and raw allocations are not swept graph nodes
     emitter.instruction("jb __rt_decref_any_dispatch");                         // release non-graph children through their ordinary helper
-    // -- integer leaves are released normally because the collector never sweeps them --
+    // -- non-graph arrays are released normally because the collector never sweeps them --
     emitter.instruction("jne __rt_decref_any_graph_kind");                      // other heap kinds keep their existing graph classification
     emitter.instruction("mov r11, r10");                                        // preserve the full header while selecting array storage
     emitter.instruction("shr r11, 8");                                          // move the array value_type into the low bits
@@ -272,10 +272,15 @@ mod packed_integer_tests {
                 let x86 = name == "linux-x86_64";
                 let mask = if x86 { "and r11d, 0x7f" } else { "ubfx x14, x11, #8, #7" };
                 let (_, gate) = assembly.split_once(mask).expect("integer storage gate");
-                let dispatch = if x86 { "jb __rt_decref_any_dispatch" }
-                    else { "b.lo __rt_decref_any_dispatch" };
-                assert!(gate.find(dispatch).unwrap() < gate.find("__rt_decref_any_graph_kind:\n").unwrap(),
-                    "{name}, PIC={pic}: integer leaf must bypass graph suppression");
+                let graph = gate.find("__rt_decref_any_graph_kind:\n").unwrap();
+                for dispatch in if x86 {
+                    ["cmp r11d, 4", "jb __rt_decref_any_dispatch", "cmp r11d, 7", "ja __rt_decref_any_dispatch"]
+                } else {
+                    ["cmp x14, #4", "b.lo __rt_decref_any_dispatch", "cmp x14, #7", "b.hi __rt_decref_any_dispatch"]
+                } {
+                    assert!(gate.find(dispatch).is_some_and(|position| position < graph),
+                        "{name}, PIC={pic}: non-graph arrays must bypass suppression: {dispatch}");
+                }
                 assert!(assembly.contains(if x86 { "test r10, 0x10000" } else { "tst x11, x14" }),
                     "{name}: ordinary graph-child reachability remains required");
                 if clang {

@@ -28,6 +28,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 values,
             )
         }
+        EvaluatedCallable::NativeDescriptor { callback, .. } => {
+            eval_native_descriptor_with_call_args(*callback, evaluated_args, context, values)
+        }
         EvaluatedCallable::Named { name, .. } => {
             eval_callable_with_call_array_args(name, evaluated_args, context, values)
         }

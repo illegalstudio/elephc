@@ -70,6 +70,7 @@ mod property_values;
 mod receiver_place;
 mod runtime_calls;
 mod runtime_array_liveness;
+mod spl_storage_write_fetch;
 mod string_write_offsets;
 mod runtime_class_messages;
 mod literal_parameter_guards;
@@ -101,13 +102,20 @@ mod method_call_types;
 mod method_dispatch;
 mod method_intrinsics;
 mod method_resolution;
+mod method_lookup;
+mod reference_return_dispatch;
 #[cfg(test)]
 #[path = "lower_inst/null_parameter_guard_tests.rs"]
 mod null_parameter_guard_tests;
+#[cfg(test)]
+#[path = "lower_inst/mixed_unbox_ownership_tests.rs"]
+mod mixed_unbox_ownership_tests;
 mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;
 mod reference_arguments;
+mod reference_argument_handoff;
+mod reference_payloads;
 mod runtime_wrappers;
 mod static_method_calls;
 mod throwable_methods;
@@ -222,12 +230,14 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
         Op::ZeroLocalSlot => lower_zero_local_slot(ctx, &inst),
         Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),
+        Op::LoadRefCellValue => local_loads::lower_load_ref_cell_value(ctx, &inst),
         Op::StoreRefCell => lower_store_ref_cell(ctx, &inst),
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
         Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
         Op::RetainLocalRefCell => lower_retain_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalSlot => lower_release_local_slot(ctx, inst_id, &inst),
+        Op::ReleaseRawLocalSlot => local_stores::lower_release_raw_local_slot(ctx, &inst),
         Op::PushCallOperandOwner => ownership::lower_push_call_operand_owner(ctx, &inst),
         Op::PopCallOperandOwner => ownership::lower_pop_call_operand_owner(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
@@ -433,6 +443,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ExprCall => callables::lower_expr_call(ctx, &inst),
         Op::CallableDescriptorInvoke => callables::lower_callable_descriptor_invoke(ctx, &inst),
         Op::PipeCall => callables::lower_pipe_call(ctx, &inst),
+        Op::MethodLookup => method_lookup::lower_method_lookup(ctx, &inst),
         Op::MethodCall => lower_method_call(ctx, &inst),
         Op::NullsafeMethodCall => lower_nullsafe_method_call(ctx, &inst),
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),

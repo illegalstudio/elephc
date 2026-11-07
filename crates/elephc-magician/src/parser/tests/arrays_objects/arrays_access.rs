@@ -10,6 +10,18 @@
 
 use super::super::support::*;
 
+/// Nested appends, nested assignments and method-result dimensions keep their complete receiver.
+#[test]
+fn parse_fragment_accepts_general_dimension_writes() {
+    let program = parse_fragment(br#"$rows['i'][] = 1; $rows['i'][0] += 2; $xml->attributes()['id'] = 'new';"#)
+        .expect("nested and returned-object dimensions should parse");
+    assert!(matches!(&program.statements()[0], EvalStmt::DimensionWrite { array: EvalExpr::ArrayGet { .. }, index: None, op: None, .. }));
+    assert!(matches!(&program.statements()[1], EvalStmt::DimensionWrite { array: EvalExpr::ArrayGet { .. }, index: Some(_), op: Some(EvalBinOp::Add), .. }));
+    assert!(matches!(&program.statements()[2], EvalStmt::DimensionWrite { array: EvalExpr::MethodCall { .. }, index: Some(_), .. }));
+    parse_fragment(br#"for ($rows['i'][] = 0; false; $rows['i'][] = 1) {}"#)
+        .expect("for clauses share dimension mutation parsing");
+}
+
 /// Verifies indexed array literals and reads parse as runtime array expressions.
 #[test]
 fn parse_fragment_accepts_indexed_array_read_source() {

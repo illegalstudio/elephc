@@ -8,6 +8,7 @@
 //! - Parent metadata lookup, constructor visibility, and compound default ownership stay centralized.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::with_runtime_owners;
 
 /// Finds generated/AOT method metadata on a class or its native parent chain.
 pub(in crate::interpreter) fn eval_aot_method_dispatch_metadata_in_hierarchy(
@@ -73,16 +74,19 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         context,
         values,
     )?;
-    let result = if let Some(scope) = bridge_scope.as_deref() {
-        eval_with_native_bridge_scope(scope, context, || {
+    let result = with_runtime_owners(&bound_args, || {
+        let result = if let Some(scope) = bridge_scope.as_deref() {
+            eval_with_native_bridge_scope(scope, context, values, |values| {
+                values.construct_object(object, native_bound_arg_values(&bound_args))
+            })
+        } else {
             values.construct_object(object, native_bound_arg_values(&bound_args))
-        })
-    } else {
-        values.construct_object(object, native_bound_arg_values(&bound_args))
-    };
-    let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+        };
+        let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+        result.and(writeback)
+    });
     let released = release_native_bound_args(&bound_args, context, values);
-    result.and(writeback).and(released)
+    result.and(released)
 }
 
 /// Returns the generated/AOT constructor scope that the runtime bridge can recognize.
@@ -270,6 +274,7 @@ pub(super) fn materialize_native_callable_object_default(
     let constructed = (|| {
         for arg in args {
             constructor_args.push(EvaluatedCallArg {
+                evaluation_owner: None,
                 name: arg.name.clone(),
                 value: materialize_native_callable_default(&arg.value, context, values)?,
                 ref_target: None,

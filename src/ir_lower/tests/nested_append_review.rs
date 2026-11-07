@@ -8,6 +8,27 @@
 //! - Objects use a null-key method call while arrays retain attached boxed mutation.
 //! - Native emitters must support the same branch graph on all five targets.
 
+/// A Mixed static root creates a missing nested append parent through attached write lookup.
+#[test]
+fn mixed_static_nested_append_uses_write_lookup_on_all_targets() {
+    let source = r#"<?php
+class MixedStaticAppendOwner { public static mixed $items = []; }
+function appendMixedStatic(): void { MixedStaticAppendOwner::$items['missing'][] = 'created'; }
+appendMixedStatic();
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "appendMixedStatic").unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.immediate == Some(
+            crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ArrayFetchForWrite))),
+            "{target}: a missing parent must be created without a read warning");
+        assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::ArrayGet),
+            "{target}: a plain append must not read the absent key");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Every target emits object-aware append dispatch and accepts deeper false promotion.
 #[test]
 fn nested_append_review_all_targets() {

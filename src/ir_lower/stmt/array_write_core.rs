@@ -22,12 +22,20 @@ pub(super) fn release_persisted_string_operand(
     span: Span,
 ) {
     let ty = ctx.builder.value_php_type(value.value);
-    // Only release a FRESH owning string temporary (a call/concat result, etc.).
-    // A borrowed load of a variable that still owns the string (e.g. the prelude's
-    // `$_GET[$k] = $v`) must NOT be released here, or the container's stored copy
-    // would be freed out from under it.
-    if matches!(ty.codegen_repr(), PhpType::Str) && ctx.value_is_owning_temporary(value) {
+    // A later widening can make a local read allocate a detached string. Emit its
+    // provisional retirement too; ownership finalization removes borrowed concrete reads.
+    if matches!(ty.codegen_repr(), PhpType::Str) && ctx.value_needs_release_after_use(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+}
+
+/// Retires a hash key whose bytes or boxed payload were only borrowed by normalization.
+pub(super) fn release_hash_key_operand(
+    ctx: &mut LoweringContext<'_, '_>, key: LoweredValue, span: Span,
+) {
+    release_persisted_string_operand(ctx, key, span);
+    if matches!(ctx.builder.value_php_type(key.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
     }
 }
 
@@ -38,10 +46,11 @@ pub(in crate::ir_lower) fn release_indexed_array_write_operand(
     value: LoweredValue,
     span: Span,
 ) {
-    if !ctx.value_is_owning_temporary(value) {
+    let value_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    let detached_string = value_ty == PhpType::Str && ctx.value_needs_release_after_use(value);
+    if !ctx.value_is_owning_temporary(value) && !detached_string {
         return;
     }
-    let value_ty = ctx.builder.value_php_type(value.value).codegen_repr();
     if matches!(
         container_elem_ty.map(PhpType::codegen_repr),
         Some(PhpType::Mixed)
@@ -149,6 +158,7 @@ pub(super) fn lower_array_assign(
 /// `$place[$k] op= $v` is written as `$place[$k] op $v` and `$place[$k] ??= $v` as
 /// `$place[$k] ?? $v`, both built with the statement's own span. A right-hand side the user
 /// wrote never carries that span, so `$a[$k] = $a[$k] + 1` stays two separate PHP accesses.
+#[derive(Clone, Copy)]
 pub(crate) enum ElementUpdate<'a> {
     /// A compound operator. The value already read the element, so the write reuses the key
     /// that read converted instead of diagnosing a float key a second time.
@@ -236,11 +246,36 @@ fn lower_array_assign_with_update(
     key_already_diagnosed: bool,
     incdec: Option<bool>,
 ) {
+    if super::native_reference_mutations::lower(ctx, array, span,
+        |ctx| lower_array_assign_selected(ctx, array, index, value, span, key_already_diagnosed, incdec))
+    { return; }
+    lower_array_assign_selected(ctx, array, index, value, span, key_already_diagnosed, incdec);
+}
+
+/// Emits the selected raw or canonical local writer without changing PHP operand order.
+#[allow(clippy::too_many_arguments)]
+fn lower_array_assign_selected(
+    ctx: &mut LoweringContext<'_, '_>, array: &str, index: &Expr, value: &Expr,
+    span: Span, key_already_diagnosed: bool, incdec: Option<bool>,
+) {
     if string_offset_writes::local_is_string_offset_target(ctx, array) {
         string_offset_writes::lower_string_offset_assign(ctx, array, index, value, span);
         return;
     }
     let array_value = load_array_local_for_write(ctx, array, span);
+    if let Some(increment) = incdec {
+        if super::native_dimension_incdec::lower(ctx, array_value, index, increment, value_incdec_locals(value), span,
+            |ctx, array_value| lower_array_assign_from_value(ctx, array, array_value, index, value, span, key_already_diagnosed, incdec))
+        { return; }
+    }
+    lower_array_assign_from_value(ctx, array, array_value, index, value, span, key_already_diagnosed, incdec);
+}
+
+/// Preserves the established typed and boxed writer after a native incdec guard.
+fn lower_array_assign_from_value(
+    ctx: &mut LoweringContext<'_, '_>, array: &str, array_value: LoweredValue,
+    index: &Expr, value: &Expr, span: Span, key_already_diagnosed: bool, incdec: Option<bool>,
+) {
     if let Some(update) = incdec.and_then(|increment| {
         super::buffer_element_updates::statement_update(ctx, array_value, value, increment)
     }) {
@@ -286,9 +321,9 @@ fn lower_array_assign_with_update(
         );
         return;
     }
-    // Concrete string keys normally select associative storage. Ref-bound Mixed-slot
-    // arrays instead use the shared writer, preserving invoker markers and keeping numeric
-    // strings indexed. A boxed Mixed/Union index may hold either
+    // Concrete string keys normally select associative storage. Ref-bound Mixed-slot arrays and
+    // copies of by-reference variadic collectors use the shared writer, preserving invoker
+    // markers and keeping numeric strings indexed. A boxed Mixed/Union index may hold either
     // an integer or a string key (foreach loop keys are always Mixed in EIR via
     // `Op::IterCurrentKey`), so it goes through `Op::ArraySetMixedKey`, whose
     // runtime helper keeps integer keys on indexed storage (preserving indexed
@@ -307,8 +342,9 @@ fn lower_array_assign_with_update(
         && !index_is_boxed_mixed_key(index_value.ir_type);
     let mixed_elements = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
-    let reference_string_key = mixed_elements && index_value.ir_type == IrType::Str
-        && ctx.is_ref_bound_local(array);
+    let reference_array = mixed_elements
+        && (ctx.is_ref_bound_local(array) || ctx.local_may_contain_reference_markers(array));
+    let reference_string_key = reference_array && index_value.ir_type == IrType::Str;
     // The checker promoted this write because its integer key may land past the end of the
     // non-empty packed array the local holds, where `ArraySet` would zero-fill the gap. The
     // decision is the checker's (it alone sees the loop-counter proofs), and it is acted on only
@@ -327,7 +363,7 @@ fn lower_array_assign_with_update(
     if op == Op::ArraySet
         && (index_value.ir_type == IrType::Str
             || empty_sparse_key
-            || nonempty_sparse_key
+            || (nonempty_sparse_key && !reference_array)
             || recorded_sparse_key)
         && !reference_string_key
     {
@@ -356,6 +392,14 @@ fn lower_array_assign_with_update(
             || matches!(value_value.ir_type,
                 IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)))
     {
+        // A later eval barrier can widen a local string key to Mixed storage. Its earlier
+        // Str load then owns the detached copy produced by `__rt_mixed_cast_string`, even
+        // though the EIR load still looks borrowed. Remember that provisional owner before
+        // `box_value_as_mixed` persists its own key copy; owning temporaries are retired by
+        // the boxer itself and must not be released twice here.
+        let release_detached_string_key = index_value.ir_type == IrType::Str
+            && !ctx.value_is_owning_temporary(index_value)
+            && ctx.value_needs_release_after_use(index_value);
         let key = ctx.box_value_as_mixed(index_value, PhpType::Mixed, Some(index.span));
         crate::ir_lower::expr::unpin_in_flight_owners(
             ctx,
@@ -365,6 +409,9 @@ fn lower_array_assign_with_update(
         lower_mixed_key_array_set(
             ctx, array, array_value, key, value_value, span, key_already_diagnosed,
         );
+        if release_detached_string_key {
+            crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
+        }
         crate::ir_lower::ownership::release_if_owned(ctx, key, Some(index.span));
         return;
     }
@@ -475,7 +522,8 @@ pub(super) fn lower_concrete_array_set_values(
         Some(span),
     );
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, index_pins, span);
-    release_persisted_string_operand(ctx, index, span);
+    if op == Op::HashSet { release_hash_key_operand(ctx, index, span); }
+    else { release_persisted_string_operand(ctx, index, span); }
     release_persisted_string_operand(ctx, value, span);
 }
 
@@ -492,6 +540,7 @@ pub(super) fn lower_boxed_array_set(
     key_already_diagnosed: bool,
 ) {
     let mut roots = Vec::new();
+    let array = boxed_invalid_scalar_receiver(ctx, array, span);
     let (array, receiver_owner) = super::nested_array_writes::root_static_update_receiver(ctx, array, span);
     if let Some(owner) = receiver_owner { roots.push(owner); }
     let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr| {
@@ -526,6 +575,7 @@ pub(super) fn lower_boxed_array_set_values(
     key_already_diagnosed: bool,
 ) {
     let mut roots = Vec::new();
+    let array = boxed_invalid_scalar_receiver(ctx, array, span);
     let (array, receiver_owner) = super::nested_array_writes::root_static_update_receiver(ctx, array, span);
     if let Some(owner) = receiver_owner { roots.push(owner); }
     let mut root = |ctx: &mut LoweringContext<'_, '_>, operand: LoweredValue| {
@@ -543,6 +593,15 @@ pub(super) fn lower_boxed_array_set_values(
     for root in roots.into_iter().rev() {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
     }
+}
+
+/// Routes impossible integer/float stores through the existing boxed PHP error path.
+fn boxed_invalid_scalar_receiver(
+    ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, span: Span,
+) -> LoweredValue {
+    if matches!(ctx.builder.value_php_type(array.value).codegen_repr(), PhpType::Int | PhpType::Float) {
+        ctx.box_value_as_mixed(array, PhpType::Mixed, Some(span))
+    } else { array }
 }
 
 /// Coerces a buffer element write value into the scalar storage accepted by `BufferSet`.

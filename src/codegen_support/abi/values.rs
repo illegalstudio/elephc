@@ -217,19 +217,39 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 /// of `cbz`'s +/-1 MiB range, which large generated PDO/class functions can exceed.
 /// The integer result represents a coerced PHP truthiness value used in conditional contexts.
 pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
+    let register = int_result_reg(emitter);
+    emit_branch_if_zero_wide(emitter, register, label);
+}
+
+/// Tests a raw integer register with a short inverse branch around a wide AArch64 transfer.
+pub fn emit_branch_if_zero_wide(emitter: &mut Emitter, register: &str, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbnz {}, 1f", int_result_reg(emitter))); // skip the long branch when the coerced truthiness result is nonzero
+            emitter.instruction(&format!("cbnz {register}, 1f"));               // skip the long transfer when the tested register is nonzero
             emitter.instruction(&format!("b {}", label));                       // branch with the wider unconditional range when the result is zero
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
             emitter.instruction(&format!(                                       // test whether the integer result is zero
                 "test {}, {}",
-                int_result_reg(emitter),
-                int_result_reg(emitter)
+                register,
+                register
             ));
             emitter.instruction(&format!("je {}", label));                      // branch when the coerced integer truthiness result is zero
+        }
+    }
+}
+
+/// Uses a wide AArch64 transfer when the caller's previous comparison was unequal.
+pub fn emit_branch_if_not_equal_wide(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction("b.eq 1f");                                     // skip the transfer when the preceding comparison was equal
+            emitter.instruction(&format!("b {label}"));                         // take the unequal edge with the wider branch range
+            emitter.label("1");                                                // resume after the conditional transfer
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("jne {label}"));                       // x86_64 conditional transfers already span the generated helper
         }
     }
 }

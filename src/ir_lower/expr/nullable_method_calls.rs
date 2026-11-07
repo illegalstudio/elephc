@@ -32,11 +32,25 @@ pub(super) fn lower_nullsafe_method_call(
     expr: &Expr,
 ) -> LoweredValue {
     let object = lower_expr(ctx, object);
+    lower_nullsafe_method_call_from_receiver(ctx, object, method, args, expr)
+}
+
+/// Guards a prepared receiver, including missing elements whose declared type excludes null.
+pub(super) fn lower_nullsafe_method_call_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
     let object_ty = ctx.builder.value_php_type(object.value);
     if value_is_definitely_null(ctx, object.value) {
+        release_owning_receiver_temporary(ctx, object, expr.span);
         return lower_boxed_null(ctx, expr);
     }
-    let Some((_, true)) = singular_object_class(&object_ty) else {
+    let nullable = singular_object_class(&object_ty).is_some_and(|(_, nullable)| nullable);
+    let container_miss = value_may_carry_container_miss(ctx, object.value);
+    if !nullable && !container_miss {
         return lower_method_call_with_receiver(
             ctx,
             object,
@@ -45,7 +59,7 @@ pub(super) fn lower_nullsafe_method_call(
             Op::NullsafeMethodCall,
             expr,
         );
-    };
+    }
     let result_type = method_call_result_type(
         ctx,
         object.value,
@@ -53,6 +67,22 @@ pub(super) fn lower_nullsafe_method_call(
         Op::NullsafeMethodCall,
         expr,
     );
+    let result_type = if container_miss && !nullable && result_type.codegen_repr() != PhpType::Mixed {
+        nullable_result_type(result_type)
+    } else { result_type };
+    lower_guarded_nullsafe_receiver(ctx, object, result_type, expr, |ctx, object| {
+        lower_method_call_with_receiver(ctx, object, method, args, Op::NullsafeMethodCall, expr)
+    })
+}
+
+/// Runs an already prepared call only for a non-null receiver, merging into nullable storage.
+pub(super) fn lower_guarded_nullsafe_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    result_type: PhpType,
+    expr: &Expr,
+    emit_call: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue) -> LoweredValue,
+) -> LoweredValue {
     let temp_name = ctx.declare_hidden_temp(result_type.clone());
     let null_block = ctx.builder.create_named_block("nullsafe.method.null", Vec::new());
     let call_block = ctx.builder.create_named_block("nullsafe.method.call", Vec::new());
@@ -74,6 +104,7 @@ pub(super) fn lower_nullsafe_method_call(
     });
 
     ctx.builder.position_at_end(null_block);
+    release_owning_receiver_temporary(ctx, object, expr.span);
     let null_value = lower_null(ctx, expr);
     let null_value = if result_type.codegen_repr() == PhpType::Mixed {
         ctx.box_value_as_mixed(null_value, result_type.clone(), Some(expr.span))
@@ -84,14 +115,7 @@ pub(super) fn lower_nullsafe_method_call(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(call_block);
-    let call = lower_method_call_with_receiver(
-        ctx,
-        object,
-        method,
-        args,
-        Op::NullsafeMethodCall,
-        expr,
-    );
+    let call = emit_call(ctx, object);
     store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
     branch_to(ctx, merge);
 
@@ -110,6 +134,9 @@ pub(super) fn lower_method_call_with_receiver(
 ) -> LoweredValue {
     let object = refine_member_receiver(ctx, object, expr);
     if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
+        return call;
+    }
+    if let Some(call) = source_variadic_calls::lower(ctx, object, method, args, op, expr) {
         return call;
     }
     lower_method_call_with_receiver_direct(ctx, object, method, args, op, expr)
@@ -177,6 +204,7 @@ fn lower_method_call_with_binding(
     // A concrete local load may later unbox physical Mixed storage after eval widens
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
     let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
+    emit_native_factory_method_lookup(ctx, object, method, expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))
@@ -278,9 +306,22 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
     }
     let receiver_slot = ctx.local_slots[&receiver_name];
     register_owned_call_operand(ctx, receiver_slot, expr.span);
+    let (method, method_slot) = if ctx.classes.contains_key("SimpleXMLElement") {
+        let method_value = lower_expr(ctx, method);
+        let method_type = ctx.builder.value_php_type(method_value.value);
+        let method_name = ctx.declare_hidden_temp(method_type.clone());
+        store_value_into_temp(ctx, &method_name, method_type, method_value, expr.span);
+        let method_slot = ctx.local_slots[&method_name];
+        register_owned_call_operand(ctx, method_slot, expr.span);
+        let receiver = ctx.load_local(&receiver_name, Some(expr.span));
+        let method = ctx.load_local(&method_name, Some(expr.span));
+        ctx.emit_void(Op::MethodLookup, vec![receiver.value, method.value], None,
+            Op::MethodLookup.default_effects(), Some(expr.span));
+        (Expr::new(ExprKind::Variable(method_name), expr.span), Some(method_slot))
+    } else { (method.clone(), None) };
     let receiver = Expr::new(ExprKind::Variable(receiver_name), expr.span);
     let callback = Expr::new(
-        ExprKind::ArrayLiteral(vec![receiver, method.clone()]),
+        ExprKind::ArrayLiteral(vec![receiver, method]),
         Span::dummy(),
     );
     let mut call_args = Vec::with_capacity(args.len() + 1);
@@ -294,6 +335,7 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
         expr.span,
     );
     let result = lower_expr(ctx, &call);
+    if let Some(slot) = method_slot { retire_owned_call_operand(ctx, slot, expr.span); }
     retire_owned_call_operand(ctx, receiver_slot, expr.span);
     result
 }
@@ -340,18 +382,19 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     roots: &[(usize, crate::ir::LocalSlotId)],
     span: Span,
 ) {
-    if let Some(result) = result.filter(|result| {
-        call_result_hands_back_a_lent_string(ctx, args, *result, return_alias, signature)
-    }) {
-        ctx.borrowed_call_results.insert(result);
-    }
-    let owned_object_result = result.is_some_and(|result| {
-        matches!(ctx.builder.value_php_type(result).codegen_repr(), PhpType::Object(_))
+    let independently_owned_result = result.is_some_and(|result| {
+        let representation = ctx.builder.value_php_type(result).codegen_repr();
+        let operation = ctx.builder.value_defining_op(result);
+        (matches!(representation, PhpType::Object(_))
+            && matches!(operation, Some(Op::Call | Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall))
+            // Method return normalization persists a borrowed string before publishing it.
+            // Even a passthrough therefore returns an owner separate from the argument.
+            || matches!(representation, PhpType::Callable | PhpType::Str)
+                && matches!(operation, Some(Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall)))
+
             && signature.is_some_and(|signature| !signature.by_ref_return)
-            && matches!(ctx.builder.value_defining_op(result),
-                Some(Op::Call | Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall))
     });
-    let guarded_result = result.filter(|_| owned_object_result && args.iter().any(|value| {
+    let guarded_result = result.filter(|_| independently_owned_result && args.iter().any(|value| {
         ctx.value_is_owning_temporary(LoweredValue {
             value: *value,
             ir_type: ctx.builder.value_type(*value),
@@ -367,14 +410,13 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
         ctx.unguard_call_argument(*value, span);
         if let Some((_, slot)) = roots.iter().find(|(index, _)| *index == parameter_index) {
             let pin_only = ctx.builder.value_defining_op(*value) == Some(Op::EnsureOwned)
-                || (ctx.builder.value_defining_op(*value) == Some(Op::Acquire)
-                    && ctx.builder.local_kind(*slot) == LocalKind::OwnedTemp);
+                || ctx.builder.local_kind(*slot) == LocalKind::OwnedTemp;
             if !pin_only {
                 retire_owned_call_operand(ctx, *slot, span);
                 continue;
             }
-            // Claimed strings and persisted byte views are only PINNED for the call: retire the
-            // pin without releasing, then decide the release against the result below.
+            // OwnedTemp records only pin an existing operand owner. Detach that record without
+            // releasing, then apply the same result-alias decision to the original producer.
             unregister_owned_call_operand(ctx, *slot, span);
             ctx.emit_void(
                 Op::UnsetLocal,
@@ -384,7 +426,8 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                 Some(span),
             );
         }
-        let reference_place_view_already_released = signature.is_some_and(|signature| {
+        let native_reference_value_view = ctx.builder.value_defining_op(*value) == Some(Op::LoadRefCellValue);
+        let reference_place_view_already_released = (native_reference_value_view || signature.is_some_and(|signature| {
             signature
                 .ref_params
                 .get(parameter_index)
@@ -393,7 +436,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
         }) && matches!(
             ctx.builder.value_defining_op(*value),
             Some(Op::LoadLocal | Op::LoadRefCell)
-        ) && ctx.builder.function().instructions.iter().any(|inst| {
+        )) && ctx.builder.function().instructions.iter().any(|inst| {
             inst.op == Op::Release && inst.operands == [*value]
         });
         if reference_place_view_already_released {
@@ -463,7 +506,15 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                         && conditionally_releasable
                         && ctx.arg_and_result_types_can_alias(*value, result))
             });
-            if !owned_object_result && !callee_owns && !independently_boxed && result_reuses_arg {
+            // A by-value scalar parameter receives a converted word, never the caller's
+            // owning box. Even an unknown return summary cannot make that box an alias.
+            let scalar_parameter_copy = signature.is_some_and(|signature| {
+                !signature.ref_params.get(parameter_index).copied().unwrap_or(false)
+                    && signature.params.get(parameter_index).is_some_and(|(_, ty)|
+                        matches!(ty.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void))
+            });
+            if !independently_owned_result && !callee_owns && !independently_boxed
+                && !scalar_parameter_copy && result_reuses_arg {
                 // Both suppression reasons above are MAY facts, so an unconditional skip is
                 // right only on the calls that actually hand the payload back. Emitting a
                 // conditional release instead lets each call decide at runtime: the codegen
@@ -491,11 +542,9 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                 if let Some(result) = result {
                     let arg_repr = ctx.builder.value_php_type(lowered.value).codegen_repr();
                     let result_repr = ctx.builder.value_php_type(result).codegen_repr();
-                    let owned_string_arg = arg_repr == PhpType::Str
-                        && matches!(
-                            ctx.builder.value_defining_op(lowered.value),
-                            Some(Op::EnsureOwned | Op::Acquire | Op::StrPersist)
-                        );
+                    // The enclosing gate includes provisional local reads and owned
+                    // user returns; final backend ownership still skips borrowed storage.
+                    let owned_string_arg = arg_repr == PhpType::Str;
                     let user_call_result = matches!(
                         ctx.builder.value_defining_op(result),
                         Some(
@@ -518,6 +567,9 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                     }
                     if owned_string_arg && user_call_result {
                         if result_repr == PhpType::Str {
+                            // A runtime view has no releasing owner of its own. Retire the
+                            // normalized cast it borrows unless that owner became the result.
+                            release_marked_cast_copies_unless_returned(ctx, lowered, result, span);
                             ctx.emit_void(
                                 Op::ReleaseUnlessAliases,
                                 vec![lowered.value, result],
@@ -530,8 +582,11 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                         }
                         continue;
                     }
-                    let comparable = matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
-                        && matches!(result_repr, PhpType::Mixed | PhpType::Union(_));
+                    let comparable = (matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
+                        && matches!(result_repr, PhpType::Mixed | PhpType::Union(_)))
+                        // Callable descriptors also have a single pointer identity. A new
+                        // binding owns its captures independently of the source descriptor.
+                        || arg_repr == PhpType::Callable && result_repr == PhpType::Callable;
                     if comparable {
                         ctx.emit_void(
                             Op::ReleaseUnlessAliases,
@@ -555,37 +610,6 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     if let Some(value) = guarded_result {
         ctx.unguard_call_argument(value, span);
     }
-}
-
-/// Returns whether a method, static-method or nullsafe call's string result is an argument the
-/// caller only lent: the callee is proven to return that parameter as-is, and the argument is
-/// no temporary the caller owns (a local, or a builtin's view into one). The result then
-/// borrows the caller's string, and releasing it as an owned call result freed the caller's
-/// own block: `$r = self::same($d)` left `$d` pointing at freed memory. Plain function calls
-/// are answered from the function's summary by `value_is_borrowed_user_call_result`.
-fn call_result_hands_back_a_lent_string(
-    ctx: &LoweringContext<'_, '_>,
-    args: &[crate::ir::ValueId],
-    result: crate::ir::ValueId,
-    return_alias: &ReturnArgAlias,
-    signature: Option<&FunctionSig>,
-) -> bool {
-    if ctx.builder.value_php_type(result).codegen_repr() != PhpType::Str
-        || signature.is_some_and(|signature| signature.by_ref_return)
-        || !matches!(
-            ctx.builder.value_defining_op(result),
-            Some(Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall)
-        )
-    {
-        return false;
-    }
-    args.iter().enumerate().any(|(parameter_index, argument)| {
-        !signature.is_some_and(|signature| {
-            signature.returned_parameter_has_independent_owner(parameter_index)
-        }) && return_alias.proven_aliases_parameter(parameter_index)
-            && ctx.call_result_may_alias_arg(*argument, result)
-            && !ctx.call_argument_is_caller_temporary(*argument)
-    })
 }
 
 /// Releases a normalized string-cast copy nested under a call argument.
@@ -669,7 +693,9 @@ pub(super) fn stabilize_borrowed_result_and_release_receiver(
     result: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if !ctx.value_is_owning_temporary(receiver) {
+    let boxed_local_read = ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed
+        && ctx.value_needs_release_after_use(receiver);
+    if !ctx.value_is_owning_temporary(receiver) && !boxed_local_read {
         return result;
     }
     let result = if ctx.value_is_owning_temporary(result) {

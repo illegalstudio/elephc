@@ -102,8 +102,21 @@ impl Checker {
         flattened_classes: &[FlattenedClass],
         errors: &mut Vec<CompileError>,
     ) -> Result<(), CompileError> {
+        let previous = self.method_property_refinements.take();
+        let result = self.type_check_methods_until_stable_inner(flattened_classes, errors);
+        self.method_property_refinements = previous;
+        result
+    }
+
+    /// Keeps precise cross-class storage across passes without replaying constructor placeholders as new writes.
+    fn type_check_methods_until_stable_inner(
+        &mut self,
+        flattened_classes: &[FlattenedClass],
+        errors: &mut Vec<CompileError>,
+    ) -> Result<(), CompileError> {
         let mut method_passes_remaining = (flattened_classes.len().max(1) * 2) + 1;
         loop {
+            self.method_property_refinements = Some(std::collections::HashSet::new());
             let classes_before_pass = self.classes.clone();
             // A pass that denies a method local the promotable `?int` read view needs another
             // pass, whose walk then keeps that local's reads `mixed`.
@@ -176,6 +189,13 @@ impl Checker {
                                 .map(|(_, t)| t.clone())
                                 .unwrap_or(PhpType::Int)
                         };
+                        // An unused untyped magic argument list has no element evidence yet.
+                        // Its Never seed must not turn a runtime callback into a null read.
+                        let ty = if type_ann.is_none() && i == 1
+                            && matches!(method_key.as_str(), "__call" | "__callstatic")
+                            && matches!(&ty, PhpType::Array(element)
+                                if matches!(element.as_ref(), PhpType::Never | PhpType::Void))
+                        { PhpType::Mixed } else { ty };
                         // Match build_method_sig and the runtime hydration adapter:
                         // user hooks consume boxed PHP arrays, synthetic SPL keeps
                         // the raw representation declared by its generated signature.

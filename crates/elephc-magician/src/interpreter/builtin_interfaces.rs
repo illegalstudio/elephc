@@ -11,6 +11,19 @@
 
 use super::*;
 
+/// Recognizes the builtin interface ancestors absent from the eval declaration registry.
+pub(super) fn builtin_interface_is_a(actual: &str, expected: &str) -> bool {
+    let actual = actual.trim_start_matches('\\').to_ascii_lowercase();
+    let expected = expected.trim_start_matches('\\');
+    let parents: &[&str] = match actual.as_str() {
+        "iterator" | "iteratoraggregate" => &["Traversable"],
+        "outeriterator" | "recursiveiterator" | "seekableiterator" => &["Iterator", "Traversable"],
+        "backedenum" => &["UnitEnum"],
+        _ => &[],
+    };
+    parents.iter().any(|parent| parent.eq_ignore_ascii_case(expected))
+}
+
 /// Returns method requirements for one PHP builtin interface name.
 pub(super) fn builtin_interface_method_requirements(
     interface: &str,

@@ -52,6 +52,7 @@ mod rotated_loops;
 mod runtime_metadata;
 mod return_ownership;
 mod shared_count_guard;
+mod shared_property_read;
 mod shared_helper;
 mod shared_mixed_string;
 mod shared_mbstring_callable;
@@ -562,6 +563,7 @@ fn finalize_user_asm(
     }
     user_asm.push('\n');
     user_asm.push_str(&user_data);
+    user_asm.push_str(&emit_native_reference_metadata(module)?);
     let mut exported: HashSet<String> = exported_functions
         .values()
         .map(|export| module.target.extern_symbol(&export.c_name))

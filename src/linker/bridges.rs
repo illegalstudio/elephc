@@ -323,7 +323,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
         // The libxml2-backed XML bridge implements PHP's `xml` (SAX parser) and
         // `xmlwriter` extensions; both surfaces are declared by the same injected prelude.
-        php_extensions: &["xml", "xmlwriter"],
+        php_extensions: &["xml", "xmlwriter", "SimpleXML"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -344,6 +344,20 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         // The eval interpreter is an internal compiler facility, not an extension.
         php_extensions: &[],
         monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_reference",
+        env_var: "ELEPHC_REFERENCE_LIB_DIR",
+        crate_name: "elephc-reference",
+        flag_name: "reference",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        php_extensions: &[],
+        monitoring: MonitoringPolicy::Infrastructure {
+            reason: "native reference metadata and protected validation coordination",
+        },
     },
     BridgeStaticlib {
         lib_name: "elephc_curl",
@@ -1745,6 +1759,9 @@ mod tests {
         }
         assert_eq!(bridge_lib_for_flag("bogus"), None);
         assert_eq!(crate_flag_names().len(), BRIDGES.len());
+        assert_eq!(bridge_lib_for_flag("reference"), Some("elephc_reference"));
+        assert_eq!(archive_filename_for_flag("reference").as_deref(), Some("libelephc_reference.a"));
+        assert!(php_extensions_for_lib("elephc_reference").is_empty());
     }
 
     /// Verifies adding a bridge requires an explicit, machine-audited monitoring decision.
@@ -1814,7 +1831,7 @@ mod tests {
         assert!(!xml.whole_archive);
         assert!(xml.apple_frameworks.is_empty());
         assert_eq!(xml.apple_libraries, &["iconv"]);
-        assert_eq!(xml.php_extensions, &["xml", "xmlwriter"]);
+        assert_eq!(xml.php_extensions, &["xml", "xmlwriter", "SimpleXML"]);
 
         let magician = bridge_for_library("elephc_magician").expect("eval bridge");
         assert_eq!(magician.crate_name, "elephc-magician");

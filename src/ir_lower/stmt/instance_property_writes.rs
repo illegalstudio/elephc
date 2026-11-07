@@ -9,6 +9,15 @@
 
 use super::*;
 
+mod native_xml;
+mod runtime_set_hooks;
+
+/// Routes a runtime-name XML write while preserving the caller's common operand owners.
+pub(crate) fn lower_native_dynamic_property_set(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
+    value: LoweredValue, span: Span,
+) -> bool { native_xml::lower_dynamic(ctx, object, property, value, span) }
+
 /// Lowers an object property write.
 pub(super) fn lower_property_assign(
     ctx: &mut LoweringContext<'_, '_>,
@@ -17,6 +26,9 @@ pub(super) fn lower_property_assign(
     value: &Expr,
     span: Span,
 ) {
+    if crate::ir_lower::expr::lower_native_xml_property_update(ctx, object, property, value, span) {
+        return;
+    }
     // Readonly errors depend on runtime initialization, after receiver and RHS effects.
     let readonly_write = ctx.throw_access_sites.get(&span).and_then(|info| {
         if let ThrowAccessKind::ReadonlyProperty { class_name, property, initialization_error } = &info.kind {
@@ -47,13 +59,27 @@ pub(super) fn lower_property_assign(
             }
         }
     }
+    // A parser-generated ??= must not replay its write or receiver/name conversion on
+    // the keep branch. Explicit `$o->p = $o->p ?? $rhs` has a different RHS span.
+    if value.span.line == span.line && value.span.col == span.col {
+        if let ExprKind::NullCoalesce { value: read, default } = &value.kind {
+            if matches!(&read.kind, ExprKind::PropertyAccess { object: read_object, property: read_property }
+                if read_object.as_ref() == object && read_property == property) {
+                crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
+                return;
+            }
+        }
+    }
     let value_expr = value;
-    let (mut receiver, lowered_value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+    let (mut receiver, lowered_value, deferred_value_owner) = if crate::ir_lower::expr::is_static_property_write_chain(object)
+        || (!property.starts_with("__elephc_") && crate::ir_lower::expr::defer_native_property_write_receiver(ctx, object)) {
         let rhs = lower_expr(ctx, value_expr);
+        let (rhs, owner) = root_deferred_property_write_value(ctx, rhs, span);
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, rhs, span);
-        (receiver, rhs)
+        (receiver, rhs, owner)
     } else {
-        let object = crate::ir_lower::expr::lower_member_receiver_at_span(ctx, object, span);
+        let object = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
+        let object = crate::ir_lower::expr::refine_member_receiver_at_span(ctx, object, span);
         let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let rhs = match object_property_type(ctx, object.value, property) {
             Some(property_ty) => {
@@ -61,7 +87,7 @@ pub(super) fn lower_property_assign(
             }
             None => lower_expr(ctx, value_expr),
         };
-        (receiver, rhs)
+        (receiver, rhs, None)
     };
     let lowered_value = ctx.borrow_write_operand_if_needed(lowered_value, span);
     // Preserve the original PHP tag until the initialization probe has chosen its branch.
@@ -141,6 +167,33 @@ pub(super) fn lower_property_assign(
         lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span);
     }
     receiver.finish(ctx, span);
+    if let Some(owner) = deferred_value_owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+    }
+}
+
+/// Publishes a deferred RHS below the receiver chain and lends the writer a borrowed view.
+fn root_deferred_property_write_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> (LoweredValue, Option<LocalSlotId>) {
+    let (value, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, span);
+    let Some(owner) = owner else {
+        return (value, None);
+    };
+    let ty = ctx.builder.value_php_type(value.value);
+    let borrowed = ctx.emit_value(
+        Op::Borrow,
+        vec![value.value],
+        None,
+        ty,
+        Op::Borrow.default_effects(),
+        Some(span),
+    );
+    ctx.builder
+        .set_value_ownership(borrowed.value, Ownership::Borrowed);
+    (borrowed, Some(owner))
 }
 
 /// Confirms the lowered receiver's single object class owns the recorded Reflection handler.
@@ -409,6 +462,18 @@ fn lower_property_assign_value(
     preserve_property_operand: bool,
     span: Span,
 ) {
+    if native_xml::lower(ctx, object, property, value_expr, lowered_value, preserve_property_operand, span) {
+        return;
+    }
+    lower_property_assign_without_native(ctx, object, property, value_expr, lowered_value,
+        preserve_property_operand, span);
+}
+
+/// Writes an ordinary slot, hook, or magic property after native XML dispatch is excluded.
+pub(super) fn lower_property_assign_without_native(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    value_expr: &Expr, lowered_value: LoweredValue, preserve_property_operand: bool, span: Span,
+) {
     let value = contextualize_property_array_assignment(
         ctx,
         object.value,
@@ -489,6 +554,18 @@ fn lower_property_assign_value(
         lower_property_hook_set(ctx, object.value, property, value, span);
         return;
     }
+    if runtime_set_hooks::lower(ctx, object, property, value, preserve_property_operand, span) {
+        return;
+    }
+    lower_property_slot_assign(ctx, object, property, value, preserve_property_operand,
+        retained_abstract_setter, span);
+}
+
+/// Stores an already prepared RHS after native and ordinary property hooks are excluded.
+fn lower_property_slot_assign(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    value: LoweredValue, preserve_property_operand: bool, retained_abstract_setter: bool, span: Span,
+) {
     let data = ctx.intern_string(property);
     // A declared property store carries MAY_THROW: the weak typed-property guard raises PHP's
     // catchable TypeError, and a Stringable receiver can throw out of its own __toString. Both
@@ -511,7 +588,12 @@ fn lower_property_assign_value(
     } else {
         Vec::new()
     };
-    if preserve_property_operand {
+    // A receiver whose class is known only at run time needs the property name as an operand
+    // even when source syntax used a literal. The complete runtime dispatcher uses that name to
+    // distinguish declared slots, existing dynamic-hash entries, and missing names handled by
+    // `__set`. The immediate-only `PropSet` ladder cannot materialize the guarded magic call.
+    let runtime_shaped_receiver = receiver_requires_literal_runtime_dispatch(ctx, object, span);
+    if preserve_property_operand || runtime_shaped_receiver {
         let property_name = ctx.emit_value(
             Op::ConstStr,
             Vec::new(),
@@ -553,6 +635,30 @@ fn lower_property_assign_value(
     // object extracted from a boxed nullable static property. Its caller retires those leases
     // after this store returns. Releasing `object` here as well would free that narrowed object
     // twice and leave any freshly published property payload dangling.
+}
+
+/// Returns whether a literal property name must remain a runtime operand for this receiver.
+///
+/// Some statically known object and union receivers use boxed storage after a guarded load. Their
+/// checked source view still selects the ordinary immediate `PropSet` ladder. Only a genuinely
+/// opaque or conflicting `mixed` source needs the full runtime-name dispatcher for `__set` and
+/// existing dynamic-hash precedence.
+fn receiver_requires_literal_runtime_dispatch(
+    ctx: &LoweringContext<'_, '_>,
+    object: LoweredValue,
+    span: Span,
+) -> bool {
+    if !matches!(
+        ctx.builder.value_php_type(object.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return false;
+    }
+    matches!(
+        ctx.member_receiver_types
+            .get(&(ctx.loop_storage_scope.clone(), span)),
+        None | Some(None) | Some(Some(PhpType::Mixed))
+    )
 }
 
 /// Returns whether this receiver can dispatch the write through an inherited abstract setter.
@@ -921,7 +1027,8 @@ pub(super) fn set_hook_receiver_has_accessor(
     object: crate::ir::ValueId,
     property: &str,
 ) -> bool {
-    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some((class_name, _)) = crate::ir_lower::expr::singular_object_class(&object_ty) else {
         return false;
     };
     let normalized = class_name.trim_start_matches('\\');

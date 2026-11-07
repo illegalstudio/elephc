@@ -18,7 +18,7 @@ pub(super) fn lower_compare(
     expr: &Expr,
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
-    let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
+    let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, right, left.span);
     let mut pending = [lhs];
     let (rhs, pending_pins) = if left_pins.is_empty() {
         lower_with_pending_owners(ctx, &mut pending, expr.span, |ctx| {

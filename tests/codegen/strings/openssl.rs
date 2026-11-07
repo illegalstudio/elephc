@@ -7,6 +7,7 @@
 //! Key details:
 //! - Ciphertext expectations come from the checked-in PHP 8.4/OpenSSL 3.6 fixtures.
 //! - GCM cases pin by-reference tags, AAD authentication, non-default IVs, and failures.
+//! - Catalog checks compare every name and account for the provider's native CPU gates.
 
 use super::*;
 
@@ -98,23 +99,48 @@ echo openssl_encrypt("short", "aes-256-cbc", $key, OPENSSL_RAW_DATA | OPENSSL_ZE
     );
 }
 
-/// Verifies constants, IV lengths, unknown-cipher false, and PHP's 135-name inventory.
+/// Verifies constants, IV lengths, and the exact catalog with native capability gates.
 #[test]
 fn test_openssl_constants_and_cipher_helpers() {
     if skip_without_openssl_native("test_openssl_constants_and_cipher_helpers") {
         return;
     }
-    let out = compile_and_run(
-        r#"<?php
+    let golden: Vec<_> = include_str!("../../../crates/elephc-openssl/tests/php_ciphers.txt")
+        .lines().collect();
+    assert_eq!(golden.len(), 135);
+    // OpenSSL 3.6.4's default provider gates these CBC-HMAC implementations on
+    // native capabilities. The checked-in PHP fixture includes ARM64's nine ETM
+    // names; x86_64 normally offers the four older MAC-then-encrypt names instead.
+    let mut optional = vec!["aes-128-cbc-hmac-sha1", "aes-128-cbc-hmac-sha256",
+        "aes-256-cbc-hmac-sha1", "aes-256-cbc-hmac-sha256"];
+    optional.extend(golden.iter().copied().filter(|name| name.ends_with("-etm")));
+    assert_eq!(optional.len(), 13);
+    let source = r#"<?php
 namespace CryptoFixture;
 $methods = openssl_get_cipher_methods();
 echo OPENSSL_RAW_DATA, ":", OPENSSL_ZERO_PADDING, ":", OPENSSL_DONT_ZERO_PAD_KEY, "|";
 echo OpEnSsL_CiPhEr_Iv_LeNgTh("aes-128-cbc"), ":", openssl_cipher_iv_length("AES-256-GCM"), ":", openssl_cipher_iv_length("aes-192-ecb"), "|";
 echo openssl_cipher_iv_length("not-a-cipher") === false ? "false" : "bad", "|";
 echo count($methods), ":", in_array("aes-128-cbc", $methods) ? "yes" : "no", ":", in_array("aes-256-gcm", $methods) ? "yes" : "no", ":", in_array("aria-128-cbc", $methods) ? "yes" : "no", ":", in_array("aes-128-wrap", $methods) ? "yes" : "no";
-"#,
-    );
-    assert_eq!(out, "1:2:4|16:12:0|false|135:yes:yes:yes:yes");
+echo "\n", implode("|", $methods), "\n";
+foreach (explode("|", "__OPTIONAL_CIPHERS__") as $name) {
+    if (openssl_cipher_iv_length($name) !== false) { echo $name, "|"; }
+}
+"#.replace("__OPTIONAL_CIPHERS__", &optional.join("|"));
+    let out = compile_and_run(&source);
+    let parts: Vec<_> = out.splitn(3, '\n').collect();
+    assert_eq!(parts.len(), 3, "missing complete cipher catalog: {out}");
+    let available: Vec<_> = parts[2].split('|').filter(|name| !name.is_empty()).collect();
+    assert_eq!(available.len(), available.iter().copied().collect::<std::collections::BTreeSet<_>>().len(),
+        "duplicate capability probes: {out}");
+    assert!(available.iter().all(|name| optional.contains(name)), "unexpected capability probe: {out}");
+    let mut expected: Vec<String> = golden.iter().copied().filter(|name| !optional.contains(name))
+        .map(str::to_string).collect();
+    assert_eq!(expected.len(), 126);
+    expected.extend(available.iter().map(|name| (*name).to_string()));
+    expected.sort_unstable();
+    assert_eq!(parts[1], expected.join("|"), "complete default-provider inventory");
+    assert_eq!(parts[0], format!("1:2:4|16:12:0|false|{}:yes:yes:yes:yes", expected.len()));
 }
 
 /// Verifies unknown ciphers and invalid padded ciphertext return false in both directions.

@@ -71,6 +71,7 @@ pub(in crate::ir_lower) fn take_owned_temp(
 ) -> LoweredValue {
     let value = ctx.load_local(temp_name, Some(span));
     ctx.clear_owned_hidden_temp(temp_name, Some(span));
+    ctx.mark_taken_owned_temp(value.value);
     value
 }
 

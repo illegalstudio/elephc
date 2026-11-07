@@ -94,8 +94,8 @@ find_native_archive() {
 
 # Shim first: it reaches into libxml2's parser-context structs on the bridge's behalf,
 # so it must precede libxml2.a (src/linker/bridges.rs LIBXML2_ARCHIVES).
-SHIM_ARCHIVE="$(find_native_archive libxml2 2.15.3 1 libelephc_libxml2_shim.a)"
-LIBXML2_ARCHIVE="$(find_native_archive libxml2 2.15.3 1 libxml2.a)"
+SHIM_ARCHIVE="$(find_native_archive libxml2 2.15.3 9 libelephc_libxml2_shim.a)"
+LIBXML2_ARCHIVE="$(find_native_archive libxml2 2.15.3 9 libxml2.a)"
 
 WORK_DIR="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/elephc-ios-xml-link.XXXXXX")"
 cleanup() {
@@ -111,6 +111,7 @@ nm -u "$LIBXML2_ARCHIVE" > "$WORK_DIR/libxml2.undefined"
 grep -F "iconv_open" "$WORK_DIR/libxml2.undefined"
 nm "$SHIM_ARCHIVE" > "$WORK_DIR/shim.symbols"
 grep -F "elephc_libxml2_v1_parser_create" "$WORK_DIR/shim.symbols"
+grep -F "elephc_libxml2_v1_sx_parse_stream" "$WORK_DIR/shim.symbols"
 
 cp "$FIXTURE_DIR/main.php" "$FIXTURE_DIR/host.c" "$WORK_DIR/"
 cp "$PROJECT_DIR/examples/xml/elephc.toml" "$WORK_DIR/elephc.toml"
@@ -128,6 +129,7 @@ test -s "$WORK_DIR/libmain.h"
 nm -u "$WORK_DIR/libmain.a" > "$WORK_DIR/main.undefined"
 grep -F "elephc_xml_parser_create" "$WORK_DIR/main.undefined"
 grep -F "elephc_xml_writer_create" "$WORK_DIR/main.undefined"
+grep -F "elephc_xml_sx_load" "$WORK_DIR/main.undefined"
 grep -F "elephc_phar_stream_open_url" "$WORK_DIR/main.undefined"
 
 # Same shape as the compiler's own Apple link plan for this program: the exported

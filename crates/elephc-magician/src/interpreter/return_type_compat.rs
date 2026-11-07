@@ -536,15 +536,18 @@ fn eval_return_class_type_is_a(
         return pending_class_return_type_is_a(pending_class, &expected_resolved, context);
     }
     if context.has_class(&actual_resolved) {
-        return context.class_is_a(&actual_resolved, &expected_resolved, false);
+        return context.class_is_a(&actual_resolved, &expected_resolved, false)
+            || context.class_interface_names(&actual_resolved).iter()
+                .any(|interface| builtin_interface_is_a(interface, &expected_resolved));
     }
     if context.has_interface(&actual_resolved) {
         return context
             .interface_parent_names(&actual_resolved)
             .iter()
-            .any(|parent| parent.eq_ignore_ascii_case(&expected_resolved));
+            .any(|parent| parent.eq_ignore_ascii_case(&expected_resolved)
+                || builtin_interface_is_a(parent, &expected_resolved));
     }
-    false
+    builtin_interface_is_a(&actual_resolved, &expected_resolved)
 }
 
 /// Returns whether the pending class declaration satisfies one expected class-like type.
@@ -567,7 +570,8 @@ fn pending_class_return_type_is_a(
     }
     pending_class_return_interface_names(class, context)
         .iter()
-        .any(|interface| interface.eq_ignore_ascii_case(expected_name))
+        .any(|interface| interface.eq_ignore_ascii_case(expected_name)
+            || builtin_interface_is_a(interface, expected_name))
 }
 
 /// Returns direct and inherited interface names for a pending eval class declaration.

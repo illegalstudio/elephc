@@ -156,7 +156,8 @@ fn as_attribute(mut declaration: Stmt, targets: i64) -> Stmt {
 }
 
 /// Adds Core's `WeakReference` declaration to a program that does not declare it yet: a prelude
-/// injected after the Core one (the hosted-extension wrappers) may need it on its own.
+/// injected after Core (DOM or hosted extensions) may need it on its own. Generated
+/// declarations are resolved here so this also works after the main namespace pass.
 pub fn ensure_weak_reference(
     mut program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
@@ -166,6 +167,8 @@ pub fn ensure_weak_reference(
         return program;
     }
     let declaration: Program = core_declarations().into_iter().filter(declared).collect();
+    let declaration = crate::name_resolver::resolve(declaration)
+        .expect("WeakReference prelude must resolve");
     inventory.record_program("core", &declaration);
     program.splice(0..0, declaration);
     program

@@ -19,6 +19,7 @@ mod array_chunk;
 mod array_chunk_refcounted;
 mod array_chunk_to_hash;
 mod call_argument_unpack;
+mod container_refusal_owner;
 mod array_count_values;
 mod array_column;
 mod array_column_boxed;
@@ -169,6 +170,7 @@ mod hash_key_hash;
 mod hash_normalize_key;
 mod hash_may_have_cyclic_values;
 mod hash_ensure_unique;
+mod hash_set_reference_layout;
 mod hash_entry_reference;
 mod hash_flip;
 mod hash_slice;
@@ -201,6 +203,7 @@ mod natsort;
 
 pub(super) mod deep_cleanup;
 mod object_free_deep;
+mod native_reference_source_retirement;
 mod range;
 mod incref;
 mod foreach_non_iterable_warning;
@@ -209,6 +212,7 @@ mod nan_bool_coercion_warning;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
 mod mixed_abs;
+mod mixed_bit_not;
 mod mixed_cast_array;
 mod mixed_clone;
 mod mixed_reference;
@@ -566,6 +570,7 @@ pub use natsort::emit_natsort;
 pub use min_max_container::{emit_min_max_hash, emit_min_max_mixed, emit_min_max_str};
 /// Emit the single-array `min()` / `max()` reductions for Mixed, string, and hash containers.
 pub use mixed_abs::emit_mixed_abs;
+pub(crate) use mixed_bit_not::{emit_mixed_bit_not, BIT_NOT_PREFIX, BIT_NOT_TYPE_ROWS};
 /// Emit boxed-Mixed-to-array cast helper.
 pub use mixed_cast_array::emit_mixed_cast_array;
 /// Emit a resource-aware owned Mixed value read.

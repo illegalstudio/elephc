@@ -55,3 +55,24 @@ fn register(emitter: &mut Emitter, record: usize, owner: usize, cleanup: &str) {
     abi::emit_load_temporary_stack_slot(emitter, scratch, owner);
     abi::emit_guard_owned_at_stack(emitter, scratch, cleanup, record);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Saved guards keep record and owner offsets distinct on every supported ABI.
+    #[test]
+    fn saved_owner_guard_uses_record_then_owner_offsets_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            guard_saved_owner(&mut emitter, 96, 16);
+            let asm = emitter.output();
+            let offsets = if target == "linux-x86_64" {
+                ["[rsp + 16]", "[rsp + 120]"]
+            } else { ["[sp, #16]", "[sp, #120]"] };
+            for offset in offsets { assert!(asm.contains(offset), "{target}: {asm}"); }
+            assert!(asm.contains("__rt_exception_guard_owned"), "{target}: {asm}");
+        }
+    }
+}

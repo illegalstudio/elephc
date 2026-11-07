@@ -12,6 +12,7 @@
 use super::super::super::*;
 use super::super::registry::eval_call_user_func_with_values_from_scope;
 use super::func_args::eval_literal_func_args_callback;
+use crate::runtime_hooks::owner_frames::with_runtime_owners;
 
 eval_builtin! {
     contract: "call_user_func",
@@ -43,19 +44,21 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func(
     if let Some(name) = eval_owned_argument_callback_name(callback, context, Some(scope), values)? {
         if eval_builtin_uses_owned_arguments(&name) {
             let arguments = args[1..].iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
-            let result = eval_builtin_call_by_value(&name, &arguments, context, scope, values);
+            let result = with_runtime_owners(&callback, ||
+                eval_builtin_call_by_value(&name, &arguments, context, scope, values));
             return finish_eval_argument_values(result, [callback], context, values);
         }
     }
     let mut operands = vec![callback];
     for argument in &args[1..] {
-        match eval_owned_expr(argument, context, scope, values) {
+        match with_runtime_owners(&operands, || eval_owned_expr(argument, context, scope, values)) {
             Ok(value) => operands.push(value),
             Err(status) => return finish_eval_argument_values(Err(status), operands, context, values),
         }
     }
     let borrowed = operands.iter().copied().map(RuntimeCellHandle::borrowed).collect();
-    let result = eval_call_user_func_with_values_from_scope(borrowed, Some(scope), context, values);
+    let result = with_runtime_owners(&operands, ||
+        eval_call_user_func_with_values_from_scope(borrowed, Some(scope), context, values));
     finish_eval_argument_values(result, operands, context, values)
 }
 

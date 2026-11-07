@@ -57,6 +57,20 @@ pub(crate) fn compile_source_to_asm_with_options(
     compile_source_to_asm_with_counters(source, dir, heap_size, gc_stats, false, heap_debug)
 }
 
+/// Compiles a native ABI fixture with declaration callbacks and their matching runtime enabled.
+pub(crate) fn compile_source_to_asm_with_native_reference_validation(
+    source: &str,
+    dir: &Path,
+    heap_size: usize,
+    heap_debug: bool,
+) -> (String, String, TestLinkRequirements) {
+    let (user, runtime, requirements) = try_compile_source_to_asm_with_capabilities(
+        source, dir, &HashSet::new(), heap_size, false, false, heap_debug,
+        default_null_repr(), false, true, elephc::php_version::PhpVersion::default(),
+    );
+    (user.expect("native-validation fixture codegen failed"), runtime, requirements)
+}
+
 /// Like `compile_source_to_asm_with_options`, with the `--counters` exit dump enabled.
 pub(crate) fn compile_source_to_asm_with_counters(
     source: &str,
@@ -282,6 +296,31 @@ fn try_compile_source_to_asm_with_defines_repr(
     String,
     TestLinkRequirements,
 ) {
+    try_compile_source_to_asm_with_capabilities(
+        source, dir, defines, heap_size, gc_stats, counters, heap_debug,
+        null_repr, with_regex, false, php_version,
+    )
+}
+
+/// Keeps explicitly selected fixture capabilities inside the same compiler stack budget.
+#[allow(clippy::too_many_arguments)]
+fn try_compile_source_to_asm_with_capabilities(
+    source: &str,
+    dir: &Path,
+    defines: &HashSet<String>,
+    heap_size: usize,
+    gc_stats: bool,
+    counters: bool,
+    heap_debug: bool,
+    null_repr: elephc::codegen::NullRepr,
+    with_regex: bool,
+    with_native_reference_validation: bool,
+    php_version: elephc::php_version::PhpVersion,
+) -> (
+    std::result::Result<String, elephc::codegen::CodegenIrError>,
+    String,
+    TestLinkRequirements,
+) {
     elephc::compiler_stack::with_compiler_stack(|| {
         try_compile_source_to_asm_with_defines_repr_inner(
             source,
@@ -293,6 +332,7 @@ fn try_compile_source_to_asm_with_defines_repr(
             heap_debug,
             null_repr,
             with_regex,
+            with_native_reference_validation,
             php_version,
         )
     })
@@ -310,6 +350,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     heap_debug: bool,
     null_repr: elephc::codegen::NullRepr,
     with_regex: bool,
+    with_native_reference_validation: bool,
     php_version: elephc::php_version::PhpVersion,
 ) -> (
     std::result::Result<String, elephc::codegen::CodegenIrError>,
@@ -317,6 +358,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     TestLinkRequirements,
 ) {
     elephc::codegen::set_null_repr(null_repr);
+    let frontend_phase = fixture_phase_timing("frontend");
     elephc::codegen::set_compile_profile(php_version, false);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
@@ -445,10 +487,17 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
+    drop(frontend_phase);
+    let eir_phase = fixture_phase_timing("eir");
     let mut ir_module =
         lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result, &synthetic_main);
+    drop(eir_phase);
     if with_regex {
         ir_module.required_runtime_features.regex = true;
+    }
+    if with_native_reference_validation {
+        elephc::ir_lower::enable_native_reference_validation(&mut ir_module)
+            .expect("native reference declaration validators must be valid EIR");
     }
     // Mirror `pipeline::backend`: report the bridges this fixture actually links to
     // `extension_loaded()` / `get_loaded_extensions()`. Extension folding happens during
@@ -460,6 +509,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
+    let codegen_phase = fixture_phase_timing("codegen");
     let generated_user_asm = elephc::codegen::generate_user_asm_from_ir_with_options_and_features(
         &ir_module,
         gc_stats,
@@ -474,14 +524,17 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         false,
         elephc::codegen::WebIsolation::Worker,
     );
+    drop(codegen_phase);
     let mut runtime_features = ir_module.required_runtime_features;
     if let Ok(output) = &generated_user_asm {
         runtime_features.handler_state |= output.handler_state;
         runtime_features.object_clone |= output.object_clone;
     }
     let user_asm = generated_user_asm.map(|output| output.asm);
+    let runtime_phase = fixture_phase_timing("runtime-asm");
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
+    drop(runtime_phase);
     let link_requirements = TestLinkRequirements::new(
         check_result.required_libraries,
         elephc::codegen::link_requirements_for_runtime_features(runtime_features),
@@ -534,6 +587,7 @@ pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
     check_result: &elephc::types::CheckResult,
     source_path: &Path,
 ) -> elephc::ir::Module {
+    let lowering_phase = fixture_phase_timing("eir.lower");
     let mut module = elephc::ir_lower::lower_program_with_source_path(
         program,
         check_result,
@@ -541,9 +595,12 @@ pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
         source_path,
     )
         .expect("AST-to-EIR lowering failed for codegen fixture");
+    drop(lowering_phase);
     if ir_opt_enabled_for_codegen_fixture() {
+        let _phase = fixture_phase_timing("eir.optimize");
         elephc::ir_passes::optimize_module(&mut module);
     }
+    let _phase = fixture_phase_timing("eir.validate");
     elephc::ir::validate_module(&module).expect("EIR validation failed for codegen fixture");
     module
 }
@@ -864,6 +921,7 @@ pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
 /// runs the same binary at `$argc == 1` and `$argc == 2`, so both arms run under CI.
 pub(crate) fn compile_and_run_per_argv(source: &str, argvs: &[&[&str]]) -> Vec<String> {
     compile_and_capture_per_argv(source, false, argvs)
+        .0
         .into_iter()
         .zip(argvs)
         .map(|(output, args)| {
@@ -879,6 +937,22 @@ pub(crate) fn compile_and_run_per_argv(source: &str, argvs: &[&[&str]]) -> Vec<S
         .collect()
 }
 
+/// Compiles once without heap debugging and captures each run, including nonzero exits.
+pub(crate) fn compile_and_run_capture_per_argv(
+    source: &str,
+    argvs: &[&[&str]],
+) -> Vec<ProgramOutput> {
+    compile_and_capture_per_argv(source, false, argvs).0
+}
+
+/// Captures ordinary executions and their exact assembly without enabling heap diagnostics.
+pub(crate) fn compile_and_run_capture_and_asm_per_argv(
+    source: &str,
+    argvs: &[&[&str]],
+) -> (Vec<ProgramOutput>, String) {
+    compile_and_capture_per_argv(source, false, argvs)
+}
+
 /// Heap-debug counterpart of [`compile_and_run_per_argv`]: compiles `source` once with heap
 /// debugging and returns every run's captured output, one per argument vector, without asserting
 /// success, so a fixture can check each arm's output and leak summary.
@@ -886,6 +960,14 @@ pub(crate) fn compile_and_run_with_heap_debug_per_argv(
     source: &str,
     argvs: &[&[&str]],
 ) -> Vec<ProgramOutput> {
+    compile_and_capture_per_argv(source, true, argvs).0
+}
+
+/// Captures per-argument heap-debug runs and their shared assembly without recompiling.
+pub(crate) fn compile_and_run_with_heap_debug_and_asm_per_argv(
+    source: &str,
+    argvs: &[&[&str]],
+) -> (Vec<ProgramOutput>, String) {
     compile_and_capture_per_argv(source, true, argvs)
 }
 
@@ -894,7 +976,7 @@ fn compile_and_capture_per_argv(
     source: &str,
     heap_debug: bool,
     argvs: &[&[&str]],
-) -> Vec<ProgramOutput> {
+) -> (Vec<ProgramOutput>, String) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -914,12 +996,27 @@ fn compile_and_capture_per_argv(
         argvs,
     );
 
+    if heap_debug {
+        let _phase = fixture_phase_timing("diagnostics");
+        super::diagnostics::preserve_heap_failures(source, &user_asm, &outputs, argvs);
+    }
+    let _phase = fixture_phase_timing("cleanup");
     let _ = fs::remove_dir_all(&dir);
-    outputs
+    (outputs, user_asm)
 }
 
 /// Returns the exact user assembly with a heap-debug fixture's output for target-specific CI diagnostics.
 pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramOutput, String) {
+    compile_heap_debug_with_asm(source, 8_388_608)
+}
+
+/// Runs a stress fixture with its required live heap while retaining all heap-debug checks.
+pub(crate) fn compile_and_run_with_heap_debug_sized(source: &str, heap_size: usize) -> ProgramOutput {
+    compile_heap_debug_with_asm(source, heap_size).0
+}
+
+/// Shares compilation, exact assembly capture and failure diagnostics across debug heap budgets.
+fn compile_heap_debug_with_asm(source: &str, heap_size: usize) -> (ProgramOutput, String) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -927,7 +1024,7 @@ pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramO
     fs::create_dir_all(&dir).unwrap();
 
     let (user_asm, runtime_asm, required_libraries) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, true);
+        compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(
         &user_asm,
@@ -938,6 +1035,7 @@ pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramO
         &[],
     );
 
+    super::diagnostics::preserve_heap_failure(source, &user_asm, &output);
     let _ = fs::remove_dir_all(&dir);
     (output, user_asm)
 }

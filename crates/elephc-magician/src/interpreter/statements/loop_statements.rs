@@ -244,7 +244,7 @@ pub(super) fn execute_foreach_object_stmt(
     }
     if eval_foreach_object_is_a(object, "IteratorAggregate", context, values)? {
         let iterator = eval_method_call_result(object, "getIterator", Vec::new(), context, values)?;
-        return match values.type_tag(iterator)? {
+        let result = (|| match values.type_tag(iterator)? {
             EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => execute_foreach_array_stmt(
                 iterator, key_name, value_name, body, context, scope, values,
             ),
@@ -254,6 +254,17 @@ pub(super) fn execute_foreach_object_stmt(
                 )
             }
             _ => Err(EvalStatus::RuntimeFatal),
+        })();
+        let released = eval_release_value(context, values, iterator);
+        return match (result, released) {
+            (Ok(control), Ok(())) => Ok(control),
+            (Err(status), _) => Err(status),
+            (Ok(control), Err(status)) => {
+                if let EvalControl::Return(value) | EvalControl::Throw(value) = control {
+                    let _ = eval_release_value(context, values, value);
+                }
+                Err(status)
+            }
         };
     }
     Err(EvalStatus::RuntimeFatal)
@@ -328,8 +339,8 @@ pub(super) fn execute_foreach_iterator_stmt(
     }
 }
 
-/// Returns whether a foreach object satisfies one iterator interface.
-pub(super) fn eval_foreach_object_is_a(
+/// Shares iterator-interface detection between foreach and iterator builtins.
+pub(in crate::interpreter) fn eval_foreach_object_is_a(
     object: RuntimeCellHandle,
     target: &str,
     context: &ElephcEvalContext,
@@ -337,52 +348,4 @@ pub(super) fn eval_foreach_object_is_a(
 ) -> Result<bool, EvalStatus> {
     dynamic_object_is_a(object, target, false, context, values)?
         .map_or_else(|| values.object_is_a(object, target, false), Ok)
-}
-
-/// Returns PHP's next automatic integer key for `$array[]` append writes.
-pub(in crate::interpreter) fn eval_array_append_key(
-    array: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let len = values.array_len(array)?;
-    let mut next_key = None;
-    let mut operands = Vec::new();
-    let result = (|| {
-        for position in 0..len {
-            let key = values.array_iter_key(array, position)?;
-            operands.push(key);
-            if values.type_tag(key)? != EVAL_TAG_INT {
-                continue;
-            }
-            let one = values.int(1)?;
-            operands.push(one);
-            let candidate = values.add(key, one)?;
-            operands.push(candidate);
-            let replace = if let Some(current) = next_key {
-                let is_greater = values.compare(EvalBinOp::Gt, candidate, current)?;
-                operands.push(is_greater);
-                values.truthy(is_greater)?
-            } else {
-                true
-            };
-            if replace {
-                next_key = Some(candidate);
-            }
-        }
-        next_key.map_or_else(|| values.int(0), Ok)
-    })();
-    let mut released = Ok(());
-    for operand in operands {
-        if result.as_ref().is_ok_and(|result| *result == operand) { continue; }
-        let cleanup = values.release(operand);
-        if released.is_ok() { released = cleanup; }
-    }
-    match (result, released) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = values.release(value);
-            Err(status)
-        }
-        (Ok(value), Ok(())) => Ok(value),
-    }
 }

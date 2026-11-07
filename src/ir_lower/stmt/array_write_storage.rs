@@ -16,8 +16,8 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
     name: &str,
     span: Span,
 ) -> LoweredValue {
-    let ty = ctx.local_type(name);
-    let value = ctx.load_local(name, Some(span));
+    let value = ctx.load_local_for_mutation(name, Some(span));
+    let ty = ctx.builder.value_php_type(value.value);
     if ty.codegen_repr() != PhpType::Mixed
         || ctx.append_update_cell_aliases.contains(name)
     {
@@ -32,11 +32,18 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
         Some(span),
     );
     ctx.store_call_argument_local(name, detached, ty, Some(span));
-    ctx.load_local(name, Some(span))
+    ctx.load_local_for_mutation(name, Some(span))
 }
 
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
+    if super::native_reference_mutations::lower(ctx, array, span,
+        |ctx| lower_array_push_inner(ctx, array, value, span)) { return; }
+    lower_array_push_inner(ctx, array, value, span);
+}
+
+/// Emits one append after native reference layout dispatch has selected its writable view.
+fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
     let receiver = Expr::new(ExprKind::Variable(array.into()), span);
     if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
     let value = lower_expr(ctx, value);
@@ -60,7 +67,7 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         ctx.store_local(array, empty, array_ty, Some(span));
     }
     let array_value = if ctx.is_ref_bound_local(array) {
-        ctx.load_local(array, Some(span))
+        ctx.load_local_for_mutation(array, Some(span))
     } else {
         load_array_local_for_write(ctx, array, span)
     };
@@ -128,13 +135,16 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
-    ctx.emit_void(
-        op,
-        vec![array_value.value, value.value],
-        None,
-        op.default_effects(),
-        Some(span),
-    );
+    if super::native_dimension_append::lower(ctx, array_value, value, span, |ctx, array, value| {
+        ctx.emit_void(op, vec![array.value, value.value], None, op.default_effects(), Some(span));
+    }) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        // A concrete object read from final Mixed storage owns its unboxed lease.
+        // Finalization removes this release when the local still lends a concrete value.
+        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
+        return;
+    }
+    ctx.emit_void(op, vec![array_value.value, value.value], None, op.default_effects(), Some(span));
     finish_hash_local_write(ctx, array, array_value, hash_storeback, span);
     release_persisted_string_operand(ctx, value, span);
 }

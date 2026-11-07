@@ -9,6 +9,17 @@
 
 use super::*;
 
+/// Inferred nullable scalar properties cannot keep a scalar type after an array append.
+#[test]
+fn test_error_untyped_nullable_scalar_property_append_keeps_refusal() {
+    for value in ["$argc", "$argc > 5 ? 1 : null"] {
+        expect_error(
+            &format!("<?php class InferredScalarAppend {{ public $n; }} $c = new InferredScalarAppend(); $c->n = {value}; $c->n[] = 7;"),
+            "Array push requires an array property",
+        );
+    }
+}
+
 /// A mixed literal spread unwraps its source once, preserving nested container element types.
 #[test]
 fn test_mixed_literal_spread_preserves_nested_element_type() {
@@ -338,15 +349,6 @@ foreach (new Counters() as &$value) {}
 #[test]
 fn test_error_union_typed_local_rejects_invalid_initializer() {
     expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
-}
-
-/// Verifies a boxed `mixed` value cannot enter an object parameter without a runtime tag check.
-#[test]
-fn test_error_mixed_rejected_at_object_parameter_boundary() {
-    expect_error(
-        "<?php final class Box {} function take(Box $box): void {} function relay(mixed $value): void { take($value); }",
-        "Function 'take' parameter $box expects Box, got mixed",
-    );
 }
 
 /// Verifies a boxed `mixed` value cannot leave a function through an array return boundary.

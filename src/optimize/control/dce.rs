@@ -16,6 +16,7 @@ mod methods;
 mod state;
 mod switches;
 mod tail;
+mod ternary;
 mod tries;
 mod writes;
 
@@ -41,6 +42,7 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
     let mut eliminated = Vec::new();
     let mut stmts = body.into_iter();
     while let Some(stmt) = stmts.next() {
+        let stmt = ternary::discarded_ternary_as_if(stmt);
         let has_tail = !stmts.as_slice().is_empty();
         let mut use_tail_sink = has_tail
             && matches!(
@@ -76,7 +78,8 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
                 dce_stmt_with_guards(stmt, &guards)
             } else {
                 let tail = stmts.by_ref().collect();
-                dce_stmt_with_tail(stmt, tail, &guards)
+                let profile = stmt.profile();
+                crate::source::with_parse_mode(profile, || dce_stmt_with_tail(stmt, tail, &guards))
             }
         } else {
             dce_stmt_with_guards(stmt, &guards)
@@ -127,6 +130,7 @@ fn stmt_contains_control_flow(stmt: &Stmt) -> bool {
         | StmtKind::DoWhile { .. }
         | StmtKind::For { .. }
         | StmtKind::Foreach { .. } => true,
+        StmtKind::ExprStmt(Expr { kind: ExprKind::Ternary { .. }, .. }) => true,
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. } => stmts_contain_control_flow(body),
@@ -709,6 +713,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             body,
         } => {
             let function_guards = GuardState::for_params(&params);
+            let reference_parameters = reference_parameter_names(&params, variadic.as_deref(), variadic_by_ref);
             let return_facts = ReturnBoundaryFacts::new(return_type.as_ref(),
                 params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &body);
             vec![Stmt {
@@ -722,7 +727,8 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                     variadic_by_ref,
                     variadic_type,
                     return_type,
-                    body: with_return_boundary_facts(Some(&return_facts), || with_function_scope(|| {
+                    body: with_return_boundary_facts(Some(&return_facts), ||
+                        with_reference_parameter_scope(by_ref_return, reference_parameters, || {
                         crate::optimize::generator_bodies::rewrite_preserving_yield(body, |body| {
                             dce_block_with_guards(body, function_guards)
                         })

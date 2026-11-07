@@ -261,7 +261,7 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     eval_object_clone_with_properties_result(object, None, None, context, values)
 }
 
-/// Creates a shallow clone, invokes `__clone()`, then applies PHP 8.5 property overrides.
+/// Copies an object, runs its native clone handler or `__clone()`, then applies property overrides.
 pub(crate) fn eval_object_clone_with_properties_result(
     object: RuntimeCellHandle,
     with_properties: Option<RuntimeCellHandle>,
@@ -324,21 +324,38 @@ pub(crate) fn eval_object_clone_with_properties_result(
     };
     context.begin_clone_initialization(clone_identity);
     let initialization = (|| {
-        if let Some(class_name) = dynamic_class_name {
-            context.register_dynamic_object(clone_identity, &class_name);
+        if let Some(class_name) = dynamic_class_name.as_deref() {
+            context.register_dynamic_object(clone_identity, class_name);
             context.clone_dynamic_property_aliases(identity, clone_identity);
-            if let Some((declaring_class, method)) = clone_method {
-                let result = eval_dynamic_method_with_values(
-                    &declaring_class,
-                    &class_name,
-                    &method,
-                    clone,
-                    Vec::new(),
-                    context,
-                    values,
-                )?;
-                eval_release_value(context, values, result)?;
-            } else if let Some(hook) = dynamic_native_clone_hook {
+        }
+        let native_cloned = super::super::runtime_ops::object_operators::clone_native_storage(values, clone)?;
+        if !native_cloned {
+            if let Some(class_name) = dynamic_class_name {
+                if let Some((declaring_class, method)) = clone_method {
+                    let result = eval_dynamic_method_with_values(
+                        &declaring_class,
+                        &class_name,
+                        &method,
+                        clone,
+                        Vec::new(),
+                        context,
+                        values,
+                    )?;
+                    eval_release_value(context, values, result)?;
+                } else if let Some(hook) = dynamic_native_clone_hook {
+                    let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
+                        clone,
+                        &hook.called_class,
+                        "__clone",
+                        Vec::new(),
+                        Some(&hook.declaring_class),
+                        Some(&hook.called_class),
+                        context,
+                        values,
+                    )?;
+                    values.release(result)?;
+                }
+            } else if let Some(hook) = aot_clone_hook {
                 let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
                     clone,
                     &hook.called_class,
@@ -351,18 +368,6 @@ pub(crate) fn eval_object_clone_with_properties_result(
                 )?;
                 values.release(result)?;
             }
-        } else if let Some(hook) = aot_clone_hook {
-            let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
-                clone,
-                &hook.called_class,
-                "__clone",
-                Vec::new(),
-                Some(&hook.declaring_class),
-                Some(&hook.called_class),
-                context,
-                values,
-            )?;
-            values.release(result)?;
         }
 
         context.restart_clone_initialization(clone_identity);
@@ -507,8 +512,10 @@ pub(super) fn eval_native_method_call_with_scope(
     if let Some(called_class) = called_class_scope {
         context.push_called_class_scope(called_class.to_string());
     }
-    let _called_class_override = called_class_scope
-        .map(|called_class| push_native_frame_called_class_override(context, scope, called_class));
+    let _native_context = match called_class_scope {
+        Some(called_class) => push_native_frame_called_class_override(context, scope, called_class),
+        None => push_native_frame_context(context),
+    };
     let result = values.method_call(object, method_name, evaluated_args);
     if called_class_scope.is_some() {
         context.pop_called_class_scope();
@@ -531,8 +538,10 @@ pub(super) fn eval_native_static_method_call_with_scope(
     if let Some(called_class) = called_class_scope {
         context.push_called_class_scope(called_class.to_string());
     }
-    let _called_class_override = called_class_scope
-        .map(|called_class| push_native_frame_called_class_override(context, scope, called_class));
+    let _native_context = match called_class_scope {
+        Some(called_class) => push_native_frame_called_class_override(context, scope, called_class),
+        None => push_native_frame_context(context),
+    };
     let result = values.static_method_call(class_name, method_name, evaluated_args);
     if called_class_scope.is_some() {
         context.pop_called_class_scope();
@@ -542,15 +551,36 @@ pub(super) fn eval_native_static_method_call_with_scope(
 }
 
 /// Runs one generated/AOT bridge operation while exposing an explicit PHP class scope.
-pub(in crate::interpreter) fn eval_with_native_bridge_scope<T>(
+pub(in crate::interpreter) fn eval_with_native_bridge_scope<T, V: RuntimeValueOps>(
     scope: &str,
     context: &mut ElephcEvalContext,
-    call: impl FnOnce() -> Result<T, EvalStatus>,
+    values: &mut V,
+    call: impl FnOnce(&mut V) -> Result<T, EvalStatus>,
 ) -> Result<T, EvalStatus> {
     context.push_class_scope(scope.to_string());
-    let result = call();
-    context.pop_class_scope();
-    result
+    let previous = values.replace_native_class_scope(Some(scope.to_string()));
+    let mut guard = NativeBridgeScope { context, values, previous };
+    call(guard.values())
+}
+
+/// Restores both interpreter and adapter scopes on normal, error and panic exits.
+struct NativeBridgeScope<'a, V: RuntimeValueOps> {
+    context: &'a mut ElephcEvalContext,
+    values: &'a mut V,
+    previous: Option<String>,
+}
+
+impl<V: RuntimeValueOps> NativeBridgeScope<'_, V> {
+    /// Lends the adapter while keeping restoration owned by this scope guard.
+    fn values(&mut self) -> &mut V { self.values }
+}
+
+impl<V: RuntimeValueOps> Drop for NativeBridgeScope<'_, V> {
+    /// Removes the temporary bridge authorization before returning to its caller.
+    fn drop(&mut self) {
+        self.values.replace_native_class_scope(self.previous.take());
+        self.context.pop_class_scope();
+    }
 }
 
 /// Returns generated/AOT property metadata inherited by an eval-declared class.
@@ -614,7 +644,7 @@ pub(super) fn eval_with_native_property_storage_scope<T, V: RuntimeValueOps>(
     let native = eval_dynamic_class_native_property_metadata(class_name, storage_name, context, values)?;
     if let Some((declaring_class, visibility, _, false)) = native {
         if visibility != EvalVisibility::Private {
-            return eval_with_native_bridge_scope(&declaring_class, context, || operation(values));
+            return eval_with_native_bridge_scope(&declaring_class, context, values, |values| operation(values));
         }
     }
     operation(values)
@@ -682,13 +712,34 @@ pub(super) fn eval_runtime_object_class_name(
 }
 
 /// Creates a backing object for an eval-declared class without running its constructor.
-pub(super) fn eval_dynamic_class_allocate_object(
+pub(in crate::interpreter) fn eval_dynamic_class_allocate_object(
     class: &EvalClass,
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if class.is_abstract() || context.has_enum(class.name()) {
+    eval_dynamic_class_allocate_object_inner(class, context, caller_scope, values, false)
+}
+
+/// Native factories materialize abstract wrappers without changing ordinary allocation.
+pub(in crate::interpreter) fn eval_dynamic_class_allocate_native_object(
+    class: &EvalClass,
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_dynamic_class_allocate_object_inner(class, context, caller_scope, values, true)
+}
+
+/// Shares property initialization and unwind cleanup under the caller's allocation policy.
+fn eval_dynamic_class_allocate_object_inner(
+    class: &EvalClass,
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+    native_factory: bool,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if (class.is_abstract() && !native_factory) || context.has_enum(class.name()) {
         return Err(EvalStatus::RuntimeFatal);
     }
     let backing_class = context

@@ -28,12 +28,6 @@ fn test_nested_write_eleventh_review_undefined_selector_rejected() {
     expect_error("<?php $items = [false]; $items[0][$missing][1] = 9;", "Undefined variable: $missing");
 }
 
-/// A false probe stays on the ordinary read/probe validation path.
-#[test]
-fn test_nested_write_eleventh_review_false_probe_rejected() {
-    expect_error("<?php $items = [false]; echo isset($items[0][0]);", "Cannot index non-array");
-}
-
 /// A deeper false ancestor is not readable merely because generated updates can promote it.
 #[test]
 fn test_nested_append_review_deep_false_read_rejected() {

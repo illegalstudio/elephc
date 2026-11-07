@@ -267,6 +267,13 @@ impl Checker {
         can_widen_local: bool,
         context: &str,
     ) -> Result<(), CompileError> {
+        if matches!(expected_ty.codegen_repr(), PhpType::Mixed | PhpType::Object(_))
+            && self.is_native_selection_reference_argument(arg, env)?
+        {
+            // Native XML selections receive independent managed cells instead of borrowing
+            // the parent's physical property or dimension storage.
+            return Ok(());
+        }
         // Guards refine the current value, while a reference still addresses the original
         // slot. Coalescing assignments likewise keep nullable parameter storage alive.
         let storage_ty = self.guarded_local_storage_type(arg, env).unwrap_or(actual_ty).clone();

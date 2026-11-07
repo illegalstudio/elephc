@@ -31,6 +31,11 @@ pub struct EvalPcntlContextLease {
 }
 
 impl EvalPcntlContextLease {
+    /// Borrows metadata pinned by a live dynamic object without entering PCNTL dispatch ownership.
+    pub(crate) fn for_live_dynamic_object(context: *mut ElephcEvalContext) -> Self {
+        Self { context, counted: false }
+    }
+
     /// Returns the pinned context pointer for interpreter dispatch.
     pub(crate) fn context_ptr(&self) -> *mut ElephcEvalContext {
         self.context
@@ -40,6 +45,9 @@ impl EvalPcntlContextLease {
 impl Clone for EvalPcntlContextLease {
     /// Adds another active-use reference to the same detached context.
     fn clone(&self) -> Self {
+        if !self.counted {
+            return Self::for_live_dynamic_object(self.context);
+        }
         let counted = if let Ok(mut state) = pcntl_runtime().lock() {
             *state
                 .active_contexts
@@ -53,6 +61,26 @@ impl Clone for EvalPcntlContextLease {
             context: self.context,
             counted,
         }
+    }
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+
+    /// Copying a view owned by a dynamic object never makes it a counted signal-handler lease.
+    #[test]
+    fn dynamic_object_context_views_do_not_acquire_pcntl_ownership() {
+        let mut context = Box::new(ElephcEvalContext::new());
+        let pointer = context.as_mut() as *mut ElephcEvalContext;
+        let lease = EvalPcntlContextLease::for_live_dynamic_object(pointer);
+        let copied = lease.clone();
+        assert!(!lease.counted && !copied.counted);
+        assert_eq!(copied.context_ptr(), pointer);
+        assert!(!pcntl_runtime().lock().unwrap().active_contexts.contains_key(&(pointer as usize)));
+        drop(copied);
+        drop(lease);
+        assert!(!pcntl_runtime().lock().unwrap().active_contexts.contains_key(&(pointer as usize)));
     }
 }
 

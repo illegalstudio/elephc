@@ -162,11 +162,12 @@ mod tests {
         // branch adds (see `support.rs` for the roll-call).
         // +4: the `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64` pointer builtins.
         // +1: `buffer_ptr`, the payload address of a buffer.
+        // +5: SimpleXML loaders/import plus internal allocation and diagnostic helpers.
         // +5: native heap usage, peak reset, and allocation/free counters.
-        // +4: the internal `__elephc_ptr_get` and `__elephc_zval_{pack,free,unpack}` aliases
-        // the extension-hosting prelude calls.
+        // +8: FileInfo procedures and shared warning/deprecation helpers.
+        // +4: internal pointer/zval aliases used by extension hosting.
         // +2: PHP 8.5 array value-edge functions.
-        assert_eq!(contracts().len(), 1248 + curl_surface);
+        assert_eq!(contracts().len(), 1253 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

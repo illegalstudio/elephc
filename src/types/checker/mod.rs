@@ -30,6 +30,7 @@ pub(crate) mod scope_dynamic_storage;
 mod driver;
 mod extern_decl;
 mod functions;
+pub(crate) use functions::validate_unresolved_call_argument_order;
 mod generic_bounds;
 mod generic_method;
 mod generic_new;
@@ -445,6 +446,9 @@ pub(crate) struct Checker {
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
+    /// Physical instance slots refined during the current method fixed-point pass.
+    /// A first constructor integer initialization may replay a placeholder from an older pass.
+    pub method_property_refinements: Option<HashSet<(String, usize)>>,
     /// Classes a two-argument `clone()` in this program can hand an override array to.
     ///
     /// Recorded by the `clone` builtin's check hook, and applied to `classes` after checking by
@@ -1700,10 +1704,30 @@ pub(crate) fn single_object_class_name(ty: &PhpType) -> Option<String> {
 /// reference) must be treated as a reference property by codegen so every access lowers
 /// through its ref-cell. Promotion is applied to the declaring class and every class that
 /// inherits the property, keeping the runtime representation consistent across the
-/// hierarchy. Constructor-promoted `&$param` properties already are reference properties
-/// (borrowed cell) and are left untouched. Object-owned reference cells are also recorded
+/// hierarchy. Exact Mixed constructor-promoted references also acquire an object owner;
+/// other constructor-promoted payloads retain their existing representation. Owned cells are recorded
 /// in `owned_reference_properties` so the object allocates and frees them.
 fn apply_reference_property_promotions(checker: &mut Checker) {
+    {
+        let contains_eval = checker.program_contains_eval;
+        let classes = &checker.classes;
+        let candidates = classes.iter().flat_map(|(name, info)| {
+            info.properties.iter().enumerate().filter_map(move |(index, (property, ty))| {
+                let declaring = info.property_declaring_classes.get(property).unwrap_or(name);
+                (ty == &PhpType::Mixed && info.visible_property_index(property) == Some(index)
+                    && info.property_slot_is_declared(index, property)
+                    && ((!info.reference_properties.contains(property) && contains_eval)
+                        || (info.reference_properties.contains(property)
+                            && info.promoted_properties.contains(property)))
+                    && !info.readonly_properties.contains(property)
+                    && !info.property_set_visibilities.contains_key(property)
+                    && info.property_hooks.get(property).is_none_or(|hooks| !hooks.any())
+                    && classes.get(declaring).is_some_and(|owner| !owner.is_internal))
+                    .then(|| (name.clone(), property.clone()))
+            })
+        }).collect::<Vec<_>>();
+        checker.reference_property_promotions.extend(candidates);
+    }
     let promotions = std::mem::take(&mut checker.reference_property_promotions);
     for (access_class, prop) in promotions {
         let declaring = checker
@@ -1711,26 +1735,34 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
             .get(&access_class)
             .and_then(|info| info.property_declaring_classes.get(&prop).cloned())
             .unwrap_or_else(|| access_class.clone());
-        for info in checker.classes.values_mut() {
-            if !info.properties.iter().any(|(name, _)| name == &prop) {
-                continue;
+        let Some(slot) = checker.classes.get(&declaring)
+            .and_then(|info| info.visible_property_index(&prop)) else { continue; };
+        let owned_constructor_reference = checker.classes.get(&declaring).is_some_and(|info| {
+            info.properties[slot].1 == PhpType::Mixed && info.promoted_properties.contains(&prop)
+        });
+        let descendants = checker.classes.keys().filter(|name| {
+            let mut current = Some(name.as_str());
+            let mut seen = HashSet::new();
+            while let Some(name) = current {
+                if name == declaring { return true; }
+                if !seen.insert(name) { break; }
+                current = checker.classes.get(name).and_then(|info| info.parent.as_deref());
             }
-            let same_decl = info
-                .property_declaring_classes
-                .get(&prop)
-                .is_some_and(|decl| decl == &declaring);
-            if !same_decl {
-                continue;
-            }
-            if info.reference_properties.contains(&prop) {
-                continue;
-            }
-            info.reference_properties.insert(prop.clone());
-            info.owned_reference_properties.insert(prop.clone());
-            if let Some(slot) = info.visible_property_index(&prop) {
-                if let Some(slot_reference) = info.property_reference_slots.get_mut(slot) {
-                    *slot_reference = true;
-                }
+            false
+        }).cloned().collect::<Vec<_>>();
+        for name in descendants {
+            let info = checker.classes.get_mut(&name).unwrap();
+            if info.properties.get(slot).is_none_or(|(name, _)| name != &prop) { continue; }
+            // Raw constructor cells keep their existing borrowed payload ABI.
+            if info.property_slot_is_reference(slot, &prop)
+                && !info.property_slot_owns_reference(slot)
+                && !owned_constructor_reference { continue; }
+            info.property_reference_slots.resize(info.properties.len(), false);
+            info.property_reference_slots[slot] = true;
+            info.owned_reference_property_slots.insert(slot);
+            if info.visible_property_index(&prop) == Some(slot) {
+                info.reference_properties.insert(prop.clone());
+                info.owned_reference_properties.insert(prop.clone());
             }
         }
     }

@@ -70,12 +70,16 @@ mod expressions;
 mod functions_namespaces;
 mod method_arguments;
 mod native_scope;
+mod null_object_boundaries;
 mod opcache_script_cache;
 mod operand_ownership;
+mod magic_property_owners;
 mod operand_string_sources;
 mod operand_shared_runtime;
 mod native_ref_cleanup;
+mod nested_dimension_unset;
 mod static_members;
+mod static_dimension_writes;
 mod generics;
 mod support;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

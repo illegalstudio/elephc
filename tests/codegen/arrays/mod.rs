@@ -13,6 +13,7 @@ mod size_bounds;
 mod assoc;
 mod assoc_push;
 mod append_history;
+mod append_receivers;
 mod append_writes;
 mod append_cancellation_review;
 mod closure_literal_returns;

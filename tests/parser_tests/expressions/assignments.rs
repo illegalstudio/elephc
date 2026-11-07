@@ -9,6 +9,15 @@
 
 use super::*;
 
+/// Quoted property append names retain their complete spelling, including namespace colons.
+#[test]
+fn test_parse_quoted_property_append_names() {
+    let statements = parse_source("<?php $xml->{'p:q'}[] = 'second';");
+    assert!(matches!(&statements[0].kind, StmtKind::PropertyArrayPush { property, .. } if property == "p:q"));
+    let statements = parse_source("<?php echo ($xml->{'p:q'}[] = 'second');");
+    assert!(matches!(&statements[0].kind, StmtKind::Echo(_)));
+}
+
 /// A property suffix extends the increment target and lowers the known fresh-null Error.
 #[test]
 fn test_append_followup_prefix_property_target() {
@@ -224,6 +233,16 @@ fn test_parse_reference_assignment() {
         }
         other => panic!("expected RefAssign, got {:?}", other),
     }
+}
+
+/// Static properties remain legal alias sources.
+#[test]
+fn test_parse_property_reference_assignment_sources() {
+    let statements = parse_source("<?php $alias =& Holder::$items;");
+    let StmtKind::RefAssign { source, .. } = &statements[0].kind else {
+        panic!("expected RefAssign for static property source")
+    };
+    assert!(matches!(source.kind, ExprKind::StaticPropertyAccess { .. }));
 }
 
 /// Verifies that `<?php $items[0] += 3;` parses to an `ArrayAssign` (not a generic `Assign`).

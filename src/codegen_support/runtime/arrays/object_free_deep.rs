@@ -263,6 +263,10 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("cmp x12, x13");                                        // have we visited every property slot?
     emitter.instruction("b.ge __rt_object_free_deep_struct");                   // finish once every property has been scanned
 
+    if features.native_reference_validation {
+        super::native_reference_source_retirement::emit(emitter);
+    }
+
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("mov x10, #16");                                        // each property slot occupies 16 bytes
     emitter.instruction("mul x10, x12, x10");                                   // compute the property slot byte offset
@@ -541,6 +545,9 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current object-property index at the top of every loop iteration
     emitter.instruction("cmp r10, QWORD PTR [rbp - 24]");                       // have we already scanned every property slot owned by this object?
     emitter.instruction("jae __rt_object_free_deep_struct");                    // finish once the property index reaches the saved property count
+    if features.native_reference_validation {
+        super::native_reference_source_retirement::emit(emitter);
+    }
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the object pointer after any nested helper call
     emitter.instruction("mov rcx, r10");                                        // copy the current property index before scaling it into a byte offset
     emitter.instruction("shl rcx, 4");                                          // convert the property index into a 16-byte property-slot offset

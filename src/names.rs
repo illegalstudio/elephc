@@ -878,6 +878,11 @@ pub fn function_symbol(name: &str) -> String {
     format!("_fn_{}", mangle_fqn(name))
 }
 
+/// Names the EIR validator called before a generator allocates its lazy coroutine.
+pub(crate) fn generator_parameter_guard_name(name: &str) -> String {
+    format!("__eir_generator_parameter_guard{}{}", INTERNAL_SYMBOL_SEPARATOR, name)
+}
+
 /// Returns the variant-active dispatch helper symbol for a given PHP function name.
 ///
 /// Format: `_fn_variant_active_<mangled_fqn>`. Used for functions with conditional
