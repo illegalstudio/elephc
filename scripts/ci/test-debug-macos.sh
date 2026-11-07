@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Purpose:
 # Runs the focused native-debugger suites on a macOS arm64 host: terminal/DAP,
-# TCP attach, postmortem, web route debugging, runtime units and CLI parsing.
+# TCP attach, postmortem, web disconnect/resume, runtime units and CLI parsing.
 #
 # Called from:
 # - A macOS developer, or manually to reproduce the `debug-tests-macos-aarch64`
@@ -24,6 +24,6 @@ export RUST_MIN_STACK="${RUST_MIN_STACK:-33554432}"
 cargo test --test debugger_spike_macos_aarch64
 cargo test --test codegen_tests test_cli_debug
 cargo test --test codegen_tests test_cli_elephc_break
-cargo test --test web_tests web_debug_
+cargo test --test web_tests web_debug_disconnect
 cargo test -p elephc-debug
 cargo test --bin elephc debug_cli

@@ -107,6 +107,10 @@ unchanged.
 
 ## Web prefork sessions
 
+macOS qualification in v1 covers terminal/DAP/attach and disconnect/resume. The
+two-worker route election and request/pool handler-child stepping are qualified
+on Linux; use Linux for those route-selection workflows.
+
 `elephc debug app.php --web --listen 127.0.0.1:8080 --route /api/orders` starts a
 `--debug --web` prefork server and waits for the first matching request. The
 selected worker advertises a mode-0600 Unix socket in a broker-owned 0700

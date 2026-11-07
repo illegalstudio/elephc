@@ -311,7 +311,9 @@ can be stepped with its own frames.
 ## Web prefork debugging
 
 `elephc debug --web` launches a `--debug --web` prefork server and attaches DAP
-to the first request that matches the broker filters:
+to the first request that matches the broker filters. Terminal/DAP/attach and
+disconnect/resume are qualified on macOS; the two-worker route election and the
+request/pool handler-child stepping are Linux-qualified in v1.
 
 ```bash
 elephc debug app.php --web --listen 127.0.0.1:8080 \
