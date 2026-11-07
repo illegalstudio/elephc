@@ -1703,12 +1703,15 @@ pub extern "C" fn elephc_debug_web_request(
     // macOS `sun_path` is much shorter than the test/session directory. Keep the
     // socket itself in /tmp with a compact unique name; the announcement JSON
     // stays in the session directory the broker owns.
-    let nonce = random_bytes::<4>().map(u32::from_ne_bytes).unwrap_or(0);
+    let nonce = dap::random_bytes::<4>().map(u32::from_ne_bytes).unwrap_or(0);
     let socket_path = std::path::Path::new("/tmp").join(format!(
         "elephc-web-{}-{sequence}-{nonce}.sock",
         std::process::id()
     ));
-    let announce_path = socket_path.with_extension("json");
+    let announce_path = std::path::Path::new(&filters.directory).join(format!(
+        "session-{}-{sequence}.json",
+        std::process::id()
+    ));
     let listener = match UnixListener::bind(&socket_path) {
         Ok(listener) => listener,
         Err(error) => {

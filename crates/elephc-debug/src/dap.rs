@@ -1629,7 +1629,7 @@ pub(crate) fn listen_for_client(path: &str) -> std::io::Result<DapConnection> {
 }
 
 /// Returns cryptographically random bytes from the OS entropy source.
-fn random_bytes<const N: usize>() -> std::io::Result<[u8; N]> {
+pub(crate) fn random_bytes<const N: usize>() -> std::io::Result<[u8; N]> {
     let mut bytes = [0u8; N];
     let mut source = std::fs::File::open("/dev/urandom")?;
     source.read_exact(&mut bytes)?;
