@@ -52,6 +52,9 @@ pub(super) fn lower(
         RuntimeFnId::ArrayMapSquare => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_map_square(ctx, inst)
         }),
+        RuntimeFnId::ArrayMapSquareAffine => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_square_affine(ctx, inst)
+        }),
         RuntimeFnId::ArrayMapSumAdd => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add(ctx, inst)
         }),

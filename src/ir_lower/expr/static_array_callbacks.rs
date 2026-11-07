@@ -560,6 +560,28 @@ pub(super) fn lower_stored_numeric_map(
                 Some(expr.span),
             ))
         }
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::SquareAffine {
+            offset,
+        } => {
+            let offset = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(offset)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            );
+            Some(ctx.emit_value(
+                Op::RuntimeCall,
+                vec![source.value, offset.value],
+                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::ArrayMapSquareAffine,
+                ))),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                crate::ir::RuntimeFnId::ArrayMapSquareAffine.intrinsic_effects(),
+                Some(expr.span),
+            ))
+        }
         crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::Affine {
             scale,
             offset,

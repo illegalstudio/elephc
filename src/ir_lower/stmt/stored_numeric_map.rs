@@ -1,6 +1,6 @@
 //! Purpose:
-//! Marks `array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v, $ints)`
-//! assignments whose
+//! Marks `array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v |
+//! $v * $v + C, $ints)` assignments whose
 //! result is only observed through storage-neutral consumers, so lowering may build
 //! a raw `array<int>` instead of boxing one Mixed cell per element.
 //!
@@ -123,6 +123,8 @@ pub(crate) enum StoredNumericMapShape {
     Affine { scale: i64, offset: i64 },
     /// `$v * $v`, multiplied by itself.
     Square,
+    /// `$v * $v + C` (or `C + $v * $v`, `$v * $v - C`), squared then offset.
+    SquareAffine { offset: i64 },
 }
 
 /// The single-operation map selector carried in `StoredNumericMapShape::Single`.
@@ -143,7 +145,49 @@ pub(crate) fn parse_stored_numeric_map(
     };
     parse_single(left, op, right, param)
         .or_else(|| parse_square(left, op, right, param))
+        .or_else(|| parse_square_affine(left, op, right, param))
         .or_else(|| parse_affine(left, op, right, param))
+}
+
+/// Parses `$v * $v + C`, `C + $v * $v`, and `$v * $v - C`.
+fn parse_square_affine(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    param: &str,
+) -> Option<StoredNumericMapShape> {
+    match op {
+        BinOp::Add => {
+            if is_square(left, param) {
+                return literal_i64(right).map(|offset| {
+                    StoredNumericMapShape::SquareAffine { offset }
+                });
+            }
+            if is_square(right, param) {
+                return literal_i64(left).map(|offset| {
+                    StoredNumericMapShape::SquareAffine { offset }
+                });
+            }
+        }
+        BinOp::Sub => {
+            if is_square(left, param) {
+                return literal_i64(right)
+                    .and_then(i64::checked_neg)
+                    .map(|offset| StoredNumericMapShape::SquareAffine { offset });
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+/// Returns whether `expr` is `$param * $param`.
+fn is_square(expr: &Expr, param: &str) -> bool {
+    let ExprKind::BinaryOp { left, op: BinOp::Mul, right } = &expr.kind else {
+        return false;
+    };
+    matches!(&left.kind, ExprKind::Variable(name) if name == param)
+        && matches!(&right.kind, ExprKind::Variable(name) if name == param)
 }
 
 /// Parses `$v * $v`.

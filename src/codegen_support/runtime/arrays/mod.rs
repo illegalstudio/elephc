@@ -67,6 +67,7 @@ mod array_map_boxed;
 mod array_map_affine;
 mod array_map_mixed;
 mod array_map_square;
+mod array_map_square_affine;
 mod array_map_numeric;
 mod array_map_str;
 mod array_merge;
@@ -380,6 +381,7 @@ pub use keyed_kernels::emit_keyed_kernels;
 pub use array_map_affine::emit_array_map_affine;
 pub use array_map_numeric::emit_array_map_numeric;
 pub use array_map_square::emit_array_map_square;
+pub use array_map_square_affine::emit_array_map_square_affine;
 pub use array_numeric_aggregate::{emit_array_numeric_aggregate, ARRAY_AGGREGATE_MESSAGES};
 /// Emit array product helper.
 pub use array_push_int::emit_array_push_int;

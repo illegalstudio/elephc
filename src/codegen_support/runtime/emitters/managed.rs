@@ -45,6 +45,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
 arrays::emit_array_map_numeric(emitter);
 arrays::emit_array_map_affine(emitter);
 arrays::emit_array_map_square(emitter);
+arrays::emit_array_map_square_affine(emitter);
     arrays::emit_array_type_check(emitter);
     arrays::emit_array_push_int(emitter);
     arrays::emit_array_push_refcounted(emitter);

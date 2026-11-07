@@ -1,7 +1,7 @@
 //! Purpose:
 //! End-to-end coverage for the stored `array_map(fn($v) => $v + C | $v - C | $v * C |
-//! $v * A + B | $v * $v, $ints)` kernels that keep a raw `array<int>` when no element
-//! overflows.
+//! $v * A + B | $v * $v | $v * $v + C, $ints)` kernels that keep a raw `array<int>`
+//! when no element overflows.
 //!
 //! Called from:
 //! - The codegen optimizer suite through `optimizer`.
@@ -468,4 +468,105 @@ echo $sum, "\n";
 "#;
     assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "1015050\n");
     assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "1015050\n");
+}
+
+/// Square-then-offset callbacks accept both addition orders and subtraction.
+#[test]
+fn test_stored_numeric_map_square_affine_shapes() {
+    let source = r#"<?php
+$values = [-2, -1, 0, 1, 2];
+$a = array_map(fn($v) => $v * $v + 1, $values);
+$b = array_map(fn($v) => 1 + $v * $v, $values);
+$c = array_map(fn($v) => $v * $v - 1, $values);
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "\n";
+"#;
+    assert_eq!(compile_and_run(source), "5,2,1,2,5|5,2,1,2,5|3,0,-1,0,3\n");
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_square_affine").count(), 3, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// The square and the offset addition promote independently, preserving PHP's types.
+#[test]
+fn test_stored_numeric_map_square_affine_overflow_preserves_php_types() {
+    let source = r#"<?php
+$big = [PHP_INT_MAX - 1, PHP_INT_MAX, 2];
+$mul = array_map(fn($v) => $v * $v + 1, $big);
+foreach ($mul as $v) { echo gettype($v), ":", $v, "|"; }
+echo "\n";
+$edge = [2];
+$add = array_map(fn($v) => $v * $v + PHP_INT_MAX, $edge);
+foreach ($add as $v) { echo gettype($v), ":", $v, "|"; }
+echo "\n";
+$sub = array_map(fn($v) => $v * $v - 2, $edge);
+foreach ($sub as $v) { echo gettype($v), ":", $v, "|"; }
+echo "\n";
+$min = [PHP_INT_MIN];
+$negative = array_map(fn($v) => $v * $v + 1, $min);
+foreach ($negative as $v) { echo gettype($v), ":", $v, "|"; }
+echo "\n";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "double:8.5070591730235E+37|double:8.5070591730235E+37|integer:5|\n\
+         double:9.2233720368548E+18|\n\
+         integer:2|\n\
+         double:8.5070591730235E+37|\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_square_affine").count(), 4, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// Element writes keep the generic boxed map for square-then-offset callbacks.
+#[test]
+fn test_stored_numeric_map_square_affine_element_writes_keep_generic_map() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+$mapped = array_map(fn($v) => $v * $v + 1, $values);
+$copy = $mapped;
+$copy[0] = 99;
+echo $mapped[0], "|", $copy[0], "\n";
+"#;
+    assert_eq!(compile_and_run(source), "2|99\n");
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map ").count(), 1, "{main}");
+    assert!(!main.contains("runtime.array_map_square_affine"), "{main}");
+}
+
+/// The safe and promoted square-then-offset results release without leaks.
+#[test]
+fn test_stored_numeric_map_square_affine_heap_debug_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = [1, 2, 3, 4];
+$mapped = array_map(fn($v) => $v * $v + 1, $values);
+$big = [PHP_INT_MAX];
+$overflow = array_map(fn($v) => $v * $v + 1, $big);
+echo array_sum($mapped), "|", gettype($overflow[0]), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "34|double\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// The square-then-offset kernel produces the same output with the EIR optimizer on and off.
+#[test]
+fn test_stored_numeric_map_square_affine_ir_opt_parity() {
+    let source = r#"<?php
+$values = range(1, 100);
+$sum = 0;
+for ($i = 0; $i < 3; $i++) {
+    $mapped = array_map(fn($v) => $v * $v + 1, $values);
+    $sum += array_sum($mapped);
+}
+echo $sum, "\n";
+"#;
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "1015350\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "1015350\n");
 }

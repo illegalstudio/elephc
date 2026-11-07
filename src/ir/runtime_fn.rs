@@ -129,6 +129,11 @@ pub enum RuntimeFnId {
     /// The product is checked once; any promoted element rebuilds the whole result as a boxed
     /// Mixed array with PHP's exact per-element int/float types.
     ArrayMapSquare,
+    /// Stored `array_map(fn($x) => $x * $x + C, $packedInts)` square-then-offset kernel.
+    ///
+    /// The product and the offset addition are checked in source order; any promoted element
+    /// rebuilds the whole result as a boxed Mixed array with PHP's exact per-element types.
+    ArrayMapSquareAffine,
     /// Fused `array_sum(array_map(fn($x) => $x + $literal, $packedInts))` scalar kernel.
     ArrayMapSumAdd,
     /// Raw-int observation of the fused map+sum kernel; avoids boxing the result.
@@ -1013,6 +1018,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumAddInt | RuntimeFnId::ArrayMapSumProbeInt | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),
             RuntimeFnId::ArrayMapNumeric | RuntimeFnId::ArrayMapAffine => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSquare => Some((1, Some(1))),
+            RuntimeFnId::ArrayMapSquareAffine => Some((2, Some(2))),
             RuntimeFnId::ArrayMapSumAddIntCached => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSumAddSafe => Some((2, Some(2))),
             RuntimeFnId::ArrayElementTypeCheck => Some((3, Some(3))),
@@ -1924,7 +1930,8 @@ impl RuntimeFnId {
             // The stored numeric maps read the packed source and allocate the destination array.
             RuntimeFnId::ArrayMapNumeric
             | RuntimeFnId::ArrayMapAffine
-            | RuntimeFnId::ArrayMapSquare => {
+            | RuntimeFnId::ArrayMapSquare
+            | RuntimeFnId::ArrayMapSquareAffine => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
             // The fused map+sum kernel walks a packed payload and boxes one result cell.
@@ -3268,6 +3275,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMapNumeric => "array_map_numeric",
             RuntimeFnId::ArrayMapAffine => "array_map_affine",
             RuntimeFnId::ArrayMapSquare => "array_map_square",
+            RuntimeFnId::ArrayMapSquareAffine => "array_map_square_affine",
             RuntimeFnId::ArrayMapSumAdd => "array_map_sum_add",
             RuntimeFnId::ArrayMapSumAddInt => "array_map_sum_add_int",
             RuntimeFnId::ArrayMapSumProbeInt => "array_map_sum_probe_int",
