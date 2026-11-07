@@ -27,7 +27,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_stmt_affected_rows(mixed $statement): int
+function mysqli_stmt_affected_rows(mixed $statement): mixed
 ```
 
 ## What the type checker enforces

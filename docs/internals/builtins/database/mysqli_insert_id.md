@@ -27,7 +27,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_insert_id(mixed $mysql): int
+function mysqli_insert_id(mixed $mysql): mixed
 ```
 
 ## What the type checker enforces

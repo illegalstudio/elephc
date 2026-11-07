@@ -6,7 +6,7 @@ description: "Returns the byte lengths of the columns in the current row."
 ## mysqli_fetch_lengths()
 
 ```php
-function mysqli_fetch_lengths(mixed $result): ?array
+function mysqli_fetch_lengths(mixed $result): mixed
 ```
 
 Returns the byte lengths of the columns in the current row.
@@ -14,7 +14,7 @@ Returns the byte lengths of the columns in the current row.
 **Parameters**:
 - `$result` (`mixed`)
 
-**Returns**: `?array`
+**Returns**: `mixed`
 
 ## Availability
 

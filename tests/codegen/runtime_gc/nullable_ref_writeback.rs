@@ -1,0 +1,898 @@
+//! Purpose:
+//! Heap-debug coverage for concrete values bound to NULLABLE typed by-reference parameters
+//! (`?array &$a`, `?Foo &$o`, `?float &$f`). An ordinary local takes the parameter's boxed cell,
+//! so the callee may store `null` or any other admitted value like php; a DECLARED-type local
+//! (`array<Item> $items = …`) keeps its typed slot and the boxed cell is written back after the
+//! call, converting an array the callee built from Mixed values into the slot's element layout
+//! and stopping the program when the value does not fit the declaration; a `null`-only local
+//! gets boxed storage.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Each fixture runs under `--heap-debug` and asserts `leak summary: clean`, so a missed
+//!   release of the previous occupant, the converted copy, or the parameter cell shows up.
+//! - Expected stdout values follow php 8.5 for the same programs.
+
+use crate::support::{compile_and_run_capture, compile_and_run_with_heap_debug, without_ir_opt};
+
+/// Asserts the program printed `expected` and left a clean heap under heap debug.
+fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
+    assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// An `array<Foo>` / `array<int>` / `array<string>` local passed to `?array &$a` receives the
+/// array the callee assigned, binds again for a second call, and nothing leaks across a loop.
+#[test]
+fn test_nullable_array_reference_writes_back_typed_arrays() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Item { public function __construct(public int $id) {} }
+function keep_last(?array &$items): int {
+    if ($items === null) { return 0; }
+    $items = [$items[count($items) - 1]];
+    return 1;
+}
+function run(): void {
+    for ($i = 0; $i < 3; $i++) {
+        $objects = [new Item(1), new Item(2), new Item(3)];
+        keep_last($objects);
+        keep_last($objects);
+        $ints = [5, 6, 7];
+        keep_last($ints);
+        $strings = ["a", "b"];
+        keep_last($strings);
+        if ($i == 2) {
+            echo count($objects), $objects[0]->id, "|", $ints[0], "|", $strings[0], "\n";
+        }
+    }
+}
+run();
+"#,
+    );
+    assert_clean(out, "13|7|b\n");
+}
+
+/// A local that only ever holds `null` binds to a nullable by-reference parameter (it gets boxed
+/// storage), and a callee that leaves `null` alone keeps it `null` — php's `$read = null;
+/// mysqli_poll($read, …)` shape.
+#[test]
+fn test_null_local_binds_to_nullable_reference_parameters() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe_fill(?array &$out, bool $fill): void {
+    if ($fill) { $out = [1, 2]; }
+}
+function run(): void {
+    $untouched = null;
+    maybe_fill($untouched, false);
+    var_dump($untouched);
+    $filled = null;
+    maybe_fill($filled, true);
+    echo count($filled), "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "NULL\n2\n");
+}
+
+/// Objects and floats bind the same way, and a replacement releases the previous value.
+#[test]
+fn test_nullable_object_and_float_references_write_back() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box { public function __construct(public int $v) {} }
+function swap(?Box &$box): void { $box = new Box($box === null ? 0 : $box->v + 1); }
+function twice(?float &$f): void { $f = $f * 2; }
+function run(): void {
+    $b = new Box(4);
+    swap($b);
+    swap($b);
+    $f = 1.25;
+    twice($f);
+    echo $b->v, "|", $f, "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "6|2.5\n");
+}
+
+/// A callee that replaces a declared-type array argument with elements of another kind is
+/// stopped with a diagnostic instead of corrupting the typed slot.
+#[test]
+fn test_nullable_array_reference_rejects_foreign_elements() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Item {}
+function corrupt(?array &$items): void { $items = ["not an item"]; }
+function run(): void {
+    array<Item> $items = [new Item()];
+    corrupt($items);
+    echo "unreachable";
+}
+run();
+"#,
+    );
+    assert!(
+        out.stderr.contains("a by-reference argument was replaced by an array whose elements"),
+        "stderr: {}",
+        out.stderr
+    );
+}
+
+/// An `array<mixed>` local (a heterogeneous literal, or a list rebuilt in a loop) passed to
+/// `?array &$a` accepts a callee array with raw typed slots: the writeback widens it into boxed
+/// cells, and the boxed array the callee keeps is retained as it is.
+#[test]
+fn test_nullable_array_reference_widens_into_mixed_locals() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Item { public function __construct(public int $id) {} }
+function replace_items(?array &$items, int $mode): void {
+    if ($mode === 0) {
+        $items = [new Item(4), new Item(5)];
+    } elseif ($mode === 1) {
+        $items = [8, 9, 10];
+    } else {
+        $items[] = "tail";
+    }
+}
+function run(): void {
+    for ($i = 0; $i < 3; $i++) {
+        $values = [1, "a", 2.5];
+        replace_items($values, 0);
+        $first = $values[0];
+        $other = [true, "b"];
+        replace_items($other, 1);
+        $kept = [1, "x"];
+        replace_items($kept, 2);
+        if ($i == 2) {
+            echo count($values), $first->id, "|", count($other), $other[2], "|", count($kept), $kept[2], "\n";
+        }
+    }
+}
+run();
+"#,
+    );
+    assert_clean(out, "24|310|3tail\n");
+}
+
+/// An object local bound to a nullable parameter of an ANCESTOR class may receive a sibling
+/// instance (`?Base &$v` given an `A`, the callee stores a `B`): the local takes boxed storage
+/// instead of keeping `A`'s layout, so it reads the sibling's own properties like php.
+#[test]
+fn test_nullable_ancestor_reference_accepts_sibling_object() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Base { public int $b = 1; }
+class A extends Base { public int $a = 10; }
+class B extends Base { public string $s = "bee"; }
+function replace(?Base &$v): void { $v = new B(); }
+function run(): void {
+    $x = new A();
+    replace($x);
+    echo get_class($x), $x->b, $x->s, "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "B1bee\n");
+}
+
+/// A callee that replaces a declared-type object array with instances of an unrelated class is
+/// stopped with a diagnostic instead of letting the slot be read at the wrong offsets.
+#[test]
+fn test_nullable_array_reference_rejects_foreign_object_elements() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Item { public int $id = 1; }
+class Other { public string $z = "zz"; }
+function corrupt(?array &$items): void { $items = [new Other()]; }
+function run(): void {
+    array<Item> $items = [new Item()];
+    corrupt($items);
+    echo $items[0]->id, "unreachable";
+}
+run();
+"#,
+    );
+    assert!(
+        out.stderr.contains("replaced by an object of a class its typed variable cannot hold"),
+        "stdout: {} stderr: {}",
+        out.stdout,
+        out.stderr
+    );
+    assert!(!out.stdout.contains("unreachable"), "stdout: {}", out.stdout);
+}
+
+/// A declared nested-array local bound to `?array &$a` keeps its typed layout when the callee leaves
+/// nested arrays of the same element kind, and a nested replacement of another kind is
+/// stopped with a diagnostic instead of being read with the slot's nested layout.
+#[test]
+fn test_nullable_array_reference_checks_nested_array_layouts() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function keep_tail(?array &$rows): void { $rows = [$rows[count($rows) - 1], [7, 8]]; }
+function run(): void {
+    array<array<int>> $rows = [[1, 2], [3, 4]];
+    keep_tail($rows);
+    echo count($rows), $rows[0][1], $rows[1][0], "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "247\n");
+    let out = compile_and_run_capture(
+        r#"<?php
+function replace_nested(?array &$rows): void { $rows = [["x", "y"]]; }
+function run(): void {
+    array<array<int>> $rows = [[1, 2]];
+    replace_nested($rows);
+    echo $rows[0][1], "unreachable";
+}
+run();
+"#,
+    );
+    assert!(
+        out.stderr.contains("a by-reference argument was replaced by an array whose elements"),
+        "stdout: {} stderr: {}",
+        out.stdout,
+        out.stderr
+    );
+    assert!(!out.stdout.contains("unreachable"), "stdout: {}", out.stdout);
+}
+
+/// A callee that stores `null` (or a value of another kind) through `?Foo &$o`, `?array &$a`
+/// or `?float &$f` reaches an ordinary concrete local like php: the local takes the
+/// parameter's boxed cell instead of a typed slot that could not hold the new value.
+#[test]
+fn test_nullable_reference_local_accepts_null_and_other_kinds() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box { public int $v = 1; }
+function clear_box(?Box &$b): void { $b = null; }
+function clear_list(?array &$a): void { $a = null; }
+function clear_float(?float &$f): void { $f = null; }
+function refill(?array &$a): void { $a = ["k" => "text", "n" => 2]; }
+function run(): void {
+    for ($i = 0; $i < 3; $i++) {
+        $box = new Box();
+        clear_box($box);
+        $ints = [1, 2];
+        clear_list($ints);
+        $boxes = [new Box(), new Box()];
+        clear_list($boxes);
+        $f = 1.5;
+        clear_float($f);
+        $other = [new Box()];
+        refill($other);
+        if ($i == 2) {
+            var_dump($box, $ints, $boxes, $f);
+            echo $other["k"], $other["n"], "\n";
+        }
+    }
+}
+run();
+"#,
+    );
+    assert_clean(out, "NULL\nNULL\nNULL\nNULL\ntext2\n");
+}
+
+/// A declared-type local keeps its typed slot, so a callee that stores `null` through
+/// `?Box &$b` into `Box $box = …` is stopped with a diagnostic: the declaration does not admit
+/// `null`, like a direct `$box = null;` would not.
+#[test]
+fn test_nullable_reference_declared_local_rejects_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Box { public int $v = 1; }
+function clear_box(?Box &$b): void { $b = null; }
+function run(): void {
+    Box $box = new Box();
+    clear_box($box);
+    echo "unreachable";
+}
+run();
+"#,
+    );
+    assert!(
+        out.stderr.contains("a by-reference argument was replaced by a value its typed variable cannot hold"),
+        "stdout: {} stderr: {}",
+        out.stdout,
+        out.stderr
+    );
+    assert!(!out.stdout.contains("unreachable"), "stdout: {}", out.stdout);
+}
+
+/// The class check of a declared-type object array runs in a function that also calls `eval()`
+/// (on another branch), so a foreign instance cannot be read with the declared class's layout.
+#[test]
+fn test_nullable_array_reference_checks_classes_beside_eval() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Item { public int $id = 1; }
+class Other { public string $z = "zz"; }
+function corrupt(?array &$items): void { $items = [new Other()]; }
+function run(bool $dynamic): void {
+    if ($dynamic) {
+        eval('echo "e";');
+        return;
+    }
+    array<Item> $items = [new Item()];
+    corrupt($items);
+    echo $items[0]->id, "unreachable";
+}
+run(false);
+"#,
+    );
+    assert!(
+        out.stderr.contains("replaced by an object of a class its typed variable cannot hold"),
+        "stdout: {} stderr: {}",
+        out.stdout,
+        out.stderr
+    );
+    assert!(!out.stdout.contains("unreachable"), "stdout: {}", out.stdout);
+}
+
+/// A declared nested-array local accepts nested arrays the callee rebuilt from `mixed` reads:
+/// every level whose slots are boxed cells is converted into the declared layout (two and
+/// three levels deep), the shared outer array is separated first, and nothing leaks.
+#[test]
+fn test_nullable_array_reference_converts_nested_mixed_arrays() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rebuild(?array &$a): void { $a = [[$a[0][0]], [$a[1][1], 9]]; }
+function deepen(?array &$a): void { $a = [[[$a[0][0][0] + 1, 7]], [[8]]]; }
+function run(): void {
+    for ($i = 0; $i < 3; $i++) {
+        array<array<int>> $rows = [[1, 2], [3, 4]];
+        rebuild($rows);
+        array<array<array<int>>> $cube = [[[5]]];
+        deepen($cube);
+        if ($i == 2) {
+            echo count($rows), $rows[0][0], $rows[1][0], $rows[1][1], "|";
+            echo $cube[0][0][0], $cube[0][0][1], $cube[1][0][0], "\n";
+        }
+    }
+}
+run();
+"#,
+    );
+    assert_clean(out, "2149|678\n");
+}
+
+/// A declared `array<array<mixed>>` local accepts nested arrays with raw typed slots: the
+/// writeback widens each nested array into boxed cells instead of rejecting a value the
+/// declaration admits, and nothing leaks.
+#[test]
+fn test_nullable_array_reference_widens_nested_arrays_into_mixed() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Cell { public function __construct(public int $v) {} }
+function retype(?array &$a): void { $a = [[1, 2], ["x", "y"], [new Cell(5)]]; }
+function run(): void {
+    for ($i = 0; $i < 3; $i++) {
+        array<array<mixed>> $rows = [[1, "a"]];
+        retype($rows);
+        if ($i == 2) {
+            echo count($rows), $rows[0][0] + $rows[0][1], $rows[1][1], $rows[2][0]->v, "\n";
+        }
+    }
+}
+run();
+"#,
+    );
+    assert_clean(out, "33y5\n");
+}
+
+/// A declared `array<callable>` local whose callee rebuilt the array from `mixed` reads keeps
+/// its capturing closures alive: the converted array retains each callable descriptor, so the
+/// closure still runs after the boxed copy is released, and nothing leaks.
+#[test]
+fn test_nullable_array_reference_retains_callables_on_conversion() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rebuild(?array &$a): void { $a = [$a[0]]; }
+function run(): void {
+    for ($i = 0; $i < 3; $i++) {
+        $n = $i;
+        array<callable> $fns = [function () use ($n) { return $n * 10; }];
+        rebuild($fns);
+        if ($i == 2) {
+            echo $fns[0](), "\n";
+        }
+    }
+}
+run();
+"#,
+    );
+    assert_clean(out, "20\n");
+}
+
+/// A `mixed` local bound to a nullable object parameter (`?A &$v`) is checked against the
+/// parameter like php: `null` and an `A` are accepted, a scalar or another class raises
+/// `TypeError` before the callee runs.
+#[test]
+fn test_nullable_object_reference_rejects_foreign_boxed_values() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public int $a = 1; }
+class B {}
+function src(int $k): mixed { return $k === 0 ? 7 : ($k === 1 ? new B() : ($k === 2 ? null : new A())); }
+function take(?A &$v): string { return $v === null ? "null" : get_class($v); }
+function run(): void {
+    foreach ([0, 1, 2, 3] as $k) {
+        $v = src($k);
+        try {
+            echo take($v), "|";
+        } catch (TypeError $e) {
+            echo "TypeError|";
+        }
+    }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "TypeError|TypeError|null|A|\n");
+}
+
+/// A `mixed` local bound to a by-reference union of `null`, arrays and objects (`?array &$v`,
+/// `array|A &$v`) is checked against the union like php: matching values enter the callee,
+/// anything else raises `TypeError` before it runs.
+#[test]
+fn test_heap_union_reference_rejects_foreign_boxed_values() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A {}
+class B {}
+function src(int $k): mixed { return [7, [1, 2], null, new A(), new B()][$k]; }
+function takeList(?array &$v): string { return $v === null ? "null" : "list" . count($v); }
+function takeEither(array|A &$v): string { return is_array($v) ? "arr" : get_class($v); }
+function run(): void {
+    for ($k = 0; $k < 5; $k++) {
+        $a = src($k);
+        try { echo takeList($a); } catch (TypeError $e) { echo "TE"; }
+        echo ",";
+        $b = src($k);
+        try { echo takeEither($b); } catch (TypeError $e) { echo "TE"; }
+        echo "|";
+    }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "TE,TE|list2,arr|null,TE|TE,A|TE,TE|\n");
+}
+
+/// The boundary checks of by-reference `array`, `?array` and `?A` parameters raise a
+/// `TypeError` the caller's `try` catches even when the callee itself cannot throw: the
+/// exception-flow pass must keep those handlers (it used to drop them as unreachable).
+#[test]
+fn test_by_ref_boundary_checks_keep_their_catch_handlers() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A {}
+function src(int $k): mixed { return $k === 0 ? 7 : ($k === 1 ? [1] : null); }
+function takeArr(array &$v): string { return "in"; }
+function takeNArr(?array &$v): string { return "in"; }
+function takeNA(?A &$v): string { return "in"; }
+function run(): void {
+    foreach ([0, 1, 2] as $k) {
+        $a = src($k);
+        try { echo takeArr($a); } catch (TypeError $e) { echo "TE"; }
+        echo ",";
+        $b = src($k);
+        try { echo takeNArr($b); } catch (TypeError $e) { echo "TE"; }
+        echo ",";
+        $c = src($k);
+        try { echo takeNA($c); } catch (TypeError $e) { echo "TE"; }
+        echo "|";
+    }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "TE,TE,TE|in,in,TE|TE,in,in|\n");
+}
+
+/// A by-reference union with the generic `object` type (`array|object &$v`) accepts any
+/// object (and any array) held by a `mixed` local, and rejects a scalar or `null` with
+/// `TypeError`, like php.
+#[test]
+fn test_generic_object_union_reference_accepts_any_object() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A {}
+function src(int $k): mixed { return [7, [1], new A(), null][$k]; }
+function take(array|object &$v): string { return is_array($v) ? "arr" : get_class($v); }
+function run(): void {
+    for ($k = 0; $k < 4; $k++) {
+        $v = src($k);
+        try { echo take($v); } catch (TypeError $e) { echo "TE"; }
+        echo "|";
+    }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "TE|arr|A|TE|\n");
+}
+
+/// Declared-type locals bound to nullable by-reference parameters: a callee that throws after
+/// writing through the reference leaves no leaked writeback cell (the local keeps its previous
+/// value, as documented: the write is applied when the call returns), two references to the same
+/// local share one cell (`both($v, $v)` sees its own write and writes back once), and the
+/// boundary check of a `mixed` local runs after every argument was evaluated.
+#[test]
+fn test_declared_reference_writeback_unwinds_shares_and_checks_after_arguments() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function fail(?array &$a): void { $a = [9, 9]; throw new RuntimeException("x"); }
+function both(?float &$a, ?float &$b): void { $a = 2.0; echo $b, ","; $b = $b + 1; }
+function lists(?array &$a, ?array &$b): void { $a[] = 2; echo count($b), ","; $b[] = 3; }
+function src(): mixed { return 7; }
+function side(): int { echo "S"; return 1; }
+function take(?array &$a, int $x): string { return "in"; }
+function run(): void {
+    array<int> $arr = [1];
+    try { fail($arr); } catch (RuntimeException $e) { echo count($arr), ":", $arr[0], "|"; }
+    float $v = 1.0;
+    both($v, $v);
+    echo $v, "|";
+    array<int> $l = [1];
+    lists($l, $l);
+    echo count($l), "|";
+    $m = src();
+    try { echo take($m, side()); } catch (TypeError $e) { echo "TE"; }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "1:1|2,3|2,3|STE\n");
+}
+
+/// A declared-type local's writeback cell is a managed reference cell: a closure that captures
+/// the reference and outlives the call keeps it alive and works on it (detached from the local
+/// once the call wrote it back, as documented), and a destructor that throws while the
+/// writeback releases the previous object (or an array holding it) leaves the local holding
+/// the new value, with nothing freed twice or leaked.
+#[test]
+fn test_declared_reference_cells_survive_captures_and_throwing_destructors() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {
+    public function __construct(public int $id) {}
+    public function __destruct() { if ($this->id === 1) { throw new RuntimeException("d"); } }
+}
+function keep(?float &$x): Closure { return function () use (&$x) { $x = $x + 1; return $x; }; }
+function replace(?C &$c): void { $c = new C(2); }
+function replaceAll(?array &$a): void { $a = [new C(2)]; }
+function run(): void {
+    float $v = 1.0;
+    $inc = keep($v);
+    echo $inc(), ":", $v, "|";
+    C $x = new C(1);
+    try { replace($x); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $x->id; }
+    echo "|";
+    array<C> $arr = [new C(1)];
+    try { replaceAll($arr); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", count($arr), $arr[0]->id; }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "2:1|caught:2|caught:12\n");
+}
+
+/// A call whose writeback releases a previous object with a throwing destructor still owns the
+/// value it returned: the result guard unwinds it (function, method and `mixed` returns), so
+/// nothing leaks although the caller never stores it. Output matches php 8.5, where the
+/// destructor already throws inside the callee.
+#[test]
+fn test_declared_reference_writeback_throw_releases_the_call_result() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {
+    public function __construct(public int $id) {}
+    public function __destruct() { if ($this->id === 1) { throw new RuntimeException("d"); } }
+}
+class R { public array $items = [1, 2]; }
+class M { public function swap(?C &$c): R { $c = new C(2); return new R(); } }
+function replace(?C &$c): R { $c = new C(2); return new R(); }
+function replaceMixed(?array &$a): mixed { $a = [new C(2)]; return [new R()]; }
+function run(): void {
+    C $x = new C(1);
+    try { $r = replace($x); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $x->id; }
+    echo "|";
+    C $y = new C(1);
+    try { $r = (new M())->swap($y); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $y->id; }
+    echo "|";
+    array<C> $arr = [new C(1)];
+    try { $m = replaceMixed($arr); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $arr[0]->id; }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "caught:2|caught:2|caught:2\n");
+}
+
+/// The writeback result guard also covers iterable and callable returns, the cell a
+/// by-reference return transfers, and calls through an interface-typed or a nullable
+/// receiver: a destructor thrown while the writeback releases the previous object leaks
+/// none of them. Output matches php 8.5.
+#[test]
+fn test_declared_reference_writeback_throw_releases_every_owned_result_kind() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {
+    public function __construct(public int $id) {}
+    public function __destruct() { if ($this->id === 1) { throw new RuntimeException("d"); } }
+}
+class R { public array $items = [1, 2]; }
+interface I { public function swap(?C &$c): R; }
+class M implements I { public function swap(?C &$c): R { $c = new C(2); return new R(); } }
+function replaceIt(?C &$c): iterable { $c = new C(2); return [new R()]; }
+function replaceFn(?C &$c): callable { $c = new C(2); $r = new R(); return function () use ($r) { return $r; }; }
+function &replaceRef(?C &$c): array { $c = new C(2); $a = [new R()]; return $a; }
+function viaInterface(I $i): void {
+    C $x = new C(1);
+    try { $r = $i->swap($x); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $x->id; }
+}
+function viaNullable(?M $m): void {
+    C $x = new C(1);
+    try { $r = $m->swap($x); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $x->id; }
+}
+function run(): void {
+    C $a = new C(1);
+    try { $r = replaceIt($a); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $a->id; }
+    echo "|";
+    C $b = new C(1);
+    try { $f = replaceFn($b); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $b->id; }
+    echo "|";
+    C $c = new C(1);
+    try { $v = replaceRef($c); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $c->id; }
+    echo "|";
+    viaInterface(new M());
+    echo "|";
+    viaNullable(new M());
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "caught:2|caught:2|caught:2|caught:2|caught:2\n");
+}
+
+/// The writeback result guard also covers a returned heap string (through its spilled
+/// return-ownership status) and a nullsafe `?->` method call: a destructor thrown while the
+/// writeback releases the previous object leaks neither result. Output matches php 8.5.
+#[test]
+fn test_declared_reference_writeback_throw_releases_strings_and_nullsafe_results() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {
+    public function __construct(public int $id) {}
+    public function __destruct() { if ($this->id === 1) { throw new RuntimeException("d"); } }
+}
+class R { public array $items = [1, 2]; }
+class M { public function swap(?C &$c): R { $c = new C(2); return new R(); } }
+function replaceStr(?C &$c): string { $c = new C(2); return str_repeat("x", 1000); }
+function viaNullsafe(?M $m): void {
+    C $x = new C(1);
+    try { $r = $m?->swap($x); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $x->id; }
+}
+function run(): void {
+    C $a = new C(1);
+    try { $s = replaceStr($a); echo "no-throw"; } catch (RuntimeException $e) { echo "caught:", $a->id; }
+    echo "|";
+    viaNullsafe(new M());
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "caught:2|caught:2\n");
+}
+
+/// An emptied `array<mixed>` written back through a nullable by-reference parameter into a
+/// declared `array<int>` local (or as a nested empty array of an `array<array<int>>` local)
+/// takes the local's element layout, so later appends store raw ints that a `mixed` consumer
+/// reads correctly. Output matches php 8.5.
+#[test]
+fn test_declared_reference_empty_arrays_take_the_local_layout() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function fill(?array &$out): void { $empty = [1, "x"]; array_pop($empty); array_pop($empty); $out = $empty; }
+function fillNested(?array &$out): void { $empty = [1, "x"]; array_pop($empty); array_pop($empty); $out = [$empty, [3]]; }
+function show(mixed $v): string { return json_encode($v); }
+function run(): void {
+    array<int> $a = [5];
+    fill($a);
+    $a[] = 42;
+    echo show($a), count($a), "|";
+    array<array<int>> $n = [[1]];
+    fillNested($n);
+    $n[0][] = 7;
+    echo show($n), "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "[42]1|[[7],[3]]\n");
+}
+
+/// A declared local passed to a nullable by-reference parameter starts the callee's cell from
+/// its value AFTER every argument ran: a later argument that writes the local through its own
+/// reference (`take($v, bump($v))`) is seen by the callee, like php's by-reference binding of
+/// the variable itself. Scalars, arrays and objects, with and without the EIR optimizer.
+/// Output matches php 8.5.
+#[test]
+fn test_declared_reference_cells_start_from_the_current_local() {
+    let run = || {
+        compile_and_run_with_heap_debug(
+            r#"<?php
+class Box { public function __construct(public int $n) {} }
+function bump(float &$x): float { $x = 2.0; return 0.0; }
+function take(?float &$v, float $ignored): void { echo $v, "|"; $v = 3.5; }
+function bumpa(array &$x): int { $x = [str_repeat("y", 3), 2]; return 0; }
+function takea(?array &$v, int $ignored): void { echo json_encode($v), "|"; $v = [9]; }
+function bumpo(Box &$x): int { $x = new Box(2); return 0; }
+function takeo(?Box &$v, int $ignored): void { echo $v->n, "|"; $v = new Box(9); }
+function run(): void {
+    float $v = 1.0;
+    take($v, bump($v));
+    echo $v, "|";
+    array $a = [str_repeat("x", 3), 1];
+    takea($a, bumpa($a));
+    echo json_encode($a), "|";
+    Box $b = new Box(1);
+    takeo($b, bumpo($b));
+    echo $b->n, "\n";
+}
+run();
+"#,
+        )
+    };
+    assert_clean(run(), "2|3.5|[\"yyy\",2]|[9]|2|9\n");
+    assert_clean(without_ir_opt(run), "2|3.5|[\"yyy\",2]|[9]|2|9\n");
+}
+
+/// A null-only local passed to a `?ptr<T> &` parameter of a method, a static method or a
+/// closure keeps pointer storage (no boxed null-output promotion), so the binding compiles and
+/// the callee's `null` reaches the local, like the plain-function case.
+#[test]
+fn test_null_locals_bind_nullable_pointer_references_through_methods() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+packed class Vec2 { public int $x; }
+class W {
+    public function clear(?ptr<Vec2> &$p): void { $p = null; }
+    public static function sclear(?ptr<Vec2> &$p): void { $p = null; }
+}
+function fclear(?ptr<Vec2> &$p): void { $p = null; }
+function run(): void {
+    $w = new W();
+    $p = null;
+    $w->clear($p);
+    $q = null;
+    W::sclear($q);
+    $r = null;
+    fclear($r);
+    $f = function (?ptr<Vec2> &$p): void { $p = null; };
+    $s = null;
+    $f($s);
+    echo var_export($p === null, true), var_export($q === null, true), var_export($r === null, true), var_export($s === null, true), "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "truetruetruetrue\n");
+}
+
+/// A null-only local passed BY VALUE to a `?ptr<T>` parameter of a method, a static method,
+/// or beside a by-reference `?array &` parameter (method or function) keeps its natural
+/// null storage: only by-reference positions without a pointer type take boxed null-output
+/// storage, so the by-value pointer binding still type-checks.
+#[test]
+fn test_null_locals_pass_by_value_to_nullable_pointer_parameters() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+packed class Vec2 { public int $x; }
+class Sink {
+    public function take(?ptr<Vec2> $p): string { return $p === null ? "n" : "p"; }
+    public static function stake(?ptr<Vec2> $p): string { return $p === null ? "n" : "p"; }
+    public function both(?array &$a, ?ptr<Vec2> $p): string { $a = [1]; return $p === null ? "n" : "p"; }
+}
+function fboth(?array &$a, ?ptr<Vec2> $p): string { $a = [2]; return $p === null ? "n" : "p"; }
+function run(): void {
+    $sink = new Sink();
+    $p = null;
+    echo $sink->take($p);
+    $q = null;
+    echo Sink::stake($q);
+    $a = null; $r = null;
+    echo $sink->both($a, $r), count($a);
+    $b = null; $s = null;
+    echo fboth($b, $s), count($b), "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "nnn1n1\n");
+}
+
+/// Named arguments and by-reference variadic tails bind null-only locals by their actual
+/// parameter: a by-value `?ptr<T>` parameter reached by name (in either order) or beside a
+/// `mixed &...$rest` tail keeps the local's null storage, while a by-reference `?array &$out`
+/// reached by name and a `mixed &...$outs` variadic still take boxed storage the callee fills.
+/// The non-pointer results match php 8.5.
+#[test]
+fn test_null_locals_bind_named_and_variadic_parameters_by_their_parameter() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+packed class V { public int $x; }
+function take(?ptr<V> $p, mixed &$other): string { $other = 1; return $p === null ? "n" : "p"; }
+function vtake(?ptr<V> $p, mixed &...$rest): string { return $p === null ? "n" : "p"; }
+function fill(int $n = 0, ?array &$out = null): void { $out = [1, 2]; }
+function mfill(int $n, mixed &...$outs): void { $outs[0] = [7, 8]; }
+function run(): void {
+    $p = null;
+    mixed $other = null;
+    echo take(p: $p, other: $other);
+    $q = null;
+    mixed $o2 = null;
+    echo vtake($q, $o2);
+    $r = null;
+    mixed $o3 = null;
+    echo take(other: $o3, p: $r), "|";
+    $x = null;
+    fill(out: $x);
+    echo count($x), "|";
+    $y = null;
+    mfill(1, $y);
+    echo count($y), "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "nnn|2|2\n");
+}
+
+/// The by-reference union checks and the by-reference object checks run in one pass in
+/// parameter order (php's RECV): with two invalid arguments the `TypeError` names the first,
+/// whichever family checks it. Each argument is invalidated only after the caller checked it.
+/// Expected output is php 8.5's.
+#[test]
+fn test_reference_entry_guards_follow_parameter_order() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class NeedObject {}
+function unionFirst(?array &$a, NeedObject &$b, int $n): void {}
+function objectFirst(NeedObject &$b, ?array &$a, int $n): void {}
+function replace(mixed &$b): int { $b = new stdClass(); return 0; }
+function run(mixed $a, mixed $b, mixed $c): void {
+    try { unionFirst($a, $b, replace($b)); } catch (TypeError $e) { echo explode(", called", $e->getMessage())[0], "|"; }
+    try { objectFirst($c, $a, replace($c)); } catch (TypeError $e) { echo explode(", called", $e->getMessage())[0], "\n"; }
+}
+run("wrong", new NeedObject(), new NeedObject());
+"#,
+    );
+    assert_clean(
+        out,
+        "unionFirst(): Argument #1 ($a) must be of type ?array, string given|objectFirst(): Argument #1 ($b) must be of type NeedObject, stdClass given\n",
+    );
+}

@@ -10,18 +10,15 @@
 //! - TRANSCRIBED from `mysqli_prelude::exception::SRC` (`synthetic_class::transcribe`);
 //!   the oracle `built_declarations_match_the_php_for_every_version` compares each
 //!   built node against that PHP.
-//! - `mysqli_sql_exception extends RuntimeException` with a public `$sqlstate`,
-//!   matching php-src's shape (there `$sqlstate` is protected with a getter; the
-//!   public property is the documented elephc divergence).
-//! - The process-wide report mode lives on `mysqli::$reportMode` (see
-//!   `connection.rs`); its default is version-gated there (`ERROR|STRICT` = 3 for
-//!   PHP >= 8.1, `OFF` = 0 for 8.0).
+//! - `final class mysqli_sql_exception extends RuntimeException` with php-src's
+//!   protected `$sqlstate`; the private `__elephcCreate` factory sets it.
 
 use crate::parser::ast::{TypeExpr, Stmt};
 use crate::synthetic_class::{
     class,
     e_bool,
     e_int,
+    e_new,
     e_null,
     e_str,
     e_this,
@@ -29,6 +26,7 @@ use crate::synthetic_class::{
     e_var,
     function,
     method,
+    s_assign,
     s_prop_assign,
     s_return,
     s_static_prop_assign,
@@ -38,13 +36,10 @@ use crate::synthetic_class::{
 
 /// `mysqli_sql_exception` — transcribed from the PHP form.
 pub(super) fn decl_class_mysqli_sql_exception() -> Stmt {
-    // php-src: class mysqli_sql_exception extends RuntimeException. The SQLSTATE is exposed as a
-    // public property (php-src keeps it protected behind getSqlState(); documented divergence,
-    // same bucket as writable mysqli properties).
     class("mysqli_sql_exception")
+        .final_()
         .extends("RuntimeException")
-        .prop("sqlstate", TypeExpr::Str, Some(e_str("00000")))
-        // The previous exception in the chain, stored in Exception's inherited Throwable slot.
+        .protected_prop("sqlstate", TypeExpr::Str, Some(e_str("00000")))
         .prop("previous", t_nullable(t_class("Throwable")), Some(e_null()))
         .method(
             method("__construct")
@@ -52,17 +47,25 @@ pub(super) fn decl_class_mysqli_sql_exception() -> Stmt {
                 .param_default("code", TypeExpr::Int, e_int(0))
                 .param_default("previous", t_nullable(t_class("Throwable")), e_null())
                 .body(vec![
-                    // The built-in Exception constructor is a checker-synthesized method with no
-                    // linkable symbol, so `parent::__construct()` cannot be called; the public
-                    // $message property is assigned directly (same pattern as PDOException in the
-                    // PDO prelude).
                     s_prop_assign(e_this(), "message", e_var("message")),
                     s_prop_assign(e_this(), "code", e_var("code")),
                     s_prop_assign(e_this(), "previous", e_var("previous")),
                 ]),
         )
-        // php 8.1+: the documented accessor for the SQLSTATE (the property itself is protected in
-        // php-src; elephc exposes both — see the class note).
+        .method(
+            method("__elephcCreate")
+                .private()
+                .static_()
+                .param("message", TypeExpr::Str)
+                .param("code", TypeExpr::Int)
+                .param("sqlstate", TypeExpr::Str)
+                .returns(t_class("mysqli_sql_exception"))
+                .body(vec![
+                    s_assign("_e", e_new("mysqli_sql_exception", vec![e_var("message"), e_var("code")])),
+                    s_prop_assign(e_var("_e"), "sqlstate", e_var("sqlstate")),
+                    s_return(e_var("_e")),
+                ]),
+        )
         .method(
             method("getSqlState")
                 .returns(TypeExpr::Str)
@@ -75,9 +78,6 @@ pub(super) fn decl_class_mysqli_sql_exception() -> Stmt {
 
 /// `mysqli_report` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_report() -> Stmt {
-    // Stores the process-wide report mode consumed by every mysqli failure path. PHP 8.1+ default:
-    // MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT; PHP 8.0: OFF (the default itself is baked into
-    // mysqli::$reportMode per version, see connection.rs).
     function("mysqli_report")
         .param("flags", TypeExpr::Int)
         .returns(TypeExpr::Bool)

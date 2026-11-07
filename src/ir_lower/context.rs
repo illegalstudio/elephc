@@ -2184,12 +2184,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// static-property cells have no owner at all, so their logical fallback is authoritative even
     /// when the alias slot itself widened for conditional ref binding.
     fn ref_cell_store_type(&self, variable: &str, fallback: &PhpType) -> PhpType {
+        // A by-reference variadic is not an incoming cell (see
+        // `is_raw_reference_variadic`): once promoted, its owner records the payload.
         if let Some(parameter) = self
             .builder
             .function()
             .params
             .iter()
-            .find(|parameter| parameter.by_ref && parameter.name == variable)
+            .find(|parameter| parameter.by_ref && !parameter.variadic && parameter.name == variable)
         {
             return parameter.php_type.clone();
         }
@@ -2203,6 +2205,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return self.builder.local_php_type(owner);
         }
         fallback.clone()
+    }
+
+    /// Returns whether `name` is a by-reference variadic parameter still in its raw slot.
+    ///
+    /// The variadic arrives as an ordinary array whose elements are the callers' reference
+    /// markers, so its slot holds that array, not a reference cell (unlike a scalar `&$x`
+    /// parameter, whose incoming cell `retain_incoming_ref_cell` adopts). It is marked
+    /// ref-bound so element writes reach the callers, but anything that needs a CELL for the
+    /// variable itself, such as a by-reference closure capture, must promote it first.
+    pub(crate) fn is_raw_reference_variadic(&self, name: &str) -> bool {
+        self.ref_cell_owner_slot(name).is_none()
+            && self.builder.function().params.iter()
+                .any(|parameter| parameter.by_ref && parameter.variadic && parameter.name == name)
     }
 
     /// Keeps reference captures attached to the physical cell ABI after a logical eval widening.

@@ -167,7 +167,11 @@ mod tests {
         // +8: FileInfo procedures and shared warning/deprecation helpers.
         // +4: internal pointer/zval aliases used by extension hosting.
         // +2: PHP 8.5 array value-edge functions.
-        assert_eq!(contracts().len(), 1253 + curl_surface);
+        // +23: the rest of the mysqli procedural surface (bind_result/fetch, async poll,
+        // statistics, warnings, change_user, ssl_set, statement attributes, and so on).
+        // +1: `__elephc_reflection_class_build`, the internal call that runs a compiled
+        // per-class `ReflectionClass` builder for `getDeclaringClass()`.
+        assert_eq!(contracts().len(), 1277 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

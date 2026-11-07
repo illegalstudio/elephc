@@ -1,7 +1,8 @@
 //! Purpose:
 //! Decides whether a parsed program references the mysqli surface — one of the
 //! mysqli classes (`mysqli`, `mysqli_stmt`, `mysqli_result`,
-//! `mysqli_sql_exception`) or a `mysqli_*` procedural function — so the mysqli
+//! `mysqli_sql_exception`, `mysqli_driver`, `mysqli_warning`) or a `mysqli_*`
+//! procedural function — so the mysqli
 //! prelude is injected only for mysqli-using programs.
 //!
 //! Called from:
@@ -19,7 +20,7 @@
 //!   hints, trait uses, `use` imports). The prefix is `mysqli_`, NOT `mysql`:
 //!   the ancient `mysql_query` API must not inject this prelude.
 //! - A bare global `MYSQLI_*` constant reference is a trigger too (the prelude
-//!   declares ~50 of them, so a program whose only mention is a constant must
+//!   declares ~110 of them, so a program whose only mention is a constant must
 //!   still get them — see `name_is_mysqli_constant`).
 //! - Capability probes (`class_exists('mysqli')`, `function_exists('mysqli_…')`,
 //!   `defined('MYSQLI_…')`, `extension_loaded('mysqli')`) are string literals and
@@ -60,6 +61,8 @@ fn name_is_mysqli_class(name: &Name) -> bool {
             || segment.eq_ignore_ascii_case("mysqli_stmt")
             || segment.eq_ignore_ascii_case("mysqli_result")
             || segment.eq_ignore_ascii_case("mysqli_sql_exception")
+            || segment.eq_ignore_ascii_case("mysqli_driver")
+            || segment.eq_ignore_ascii_case("mysqli_warning")
     })
 }
 
@@ -233,7 +236,7 @@ fn expr_refs_mysqli(expr: &Expr) -> bool {
         | ExprKind::MagicConstant(_) => false,
 
         // A bare global `MYSQLI_*` constant is a mysqli reference: the prelude
-        // declares ~50 of them, and a program whose only mention is e.g.
+        // declares ~110 of them, and a program whose only mention is e.g.
         // `['mode' => MYSQLI_ASSOC]` would otherwise fail with "undefined
         // constant" — the failure the exhaustive walk exists to prevent. PDO
         // has no such gap because its constants are class constants reached

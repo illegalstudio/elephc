@@ -48,6 +48,7 @@ pub(crate) use return_boundary::declared_int_return_requires_validation;
 mod result;
 /// Shared builtin Reflection ancestry for public metadata property write handlers.
 pub(crate) mod reflection_properties;
+pub(crate) mod method_order;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
 /// Function signature representation and builtin signature helpers.

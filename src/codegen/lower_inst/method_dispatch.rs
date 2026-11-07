@@ -145,7 +145,7 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_method_call_result(ctx, inst, &target)?;
     // User callees return an owner independent of the caller's materialized Mixed arguments.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, target.by_ref_return)
 }
 
 /// Rejects the raw null-container representation before a static object method dispatch.
@@ -310,7 +310,7 @@ pub(super) fn lower_mixed_method_candidate_call(
     store_method_call_result(ctx, inst, &candidate.target)?;
     // Candidate dispatch creates the same caller-owned coercion cells as concrete dispatch.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, candidate.target.by_ref_return)
 }
 
 /// Returns true when `class_name` is `ancestor` or reaches it through `parent`.
