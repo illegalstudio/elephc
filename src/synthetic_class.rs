@@ -462,6 +462,17 @@ pub fn e_not(value: Expr) -> Expr {
     Expr::new(ExprKind::Not(Box::new(value)), Span::dummy())
 }
 
+/// `value instanceof ClassName`, with the class fully qualified.
+pub fn e_instanceof(value: Expr, class_name: &str) -> Expr {
+    Expr::new(
+        ExprKind::InstanceOf {
+            value: Box::new(value),
+            target: crate::parser::ast::InstanceOfTarget::Name(fq_name(class_name)),
+        },
+        Span::dummy(),
+    )
+}
+
 /// `-value`, the unary minus.
 ///
 /// A NEGATIVE LITERAL IS THIS TOO. The parser does NOT fold `-3` into `IntLiteral(-3)`; it
