@@ -1700,8 +1700,12 @@ pub extern "C" fn elephc_debug_web_request(
     }
 
     let sequence = WEB_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let socket_path = std::path::Path::new(&filters.directory).join(format!(
-        "session-{}-{sequence}.sock",
+    // macOS `sun_path` is much shorter than the test/session directory. Keep the
+    // socket itself in /tmp with a compact unique name; the announcement JSON
+    // stays in the session directory the broker owns.
+    let nonce = random_bytes::<4>().map(u32::from_ne_bytes).unwrap_or(0);
+    let socket_path = std::path::Path::new("/tmp").join(format!(
+        "elephc-web-{}-{sequence}-{nonce}.sock",
         std::process::id()
     ));
     let announce_path = socket_path.with_extension("json");

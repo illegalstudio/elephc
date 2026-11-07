@@ -5344,7 +5344,7 @@ fn test_cli_debug_attach_connects_to_listening_binary() {
         "attach fixture compilation failed: {}",
         String::from_utf8_lossy(&compile.stderr)
     );
-    let socket = dir.join("app.sock");
+    let socket = short_attach_socket("attach");
     let mut debuggee = DebuggeeGuard {
         child: std::process::Command::new(dir.join("main"))
             .env("ELEPHC_DEBUG_DAP", "1")
@@ -5860,8 +5860,8 @@ fn test_cli_debug_attach_pause_stops_outside_started_debuggee() {
         "attach pause compilation failed: {}",
         String::from_utf8_lossy(&compile.stderr)
     );
-    let socket = dir.join("app.sock");
-    let pid_path = dir.join("app.sock.pid");
+    let socket = short_attach_socket("attach-pause");
+    let pid_path = std::path::PathBuf::from(format!("{}.pid", socket.display()));
     let mut debuggee = DebuggeeGuard {
         child: std::process::Command::new(dir.join("main"))
             .env("ELEPHC_DEBUG_DAP", "1")
@@ -6337,6 +6337,20 @@ impl Drop for DapClient {
             let _ = self.child.wait();
         }
     }
+}
+
+/// Returns a short Unix-socket path for attach fixtures.
+///
+/// macOS limits `sun_path` to 104 bytes; the test temp directory is far longer
+/// than that on the runners. The runtime removes the socket after accepting.
+fn short_attach_socket(label: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    std::path::PathBuf::from(format!(
+        "/tmp/elephc-{label}-{}-{}.sock",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 /// Kills a separately-spawned debuggee when a test unwinds before waiting.
