@@ -602,7 +602,7 @@ float-promoting chain as `$cell = $row * $columns + $column`. Casting the local
 before that suffix would change PHP's answer after overflow, so the pass fuses the
 complete expression at each cast and removes the now-unobserved boxed storage.
 
-## Reduce sum fusion
+## Reduce sum and product fusion
 
 `src/ir_lower/expr/static_array_callbacks.rs` fuses
 `array_reduce($ints, fn($carry, $item) => $carry + $item, C)` when `$ints` is a
@@ -617,6 +617,16 @@ exactly like PHP's left-to-right addition, and only the final result is boxed. A
 declared parameter/return type, a capture, a non-add body, an initial whose raw
 type is not proven (string/bool/null/expression/reference), or a non-variable
 source keeps the generic boxed reduce.
+
+The multiplicative body `array_reduce($ints, fn($carry, $item) => $carry * $item, C)`
+uses the same raw-scalar seed rule. A raw int initial lowers to
+`ArrayReduceProductSeed`, which calls `__rt_array_product_int_i64`: every step uses
+PHP's checked signed multiplication, and the first overflow converts both operands
+to double and continues in double mode. A raw float initial lowers to
+`ArrayReduceProductFloatSeed`, which calls `__rt_array_product_float_i64` and
+multiplies every element in double mode. An empty range boxes the seed unchanged,
+so an int seed stays `int` and `-0.0` stays `float(-0)`. Other bodies, captures,
+declared types, or an initial whose raw type is not proven keep the generic reduce.
 
 ## Loop-invariant array caches
 

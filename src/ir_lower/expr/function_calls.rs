@@ -112,6 +112,9 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
     if let Some(value) = lower_reduce_sum(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_reduce_product(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_count_explode(ctx, canonical, args, expr) {
         return value;
     }

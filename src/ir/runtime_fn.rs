@@ -179,6 +179,16 @@ pub enum RuntimeFnId {
     /// The raw IEEE-754 seed starts the accumulator in double mode, so every element is added
     /// as a double and only the final float result is boxed.
     ArrayReduceSumFloatSeed,
+    /// Raw seeded product for `array_reduce($ints, fn($c, $v) => $c * $v, C)`.
+    ///
+    /// The accumulator stays a raw int until the first overflow, then continues as a double;
+    /// only the final int-or-float result is boxed.
+    ArrayReduceProductSeed,
+    /// Raw float-seeded product for `array_reduce($ints, fn($c, $v) => $c * $v, F)`.
+    ///
+    /// The raw IEEE-754 seed starts the accumulator in double mode, so every element is
+    /// multiplied as a double and only the final float result is boxed.
+    ArrayReduceProductFloatSeed,
     ArrayReplace,
     ArrayReplaceRecursive,
     ArrayReverse,
@@ -1045,9 +1055,10 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMapSumAddSafe => Some((2, Some(2))),
             RuntimeFnId::ArrayElementTypeCheck => Some((3, Some(3))),
             RuntimeFnId::ArraySumInt => Some((1, Some(1))),
-            RuntimeFnId::ArrayReduceSumSeed | RuntimeFnId::ArrayReduceSumFloatSeed => {
-                Some((2, Some(2)))
-            }
+            RuntimeFnId::ArrayReduceSumSeed
+            | RuntimeFnId::ArrayReduceSumFloatSeed
+            | RuntimeFnId::ArrayReduceProductSeed
+            | RuntimeFnId::ArrayReduceProductFloatSeed => Some((2, Some(2))),
             RuntimeFnId::ArraySumProbeSmall => Some((1, Some(1))),
             RuntimeFnId::ArraySumIntCached => Some((2, Some(2))),
             RuntimeFnId::AbsInt => Some((1, Some(1))),
@@ -1984,7 +1995,10 @@ impl RuntimeFnId {
             ),
             // The unboxed sum reads a packed int payload and returns a raw integer; an
             // overflow-promoted sum applies PHP's warned float-to-int cast warning.
-            RuntimeFnId::ArrayReduceSumSeed | RuntimeFnId::ArrayReduceSumFloatSeed => {
+            RuntimeFnId::ArrayReduceSumSeed
+            | RuntimeFnId::ArrayReduceSumFloatSeed
+            | RuntimeFnId::ArrayReduceProductSeed
+            | RuntimeFnId::ArrayReduceProductFloatSeed => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
             RuntimeFnId::ArraySumInt => E::from_bits_retain(
@@ -2996,6 +3010,8 @@ impl RuntimeFnId {
                 // they never hand back storage from the source array.
                 | RuntimeFnId::ArrayReduceSumSeed
                 | RuntimeFnId::ArrayReduceSumFloatSeed
+                | RuntimeFnId::ArrayReduceProductSeed
+                | RuntimeFnId::ArrayReduceProductFloatSeed
                 // Comparator set operations always allocate a fresh hash-backed result and
                 // retain each selected value independently of both borrowed source operands.
                 | RuntimeFnId::ArrayUdiff
@@ -3333,6 +3349,8 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayReduce => "array_reduce",
             RuntimeFnId::ArrayReduceSumSeed => "array_reduce_sum_seed",
             RuntimeFnId::ArrayReduceSumFloatSeed => "array_reduce_sum_float_seed",
+            RuntimeFnId::ArrayReduceProductSeed => "array_reduce_product_seed",
+            RuntimeFnId::ArrayReduceProductFloatSeed => "array_reduce_product_float_seed",
             RuntimeFnId::ArrayReplace => "array_replace",
             RuntimeFnId::ArrayReplaceRecursive => "array_replace_recursive",
             RuntimeFnId::ArrayReverse => "array_reverse",

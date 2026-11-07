@@ -315,8 +315,8 @@ pub(super) fn instance_callable_signature(target: &StaticCallableBinding) -> Opt
 ///
 /// The closure is an untyped pure addition of its two parameters. With initial zero, PHP's
 /// left-to-right reduction and `array_sum()` perform the same integer additions with the same
-/// overflow-to-float promotion. A nonzero raw int initial (literal or a local proven `int`)
-/// uses `ArrayReduceSumSeed`; a raw float initial (literal or a local proven `float`) uses
+/// overflow-to-float promotion. A raw int initial (literal or a local proven `int`) uses
+/// `ArrayReduceSumSeed`; a raw float initial (literal or a local proven `float`) uses
 /// `ArrayReduceSumFloatSeed`, whose accumulator starts in double mode. Either way the carry
 /// never boxes a Mixed cell per element. A declared return type, a capture, an initial whose
 /// raw type is not proven before lowering, or any other body keeps the generic reduce path.
@@ -325,6 +325,42 @@ pub(super) fn lower_reduce_sum(
     name: &str,
     args: &[Expr],
     expr: &Expr,
+) -> Option<LoweredValue> {
+    lower_reduce_seeded(ctx, name, args, expr, ReduceOp::Add)
+}
+
+/// Lowers `array_reduce($ints, fn($carry, $item) => $carry * $item, C)` to a raw product.
+///
+/// The closure is an untyped pure multiplication of its two parameters. A raw int initial
+/// (literal or a local proven `int`) uses `ArrayReduceProductSeed`, whose checked integer
+/// multiplication promotes to double at the first overflow; a raw float initial (literal or a
+/// local proven `float`) uses `ArrayReduceProductFloatSeed`, which multiplies every element in
+/// double mode. Either way the carry never boxes a Mixed cell per element. A declared return
+/// type, a capture, an initial whose raw type is not proven before lowering, or any other
+/// body keeps the generic reduce path.
+pub(super) fn lower_reduce_product(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    lower_reduce_seeded(ctx, name, args, expr, ReduceOp::Mul)
+}
+
+/// Which pure reduction body the shared shape proof accepts.
+#[derive(Clone, Copy)]
+enum ReduceOp {
+    Add,
+    Mul,
+}
+
+/// Shared shape proof and lowering for `array_reduce($ints, fn($a, $b) => $a OP $b, C)`.
+fn lower_reduce_seeded(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+    reduce_op: ReduceOp,
 ) -> Option<LoweredValue> {
     if php_symbol_key(name.trim_start_matches('\\')) != "array_reduce" || args.len() != 3 {
         return None;
@@ -368,9 +404,15 @@ pub(super) fn lower_reduce_sum(
     let [Stmt { kind: StmtKind::Return(Some(body)), .. }] = body.as_slice() else {
         return None;
     };
-    let ExprKind::BinaryOp { left, op: BinOp::Add, right } = &body.kind else {
+    let ExprKind::BinaryOp { left, op, right } = &body.kind else {
         return None;
     };
+    if !matches!(
+        (reduce_op, op),
+        (ReduceOp::Add, BinOp::Add) | (ReduceOp::Mul, BinOp::Mul)
+    ) {
+        return None;
+    }
     let is_param = |expr: &Expr, index: usize| {
         matches!(&expr.kind, ExprKind::Variable(name) if name == &params[index].0)
     };
@@ -380,8 +422,8 @@ pub(super) fn lower_reduce_sum(
         return None;
     }
     let source = lower_expr(ctx, &args[0]);
-    let (target, seed) = match seed {
-        ReduceSeed::IntLiteral(0) => {
+    let (target, seed) = match (reduce_op, seed) {
+        (ReduceOp::Add, ReduceSeed::IntLiteral(0)) => {
             return Some(ctx.emit_value(
                 Op::RuntimeCall,
                 vec![source.value],
@@ -393,7 +435,7 @@ pub(super) fn lower_reduce_sum(
                 Some(expr.span),
             ));
         }
-        ReduceSeed::IntLiteral(value) => (
+        (ReduceOp::Add, ReduceSeed::IntLiteral(value)) => (
             crate::ir::RuntimeFnId::ArrayReduceSumSeed,
             ctx.emit_value(
                 Op::ConstI64,
@@ -405,11 +447,11 @@ pub(super) fn lower_reduce_sum(
             )
             .value,
         ),
-        ReduceSeed::IntValue => (
+        (ReduceOp::Add, ReduceSeed::IntValue) => (
             crate::ir::RuntimeFnId::ArrayReduceSumSeed,
             lower_expr(ctx, &args[2]).value,
         ),
-        ReduceSeed::FloatLiteral(value) => (
+        (ReduceOp::Add, ReduceSeed::FloatLiteral(value)) => (
             crate::ir::RuntimeFnId::ArrayReduceSumFloatSeed,
             ctx.emit_value(
                 Op::ConstF64,
@@ -421,8 +463,40 @@ pub(super) fn lower_reduce_sum(
             )
             .value,
         ),
-        ReduceSeed::FloatValue => (
+        (ReduceOp::Add, ReduceSeed::FloatValue) => (
             crate::ir::RuntimeFnId::ArrayReduceSumFloatSeed,
+            lower_expr(ctx, &args[2]).value,
+        ),
+        (ReduceOp::Mul, ReduceSeed::IntLiteral(value)) => (
+            crate::ir::RuntimeFnId::ArrayReduceProductSeed,
+            ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(value)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            )
+            .value,
+        ),
+        (ReduceOp::Mul, ReduceSeed::IntValue) => (
+            crate::ir::RuntimeFnId::ArrayReduceProductSeed,
+            lower_expr(ctx, &args[2]).value,
+        ),
+        (ReduceOp::Mul, ReduceSeed::FloatLiteral(value)) => (
+            crate::ir::RuntimeFnId::ArrayReduceProductFloatSeed,
+            ctx.emit_value(
+                Op::ConstF64,
+                Vec::new(),
+                Some(Immediate::F64(value)),
+                PhpType::Float,
+                Op::ConstF64.default_effects(),
+                Some(expr.span),
+            )
+            .value,
+        ),
+        (ReduceOp::Mul, ReduceSeed::FloatValue) => (
+            crate::ir::RuntimeFnId::ArrayReduceProductFloatSeed,
             lower_expr(ctx, &args[2]).value,
         ),
     };

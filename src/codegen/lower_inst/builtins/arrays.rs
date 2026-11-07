@@ -54,6 +54,7 @@ mod filter;
 mod map_dispatch;
 mod map_results;
 mod reduce_sets;
+mod reduce_product_seed;
 mod reduce_sum_seed;
 mod misc_dispatch;
 mod mixed_array_argument_guard;
@@ -114,6 +115,9 @@ pub(crate) use filter::{
 };
 pub(crate) use map_dispatch::{
     lower_array_map,
+};
+pub(crate) use reduce_product_seed::{
+    lower_array_reduce_product_float_seed, lower_array_reduce_product_seed,
 };
 pub(crate) use reduce_sum_seed::{
     lower_array_reduce_sum_float_seed, lower_array_reduce_sum_seed,

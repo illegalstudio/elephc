@@ -98,7 +98,8 @@ echo gettype($overflow), ":", $overflow, "\n";
     assert!(!main.contains("runtime.array_reduce "), "{main}");
 }
 
-/// Non-add callback bodies keep the generic boxed reducer.
+/// Only the supported additive body stays on the sum fusion; a multiplicative body takes the
+/// product fusion and any other body keeps the generic boxed reducer.
 #[test]
 fn test_reduce_sum_seed_keeps_generic_for_other_bodies() {
     let source = r#"<?php
@@ -108,7 +109,8 @@ echo array_reduce($values, fn($c, $v) => $c ^ $v, 0), "\n";
 "#;
     assert_eq!(compile_and_run(source), "12|0\n");
     let main = emit_main_ir(source);
-    assert_eq!(main.matches("runtime.array_reduce ").count(), 2, "{main}");
+    assert_eq!(main.matches("runtime.array_reduce ").count(), 1, "{main}");
+    assert_eq!(main.matches("runtime.array_reduce_product_seed").count(), 1, "{main}");
     assert!(!main.contains("runtime.array_reduce_sum_seed"), "{main}");
 }
 
