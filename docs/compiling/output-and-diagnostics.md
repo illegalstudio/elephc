@@ -81,21 +81,70 @@ elephc --check hello.php
 ### `--source-map`
 
 Emits a `.map` sidecar file next to the generated assembly, mapping assembly back
-to PHP source positions. The sidecar is a versioned JSON document with function
-ranges, assembly labels, opcode-tagged line mappings, and a PHP-line inverse
-index — see [Source maps](source-maps.md) for the schema contract.
+to PHP source positions. The version 3 JSON document carries the physical
+`sources` table, function ranges, assembly labels, opcode-tagged line mappings,
+and a per-source PHP-line inverse index — see [Source maps](source-maps.md) for
+the schema contract. Included and autoloaded files keep their own source id and
+path.
 
 ```bash
 elephc --emit-asm --source-map hello.php
 ```
 
+### `--debug`
+
+Builds the artifact half of the native debugger preset:
+
+```bash
+elephc --debug hello.php
+```
+
+It implies `--debug-info`, keeps the symbol table, disables EIR optimization,
+and skips the AST passes that can erase source-mapped statements (constant
+folding, propagation, dead-code elimination and unreachable-declaration
+pruning). Library emits are refused: a process entry point is required.
+
+It writes `hello.edbg.json`, a versioned source/function/site/local metadata
+document, and embeds the same JSON behind `elephc_debug_metadata` /
+`elephc_debug_metadata_len` (see [Debug metadata](debug-metadata.md)).
+
+The generated code checks a one-byte flag per source-line transition and calls
+the preserving `elephc_debug_site` hook only when that site is armed. Set
+`ELEPHC_DEBUG_SITES=1` when running the debug binary to arm every site and dump
+the per-site counters to stderr:
+
+```text
+elephc-debug-site: 12 1
+elephc-debug-sites: total=36 sites=36 frame=0xffffda55dab0
+```
+
+Without the environment variable the flags stay zero: the hook is not called,
+the dump is silent, and the program behaves normally.
+
+`elephc debug <source>` builds and launches the interactive session: without
+`--break` it stops at the first executed site; with `--break FILE:LINE` it stops
+at that line. `bt` walks the activation stack from the current frame through its
+callers, and `frame <index>` selects a caller for `locals` and `p`. `next` steps
+over calls, `step` enters them, and `finish` returns to the caller. Locals are
+read from the selected frame and formatted read-only: scalars, strings,
+indexed/associative arrays and reference cells are displayed with their children.
+
+`elephc debug --dap <source>` serves the Debug Adapter Protocol on stdio for IDE
+clients; the program's stdout is redirected to stderr so the protocol stream
+stays clean. `elephc debug --attach <socket>` connects to a debug binary that
+was started with `ELEPHC_DEBUG_DAP_LISTEN`. Breakpoints verify the on-disk source
+hash, and launch-mode `pause` stops at the next executed site. See
+[DAP adapter](dap.md). Monitor call capture is a later stage.
+`--debug` remains the correct artifact to inspect with `lldb`/`gdb`.
+
 ### `--debug-info`
 
-Embeds DWARF debug information in the generated assembly — a line table and one
+Embeds DWARF debug information in the generated assembly — a line table, one
+`.file` per physical source (including included and autoloaded files), and one
 `DW_TAG_subprogram` per PHP function, derived from the same source markers that
 drive `--source-map`. Standard debuggers (lldb, gdb) and profilers then map
-compiled code back to PHP lines without any custom tooling. On macOS a `.dSYM`
-bundle is produced next to the binary:
+compiled code back to the correct PHP file and line without any custom tooling.
+On macOS a `.dSYM` bundle is produced next to the binary:
 
 ```bash
 elephc --debug-info hello.php

@@ -160,6 +160,9 @@ pub enum LinuxLinkMode {
 pub struct LinkPlan {
     ordered: Vec<LinkItem>,
     linux_mode: LinuxLinkMode,
+    /// Symbols the final link must retain even when they have no code reference.
+    /// Used by `--debug` for the embedded debug-metadata section.
+    undefined_symbols: Vec<String>,
 }
 
 impl LinkPlan {
@@ -168,6 +171,7 @@ impl LinkPlan {
         Self {
             ordered: Vec::new(),
             linux_mode: LinuxLinkMode::Static,
+            undefined_symbols: Vec::new(),
         }
     }
 
@@ -177,6 +181,7 @@ impl LinkPlan {
         Self {
             ordered,
             linux_mode,
+            undefined_symbols: Vec::new(),
         }
     }
 
@@ -196,6 +201,20 @@ impl LinkPlan {
     /// Returns the typed linker items in their semantic order.
     pub fn items(&self) -> &[LinkItem] {
         &self.ordered
+    }
+
+    /// Marks one already-defined symbol as a linker root so `--gc-sections` /
+    /// `-dead_strip` keeps its section in the final artifact.
+    pub fn retain_undefined_symbol(&mut self, symbol: impl Into<String>) {
+        let symbol = symbol.into();
+        if !self.undefined_symbols.contains(&symbol) {
+            self.undefined_symbols.push(symbol);
+        }
+    }
+
+    /// Returns the symbols the link must retain as roots.
+    pub fn undefined_symbols(&self) -> &[String] {
+        &self.undefined_symbols
     }
 
     /// Returns the Linux link mode derived from every current item.
@@ -250,7 +269,7 @@ impl LinkPlan {
             return self.clone();
         }
 
-        Self::from_items(
+        let mut plan = Self::from_items(
             self.ordered
                 .iter()
                 .filter(|item| match item {
@@ -265,7 +284,11 @@ impl LinkPlan {
                 })
                 .cloned()
                 .collect(),
-        )
+        );
+        for symbol in &self.undefined_symbols {
+            plan.retain_undefined_symbol(symbol.clone());
+        }
+        plan
     }
 
     /// Recomputes Linux mode and diagnostic provenance from ordered typed items.

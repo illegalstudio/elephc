@@ -167,7 +167,9 @@ mod tests {
         // +8: FileInfo procedures and shared warning/deprecation helpers.
         // +4: internal pointer/zval aliases used by extension hosting.
         // +2: PHP 8.5 array value-edge functions.
-        assert_eq!(contracts().len(), 1253 + curl_surface);
+        // +1: the internal `__elephc_debug_event` capture helper.
+        // +4: the elephc-native debug source helpers (break/dump/trace_start/trace_end).
+        assert_eq!(contracts().len(), 1258 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

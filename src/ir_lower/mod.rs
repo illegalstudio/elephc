@@ -53,6 +53,7 @@ pub(crate) use expr::body_contains_eval_call;
 #[allow(unused_imports)] // used by the binary's pipeline only
 pub(crate) use program::module_runs_interpreted_code;
 
+use std::cell::Cell;
 use std::fmt;
 use std::path::Path;
 
@@ -73,7 +74,7 @@ pub fn lower_program(
     target: Target,
     web: bool,
 ) -> Result<Module, LoweringError> {
-    program::lower(program, check_result, target, None, web)
+    program::lower(program, check_result, target, None, web, false)
 }
 
 /// Lowers `program` into an EIR module and records the main PHP source path.
@@ -83,7 +84,7 @@ pub fn lower_program_with_source_path(
     target: Target,
     source_path: &Path,
 ) -> Result<Module, LoweringError> {
-    program::lower(program, check_result, target, Some(source_path), false)
+    program::lower(program, check_result, target, Some(source_path), false, false)
 }
 
 /// Lowers `program` into EIR while retaining both source-path and web-mode metadata.
@@ -94,7 +95,55 @@ pub fn lower_program_with_source_path_and_web(
     source_path: &Path,
     web: bool,
 ) -> Result<Module, LoweringError> {
-    program::lower(program, check_result, target, Some(source_path), web)
+    program::lower(program, check_result, target, Some(source_path), web, false)
+}
+
+/// Lowers a `--debug` build, enabling debug-only instrumentation such as
+/// full logical/switch path coverage.
+#[allow(dead_code)] // the binary pipeline selects the build policy; the embedder library does not
+pub(crate) fn lower_program_for_build(
+    program: &Program,
+    check_result: &CheckResult,
+    target: Target,
+    source_path: &Path,
+    web: bool,
+    debug_build: bool,
+) -> Result<Module, LoweringError> {
+    program::lower(
+        program,
+        check_result,
+        target,
+        Some(source_path),
+        web,
+        debug_build,
+    )
+}
+
+thread_local! {
+    /// Whether the current thread's lowering belongs to a `--debug` build.
+    static DEBUG_BUILD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Returns whether the current lowering should emit debug-only instrumentation.
+pub(crate) fn debug_build_enabled() -> bool {
+    DEBUG_BUILD.with(Cell::get)
+}
+
+/// Runs `f` with the thread's debug-build lowering policy set and restored after.
+fn with_debug_build<T>(debug_build: bool, f: impl FnOnce() -> T) -> T {
+    /// Restores the previous policy even when lowering returns early.
+    struct Restore(bool);
+
+    impl Drop for Restore {
+        /// Restores the thread-local debug policy.
+        fn drop(&mut self) {
+            DEBUG_BUILD.with(|flag| flag.set(self.0));
+        }
+    }
+
+    let previous = DEBUG_BUILD.with(|flag| flag.replace(debug_build));
+    let _restore = Restore(previous);
+    f()
 }
 
 /// Error produced while building or validating EIR.

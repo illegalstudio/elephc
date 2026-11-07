@@ -10,6 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::*;
+use crate::debug_metadata;
 
 /// Inputs consumed by the post-EIR backend and linker pipeline.
 pub(super) struct BackendInputs<'a> {
@@ -47,6 +48,7 @@ pub(super) struct BackendInputs<'a> {
     pub(super) exported_classes: &'a [crate::phpext::classes::ExportedClass],
     pub(super) regalloc_linear: bool,
     pub(super) emit_debug_info: bool,
+    pub(super) debug_build: bool,
     pub(super) keep_symbols: bool,
     pub(super) output_paths: &'a OutputPaths,
     pub(super) emit_source_map: bool,
@@ -97,6 +99,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         exported_classes,
         regalloc_linear,
         emit_debug_info,
+        debug_build,
         keep_symbols,
         output_paths,
         emit_source_map,
@@ -231,6 +234,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         counters,
         instrument,
         probe,
+        debug_build,
         heap_debug,
         requires_elephc_tls,
         emit,
@@ -248,6 +252,24 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     };
     runtime_features.handler_state |= generated_user_asm.handler_state;
     runtime_features.object_clone |= generated_user_asm.object_clone;
+    timings.record_since("codegen", phase_started);
+
+    crate::progress::phase("debug-metadata");
+    let phase_started = Instant::now();
+    let metadata_json = if debug_build {
+        match debug_metadata::build(&generated_user_asm.asm, Path::new(filename)) {
+            Ok(json) => Some(json),
+            Err(err) => {
+                crate::progress::clear();
+                eprintln!("Debug metadata error: {err}");
+                process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+    timings.record_since("debug-metadata", phase_started);
+
     let user_asm = if emit_debug_info {
         debug_info::inject_line_directives(&generated_user_asm.asm, filename, target.platform)
     } else {
@@ -259,17 +281,9 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             Err(error) => { eprintln!("PHP extension error: {error}"); process::exit(1); }
         }
     } else { user_asm };
-    timings.record_since("codegen", phase_started);
 
-    crate::progress::phase("write-asm");
-    let phase_started = Instant::now();
-    if let Err(e) = crate::pipeline::artifact_io::write_artifact(&output_paths.asm, user_asm.as_bytes()) {
-        crate::progress::clear();
-        eprintln!("Error writing '{}': {}", output_paths.asm.display(), e);
-        process::exit(1);
-    }
-    timings.record_since("write-asm", phase_started);
-
+    // The source map parses the instruction markers, so it must see the
+    // assembly before the metadata JSON is appended.
     if emit_source_map {
         crate::progress::phase("source-map");
         let phase_started = Instant::now();
@@ -286,6 +300,28 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             process::exit(1);
         }
         timings.record_since("source-map", phase_started);
+    }
+
+    let user_asm = match metadata_json.as_deref() {
+        Some(json) => debug_metadata::inject_embedded(&user_asm, json, target),
+        None => user_asm,
+    };
+
+    crate::progress::phase("write-asm");
+    let phase_started = Instant::now();
+    if let Err(e) = crate::pipeline::artifact_io::write_artifact(&output_paths.asm, user_asm.as_bytes()) {
+        crate::progress::clear();
+        eprintln!("Error writing '{}': {}", output_paths.asm.display(), e);
+        process::exit(1);
+    }
+    timings.record_since("write-asm", phase_started);
+
+    if let Some(json) = metadata_json.as_deref() {
+        if let Err(err) = debug_metadata::write_sidecar(&output_paths.debug_metadata, json) {
+            crate::progress::clear();
+            eprintln!("Debug metadata error: {err}");
+            process::exit(1);
+        }
     }
 
     if emit_asm {
@@ -374,7 +410,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             process::exit(1);
         }
     }
-    let link_plan = crate::link_planning::build(crate::link_planning::LinkPlanningInputs {
+    let mut link_plan = crate::link_planning::build(crate::link_planning::LinkPlanningInputs {
         user_libraries: extra_link_libs,
         user_search_paths: extra_link_paths,
         user_frameworks: extra_frameworks,
@@ -384,6 +420,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         forced_bridges: &forced_bridge_libs,
         web,
     });
+    if debug_build {
+        // The metadata section has no code reference; mark its symbol as a linker
+        // root so --gc-sections / -dead_strip cannot discard the runtime table.
+        link_plan.retain_undefined_symbol(target.extern_symbol("elephc_debug_metadata"));
+    }
 
     crate::progress::phase("assemble");
     let phase_started = Instant::now();

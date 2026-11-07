@@ -381,6 +381,7 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                         .iter()
                         .find(|(n, _)| n.eq_ignore_ascii_case("x-elephc-query"))
                         .is_some_and(|(_, value)| probe_route::query_is_authentic(value));
+                    crate::debug_bridge::request_begin(&method, &path, &headers);
                     request_state::set_request(method, uri, path, query, headers, body, meta);
                     probe_route::set(&probe_route);
                     // A signed header authorizes this request outright; without
@@ -401,6 +402,10 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     } else {
                         run_handler(handler)
                     };
+                    // A debug web session belongs to one request only. Tearing it
+                    // down here resumes the handler after a client disconnect and
+                    // leaves the worker's next request unchanged.
+                    crate::debug_bridge::request_end();
                     // Unconditional and idempotent: a request that started no
                     // slice ends none, and consecutive profiled requests stay
                     // separate captures.

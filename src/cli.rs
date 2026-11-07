@@ -123,6 +123,8 @@ Subcommands:
   repl                    Interactive PHP through eval (see `elephc repl --help`)
   test [PATH]             Compile and run the test suite under PATH, default `tests`
                           (see `elephc test --help`)
+  debug <TARGET>          Build/run a --debug program with the interactive stdin
+                          session (see `elephc debug --help`)
   monitor <TARGET>        Profile a program built with --with-monitoring: a .php
                           source, a binary, or a running service's address
                           (see `elephc monitor --help`)
@@ -182,6 +184,7 @@ Diagnostics:
                           template on stderr
   --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
+  --debug                 Debug build preset: DWARF, symbols, no EIR/AST optimization
   --debug-info            Embed DWARF line info for debuggers
   --keep-symbols          Keep the symbol table (stripped by default; for profilers)
 
@@ -225,6 +228,10 @@ pub(crate) struct CliConfig {
     /// Print a per-template summary of monomorphized generic instantiations on stderr.
     pub(crate) report_generics: bool,
     pub(crate) emit_debug_info: bool,
+    /// Interactive debug build preset. It implies DWARF/symbols and skips the
+    /// source-erasing optimizer passes; the runtime agent and site guards are
+    /// wired by the later debugger stages.
+    pub(crate) debug_build: bool,
     /// Keep the symbol table in the linked executable; it is stripped by default.
     pub(crate) keep_symbols: bool,
     pub(crate) regalloc_linear: bool,
@@ -275,6 +282,8 @@ pub(crate) enum Command {
     Repl(crate::repl::ReplCommand),
     /// The existing PHP compilation command and all of its normalized options.
     Compile(CliConfig),
+    /// One interactive debug launch.
+    Debug(crate::debug_cli::DebugCommand),
     /// One validated `elephc native` subcommand.
     Native(NativeCommand),
     /// One validated `elephc extension` hosted-extension command.
@@ -301,6 +310,15 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
             Ok(command) => Command::Test(command),
             Err(error) => {
                 eprintln!("{error}\n\n{}", crate::test_command::HELP);
+                process::exit(1);
+            }
+        };
+    }
+    if args.get(1).map(String::as_str) == Some("debug") {
+        return match crate::debug_cli::parse_args(&args[2..]) {
+            Ok(command) => Command::Debug(command),
+            Err(error) => {
+                eprintln!("{error}\n\n{}", crate::debug_cli::HELP);
                 process::exit(1);
             }
         };
@@ -378,6 +396,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut emit_source_map = false;
     let mut report_generics = false;
     let mut emit_debug_info = false;
+    let mut debug_build = false;
     let mut keep_symbols = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
@@ -494,6 +513,8 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             emit_source_map = true;
         } else if arg == "--report-generics" {
             report_generics = true;
+        } else if arg == "--debug" {
+            debug_build = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
         } else if arg == "--keep-symbols" {
@@ -624,7 +645,9 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     if output_modes > 1 {
         fail("--emit-ir, --emit-asm, and --check are mutually exclusive");
     }
-    if let Err(message) = validate_target_output(target, emit, check_only, emit_ir) {
+    if let Err(message) =
+        validate_target_output(target, emit, check_only, emit_ir, emit_asm, debug_build)
+    {
         fail(message);
     }
     if !export_constants.is_empty() && emit != Emit::Phpext {
@@ -649,6 +672,20 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
              main, so the profiling runtime is never initialized and the hooks it \
              embeds can never be activated",
         );
+    }
+    if debug_build {
+        // An iOS library is the documented compile-only form: it carries metadata
+        // and dormant guards for a host app, but cannot start a debug session.
+        if emit.is_library() && !target.is_ios() {
+            fail(
+                "--debug supports executable builds only: a library has no process entry point \
+                 to launch or attach a debugger to",
+            );
+        }
+        emit_debug_info = true;
+        keep_symbols = true;
+        ir_opt = false;
+        with_crates.insert("debug".to_string());
     }
     if web && emit_asm {
         fail("--web cannot be combined with --emit-asm");
@@ -699,6 +736,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         emit_source_map,
         report_generics,
         emit_debug_info,
+        debug_build,
         keep_symbols,
         regalloc_linear,
         ir_opt,
@@ -978,11 +1016,30 @@ fn validate_target_output(
     emit: Emit,
     check_only: bool,
     emit_ir: bool,
+    emit_asm: bool,
+    debug_build: bool,
 ) -> Result<(), &'static str> {
     if emit == Emit::Phpext && target.is_ios() {
         return Err("PHP extension output is unsupported for iOS targets");
     }
-    if target.is_ios() && emit == Emit::Executable && !check_only && !emit_ir {
+    // iOS can carry the debug metadata and per-site guards into a library or an
+    // assembly artifact, but there is no process to launch or attach to. Only the
+    // interactive executable form is refused.
+    if target.is_ios()
+        && debug_build
+        && !emit.is_library()
+        && !check_only
+        && !emit_ir
+        && !emit_asm
+    {
+        return Err(
+            "--debug cannot launch or attach to an iOS process: interactive debugging is not \
+             supported on ios-arm64 or ios-sim-arm64; build compile-only metadata with \
+             --emit-asm or --emit staticlib/cdylib, or use `elephc monitor --calls` / \
+             `elephc test --coverage` on a host target",
+        );
+    }
+    if target.is_ios() && emit == Emit::Executable && !check_only && !emit_ir && !emit_asm {
         return Err(
             "iOS targets do not emit standalone executables; use --emit staticlib (or --emit \
              cdylib) and link the library into an iOS app host",
@@ -1099,6 +1156,32 @@ mod tests {
         assert!(kept.keep_symbols, "--keep-symbols must keep the symbol table");
     }
 
+    /// Verifies `--debug` is a coherent preset, not just an alias for one of
+    /// the artifact flags: it implies DWARF and symbols and disables EIR
+    /// optimization.
+    #[test]
+    fn debug_preset_implies_debug_artifacts_and_no_ir_opt() {
+        let debug = compile_config(&[
+            "elephc".to_string(),
+            "--debug".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(debug.debug_build, "--debug must record the build mode");
+        assert!(debug.emit_debug_info, "--debug must imply --debug-info");
+        assert!(debug.keep_symbols, "--debug must keep symbols for lldb/gdb");
+        assert!(!debug.ir_opt, "--debug must disable EIR optimization");
+
+        let info = compile_config(&[
+            "elephc".to_string(),
+            "--debug-info".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(!info.debug_build, "--debug-info alone is not an interactive build");
+        assert!(info.ir_opt, "--debug-info alone must not change optimization");
+
+        assert!(HELP.contains("--debug"), "--help must document the preset");
+    }
+
     /// Verifies `--debug-info` and `--keep-symbols` are independent flags.
     ///
     /// They are consumed together at link time — either one keeps the names — but each must parse
@@ -1180,17 +1263,40 @@ mod tests {
             Target::new_apple(Arch::AArch64, AppleVariant::IOS),
             Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
         ] {
-            assert!(validate_target_output(target, Emit::Executable, false, false).is_err());
-            assert!(validate_target_output(target, Emit::Staticlib, false, false).is_ok());
-            assert!(validate_target_output(target, Emit::Cdylib, false, false).is_ok());
-            assert!(validate_target_output(target, Emit::Phpext, false, false).is_err());
-            assert!(validate_target_output(target, Emit::Executable, true, false).is_ok());
-            assert!(validate_target_output(target, Emit::Executable, false, true).is_ok());
+            assert!(validate_target_output(target, Emit::Executable, false, false, false, false).is_err());
+            assert!(validate_target_output(target, Emit::Staticlib, false, false, false, false).is_ok());
+            assert!(validate_target_output(target, Emit::Cdylib, false, false, false, false).is_ok());
+            assert!(validate_target_output(target, Emit::Phpext, false, false, false, false).is_err());
+            assert!(validate_target_output(target, Emit::Executable, true, false, false, false).is_ok());
+            assert!(validate_target_output(target, Emit::Executable, false, true, false, false).is_ok());
+            // Compile-only forms are allowed; the default interactive form is not.
+            assert!(
+                validate_target_output(target, Emit::Staticlib, false, false, false, true).is_ok(),
+                "an iOS library must carry compile-only debug metadata"
+            );
+            assert!(
+                validate_target_output(target, Emit::Executable, false, false, true, true).is_ok(),
+                "--emit-asm must carry compile-only debug metadata on iOS"
+            );
+            let debug_error = validate_target_output(
+                target,
+                Emit::Executable,
+                false,
+                false,
+                false,
+                true,
+            )
+            .expect_err("interactive debug must be refused on iOS");
+            assert!(debug_error.contains("--emit-asm"));
+            assert!(debug_error.contains("elephc monitor --calls"));
+            assert!(debug_error.contains("elephc test --coverage"));
         }
         assert!(
             validate_target_output(
                 Target::new(Platform::MacOS, Arch::AArch64),
                 Emit::Executable,
+                false,
+                false,
                 false,
                 false,
             )

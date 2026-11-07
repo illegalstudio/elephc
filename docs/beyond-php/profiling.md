@@ -13,7 +13,10 @@ developer acts on: *heap allocation*, *Mixed cell boxing*, *reference counting*,
 *dynamic Mixed arithmetic*. That cause view is the piece an interpreter-based
 profiler cannot produce.
 
-There is **one command**, and it does not change with the environment. What
+The debugger and the profiler are complementary. When the question is *what is
+the program doing* rather than *how long did it take*, see
+[Debugging PHP](debugging.md). There is **one profiling command**, and it does
+not change with the environment. What
 changes is what you point it at:
 
 | You have | You run | What happens |
@@ -1252,6 +1255,95 @@ spent on a path that throws is attributed best-effort (the shadow stack
 resynchronizes after an exception unwinds past a missed exit). Instrumentation is
 per-thread and reports the main thread at exit, which is the whole program for
 single-threaded PHP.
+
+## Call capture with values
+
+`elephc monitor <program|source.php> --calls[=none|types|scalars|full]` runs a
+`--debug` build with call capture enabled and prints the PHP-formatted arguments
+and return values of every call, in execution order. The modes are:
+
+| Mode | Captured per call |
+|---|---|
+| `none` | function and depth only |
+| `types` | argument/return type names, no values |
+| `scalars` | full scalar/string values; arrays and objects keep their summary |
+| `full` (default) | scalar values plus bounded nested array/object children |
+
+`all` and `1` remain aliases for `full`. `--calls-out FILE` writes the same
+bounded events as JSONL, and `--html FILE` writes a self-contained call-tree
+page with per-call values. The page has no JavaScript or external assets.
+`--exact` combines the exact `--with-monitoring` profile with call capture in
+one build/run; the exact table prints first. That timing is a debug-build timing
+and includes capture overhead, so use plain `monitor --exact` when pure timing
+is the question.
+
+### Redaction and bounded rendering
+
+Call capture never floods a report with a single large value:
+
+- a string is shown up to **256 bytes**, with the marker `…<N bytes omitted>`
+  and the original length retained in the `string(<length>)` header;
+- a container shows up to **16 children** and **3 nested levels**. Overflow is
+  marked `… +N more` at the child cap and `…<depth limit>` at the depth cap;
+- an argument marked `#[\SensitiveParameter]` is redacted to `<redacted>`; its
+  JSONL entry carries `"redacted": true` and no real value. The `.edbg.json`
+  local carries `"sensitive": true`.
+
+JSONL argument/return records add `"truncated": true` and an `overflow` object
+with the applicable `string_bytes`, `children` and `depth` fields. The text table
+shows the embedded markers, and the HTML panel adds `redacted` / `truncated`
+badges next to the affected value. If the bounded event ring itself drops events,
+`--calls-out` ends with `{"kind":"capture_overflow","dropped":N}` and the text/HTML
+reports print the dropped count. Redaction applies to call capture; DAP/terminal
+inspection is a separate read-only view.
+
+### `elephc_break`, `elephc_dump` and named trace segments
+
+Debug builds also carry three elephc-only helpers. They are hidden by
+`--strict-php` and are no-ops outside a call capture or interactive/DAP session
+when they only manage segments:
+
+```php
+elephc_break(): void
+elephc_dump(mixed $value, ?string $label = null, string $to = 'auto'): void
+elephc_trace_start(string $name): void
+elephc_trace_end(string $name): void
+```
+
+`elephc_break()` asks an attached interactive or DAP debugger to stop at the
+caller's current source line. Outside a debug session it is a no-op, and a normal
+build carries the same no-op stub so one source tree compiles everywhere. The
+source helper is transparent: it does not add a frame to `bt`/DAP `stackTrace`,
+and the stop reports the user line that called it.
+
+`elephc_dump()` records one explicit formatted snapshot. `to` selects the
+destination:
+
+- `auto` records when a call capture is active, otherwise writes to stderr;
+- `stderr` always writes to stderr (and still records when a capture is active);
+- `terminal` writes to stderr in this native build (and records when a capture is
+  active);
+- `html` records when a capture is active, otherwise falls back to stderr;
+- any other value raises `ValueError` before the native recorder sees the call.
+
+An explicit dump is always recorded during a capture, even in `--calls=none`
+mode: that mode suppresses only the automatic argument/return values. Outside a
+capture in a `--debug` build, `elephc_dump()` writes
+`elephc_dump[label]: <value>` to stderr. The dump and trace helpers require a
+`--debug` build; `--strict-php` hides every helper.
+
+`elephc_trace_start($name)` opens a named, nestable segment; `elephc_trace_end`
+must match the top of the stack or it warns and no-ops. Empty names raise
+`ValueError`. In an interactive/DAP session the segment start/end and scoped
+dumps are printed to the debug console; in a `monitor --calls` capture they are
+JSONL/HTML events. Segments still open at exit close as `complete: false`. The JSONL stream marks these events with
+`"kind": "segment_start"`, `"segment_end"` or `"segment_warning"`; dump events
+use `"kind": "dump"` with `label`, `value`, `type` and the current `segments`
+path. Call events carry the same `segments` path.
+
+The monitor HTML panel adds **Dumps** and **Trace segments** sections and tags
+call/dump lines with their segment path. The JSONL file remains the raw event
+stream, so a later tool can rebuild the same view.
 
 ## Exact call counts
 

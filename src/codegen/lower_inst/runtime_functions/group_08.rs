@@ -40,6 +40,9 @@ pub(super) fn lower(
         RuntimeFnId::ElephcCloneOverrideReferenceGuard => Some({
             crate::codegen::lower_inst::builtins::clone_with::overrides::lower_reference_override_guard(ctx, inst)
         }),
+        RuntimeFnId::ElephcDebugEvent => Some({
+            crate::codegen::lower_inst::builtins::debug_events::lower_event(ctx, inst)
+        }),
         RuntimeFnId::ElephcObjectIsEnum => Some({
             crate::codegen::lower_inst::builtins::object_props::lower_object_is_enum(ctx, inst)
         }),

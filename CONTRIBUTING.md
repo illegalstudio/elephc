@@ -179,7 +179,7 @@ which tiers a run executes and writes its reason to the run summary.
 |---|---|---|---|
 | Build and archive on every platform, doctests, the macOS xml bridge tests, repository checks (docs sync, action pins, audit, ...) | yes | yes | yes |
 | Linux x86_64 and ARM64 test matrix, managed native smoke on all three hosts | yes | yes | only if the queue did not test that commit |
-| macOS test matrix (non-codegen, CLI, web, codegen, eval, PDO, curl) and the iOS compile and link jobs | with `ci:macos`, or when the PR changes CI scheduling | yes | only if the queue did not test that commit |
+| macOS test matrix (non-codegen, CLI, web, debug, codegen, eval, PDO, curl) and the iOS compile and link jobs | with `ci:macos`, or when the PR changes CI scheduling | yes | only if the queue did not test that commit |
 | Core live database suites (`pdo-live.yml`: PostgreSQL 16 and MySQL 8.4) | yes | yes | only if the queue did not test that commit |
 | Optional-driver live database suites (`pdo-live.yml`: `sqlsrv-oci`, `cubrid-dblib`, `firebird-odbc`, `informix-ibm`) | when the PR changes PDO or mysqli code or `Cargo.lock`, or with `ci:pdo-live` | yes | only if the queue did not test that commit |
 | Real PHP 8.5 extension SDK matrix (NTS/ZTS on all three hosts, Valgrind and Apple leaks) | when producer, compiler or SDK inputs change | yes, required by `Build & Test` | only if the queue did not test that commit |

@@ -72,6 +72,16 @@ pub(crate) struct SharedCodegenState {
     /// name table `elephc_instr_init` reads; main is emitted last, so it is
     /// complete by then.
     instr_registry: Vec<String>,
+    /// Source identities already announced with an `@file` marker. The marker
+    /// carries the physical path (hex-encoded) so the DWARF/source-map readers
+    /// can distinguish included files that share line/column coordinates.
+    pub(super) debug_sources: std::collections::HashSet<u32>,
+    /// `--debug`: emit per-site hook calls and debug metadata markers.
+    pub(super) debug_build: bool,
+    /// Next compiler-assigned debug site id.
+    pub(super) next_debug_site: usize,
+    /// Next compiler-assigned debug function id.
+    pub(super) next_debug_function: usize,
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -111,6 +121,20 @@ struct RuntimeCallWrapperCacheEntry {
 }
 
 impl SharedCodegenState {
+    /// Assigns the next stable debug function id.
+    pub(super) fn next_debug_function(&mut self) -> usize {
+        let function = self.next_debug_function;
+        self.next_debug_function += 1;
+        function
+    }
+
+    /// Assigns the next stable debug site id.
+    pub(super) fn next_debug_site(&mut self) -> usize {
+        let site = self.next_debug_site;
+        self.next_debug_site += 1;
+        site
+    }
+
     /// Records dependencies introduced by a synthetic wrapper that was not present during the
     /// module's original EIR feature scan.
     pub(super) fn record_generated_runtime_features(&mut self, function: &Function) {

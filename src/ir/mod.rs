@@ -38,8 +38,8 @@ pub(crate) use builder::local_load_types_share_storage;
 pub(crate) use builder::local_load_coercion_owns_result;
 pub use effects::Effects;
 pub use function::{
-    Function, FunctionFlags, FunctionId, FunctionParam, LocalKind, LocalSlot,
-    LocalSlotId,
+    BranchSite, BranchSiteKind, Function, FunctionFlags, FunctionId, FunctionParam, LocalKind,
+    LocalSlot, LocalSlotId, PathDescriptor, PathSite, PathSiteKind, PathTerminal,
 };
 pub use instr::{
     BuiltinId, CheckedNumericChainImmediate, CmpPredicate, CoreBuiltinOp, GcControlOp, Immediate,

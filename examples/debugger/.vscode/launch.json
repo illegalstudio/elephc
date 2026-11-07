@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "elephc",
+      "request": "launch",
+      "name": "Debug with elephc",
+      "program": "${workspaceFolder}/main.php",
+      "stopOnEntry": false
+    }
+  ]
+}
