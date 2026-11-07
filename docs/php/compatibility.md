@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **1243 / 2169** (57%), classes **188 / 329** (57%), constants **1361 / 3180** (43%).
+Overall coverage: functions **1265 / 2169** (58%), classes **190 / 329** (58%), constants **1419 / 3180** (45%).
 
 ## Coverage by PHP module
 
@@ -94,8 +94,8 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `gd` constants: 67 / 0
 - `gmp` constants: 9 / 0
 - `intl` functions: 187 / 0
-- `mysqli` functions: 84 / 0
-- `mysqli` constants: 52 / 0
+- `mysqli` functions: 106 / 0
+- `mysqli` constants: 110 / 0
 - `pdo` functions: 1 / 0
 - `random` functions: 9 / 3
 - `session` functions: 23 / 0
