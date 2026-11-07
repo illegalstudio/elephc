@@ -745,7 +745,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         }
         Some(InaccessibleMethodError::DirectCall) => Some(Some(CallableResolverMiss::DirectCall)),
         // Names a value of the frame it runs in, which a shared body does not have.
-        Some(InaccessibleMethodError::Dynamic(_)) => None,
+        Some(InaccessibleMethodError::Dynamic(_) | InaccessibleMethodError::AtSite(_)) => None,
     };
     if let Some(miss) = miss.filter(|_| callable_resolver_is_shareable(ctx, callable)) {
         let spec = CallableResolverSpec {
@@ -757,11 +757,16 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             arity,
             miss,
         };
-        let scope = ctx
-            .function
-            .lexical_class
-            .as_deref()
-            .map(|class| class.trim_start_matches('\\').to_string());
+        // Only a direct call's refusal names the scope, so any other resolver of a scope that
+        // reaches no non-public method is the global one.
+        let scope = if matches!(spec.miss, Some(CallableResolverMiss::DirectCall)) {
+            ctx.function
+                .lexical_class
+                .as_deref()
+                .map(|class| class.trim_start_matches('\\').to_string())
+        } else {
+            crate::codegen::shared_mixed_callable::reach_scope(ctx)
+        };
         let key = format!("{}:{:?}:{}", CALLABLE_RESOLVER_PREFIX, spec, scope.as_deref().unwrap_or(""));
         let label = ctx.keyed_global_label(&key, CALLABLE_RESOLVER_PREFIX);
         ctx.shared.request_dynamic_prop_helper(
@@ -848,7 +853,9 @@ pub(in crate::codegen) fn emit_mixed_callable_resolver(
         CallableResolverMiss::InvalidCallback(prefix) => {
             InaccessibleMethodError::InvalidCallback(prefix.clone())
         }
-        CallableResolverMiss::DirectCall => InaccessibleMethodError::DirectCall,
+        CallableResolverMiss::DirectCall | CallableResolverMiss::DirectCallAtSite => {
+            InaccessibleMethodError::DirectCall
+        }
     });
     emit_inline_mixed_callable_descriptor_value(
         &mut ctx,
@@ -1570,6 +1577,10 @@ enum InaccessibleMethodError {
     /// the module-wide helper, which serves `call_user_func()`, `call_user_func_array()` and
     /// plain calls alike.
     Dynamic(ValueId),
+    /// Hands the inaccessible record back to the site, which words the message for its own scope.
+    /// The search shared by every scope that reaches no non-public method uses it, jumping to
+    /// this label with the record in the result register.
+    AtSite(String),
 }
 
 /// Resolves a callable array whose method the class does not offer to the class's `__call()`.
@@ -1817,6 +1828,11 @@ fn emit_inaccessible_method_error(
     // quotes the method name exactly as the caller spelled it).
     match error {
         InaccessibleMethodError::Ignore => unreachable!("filtered above"),
+        InaccessibleMethodError::AtSite(done_label) => {
+            let flag_reg = runtime_descriptor_owned_flag_reg(ctx);
+            abi::emit_load_int_immediate(ctx.emitter, flag_reg, CALLABLE_ARRAY_LOOKUP_REFUSED);
+            abi::emit_jump(ctx.emitter, done_label);
+        }
         InaccessibleMethodError::Dynamic(kind) => {
             let user_func = ctx.next_label("callable_array_inaccessible_user_func");
             let user_func_array = ctx.next_label("callable_array_inaccessible_user_func_array");
@@ -4596,6 +4612,9 @@ fn emit_object_selector_static_arms(
 const CALLABLE_ARRAY_LOOKUP_PREFIX: &str = "callable_array_lookup";
 /// What the shared search leaves in the ownership flag register when nothing matched.
 const CALLABLE_ARRAY_LOOKUP_MISS: i64 = 2;
+/// What it leaves there when the method exists and the scope cannot reach it, the inaccessible
+/// record in the result register.
+const CALLABLE_ARRAY_LOOKUP_REFUSED: i64 = 3;
 
 /// Resolves a saved mixed callable-array selector to a descriptor and ownership flag, against
 /// every descriptor target the scope reaches.
@@ -4616,7 +4635,7 @@ fn emit_mixed_callable_array_descriptor_lookup(
             CallableResolverMiss::InvalidCallback(prefix.clone())
         }
         InaccessibleMethodError::DirectCall => CallableResolverMiss::DirectCall,
-        InaccessibleMethodError::Dynamic(_) => {
+        InaccessibleMethodError::Dynamic(_) | InaccessibleMethodError::AtSite(_) => {
             return emit_inline_callable_array_lookup(
                 ctx, instance_targets, static_cases, miss_label, inaccessible,
             );
@@ -4629,11 +4648,15 @@ fn emit_mixed_callable_array_descriptor_lookup(
             ctx, instance_targets, static_cases, miss_label, inaccessible,
         );
     }
-    let scope = ctx
-        .function
-        .lexical_class
-        .as_deref()
-        .map(|class| class.trim_start_matches('\\').to_string());
+    // What a scope can reach decides the search, and only a scope that reaches a non-public method
+    // sees anything the global one does not. The scope's name is needed by one message only, a
+    // direct call's refusal, which the site raises itself.
+    let scope = crate::codegen::shared_mixed_callable::reach_scope(ctx);
+    let miss = match (&scope, miss) {
+        (None, CallableResolverMiss::DirectCall) => CallableResolverMiss::DirectCallAtSite,
+        (_, miss) => miss,
+    };
+    let reports_at_site = matches!(miss, CallableResolverMiss::DirectCallAtSite);
     let key = format!("{}:{:?}:{}", CALLABLE_ARRAY_LOOKUP_PREFIX, miss, scope.as_deref().unwrap_or(""));
     let label = ctx.keyed_global_label(&key, CALLABLE_ARRAY_LOOKUP_PREFIX);
     ctx.shared.request_dynamic_prop_helper(
@@ -4653,6 +4676,21 @@ fn emit_mixed_callable_array_descriptor_lookup(
             ctx.emitter.instruction(&format!("cmp {}, {}", flag_reg, CALLABLE_ARRAY_LOOKUP_MISS)); // did the search find nothing?
             ctx.emitter.instruction(&format!("je {}", miss_label));             // nothing matched
         }
+    }
+    if reports_at_site {
+        let reachable = ctx.next_label("callable_array_lookup_reachable");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {}, #{}", flag_reg, CALLABLE_ARRAY_LOOKUP_REFUSED)); // did the search find a method this scope cannot reach?
+                ctx.emitter.instruction(&format!("b.ne {}", reachable));        // it found a descriptor
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {}, {}", flag_reg, CALLABLE_ARRAY_LOOKUP_REFUSED)); // did the search find a method this scope cannot reach?
+                ctx.emitter.instruction(&format!("jne {}", reachable));         // it found a descriptor
+            }
+        }
+        emit_inaccessible_method_throw(ctx, &InaccessibleMethodError::DirectCall);
+        ctx.emitter.label(&reachable);
     }
     Ok(())
 }
@@ -4697,17 +4735,18 @@ pub(in crate::codegen) fn emit_callable_array_lookup_helper(
             }
         }
     }
+    let miss_label = ctx.next_label("callable_array_lookup_miss");
+    let done_label = ctx.next_label("callable_array_lookup_found");
     let inaccessible = match miss {
         CallableResolverMiss::Ignore => InaccessibleMethodError::Ignore,
         CallableResolverMiss::InvalidCallback(prefix) => {
             InaccessibleMethodError::InvalidCallback(prefix.clone())
         }
         CallableResolverMiss::DirectCall => InaccessibleMethodError::DirectCall,
+        CallableResolverMiss::DirectCallAtSite => InaccessibleMethodError::AtSite(done_label.clone()),
     };
     let instance_targets = runtime_array_instance_method_targets_for_descriptor(&ctx);
     let static_cases = runtime_static_method_descriptor_cases(&mut ctx, None);
-    let miss_label = ctx.next_label("callable_array_lookup_miss");
-    let done_label = ctx.next_label("callable_array_lookup_found");
     emit_inline_callable_array_lookup(
         &mut ctx, &instance_targets, &static_cases, &miss_label, &inaccessible,
     )?;

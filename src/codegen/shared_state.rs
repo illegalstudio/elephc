@@ -329,6 +329,8 @@ pub(crate) enum CallableResolverMiss {
     InvalidCallback(String),
     /// php's direct call wording.
     DirectCall,
+    /// php's direct call wording, raised by the site, which knows its scope.
+    DirectCallAtSite,
 }
 
 /// One runtime-name property helper waiting for its body to be emitted.

@@ -97,6 +97,52 @@ fn callable_array_sites_call_one_search() {
     assert!(definitions < 8 && unique < 8, "{definitions} searches for {unique} call targets");
 }
 
+/// `count` classes with public methods only, each calling a callable array.
+fn public_scopes_fixture(count: usize) -> String {
+    let mut source = String::from("<?php\nclass T { public function m(): int { return 1; } }\n");
+    for index in 0..count {
+        source.push_str(&format!(
+            "class C{index} {{ public function run($o, $m) {{ return [$o, $m](); }} }}\n\
+             echo (new C{index}())->run(new T(), $argc > 1 ? 'x' : 'm'), \"\\n\";\n"
+        ));
+    }
+    source
+}
+
+/// A class that reaches no non-public method sees what the global scope sees, so a hundred of
+/// them share the search instead of building one each.
+#[test]
+fn scopes_with_public_reach_share_one_search() {
+    let text = assembly(&public_scopes_fixture(100));
+    let searches = text
+        .lines()
+        .filter(|line| line.starts_with("_eir_shared_callable_array_lookup_"))
+        .count();
+    assert!(searches < 8, "{searches} searches for scopes that see the same methods");
+}
+
+/// The refusal of a shared search still names the scope of the site that called it.
+#[test]
+fn a_shared_search_refuses_in_the_scope_of_its_site() {
+    let output = compile_and_run(
+        r#"<?php
+class B { private function hidden(): string { return "B::hidden"; } }
+class P1 { public function run($o, $m) { try { return [$o, $m](); } catch (\Error $e) { return $e->getMessage(); } } }
+class P2 { public function run($o, $m) { try { return [$o, $m](); } catch (\Error $e) { return $e->getMessage(); } } }
+function run($o, $m) { try { return [$o, $m](); } catch (\Error $e) { return $e->getMessage(); } }
+echo (new P1())->run(new B(), 'hidden'), "\n";
+echo (new P2())->run(new B(), 'hidden'), "\n";
+echo run(new B(), 'hidden'), "\n";
+"#,
+    );
+    assert_eq!(
+        output,
+        "Call to private method B::hidden() from scope P1\n\
+         Call to private method B::hidden() from scope P2\n\
+         Call to private method B::hidden() from global scope\n"
+    );
+}
+
 /// One resolver per scope reports php's refusal from the right class, and each scope reaches its
 /// own private method.
 #[test]

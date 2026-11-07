@@ -85,6 +85,15 @@ fn scope_sensitive_classes(module: &Module) -> std::collections::HashSet<String>
     sensitive
 }
 
+/// The class scope a callable search of `ctx` has to be emitted for: its lexical class when that
+/// class reaches a non-public method, `None` when it sees exactly what the global scope sees.
+pub(super) fn reach_scope(ctx: &FunctionContext<'_>) -> Option<String> {
+    let scope = ctx.function.lexical_class.as_deref()?.trim_start_matches('\\');
+    let sharing = ctx.shared.mixed_callable_sharing();
+    let decided = sharing.global.iter().any(Option::is_some);
+    (!decided || sharing.sensitive.contains(scope)).then(|| scope.to_string())
+}
+
 /// The scope-specific helper class of a site: `Some` when its scope reaches non-public methods.
 fn sensitive_scope<'a>(sharing: &MixedCallableSharing, scope: Option<&'a str>) -> Option<&'a str> {
     let scope = scope?.trim_start_matches('\\');
