@@ -38,6 +38,11 @@ class WebRunnerTests(unittest.TestCase):
         self.assertEqual(parsed["latency_p99_ms"], 1.0)
         self.assertEqual(parsed["transfer_per_sec"], "341.00KB")
 
+    def test_process_tree_and_cpu_probe_cover_this_process(self):
+        import os
+        self.assertIn(os.getpid(), run.process_tree(os.getpid()))
+        self.assertGreaterEqual(run.process_cpu_seconds(os.getpid()), 0.0)
+
     def test_aggregate_sums_throughput_across_clients(self):
         first = run.parse_wrk(WRK_SAMPLE)
         second = dict(first)

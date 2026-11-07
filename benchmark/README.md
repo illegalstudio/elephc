@@ -245,6 +245,7 @@ the historical dashboard:
 python3 benchmark/web/run.py
 python3 benchmark/web/run.py --workers 4 --threads 4 --connections 100 --duration 10s
 python3 benchmark/web/run.py --workers 8 --clients 3 --threads 4 --connections 200
+python3 benchmark/web/run.py --workers 1 --cpu
 python3 benchmark/web/run.py --no-build --compiler target/release/elephc \
   --json web-results.json --markdown web-results.md
 python3 benchmark/web/run.py --k6 vus --k6 constant
@@ -256,7 +257,9 @@ one `echo` and one `$_SERVER['SERVER_SOFTWARE']` read. The runner compiles it
 with `--web`, starts the server on an ephemeral port, warms up with `wrk`, then
 takes repeated measurements and reports the median. `--clients N` starts N
 concurrent `wrk` processes and reports aggregate throughput (useful for proving
-whether one load generator is the bottleneck); `--php-baseline` measures the
+whether one load generator is the bottleneck); `--cpu` samples the server
+master and workers (`proc_pid_rusage` on macOS, `/proc` on Linux) and reports
+server CPU per request, which stays meaningful when the host is busy; `--php-baseline` measures the
 same fixture under `php -S` (single process, not PHP-FPM), and `--k6` runs the
 article's 100-VU and 5,000 req/s shapes.
 

@@ -22,6 +22,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import platform
@@ -40,6 +41,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_FIXTURE = Path(__file__).resolve().parent / "hello.php"
+# Resolve the platform string before `libproc` is loaded through ctypes. On
+# macOS, importing `plistlib` after `libproc` crashes the system Python 3.9.
+HOST_PLATFORM = platform.platform()
 K6_SCRIPTS = {
     "vus": Path(__file__).resolve().parent / "k6-vus.js",
     "constant": Path(__file__).resolve().parent / "k6-constant.js",
@@ -51,6 +55,113 @@ def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def process_tree(master: int) -> list[int]:
+    """Returns the master PID and every descendant currently visible to `ps`."""
+    completed = subprocess.run(
+        ["ps", "-axo", "pid=,ppid="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    children: dict[int, list[int]] = {}
+    for line in completed.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        children.setdefault(ppid, []).append(pid)
+    tree = [master]
+    pending = [master]
+    while pending:
+        parent = pending.pop()
+        for child in children.get(parent, []):
+            tree.append(child)
+            pending.append(child)
+    return tree
+
+
+class _MachTimebase(ctypes.Structure):
+    """Mirrors `struct mach_timebase_info` from `<mach/mach_time.h>`."""
+
+    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+
+
+_MACH_TIMEBASE: tuple[int, int] | None = None
+
+
+def _mach_timebase() -> tuple[int, int]:
+    """Returns the `mach_absolute_time` numerator/denominator, cached."""
+    global _MACH_TIMEBASE
+    if _MACH_TIMEBASE is None:
+        try:
+            libsystem = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+            timebase = _MachTimebase()
+            if libsystem.mach_timebase_info(ctypes.byref(timebase)) != 0 or not timebase.denom:
+                _MACH_TIMEBASE = (1, 1)
+            else:
+                _MACH_TIMEBASE = (int(timebase.numer), int(timebase.denom))
+        except OSError:
+            _MACH_TIMEBASE = (1, 1)
+    return _MACH_TIMEBASE
+
+
+_LIBPROC: ctypes.CDLL | None = None
+
+
+def _libproc() -> ctypes.CDLL | None:
+    """Loads `libproc` once and installs the `proc_pid_rusage` signature."""
+    global _LIBPROC
+    if _LIBPROC is None:
+        try:
+            _LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        except OSError:
+            return None
+        _LIBPROC.proc_pid_rusage.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_void_p,
+        ]
+        _LIBPROC.proc_pid_rusage.restype = ctypes.c_int
+    return _LIBPROC
+
+
+def _darwin_process_cpu_seconds(pid: int) -> float:
+    """Reads one process's user+system CPU time from `proc_pid_rusage`."""
+    libproc = _libproc()
+    if libproc is None:
+        return 0.0
+    buffer = ctypes.create_string_buffer(256)
+    # RUSAGE_INFO_V4: ri_user_time at byte 16, ri_system_time at byte 24.
+    # Both are in mach absolute time units, not nanoseconds.
+    if libproc.proc_pid_rusage(pid, 4, buffer) != 0:
+        return 0.0
+    user = ctypes.c_uint64.from_buffer(buffer, 16).value
+    system = ctypes.c_uint64.from_buffer(buffer, 24).value
+    numer, denom = _mach_timebase()
+    return (user + system) * numer / denom / 1_000_000_000.0
+
+
+def process_cpu_seconds(pid: int) -> float:
+    """Returns one process's user+system CPU time in seconds, best effort."""
+    if sys.platform == "darwin":
+        return _darwin_process_cpu_seconds(pid)
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        fields = stat[stat.rfind(")") + 2 :].split()
+        ticks = int(fields[11]) + int(fields[12])
+        return ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, IndexError, ValueError):
+        return 0.0
+
+
+def server_cpu_seconds(master: int) -> float:
+    """Sums the CPU time of the server master and its worker descendants."""
+    return sum(process_cpu_seconds(pid) for pid in process_tree(master))
 
 
 def wait_for_server(process: subprocess.Popen[str], url: str, log_path: Path) -> None:
@@ -107,6 +218,7 @@ def parse_wrk(text: str) -> dict[str, Any]:
             result["socket_errors"] = stripped.split(":", 1)[1].strip()
         elif " requests in " in stripped and " read" in stripped:
             result["summary"] = stripped
+            result["requests"] = float(stripped.split()[0])
     if "requests_per_sec" not in result:
         raise SystemExit(f"could not parse wrk output:\n{text}")
     return result
@@ -135,6 +247,7 @@ def aggregate_wrk_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     return {
         "clients": len(results),
+        "requests": sum(float(result.get("requests", 0)) for result in results),
         "requests_per_sec": sum(float(result["requests_per_sec"]) for result in results),
         "latency_avg_ms": statistics.mean(average_latencies) if average_latencies else 0.0,
         "latency_p99_ms": max(p99_latencies) if p99_latencies else None,
@@ -280,7 +393,7 @@ def server_environment(compiler: Path) -> dict[str, Any]:
     wrk = shutil.which("wrk")
     k6 = shutil.which("k6")
     return {
-        "platform": platform.platform(),
+        "platform": HOST_PLATFORM,
         "machine": platform.machine(),
         "processor": platform.processor(),
         "cpu_count": os.cpu_count(),
@@ -303,6 +416,11 @@ def summarize(rounds: list[dict[str, Any]]) -> dict[str, Any]:
     rps = [float(round_["requests_per_sec"]) for round_ in rounds]
     avg = [float(round_["latency_avg_ms"]) for round_ in rounds if "latency_avg_ms" in round_]
     p99 = [float(round_["latency_p99_ms"]) for round_ in rounds if "latency_p99_ms" in round_]
+    cpu = [
+        float(round_["server_cpu_us_per_request"])
+        for round_ in rounds
+        if "server_cpu_us_per_request" in round_
+    ]
     return {
         "rounds": len(rounds),
         "requests_per_sec_median": median(rps),
@@ -310,6 +428,7 @@ def summarize(rounds: list[dict[str, Any]]) -> dict[str, Any]:
         "requests_per_sec_max": max(rps) if rps else None,
         "latency_avg_ms_median": median(avg),
         "latency_p99_ms_median": median(p99),
+        "server_cpu_us_per_request_median": median(cpu),
     }
 
 
@@ -337,6 +456,7 @@ def markdown_report(results: dict[str, Any]) -> str:
     summary = results["wrk"]["summary"]
     p99_median = summary.get("latency_p99_ms_median")
     p99_text = f"{p99_median:.2f} ms" if p99_median is not None else "n/a"
+    cpu_median = summary.get("server_cpu_us_per_request_median")
     lines.extend(
         [
             "",
@@ -346,6 +466,10 @@ def markdown_report(results: dict[str, Any]) -> str:
             "",
         ]
     )
+    if cpu_median is not None:
+        lines.extend(
+            [f"Server CPU: **{cpu_median:.2f} µs/request** (median).", ""]
+        )
     if results.get("k6"):
         lines.extend(["## k6", "", "| Scenario | HTTP req/s | avg | p95 | failed |", "|---|---:|---:|---:|---:|"])
         for scenario in results["k6"]:
@@ -439,6 +563,7 @@ def main() -> int:
     parser.add_argument("--duration", default="10s")
     parser.add_argument("--warmup", default="2s")
     parser.add_argument("--repeat", type=int, default=3)
+    parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--k6", action="append", choices=sorted(K6_SCRIPTS), default=[])
     parser.add_argument("--php-baseline", action="store_true")
     parser.add_argument("--json", type=Path)
@@ -488,8 +613,10 @@ def main() -> int:
                         args.timeout,
                         args.clients,
                     )
-                rounds = [
-                    run_wrk(
+                rounds = []
+                for _ in range(args.repeat):
+                    before = server_cpu_seconds(process.pid) if args.cpu else 0.0
+                    round_ = run_wrk(
                         url,
                         args.threads,
                         args.connections,
@@ -497,8 +624,15 @@ def main() -> int:
                         args.timeout,
                         args.clients,
                     )
-                    for _ in range(args.repeat)
-                ]
+                    if args.cpu:
+                        after = server_cpu_seconds(process.pid)
+                        round_["server_cpu_seconds"] = max(0.0, after - before)
+                        requests = float(round_.get("requests", 0))
+                        if requests:
+                            round_["server_cpu_us_per_request"] = (
+                                round_["server_cpu_seconds"] / requests * 1e6
+                            )
+                    rounds.append(round_)
                 k6_results = [
                     run_k6(scenario, url, args.duration, work_dir, args.timeout)
                     for scenario in args.k6
@@ -514,6 +648,7 @@ def main() -> int:
             "fixture": str(fixture),
             "workers": args.workers,
             "clients": args.clients,
+            "cpu": args.cpu,
             "threads": args.threads,
             "connections": args.connections,
             "duration": args.duration,
