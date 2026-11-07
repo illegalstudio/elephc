@@ -363,7 +363,7 @@ impl Checker {
             actual_ty,
             call_span,
             caller_env,
-        );
+        )?;
         self.record_reference_alias_root(arg);
         Ok(())
     }
@@ -1014,7 +1014,7 @@ impl Checker {
                             &actual_ty,
                             span,
                             caller_env,
-                        );
+                        )?;
                     }
                     if by_ref_undefined_local {
                         self.record_undefined_by_ref_argument(arg, expected_ty, span);
@@ -1047,6 +1047,9 @@ impl Checker {
                         if (coercive_param_binding
                             && sig.declared_params.get(param_idx).copied().unwrap_or(false))
                             || (supplied_reference && matches!(expected_ty, PhpType::Object(_)))
+                            || (supplied_reference
+                                && expected_ty.codegen_repr() == PhpType::Mixed
+                                && actual_ty.codegen_repr() == PhpType::Mixed)
                         {
                             self.require_bound_param_arg_type(
                                 expected_ty,

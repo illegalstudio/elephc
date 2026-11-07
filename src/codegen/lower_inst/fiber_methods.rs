@@ -449,7 +449,7 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     // store-then-write-back-then-jump order `method_intrinsics`' nullable dispatch uses.
     store_if_result(ctx, inst)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)?;
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)?;
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
     objects::emit_boxed_null(ctx);

@@ -101,6 +101,9 @@ pub(super) fn lower(
         RuntimeFnId::ElephcOpcacheRtSwap => Some({
             crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_swap(ctx, inst)
         }),
+        RuntimeFnId::ElephcReflectionClassBuild => Some({
+            crate::codegen::lower_inst::builtins::reflection_class_build::lower_reflection_class_build(ctx, inst)
+        }),
         RuntimeFnId::ElephcPtrIsNull => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_is_null(ctx, inst)
         }),

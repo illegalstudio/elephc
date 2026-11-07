@@ -187,11 +187,11 @@
   ],
   "coverage": {
     "classes": {
-      "have": 188,
+      "have": 190,
       "total": 329
     },
     "constants": {
-      "have": 1361,
+      "have": 1419,
       "total": 3180
     },
     "functions": {
@@ -1013,20 +1013,20 @@
     },
     {
       "classes": {
-        "eval": 4,
-        "have": 4,
+        "eval": 6,
+        "have": 6,
         "total": 6
       },
       "constants": {
         "eval": 0,
-        "have": 52,
+        "have": 110,
         "total": 110
       },
       "docs": "docs/php/mysqli.md#functions",
       "extension": "mysqli",
       "functions": {
         "eval": 0,
-        "have": 84,
+        "have": 106,
         "total": 106
       },
       "name": "mysqli",
@@ -1744,8 +1744,18 @@
         "since": "8.6"
       }
     ],
-    "constants": [],
-    "functions": []
+    "constants": [
+      {
+        "name": "MYSQLI_OPT_COMPRESS",
+        "since": "8.6"
+      }
+    ],
+    "functions": [
+      {
+        "name": "mysqli_quote_string",
+        "since": "8.6"
+      }
+    ]
   },
   "pecl": [
     {

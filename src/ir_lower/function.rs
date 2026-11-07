@@ -1860,6 +1860,32 @@ fn lower_body_into_function(
         .iter()
         .map(|param| param.by_ref)
         .collect::<Vec<_>>();
+    // By-reference parameters of a union of null, arrays and objects are checked on entry,
+    // after the caller evaluated every argument (php's RECV order).
+    let reference_entry_guards = {
+        let display = function
+            .display_name
+            .clone()
+            .or_else(|| function.source_name.clone())
+            .unwrap_or_else(|| function.name.clone());
+        let mut position = 0;
+        let mut guards = Vec::new();
+        for (index, (name, php_type)) in params.iter().enumerate() {
+            if name == "this"
+                || name == crate::func_args::HIDDEN_ARGC_PARAM
+                || name == crate::func_args::HIDDEN_ARGS_PARAM
+            {
+                continue;
+            }
+            position += 1;
+            if by_ref_params.get(index).copied().unwrap_or(false)
+                && crate::ir_lower::expr::reference_parameter_needs_entry_guard(php_type)
+            {
+                guards.push((display.clone(), position, name.clone(), php_type.clone()));
+            }
+        }
+        guards
+    };
     let reference_variadic = function.signature.as_ref().and_then(|signature| {
         let name = signature.variadic.as_ref()?;
         let index = signature.params.iter().position(|(candidate, _)| candidate == name)?;
@@ -1975,10 +2001,19 @@ fn lower_body_into_function(
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
     ctx.lower_with_final_string_storage(|ctx| {
-        if !eager_parameters { super::object_boundaries::guard_parameters(ctx); }
+        if !eager_parameters {
+            super::object_boundaries::guard_parameters(ctx, &reference_entry_guards);
+        }
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
+            if eager_parameters {
+                // Generators check their parameters eagerly elsewhere; these keep their
+                // place at the start of the body.
+                for (display, position, name, php_type) in &reference_entry_guards {
+                    crate::ir_lower::expr::guard_reference_parameter_entry(ctx, display, *position, name, php_type);
+                }
+            }
             crate::ir_lower::numeric_storage::lower_body(ctx, body);
         }
     });

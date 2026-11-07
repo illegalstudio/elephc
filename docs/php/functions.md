@@ -432,6 +432,36 @@ type dispatch the rewrite does not implement (`iterable`, pointers, buffers) sti
 returns; if the callee throws after mutating the reference, the property keeps its previous
 value (PHP would already have applied the mutation).
 
+A local passed to a **nullable typed** by-reference parameter (`?array &$items`,
+`?Item &$item`, `?float &$f`) takes the parameter's boxed storage, like PHP: the callee may
+store `null`, an array of any shape, or any object the parameter admits, and the local holds it
+after the call. A local that only ever holds `null` gets the same boxed storage.
+
+A local declared with an explicit type (`array<Item> $items = ...`, `Item $item = ...`,
+`float $f = ...`) keeps its declared storage instead: the parameter's boxed cell is written
+back into the typed variable when the call returns. An array the callee built from `mixed`
+values is converted into the declared element layout on the way back. A callee that leaves a
+value the declaration cannot hold (`null`, elements of another kind, an object or object
+element of another class, or a nested array of another element kind) stops the program with a
+diagnostic, as a direct assignment of that value would be rejected; PHP has no declared local
+types. While the declared local keeps its typed slot, the write-back runs when the call
+returns: if the callee throws after writing through the reference, the local keeps its
+previous value (PHP would already have applied the write), and nothing leaks. A closure
+the callee returns with the reference captured (`use (&$x)`) keeps working on that reference
+after the call, but no longer reaches the declared local once the call has written it back. Two references to the same declared local (`f($v, $v)`) share one cell. A `mixed`
+local bound to a by-reference union of `null`, arrays and objects is checked against that
+union when the callee starts, after every argument was evaluated, and anything else raises
+`TypeError` like PHP.
+
+Known gaps against PHP for these nullable by-reference parameters:
+
+- A `global` variable passed by reference to an `array`, `mixed` or nullable parameter does
+  not receive the callee's write: the variable keeps its previous value.
+- A `static` local passed to `?float &$f` or `?array &$a` is rejected at compile time
+  ("requires a variable with mixed/union/nullable storage when passed by reference").
+- A `?Item` property passed to `?Item &$item` is rejected at compile time with the same
+  message. An `array`-typed property given `null` raises PHP's `TypeError`, as in PHP.
+
 ## References to array elements
 
 A local can alias an element of an **indexed array** (`$b =& $a[0]`). Writing through

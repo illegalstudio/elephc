@@ -235,7 +235,7 @@ impl Checker {
                             &actual_ty,
                             span,
                             caller_env,
-                        );
+                        )?;
                     }
                     // PHP's parameter binding only applies to a *declared* parameter type.
                     // An inferred parameter's "expected" type is just what earlier call sites

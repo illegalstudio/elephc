@@ -162,6 +162,7 @@ pub(in crate::codegen) use conversions::{
 };
 pub(super) use core_closures::function_signature_from_eir;
 pub(in crate::codegen) use core_builtins::emit_function_frame_reader;
+pub(in crate::codegen) use objects::emit_pending_reflection_class_builders;
 pub(super) use descriptor_entries::emit_static_method_descriptor_entry_wrapper;
 pub(super) use descriptor_metadata::{
     class_method_body_exists, emit_runtime_descriptor_with_receiver_capture,

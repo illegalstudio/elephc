@@ -64,11 +64,28 @@ pub(super) fn coerce_reference_store(
     result
 }
 
+/// One by-reference parameter whose `null|array|object` union is checked on entry:
+/// `(callable display name, 1-based position, parameter name, declared type)`.
+pub(super) type ReferenceEntryGuard = (String, usize, String, PhpType);
+
 /// Checks declared object parameters before user statements or constructor promotions run.
-pub(super) fn guard_parameters(ctx: &mut LoweringContext<'_, '_>) {
-    let Some(signature) = ctx.builder.function().signature.clone() else { return; };
+///
+/// `reference_guards` are the by-reference union checks
+/// (`expr::guard_reference_parameter_entry`). They run in the same pass, at their parameter's
+/// position, because php checks parameters in declaration order (RECV): with two invalid
+/// arguments, the `TypeError` must name the first one whichever family checks it.
+pub(super) fn guard_parameters(
+    ctx: &mut LoweringContext<'_, '_>,
+    reference_guards: &[ReferenceEntryGuard],
+) {
+    let mut pending = vec![true; reference_guards.len()];
+    let Some(signature) = ctx.builder.function().signature.clone() else {
+        run_reference_guards(ctx, reference_guards, &mut pending, None);
+        return;
+    };
     let callable = callable_label(ctx);
     for (index, (name, ty)) in signature.params.iter().enumerate() {
+        run_reference_guards(ctx, reference_guards, &mut pending, Some(name));
         if signature.variadic.as_ref() == Some(name) {
             if let Some(hint) = crate::types::signatures::variadic_source_element_type_expr(&signature) {
                 let element = resolve_context_type(ctx, ctx.type_expr_to_php_type_for_value(hint));
@@ -120,6 +137,26 @@ pub(super) fn guard_parameters(ctx: &mut LoweringContext<'_, '_>) {
             );
             reject_null(ctx, value, Expr::string_lit(message), Span::dummy(), true);
         }
+    }
+    run_reference_guards(ctx, reference_guards, &mut pending, None);
+}
+
+/// Runs the pending by-reference entry guards for parameter `name`, or every pending one when
+/// `name` is `None`, marking each as done.
+fn run_reference_guards(
+    ctx: &mut LoweringContext<'_, '_>,
+    reference_guards: &[ReferenceEntryGuard],
+    pending: &mut [bool],
+    name: Option<&String>,
+) {
+    for (index, (display, position, parameter, php_type)) in reference_guards.iter().enumerate() {
+        if !pending[index] || name.is_some_and(|name| name != parameter) {
+            continue;
+        }
+        pending[index] = false;
+        crate::ir_lower::expr::guard_reference_parameter_entry(
+            ctx, display, *position, parameter, php_type,
+        );
     }
 }
 

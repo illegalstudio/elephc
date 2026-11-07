@@ -18,7 +18,7 @@ use crate::types::PhpType;
 use super::super::super::context::FunctionContext;
 use super::super::{
     class_method_already_emitted, direct_call_stack_pad_bytes, emit_call_arg_temp_cleanups,
-    emit_ref_arg_writebacks,
+    emit_ref_arg_writebacks_guarding_result,
     materialize_method_call_args_with_receiver_reg_and_refs, store_compiled_call_result,
 };
 use crate::codegen::{CodegenIrError, Result};
@@ -92,7 +92,7 @@ fn lower_instance_method_callable_call(
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_compiled_call_result(ctx, inst, &target.return_ty, target.by_ref_return)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Resolves a callable operand back to the receiver-bound method descriptor that produced it.

@@ -6,13 +6,12 @@ description: "Returns the client library version as an integer."
 ## mysqli_get_client_version()
 
 ```php
-function mysqli_get_client_version(mixed $mysql): int
+function mysqli_get_client_version(): int
 ```
 
 Returns the client library version as an integer.
 
-**Parameters**:
-- `$mysql` (`mixed`)
+**Parameters**: none.
 
 **Returns**: `int`
 

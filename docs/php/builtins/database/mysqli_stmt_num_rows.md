@@ -6,7 +6,7 @@ description: "Returns how many rows a prepared statement's buffered result has."
 ## mysqli_stmt_num_rows()
 
 ```php
-function mysqli_stmt_num_rows(mixed $statement): int
+function mysqli_stmt_num_rows(mixed $statement): mixed
 ```
 
 Returns how many rows a prepared statement's buffered result has.
@@ -14,7 +14,7 @@ Returns how many rows a prepared statement's buffered result has.
 **Parameters**:
 - `$statement` (`mixed`)
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 

@@ -377,6 +377,11 @@ pub(super) fn capture_call_argument_value(
 }
 
 /// Rechecks a declared object reference when an earlier call has changed its boxed payload.
+///
+/// Only a non-nullable class parameter is checked here: inside the callee its slot reads an
+/// object pointer. A union of `null`, arrays and objects (`?A &$v`, `?array &$v`) is a boxed
+/// cell in the callee and is checked on entry instead, after every argument was evaluated
+/// (`crate::ir_lower::expr::guard_reference_parameter_entry`).
 fn guard_boxed_object_reference_argument(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -467,6 +472,37 @@ fn guard_boxed_object_reference_argument(
     ctx.builder.position_at_end(accepted);
 }
 
+/// Whether a by-reference parameter of type `ty` takes a boxed cell a promoted local can share:
+/// `mixed`, an object, a union of objects only (`A|B`), or a NULLABLE union of objects, arrays
+/// and floats (`?Base`, `?array`, `?float`). The checker authorizes promotion only for a whole
+/// local it gave boxed storage: one that may receive `null` (or a sibling class) through such a
+/// parameter, which its typed slot could not hold.
+fn boxed_reference_param_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Mixed | PhpType::Object(_) => true,
+        PhpType::Union(members) => {
+            let objects_only = members.iter().any(|member| matches!(member, PhpType::Object(_)))
+                && members
+                    .iter()
+                    .all(|member| matches!(member, PhpType::Object(_) | PhpType::Void));
+            let nullable_heap_or_float = members.iter().any(|member| matches!(member, PhpType::Void))
+                && members.iter().all(|member| {
+                    member.is_php_array()
+                        || matches!(
+                            member,
+                            PhpType::Void
+                                | PhpType::Object(_)
+                                | PhpType::Array(_)
+                                | PhpType::AssocArray { .. }
+                                | PhpType::Float
+                        )
+                });
+            objects_only || nullable_heap_or_float
+        }
+        _ => false,
+    }
+}
+
 /// Gives an eligible whole-local reference the canonical boxed payload required by the callee.
 ///
 /// The checker permits this only for an eligible whole local. An existing object alias already
@@ -481,7 +517,7 @@ fn promote_boxed_reference_local_argument(
         || !sig
             .params
             .get(index)
-            .is_some_and(|(_, ty)| matches!(ty, PhpType::Mixed | PhpType::Object(_)))
+            .is_some_and(|(_, ty)| boxed_reference_param_type(ty))
     {
         return;
     }

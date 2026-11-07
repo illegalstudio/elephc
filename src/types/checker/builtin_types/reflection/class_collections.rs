@@ -342,18 +342,52 @@ pub(super) fn builtin_reflection_class_object_method(
         return_type: Some(TypeExpr::Named(Name::unqualified(class_name))),
         by_ref_return: false,
         body: vec![Stmt::new(
-            StmtKind::Return(Some(Expr::new(
-                ExprKind::PropertyAccess {
-                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
-                    property: property.to_string(),
-                },
-                dummy_span,
-            ))),
+            StmtKind::Return(Some(reflection_lazy_class_read(property))),
             dummy_span,
         )],
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// `is_int($this->{property}) ? __elephc_reflection_class_build($this->{property}) : $this->{property}`.
+///
+/// Codegen fills a member reflector's declaring-class (and a parameter's class-type) slot with
+/// the address of a compiled builder for that class, not with a `ReflectionClass`: php builds
+/// a new, complete reflector on every `getDeclaringClass()` / `getClass()` call, and holding
+/// one per member would cost the class's property arrays per member or, shared, form a cycle
+/// with the class's own members. Eval-built reflectors store the object itself, and a member
+/// with no class stores `false`/`null`; both come back unchanged.
+pub(super) fn reflection_lazy_class_read(property: &str) -> Expr {
+    let span = crate::span::Span::dummy();
+    let slot = || super::class_relations::reflection_this_property(property, span);
+    Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(super::class_relations::function_call("is_int", vec![slot()], span)),
+            then_expr: Box::new(super::class_relations::function_call(
+                "__elephc_reflection_class_build",
+                vec![slot()],
+                span,
+            )),
+            else_expr: Box::new(slot()),
+        },
+        span,
+    )
+}
+
+/// Returns a public mixed getter that builds the `ReflectionClass` a slot names on each call
+/// (see `reflection_lazy_class_read`).
+pub(super) fn builtin_reflection_lazy_class_getter(method_name: &str, property: &str) -> ClassMethod {
+    let mut method = super::basic_methods::builtin_reflection_slot_getter(
+        method_name,
+        property,
+        mixed_type(),
+    );
+    method.body = vec![Stmt::new(
+        StmtKind::Return(Some(reflection_lazy_class_read(property))),
+        crate::span::Span::dummy(),
+    )];
+    method
 }
 
 /// Returns a public mixed `ReflectionClass` method backed by one private slot.

@@ -292,6 +292,12 @@ impl Checker {
                 ),
             ));
         }
+        // A declared-type array/object/float local bound to a nullable parameter of its own
+        // kind keeps its typed slot: the call writes the boxed cell back and verifies its kind.
+        // Any other local takes the boxed cell below instead.
+        if self.nullable_reference_keeps_concrete_storage(expected_ty, actual_ty, arg) {
+            return Ok(());
+        }
         // The call lowering boxes PHP array locals before exposing their ref-cell address.
         // This changes storage, not the declared values accepted by the reference parameter.
         if expected_ty.is_php_array()
