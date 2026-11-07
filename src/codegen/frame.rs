@@ -1214,6 +1214,14 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     if ctx.shared.counters {
         emit_counters_dump(ctx);
     }
+    // A worker never reaches the exit path that prints the heap-debug report, so it prints here,
+    // once per request, after the request's locals are released: the counters are the worker's
+    // running totals, so a leak shows as live blocks that grow from one request to the next.
+    if ctx.heap_debug {
+        ctx.emitter
+            .comment("heap-debug: print allocator summary and leak report to stderr");
+        abi::emit_call_label(ctx.emitter, "__rt_heap_debug_report");
+    }
     // The EXACT profile is not dumped here either. The bridge brackets every
     // request — `elephc_instr_request(1|2)` before the handler, `(0)` after — and
     // that close is what ends a slice and writes it, once, and only if one was
@@ -1271,6 +1279,13 @@ pub(super) fn emit_web_entry_stub(
     // request. (A `--no-web-heap-guard` opt-out for benchmarking is a follow-up.)
     ctx.emitter.comment("enable web heap-guard flag");
     abi::emit_enable_web_heap_guard_flag(ctx.emitter);
+    // `--heap-debug` turns on its validation the same way: once, here in the master, so every
+    // forked worker inherits it. `emit_main_prologue` does this for a CLI program, but a `--web`
+    // build never runs that prologue, so the flag stayed 0 and `--heap-debug` did nothing.
+    if ctx.heap_debug {
+        ctx.emitter.comment("enable heap debug flag");
+        abi::emit_enable_heap_debug_flag(ctx.emitter);
+    }
     // BEFORE the preload, not after. The preload's own code can call `opcache_*`, and every
     // one of those answers comes from the bridge. Running it first left the bridge at its
     // DEFAULT configuration — a disabled cache — so `opcache_compile_file()` in a preload
