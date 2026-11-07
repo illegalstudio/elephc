@@ -210,13 +210,16 @@ pub(crate) fn assembler_command(target: Target) -> Command {
     assembler
 }
 
-/// Whether `ELEPHC_ASM=inhouse` asks for the in-tree assembler (`crate::linker::inhouse`) on a
-/// target it handles: macOS arm64.
+/// Whether the in-tree assembler (`crate::linker::inhouse`) handles this target: macOS arm64,
+/// unless `ELEPHC_ASM=system` asks for `as`.
+///
+/// It runs in the compiler's own process, so `as` and its process start go away. A Symfony build
+/// on one core spent 747 s of CPU, children included, against 546 s through this path.
 fn inhouse_enabled(target: Target) -> bool {
     target.platform == Platform::MacOS
         && target.apple_variant == AppleVariant::MacOS
         && target.arch == crate::codegen::platform::Arch::AArch64
-        && matches!(std::env::var("ELEPHC_ASM").as_deref(), Ok("inhouse"))
+        && !matches!(std::env::var("ELEPHC_ASM").as_deref(), Ok("system"))
 }
 
 /// Assembles `asm_path` with the in-tree assembler when it is enabled and handles the text,
@@ -412,9 +415,12 @@ pub(crate) fn assemble_parallel(
         source,
         parts,
         target.platform.local_label_prefix(),
-        // Kept for the in-tree assembler too: the split's encoder is the fast path for the common
-        // symbol-free forms, and a `.inst` word costs the in-tree assembler almost nothing to take.
-        target.arch == crate::codegen::platform::Arch::AArch64 && encode_enabled(),
+        // `as` matches an instruction slowly, so the split hands it encoded words. The in-tree
+        // assembler encodes anyway: encoding here too, then writing and parsing the hex, took a
+        // slice from 6 s to 15.
+        target.arch == crate::codegen::platform::Arch::AArch64
+            && encode_enabled()
+            && !inhouse_enabled(target),
     ) else {
         drop(mapped);
         assemble(target, asm_path, obj_path);

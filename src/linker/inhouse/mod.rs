@@ -3,7 +3,7 @@
 //! process, in place of the system `as`.
 //!
 //! Called from:
-//! - `crate::linker::assemble_parallel` for every slice, when `ELEPHC_ASM=inhouse`.
+//! - `crate::linker::assemble_parallel` for every slice, unless `ELEPHC_ASM=system`.
 //!
 //! Key details:
 //! - The listing the compiler writes uses a small, fixed subset of the assembler language: two
