@@ -130,7 +130,17 @@ checkConditionalArray($argc > 0);
             .unwrap();
         let clone = callee.instructions.iter().position(|inst| inst.op == Op::MixedClone)
             .unwrap_or_else(|| panic!("{name}: the shared caller value must detach before mutation"));
-        let setter = callee.instructions.iter().position(|inst| inst.op == Op::RuntimeCall)
+        // The parameter's entry type guard (php's RECV check) formats its TypeError through
+        // get_class() / gettype() on its failure path; those calls are not the write.
+        let setter = callee.instructions.iter().position(|inst| {
+            inst.op == Op::RuntimeCall
+                && !matches!(
+                    inst.immediate,
+                    Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                        crate::ir::RuntimeFnId::GetClass | crate::ir::RuntimeFnId::Gettype
+                    )))
+                )
+        })
             .unwrap_or_else(|| panic!("{name}: missing boxed array setter"));
         assert!(
             clone < setter,

@@ -6,7 +6,7 @@ description: "Returns how many rows a result has."
 ## mysqli_num_rows()
 
 ```php
-function mysqli_num_rows(mixed $result): int
+function mysqli_num_rows(mixed $result): mixed
 ```
 
 Returns how many rows a result has.
@@ -14,7 +14,7 @@ Returns how many rows a result has.
 **Parameters**:
 - `$result` (`mixed`)
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 

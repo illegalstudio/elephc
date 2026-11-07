@@ -36,6 +36,7 @@ use crate::types::{
 use super::super::super::context::FunctionContext;
 
 mod owner_dispatch;
+mod class_builders;
 mod owner_emission;
 mod class_metadata;
 mod callable_metadata;
@@ -67,6 +68,7 @@ mod type_object_emit;
 mod flags_offsets;
 
 use owner_emission::*;
+pub(in crate::codegen) use class_builders::emit_pending_reflection_class_builders;
 use class_metadata::*;
 use callable_metadata::*;
 use property_metadata::*;
