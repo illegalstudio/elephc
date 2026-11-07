@@ -396,6 +396,34 @@ pub(crate) fn cstring(bytes: &[u8]) -> CString {
     unsafe { CString::from_vec_with_nul_unchecked(buffer) }
 }
 
+/// Builds a NUL-terminated C string from a `Display` value in one allocation.
+///
+/// Used for the request URI, where `Uri::to_string()` would allocate once for
+/// the temporary `String` and then again for the `CString`.
+pub(crate) fn cstring_display(value: impl std::fmt::Display) -> CString {
+    use std::fmt::Write;
+
+    /// `fmt::Write` sink over the final allocation.
+    struct Buffer(Vec<u8>);
+
+    impl Write for Buffer {
+        /// Appends one rendered fragment.
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            self.0.extend_from_slice(text.as_bytes());
+            Ok(())
+        }
+    }
+
+    let mut buffer = Buffer(Vec::with_capacity(128));
+    let _ = write!(buffer, "{value}");
+    if buffer.0.contains(&0) {
+        buffer.0.retain(|byte| *byte != 0);
+    }
+    buffer.0.push(0);
+    // SAFETY: the buffer ends in exactly one NUL and contains no interior NUL.
+    unsafe { CString::from_vec_with_nul_unchecked(buffer.0) }
+}
+
 /// Formats an IP address into a C string without a heap-allocated intermediate
 /// `String`. IPv4 and IPv6 rendering both fit in 64 bytes.
 pub(crate) fn ip_cstring(ip: std::net::IpAddr) -> CString {
@@ -783,6 +811,17 @@ mod tests {
     fn cstring_drops_only_interior_nul() {
         assert_eq!(cstring(b"a\0b").as_bytes(), b"ab");
         assert_eq!(cstring(b"\xff\xfe").as_bytes(), b"\xff\xfe");
+    }
+
+    /// `cstring_display` renders in one allocation and strips interior NULs.
+    #[test]
+    fn cstring_display_renders_and_strips_nul() {
+        assert_eq!(cstring_display("/a?b=1").as_bytes(), b"/a?b=1");
+        assert_eq!(cstring_display("a\0b").as_bytes(), b"ab");
+        assert_eq!(
+            cstring_display(std::net::Ipv4Addr::LOCALHOST).as_bytes(),
+            b"127.0.0.1"
+        );
     }
 
     /// IPv4 and IPv6 both format into the stack buffer without truncation.

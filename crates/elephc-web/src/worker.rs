@@ -284,7 +284,7 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     // value; the old `String` + `replace` + `CString` chain allocated
                     // three times.
                     let method = request_state::cstring(req.method().as_str().as_bytes());
-                    let uri = request_state::cstring(req.uri().to_string().as_bytes());
+                    let uri = request_state::cstring_display(req.uri());
                     let path = request_state::cstring(req.uri().path().as_bytes());
                     let query_text = req.uri().query().unwrap_or("").to_string();
                     let query = request_state::cstring(query_text.as_bytes());
