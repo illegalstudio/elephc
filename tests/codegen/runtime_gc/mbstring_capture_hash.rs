@@ -323,7 +323,14 @@ fn function_symbol(assembly: &str, name: &str) -> String {
     let marker = format!("@fn name={name} symbol=");
     let start = assembly.find(&marker)
         .unwrap_or_else(|| panic!("typed capture test function {name} was not emitted")) + marker.len();
-    assembly[start..].lines().next().unwrap().trim().to_owned()
+    assembly[start..]
+        .lines()
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned()
 }
 
 /// Replaces exactly one marked helper body while preserving its generated cleanup callback.

@@ -2195,7 +2195,13 @@ mod tests {
                         continue;
                     }
                     if let Some((name, _)) = rest.split_once(':') {
-                        found.push(format!("elephc_{}", name.trim()));
+                        let name = format!("elephc_{}", name.trim());
+                        // The debug metadata labels are emitted as `.quad` payloads, not
+                        // bridge-resolved `.comm` function-pointer slots.
+                        if name == "elephc_debug_metadata" || name == "elephc_debug_metadata_len" {
+                            continue;
+                        }
+                        found.push(name);
                     }
                 }
             }
