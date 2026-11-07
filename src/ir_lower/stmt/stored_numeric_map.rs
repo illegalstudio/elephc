@@ -1,5 +1,6 @@
 //! Purpose:
-//! Marks `array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B, $ints)` assignments whose
+//! Marks `array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v, $ints)`
+//! assignments whose
 //! result is only observed through storage-neutral consumers, so lowering may build
 //! a raw `array<int>` instead of boxing one Mixed cell per element.
 //!
@@ -120,6 +121,8 @@ pub(crate) enum StoredNumericMapShape {
     Single { constant: i64, op: StoredNumericMapOp },
     /// `$v * A + B` (and its commutative/negated forms), evaluated multiply-then-add.
     Affine { scale: i64, offset: i64 },
+    /// `$v * $v`, multiplied by itself.
+    Square,
 }
 
 /// The single-operation map selector carried in `StoredNumericMapShape::Single`.
@@ -138,7 +141,25 @@ pub(crate) fn parse_stored_numeric_map(
     let ExprKind::BinaryOp { left, op, right } = &body.kind else {
         return None;
     };
-    parse_single(left, op, right, param).or_else(|| parse_affine(left, op, right, param))
+    parse_single(left, op, right, param)
+        .or_else(|| parse_square(left, op, right, param))
+        .or_else(|| parse_affine(left, op, right, param))
+}
+
+/// Parses `$v * $v`.
+fn parse_square(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    param: &str,
+) -> Option<StoredNumericMapShape> {
+    if !matches!(op, BinOp::Mul)
+        || !matches!(&left.kind, ExprKind::Variable(name) if name == param)
+        || !matches!(&right.kind, ExprKind::Variable(name) if name == param)
+    {
+        return None;
+    }
+    Some(StoredNumericMapShape::Square)
 }
 
 /// Parses the original single-operation shapes.

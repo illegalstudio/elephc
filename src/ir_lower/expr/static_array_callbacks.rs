@@ -548,6 +548,18 @@ pub(super) fn lower_stored_numeric_map(
                 Some(expr.span),
             ))
         }
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::Square => {
+            Some(ctx.emit_value(
+                Op::RuntimeCall,
+                vec![source.value],
+                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::ArrayMapSquare,
+                ))),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                crate::ir::RuntimeFnId::ArrayMapSquare.intrinsic_effects(),
+                Some(expr.span),
+            ))
+        }
         crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::Affine {
             scale,
             offset,

@@ -646,12 +646,13 @@ existing vector/scalar body but skips the Mixed box; a promoted map or running s
 terminates in PHP's warned float-to-int conversion.
 
 `src/ir_lower/stmt/stored_numeric_map.rs` marks a stored
-`$mapped = array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B, $ints)`
+`$mapped = array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v, $ints)`
 when every use of `$mapped` and its value aliases is storage-neutral: indexed
 reads, value-`foreach`, read-only aliasing, or a whitelisted builtin such as
 `count`, `array_sum`, `implode`, `json_encode`, `var_dump`, `array_values`, or
 `array_keys`. The affine form also accepts `B + $v * A`, `B - $v * A`,
-`$v * A - B`, and literal negation, and is evaluated multiply-then-add. Any
+`$v * A - B`, and literal negation, and is evaluated multiply-then-add; a square
+callback `$v * $v` uses its own single-product kernel. Any
 element write, direct or through an alias, keeps the generic boxed map so
 copy-on-write and ownership stay on the established path. The marker becomes a
 synthetic call consumed by lowering, so the checker's `array<mixed>` type is

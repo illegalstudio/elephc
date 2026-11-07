@@ -1,6 +1,7 @@
 //! Purpose:
-//! End-to-end coverage for the stored `array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B, $ints)`
-//! kernels that keep a raw `array<int>` when no element overflows.
+//! End-to-end coverage for the stored `array_map(fn($v) => $v + C | $v - C | $v * C |
+//! $v * A + B | $v * $v, $ints)` kernels that keep a raw `array<int>` when no element
+//! overflows.
 //!
 //! Called from:
 //! - The codegen optimizer suite through `optimizer`.
@@ -375,4 +376,96 @@ echo $sum, "\n";
 "#;
     assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "45750\n");
     assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "45750\n");
+}
+
+/// A square callback maps negatives correctly and feeds every neutral consumer.
+#[test]
+fn test_stored_numeric_map_square_shapes_and_consumers() {
+    let source = r#"<?php
+$values = [-3, -2, 0, 2, 3];
+$mapped = array_map(fn($v) => $v * $v, $values);
+echo implode(",", $mapped), "|", array_sum($mapped), "|";
+foreach ($mapped as $v) { echo $v, ","; }
+echo "\n";
+"#;
+    assert_eq!(compile_and_run(source), "9,4,0,4,9|26|9,4,0,4,9,\n");
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_square").count(), 1, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// A square overflow promotes only the overflowing elements to float.
+#[test]
+fn test_stored_numeric_map_square_overflow_preserves_php_types() {
+    let source = r#"<?php
+$big = [PHP_INT_MAX - 1, PHP_INT_MAX, 2];
+$mapped = array_map(fn($v) => $v * $v, $big);
+foreach ($mapped as $v) { echo gettype($v), ":", $v, "|"; }
+echo "\n";
+$min = [PHP_INT_MIN];
+$negative = array_map(fn($v) => $v * $v, $min);
+foreach ($negative as $v) { echo gettype($v), ":", $v, "|"; }
+echo "\n";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "double:8.5070591730235E+37|double:8.5070591730235E+37|integer:4|\n\
+         double:8.5070591730235E+37|\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_square").count(), 2, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// Element writes keep the generic boxed map for square callbacks.
+#[test]
+fn test_stored_numeric_map_square_element_writes_keep_generic_map() {
+    let source = r#"<?php
+$values = [1, 2, 3];
+$mapped = array_map(fn($v) => $v * $v, $values);
+$copy = $mapped;
+$copy[0] = 99;
+echo $mapped[0], "|", $copy[0], "\n";
+"#;
+    assert_eq!(compile_and_run(source), "1|99\n");
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map ").count(), 1, "{main}");
+    assert!(!main.contains("runtime.array_map_square"), "{main}");
+}
+
+/// The safe and promoted square results release without leaks.
+#[test]
+fn test_stored_numeric_map_square_heap_debug_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = [1, 2, 3, 4];
+$mapped = array_map(fn($v) => $v * $v, $values);
+$big = [PHP_INT_MAX];
+$overflow = array_map(fn($v) => $v * $v, $big);
+echo array_sum($mapped), "|", gettype($overflow[0]), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "30|double\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// The square kernel produces the same output with the EIR optimizer on and off.
+#[test]
+fn test_stored_numeric_map_square_ir_opt_parity() {
+    let source = r#"<?php
+$values = range(1, 100);
+$sum = 0;
+for ($i = 0; $i < 3; $i++) {
+    $mapped = array_map(fn($v) => $v * $v, $values);
+    $sum += array_sum($mapped);
+}
+echo $sum, "\n";
+"#;
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "1015050\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "1015050\n");
 }
