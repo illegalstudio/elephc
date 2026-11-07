@@ -92,6 +92,11 @@ pub(super) fn scope_may_initialize(ctx: &FunctionContext<'_>, declaring: &str) -
     }
 }
 
+/// Whether a write to `slot` runs a readonly guard.
+pub(super) fn slot_has_readonly_guard(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> bool {
+    readonly_declaring_class(ctx, slot).is_some()
+}
+
 fn plan_for(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> Option<ReadonlyPlan> {
     let declaring = readonly_declaring_class(ctx, slot)?;
     let in_scope = scope_may_initialize(ctx, &declaring);

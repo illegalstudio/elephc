@@ -351,7 +351,7 @@ pub(super) fn lower_mixed_named_prop_set(
     };
     let done_label = ctx.next_label("mixed_named_prop_set_done");
     let miss_label = ctx.next_label("mixed_named_prop_set_miss");
-    let match_labels = candidates
+    let mut match_labels = candidates
         .iter()
         .map(|candidate| {
             ctx.next_label(&format!(
@@ -361,14 +361,22 @@ pub(super) fn lower_mixed_named_prop_set(
             ))
         })
         .collect::<Vec<_>>();
+    let arm_owners = shared_named_set_arm_owners(ctx, &candidates);
+    for (index, owner) in arm_owners.iter().enumerate() {
+        match_labels[index] = match_labels[*owner].clone();
+    }
 
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_mixed_unboxed_not_object(ctx, &done_label);
     push_mixed_unboxed_object_payload(ctx);
 
-    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_stacked_object_class_matches(ctx, candidate.class_id, 0, label);
+    let dispatch = candidates
+        .iter()
+        .zip(match_labels.iter())
+        .map(|(candidate, label)| (candidate.class_id, label.as_str()));
+    for (first, last, label) in class_id_runs(dispatch) {
+        emit_branch_if_stacked_object_class_in_run(ctx, first, last, 0, label);
     }
     for class_id in &table_misses {
         emit_branch_if_stacked_object_class_matches(ctx, *class_id, 0, &miss_label);
@@ -381,7 +389,10 @@ pub(super) fn lower_mixed_named_prop_set(
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
-    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+    for (index, (candidate, label)) in candidates.iter().zip(match_labels.iter()).enumerate() {
+        if arm_owners[index] != index {
+            continue;
+        }
         ctx.emitter.label(label);
         match &candidate.action {
             MixedPropertyWriteAction::Refuse(message) => {
@@ -1191,6 +1202,96 @@ pub(super) fn emit_branch_if_stacked_object_class_matches(
             ctx.emitter
                 .instruction(&format!("cmp r10, {}", candidate_reg));           // compare it with this candidate class
             ctx.emitter.instruction(&format!("je {}", matched_label));          // take the candidate's declared-slot store
+        }
+    }
+}
+
+/// For each arm of a literal-name write ladder, the index of the first arm with the same code.
+///
+/// Only a store that cannot fail shares: an untyped slot of a class with no guard on it, whose
+/// code is the same at the same offset whatever the class. Anything that can raise names its own
+/// class in the message. A Symfony build carried 177 MB of these arms, one per class declaring a
+/// common name.
+fn shared_named_set_arm_owners(
+    ctx: &FunctionContext<'_>,
+    candidates: &[MixedPropertyWriteCandidate],
+) -> Vec<usize> {
+    let mut first_for_offset: crate::fast_hash::FastMap<usize, usize> = Default::default();
+    candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| match &candidate.action {
+            MixedPropertyWriteAction::Slot(slot) if store_cannot_refuse(ctx, slot) => {
+                *first_for_offset.entry(slot.offset).or_insert(index)
+            }
+            _ => index,
+        })
+        .collect()
+}
+
+/// Whether a write to `slot` is the same plain store on every class that has it at that offset.
+fn store_cannot_refuse(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> bool {
+    !slot.is_declared
+        && !slot.is_packed
+        && !slot.is_reference
+        && slot.php_type.codegen_repr() == PhpType::Mixed
+        && !super::readonly_guard::slot_has_readonly_guard(ctx, slot)
+        && ctx
+            .module
+            .class_infos
+            .get(&slot.class_name)
+            .is_some_and(|info| info.retained_abstract_setter(&slot.property).is_none())
+}
+
+/// Sorts `(class id, label)` pairs and merges consecutive ids that jump to the same label.
+fn class_id_runs<'a>(
+    arms: impl Iterator<Item = (u64, &'a str)>,
+) -> Vec<(u64, u64, &'a str)> {
+    let mut sorted = arms.collect::<Vec<_>>();
+    sorted.sort_unstable_by_key(|(class_id, _)| *class_id);
+    let mut runs: Vec<(u64, u64, &'a str)> = Vec::new();
+    for (class_id, label) in sorted {
+        match runs.last_mut() {
+            Some((_, last, run_label)) if *last + 1 == class_id && *run_label == label => {
+                *last = class_id;
+            }
+            _ => runs.push((class_id, class_id, label)),
+        }
+    }
+    runs
+}
+
+/// Branches when the stacked receiver's class id lies in `first..=last`.
+fn emit_branch_if_stacked_object_class_in_run(
+    ctx: &mut FunctionContext<'_>,
+    first: u64,
+    last: u64,
+    object_stack_offset: usize,
+    matched_label: &str,
+) {
+    if first == last {
+        emit_branch_if_stacked_object_class_matches(ctx, first, object_stack_offset, matched_label);
+        return;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", object_stack_offset);
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the receiver's class id
+            abi::emit_load_int_immediate(ctx.emitter, "x11", first as i64);
+            ctx.emitter.instruction("sub x10, x10, x11");                       // make the run start at zero
+            abi::emit_load_int_immediate(ctx.emitter, "x11", (last - first) as i64);
+            ctx.emitter.instruction("cmp x10, x11");                            // unsigned: below the run wraps high
+            ctx.emitter.instruction(&format!("b.ls {}", matched_label));        // the class is in the run
+        }
+        Arch::X86_64 => {
+            let candidate_reg = abi::tertiary_scratch_reg(ctx.emitter);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", object_stack_offset);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the receiver's class id
+            abi::emit_load_int_immediate(ctx.emitter, candidate_reg, first as i64);
+            ctx.emitter.instruction(&format!("sub r10, {}", candidate_reg));    // make the run start at zero
+            abi::emit_load_int_immediate(ctx.emitter, candidate_reg, (last - first) as i64);
+            ctx.emitter.instruction(&format!("cmp r10, {}", candidate_reg));    // unsigned: below the run wraps high
+            ctx.emitter.instruction(&format!("jbe {}", matched_label));         // the class is in the run
         }
     }
 }

@@ -1661,3 +1661,72 @@ fn test_dynamic_new_arms_do_not_grow_with_the_candidate_properties() {
     assert_eq!(out.stdout, "C0:0:0:s0,C1:1:0:s0,C2:2:0:s0,C3:3:0:s0\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// `count` classes declaring the same untyped property at the same offset, and a write of it on
+/// an untyped receiver, then a read of every instance.
+fn named_setter_program(count: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..count {
+        source.push_str(&format!("class S{index} {{ public $value = 0; }}\n"));
+    }
+    source.push_str("function put(mixed $o, mixed $v): void { $o->value = $v; }\n$all = [];\n");
+    for index in 0..count {
+        source.push_str(&format!("$all[] = new S{index}();\n"));
+    }
+    source.push_str(
+        "foreach ($all as $i => $o) { put($o, \"v$i\"); put($o, [$i]); put($o, $i); }\n\
+         foreach ($all as $o) { echo $o->value, \"\\n\"; }\n",
+    );
+    source
+}
+
+/// Instructions of the shared named-write helpers.
+fn named_setter_instructions(asm: &str) -> usize {
+    instructions_in_functions(asm, "_eir_shared_named_prop_set_")
+}
+
+/// Classes that store a name the same way share one arm and one range test: ten times the classes
+/// must not add an instruction to the write, on either target.
+#[test]
+fn test_named_setter_arms_do_not_grow_with_the_class_count() {
+    for target in ["macos-aarch64", "linux-x86_64"] {
+        let small = emit_asm_with_env("elephc_named_set_small", &named_setter_program(10), target, &[]);
+        let large = emit_asm_with_env("elephc_named_set_large", &named_setter_program(100), target, &[]);
+        let before = named_setter_instructions(&small);
+        assert!(before > 0, "{target}: found no named setter");
+        assert_eq!(before, named_setter_instructions(&large), "{target}: the arms grew");
+    }
+}
+
+/// Every class of a shared arm still gets the write, and each old value is released.
+#[test]
+fn test_named_setter_shared_arm_writes_every_class() {
+    let out = compile_and_run_with_heap_debug_and_asm(&named_setter_program(5)).0;
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0\n1\n2\n3\n4\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A class outside the run, one with a typed slot, and a readonly one keep their own behaviour.
+#[test]
+fn test_named_setter_keeps_typed_and_readonly_classes_apart() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public $value = 1; }
+class B { public $value = 2; }
+class T { public int $value = 3; }
+class C { public $value = 4; }
+class R { public function __construct(public readonly int $value) {} }
+class D { public $other = 5; public $value = 6; }
+function put(mixed $o, mixed $v): void { $o->value = $v; }
+foreach ([new A(), new B(), new C(), new D()] as $o) { put($o, 9); echo $o->value, "\n"; }
+try { put(new T(), "x"); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+try { put(new R(1), 2); } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "9\n9\n9\n9\nCannot assign string to property T::$value of type int\n\
+         Cannot modify readonly property R::$value\n"
+    );
+}
