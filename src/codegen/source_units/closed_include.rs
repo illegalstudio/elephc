@@ -183,7 +183,17 @@ pub(super) fn emit_closed_include(module: &Module, emitter: &mut Emitter, data: 
     let not_compiled_tail = data.add_string(
         b"': it is part of this closed-world build but its top level cannot be run from an include\n",
     );
-    emit_runtime_include(emitter, &not_compiled_head, &not_compiled_tail);
+    // Under a usage manifest, a file that exists but was not compiled is one php would include and
+    // no recorded run did: a closed-world violation, not php's failed-open.
+    let escaped = module.usage_manifest.then(|| {
+        (
+            data.add_string(b"Fatal error: closed-world violation: '"),
+            data.add_string(
+                b"' was not recorded in the usage manifest, so this build did not compile it; record a run that reaches it and rebuild\n",
+            ),
+        )
+    });
+    emit_runtime_include(emitter, &not_compiled_head, &not_compiled_tail, escaped.as_ref());
     emit_include_failed(emitter, &first, &second, &middle, &tail, &fatal_head, &fatal_tail);
 }
 
@@ -297,9 +307,16 @@ fn write_stderr_path(emitter: &mut Emitter) {
     }
 }
 
-fn emit_runtime_include(emitter: &mut Emitter, not_compiled_head: &(String, usize), not_compiled_tail: &(String, usize)) {
+fn emit_runtime_include(
+    emitter: &mut Emitter,
+    not_compiled_head: &(String, usize),
+    not_compiled_tail: &(String, usize),
+    escaped: Option<&((String, usize), (String, usize))>,
+) {
     let prefix = emitter.target.platform.local_label_prefix();
     let l = |name: &str| format!("{prefix}closed_include_{name}");
+    // A table miss after `realpath()` resolved the path: the file exists.
+    let exists_unknown = if escaped.is_some() { l("escaped") } else { l("unknown") };
     let (unknown, answer_true, dispatch, not_once, decl_done, not_decl, run, not_compiled) = (
         l("unknown"), l("true"), l("dispatch"), l("not_once"), l("decl_done"), l("not_decl"),
         l("run"), l("not_compiled"),
@@ -339,7 +356,7 @@ fn emit_runtime_include(emitter: &mut Emitter, not_compiled_head: &(String, usiz
             abi::emit_call_label(emitter, "__rt_heap_free");                    // the canonical path was only needed for the lookup
             emitter.label(&record);
             abi::load_at_offset(emitter, "x9", RECORD_SLOT);
-            emitter.instruction(&format!("cbz x9, {unknown}"));                 // not part of the closed world
+            emitter.instruction(&format!("cbz x9, {exists_unknown}"));          // not part of the closed world
             abi::load_at_offset(emitter, "x3", FLAGS);
             emitter.instruction("ldr x10, [x9, #16]");                          // the file's guard cell
             emitter.instruction("ldr x11, [x10]");                              // 0 until something includes the file
@@ -413,7 +430,7 @@ fn emit_runtime_include(emitter: &mut Emitter, not_compiled_head: &(String, usiz
             emitter.label(&record);
             abi::load_at_offset(emitter, "r9", RECORD_SLOT);
             emitter.instruction("test r9, r9");                                 // not part of the closed world?
-            emitter.instruction(&format!("jz {unknown}"));
+            emitter.instruction(&format!("jz {exists_unknown}"));
             abi::load_at_offset(emitter, "rcx", FLAGS);
             emitter.instruction("mov r10, QWORD PTR [r9 + 16]");                // the file's guard cell
             emitter.instruction("mov r11, QWORD PTR [r10]");                    // 0 until something includes the file
@@ -470,6 +487,13 @@ fn emit_runtime_include(emitter: &mut Emitter, not_compiled_head: &(String, usiz
     write_stderr_path(emitter);
     write_stderr(emitter, &not_compiled_tail.0, not_compiled_tail.1);
     abi::emit_exit(emitter, 255);
+    if let Some((head, tail)) = escaped {
+        emitter.label(&exists_unknown);
+        write_stderr(emitter, &head.0, head.1);
+        write_stderr_path(emitter);
+        write_stderr(emitter, &tail.0, tail.1);
+        abi::emit_exit(emitter, 255);
+    }
 }
 
 /// `__rt_include_failed`: php's failed-open for a path nothing compiled answers.

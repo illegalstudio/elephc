@@ -149,6 +149,7 @@ fn lower_on_compiler_stack(
     module.web = web;
     module.closed_world = closed_world;
     module.usage_escapes = crate::closed_world::loadable_classes();
+    module.usage_manifest = crate::closed_world::usage_manifest().is_some();
     module.runtime_bound_functions = std::sync::Arc::new(
         runtime_bindings::collect_runtime_bound_functions(program),
     );

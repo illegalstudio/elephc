@@ -2255,6 +2255,33 @@ if ($argc > 1) {
     dir
 }
 
+/// Under a usage manifest, a runtime include of a file that exists but that no recorded run
+/// included, so the build did not compile it, stops with the closed-world violation naming it; a
+/// file that does not exist still fails to open the way php reports it.
+#[test]
+fn closed_world_usage_manifest_include_of_an_uncompiled_file_is_a_violation() {
+    let dir = make_test_dir("cw_usage_include");
+    fs::write(dir.join("extra.php"), "<?php\necho \"extra\\n\";\n").unwrap();
+    fs::write(dir.join("main.php"), "<?php\necho \"start\\n\";\n$r = include $argv[1];\nvar_dump($r);\n").unwrap();
+    fs::write(dir.join("usage.txt"), "elephc-usage 1\n").unwrap();
+    compile_ok(&dir, &["--closed-world", "--usage-manifest", "usage.txt"]);
+
+    let output = Command::new(dir.join("main")).arg(dir.join("extra.php")).current_dir(&dir).output().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(text(&output.stdout), "start\n");
+    let expected = format!(
+        "closed-world violation: '{}' was not recorded in the usage manifest",
+        dir.join("extra.php").display()
+    );
+    assert!(text(&output.stderr).contains(&expected), "{}", text(&output.stderr));
+
+    let output = Command::new(dir.join("main")).arg("missing.php").current_dir(&dir).output().unwrap();
+    let all = format!("{}{}", text(&output.stdout), text(&output.stderr));
+    assert!(all.contains("Failed opening 'missing.php' for inclusion"), "{all}");
+    assert!(all.contains("bool(false)"), "{all}");
+    assert!(!all.contains("closed-world violation"), "{all}");
+}
+
 /// A path no recorded run took reaches `Unused`, which php would autoload but the manifest left out
 /// of the build: the program stops with the closed-world violation, which no `catch` swallows,
 /// instead of php's catchable "Class not found" for a class that exists.
