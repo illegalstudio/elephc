@@ -1200,6 +1200,10 @@ pub(super) fn dynamic_property_hash_offset_for_class(
         .class_infos
         .get(normalized)
         .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", normalized)))?;
+    // First: this runs per descendant per property site, and most classes have no hash to ask.
+    if !class_info.dynamic_property_hash_is_name_addressable() {
+        return Ok(None);
+    }
     // A slot this SCOPE does not resolve the name to is not a collision: php keeps a strict
     // ancestor's private property under a mangled key, so the plain name belongs to the hash here.
     if class_info
@@ -1211,12 +1215,7 @@ pub(super) fn dynamic_property_hash_offset_for_class(
     {
         return Ok(None);
     }
-    if class_info.dynamic_property_hash_is_name_addressable() {
-        return Ok(Some(dynamic_property_hash_offset(
-            class_info.properties.len(),
-        )));
-    }
-    Ok(None)
+    Ok(Some(dynamic_property_hash_offset(class_info.properties.len())))
 }
 
 /// Returns true when a class name is the builtin `stdClass` dynamic-property container.
