@@ -69,10 +69,12 @@ use emitted_classes::collect_emitted_class_names;
 pub(crate) use prescan::collect_constants;
 pub use runtime_features::{LinkRequirement, RuntimeFeatures};
 pub use runtime_features::{
-    link_requirements_for_runtime_features, runtime_features_for_program_and_classes,
+    force_runtime_features_for_flag, link_requirements_for_runtime_features,
+    runtime_features_for_program_and_classes,
 };
 pub(crate) use sentinels::NULL_SENTINEL;
 pub(crate) use value_boxing::{
+    emit_box_current_php_return_as_mixed,
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
     container_value_tag, mixed_unbox_payload_reg, runtime_value_tag,

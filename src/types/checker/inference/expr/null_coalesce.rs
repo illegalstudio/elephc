@@ -31,6 +31,20 @@ use super::super::super::Checker;
 use super::buffer_merges::buffer_merge_result_type;
 use super::merge_null_coalesce_result_type;
 
+/// Returns the type the `??` merge sees for its default: `inferred`, or `Never` when the default
+/// never yields a value (`throw`, `exit`, `die`), which the checker otherwise types as `Void`.
+///
+/// `$n ?? throw new E()` keeps the value's own type, as a `?:` throw arm does: only a default
+/// that can complete is a null arm, and a scalar beside a null arm keeps the null member
+/// (`null_coalesce_merge_type`), which would turn `$argv[1] ?? exit(1)` into `string|null`.
+pub(super) fn coalesce_default_type(default: &Expr, inferred: PhpType) -> PhpType {
+    if crate::termination::expr_guarantees_function_exit(default) {
+        PhpType::Never
+    } else {
+        inferred
+    }
+}
+
 /// Types `value ?? default` from the left operand's type, the default's type and whether the
 /// left operand can ever be null (see [`operand_is_never_null`]).
 ///

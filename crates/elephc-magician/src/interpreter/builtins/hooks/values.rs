@@ -674,7 +674,7 @@ impl EvalValuesHook {
             }),
             Self::StringSplitJoin => match name {
                 "explode" => eval_explode_declared_values_result(evaluated_args, values),
-                "implode" => eval_implode_declared_values_result(evaluated_args, values),
+                "implode" => eval_implode_declared_values_result(evaluated_args, context, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StreamBoolPredicate => one_arg(evaluated_args, values, |stream, values| {

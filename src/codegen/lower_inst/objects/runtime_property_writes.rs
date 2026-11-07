@@ -96,7 +96,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_set(
     }
     match ctx.value_php_type(object)?.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
-            lower_runtime_mixed_prop_set(ctx, object, property_value, value, inst)
+            lower_runtime_mixed_prop_set(ctx, object, property_value, value, None, inst)
         }
         PhpType::Object(class_name) => {
             lower_runtime_object_prop_set(ctx, object, property_value, value, &class_name, inst)
@@ -122,7 +122,10 @@ pub(super) fn lower_const_dynamic_prop_set(
         ctx.value_php_type(object)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return lower_mixed_named_prop_set(ctx, object, value, property, inst);
+        // Keep runtime class, magic and dynamic-hash precedence while pruning declared slots
+        // whose names cannot match this literal. The named fast path cannot stage a guarded
+        // `__set` call or preserve existing-entry-before-magic precedence on its own.
+        return lower_runtime_mixed_prop_set(ctx, object, property_value, value, Some(property), inst);
     }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, property);
@@ -1265,11 +1268,12 @@ pub(super) fn lower_runtime_mixed_prop_set(
     object: ValueId,
     property_value: ValueId,
     value: ValueId,
+    known_name: Option<&str>,
     inst: &Instruction,
 ) -> Result<()> {
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     let write_kind = PropertyAccessKind::RuntimeWrite;
-    let candidates = declared_mixed_property_set_candidates(ctx, value, write_kind, inst)?;
+    let candidates = declared_mixed_property_set_candidates(ctx, value, known_name, write_kind, inst)?;
     let done_label = ctx.next_label("mixed_dyn_prop_set_done");
     let miss_label = ctx.next_label("mixed_dyn_prop_set_miss");
     let stdclass_label = ctx.next_label("mixed_dyn_prop_set_stdclass");
@@ -1313,6 +1317,14 @@ pub(super) fn lower_runtime_mixed_prop_set(
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    // Eval subclasses can retain any native parent's physical class id. Claim their
+    // writes by object identity before declared slots, magic methods or property hashes.
+    emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    emit_runtime_property_set_for_stacked_name_after_eval_probe(
+        ctx, value, &value_ty, 16, 0, 32, Some(&done_label),
+    )?;
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         emit_branch_if_mixed_dynamic_property_candidate_matches(
@@ -1446,6 +1458,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
 pub(super) fn declared_mixed_property_set_candidates(
     ctx: &FunctionContext<'_>,
     value: ValueId,
+    known_name: Option<&str>,
     write_kind: PropertyAccessKind,
     inst: &Instruction,
 ) -> Result<Vec<MixedPropertyWriteCandidate>> {
@@ -1458,6 +1471,7 @@ pub(super) fn declared_mixed_property_set_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
+            if known_name.is_some_and(|name| name != property) { continue; }
             let Some(candidate) = mixed_property_write_candidate(
                 ctx,
                 class_name,
@@ -1609,12 +1623,25 @@ fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
     name_stack_offset: usize,
     enclosing_stack_bytes: usize,
 ) -> Result<()> {
+    emit_runtime_property_set_for_stacked_name_after_eval_probe(
+        ctx, value, value_ty, object_stack_offset, name_stack_offset, enclosing_stack_bytes, None,
+    )
+}
+
+/// Probes eval identity before native dispatch, or completes the legacy stdClass fallback.
+fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
+    ctx: &mut FunctionContext<'_>, value: ValueId, value_ty: &PhpType,
+    object_stack_offset: usize, name_stack_offset: usize, enclosing_stack_bytes: usize,
+    native_done_label: Option<&str>,
+) -> Result<()> {
     if !crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(
         ctx.module,
     ) {
-        return emit_runtime_stdclass_set_for_stacked_name(
-            ctx, value, value_ty, object_stack_offset, name_stack_offset,
-        );
+        return if native_done_label.is_some() { Ok(()) } else {
+            emit_runtime_stdclass_set_for_stacked_name(
+                ctx, value, value_ty, object_stack_offset, name_stack_offset,
+            )
+        };
     }
     let plain = ctx.next_label("eval_prop_set_plain");
     let handled = ctx.next_label("eval_prop_set_handled");
@@ -1661,7 +1688,10 @@ fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     abi::emit_release_temporary_stack(ctx.emitter, 32);
-    abi::emit_jump(ctx.emitter, &done);
+    if let Some(done) = native_done_label {
+        abi::emit_release_temporary_stack(ctx.emitter, enclosing_stack_bytes);
+        abi::emit_jump(ctx.emitter, done);
+    } else { abi::emit_jump(ctx.emitter, &done); }
 
     ctx.emitter.label(&raise);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
@@ -1672,10 +1702,23 @@ fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
         Arch::AArch64 => abi::emit_store_reg_to_symbol(ctx.emitter, "x1", "_exc_value", 0),
         Arch::X86_64 => abi::emit_store_reg_to_symbol(ctx.emitter, "rdi", "_exc_value", 0),
     }
+    // The bridge transfers an owned box. Keep its Throwable payload for native unwinding,
+    // then retire the box before abandoning the stack block that held its only pointer.
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_exc_value", 0);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object("Throwable".into()));
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     abi::emit_release_temporary_stack(ctx.emitter, 32 + enclosing_stack_bytes);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
 
     ctx.emitter.label(&plain);
+    if native_done_label.is_some() {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        ctx.emitter.label(&done);
+        return Ok(());
+    }
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     match target.arch {
         Arch::AArch64 => {
@@ -1741,10 +1784,9 @@ pub(super) fn emit_runtime_stdclass_set_for_stacked_name(
 /// removal path and matches PHP exactly: the key disappears, `isset()` answers false,
 /// the value renderers stop listing it, and a later write re-appends it.
 ///
-/// Every other slot shape is REFUSED rather than silently skipped. A by-reference
-/// property slot holds an object-owned ref-cell pointer that the destructor still has
-/// to free and that a later write would write THROUGH — reviving the alias PHP's
-/// `unset()` just broke — so neither zeroing nor keeping the cell reproduces PHP.
+/// An object-owned typed reference property receives a fresh uninitialized cell before its
+/// old cell owner is released. Surviving aliases keep the old cell independently of the object.
+/// Borrowed and untyped reference-property slots retain their explicit unsupported diagnostic.
 /// A packed field and a refined untyped slot that type checking did not widen have no removable
 /// storage. Skipping them quietly leaves `isset()` answering `true` after an `unset()`, so they
 /// name themselves instead.
@@ -1804,7 +1846,7 @@ pub(super) fn lower_named_prop_unset(
         return Ok(());
     }
     let slot = resolve_property_slot(ctx, object, property, inst)?;
-    if let Some(reason) = unset_unsupported_slot_reason(&slot) {
+    if let Some(reason) = unset_unsupported_slot_reason(ctx, &slot) {
         return Err(CodegenIrError::unsupported(format!(
             "unset() of {} {}::${}",
             reason, slot.class_name, slot.property
@@ -1831,7 +1873,7 @@ pub(super) fn emit_dynamic_plan_unset(
 ) -> Result<()> {
     match &arm.action {
         PropertyRuntimeAction::Slot(slot) => {
-            if let Some(reason) = unset_unsupported_slot_reason(slot) {
+            if let Some(reason) = unset_unsupported_slot_reason(ctx, slot) {
                 return Err(CodegenIrError::unsupported(format!(
                     "unset() of {} {}::${}",
                     reason, slot.class_name, slot.property
@@ -1871,7 +1913,9 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_unset_runtime(
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property_value = expect_operand(inst, 1)?;
-    if let Some(property) = const_string_operand(ctx, property_value)? {
+    if let Some(property) = const_string_operand(ctx, property_value)?
+        .filter(|_| matches!(ctx.value_php_type(object), Ok(PhpType::Object(_))))
+    {
         let property = property.to_string();
         return lower_named_prop_unset(ctx, object, &property, inst);
     }
@@ -2148,7 +2192,7 @@ fn emit_mixed_runtime_name_unset_arm(
         // and this scope resolves the name to it. No ancestor's private slot is reachable here:
         // such a name resolves to `DynamicHash` or `DynamicMissing` instead.
         PropertyRuntimeAction::Slot(slot) => {
-            if let Some(reason) = unset_unsupported_slot_reason(slot) {
+            if let Some(reason) = unset_unsupported_slot_reason(ctx, slot) {
                 return Err(CodegenIrError::unsupported(format!(
                     "unset() of {} {}::${}",
                     reason, slot.class_name, slot.property
@@ -2196,6 +2240,12 @@ fn detach_and_release_unset_property_value(
     slot: &PropertySlot,
     base_reg: &str,
 ) {
+    if slot.is_reference {
+        crate::codegen_support::runtime::reference_cells::emit_owned_property_unset(
+            ctx.emitter, base_reg, slot.offset,
+        );
+        return;
+    }
     let prop_ty = slot.php_type.codegen_repr();
     let releases_value =
         matches!(prop_ty, PhpType::Str | PhpType::Callable) || prop_ty.is_refcounted();

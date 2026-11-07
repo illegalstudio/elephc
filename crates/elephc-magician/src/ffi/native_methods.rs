@@ -37,6 +37,7 @@ use constructor_registration::*;
 use method_registration::*;
 use property_registration::*;
 pub use property_registration::__elephc_eval_register_native_class_default_error;
+pub use property_registration::__elephc_eval_register_native_property_default_enum_case;
 pub use public_abi::*;
 pub use callable_default_errors::*;
 pub use callable_default_expressions::*;

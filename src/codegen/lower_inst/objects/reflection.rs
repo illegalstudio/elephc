@@ -21,12 +21,11 @@ use crate::codegen::literal_defaults::{
 use crate::codegen::{
     abi, emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
-    runtime_value_tag, CodegenIrError, Result, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    runtime_value_tag, CodegenIrError, Result,
 };
 use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
 use crate::names::{
     php_symbol_key, property_hook_get_method, property_hook_set_method,
-    static_property_symbol,
 };
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
 use crate::types::{
@@ -53,6 +52,7 @@ mod parameter_defaults;
 mod object_defaults;
 mod default_export;
 mod names_constants;
+mod constant_resolved;
 mod constant_arithmetic;
 mod constant_arrays;
 mod operand_extract;
@@ -113,7 +113,6 @@ struct ReflectionOwnerMetadata {
     constant_names: Vec<String>,
     constant_members: Vec<ReflectionConstantMember>,
     default_property_members: Vec<ReflectionDefaultPropertyMember>,
-    static_property_members: Vec<ReflectionStaticPropertyMember>,
     constant_reflection_members: Vec<ReflectionListedMember>,
     enum_case_members: Vec<ReflectionListedMember>,
     method_members: Vec<ReflectionListedMember>,
@@ -279,6 +278,9 @@ enum ReflectionParameterDefaultValue {
     Float(f64),
     Str(String),
     Null,
+    EnumCase(crate::codegen::const_default_values::EnumCaseDefault),
+    /// A scalar whose constant expression first reads these enum singletons, in PHP order.
+    Evaluated { value: Box<ReflectionParameterDefaultValue>, enum_cases: Vec<(String, String)> },
     DeferredError(String),
     EirHelper(String),
     Object {
@@ -327,14 +329,6 @@ struct ReflectionDefaultPropertyMember {
     value: ReflectionParameterDefaultValue,
 }
 
-/// Metadata for one live static-property value exposed by ReflectionClass.
-struct ReflectionStaticPropertyMember {
-    name: String,
-    declaring_class_name: String,
-    php_type: PhpType,
-    is_declared: bool,
-}
-
 /// Compile-time value forms supported by Reflection constant metadata emission.
 #[derive(Clone)]
 enum ReflectionConstantValue {
@@ -347,6 +341,8 @@ enum ReflectionConstantValue {
         enum_name: String,
         case_name: String,
     },
+    /// A value whose constant expression first reads these enum singletons, in PHP order.
+    Evaluated { value: Box<ReflectionConstantValue>, enum_cases: Vec<(String, String)> },
     Array(Vec<ReflectionConstantValue>),
     AssocArray(Vec<ReflectionConstantAssocEntry>),
 }

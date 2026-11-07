@@ -97,6 +97,8 @@ for a complete project.
 | `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array\|false` | PHP returns the pieces, or `false` for an invalid pattern or the removed `/e` modifier. The checker types this result as `array\|false`. Supports no-empty, delimiter-capture, offset-capture, and positive limits |
 | `mb_ereg_match()` | `mb_ereg_match($pattern, $string, $options = null): bool` | Test a bare multibyte regex at the start of the string through Oniguruma, using the current `mb_regex_encoding()` and `mb_regex_set_options()` settings. An explicit options argument overrides the current options for this call |
 
+Capture output supports ordinary locals and native references whose payload is already boxed `mixed` or has the exact capture-array layout. Native references with a frozen scalar or string payload are rejected during compilation instead of receiving an incompatible boxed pointer. Use an untyped or `mixed` reference for a destination that can change type. Captures written through an eligible native `mixed` property alias remain visible to eval references sharing that property.
+
 ## Pattern syntax
 
 PCRE syntax is passed to PCRE2, so lookahead, lookbehind, lazy quantifiers,

@@ -14,6 +14,23 @@ use super::context::LoweringContext;
 
 /// Replaces native Core method bodies with typed operations and the normal return cleanup.
 pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, body: &[crate::parser::ast::Stmt]) -> bool {
+    if matches!(ctx.owner_name(), "ArrayObject::__elephc_fetch_for_write" | "ArrayIterator::__elephc_fetch_for_write")
+        && ctx.current_class.as_ref().and_then(|name| ctx.classes.get(name)).is_some_and(|info| info.is_internal)
+    {
+        // The ordinary AST keeps the selector's parameter, local and reachability contracts.
+        super::stmt::lower_stmt(ctx, &body[0]);
+        let receiver = ctx.load_local("this", None);
+        let index = ctx.load_local("i", None);
+        let property = ctx.intern_string("values");
+        let array = ctx.emit_value(Op::PropGetForWrite, vec![receiver.value],
+            Some(Immediate::Data(property)), PhpType::Array(Box::new(PhpType::Mixed)),
+            Op::PropGetForWrite.default_effects(), None);
+        ctx.builder.set_value_ownership(array.value, crate::ir::Ownership::Borrowed);
+        let result = ctx.emit_owned_value(Op::ArrayGetForWrite, vec![array.value, index.value],
+            None, PhpType::Mixed, Op::ArrayGetForWrite.default_effects(), None);
+        super::stmt::terminate_return(ctx, Some(result.value));
+        return true;
+    }
     if matches!(ctx.owner_name(), "WeakMap::__elephc_key" | "WeakMap::__elephc_array") {
         let array = ctx.owner_name().ends_with("__elephc_array");
         crate::ir_lower::stmt::lower_stmt(ctx, &body[0]);

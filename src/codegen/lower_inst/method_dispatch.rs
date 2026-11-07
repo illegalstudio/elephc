@@ -180,14 +180,27 @@ pub(super) fn lower_mixed_method_call(
     method_name: &str,
 ) -> Result<()> {
     let candidates = mixed_method_candidates(ctx, method_name, inst.operands.len())?;
+    // Eval subclasses keep their native backing class id, so identity must precede that ladder.
+    let eval_done_label = if ctx.module.required_runtime_features.eval_bridge {
+        let native_label = ctx.next_label("mixed_method_native");
+        let eval_done = ctx.next_label("mixed_method_eval_done");
+        builtins::lower_eval_context_free_method_call(
+            ctx, inst, object, method_name, &native_label, &eval_done,
+        )?;
+        ctx.emitter.label(&native_label);
+        Some(eval_done)
+    } else { None };
+    // A method declared only by eval has no native candidate. Its owning context
+    // must still get the first chance to resolve the call from a context-free frame.
     if candidates.is_empty() {
         if builtins::has_eval_context(ctx) {
-            return builtins::lower_eval_method_call(ctx, inst, object, method_name);
+            builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
+        } else {
+            emit_method_call_on_null_fatal(ctx, method_name);
         }
-        emit_method_call_on_null_fatal(ctx, method_name);
+        if let Some(label) = eval_done_label { ctx.emitter.label(&label); }
         return Ok(());
     }
-
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     let non_object_label = ctx.next_label("mixed_method_non_object");
     let no_match_label = ctx.next_label("mixed_method_no_match");
@@ -235,6 +248,7 @@ pub(super) fn lower_mixed_method_call(
     emit_method_call_on_null_fatal(ctx, method_name);
 
     ctx.emitter.label(&done_label);
+    if let Some(label) = eval_done_label { ctx.emitter.label(&label); }
     Ok(())
 }
 

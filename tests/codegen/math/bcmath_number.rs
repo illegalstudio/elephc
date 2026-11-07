@@ -9,6 +9,25 @@
 
 use crate::support::*;
 
+/// Preserves main's float division and integer modulo for nullable and scalar Number unions.
+#[test]
+fn test_bcmath_number_union_division_modulo() {
+    let out = compile_and_run(r#"<?php
+function divideUnionNumber(?BcMath\Number $value): mixed { return $value / 2; }
+function moduloUnionNumber(BcMath\Number|int $value): mixed { return $value % 4; }
+function showUnionNumber(mixed $value): void {
+    if ($value instanceof BcMath\Number) { echo $value->value, '|'; }
+    else { var_dump($value); }
+}
+showUnionNumber(divideUnionNumber(new BcMath\Number('3')));
+showUnionNumber(divideUnionNumber(null));
+showUnionNumber(moduloUnionNumber(new BcMath\Number('7')));
+showUnionNumber(moduloUnionNumber(9));
+"#);
+    // Main represents scalar division as float, including the nullable fallback.
+    assert_eq!(out, "1.5|float(0)\n3|int(1)\n");
+}
+
 /// Constructs a namespaced Number and checks its exact decimal methods and scale.
 #[test]
 fn test_bcmath_number_methods() {

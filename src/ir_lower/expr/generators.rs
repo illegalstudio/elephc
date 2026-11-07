@@ -21,12 +21,22 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>,
         None
     };
     let yielded = if let Some(value) = value {
-        let yielded = lower_expr(ctx, value);
+        let source = lower_expr(ctx, value);
+        // Transfer a fresh value into one suspension owner, retiring the producer now.
+        let yielded = if ctx.value_is_owning_temporary(source) {
+            let boxed = ctx.box_value_as_mixed(source, PhpType::Mixed, Some(expr.span));
+            let source_is_marked_copy = ctx.builder.value_defining_instruction(source.value)
+                .is_some_and(|inst| inst.op == Op::StrPersist
+                    && inst.immediate == Some(Immediate::Bool(true)));
+            if !source_is_marked_copy {
+                // The boxed result owns its bytes; nested normalization copies are no longer read.
+                crate::ir_lower::ownership::release_marked_normalized_cast_copies(ctx, source, Some(expr.span));
+            }
+            boxed
+        } else { source };
         operands.push(yielded.value);
         Some(yielded)
-    } else {
-        None
-    };
+    } else { None };
     if key_owner.is_some() && ctx.builder.value_php_type(operands[0]).codegen_repr() == PhpType::Str {
         let owner = key_owner.take().unwrap();
         // The key's box must own its bytes before its source owner retires. Transfer this

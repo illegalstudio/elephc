@@ -40,6 +40,7 @@ mod literal_defaults;
 mod literal_method_index;
 mod local_analysis;
 mod mbstring_configuration;
+mod null_local_proof;
 pub(crate) mod lower_inst;
 mod lower_term;
 mod machine_peephole;
@@ -47,9 +48,11 @@ mod parallel_moves;
 mod runtime_callable_invoker;
 #[cfg(test)]
 pub(crate) use runtime_callable_invoker::function_returns_owned_string;
+mod rotated_loops;
 mod runtime_metadata;
 mod return_ownership;
 mod shared_count_guard;
+mod shared_property_read;
 mod shared_helper;
 mod shared_mixed_string;
 mod shared_mbstring_callable;
@@ -560,6 +563,7 @@ fn finalize_user_asm(
     }
     user_asm.push('\n');
     user_asm.push_str(&user_data);
+    user_asm.push_str(&emit_native_reference_metadata(module)?);
     let mut exported: HashSet<String> = exported_functions
         .values()
         .map(|export| module.target.extern_symbol(&export.c_name))

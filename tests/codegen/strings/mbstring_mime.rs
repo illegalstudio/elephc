@@ -163,7 +163,7 @@ const MIME_CALLABLE_OWNERSHIP_CASES: [(&str, &str); 6] = [
     ),
     (
         "spread_evaluation",
-        "try { $decode(...[new OwnedMimeHeader(), new OwnedMimeHeader(), new OwnedMimeHeader(), new OwnedMimeHeader(), new OwnedMimeHeader()], failingMimeArgument()); } catch (Exception) {}",
+        "try { $decode(...[new OwnedMimeHeader(), new OwnedMimeHeader(), new OwnedMimeHeader(), new OwnedMimeHeader(), new OwnedMimeHeader()], tail: failingMimeArgument()); } catch (Exception) {}",
     ),
     (
         "arity",

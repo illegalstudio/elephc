@@ -12,6 +12,8 @@ use super::*;
 /// Lowers a plain PHP local assignment.
 pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
     crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
+    let carries_reference_markers = matches!(&value.kind,
+        ExprKind::Variable(source) if ctx.local_may_contain_reference_markers(source));
     // PHP allows compound assignment on an undefined variable (`$x += 1`),
     // treating the undefined variable as null/0 with a warning. The type
     // checker injects the variable as `Void` and emits a warning. At the
@@ -62,7 +64,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     // shape) still reads the OLD binding. And it is before `contextualize_local_assignment`,
     // whose whole job is to coerce the value into the storage contract the name ALREADY has —
     // the contract of the binding being abandoned, which must not apply to the new one.
-    if ctx.is_recorded_retype_site(span, name) {
+    if ctx.is_recorded_retype_site(span, name) && !closure_captures_local_by_ref(value, name) {
         ctx.rebind_local_for_retype(name, Some(span));
     }
     // The checker's pre-scan marked `$name` as assigned incompatible types across a branch, so its
@@ -135,6 +137,11 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
         php_type
     };
     ctx.store_local(name, lowered, php_type, Some(span));
+    if carries_reference_markers {
+        ctx.mark_reference_marker_array_local(name);
+    } else {
+        ctx.clear_reference_marker_array_local(name);
+    }
     let callable_result = if direct_closure {
         ctx.take_pending_static_callable_result()
     } else {
@@ -177,6 +184,15 @@ pub(super) fn closure_captures_local(value: &Expr, name: &str) -> bool {
         ExprKind::Closure { captures, capture_refs, .. }
             if captures.iter().any(|capture| capture == name)
                 || capture_refs.iter().any(|capture| capture == name)
+    )
+}
+
+/// Returns whether a closure literal captures the assigned local by reference.
+fn closure_captures_local_by_ref(value: &Expr, name: &str) -> bool {
+    matches!(
+        &value.kind,
+        ExprKind::Closure { capture_refs, .. }
+            if capture_refs.iter().any(|capture| capture == name)
     )
 }
 

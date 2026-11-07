@@ -21,13 +21,13 @@ use super::super::syntactic::wider_type_syntactic;
 impl Checker {
     /// Infers the type of a method call expression (`$obj->method(...)`).
     ///
-    /// Dispatches to `infer_method_call_on_class_type` for `Object` types,
-    /// `infer_method_call_on_interface_type` for interface types, and
-    /// handles nullable union receivers. A `Mixed` receiver dispatches at
-    /// runtime over the classes that declare the method, so its result is the
-    /// union of those candidates' return types (see
-    /// `mixed_receiver_method_return_type`). Other unhandled receiver types fall
-    /// back to `PhpType::Int`.
+    /// Dispatches to `infer_method_call_on_class_type` for concrete `Object`
+    /// types, `infer_method_call_on_interface_type` for interface types, and
+    /// handles nullable union receivers. A `Mixed` or bare `object` receiver
+    /// dispatches at runtime over the classes that declare the method, so its
+    /// result is the union of those candidates' return types (see
+    /// `mixed_receiver_method_return_type`). Other unhandled receiver types
+    /// fall back to `PhpType::Int`.
     pub(crate) fn infer_method_call_type(
         &mut self,
         object: &Expr,
@@ -37,16 +37,27 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        let class = match &obj_ty {
+            PhpType::Object(name) if !name.is_empty() => Some(name.clone()),
+            PhpType::Union(_) => self.union_single_object_class(&obj_ty),
+            _ => None,
+        };
+        let description = class.map(|class| format!("Method {class}::{method}"))
+            .unwrap_or_else(|| "Method call".to_string());
+        self.require_valid_unresolved_call_argument_order(args, &description)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
-            if self.interfaces.contains_key(class_name) {
-                return self
-                    .infer_method_call_on_interface_type(class_name, method, args, expr, env);
+            if !class_name.is_empty() {
+                if self.interfaces.contains_key(class_name) {
+                    return self
+                        .infer_method_call_on_interface_type(class_name, method, args, expr, env);
+                }
+                let return_ty =
+                    self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
+                return Ok(self
+                    .tracked_reflection_class_method_return_type(object, method)
+                    .unwrap_or(return_ty));
             }
-            let return_ty = self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
-            return Ok(self
-                .tracked_reflection_class_method_return_type(object, method)
-                .unwrap_or(return_ty));
         }
         // Method calls on a union object type are allowed when the union has a
         // single object class. `?Foo` / `Foo|null` faults on a null receiver as in
@@ -123,8 +134,8 @@ impl Checker {
                 _ => {}
             }
         }
-        // A method call on a `mixed` receiver dispatches on the runtime class id
-        // over exactly the classes that declare the method (see
+        // A method call on a `mixed` or bare `object` receiver dispatches on the
+        // runtime class id over exactly the classes that declare the method (see
         // `mixed_method_candidates` / `lower_mixed_method_call` and the
         // Mixed-receiver method emission in `ir_lower::program`). The static
         // result is therefore the union of those candidates' return types. When
@@ -136,7 +147,9 @@ impl Checker {
         // `function f($x) { return $x->name(); }` rendered the returned string as
         // `0`. With no declaring class the runtime would fatal, so `mixed` is the
         // safe static result.
-        if matches!(obj_ty, PhpType::Mixed) {
+        if matches!(&obj_ty, PhpType::Mixed)
+            || matches!(&obj_ty, PhpType::Object(class) if class.is_empty())
+        {
             // A Reflection owner is one of those candidates, so the `getAttributes()` flag guard
             // applies here as well — without this the call answers with exact-name matches only,
             // which is the silent subset the guard exists to prevent.
@@ -224,6 +237,7 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, "Nullsafe method call")?;
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         let Some((class_name, nullable)) =
@@ -257,6 +271,7 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, "Dynamic method call")?;
         let obj_ty = self.infer_type(object, env)?;
         let Some((_class_name, _nullable)) =
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
@@ -452,6 +467,7 @@ impl Checker {
         env: &TypeEnv,
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, &format!("Method {class_name}::{method}"))?;
         let method_key = php_symbol_key(method);
         if self.enums.contains_key(class_name)
             && args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
@@ -994,6 +1010,16 @@ impl Checker {
         env: &TypeEnv,
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
+        let named_class = match receiver.written_class_receiver() {
+            StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+            StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone(),
+            StaticReceiver::Parent => self.current_class.as_ref().and_then(|name|
+                self.classes.get(name).and_then(|class| class.parent.clone())),
+            StaticReceiver::Generic(_) => None,
+        };
+        let description = named_class.map(|class| format!("Static method {class}::{method}"))
+            .unwrap_or_else(|| "Static method call".to_string());
+        self.require_valid_unresolved_call_argument_order(args, &description)?;
         // `Box::of(5)` on a generic class, BEFORE the receiver is resolved against the class
         // table: a template is stripped from the program, so the table has no entry for it and
         // the ordinary path reports it as an undefined class.

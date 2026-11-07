@@ -36,6 +36,8 @@ mod shift;
 mod unshift;
 pub(in crate::codegen::lower_inst::builtins) mod values;
 mod basic;
+mod keyed_kernels;
+mod type_check;
 mod push;
 mod boxed_map_callback;
 mod boxed_merge;
@@ -90,6 +92,12 @@ use in_array_cases::*;
 use in_array_coercions::*;
 use in_array_strings::*;
 
+pub(crate) use keyed_kernels::{
+    lower_array_filter_count_mod, lower_array_map_sum_add, lower_array_map_sum_add_int,
+    lower_array_map_sum_add_int_cached, lower_array_map_sum_add_safe,
+    lower_array_map_sum_probe_int,
+};
+pub(crate) use type_check::lower_array_element_type_check;
 pub(crate) use basic::{
     lower_call_user_func_builtin_escape, lower_array_sum, lower_array_product,
     lower_array_chunk, lower_array_pad, lower_array_fill, lower_array_fill_keys,

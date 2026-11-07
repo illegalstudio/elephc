@@ -314,25 +314,7 @@ pub(super) fn emit_mixed_tag_eq(
     value: ValueId,
     tag: u8,
 ) -> Result<()> {
-    let ty = ctx.load_value_to_result(value)?;
-    // An inline tagged scalar already carries its runtime tag in the second word; the tag
-    // space is the Mixed one (int 0, null 8), so the comparison is the same after reading the
-    // register instead of unboxing a cell (#1999).
-    let tag_reg = match ty.codegen_repr() {
-        PhpType::TaggedScalar => {
-            crate::codegen_support::sentinels::tagged_scalar_tag_reg(ctx.emitter).to_string()
-        }
-        PhpType::Mixed | PhpType::Union(_) => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            abi::int_result_reg(ctx.emitter).to_string()
-        }
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "mixed tag predicate for PHP type {:?}",
-                other
-            )))
-        }
-    };
+    let tag_reg = emit_concrete_mixed_tag(ctx, value, "mixed tag predicate")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, tag));     // compare the runtime tag against the expected tag
@@ -347,6 +329,59 @@ pub(super) fn emit_mixed_tag_eq(
     Ok(())
 }
 
+/// Loads a concrete runtime tag without paying for `__rt_mixed_unbox` on ordinary cells.
+///
+/// A boxed cell's first word is its concrete tag. A null pointer means the null tag (8), and
+/// only a nested Mixed wrapper (tag 7) needs the peeling helper, which can reach an integer,
+/// string, array, or null payload. The returned register holds the concrete tag.
+fn emit_concrete_mixed_tag(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    context: &str,
+) -> Result<String> {
+    let ty = ctx.load_value_to_result(value)?;
+    // An inline tagged scalar already carries its runtime tag in the second word; the tag
+    // space is the Mixed one (int 0, null 8), so no cell load or helper call is needed (#1999).
+    match ty.codegen_repr() {
+        PhpType::TaggedScalar => Ok(
+            crate::codegen_support::sentinels::tagged_scalar_tag_reg(ctx.emitter).to_string(),
+        ),
+        PhpType::Mixed | PhpType::Union(_) => {
+            let peeled = ctx.next_label("mixed_tag_peeled");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x10, x0");                     // keep the cell across the fast tag load
+                    ctx.emitter.instruction("mov x0, #8");                      // a null pointer unboxes to the null tag
+                    ctx.emitter.instruction(&format!("cbz x10, {peeled}"));     // stop once null already carries the tag
+                    ctx.emitter.instruction("ldr x0, [x10]");                   // read the concrete tag from the cell's first word
+                    ctx.emitter.instruction("cmp x0, #7");                      // does this cell wrap another Mixed value?
+                    ctx.emitter.instruction(&format!("b.ne {peeled}"));         // an ordinary cell already carries its concrete tag
+                    ctx.emitter.instruction("mov x0, x10");                     // pass the nested wrapper to the peeling helper
+                    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");     // peel nested wrappers to their concrete tag
+                    ctx.emitter.label(&peeled);
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov r10, rax");                    // keep the cell across the fast tag load
+                    ctx.emitter.instruction("mov eax, 8");                      // a null pointer unboxes to the null tag
+                    ctx.emitter.instruction("test r10, r10");                   // is the boxed cell pointer null?
+                    ctx.emitter.instruction(&format!("jz {peeled}"));           // stop once null already carries the tag
+                    ctx.emitter.instruction("mov rax, QWORD PTR [r10]");        // read the concrete tag from the cell's first word
+                    ctx.emitter.instruction("cmp rax, 7");                      // does this cell wrap another Mixed value?
+                    ctx.emitter.instruction(&format!("jne {peeled}"));          // an ordinary cell already carries its concrete tag
+                    ctx.emitter.instruction("mov rax, r10");                    // pass the nested wrapper to the peeling helper
+                    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");     // peel nested wrappers to their concrete tag
+                    ctx.emitter.label(&peeled);
+                }
+            }
+            Ok(abi::int_result_reg(ctx.emitter).to_string())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "{context} for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
 /// Emits a boolean result that is 1 when a boxed Mixed value's unboxed runtime tag is one
 /// of `true_tags`, else 0. Backs the `is_array`/`is_object`/`is_scalar` kind predicates over
 /// boxed Mixed/Union cells, where the concrete kind is only known at runtime.
@@ -355,24 +390,7 @@ pub(super) fn emit_mixed_tag_membership(
     value: ValueId,
     true_tags: &[u8],
 ) -> Result<()> {
-    let ty = ctx.load_value_to_result(value)?;
-    // See `emit_mixed_tag_eq`: an inline tagged scalar's tag is already in the second word and
-    // shares the Mixed tag space (#1999).
-    let tag_reg = match ty.codegen_repr() {
-        PhpType::TaggedScalar => {
-            crate::codegen_support::sentinels::tagged_scalar_tag_reg(ctx.emitter).to_string()
-        }
-        PhpType::Mixed | PhpType::Union(_) => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            abi::int_result_reg(ctx.emitter).to_string()
-        }
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "mixed kind predicate for PHP type {:?}",
-                other
-            )))
-        }
-    };
+    let tag_reg = emit_concrete_mixed_tag(ctx, value, "mixed kind predicate")?;
     let true_label = ctx.next_label("mixed_kind_true");
     let done_label = ctx.next_label("mixed_kind_done");
     for &tag in true_tags {

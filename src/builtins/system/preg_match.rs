@@ -39,6 +39,7 @@ builtin! {
 /// The result is PHP `int|false`: `1` or `0` for a completed search, and `false` when
 /// the pattern is invalid or uses the removed `/e` modifier.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    check_capture_output_storage(cx)?;
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.infer_type(&cx.args[1], cx.env)?;
     if cx.args.len() == 3 && !matches!(cx.args[2].kind, ExprKind::Variable(_)) {
@@ -48,4 +49,19 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]))
+}
+
+/// Rejects capture writes that would replace a frozen scalar reference with an array pointer.
+pub(super) fn check_capture_output_storage(cx: &BuiltinCheckCtx) -> Result<(), CompileError> {
+    let Some(argument) = cx.args.get(2).filter(|_| !cx.argument_was_omitted(2)) else { return Ok(()); };
+    let ExprKind::Variable(name) = &argument.kind else { return Ok(()); };
+    if cx.checker.active_ref_params.contains(name)
+        && !cx.checker.boxed_ref_aliased_locals.contains(name)
+        && cx.env.get(name).is_some_and(|ty| matches!(ty.codegen_repr(),
+            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str))
+    {
+        return Err(CompileError::new(argument.span,
+            "regex capture output cannot retype a native reference"));
+    }
+    Ok(())
 }

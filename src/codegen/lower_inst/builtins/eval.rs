@@ -64,7 +64,10 @@ const EVAL_SCOPE_ACCESS_MASK_OFFSET: usize = 192;
 const EVAL_CATALOG_PHASE_OFFSET: usize = 200;
 const EVAL_BRIDGE_STACK_BYTES: usize = 208;
 const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
+const EVAL_SCOPE_FLAG_DIRTY: i64 = 1 << 2;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
+const EVAL_SCOPE_FLAG_NATIVE_SNAPSHOT: i64 = 1 << 5;
+const EVAL_SCOPE_FLAG_NATIVE_DETACHED: i64 = 1 << 6;
 const EVAL_CLASS_LOOKUP_GET_CLASS: i64 = 0;
 const EVAL_CLASS_LOOKUP_GET_PARENT_CLASS: i64 = 1;
 const EVAL_MEMBER_LOOKUP_METHOD_EXISTS: i64 = 0;
@@ -225,6 +228,7 @@ struct EvalNativePropertyDefaultRegistration {
 /// Property default metadata separates stored values from deferred materialization failures.
 enum EvalNativePropertyDefault {
     Value(EvalNativeCallableDefault),
+    EnumCase(crate::codegen::const_default_values::EnumCaseDefault),
     DeferredError(String),
 }
 
@@ -272,9 +276,12 @@ mod property_attribute_registration;
 mod constructor_params;
 mod function_params;
 mod scope_context;
+#[cfg(test)]
+mod scope_native_snapshot_tests;
 mod sync_inventory;
 mod scope_io;
 mod scope_reload;
+mod scope_reload_checks;
 mod status;
 
 #[allow(unused_imports)]
@@ -346,16 +353,21 @@ pub(crate) use context_registration::configure_eval_opcache;
 pub(in crate::codegen::lower_inst::builtins) use context_registration::register_eval_inventory;
 pub(super) use calls::lower_eval;
 pub(super) use dynamic_calls::{
-    lower_eval_function_call, lower_eval_function_call_array, lower_eval_method_call,
-    lower_eval_native_frame_static_method_call, lower_eval_native_frame_static_property_get,
-    lower_eval_native_frame_static_property_set, lower_eval_object_new,
-    lower_eval_object_new_dynamic_fallback, lower_eval_static_method_call,
+    lower_eval_context_free_method_call, lower_eval_function_call, lower_eval_function_call_array,
+    lower_eval_method_call, lower_eval_native_frame_static_method_call,
+    lower_eval_native_frame_static_property_get, lower_eval_native_frame_static_property_set,
+    lower_eval_object_new, lower_eval_object_new_dynamic_fallback, lower_eval_static_method_call,
 };
+mod constructorless;
+pub(super) use constructorless::lower_eval_constructorless_fallback;
+mod method_lookup;
+pub(super) use method_lookup::lower_eval_abstract_method_guard;
 pub(super) use introspection::{
     emit_context_free_object_class_name, lower_eval_callable_call_array,
     lower_eval_class_relation, lower_eval_is_callable, lower_eval_member_exists,
     lower_eval_object_class_name, lower_eval_object_is_a, lower_eval_object_is_a_dynamic,
 };
+pub(in crate::codegen::lower_inst) use introspection::lower_callable_parameter_is_by_ref;
 pub(super) use scope_access::{lower_eval_scope_get, lower_eval_scope_set};
 pub(super) use symbol_queries::{
     has_eval_context, lower_eval_class_constant_fetch, lower_eval_class_exists,

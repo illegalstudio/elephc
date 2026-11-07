@@ -25,7 +25,14 @@ impl Scanner<'_> {
             ExprKind::FunctionCall { name, args } => self.scan_function_call(name.as_str(), args),
             ExprKind::FirstClassCallable(target) => self.scan_callable_target(target),
             ExprKind::ExprCall { callee, args } => {
-                self.unresolved_callable_hazard();
+                let exact = matches!(&callee.kind, ExprKind::StringLiteral(_))
+                    || matches!(&callee.kind, ExprKind::ArrayLiteral(values) if values.len() == 2
+                        && matches!(&values[1].kind, ExprKind::StringLiteral(_)));
+                if exact {
+                    self.callable_or_hazard(Some(callee));
+                } else {
+                    self.unresolved_callable_hazard();
+                }
                 self.scan_class_introspection_callable(callee, args);
                 self.scan_expr(callee);
                 self.scan_exprs(args);
@@ -320,7 +327,15 @@ impl Scanner<'_> {
             "method_exists" => self.method_exists(args),
             "get_class_methods" => self.usage.hazards.dynamic_method = true,
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
-            "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize" => self.usage.hazards.dynamic_class = true,
+            "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize"
+                => self.usage.hazards.dynamic_class = true,
+            "__elephc_simplexml_allocate" => {
+                if self.current_function.as_deref() == Some("__elephc_simplexml_wrap") {
+                    self.usage.instantiated_subclass_roots.insert(php_symbol_key("SimpleXMLElement"));
+                } else {
+                    self.usage.hazards.dynamic_class = true;
+                }
+            }
             "eval" => self.literal_eval_or_hazard(first),
             _ => {}
         }
@@ -337,7 +352,32 @@ impl Scanner<'_> {
                 self.scan_class_argument(name, args, 0, false);
             }
             "is_a" | "is_subclass_of" => {
-                self.scan_class_argument(name, args, 0, false);
+                let normalized = self.normalized_function_arguments(name, args);
+                // This prelude helper rejects every name outside the SimpleXML family.
+                // Ordinary string class probes must retain their dynamic lookup hazard.
+                if name == "is_a"
+                    && self.current_function.as_deref() == Some("__elephc_simplexml_class")
+                    && normalized.get(1).map(unwrap_named_arg).is_some_and(|class| {
+                        matches!(&class.kind, ExprKind::StringLiteral(class) if class == "SimpleXMLElement")
+                    })
+                {
+                    self.usage.instantiated_subclass_roots.insert(php_symbol_key("SimpleXMLElement"));
+                    return;
+                }
+                let allow_string = match normalized.get(2).map(unwrap_named_arg) {
+                    Some(Expr { kind: ExprKind::BoolLiteral(false), .. }) => false,
+                    Some(_) => true,
+                    None => name == "is_subclass_of",
+                };
+                let first = normalized.first().map(unwrap_named_arg);
+                if let Some(first) = first {
+                    let classes = self.expr_classes(first);
+                    if !classes.is_empty() {
+                        self.usage.classes.extend(classes);
+                    } else if allow_string && !matches!(first.kind, ExprKind::This | ExprKind::NewObject { .. } | ExprKind::NewGeneric { .. }) {
+                        self.literal_class_or_hazard(Some(first));
+                    }
+                } else if allow_string { self.usage.hazards.dynamic_class = true; }
                 self.scan_class_argument(name, args, 1, false);
             }
             "stream_wrapper_register" | "stream_filter_register" => {
@@ -1197,6 +1237,12 @@ impl Scanner<'_> {
             self.usage.fragment_classes.insert(key.clone());
         }
         if let Some(operators) = elephc_builtin_contract::lookup_class(&key).and_then(|class| class.operators) {
+            if let Some(method) = operators.json {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+            }
+            for (_, method) in operators.native_casts {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+            }
             for (_, method) in operators.arithmetic {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
             }
@@ -1210,6 +1256,9 @@ impl Scanner<'_> {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
             }
             if let Some(method) = operators.boolean {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+            }
+            if let Some(method) = operators.bit_not {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
             }
             if let Some(casts) = operators.casts {
@@ -1259,7 +1308,7 @@ impl Scanner<'_> {
                 self.usage.hazards.dynamic_method = true;
             }
             ExprKind::ArrayAccess { array, .. } => {
-                self.record_protocol_methods(array, &["__elephc_reference"]);
+                self.record_protocol_methods(array, &["__elephc_reference", "__elephc_fetch_for_write"]);
                 self.scan_assignment_target(array);
             }
             _ => {}

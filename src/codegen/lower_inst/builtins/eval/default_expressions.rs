@@ -44,6 +44,7 @@ pub(super) fn eval_native_callable_default_at(
     depth: usize,
 ) -> Option<EvalNativeCallableDefault> {
     resolve_const_default_at(expr, &shared_default_context(default_context), depth)
+        .filter(|value| !crate::codegen::const_default_values::const_default_contains_enum(value))
 }
 
 /// Builds one bool default metadata value.
@@ -73,4 +74,5 @@ pub(super) fn eval_native_array_default(
     depth: usize,
 ) -> Option<EvalNativeCallableDefault> {
     resolve_array_const_default(expr, &shared_default_context(default_context), depth)
+        .filter(|value| !crate::codegen::const_default_values::const_default_contains_enum(value))
 }

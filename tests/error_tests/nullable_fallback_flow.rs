@@ -136,7 +136,6 @@ fn test_nullable_fallback_flow_r51_foreach_retirement_admission() {
     for (params, iteration) in [
         ("", "foreach ([1] as $e) { break; }"),
         ("", "foreach ([7 => 'v'] as $e => $v) { break; }"),
-        ("array $xs", "foreach ($xs as $e) { return; }"),
         ("", "$xs = [1]; foreach ($xs as &$e) { break; }"),
     ] {
         let source = format!("<?php class D {{ public function __destruct() {{ throw new Exception('d'); }} }} function need(D $x): void {{}} function run({params}): void {{ $e = new D(); try {{ {iteration} }} catch (Exception $c) {{ need($e); }} }}");
@@ -146,6 +145,17 @@ fn test_nullable_fallback_flow_r51_foreach_retirement_admission() {
     expect_error("<?php class D { public function __destruct() { throw new Exception('d'); } } function need(D $x): void {} $e = new D(); try { foreach ([1] as $e) { break; } } catch (Exception $c) { need($e); }", "expects D");
     expect_error("<?php class D { public function __destruct() { throw new Exception('d'); } } function need(int $x): void {} function run(): void { $key = new D(); $value = 5; try { foreach ([7 => 'v'] as $key => $value) { break; } } catch (Exception $c) { need($value); } }", "expects int");
     expect_error("<?php function need(int $x): void {} function run(): void { foreach (['key' => 7] as $e => $e) { need($e); } }", "expects int");
+}
+
+/// An unknown foreach element reaches the normal runtime object guard after retirement throws.
+#[test]
+fn test_nullable_fallback_flow_foreach_mixed_retirement_object_guard_admission() {
+    // A declared array leaves its element Mixed. Mixed-to-object calls are guarded at runtime,
+    // while the known scalar and incompatible object cases above remain compile-time errors.
+    check_source("<?php class D { public function __destruct() { throw new Exception('d'); } } \
+        function need(D $x): void {} function run(array $xs): void { $e = new D(); \
+        try { foreach ($xs as $e) { return; } } catch (Exception $c) { need($e); } }")
+        .unwrap_or_else(|error| panic!("Mixed foreach elements require a runtime object guard: {error}"));
 }
 
 /// Empty foreach sources and non-heap displaced values add no retirement exits.
@@ -1874,4 +1884,37 @@ fn test_nullable_fallback_flow_review_fixed_reference_continuation() {
     let detached_capture = "<?php function nullableValue(?int $value): ?int { return $value; } function resetValue(?int &$value): void { $value = null; } function run(?int $value): void { $show = function () use (&$value) { var_dump($value); }; unset($value); $value = nullableValue(5); if ($value !== null) { $value++; } resetValue($value); }";
     expect_error(detached_capture, "by-reference storage");
     check_source("<?php function resetValue(?int &$value): void { $value = null; } function run(?int $value, bool $flag): void { if ($flag) { $show = function () use (&$value) { var_dump($value); }; $show(); } if ($value !== null) { $value++; } resetValue($value); }").unwrap();
+}
+
+/// A null default keeps a scalar value nullable (issue #1944): `$n ?? null` over `?int $n` is
+/// `int|null`, as `$n ?: null` is, and a typed array miss keeps its element nullable. A guard
+/// narrows it back. Containers and objects keep their own type beside a null default, so
+/// `$cfg["items"] ?? null` still feeds `array_merge()`, and a default that never yields
+/// (`throw`, `exit`) or excludes null keeps the value's own type.
+#[test]
+fn test_nullable_fallback_flow_scalar_null_default_types() {
+    let declarations = "function takesInt(int $value): void {} function takesString(string $value): void {} function takesFloat(float $value): void {} final class Item { public string $name = 'item'; }";
+    for (body, error) in [
+        ("$x = $n ?? null; takesInt($x);", "expects int, got int|null"),
+        ("$x = $n ?? null; return $x;", "return type expects int, got int|null"),
+        ("$x = $b ?? null; return $x;", "return type expects int, got bool|null"),
+        ("$x = $i ?: null; takesInt($x);", "expects int, got int|null"),
+        ("$m = ['a' => 1.5]; $x = $m[$k] ?? null; takesFloat($x);", "expects float, got float|null"),
+        ("$x = $argv[1] ?? null; takesString($x);", "expects string, got string|null"),
+    ] {
+        let source = format!("<?php {declarations} function run(?int $n, ?bool $b, int $i, string $k, array<string> $argv): int {{ {body} return 0; }}");
+        expect_error(&source, error);
+    }
+    for body in [
+        "$x = $n ?? null; if ($x !== null) { takesInt($x); }",
+        "$x = $n ?? null; takesInt($x ?? 0);",
+        "$x = $n ?? 0; takesInt($x);",
+        "$x = $n ?? throw new RuntimeException('none'); takesInt($x);",
+        "$x = $argv[1] ?? exit(1); takesString($x);",
+        "$cfg = ['items' => [1, 2]]; $items = $cfg['items'] ?? null; echo json_encode(array_merge($items, [3]));",
+        "$objs = [new Item()]; $o = $objs[$i] ?? null; takesString($o->name);",
+    ] {
+        let source = format!("<?php {declarations} function run(?int $n, ?bool $b, int $i, string $k, array<string> $argv): int {{ {body} return 0; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{body}: {error}"));
+    }
 }

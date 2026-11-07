@@ -2,14 +2,15 @@
 //! Applies shared internal-class operator contracts to evaluated runtime cells.
 //!
 //! Called from:
-//! - RuntimeValueOps arithmetic, comparison, boolean, and cast entry points.
+//! - RuntimeValueOps arithmetic, comparison, boolean, cast, and clone entry points.
+//! - EvalIR unary arithmetic for native internal-class operands.
 //!
 //! Key details:
 //! - Native method bridges borrow operands and transfer an owned result cell.
 //! - Strict identity bypasses dispatch; class-name and comparison temporaries are released.
 
 use super::*;
-use elephc_builtin_contract::{ClassContract, ObjectArithmetic};
+use elephc_builtin_contract::{ClassContract, ClassOperators, ObjectArithmetic, ObjectArithmeticResult, ObjectOperandDispatch};
 
 /// Resolves the actual runtime class without retaining a transient class-name cell.
 fn operator_class(
@@ -21,7 +22,50 @@ fn operator_class(
     let released = values.release(name);
     let bytes = bytes.and_then(|bytes| released.map(|()| bytes))?;
     let class = std::str::from_utf8(&bytes).ok().and_then(elephc_builtin_contract::lookup_class);
-    Ok(class.filter(|class| class.operators.is_some()))
+    if let Some(class) = class.filter(|class| class.operators.is_some()) { return Ok(Some(class)); }
+    for class in elephc_builtin_contract::classes().iter().filter(|class| class.operators.is_some()) {
+        if values.object_is_a(value, class.name, false)? { return Ok(Some(class)); }
+    }
+    Ok(None)
+}
+
+/// Preserves numeric-result float zero signs without changing other native classes' unary adapter.
+pub(in crate::interpreter) fn negate(
+    values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(class) = operator_class(values, value)? else { return Ok(None); };
+    let Some(operators) = class.operators else { return Ok(None); };
+    let number = operators.arithmetic_result == ObjectArithmeticResult::Number;
+    let operation = if number { ObjectArithmetic::Mul } else { ObjectArithmetic::Sub };
+    let Some(method) = operators.arithmetic_method(operation) else { return Ok(None); };
+    let factor = values.int(if number { -1 } else { 0 })?;
+    let result = values.operator_static_call(class.name, method, vec![factor, value]);
+    let released = values.release(factor);
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(result), Err(status)) => { let _ = values.release(result); Err(status) },
+        (Ok(result), Ok(())) => Ok(Some(result)),
+    }
+}
+
+/// Runs a native clone handler and reports whether it replaces userland clone dispatch.
+pub(in crate::interpreter) fn clone_native_storage(
+    values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
+) -> Result<bool, EvalStatus> {
+    for class in elephc_builtin_contract::classes() {
+        let Some(method) = class.operators.and_then(|ops| ops.native_clone) else { continue; };
+        match values.object_is_a(value, class.name, false) {
+            Ok(true) => {
+                let result = values.operator_method_call(value, method, vec![])?;
+                return values.release(result).map(|()| true);
+            }
+            Ok(false) => (),
+            // Embedders without native class capabilities retain ordinary user-object cloning.
+            Err(EvalStatus::UnsupportedConstruct) => return Ok(false),
+            Err(status) => return Err(status),
+        }
+    }
+    Ok(false)
 }
 
 /// Calls a typed arithmetic adapter with operands in their original source order.
@@ -29,9 +73,8 @@ pub(super) fn arithmetic(
     values: &mut (impl RuntimeValueOps + ?Sized), operation: ObjectArithmetic,
     left: RuntimeCellHandle, right: RuntimeCellHandle,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let class = operator_class(values, left)?.or(operator_class(values, right)?);
-    let Some(class) = class else { return Ok(None) };
-    let Some(method) = class.operators.and_then(|ops| ops.arithmetic_method(operation)) else { return Ok(None) };
+    let Some((class, method)) = binary_method(values, left, right,
+        |ops| ops.arithmetic_method(operation))? else { return Ok(None); };
     values.operator_static_call(class.name, method, vec![left, right]).map(Some)
 }
 
@@ -46,9 +89,8 @@ pub(super) fn bitwise(
         EvalBinOp::BitXor => elephc_builtin_contract::ObjectBitwise::Xor,
         _ => return Ok(None),
     };
-    let class = operator_class(values, left)?.or(operator_class(values, right)?);
-    let Some(class) = class else { return Ok(None) };
-    let Some(method) = class.operators.and_then(|ops| ops.bitwise_method(operation)) else { return Ok(None) };
+    let Some((class, method)) = binary_method(values, left, right,
+        |ops| ops.bitwise_method(operation))? else { return Ok(None); };
     values.operator_static_call(class.name, method, vec![left, right]).map(Some)
 }
 
@@ -62,10 +104,50 @@ pub(super) fn shift(
         EvalBinOp::ShiftRight => elephc_builtin_contract::ObjectShift::Right,
         _ => return Ok(None),
     };
-    let class = operator_class(values, left)?.or(operator_class(values, right)?);
-    let Some(class) = class else { return Ok(None) };
-    let Some(method) = class.operators.and_then(|ops| ops.shift_method(operation)) else { return Ok(None) };
+    let Some((class, method)) = binary_method(values, left, right,
+        |ops| ops.shift_method(operation))? else { return Ok(None); };
     values.operator_static_call(class.name, method, vec![left, right]).map(Some)
+}
+
+/// Falls through missing operations while trying both handlers before numeric conversion.
+fn binary_method(
+    values: &mut (impl RuntimeValueOps + ?Sized), left: RuntimeCellHandle, right: RuntimeCellHandle,
+    method: impl Fn(&ClassOperators) -> Option<&'static str>,
+) -> Result<Option<(&'static ClassContract, &'static str)>, EvalStatus> {
+    let candidates = [operator_class(values, left)?, operator_class(values, right)?];
+    for dispatch in [ObjectOperandDispatch::Handler, ObjectOperandDispatch::NumericConversion] {
+        for class in candidates.into_iter().flatten() {
+            if let Some(operators) = class.operators.filter(|ops| ops.operand_dispatch == dispatch) {
+                if let Some(method) = method(operators) { return Ok(Some((class, method))); }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Runs native bitwise handlers before numeric casts and retires independent cast cells.
+pub(super) fn bitwise_result(
+    values: &mut (impl RuntimeValueOps + ?Sized), op: EvalBinOp,
+    left: RuntimeCellHandle, right: RuntimeCellHandle,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(result) = shift(values, op, left, right)? { return Ok(result); }
+    if let Some(result) = bitwise(values, op, left, right)? { return Ok(result); }
+    let left_cast = numeric_cast(values, left, elephc_builtin_contract::ObjectCast::Int)?;
+    let right_cast = match numeric_cast(values, right, elephc_builtin_contract::ObjectCast::Int) {
+        Ok(value) => value,
+        Err(status) => {
+            if let Some(value) = left_cast { let _ = values.release(value); }
+            return Err(status);
+        }
+    };
+    let result = values.bitwise(op, left_cast.unwrap_or(left), right_cast.unwrap_or(right));
+    let left_release = left_cast.map(|value| values.release(value)).transpose();
+    let right_release = right_cast.map(|value| values.release(value)).transpose();
+    match (result, left_release.and(right_release)) {
+        (Err(status), _) => Err(status),
+        (Ok(result), Err(status)) => { let _ = values.release(result); Err(status) },
+        (Ok(result), Ok(_)) => Ok(result),
+    }
 }
 
 /// Applies PHP's internal-class `~$value` identity as `0 - value - 1`.
@@ -73,6 +155,14 @@ pub(super) fn bit_not(
     values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let Some(class) = operator_class(values, value)? else { return Ok(None) };
+    if let Some(operators) = class.operators {
+        if let Some(method) = operators.bit_not {
+            return values.operator_method_call(value, method, vec![]).map(Some);
+        }
+        if operators.operand_dispatch == ObjectOperandDispatch::NumericConversion {
+            return Ok(None);
+        }
+    }
     let Some(method) = class
         .operators
         .and_then(|ops| ops.arithmetic_method(ObjectArithmetic::Sub))
@@ -115,6 +205,29 @@ pub(super) fn truthy(
     let truthy = values.truthy_raw(result);
     let released = values.release(result);
     truthy.and_then(|truthy| released.map(|()| Some(truthy)))
+}
+
+/// Applies an internal numeric conversion through the same instance adapter as AOT.
+pub(in crate::interpreter) fn numeric_cast(
+    values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
+    cast: elephc_builtin_contract::ObjectCast,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(class) = operator_class(values, value)? else { return Ok(None); };
+    let Some(method) = class.operators.and_then(|ops| ops.cast_method(cast)) else { return Ok(None); };
+    values.operator_method_call(value, method, vec![]).map(Some)
+}
+
+/// Selects an internal JSON adapter without invoking it before the encoder's recursion guard.
+pub(in crate::interpreter) fn json_method(
+    values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
+) -> Result<Option<&'static str>, EvalStatus> {
+    let class = match operator_class(values, value) {
+        Ok(class) => class,
+        // Embedders without native class capabilities keep ordinary property encoding.
+        Err(EvalStatus::UnsupportedConstruct) => return Ok(None),
+        Err(status) => return Err(status),
+    };
+    Ok(class.and_then(|class| class.operators).and_then(|operators| operators.json))
 }
 
 /// Compares values and materializes either a signed integer or a PHP boolean result.

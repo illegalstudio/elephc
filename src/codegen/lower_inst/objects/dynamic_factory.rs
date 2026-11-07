@@ -191,12 +191,12 @@ pub(super) fn dynamic_new_candidate(
     } else {
         return Ok(None);
     };
-    let property_initialization = collect_property_initialization(class_info, inst);
+    let property_initialization = collect_property_initialization(ctx.module, class_info, inst);
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
         property_count: class_info.properties.len(),
-        allow_dynamic_properties: class_info.has_property_hash_storage(),
+        allow_dynamic_properties: class_name == "stdClass" || class_info.has_property_hash_storage(),
         uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
         owned_reference_property_offsets: owned_reference_property_offsets(class_info),
         property_initialization,
@@ -211,7 +211,8 @@ pub(super) fn dynamic_new_without_constructor_candidate(
     class_info: &ClassInfo,
     inst: &Instruction,
 ) -> Result<Option<DynamicNewCandidate>> {
-    if class_info.is_abstract || ctx.module.enum_infos.contains_key(class_name) {
+    let native_factory = matches!(inst.immediate, Some(Immediate::Bool(true)));
+    if (class_info.is_abstract && !native_factory) || ctx.module.enum_infos.contains_key(class_name) {
         return Ok(None);
     }
     if class_name != "stdClass" && known_dynamic_new_builtin_class_names().contains(&class_name) {
@@ -220,15 +221,16 @@ pub(super) fn dynamic_new_without_constructor_candidate(
     if class_name == "SplFixedArray" || is_spl_doubly_linked_list_family(class_name) {
         return Ok(None);
     }
-    if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
+    if !(native_factory && class_info.is_abstract)
+        && class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
         return Ok(None);
     }
-    let property_initialization = collect_property_initialization(class_info, inst);
+    let property_initialization = collect_property_initialization(ctx.module, class_info, inst);
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
         property_count: class_info.properties.len(),
-        allow_dynamic_properties: class_info.has_property_hash_storage(),
+        allow_dynamic_properties: class_name == "stdClass" || class_info.has_property_hash_storage(),
         uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
         owned_reference_property_offsets: owned_reference_property_offsets(class_info),
         property_initialization,

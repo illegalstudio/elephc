@@ -77,6 +77,7 @@ use declaration_metadata::{
 /// 8. Top-level program checking (twice: initial pass for errors that stabilize, then final)
 /// 9. Method body type-checking to stability
 /// 10. Implicit Stringable interface application
+/// 11. Re-walk of function bodies whose initial errors the final pass would drop as stale
 ///
 /// Returns `Ok((Checker, TypeEnv))` on success or `Err(CompileError)` if any phase reports errors.
 /// The `Checker` carries resolved class/interface/enum/function metadata; `TypeEnv` holds the global type environment.
@@ -486,6 +487,7 @@ pub(super) fn check_types_impl(
     checker.type_check_methods_until_stable(&methods_to_check, &mut errors)?;
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
+    let failed_body_errors = checker.recheck_failed_function_bodies(&initial_top_level_errors);
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
     for (initial_errors, final_errors) in initial_top_level_errors
@@ -498,6 +500,14 @@ pub(super) fn check_types_impl(
         }
         if !Checker::can_suppress_initial_top_level_errors(&initial_errors) {
             errors.extend(initial_errors);
+        }
+    }
+    // A body error an unsuppressed initial statement already reported is not repeated.
+    for error in checker.unresolved_rechecked_body_errors(failed_body_errors) {
+        if !errors.iter().any(|seen| {
+            seen.span == error.span && seen.file == error.file && seen.message == error.message
+        }) {
+            errors.push(error);
         }
     }
 

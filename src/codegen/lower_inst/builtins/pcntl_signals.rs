@@ -132,7 +132,6 @@ pub(super) fn lower_sigprocmask(
     }
     release_normalized_signal_array(ctx, normalized, MASK_NORMALIZED_OFFSET);
     if let Some(slot) = old_slot {
-        ctx.release_local_before_refcounted_writeback(slot)?;
         emit_indexed_int_array_from_stack(ctx, 0, MASK_RESULT_OFFSET);
         store_signal_array(ctx, slot)?;
     }
@@ -253,7 +252,6 @@ pub(super) fn lower_signal_wait(
     }
     release_normalized_signal_array(ctx, normalized, WAIT_NORMALIZED_OFFSET);
     if let Some(slot) = info_slot {
-        ctx.release_local_before_refcounted_writeback(slot)?;
         match ctx.emitter.target.arch {
             Arch::AArch64 => ctx.emitter.instruction("mov x0, sp"),             // pass the stable siginfo record to the array builder
             Arch::X86_64 => ctx.emitter.instruction("mov rdi, rsp"),            // pass the stable siginfo record to the array builder
@@ -509,7 +507,7 @@ fn store_signal_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resul
             &PhpType::Array(Box::new(PhpType::Int)),
         );
     }
-    ctx.store_current_result_to_local(slot)
+    super::super::local_stores::publish_current_owned_output(ctx, slot, &PhpType::Array(Box::new(PhpType::Int)))
 }
 
 /// Loads an optional integer operand or a fixed PHP default.

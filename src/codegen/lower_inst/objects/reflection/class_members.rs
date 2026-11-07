@@ -282,29 +282,6 @@ pub(super) fn reflection_class_default_property_members(
         .collect()
 }
 
-/// Returns static-property storage slots for `ReflectionClass::getStaticProperties()`.
-pub(super) fn reflection_class_static_property_members(
-    class_name: &str,
-    info: &crate::types::ClassInfo,
-) -> Vec<ReflectionStaticPropertyMember> {
-    info.static_properties
-        .iter()
-        .map(|(property_name, php_type)| {
-            let declaring_class_name = info
-                .static_property_declaring_classes
-                .get(property_name)
-                .cloned()
-                .unwrap_or_else(|| class_name.to_string());
-            ReflectionStaticPropertyMember {
-                name: property_name.clone(),
-                declaring_class_name,
-                php_type: php_type.clone(),
-                is_declared: info.declared_static_properties.contains(property_name),
-            }
-        })
-        .collect()
-}
-
 /// Returns materializable interface constant values for ReflectionClass metadata.
 pub(super) fn reflection_interface_constant_members(
     ctx: &FunctionContext<'_>,

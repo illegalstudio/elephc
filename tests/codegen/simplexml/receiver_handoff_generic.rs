@@ -1,0 +1,295 @@
+//! Purpose:
+//! Covers actual XML children in ordinary generic and dynamic property storage.
+//!
+//! Called from:
+//! - Managed-libxml2 executable codegen CI with strict heap checks.
+//!
+//! Key details:
+//! - Temporary parent destructors observe the pre-update value for every object-bearing field type.
+//! - Existing magic-class entries bypass getters and native object updates need no parent writeback.
+//! - Typed XML getter hooks run once, including their null-result failure path.
+
+use crate::support::*;
+
+/// Generic field types and dynamic entries hand off actual XML children in AOT and opaque eval.
+fn assert_generic_property_handoff(eval_mode: bool) {
+    if skip_without_xml_native("test_simplexml_generic_property_handoff_bundle") { return; }
+    let source = r#"<?php
+interface GenericXmlHolderMarker {}
+class GenericXmlMixed implements GenericXmlHolderMarker {
+    private mixed $view;
+    public mixed $items;
+    public function __construct(mixed $node) { $this->items = $node; $this->view = $node; }
+    public function __destruct() { echo 'mixed:', count($this->view), ':', $this->view[0], '|'; }
+}
+class GenericXmlObject implements GenericXmlHolderMarker {
+    private mixed $view;
+    public object $items;
+    public function __construct(object $node) { $this->items = $node; $this->view = $node; }
+    public function __destruct() { echo 'object:', count($this->view), ':', $this->view[0], '|'; }
+}
+class GenericXmlCountable implements GenericXmlHolderMarker {
+    private mixed $view;
+    public Countable $items;
+    public function __construct(Countable $node) { $this->items = $node; $this->view = $node; }
+    public function __destruct() { echo 'countable:', count($this->view), ':', $this->view[0], '|'; }
+}
+class GenericXmlIterable implements GenericXmlHolderMarker {
+    private mixed $view;
+    public iterable $items;
+    public function __construct(iterable $node) { $this->items = $node; $this->view = $node; }
+    public function __destruct() { echo 'iterable:', count($this->view), ':', $this->view[0], '|'; }
+}
+class GenericXmlUnion implements GenericXmlHolderMarker {
+    private mixed $view;
+    public SimpleXMLElement|false $items;
+    public function __construct(SimpleXMLElement $node) { $this->items = $node; $this->view = $node; }
+    public function __destruct() { echo 'union:', count($this->view), ':', $this->view[0], '|'; }
+}
+class GenericXmlUntyped implements GenericXmlHolderMarker {
+    private mixed $view;
+    public $items;
+    public function __construct(mixed $node) { $this->items = $node; $this->view = $node; }
+    public function __destruct() { echo 'untyped:', count($this->view), ':', $this->view[0], '|'; }
+}
+class GenericXmlReadonly implements GenericXmlHolderMarker {
+    private mixed $view;
+    public readonly mixed $items;
+    public function __construct(mixed $node) { $this->items = $node; $this->view = $node; }
+    public function __destruct() { echo 'readonly:', count($this->view), ':', $this->view[0], '|'; }
+}
+class GenericXmlPrivateSet implements GenericXmlHolderMarker {
+    private mixed $view;
+    public private(set) object $items;
+    public function __construct(object $node) { $this->items = $node; $this->view = $node; }
+    public function __destruct() { echo 'private-set:', count($this->view), ':', $this->view[0], '|'; }
+}
+#[AllowDynamicProperties]
+class GenericXmlDynamic implements GenericXmlHolderMarker {
+    public function __destruct() { $items = get_object_vars($this)['items']; echo 'dynamic:', count($items), ':', $items[0], '|'; }
+}
+#[AllowDynamicProperties]
+class GenericXmlGetter implements GenericXmlHolderMarker {
+    public function __get(string $name): mixed { echo 'unexpected-get|'; return null; }
+    public function __destruct() { $items = get_object_vars($this)['items']; echo 'getter:', count($items), ':', $items[0], '|'; }
+}
+function GenericXmlSeed(mixed $box, mixed $node): void { $box->items = $node; }
+function GenericXmlNode(): SimpleXMLElement { return (new SimpleXMLElement('<r><item>1</item></r>'))->item; }
+function GenericXmlMakeMixed(): mixed { return new GenericXmlMixed(GenericXmlNode()); }
+function GenericXmlMakeObject(): mixed { return new GenericXmlObject(GenericXmlNode()); }
+function GenericXmlMakeCountable(): mixed { return new GenericXmlCountable(GenericXmlNode()); }
+function GenericXmlMakeIterable(): mixed { return new GenericXmlIterable(GenericXmlNode()); }
+function GenericXmlMakeUnion(): mixed { return new GenericXmlUnion(GenericXmlNode()); }
+function GenericXmlMakeUntyped(): mixed { return new GenericXmlUntyped(GenericXmlNode()); }
+function GenericXmlMakeReadonly(): mixed { return new GenericXmlReadonly(GenericXmlNode()); }
+function GenericXmlMakePrivateSet(): mixed { return new GenericXmlPrivateSet(GenericXmlNode()); }
+function GenericXmlMakeDynamic(): mixed { $box = new GenericXmlDynamic(); GenericXmlSeed($box, GenericXmlNode()); return $box; }
+function GenericXmlMakeGetter(): mixed { $box = new GenericXmlGetter(); GenericXmlSeed($box, GenericXmlNode()); return $box; }
+function GenericXmlKnown(): GenericXmlMixed { return new GenericXmlMixed(GenericXmlNode()); }
+function GenericXmlErasedObject(): object { return new GenericXmlObject(GenericXmlNode()); }
+function GenericXmlErasedInterface(): GenericXmlHolderMarker { return new GenericXmlCountable(GenericXmlNode()); }
+GenericXmlMakeMixed()->items[] = 2;
+GenericXmlMakeMixed()->items[0] = 3;
+GenericXmlMakeMixed()->items[0] .= 'x';
+GenericXmlMakeObject()->items[] = 2;
+GenericXmlMakeObject()->items[0] = 3;
+GenericXmlMakeObject()->items[0] .= 'x';
+GenericXmlMakeCountable()->items[] = 2;
+GenericXmlMakeCountable()->items[0] = 3;
+GenericXmlMakeCountable()->items[0] .= 'x';
+GenericXmlMakeIterable()->items[] = 2;
+GenericXmlMakeIterable()->items[0] = 3;
+GenericXmlMakeIterable()->items[0] .= 'x';
+GenericXmlMakeUnion()->items[] = 2;
+GenericXmlMakeUnion()->items[0] = 3;
+GenericXmlMakeUnion()->items[0] .= 'x';
+GenericXmlMakeUntyped()->items[] = 2;
+GenericXmlMakeUntyped()->items[0] = 3;
+GenericXmlMakeUntyped()->items[0] .= 'x';
+GenericXmlMakeReadonly()->items[] = 2;
+GenericXmlMakeReadonly()->items[0] = 3;
+GenericXmlMakeReadonly()->items[0] .= 'x';
+GenericXmlMakePrivateSet()->items[] = 2;
+GenericXmlMakePrivateSet()->items[0] = 3;
+GenericXmlMakePrivateSet()->items[0] .= 'x';
+GenericXmlMakeDynamic()->items[] = 2;
+GenericXmlMakeDynamic()->items[0] = 3;
+GenericXmlMakeDynamic()->items[0] .= 'x';
+GenericXmlMakeGetter()->items[] = 2;
+GenericXmlMakeGetter()->items[0] = 3;
+GenericXmlMakeGetter()->items[0] .= 'x';
+GenericXmlKnown()->items[] = 2;
+GenericXmlErasedObject()->items[] = 2;
+GenericXmlErasedInterface()->items[] = 2;
+class GenericXmlMutating {
+    public function __construct(public mixed $items) {}
+    public function __destruct() { $this->items[0] = 'D'; }
+}
+function GenericXmlMutate(mixed $node): mixed { return new GenericXmlMutating($node); }
+$root = new SimpleXMLElement('<r><item>1</item></r>');
+GenericXmlMutate($root->item)->items[0] = 'S';
+echo 'final:', $root->item[0], '|';
+class GenericXmlFallback {
+    public function __construct(public mixed $items) {}
+    public function __destruct() { echo 'array:', count($this->items), '|'; }
+}
+function GenericXmlArray(): mixed { return new GenericXmlFallback([1]); }
+GenericXmlArray()->items[] = 2;
+function GenericXmlShared(): mixed { global $genericShared; return $genericShared; }
+$genericShared = new GenericXmlFallback([1]);
+GenericXmlShared()->items[] = 2;
+echo 'shared:', count($genericShared->items), '|'; unset($genericShared);
+function GenericXmlReadonlyArray(): mixed { return new GenericXmlReadonly([1]); }
+try { GenericXmlReadonlyArray()->items[] = 2; }
+catch (Throwable $error) { echo $error->getMessage(), '|'; }
+function GenericXmlBorrowed(object $box): void { $box->items[] = 2; }
+$borrowed = new GenericXmlReadonly(GenericXmlNode());
+GenericXmlBorrowed($borrowed);
+echo 'borrowed:', count($borrowed->items), '|'; unset($borrowed);
+class GenericXmlHook {
+    private ?SimpleXMLElement $alias;
+    public ?SimpleXMLElement $items { get { global $genericKey; $genericKey = 1; echo 'hook-get|'; return $this->items; } }
+    public function __construct(?SimpleXMLElement $node) { $this->items = $node; $this->alias = $node; }
+    public function __destruct() { echo 'hook-drop|'; if ($this->alias !== null) { $this->alias[0] = 'D'; } }
+}
+function GenericXmlHookKnown(?SimpleXMLElement $node): GenericXmlHook { return new GenericXmlHook($node); }
+function GenericXmlHookErased(?SimpleXMLElement $node): mixed { return new GenericXmlHook($node); }
+GenericXmlHookKnown($root->item)->items[0] = 'S'; echo 'hook-known:', $root->item[0], '|';
+GenericXmlHookErased($root->item)->items[0] = 'S'; echo 'hook-erased:', $root->item[0], '|';
+try { GenericXmlHookKnown(null)->items[] = 2; }
+catch (Throwable $error) { echo $error->getMessage(), '|'; }
+try { GenericXmlHookErased(null)->items[] = 2; }
+catch (Throwable $error) { echo $error->getMessage(), '|'; }
+
+$genericKey = 0;
+$keyRoot = new SimpleXMLElement('<r><item>A</item><item>B</item></r>');
+class GenericXmlKeyHolder {
+    public function __construct(public mixed $items) {}
+    public function __destruct() { global $genericKey; $genericKey = 1; echo 'key-drop|'; }
+}
+function GenericXmlKeyMake(mixed $node): mixed { return new GenericXmlKeyHolder($node); }
+GenericXmlKeyMake($keyRoot->item)->items[$genericKey] = 'S';
+echo 'key:', $keyRoot->item[0], ':', $keyRoot->item[1], ':', $genericKey, '|';
+$genericKey = 0;
+$keyRoot = new SimpleXMLElement('<r><item>A</item><item>B</item></r>');
+GenericXmlKeyMake($keyRoot->item)->items[$genericKey] .= 'S';
+echo 'compound-key:', $keyRoot->item[0], ':', $keyRoot->item[1], ':', $genericKey, '|';
+GenericXmlMutate($root->item)->items[0] .= 'S'; echo 'compound-final:', $root->item[0], '|';
+$genericKey = 0;
+$keyRoot = new SimpleXMLElement('<r><item>A</item><item>B</item></r>');
+GenericXmlHookKnown($keyRoot->item)->items[$genericKey] = 'S';
+echo 'hook-key-known:', $keyRoot->item[0], ':', $keyRoot->item[1], ':', $genericKey, '|';
+$genericKey = 0;
+$keyRoot = new SimpleXMLElement('<r><item>A</item><item>B</item></r>');
+GenericXmlHookErased($keyRoot->item)->items[$genericKey] = 'S';
+echo 'hook-key-erased:', $keyRoot->item[0], ':', $keyRoot->item[1], ':', $genericKey, '|';
+class GenericXmlVisProtected { protected mixed $items; public function __construct(mixed $node) { $this->items = $node; } }
+class GenericXmlVisPrivate { private mixed $items; public function __construct(mixed $node) { $this->items = $node; } }
+class GenericXmlVisMagic {
+ protected mixed $items;
+ public function __construct(mixed $visHidden, private mixed $visVisible) { $this->items = $visHidden; }
+ public function __isset(string $name): bool { return true; }
+ public function __get(string $name): mixed { echo 'magic-get|'; return $this->visVisible; }
+}
+class GenericXmlVisMagicPrivate {
+ private mixed $items;
+ public function __construct(mixed $hidden, private mixed $visible) { $this->items = $hidden; }
+ public function __isset(string $name): bool { return true; }
+ public function __get(string $name): mixed { echo 'private-get|'; return $this->visible; }
+}
+function GenericXmlVisProtectedMake(mixed $node):mixed {return new GenericXmlVisProtected($node);}
+function GenericXmlVisPrivateMake(mixed $node):mixed {return new GenericXmlVisPrivate($node);}
+function GenericXmlVisMagicMake(mixed $visHidden,mixed $visVisible):mixed {return new GenericXmlVisMagic($visHidden,$visVisible);}
+$visKey=0; $visHidden=new SimpleXMLElement('<r><item>H</item></r>');
+$visProtected=GenericXmlVisProtectedMake($visHidden->item);
+try {$visProtected->items[$visKey]='S';} catch(Throwable $visError) {echo $visError->getMessage(),'|';}
+try {$visProtected->items[0]='S';} catch(Throwable $visError) {echo $visError->getMessage(),'|';}
+$visPrivate=GenericXmlVisPrivateMake($visHidden->item);
+try {$visPrivate->items[$visKey]='S';} catch(Throwable $visError) {echo $visError->getMessage(),'|';}
+try {$visPrivate->items[0]='S';} catch(Throwable $visError) {echo $visError->getMessage(),'|';}
+echo 'hidden:',$visHidden->item[0],'|';
+$visVisible=new SimpleXMLElement('<r><item>V</item></r>');
+$visMagic=GenericXmlVisMagicMake($visHidden->item,$visVisible->item);
+$visMagic->items[$visKey]='S'; echo 'magic:',$visHidden->item[0],':',$visVisible->item[0],'|';
+$visMagic->items[0]='T'; echo 'magic-literal:',$visHidden->item[0],':',$visVisible->item[0],'|';
+function GenericXmlVisMagicPrivateMake(mixed $hidden, mixed $visible): mixed { return new GenericXmlVisMagicPrivate($hidden, $visible); }
+$visMagicPrivate = GenericXmlVisMagicPrivateMake($visHidden->item, $visVisible->item);
+$visMagicPrivate->items[$visKey] = 'P'; echo 'magic-private:', $visHidden->item[0], ':', $visVisible->item[0], '|';
+$visMagicPrivate->items[0] = 'Q'; echo 'magic-private-literal:', $visHidden->item[0], ':', $visVisible->item[0], '|';
+try { $visProtected->items[] = 'S'; } catch (Throwable $visError) { echo $visError->getMessage(), '|'; }
+try { $visPrivate->items[] = 'S'; } catch (Throwable $visError) { echo $visError->getMessage(), '|'; }
+echo 'append-hidden:', count($visHidden->item), ':', $visHidden->item[0], '|';
+"#;
+    let expected = "mixed:1:1|mixed:1:1|mixed:1:1|object:1:1|object:1:1|object:1:1|countable:1:1|countable:1:1|countable:1:1|iterable:1:1|iterable:1:1|iterable:1:1|union:1:1|union:1:1|union:1:1|untyped:1:1|untyped:1:1|untyped:1:1|readonly:1:1|readonly:1:1|readonly:1:1|private-set:1:1|private-set:1:1|private-set:1:1|dynamic:1:1|dynamic:1:1|dynamic:1:1|getter:1:1|getter:1:1|getter:1:1|mixed:1:1|object:1:1|countable:1:1|final:S|array:1|shared:2|array:2|readonly:1:1|Cannot indirectly modify readonly property GenericXmlReadonly::$items|borrowed:2|readonly:2:1|hook-get|hook-drop|hook-known:S|hook-get|hook-drop|hook-erased:S|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|key-drop|key:A:S:1|key-drop|compound-key:A:BS:1|compound-final:DS|hook-get|hook-drop|hook-key-known:D:S:1|hook-get|hook-drop|hook-key-erased:D:S:1|Cannot access protected property GenericXmlVisProtected::$items|Cannot access protected property GenericXmlVisProtected::$items|Cannot access private property GenericXmlVisPrivate::$items|Cannot access private property GenericXmlVisPrivate::$items|hidden:H|magic-get|magic:H:S|magic-get|magic-literal:H:T|private-get|magic-private:H:P|private-get|magic-private-literal:H:Q|Cannot access protected property GenericXmlVisProtected::$items|Cannot access private property GenericXmlVisPrivate::$items|append-hidden:1:H|";
+    let (source, expected) = if eval_mode {
+        let renamed = source.replace("GenericXml", "EvalGenericXml");
+        let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+        (format!("<?php class GenericHandoffXmlCapability extends SimpleXMLElement {{}} \
+            $source = $argc > 0 ? '{body}' : ''; eval($source);"),
+            expected.replace("GenericXml", "EvalGenericXml"))
+    } else { (source.to_string(), expected.to_string()) };
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Native handoff cases compile without importing opaque eval's complete class catalog.
+#[test]
+fn test_simplexml_generic_property_handoff_native_bundle() {
+    assert_generic_property_handoff(false);
+}
+
+/// Opaque eval retains every handoff case without duplicating its classes as native declarations.
+#[test]
+fn test_simplexml_generic_property_handoff_eval_bundle() {
+    assert_generic_property_handoff(true);
+}
+
+/// Ordinary magic and dynamic names select one accessible child for indexed writes.
+#[test]
+fn test_simplexml_indexed_property_protocols_bundle() {
+    if skip_without_xml_native("test_simplexml_indexed_property_protocols_bundle") { return; }
+    let source = r#"<?php
+set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
+class IndexedHiddenXml {
+    public function __construct(private mixed $items) {}
+}
+class IndexedMagicXml {
+    public function __construct(private mixed $items, private mixed $visible) {}
+    public function __get(string $name): mixed { echo 'get|'; return $this->visible; }
+}
+#[AllowDynamicProperties]
+class IndexedDynamicXml {
+    public function __get(string $name): mixed { echo 'unexpected-get|'; return null; }
+}
+class IndexedMagicArray {
+    private array $backing = [1, 2];
+    public function __get(string $name): mixed { echo 'array-get|'; return $this->backing; }
+    public function snapshot(): array { return $this->backing; }
+}
+function indexedPropertySeed(mixed $object, mixed $value): void { $object->items = $value; }
+function indexedPropertySet(mixed $object, mixed $value): void { $object->items[0] = $value; }
+function indexedPropertyConcat(mixed $object): void { $object->items[0] .= 'T'; }
+function indexedKnownMagic(IndexedMagicXml $object): void { $object->items[0] .= 'K'; }
+$hidden = new SimpleXMLElement('<r><a>H</a></r>');
+$visible = new SimpleXMLElement('<r><a>V</a></r>');
+$private = new IndexedHiddenXml($hidden->a);
+try { indexedPropertySet($private, 'bad'); } catch (Error $error) { echo $error->getMessage(), '|'; }
+$magic = new IndexedMagicXml($hidden->a, $visible->a);
+indexedPropertySet($magic, 'S'); indexedPropertyConcat($magic); indexedKnownMagic($magic);
+echo $hidden->a, ':', $visible->a, '|';
+$dynamic = new IndexedDynamicXml(); indexedPropertySeed($dynamic, $visible->a);
+indexedPropertySet($dynamic, 'D'); indexedPropertyConcat($dynamic); echo $visible->a, '|';
+indexedPropertySeed($dynamic, [1, 2]); $alias = get_object_vars($dynamic)['items'];
+indexedPropertySet($dynamic, 9); echo json_encode(get_object_vars($dynamic)['items']), ':', json_encode($alias), '|';
+$array = new IndexedMagicArray(); indexedPropertySet($array, 9);
+echo json_encode($array->snapshot()), '|';
+unset($private, $magic, $dynamic, $array, $alias, $hidden, $visible, $error);
+restore_error_handler();
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Cannot access private property IndexedHiddenXml::$items|get|get|get|H:STK|DT|[9,2]:[1,2]|array-get|8:Indirect modification of overloaded property IndexedMagicArray::$items has no effect|[1,2]|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -12,16 +12,43 @@
 
 use super::*;
 
+mod iterable_property;
+
 /// Writes a leaf only after evaluating its computed dimensions and RHS.
 pub(super) fn lower_store(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
+) {
+    if super::native_reference_mutations::lower_target(ctx, target, span,
+        |ctx| lower_store_selected(ctx, target, value, span)) { return; }
+    lower_store_selected(ctx, target, value, span);
+}
+
+/// Captures inputs once on the selected writable root layout.
+fn lower_store_selected(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
 ) {
     let mut sources = Vec::new();
     let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
     let value = lower_expr(ctx, value);
     let (value, value_owner) = super::nested_array_writes::root_static_update_receiver(ctx, value, span);
-    let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, &target, &target)
-        .map_or(target, |(_, write)| write);
+    if !iterable_property::dispatch(ctx, &target, span, |ctx, target| {
+        lower_captured_store(ctx, target, value, span);
+    }) {
+        lower_captured_store(ctx, &target, value, span);
+    }
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    retire_owner(ctx, value_owner, span);
+    super::nested_write_sources::retire(ctx, sources, span);
+}
+
+/// Writes one captured target without re-evaluating its receiver, keys, or RHS.
+fn lower_captured_store(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: LoweredValue, span: Span,
+) {
+    let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, target, target)
+        .map_or_else(|| target.clone(), |(_, write)| write);
     let ExprKind::ArrayAccess { array, index } = &target.kind else { unreachable!() };
     let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, array, span);
     if ctx.builder.insertion_block_is_terminated() { return; }
@@ -34,23 +61,48 @@ pub(super) fn lower_store(
         emit_store(ctx, parent, key, value, index, span);
     });
     emit_store(ctx, parent, key, value, index, span);
+    if ctx.builder.insertion_block_is_terminated() { return; }
     retire_owner(ctx, key_owner, span);
     retire_owner(ctx, parent_owner, span);
-    retire_owner(ctx, value_owner, span);
-    super::nested_write_sources::retire(ctx, sources, span);
 }
 
 /// Appends directly into a stored parent instead of cloning a detached read and writing it back.
 pub(super) fn lower_append(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
 ) {
+    if super::native_reference_mutations::lower_target(ctx, target, span,
+        |ctx| lower_append_selected(ctx, target, value, span)) { return; }
+    lower_append_selected(ctx, target, value, span);
+}
+
+/// Captures a deep append once before traversing its selected writable root.
+fn lower_append_selected(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
+) {
     let mut sources = Vec::new();
     let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
     let value = lower_expr(ctx, value);
     let (value, value_owner) = super::nested_array_writes::root_static_update_receiver(ctx, value, span);
-    let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, &target, &target)
-        .map_or(target, |(_, write)| write);
-    let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, &target, span);
+    if !iterable_property::dispatch(ctx, &target, span, |ctx, target| {
+        lower_captured_append(ctx, target, value, span);
+    }) {
+        lower_captured_append(ctx, &target, value, span);
+    }
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    retire_owner(ctx, value_owner, span);
+    super::nested_write_sources::retire(ctx, sources, span);
+}
+
+/// Appends through one captured target without replaying its evaluated inputs.
+fn lower_captured_append(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: LoweredValue, span: Span,
+) {
+    let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, target, target)
+        .map_or_else(|| target.clone(), |(_, write)| write);
+    let parent =
+        super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, &target, span);
     if ctx.builder.insertion_block_is_terminated() { return; }
     let parent = resolve_parent_for_write(ctx, parent, span);
     let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
@@ -59,9 +111,8 @@ pub(super) fn lower_append(
         emit_append(ctx, parent, value, span);
     });
     emit_append(ctx, parent, value, span);
+    if ctx.builder.insertion_block_is_terminated() { return; }
     retire_owner(ctx, parent_owner, span);
-    retire_owner(ctx, value_owner, span);
-    super::nested_write_sources::retire(ctx, sources, span);
 }
 
 /// Resolves boxed caller-reference markers before conversion or mutation of the selected cell.
@@ -127,6 +178,17 @@ fn emit_object_append(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
     value: LoweredValue, span: Span,
 ) {
+    if super::native_dimension_append::lower(ctx, parent, value, span, |ctx, parent, value| {
+        emit_array_access_append(ctx, parent, value, span);
+    }) { return; }
+    emit_array_access_append(ctx, parent, value, span);
+}
+
+/// Preserves ordinary ArrayAccess append and WeakMap rejection after the native XML guard.
+fn emit_array_access_append(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
+    value: LoweredValue, span: Span,
+) {
     let weak_map = ctx.intern_class_name("WeakMap");
     let denied = ctx.emit_value(Op::InstanceOf, vec![parent.value], Some(Immediate::Data(weak_map)),
         PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
@@ -167,6 +229,7 @@ fn emit_object_append(
 /// Fetches one child with balanced, unwind-visible input and result owners.
 pub(super) fn fetch_parent(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, index: &Expr, span: Span,
+    key_already_diagnosed: bool,
 ) -> LoweredValue {
     let (receiver, receiver_owner) =
         super::nested_array_writes::root_static_update_receiver(ctx, receiver, span);
@@ -182,8 +245,18 @@ pub(super) fn fetch_parent(
         return receiver;
     }
     let child = ctx.emit_value(Op::RuntimeCall, vec![receiver.value, key.value],
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        Some(Immediate::RuntimeCall(if key_already_diagnosed {
+            RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+        } else { RuntimeCallTarget::ArrayFetchForWrite })),
         PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));
+    finish_parent_fetch(ctx, child, receiver_owner, key_owner, span)
+}
+
+/// Protects a selected owned child before retiring the published receiver and key owners.
+pub(super) fn finish_parent_fetch(
+    ctx: &mut LoweringContext<'_, '_>, child: LoweredValue,
+    receiver_owner: Option<LocalSlotId>, key_owner: Option<LocalSlotId>, span: Span,
+) -> LoweredValue {
     let selected = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let slot = ctx.local_slots[&selected];
     ctx.store_call_argument_local(&selected, child, PhpType::Mixed, Some(span));

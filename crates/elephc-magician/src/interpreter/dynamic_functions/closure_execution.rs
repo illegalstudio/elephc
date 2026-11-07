@@ -19,6 +19,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_values(
     let evaluated_args = evaluated_args
         .into_iter()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value,
             ref_target: None,
@@ -134,6 +135,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            function.name(),
             function.return_type(),
             None,
             None,
@@ -152,6 +154,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     context.pop_called_class_scope();
     context.pop_class_scope();
     let return_result = finish_activation_scope(&mut function_scope, return_result, context, values);
+    let return_result = finish_native_bound_call(return_result, &evaluated_args, context, values);
     context.pop_function();
     return_result
 }
@@ -496,6 +499,7 @@ fn eval_closure_with_optional_binding(
         | (_, _, Err(status), _)
         | (_, _, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            &eval_closure_display_name(function, context),
             function.return_type(),
             None,
             None,
@@ -516,6 +520,7 @@ fn eval_closure_with_optional_binding(
     }
     let return_result = release_function_args(return_result, context, values);
     let return_result = finish_activation_scope(&mut function_scope, return_result, context, values);
+    let return_result = finish_native_bound_call(return_result, &evaluated_args, context, values);
     context.pop_function();
     return_result
 }
@@ -692,6 +697,7 @@ fn visit_static_var_declarations(
             }
             EvalStmt::ArrayAppendVar { .. }
             | EvalStmt::ArraySetVar { .. }
+            | EvalStmt::DimensionWrite { .. }
             | EvalStmt::Break
             | EvalStmt::ClassDecl(_)
             | EvalStmt::Continue
@@ -731,6 +737,7 @@ fn visit_static_var_declarations(
             | EvalStmt::StaticPropertySet { .. }
             | EvalStmt::TypedVar { .. }
             | EvalStmt::StoreVar { .. }
+            | EvalStmt::IncDecVar { .. }
             | EvalStmt::Throw(_)
             | EvalStmt::TraitDecl(_)
             | EvalStmt::UnsetArrayElement { .. }

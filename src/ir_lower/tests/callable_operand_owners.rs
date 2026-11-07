@@ -624,6 +624,44 @@ fn last_slot_instruction(
         .next_back()
 }
 
+/// A current-Fiber result stays a saved-frame edge while an omitted default is destroyed.
+#[test]
+fn current_fiber_results_are_staged_before_default_cleanup_on_every_target() {
+    let source = r#"<?php
+class StagedFiberDefault { public function __destruct() { Fiber::suspend(9); } }
+class StagedFiberFactory {
+    public static function stat(StagedFiberDefault $value = new StagedFiberDefault()): mixed {
+        return Fiber::getCurrent();
+    }
+    public function instance(StagedFiberDefault $value = new StagedFiberDefault()): mixed {
+        return Fiber::getCurrent();
+    }
+}
+function stageCurrentFiberResult(): void {
+    $held = StagedFiberFactory::stat();
+    $factory = new StagedFiberFactory(); $other = $factory->instance();
+}
+"#;
+    for target in TARGETS {
+        let (module, caller) = lower_function(source, target, "stageCurrentFiberResult");
+        for operation in [Op::StaticMethodCall, Op::MethodCall] {
+            let call = caller.instructions.iter().position(|instruction|
+                instruction.op == operation).unwrap();
+            let result = caller.instructions[call].result.unwrap();
+            let slot = staged_result_slot(&caller, result);
+            let publish = slot_instruction(&caller, Op::PushCallOperandOwner, slot).unwrap();
+            let detach = last_slot_instruction(&caller, Op::PopCallOperandOwner, slot).unwrap();
+            assert!(publish < call && call < detach, "{target}: {operation:?} result stays visible through cleanup");
+            assert!(caller.instructions[call + 1..detach].iter().any(|instruction|
+                matches!(instruction.op, Op::Release | Op::ReleaseLocalSlot)),
+                "{target}: the destructor-capable default retires before the result guard");
+        }
+        assert_owner_records_are_lifo(&caller, target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// A descriptor invocation stages its owned result OUTSIDE the callback and container records.
 ///
 /// Retiring the argument container and the callback runs PHP destructors that can throw into a

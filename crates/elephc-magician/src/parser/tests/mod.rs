@@ -25,3 +25,4 @@ mod static_members;
 mod generics;
 mod support;
 mod trait_adaptations;
+mod small_stack;

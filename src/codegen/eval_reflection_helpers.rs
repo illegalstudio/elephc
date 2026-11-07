@@ -149,6 +149,7 @@ fn emit_reflection_attribute_new_aarch64(
     emitter.instruction("ldr x1, [sp, #24]");                                   // move the ReflectionAttribute object pointer into the Mixed payload
     emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the ReflectionAttribute object for eval
+    super::eval_reflection_owner_helpers::retire_reflection_owner_allocation_after_boxing(emitter, 40);
     emitter.instruction(&format!("b {}", done_label));                          // skip the fail-closed return path after boxing
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
@@ -181,6 +182,7 @@ fn emit_reflection_attribute_new_x86_64(emitter: &mut Emitter, layout: &Reflecti
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
     emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
     emitter.instruction("call __rt_mixed_from_value");                          // box the ReflectionAttribute object for eval
+    super::eval_reflection_owner_helpers::retire_reflection_owner_allocation_after_boxing(emitter, 48);
     emitter.instruction(&format!("jmp {}", done_label));                        // skip the fail-closed return path after boxing
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure

@@ -169,6 +169,7 @@ pub(super) fn eval_reflection_function_closure_target_name(target: &EvalClosureO
         EvalClosureObjectTarget::ForeignContext { target, .. } => {
             eval_reflection_function_closure_target_name(target)
         }
+        EvalClosureObjectTarget::NativeDescriptor { display_name, .. } => display_name.clone(),
         EvalClosureObjectTarget::Named(name)
         | EvalClosureObjectTarget::BoundNamed { name, .. } => name.clone(),
         EvalClosureObjectTarget::InvokableObject { .. } => String::from("__invoke"),

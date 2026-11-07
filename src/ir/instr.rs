@@ -66,8 +66,15 @@ const _: () = assert!(std::mem::size_of::<Instruction>() <= 112);
 /// Optimization pass recorded as an instruction's provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassOrigin {
+    ArrayFillLoop,
+    ArrayGetBounds,
+    ArraySumLoop,
+    SqrtSumLoop,
+    JsonDecodeCountHoist,
     BufferAccess,
     ConstFold,
+    CountHoist,
+    ConcatResetHoist,
     IntegerRange,
     Licm,
     LoopOptimize,
@@ -77,8 +84,15 @@ impl PassOrigin {
     /// Returns the lower-case spelling used by source maps and the EIR printer.
     pub fn name(self) -> &'static str {
         match self {
+            PassOrigin::ArrayFillLoop => "array_fill_loop",
+            PassOrigin::ArrayGetBounds => "array_get_bounds",
+            PassOrigin::ArraySumLoop => "array_sum_loop",
+            PassOrigin::SqrtSumLoop => "sqrt_sum_loop",
+            PassOrigin::JsonDecodeCountHoist => "json_decode_count_hoist",
             PassOrigin::BufferAccess => "buffer_access",
             PassOrigin::ConstFold => "const_fold",
+            PassOrigin::CountHoist => "count_hoist",
+            PassOrigin::ConcatResetHoist => "concat_reset_hoist",
             PassOrigin::IntegerRange => "integer_range",
             PassOrigin::Licm => "licm",
             PassOrigin::LoopOptimize => "loop_optimize",
@@ -210,6 +224,11 @@ pub enum Immediate {
     StringOffsetCast,
     /// Binds an already validated float-shaped runtime argument to int with precision diagnostics.
     ImplicitIntCast,
+    /// Marks an element op on a typed scalar packed local whose storage may already have been
+    /// promoted to a hash at run time (heap kind 3). Codegen dispatches on the heap kind, and an
+    /// `ArraySet` whose integer key would skip a slot (or is negative) promotes the array to a
+    /// hash instead of zero-filling the gap, as PHP does.
+    PromotableArray,
     Data(DataId),
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {
@@ -477,6 +496,8 @@ pub enum MixedNumericOp {
 pub enum PropertyFetchMode {
     /// An ordinary value read: refuse an inaccessible name, warn on an undefined one.
     Read,
+    /// An unset container fetch: quiet declared slots, direct `__get`, and missing dynamic null slots.
+    QuietRead,
     /// A silent existence probe: an inaccessible or undefined name answers `null`.
     Probe,
     /// The probe `isset()` makes: silent like `Probe`, and only the answer's nullness is used,
@@ -493,6 +514,7 @@ impl PropertyFetchMode {
     pub const fn as_eir(self) -> &'static str {
         match self {
             Self::Read => "read",
+            Self::QuietRead => "quiet_read",
             Self::Probe => "probe",
             Self::Isset => "isset",
             Self::Empty => "empty",
@@ -505,7 +527,12 @@ impl PropertyFetchMode {
         matches!(self, Self::Isset | Self::Empty)
     }
 
-    /// Returns whether this mode may raise or warn about the name it fetches.
+    /// Selects a value getter and ordinary visibility checks instead of an isset guard.
+    pub const fn uses_magic_get(self) -> bool {
+        matches!(self, Self::Read | Self::QuietRead)
+    }
+
+    /// Returns whether missing and uninitialized slots use ordinary value-read diagnostics.
     pub const fn is_read(self) -> bool {
         matches!(self, Self::Read)
     }
@@ -847,15 +874,27 @@ pub enum Op {
     UnsetLocal,
     ZeroLocalSlot,
     LoadRefCell,
+    /// Copies the current value of a reference into an independent owning Mixed snapshot.
+    /// The local's physical payload ABI stays unchanged, including for raw native parameters.
+    LoadRefCellValue,
+    /// Stores an original RHS through a reference. An optional second I64 PHP bool records
+    /// assignment-site strictness for canonical publishers; legacy hand-built IR defaults weak.
+    /// An optional third operand borrows a temporary source parking slot, which a canonical
+    /// publisher clears and retires before the displaced value's destructor can execute.
     StoreRefCell,
     PromoteLocalRefCell,
     AliasLocalRefCell,
-    /// Retains the nullable cell in one hidden owner slot into another hidden owner slot.
-    /// Immediate: source/destination owner slots. Inline borrowed references remain null owners.
+    /// Retains a nullable owner or authenticates an incoming managed by-ref parameter cell.
+    /// Immediate: source/destination slots. Borrowed frame arguments produce null owners.
     RetainLocalRefCell,
     ReleaseLocalRefCell,
     ReleaseLocalSlot,
+    /// Retires a raw local owner only when its runtime storage is not a reference-cell pointer.
+    ReleaseRawLocalSlot,
+    /// Publishes a cleanup record for the immediate owner slot. ReturnRefCell slots use stable
+    /// frame records so pending returns do not change receiver/foreach temporary stack offsets.
     PushCallOperandOwner,
+    /// Detaches the named owner's record, preserving newer fixed return-lease records.
     PopCallOperandOwner,
     LoadGlobal,
     StoreGlobal,
@@ -872,6 +911,9 @@ pub enum Op {
     /// The pointer is borrowed from process-lifetime symbol storage and lets a synthetic local
     /// reference publish container replacements back to the static property.
     LoadStaticPropertyRefCell,
+    /// Moves an original RHS into static storage with an optional assignment-site Bool.
+    /// An optional third borrowed LoadLocal operand names its unwind parking slot, cleared
+    /// once a same-representation store transfers ownership to storage or its publisher.
     StoreStaticProperty,
     StaticPropInitialized,
     LoadReflectionStaticProperty,
@@ -971,6 +1013,26 @@ pub enum Op {
     ArrayLen,
     HashLen,
     ArrayGet,
+    /// Appends one raw int into a private, preallocated, int-shaped indexed array.
+    ///
+    /// Operands: array, value. No immediate. The producer proved the array is unique, non-null,
+    /// int-shaped and has spare capacity for this append, so codegen stores the payload and
+    /// advances the header length without COW, shape, growth or writeback work.
+    ArrayPushReserved,
+    /// Sums a dense int-shaped indexed array range into a fresh Mixed int/float cell.
+    ///
+    /// Operands: array, inclusive start, exclusive end, borrowed seed Mixed cell. No immediate.
+    /// The producer proved the receiver is a private, non-null, int-shaped packed array and that
+    /// the range is in bounds. The helper reproduces PHP's left-to-right `+` sequence, promoting
+    /// to float at the first integer overflow, and returns an owned Mixed cell.
+    ArraySumInt,
+    /// Reads one element of a private, int-shaped indexed array at a proven in-bounds index.
+    ///
+    /// Operands: array, index. No immediate. The producing pass proved the receiver is non-null,
+    /// not hash-promoted, not widened to boxed slots, and that `0 <= index < length` holds on
+    /// every path reaching the read. Codegen emits one direct payload load; unlike [`Op::ArrayGet`]
+    /// the op cannot warn, throw, allocate, or yield PHP null.
+    ArrayGetUnchecked,
     ArrayGetSilent,
     /// Prepares an indexed element for mutation: boxed Mixed reads retain the owning cell, while
     /// typed container reads copy-on-write separate and republish the child in its parent slot.
@@ -1059,6 +1121,7 @@ pub enum Op {
     ObjectCloneShallow,
     DynamicObjectNew,
     DynamicObjectNewMixed,
+    /// Skips constructors; `Bool(true)` permits abstract classes for native factories.
     DynamicObjectNewWithoutConstructorMixed,
     /// Reinterprets one runtime callable descriptor as an opaque bridge pointer.
     CallablePtr,
@@ -1140,6 +1203,8 @@ pub enum Op {
     DynamicPropSet,
     NullsafePropGet,
     NullsafeMethodCall,
+    /// Rejects an abstract instance target before evaluating call arguments.
+    /// Operand: receiver and a Data method name, or receiver/runtime name without an immediate.
     MethodLookup,
     MethodCall,
     StaticMethodCall,
@@ -1189,6 +1254,13 @@ pub enum Op {
     /// (`"f(): Return value must be of type int, "`), to which codegen appends the runtime
     /// type word and `" returned"`. Result: `I64`.
     ReturnBoundaryMixedToInt,
+    /// Narrows a checked integer add/sub/mul result stored into a DECLARED `int` property.
+    /// The operand can only hold an int or the float promoted by overflow (boxed Mixed, or a
+    /// raw I64/F64 after constant folding): an int forwards, a float inside `[-2^63, 2^63)`
+    /// truncates exactly (every such float is integral), and any other float throws the
+    /// catchable `TypeError` whose complete text is the immediate's data id
+    /// (`"Cannot assign float to property C::$p of type int"`). Result: `I64`.
+    PropertyBoundaryCheckedToInt,
     ClassConstant,
     ScopedConstantGet,
     ClassAttrNames,
@@ -1353,6 +1425,7 @@ impl Op {
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
+            LoadRefCellValue => E::READS_LOCAL | E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             StoreLocal | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
                 E::WRITES_LOCAL
             }
@@ -1363,11 +1436,11 @@ impl Op {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
-            RetainLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
+            RetainLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             // The last cell owner can run an arbitrary payload destructor.
             ReleaseLocalRefCell => E::all(),
             // Retiring the slot can invoke an arbitrary PHP destructor after clearing its owner.
-            ReleaseLocalSlot => E::all(),
+            ReleaseLocalSlot | ReleaseRawLocalSlot => E::all(),
             PushCallOperandOwner | PopCallOperandOwner => {
                 E::READS_LOCAL | E::READS_GLOBAL | E::WRITES_GLOBAL
             }
@@ -1386,10 +1459,10 @@ impl Op {
             // late-static visibility fatal before exposing the writable symbol slot.
             LoadStaticPropertyRefCell => E::READS_GLOBAL | E::MAY_THROW | E::MAY_FATAL,
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
+            // Declared slots can reject a value with a catchable TypeError before the write.
+            StoreStaticProperty | StoreReflectionStaticProperty => E::WRITES_GLOBAL | E::WRITES_LOCAL | E::MAY_THROW,
             StoreGlobal
             | StoreStaticLocal
-            | StoreStaticProperty
-            | StoreReflectionStaticProperty
             | InitStaticLocal
             | IncludeOnceMark
             | FunctionVariantMark
@@ -1410,6 +1483,11 @@ impl Op {
             ArrayToPointerWords => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
+            // Reads the array range and the seed cell, retains the seed for an empty range,
+            // and allocates the boxed result. No PHP callback or warning runs inside.
+            ArraySumInt => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
+            // Stores one raw int into preallocated spare capacity and advances the header length.
+            ArrayPushReserved => E::WRITES_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | FirstClassCallableNew | CallableValueNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
@@ -1428,9 +1506,12 @@ impl Op {
             // Scalar stores and whole POD record copies never replace refcounted elements.
             BufferSetResolved => E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL,
             BufferSet => E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset | DescriptorArgKeyExists => {
-                E::READS_HEAP
-            }
+            ArrayGetUnchecked
+            | ArrayGetSilent
+            | HashGetSilent
+            | ArrayIsset
+            | HashIsset
+            | DescriptorArgKeyExists => E::READS_HEAP,
             ArrayGet | HashGet => E::READS_HEAP | E::MAY_WARN,
             // Not a pure read despite the name: the copy-on-write split rewrites the receiver's
             // element slot (and the receiver's own local slot), so it must never be treated as
@@ -1507,7 +1588,10 @@ impl Op {
             // the hash removal can reallocate the table.
             PropUnset | DynamicPropUnset => E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
+            // Marker writes can refuse an incompatible reference payload with a catchable Error.
+            // Retiring the rejected or replaced value can also invoke arbitrary PHP destructors.
+            ArraySet | HashSet | DescriptorArgSet | ArraySetMixedKey => E::all(),
+            ArrayPush | HashAppend
             | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             // `PropSet` and `DynamicPropSet` now carry the SAME conservative contract, because
@@ -1531,16 +1615,13 @@ impl Op {
             ArrayElemAddr => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
             }
-            ArraySetMixedKey => {
-                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN | E::REFCOUNT_OP
-            }
             ArrayGetMixedKey => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN,
             ArrayGetMixedKeySilent => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
             ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
-            MethodCall | NullsafeMethodCall => {
+            MethodLookup | MethodCall | NullsafeMethodCall => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_DEOPT
             }
             // These opcodes drive PHP's Iterator protocol through hidden method calls.
@@ -1550,12 +1631,15 @@ impl Op {
             IterStart | IterCurrentKey | IterCurrentValue | IterNext | IteratorMethodCall => {
                 E::all()
             }
+            // Constructorless allocation still creates default storage and a boxed owning result.
+            DynamicObjectNewWithoutConstructorMixed => E::READS_HEAP | E::WRITES_HEAP
+                | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL | E::MAY_DEOPT,
             SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
-            | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
-            | InstanceOfDynamic | MixedNumericBinop | PhpRelCmp
-            | Spaceship => {
+            | StaticMethodCall
+            | MixedNumericBinop | PhpRelCmp | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
+            InstanceOfDynamic => E::READS_HEAP | E::MAY_THROW | E::MAY_DEOPT,
             // Object/number conversion can invoke an arbitrary PHP warning handler.
             LooseEq | LooseNotEq => E::READS_HEAP | E::MAY_DEOPT | E::MAY_WARN | E::MAY_THROW,
             // `++`/`--` on a string reads the operand's payload, may write the shared
@@ -1568,7 +1652,8 @@ impl Op {
             IterEnd => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_DEOPT,
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
             EnumBackingStringToInt | EnumBackingMixedToInt | PackedFieldMixedToInt
-            | PackedFieldMixedToFloat | PackedFieldMixedToBool | ReturnBoundaryMixedToInt => {
+            | PackedFieldMixedToFloat | PackedFieldMixedToBool | ReturnBoundaryMixedToInt
+            | PropertyBoundaryCheckedToInt => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
@@ -1662,6 +1747,8 @@ impl Op {
     /// `ir_lower::expr::arithmetic_effects()` drops that bit when the right operand is a literal
     /// that rules the error out, so `$x << 3` and `$x / 2` stay removable, hoistable, and
     /// CSE-able exactly as they were before the guards existed.
+    /// Element stores also refine their callback-capable defaults when container, key and
+    /// replacement types prove that no marker, PHP coercion or destructor can be reached.
     /// Runtime-selected callable, function-variant and eval targets keep their defaults:
     /// whole-module refinement has no proof of every implementation they may invoke.
     pub fn allows_effect_refinement(self) -> bool {
@@ -1674,6 +1761,10 @@ impl Op {
                 | Op::IShl
                 | Op::IShrA
                 | Op::Call
+                | Op::ArraySet
+                | Op::HashSet
+                | Op::DescriptorArgSet
+                | Op::ArraySetMixedKey
                 | Op::ClosureBind
                 | Op::LanguageConstructCall
                 | Op::RuntimeCall
@@ -1709,12 +1800,14 @@ impl Op {
             UnsetLocal => "unset_local",
             ZeroLocalSlot => "zero_local_slot",
             LoadRefCell => "load_ref_cell",
+            LoadRefCellValue => "load_ref_cell_value",
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",
             AliasLocalRefCell => "alias_local_ref_cell",
             RetainLocalRefCell => "retain_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",
             ReleaseLocalSlot => "release_local_slot",
+            ReleaseRawLocalSlot => "release_raw_local_slot",
             PushCallOperandOwner => "push_call_operand_owner",
             PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",
@@ -1811,6 +1904,9 @@ impl Op {
             ArrayLen => "array_len",
             HashLen => "hash_len",
             ArrayGet => "array_get",
+            ArrayPushReserved => "array_push_reserved",
+            ArraySumInt => "array_sum_int",
+            ArrayGetUnchecked => "array_get_unchecked",
             ArrayGetSilent => "array_get_silent",
             ArrayGetForWrite => "array_get_for_write",
             HashGet => "hash_get",
@@ -1898,6 +1994,7 @@ impl Op {
             PackedFieldMixedToFloat => "packed_field_mixed_to_float",
             PackedFieldMixedToBool => "packed_field_mixed_to_bool",
             ReturnBoundaryMixedToInt => "return_boundary_mixed_to_int",
+            PropertyBoundaryCheckedToInt => "property_boundary_checked_to_int",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",
             ClassAttrNames => "class_attr_names",

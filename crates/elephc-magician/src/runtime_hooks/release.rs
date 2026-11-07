@@ -42,6 +42,28 @@ impl ElephcRuntimeOps {
         let pending = unsafe { (self.context as *mut super::ElephcEvalContext).as_mut() }
             .and_then(super::ElephcEvalContext::take_pending_throw);
         let (thrown, caught) = release_native_cells_with_status(cells, pending);
+        self.finish_native_cleanup(thrown, caught)
+    }
+
+    /// Unlinks a staging record before consuming its owner inside the native cleanup boundary.
+    pub(in crate::runtime_hooks) fn release_reference_pin(
+        &mut self, pin: *mut std::ffi::c_void,
+    ) -> Result<(), EvalStatus> {
+        let pending = unsafe { (self.context as *mut super::ElephcEvalContext).as_mut() }
+            .and_then(super::ElephcEvalContext::take_pending_throw);
+        let mut thrown = pending.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr);
+        let caught = unsafe {
+            super::externs::__elephc_eval_value_native_reference_pin_release_v1(pin, &mut thrown)
+        } != 0;
+        self.finish_native_cleanup(
+            (!thrown.is_null()).then(|| RuntimeCellHandle::from_raw(thrown)), caught,
+        )
+    }
+
+    /// Republishes an owned pending chain while distinguishing an earlier throw from a new failure.
+    fn finish_native_cleanup(
+        &mut self, thrown: Option<RuntimeCellHandle>, caught: bool,
+    ) -> Result<(), EvalStatus> {
         let has_throwable = thrown.is_some();
         if let Some(thrown) = thrown {
             self.schedule_pending_throw(thrown)?;

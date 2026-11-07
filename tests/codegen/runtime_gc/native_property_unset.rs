@@ -10,6 +10,73 @@
 
 use crate::support::*;
 
+/// Native and eval unset detach an owned typed cell while a surviving AOT alias stays writable.
+#[test]
+fn test_native_reference_property_unset_detaches_surviving_aliases_bundle() {
+    let source = r#"<?php
+class NativeReferenceUnsetParent {
+    public string $value = 'old';
+    public function &valueRef(): string { return $this->value; }
+}
+class NativeReferenceUnsetChild extends NativeReferenceUnsetParent {}
+class NativeReferenceUnsetReentryBox {
+    public ?NativeReferenceUnsetReentryPayload $value = null;
+    public function &valueRef(): ?NativeReferenceUnsetReentryPayload { return $this->value; }
+}
+class NativeReferenceUnsetReentryPayload {
+    public NativeReferenceUnsetReentryBox $owner;
+    public bool $active;
+    public function __construct(NativeReferenceUnsetReentryBox $owner, bool $active) {
+        $this->owner = $owner; $this->active = $active;
+    }
+    public function __destruct() {
+        if ($this->active) {
+            echo isset($this->owner->value) ? 'bad|' : 'removed|';
+            $this->owner->value = new NativeReferenceUnsetReentryPayload($this->owner, false);
+        }
+    }
+}
+function nativeReferenceUnsetFromEval(object $holder, string $source): void {
+    eval($source);
+}
+$holder = new NativeReferenceUnsetChild();
+$alias =& $holder->valueRef();
+if ($argc === 1) { unset($holder->value); }
+else {
+    $source = $argc > 0 ? 'unset($holder->value);' : '';
+    nativeReferenceUnsetFromEval($holder, $source);
+    unset($source);
+}
+echo $alias, '|', isset($holder->value) ? 'bad|' : 'unset|';
+$alias = 'detached';
+$holder->value = 'new';
+echo $alias, '|', $holder->value, '|';
+unset($holder);
+echo $alias, '|';
+unset($alias);
+$holder = new NativeReferenceUnsetReentryBox();
+$holder->value = new NativeReferenceUnsetReentryPayload($holder, true);
+$alias =& $holder->valueRef();
+unset($alias);
+if ($argc === 1) { unset($holder->value); }
+else {
+    $source = $argc > 0 ? 'unset($holder->value);' : '';
+    nativeReferenceUnsetFromEval($holder, $source);
+    unset($source);
+}
+echo isset($holder->value) ? 'recreated|' : 'bad|';
+unset($holder);
+"#;
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(&source, &[&[], &["eval"]]);
+    preserve_stdout_mismatches(&source, &assembly, &runs,
+        &["old|unset|detached|new|detached|removed|recreated|", "old|unset|detached|new|detached|removed|recreated|"]);
+    for (mode, out) in runs.iter().enumerate() {
+        assert!(out.success, "mode={mode} status={} stdout={} stderr={}", out.status, out.stdout, out.stderr);
+        assert_eq!(out.stdout, "old|unset|detached|new|detached|removed|recreated|", "mode={mode}");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "mode={mode}: {}", out.stderr);
+    }
+}
+
 /// Opaque eval probes uninitialized native slots without going through the rejecting getter.
 #[test]
 fn test_core_eval_native_isset_skips_uninitialized_and_unset_property_reads() {

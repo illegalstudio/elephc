@@ -30,6 +30,7 @@ pub(crate) mod scope_dynamic_storage;
 mod driver;
 mod extern_decl;
 mod functions;
+pub(crate) use functions::validate_unresolved_call_argument_order;
 mod generic_bounds;
 mod generic_method;
 mod generic_new;
@@ -47,6 +48,7 @@ mod binding_flow;
 mod mixed_storage_scan;
 mod numeric_regions;
 mod packed_counter;
+mod promotable_arrays;
 pub(crate) mod null_probe;
 mod schema;
 mod stmt_check;
@@ -69,6 +71,7 @@ use crate::types::{
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
+pub(crate) use loop_storage::loop_assigned_local_names;
 pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 pub(crate) use schema::normalize_signature_default_receivers;
@@ -95,6 +98,14 @@ pub(crate) struct Checker {
     pub failed_variant_contracts: HashMap<String, CompileError>,
     /// Signatures whose body and return validation completed, rather than mere placeholders.
     pub completed_function_signatures: HashSet<String>,
+    /// Body errors of each function's latest failed walk, cleared when the body is walked again.
+    pub failed_function_body_errors: HashMap<String, Vec<CompileError>>,
+    /// Failed untyped-parameter functions the final top-level pass walks again at their next
+    /// direct call, with the argument types that call settles on.
+    pub rewalk_failed_body_at_next_call: HashSet<String>,
+    /// While a failed body is walked again, the completed callees with an inferred return
+    /// already refreshed from the settled property types; `None` outside such a walk.
+    pub refreshed_inferred_callees: Option<HashSet<String>>,
     /// Canonical function signatures indexed by fully-qualified name.
     pub functions: HashMap<String, FunctionSig>,
     function_name_indices: function_names::FunctionNameIndices,
@@ -115,6 +126,8 @@ pub(crate) struct Checker {
     pub constants: HashMap<String, PhpType>,
     /// Tracks the return type of closures assigned to variables, keyed by variable name.
     pub closure_return_types: HashMap<String, PhpType>,
+    /// Contextual parameter types inferred for inline array-callback closures, keyed by span.
+    pub closure_param_hints: HashMap<Span, Vec<PhpType>>,
     /// Tracks known callable signatures for variables holding first-class callables,
     /// keyed by variable name.
     pub callable_sigs: HashMap<String, FunctionSig>,
@@ -171,6 +184,8 @@ pub(crate) struct Checker {
     /// Deduplicated by instantiated name, so the fixpoint terminates for any program without
     /// polymorphic recursion.
     pub requested_instantiations: Vec<(String, crate::generics::Bindings)>,
+    /// Typed clones the direct calls of this check redirected to, deduplicated by clone name.
+    pub requested_promotable_clones: Vec<crate::generics::promotable_clones::PromotableCloneRequest>,
     /// (enclosing function, call site) -> the instantiated function that call resolved to.
     ///
     /// Lowering cannot re-derive this: picking the instantiation needs the argument TYPES, and
@@ -184,7 +199,7 @@ pub(crate) struct Checker {
     /// same line and column. Keying on `Span` alone collapsed those two into one and made the
     /// second call invoke the first's function.
     ///
-    /// The scope half is `current_loop_storage_scope` (`main`, a function's name,
+    /// The scope half is `current_loop_storage_scope` (`#main`, a function's name,
     /// `Class::method`, or a closure's nested scope), which lowering spells the same way and
     /// `generics::site_scope` rebuilds for the AST rename passes. All three generic site maps
     /// use it.
@@ -431,6 +446,9 @@ pub(crate) struct Checker {
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
+    /// Physical instance slots refined during the current method fixed-point pass.
+    /// A first constructor integer initialization may replay a placeholder from an older pass.
+    pub method_property_refinements: Option<HashSet<(String, usize)>>,
     /// Classes a two-argument `clone()` in this program can hand an override array to.
     ///
     /// Recorded by the `clone` builtin's check hook, and applied to `classes` after checking by
@@ -619,6 +637,43 @@ pub(crate) struct Checker {
     /// type, as span -> the SET of local NAMES re-bound there. Carried in `CheckResult` from here
     /// so the binding-decision maps travel together, keyed and shaped the same way.
     pub local_retype_sites: HashMap<Span, HashSet<String>>,
+    /// Local array writes whose integer key may skip a slot of a non-empty packed array, as
+    /// span -> the SET of local NAMES promoted to hash storage there. See
+    /// `CheckResult::sparse_key_write_sites`.
+    pub sparse_key_write_sites: HashMap<Span, HashSet<String>>,
+    /// Typed scalar packed locals promoted to hash storage only at run time, and their whole-value
+    /// reads typed `array<mixed>`. See `CheckResult::promotable_arrays`.
+    pub promotable_arrays: crate::types::PromotableArrays,
+    /// The current body's locals `promotable_arrays::find_candidates` found free of references,
+    /// unsets, nested writes and by-reference calls, so they may become promotable. Installed per
+    /// body before it is checked, and saved and restored around nested bodies.
+    pub promotable_array_candidates: promotable_arrays::PromotableCandidates,
+    /// Spans of promotable values handed on raw: an argument bound to a promotable `array<int>`
+    /// parameter, a `return` from a function declared `array<int>`, or an assignment to a
+    /// candidate local. They skip the `array<mixed>` view.
+    pub promotable_raw_sites: HashSet<Span>,
+    /// `(function, parameter)` pairs some caller passes a promotable `array<int>` to, so the
+    /// parameter is promotable from the function's entry.
+    pub promotable_params: HashSet<(String, String)>,
+    /// Functions declared to return `array<int>` that return a promotable value.
+    pub promotable_returning: HashSet<String>,
+    /// Functions to re-resolve once their current resolution ends, because a promotable
+    /// decision about them appeared while their body was being checked.
+    pub pending_promotable_reresolutions: Vec<String>,
+    /// `(callee, parameter, argument)` for call arguments that are themselves calls: whether they
+    /// return a promotable value is known only once they are checked.
+    pub pending_promotable_call_args: Vec<(String, String, Expr)>,
+    /// Candidate sets of callee bodies, computed once per function.
+    pub promotable_callee_candidates: HashMap<String, promotable_arrays::PromotableCandidates>,
+    /// `(scope, local)` pairs whose boxed or counter-key element reads took the `?int` view in the
+    /// current walk of `scope`.
+    pub promotable_view_reads: HashSet<(String, String)>,
+    /// `(scope, local)` pairs some write or entry made promotable in the current walk of `scope`.
+    pub promotable_walk_locals: HashSet<(String, String)>,
+    /// `(scope, local)` pairs denied the `?int` view because a walk gave it to them and nothing in
+    /// that walk made them promotable. It only grows, so re-walking a body until it stops growing
+    /// terminates, and the last walk gives the view exactly to the locals it promotes.
+    pub promotable_view_denied: HashSet<(String, String)>,
     /// AST address of the expression that forms the ENTIRE expression-statement currently being
     /// checked, or `None` outside one.
     ///
@@ -1561,6 +1616,7 @@ fn check_types_on_compiler_stack(
 
     Ok(CheckResult {
         requested_instantiations: checker.requested_instantiations,
+        requested_promotable_clones: checker.requested_promotable_clones,
         generic_call_sites: checker.generic_call_sites,
         requested_class_instantiations: checker.requested_class_instantiations,
         requested_method_instantiations: checker.requested_method_instantiations,
@@ -1586,6 +1642,7 @@ fn check_types_on_compiler_stack(
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
         closure_generator_spans: checker.closure_generator_spans,
+        closure_param_hints: checker.closure_param_hints,
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
         local_value_read_types: checker.local_value_read_types,
@@ -1599,6 +1656,8 @@ fn check_types_on_compiler_stack(
         local_ref_detach_sites: checker.local_ref_detach_sites,
         local_retype_sites: checker.local_retype_sites,
         mixed_storage_store_sites: checker.mixed_storage_store_sites,
+        sparse_key_write_sites: checker.sparse_key_write_sites,
+        promotable_arrays: checker.promotable_arrays,
     })
 }
 
@@ -1651,10 +1710,30 @@ pub(crate) fn single_object_class_name(ty: &PhpType) -> Option<String> {
 /// reference) must be treated as a reference property by codegen so every access lowers
 /// through its ref-cell. Promotion is applied to the declaring class and every class that
 /// inherits the property, keeping the runtime representation consistent across the
-/// hierarchy. Constructor-promoted `&$param` properties already are reference properties
-/// (borrowed cell) and are left untouched. Object-owned reference cells are also recorded
+/// hierarchy. Exact Mixed constructor-promoted references also acquire an object owner;
+/// other constructor-promoted payloads retain their existing representation. Owned cells are recorded
 /// in `owned_reference_properties` so the object allocates and frees them.
 fn apply_reference_property_promotions(checker: &mut Checker) {
+    {
+        let contains_eval = checker.program_contains_eval;
+        let classes = &checker.classes;
+        let candidates = classes.iter().flat_map(|(name, info)| {
+            info.properties.iter().enumerate().filter_map(move |(index, (property, ty))| {
+                let declaring = info.property_declaring_classes.get(property).unwrap_or(name);
+                (ty == &PhpType::Mixed && info.visible_property_index(property) == Some(index)
+                    && info.property_slot_is_declared(index, property)
+                    && ((!info.reference_properties.contains(property) && contains_eval)
+                        || (info.reference_properties.contains(property)
+                            && info.promoted_properties.contains(property)))
+                    && !info.readonly_properties.contains(property)
+                    && !info.property_set_visibilities.contains_key(property)
+                    && info.property_hooks.get(property).is_none_or(|hooks| !hooks.any())
+                    && classes.get(declaring).is_some_and(|owner| !owner.is_internal))
+                    .then(|| (name.clone(), property.clone()))
+            })
+        }).collect::<Vec<_>>();
+        checker.reference_property_promotions.extend(candidates);
+    }
     let promotions = std::mem::take(&mut checker.reference_property_promotions);
     for (access_class, prop) in promotions {
         let declaring = checker
@@ -1662,26 +1741,34 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
             .get(&access_class)
             .and_then(|info| info.property_declaring_classes.get(&prop).cloned())
             .unwrap_or_else(|| access_class.clone());
-        for info in checker.classes.values_mut() {
-            if !info.properties.iter().any(|(name, _)| name == &prop) {
-                continue;
+        let Some(slot) = checker.classes.get(&declaring)
+            .and_then(|info| info.visible_property_index(&prop)) else { continue; };
+        let owned_constructor_reference = checker.classes.get(&declaring).is_some_and(|info| {
+            info.properties[slot].1 == PhpType::Mixed && info.promoted_properties.contains(&prop)
+        });
+        let descendants = checker.classes.keys().filter(|name| {
+            let mut current = Some(name.as_str());
+            let mut seen = HashSet::new();
+            while let Some(name) = current {
+                if name == declaring { return true; }
+                if !seen.insert(name) { break; }
+                current = checker.classes.get(name).and_then(|info| info.parent.as_deref());
             }
-            let same_decl = info
-                .property_declaring_classes
-                .get(&prop)
-                .is_some_and(|decl| decl == &declaring);
-            if !same_decl {
-                continue;
-            }
-            if info.reference_properties.contains(&prop) {
-                continue;
-            }
-            info.reference_properties.insert(prop.clone());
-            info.owned_reference_properties.insert(prop.clone());
-            if let Some(slot) = info.visible_property_index(&prop) {
-                if let Some(slot_reference) = info.property_reference_slots.get_mut(slot) {
-                    *slot_reference = true;
-                }
+            false
+        }).cloned().collect::<Vec<_>>();
+        for name in descendants {
+            let info = checker.classes.get_mut(&name).unwrap();
+            if info.properties.get(slot).is_none_or(|(name, _)| name != &prop) { continue; }
+            // Raw constructor cells keep their existing borrowed payload ABI.
+            if info.property_slot_is_reference(slot, &prop)
+                && !info.property_slot_owns_reference(slot)
+                && !owned_constructor_reference { continue; }
+            info.property_reference_slots.resize(info.properties.len(), false);
+            info.property_reference_slots[slot] = true;
+            info.owned_reference_property_slots.insert(slot);
+            if info.visible_property_index(&prop) == Some(slot) {
+                info.reference_properties.insert(prop.clone());
+                info.owned_reference_properties.insert(prop.clone());
             }
         }
     }

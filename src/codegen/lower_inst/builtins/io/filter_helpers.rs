@@ -9,20 +9,22 @@
 
 use super::*;
 
+/// Shared builtin filter names and byte-table ids for literal and dynamic dispatch.
+pub(super) const BUILTIN_STREAM_FILTERS: &[(&str, u8)] = &[
+    ("string.toupper", 1),
+    ("string.tolower", 2),
+    ("string.rot13", 3),
+    ("string.strip_tags", 4),
+    ("dechunk", 5),
+    ("convert.base64-encode", 6),
+    ("convert.base64-decode", 7),
+    ("convert.quoted-printable-encode", 8),
+    ("convert.quoted-printable-decode", 9),
+];
+
 /// Maps runtime-supported built-in stream filter names to byte-table ids.
 pub(super) fn stream_filter_id(name: &str) -> Option<u8> {
-    match name {
-        "string.toupper" => Some(1),
-        "string.tolower" => Some(2),
-        "string.rot13" => Some(3),
-        "string.strip_tags" => Some(4),
-        "dechunk" => Some(5),
-        "convert.base64-encode" => Some(6),
-        "convert.base64-decode" => Some(7),
-        "convert.quoted-printable-encode" => Some(8),
-        "convert.quoted-printable-decode" => Some(9),
-        _ => None,
-    }
+    BUILTIN_STREAM_FILTERS.iter().find_map(|(candidate, id)| (*candidate == name).then_some(*id))
 }
 
 /// Reads a compile-time integer filter parameter from the fourth builtin operand.
@@ -75,6 +77,13 @@ pub(super) fn lower_builtin_stream_filter_attach(
 ) -> Result<()> {
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
+    finish_builtin_stream_filter_attach(ctx, inst, id)
+}
+
+/// Attaches a builtin filter after validating its descriptor into the integer result register.
+pub(super) fn finish_builtin_stream_filter_attach(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, id: u8,
+) -> Result<()> {
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     materialize_stream_filter_mode(ctx, inst)?;
     let skip_read = ctx.next_label("sf_skip_read");
@@ -167,6 +176,13 @@ pub(super) fn lower_user_stream_filter_attach(
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     load_string_to_result(ctx, filter, "stream_filter_append filter")?;
+    finish_user_stream_filter_attach(ctx, inst)
+}
+
+/// Attaches a userspace filter with its descriptor on the stack and name in result registers.
+pub(super) fn finish_user_stream_filter_attach(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");

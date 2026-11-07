@@ -20,7 +20,13 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_heap_alloc(emitter);
     arrays::emit_heap_grow_tail(emitter);
     arrays::emit_heap_consolidate(emitter);
-    super::super::reference_cells::emit_reference_cells(emitter);
+    super::super::reference_cells::emit_reference_cells(emitter, features.native_reference_validation);
+    if features.native_reference_validation {
+        super::super::reference_cells::emit_validation_coordinator(emitter);
+        super::super::reference_cells::emit_validation_commit(emitter);
+        super::super::reference_cells::emit_validation_publish(emitter);
+        super::super::reference_cells::emit_source_lifecycle(emitter);
+    }
     arrays::emit_heap_debug_fail(emitter);
     arrays::emit_heap_debug_check_live(emitter);
     arrays::emit_heap_debug_validate_free_list(emitter);
@@ -32,6 +38,11 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_ensure_unique(emitter);
     arrays::emit_array_grow(emitter);
     arrays::emit_array_new(emitter);
+    arrays::emit_array_map_sum_probe_int(emitter);
+    arrays::emit_array_sum_probe_small(emitter);
+    arrays::emit_array_sum_int(emitter);
+    arrays::emit_keyed_kernels(emitter);
+    arrays::emit_array_type_check(emitter);
     arrays::emit_array_push_int(emitter);
     arrays::emit_array_push_refcounted(emitter);
     arrays::emit_array_push_str(emitter);
@@ -169,7 +180,9 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_map_mixed(emitter);
     arrays::emit_array_map_str(emitter);
     arrays::emit_array_map_str_owned(emitter);
+    arrays::emit_array_filter_int_direct(emitter);
     arrays::emit_array_predicate_boxed(emitter);
+    arrays::emit_array_reduce_int_direct(emitter);
     arrays::emit_array_reduce(emitter);
     arrays::emit_array_reduce_str(emitter);
     arrays::emit_array_reduce_boxed(emitter);
@@ -203,8 +216,10 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_mixed_reference(emitter);
     arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
+    arrays::emit_mixed_from_owned_string(emitter);
     arrays::emit_mixed_cast_array(emitter);
     arrays::emit_mixed_abs(emitter);
+    arrays::emit_mixed_bit_not(emitter);
     arrays::emit_mixed_instanceof(emitter);
     arrays::emit_iterable_unsupported_kind(emitter);
     arrays::emit_foreach_non_iterable_warning(emitter);
@@ -232,7 +247,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     // Native `clone()` and Magician share this compact boxed adapter. Omit it when neither
     // surface is reachable so native-only literal eval keeps its runtime dependency-pure.
     if features.object_clone || features.eval_bridge {
-        eval_bridge::emit_object_clone_shallow_runtime(emitter);
+        eval_bridge::emit_object_clone_shallow_runtime(emitter, features.native_reference_validation);
     }
     if features.eval_bridge {
         eval_bridge::emit_eval_bridge_runtime(emitter, features);
@@ -273,7 +288,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_mixed_array_set(emitter);
     objects::emit_mixed_array_append(emitter);
     objects::emit_mixed_array_fetch_for_write(emitter);
-    objects::emit_new_by_name(emitter);
+    objects::emit_new_by_name(emitter, features.native_reference_validation);
     objects::emit_call_object_destructor(emitter);
     // PHP `==` walkers: one boxed-Mixed dispatcher plus the array and object
     // recursion it delegates to. Emitted after the object property accessors it calls.
@@ -290,6 +305,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_var_dump_emit_enum_line(emitter);
     objects::emit_pr_obj_desc(emitter);
     objects::emit_print_r_object(emitter);
+    objects::emit_native_debug(emitter);
     objects::emit_obj_dump_dyn_props(emitter);
     objects::emit_obj_debuginfo_fetch(emitter);
     objects::emit_vd_debuginfo_object(emitter);

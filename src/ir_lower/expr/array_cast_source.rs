@@ -289,7 +289,13 @@ fn null_coalesce_source_type(
     let default_ty = super::merge_temps::null_only_call_merge_type(ctx, default)
         .unwrap_or_else(|| array_cast_source_type_for_ir(ctx, default))
         .codegen_repr();
-    // Must agree with `null_coalesce_result_type`, which boxes an int/bool pair.
+    // Must agree with `null_coalesce_result_type`, which boxes an int/bool pair and keeps a
+    // scalar beside a null default nullable.
+    if let Some(nullable) =
+        super::merge_temps::scalar_beside_null_merge_type(&value_ty, default, &default_ty)
+    {
+        return nullable;
+    }
     materialized_merge_type(&value_ty, &default_ty)
 }
 

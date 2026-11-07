@@ -32,6 +32,7 @@ pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter, features: RuntimeF
     emit_object_clone_shallow_eval_export(emitter);
     emit_magic_set_guard_eval_exports(emitter);
     scope_release::emit(emitter);
+    owner_frames::emit(emitter);
 }
 
 /// Emits self-contained value wrappers shared by native eval fragments and Magician.
@@ -44,23 +45,27 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter, features: RuntimeFe
     }
     emit_gc_lifecycle_wrappers(emitter);
     release_boundary::emit(emitter);
+    bit_not::emit(emitter);
     array_reference_query::emit_array_entry_reference_query(emitter);
     resources::emit_resource_inventory_wrapper(emitter);
     backtrace::emit_backtrace_entry_wrapper(emitter);
     lifecycle::emit(emitter);
     output::emit(emitter);
+    debug::emit(emitter);
     array_next_index::emit(emitter);
+    native_reference_cells::emit(emitter);
     callable_adapter::emit(emitter);
+    spl_storage_write::emit(emitter);
     if features.mbstring || features.eval_bridge { string_literal::emit(emitter); }
 }
 
 /// Emits the boxed shallow-clone adapter shared by Magician and PHP 8.5 `clone()`.
-pub(crate) fn emit_object_clone_shallow_runtime(emitter: &mut Emitter) {
+pub(crate) fn emit_object_clone_shallow_runtime(emitter: &mut Emitter, native_validation: bool) {
     emitter.blank();
     emitter.comment("--- runtime: boxed object shallow clone ---");
     match emitter.target.arch {
-        Arch::AArch64 => emit_aarch64_object_clone_shallow_wrapper(emitter),
-        Arch::X86_64 => emit_x86_64_object_clone_shallow_wrapper(emitter),
+        Arch::AArch64 => emit_aarch64_object_clone_shallow_wrapper(emitter, native_validation),
+        Arch::X86_64 => emit_x86_64_object_clone_shallow_wrapper(emitter, native_validation),
     }
 }
 
@@ -91,12 +96,17 @@ fn emit_magic_set_guard_eval_exports(emitter: &mut Emitter) {
 
 mod aarch64_values_classes;
 mod aarch64_arrays;
+#[cfg(test)]
+mod key_normalization_tests;
 mod array_iter_value;
 pub(crate) mod array_next_index;
 mod reference_values;
+mod native_reference_cells;
 mod callable_adapter;
+mod spl_storage_write;
 mod lifecycle;
 mod output;
+mod debug;
 mod mbstring;
 pub(crate) mod string_literal;
 mod aarch64_casts;
@@ -126,7 +136,9 @@ mod resources;
 mod backtrace;
 mod gc_boundary;
 mod release_boundary;
+mod bit_not;
 mod scope_release;
+mod owner_frames;
 
 #[allow(unused_imports)]
 use aarch64_values_classes::*;
@@ -687,6 +699,28 @@ mod tests {
                 body.contains(exit_status),
                 "fatal must exit with status 255 on {target:?}:\n{body}"
             );
+        }
+    }
+
+    /// PHP clone and eval register completed native sources before the new box exposes the copy.
+    #[test]
+    fn boxed_runtime_clone_registers_completed_native_sources_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for enabled in [false, true] {
+                let mut emitter = Emitter::new(target);
+                emit_object_clone_shallow_runtime(&mut emitter, enabled);
+                let asm = emitter.output();
+                let bind = asm.find("__rt_reference_sources_bind_object");
+                assert_eq!(bind.is_some(), enabled, "{name}: ordinary clones keep no registry dependency");
+                if let Some(bind) = bind {
+                    let copy = asm.find("__rt_hash_clone_shallow").unwrap();
+                    let boxing = if target.arch == Arch::AArch64 { "mov x0, #24" }
+                        else { "mov rax, 24" };
+                    let boxed = asm[bind..].find(boxing).unwrap() + bind;
+                    assert!(copy < bind && bind < boxed, "{name}: register all initialized clone cells");
+                }
+            }
         }
     }
 

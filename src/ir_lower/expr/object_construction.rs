@@ -415,15 +415,29 @@ pub(super) fn lower_new_dynamic(
 ) -> LoweredValue {
     let args = expand_static_call_spread_args(args);
     let name_value = lower_expr(ctx, name_expr);
-    let owns_name = ctx.value_is_owning_temporary(name_value)
-        && !ctx.value_is_owned_unboxed_local_load(name_value.value);
-    if owns_name { guard_descriptor_container(ctx, name_value, expr.span); }
+    // Constructor arguments can replace the original class-name binding. Retain its
+    // evaluated value, including provisional string projections from Mixed locals.
+    let name_type = ctx.builder.value_php_type(name_value.value);
+    let (name_value, name_owner) = if Ownership::php_type_needs_lifetime_tracking(&name_type) {
+        let name_temp = ctx.declare_hidden_temp(name_type.clone());
+        store_value_into_temp(ctx, &name_temp, name_type, name_value, expr.span);
+        let slot = ctx.local_slots[&name_temp];
+        register_owned_call_operand(ctx, slot, expr.span);
+        let borrowed = ctx.load_local(&name_temp, Some(expr.span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        (borrowed, Some(slot))
+    } else { (name_value, None) };
     crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name_value, expr.span);
-    if owns_name { ctx.unguard_call_argument(name_value.value, expr.span); }
-    if let Some(value) = lower_new_dynamic_planned_dispatch(ctx, name_value, &args, expr) {
-        return value;
+    let result = lower_new_dynamic_planned_dispatch(ctx, name_value, &args, expr)
+        .unwrap_or_else(|| lower_new_dynamic_generic(ctx, name_value, &args, expr));
+    if let Some(slot) = name_owner {
+        let guard_result = ctx.value_is_owning_temporary(result)
+            && !ctx.has_call_argument_guard(result.value);
+        if guard_result { guard_descriptor_container(ctx, result, expr.span); }
+        retire_owned_call_operand(ctx, slot, expr.span);
+        if guard_result { ctx.unguard_call_argument(result.value, expr.span); }
     }
-    lower_new_dynamic_generic(ctx, name_value, &args, expr)
+    result
 }
 
 /// Emits the generic runtime class-name dispatch for `new $class(...)`.
@@ -444,6 +458,12 @@ pub(super) fn lower_new_dynamic_generic(
     let mut operands = vec![name_value.value];
     let uses_runtime_arg_container =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
+    let result_staging = if uses_runtime_arg_container { None } else {
+        prepublish_call_result(ctx, &PhpType::Mixed, expr.span)
+    };
+    let mut positional = Vec::new();
+    let mut intermediates = Vec::new();
+    let mut roots = Vec::new();
     let arg_container = if uses_runtime_arg_container {
         let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
         operands.push(arg_container.value);
@@ -453,7 +473,12 @@ pub(super) fn lower_new_dynamic_generic(
         }
         Some((arg_container, owns_arguments))
     } else {
-        operands.extend(lower_args(ctx, args));
+        begin_call_argument_evaluation(ctx);
+        positional = lower_args(ctx, args);
+        intermediates = finish_call_argument_evaluation(ctx, &mut positional);
+        roots = root_user_call_operands(ctx, &mut positional, None, &ReturnArgAlias::None,
+            &PhpType::Mixed, expr.span);
+        operands.extend(positional.iter().copied());
         None
     };
     let result = ctx.emit_value(
@@ -464,6 +489,7 @@ pub(super) fn lower_new_dynamic_generic(
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),
     );
+    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
     if let Some((arg_container, true)) = arg_container {
         let guard_result = ctx.value_is_owning_temporary(result);
         if guard_result {
@@ -474,8 +500,12 @@ pub(super) fn lower_new_dynamic_generic(
         if guard_result {
             ctx.unguard_call_argument(result.value, expr.span);
         }
+    } else if !uses_runtime_arg_container {
+        release_owned_call_arg_temporaries_with_roots(ctx, &positional, None,
+            &ReturnArgAlias::None, None, &roots, expr.span);
+        retire_call_argument_intermediates(ctx, &intermediates);
     }
-    result
+    take_prepublished_call_result(ctx, result_staging, result, expr.span)
 }
 
 /// Lowers dynamic object construction.

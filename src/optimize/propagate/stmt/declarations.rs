@@ -63,11 +63,12 @@ pub(super) fn propagate_property(property: ClassProperty) -> ClassProperty {
 /// using a fresh empty scalar environment (no enclosing scope bindings). Other method
 /// metadata (name, visibility, attributes, return type, etc.) is copied unchanged.
 pub(super) fn propagate_method(method: ClassMethod) -> ClassMethod {
+    let reference_parameters = reference_parameter_names(&method.params, method.variadic.as_deref(), method.variadic_by_ref);
     ClassMethod {
         // A REBUILD. Constant propagation rewrites params and body, not the declaration.
         type_params: method.type_params,
         params: propagate_params(method.params),
-        body: with_function_scope_mode(method.by_ref_return, || {
+        body: with_reference_parameter_scope(method.by_ref_return, reference_parameters, || {
             crate::optimize::generator_bodies::rewrite_preserving_yield(method.body, |body| {
                 propagate_block(body, HashMap::new()).0
             })

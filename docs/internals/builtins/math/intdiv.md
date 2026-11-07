@@ -14,13 +14,12 @@ description: "Compiler internals for intdiv(): lowering path, type checks, and r
 
 ### Lowering notes
 
-- Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.intdiv` through `BuiltinLoweringContext`.
-- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
+- Uses the `eir_graph` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
 ## Semantic descriptor
 
-- **Target strategy**: `runtime_call`
+- **Target strategy**: `eir_graph`
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
@@ -31,8 +30,7 @@ description: "Compiler internals for intdiv(): lowering path, type checks, and r
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.intdiv`
-- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

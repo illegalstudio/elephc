@@ -75,6 +75,31 @@ pub(super) fn collect_exception_bodies<'a>(
     }
 }
 
+/// Preserves lexical reference parameter names for each fixed-point exception summary.
+pub(super) fn collect_reference_parameter_scopes(
+    stmts: &[Stmt], scopes: &mut HashMap<String, HashSet<String>>,
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, params, variadic, variadic_by_ref, .. } => {
+                scopes.insert(name.clone(), crate::optimize::reference_parameter_names(
+                    params, variadic.as_deref(), *variadic_by_ref));
+            }
+            StmtKind::ClassDecl { name, methods, .. }
+            | StmtKind::TraitDecl { name, methods, .. }
+            | StmtKind::InterfaceDecl { name, methods, .. } => {
+                for method in methods {
+                    scopes.insert(method_effect_key(name, &method.name),
+                        crate::optimize::reference_parameter_names(&method.params,
+                            method.variadic.as_deref(), method.variadic_by_ref));
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_reference_parameter_scopes(body, scopes),
+            _ => {}
+        }
+    }
+}
+
 /// Collects declaration-level entry checks when checker metadata is unavailable to the pass.
 pub(super) fn collect_object_reference_entry_checks(
     stmts: &[Stmt],

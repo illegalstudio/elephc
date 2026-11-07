@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<r xmlns:p="urn:p" at="base" p:at="literal"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q></r>
+1:value:second:0|base:literal:a:b|method:qualified|:a|SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|SimpleXMLElement::addAttribute(): Attribute already exists|<?xml version="1.0"?>
+<r xmlns:p="urn:p" at="base" p:at="literal" :c="1"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q><p:method>qualified</p:method><:a>leading</:a></r>

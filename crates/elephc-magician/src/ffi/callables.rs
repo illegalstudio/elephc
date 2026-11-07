@@ -34,6 +34,28 @@ pub unsafe extern "C" fn __elephc_eval_is_callable(
     std::panic::catch_unwind(|| unsafe { eval_is_callable_inner(ctx, callback) }).unwrap_or(0)
 }
 
+/// Probes a positional or named parameter before native argument evaluation starts.
+///
+/// # Safety
+/// The context and callback must be live; `name_ptr` must be readable for `name_len` bytes.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_callable_parameter_is_by_ref(
+    ctx: *mut ElephcEvalContext, callback: *mut RuntimeCell,
+    name_ptr: *const u8, name_len: u64, position: u64,
+) -> u64 {
+    std::panic::catch_unwind(|| {
+        let Some(context) = (unsafe { ctx.as_mut() }) else { return 0; };
+        if context.abi_version() != ABI_VERSION || callback.is_null() { return 0; }
+        let Ok(name) = crate::ffi::util::abi_name_to_string(name_ptr, name_len) else { return 0; };
+        let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+        interpreter::execute_context_callable_parameter_is_by_ref(context,
+            RuntimeCellHandle::from_raw(callback).borrowed(),
+            (!name.is_empty()).then_some(name.as_str()), position as usize, &mut values)
+            .map(u64::from).unwrap_or(0)
+    }).unwrap_or(0)
+}
+
 /// Dispatches a callback value with a PHP argument array through the eval context.
 ///
 /// # Safety

@@ -189,7 +189,9 @@ impl Checker {
             StmtKind::FunctionDecl { .. } => Ok(()),
             StmtKind::Return(expr) => {
                 if let Some(e) = expr {
+                    self.prepare_promotable_return(e, env);
                     let returned = self.infer_type_with_assignment_effects(e, env)?;
+                    self.confirm_promotable_return(e, env);
                     self.record_return_boundary_exception_flow(&returned, env);
                     // Record the type as observed HERE, in flow order, so the later
                     // flow-insensitive return-coverage pass does not apply a narrowing that

@@ -34,6 +34,7 @@ pub(super) fn lower_reflection_class_new_instance(
         &result_type,
         expr.span,
     );
+    let class_name_pins = pin_in_flight_owners(ctx, &[class_name.value], expr.span);
     begin_call_argument_evaluation(ctx);
     let mut arg_values = lower_args_with_signature(ctx, constructor_sig.as_ref(), &args);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
@@ -66,6 +67,10 @@ pub(super) fn lower_reflection_class_new_instance(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    unpin_in_flight_owners(ctx, class_name_pins, expr.span);
+    if ctx.value_is_owning_temporary(class_name) {
+        crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
+    }
     take_prepublished_call_result(ctx, result_staging, object, expr.span)
 }
 
@@ -94,14 +99,20 @@ pub(super) fn lower_reflection_class_new_instance_without_constructor(
         return lower_reflection_class_new_instance_without_constructor_unsupported(ctx, expr);
     }
     let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
-    ctx.emit_value(
+    let pins = pin_in_flight_owners(ctx, &[class_name.value], expr.span);
+    let result = ctx.emit_value(
         Op::DynamicObjectNewWithoutConstructorMixed,
         vec![class_name.value],
         None,
         PhpType::Mixed,
         Op::DynamicObjectNewWithoutConstructorMixed.default_effects(),
         Some(expr.span),
-    )
+    );
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    if ctx.value_is_owning_temporary(class_name) {
+        crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
+    }
+    result
 }
 
 /// Lowers live static-property value access for statically-known `ReflectionClass` calls.

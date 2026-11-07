@@ -31,7 +31,7 @@ fn dce_if_tail(
 
     if body.is_empty() {
         if rest.is_empty() {
-            expr_to_effect_stmt(condition)
+            condition_to_effect_stmt(condition)
         } else {
             vec![build_if_stmt(
                 invert_condition(condition),
@@ -98,7 +98,7 @@ pub(super) fn dce_if_stmt(
 
     if tail.is_empty() {
         if then_body.is_empty() {
-            return expr_to_effect_stmt(condition);
+            return condition_to_effect_stmt(condition);
         }
 
         return vec![build_if_stmt(
@@ -112,7 +112,7 @@ pub(super) fn dce_if_stmt(
 
     if elseif_clauses.is_empty() {
         if then_body.is_empty() && else_body.is_none() {
-            return expr_to_effect_stmt(condition);
+            return condition_to_effect_stmt(condition);
         }
 
         if then_body.is_empty() {
@@ -128,7 +128,7 @@ pub(super) fn dce_if_stmt(
         }
 
         if tail == then_body {
-            let mut stmts = expr_to_effect_stmt(condition);
+            let mut stmts = condition_to_effect_stmt(condition);
             stmts.extend(then_body);
             return stmts;
         }

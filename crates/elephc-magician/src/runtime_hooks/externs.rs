@@ -17,8 +17,20 @@ use crate::value::RuntimeCell;
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Casts one borrowed Mixed value to a fresh boxed PHP array.
+    pub(super) fn __elephc_eval_value_cast_array(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Shares find (0), push (1), and saved-depth restore (2) with the native debug walk.
+    pub(super) fn __elephc_eval_debug_guard(value: *mut RuntimeCell, operation: u64, depth: u64) -> u64;
+
     /// Boxes a borrowed persistent native descriptor for a lazy Reflection default factory.
     pub(super) fn __elephc_eval_value_callable_from_raw(descriptor: usize) -> *mut RuntimeCell;
+    /// Contains a three-argument descriptor invocation and transfers only a successful owned result.
+    pub(super) fn __elephc_eval_invoke_native_callable_v2(
+        callback: *mut RuntimeCell,
+        arguments: *mut RuntimeCell,
+        invocation_scope: i64,
+        output: *mut *mut RuntimeCell,
+    ) -> u64;
     /// Wraps a PHP value in an independently owned runtime reference cell.
     pub(super) fn __elephc_eval_value_reference_new(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Reports whether a boxed value is a runtime reference cell.
@@ -123,8 +135,23 @@ unsafe extern "C" {
         index: *mut RuntimeCell,
         value: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    /// Fetches or mutates attached SPL storage behind one protected versioned boundary.
+    pub(super) fn __elephc_eval_spl_storage_write_v1(
+        operation: u64,
+        array: *mut RuntimeCell,
+        index: *mut RuntimeCell,
+        payload: *mut RuntimeCell,
+    ) -> u64;
     /// Reads an instance property using the supplied visibility scope.
     pub(super) fn __elephc_eval_value_property_get(
+        object: *mut RuntimeCell,
+        name_ptr: *const u8,
+        name_len: u64,
+        scope_ptr: *const u8,
+        scope_len: u64,
+    ) -> *mut RuntimeCell;
+    /// Returns an owned alias of eligible native property storage, or null when unsupported.
+    pub(super) fn __elephc_eval_value_property_reference(
         object: *mut RuntimeCell,
         name_ptr: *const u8,
         name_len: u64,
@@ -169,6 +196,15 @@ unsafe extern "C" {
     ) -> u64;
     /// Returns an owned boxed native static-property value using the supplied access scope.
     pub(super) fn __elephc_eval_value_static_property_get(
+        class_ptr: *const u8,
+        class_len: u64,
+        name_ptr: *const u8,
+        name_len: u64,
+        scope_ptr: *const u8,
+        scope_len: u64,
+    ) -> *mut RuntimeCell;
+    /// Retains an eligible native static property reference under the supplied access scope.
+    pub(super) fn __elephc_eval_value_static_property_reference(
         class_ptr: *const u8,
         class_len: u64,
         name_ptr: *const u8,
@@ -421,6 +457,22 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_invoker_ref_cell(
         slot: *mut *mut crate::value::RuntimeCell,
     ) -> *mut RuntimeCell;
+    /// Allocates a managed native Mixed slot that owns the existing PHP reference.
+    pub(super) fn __elephc_eval_value_native_mixed_reference_cell(
+        reference: *mut RuntimeCell,
+        pin: *mut c_void,
+    ) -> u64;
+    /// Retains an existing reference in a caller-owned invisible argument record.
+    pub(super) fn __elephc_eval_value_native_reference_owner_pin_v1(
+        reference: *mut RuntimeCell, pin: *mut c_void, cell: u64, staging: *mut c_void,
+    ) -> u64;
+    /// Unlinks an argument root and transfers its owner without running native or eval destructors.
+    pub(super) fn __elephc_eval_value_native_reference_owner_take_v1(pin: *mut c_void) -> *mut RuntimeCell;
+    /// Unlinks a staging root before consuming its owner and updating the boxed Throwable chain.
+    pub(super) fn __elephc_eval_value_native_reference_pin_release_v1(
+        pin: *mut c_void,
+        thrown: *mut *mut RuntimeCell,
+    ) -> u64;
     /// Wraps a typed raw slot for native callable reference binding.
     pub(super) fn __elephc_eval_value_invoker_raw_ref_cell(
         slot: *mut c_void,
@@ -547,8 +599,10 @@ unsafe extern "C" {
         right: *mut RuntimeCell,
         op: u64,
     ) -> *mut RuntimeCell;
-    /// Returns the boxed bitwise complement of the input value.
-    pub(super) fn __elephc_eval_value_bit_not(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Borrows a value and publishes an owned complement, returning protected native status.
+    pub(super) fn __elephc_eval_value_bit_not_v1(
+        value: *mut RuntimeCell, result: *mut *mut RuntimeCell,
+    ) -> u64;
     /// Returns the boxed concatenation of the supplied PHP values.
     pub(super) fn __elephc_eval_value_concat(
         left: *mut RuntimeCell,

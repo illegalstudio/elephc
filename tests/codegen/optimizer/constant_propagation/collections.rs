@@ -9,6 +9,35 @@
 
 use super::*;
 
+/// Function, method and closure reference parameters may all identify the same caller variable.
+#[test]
+fn test_constant_propagation_preserves_aliased_reference_parameters_bundle() {
+    let source = r#"<?php
+function referenceParameterPair(array &$first, array &$second): void {
+    $first = [2]; echo $second[0], '|';
+    $second = [3]; echo $first[0], '|';
+}
+class ReferenceParameterPairMethod {
+    public function run(array &$first, array &$second): void {
+        $first = [2]; echo $second[0], '|';
+        $second = [3]; echo $first[0], '|';
+    }
+}
+$items = [$argc]; referenceParameterPair($items, $items);
+$method = new ReferenceParameterPairMethod(); $method->run($items, $items);
+$closure = function (array &$first, array &$second): void {
+    $first = [2]; echo $second[0], '|';
+    $second = [3]; echo $first[0], '|';
+};
+$closure($items, $items);
+function referenceParameterList(&$first, &$second): void {
+    [$first] = [2]; $second = 3; echo $first, '|';
+}
+$value = $argc; referenceParameterList($value, $value);
+"#;
+    assert_eq!(crate::support::compile_and_run(source), "2|3|2|3|2|3|3|");
+}
+
 /// Verifies that list unpacking of a scalar literal array (`[$base, $exp] = [2, 3]`)
 /// propagates the constants so `$base ** $exp` folds to `8` with no `pow` call.
 #[test]

@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
+//! - Fresh declaring-class, function, and type objects transfer ownership into their cells.
 
 use super::*;
 use crate::codegen::lower_inst::emit_runtime_callable_invoker_with_string_owner;
@@ -263,7 +264,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.returns_reference = *returns_reference;
             metadata.rendered_to_string = reflection_declaring_function_dump(ctx, None, name);
             emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionFunction".to_string()),
             );
@@ -298,7 +299,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
                 name,
             );
             emit_reflection_owner_object(ctx, "ReflectionMethod", &metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionMethod".to_string()),
             );
@@ -335,7 +336,7 @@ pub(super) fn emit_reflection_parameter_declaring_class_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(declaring_class_name) = parameter.declaring_class_name.as_deref() {
         emit_shared_reflection_class(ctx, declaring_class_name, true)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -379,7 +380,7 @@ pub(super) fn emit_reflection_parameter_class_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(class_name) = reflection_parameter_class_name(parameter) {
         emit_shared_reflection_class(ctx, class_name, false)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -433,21 +434,21 @@ pub(super) fn emit_reflection_owner_type_property_by_name(
     match type_metadata {
         Some(ReflectionParameterTypeMetadata::Named(type_metadata)) => {
             emit_reflection_named_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionNamedType".to_string()),
             );
         }
         Some(ReflectionParameterTypeMetadata::Union(type_metadata)) => {
             emit_reflection_union_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionUnionType".to_string()),
             );
         }
         Some(ReflectionParameterTypeMetadata::Intersection(type_metadata)) => {
             emit_reflection_intersection_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionIntersectionType".to_string()),
             );

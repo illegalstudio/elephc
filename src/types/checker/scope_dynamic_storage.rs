@@ -412,17 +412,17 @@ fn site_needs_storage_on_class(
 /// builtin, a packed class and an enum all own their slot representation together with the code
 /// that reads it, and stdClass already stores every property in a hash.
 ///
-/// The builtin catalog, NOT `declared_classes`, is the authority for the first of those. The
-/// driver repopulates `declared_classes` from the class map AFTER builtin injection, so that set
-/// contains the injected SPL, Reflection, DateTime and throwable classes too and would exclude
-/// nothing here. A user subclass of a builtin is absent from the catalog and stays eligible.
+/// The catalog route, not `declared_classes`, is the authority for the first of those. The driver
+/// repopulates `declared_classes` from the class map after injection, so that set contains both
+/// compiler-owned classes and ordinary prelude classes. Prelude classes keep PHP-owned layouts
+/// and remain eligible, while a user subclass is absent from the catalog and stays eligible too.
 ///
 /// A `readonly` class is excluded for a different reason, php's own: it carries the engine's
 /// no-dynamic-properties flag, so no write may ever create an entry there and the write checks
 /// refuse the creation outright. Reserving a hash it can never legally fill would charge every
 /// instance a trailing pointer plus clone and GC traversal for nothing.
 fn reserve_property_hash_storage(checker: &mut Checker, class_name: &str) {
-    if elephc_builtin_contract::lookup_class(class_name).is_some()
+    if catalog_class_owns_physical_layout(class_name)
         || !checker.declared_classes.contains(class_name)
         || checker.packed_classes.contains_key(class_name)
         || checker.enums.contains_key(class_name)
@@ -440,4 +440,25 @@ fn reserve_property_hash_storage(checker: &mut Checker, class_name: &str) {
         return;
     }
     info.scope_dynamic_property_storage = true;
+}
+
+/// Returns whether a catalog class uses compiler-owned storage instead of an injected PHP body.
+pub(super) fn catalog_class_owns_physical_layout(class_name: &str) -> bool {
+    elephc_builtin_contract::lookup_class(class_name).is_some_and(|contract| {
+        !matches!(contract.aot, elephc_builtin_contract::ClassRoute::Prelude)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::catalog_class_owns_physical_layout;
+
+    /// Prelude classes retain ordinary PHP layouts while checker and language classes do not.
+    #[test]
+    fn catalog_layout_ownership_distinguishes_prelude_classes() {
+        assert!(!catalog_class_owns_physical_layout("DOMNode"));
+        assert!(catalog_class_owns_physical_layout("ArrayObject"));
+        assert!(catalog_class_owns_physical_layout("Closure"));
+        assert!(!catalog_class_owns_physical_layout("UserClass"));
+    }
 }

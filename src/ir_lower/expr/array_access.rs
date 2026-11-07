@@ -178,12 +178,34 @@ pub(super) fn lower_array_access_with_missing_warning(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
+    if !warn_on_missing {
+        if let ExprKind::PropertyAccess { object, property } = &array.kind {
+            if property_expr_can_be_uninitialized(ctx, object, property) {
+                return lower_guarded_property_array_access(
+                    ctx, object, property, index, expr,
+                );
+            }
+        }
+    }
     let array_value = if warn_on_missing {
-        lower_expr(ctx, array)
+        lower_element_receiver(ctx, array)
     } else {
         lower_subscript_receiver_silently(ctx, array)
     };
     lower_array_access_from_receiver(ctx, array_value, index, expr, warn_on_missing)
+}
+
+/// Lowers an element receiver, keeping a promotable `array<int>` local in its typed storage.
+///
+/// The element read dispatches on the heap kind itself, so the boxed `array<mixed>` view a
+/// whole-value read of that local takes would only cost a copy and change the element type.
+fn lower_element_receiver(ctx: &mut LoweringContext<'_, '_>, array: &Expr) -> LoweredValue {
+    match &array.kind {
+        ExprKind::Variable(name) if ctx.is_promotable_array_local(name) => {
+            ctx.with_promotable_view_suppressed(|ctx| lower_expr(ctx, array))
+        }
+        _ => lower_expr(ctx, array),
+    }
 }
 
 /// Lowers array access over an already evaluated receiver, taking the null-safe route when
@@ -210,7 +232,160 @@ pub(super) fn lower_subscript_receiver_silently(
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
     }
-    lower_expr(ctx, array)
+    lower_element_receiver(ctx, array)
+}
+
+/// Probes a typed property before indexing it without erasing the initialized value's type.
+fn lower_guarded_property_array_access(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let object_value = lower_member_receiver(ctx, object, expr);
+    let mut pending_object = [object_value];
+    let (index_value, object_pins) = lower_with_pending_owners(
+        ctx,
+        &mut pending_object,
+        expr.span,
+        |ctx| lower_expr(ctx, index),
+    );
+    let object_value = pending_object[0];
+    unpin_in_flight_owners(ctx, object_pins, expr.span);
+    let property_name = ctx.intern_string(property);
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object_value.value],
+        Some(Immediate::Data(property_name)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(expr.span),
+    );
+    let missing = ctx
+        .builder
+        .create_named_block("dimension.property.uninitialized", Vec::new());
+    let present = ctx
+        .builder
+        .create_named_block("dimension.property.initialized", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("dimension.property.merge", Vec::new());
+    let result = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let initial = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: present,
+        then_args: Vec::new(),
+        else_target: missing,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(missing);
+    crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
+    crate::ir_lower::ownership::release_marked_normalized_cast_copies(
+        ctx,
+        index_value,
+        Some(index.span),
+    );
+    release_owning_receiver_temporary(ctx, object_value, expr.span);
+    let null = lower_boxed_null(ctx, expr);
+    store_value_into_temp(ctx, &result, PhpType::Mixed, null, expr.span);
+    branch_to(ctx, merge);
+    let missing_slots = ctx.initialized_slots_snapshot();
+
+    ctx.builder.position_at_end(present);
+    ctx.restore_initialized_slots(initial.clone());
+    let property_value = lower_property_get_from_value(
+        ctx,
+        object_value,
+        property,
+        Op::PropGet,
+        expr,
+    );
+    let selected = lower_array_access_from_values(
+        ctx,
+        property_value,
+        index_value,
+        index,
+        expr,
+        false,
+        false,
+    );
+    store_silent_dimension_result(ctx, &result, selected, expr);
+    branch_to(ctx, merge);
+    let present_slots = ctx.initialized_slots_snapshot();
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &initial,
+        missing_slots,
+        true,
+        present_slots,
+        true,
+    ));
+    take_owned_temp(ctx, &result, expr.span)
+}
+
+/// Stores a silent dimension read without turning its missing sentinel into a real scalar.
+///
+/// The property-initialization guard merges through boxed `Mixed` storage. Boxing a missing
+/// typed string or scalar read directly would preserve its scalar tag and make `isset()` see a
+/// value, while `??` would receive an empty string or sentinel payload. Test the typed result
+/// first and publish a boxed PHP null on the missing path instead.
+fn store_silent_dimension_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    result: &str,
+    selected: LoweredValue,
+    expr: &Expr,
+) {
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![selected.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    let missing = ctx
+        .builder
+        .create_named_block("dimension.value.missing", Vec::new());
+    let present = ctx
+        .builder
+        .create_named_block("dimension.value.present", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("dimension.value.merge", Vec::new());
+    let initial = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: missing,
+        then_args: Vec::new(),
+        else_target: present,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(missing);
+    crate::ir_lower::ownership::release_if_owned(ctx, selected, Some(expr.span));
+    let null = lower_boxed_null(ctx, expr);
+    store_value_into_temp(ctx, result, PhpType::Mixed, null, expr.span);
+    branch_to(ctx, merge);
+    let missing_slots = ctx.initialized_slots_snapshot();
+
+    ctx.builder.position_at_end(present);
+    ctx.restore_initialized_slots(initial.clone());
+    store_value_into_temp(ctx, result, PhpType::Mixed, selected, expr.span);
+    branch_to(ctx, merge);
+    let present_slots = ctx.initialized_slots_snapshot();
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &initial,
+        missing_slots,
+        true,
+        present_slots,
+        true,
+    ));
 }
 
 /// Lowers array access once the receiver is already evaluated.
@@ -309,6 +484,13 @@ fn lower_array_access_from_values_with_receiver_pins(
     receiver_pins: Vec<super::PinnedInFlightOwner>,
     receiver_owner: Option<crate::ir::LocalSlotId>,
 ) -> LoweredValue {
+    if !warn_on_missing && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar)
+    {
+        super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
+        crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
+        return lower_null(ctx, expr);
+    }
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             // Nullable scalar keys carry an inline tag. Preserve null as the empty-string
@@ -396,24 +578,41 @@ fn lower_array_access_from_values_with_receiver_pins(
         index_value = rooted;
         owner
     } else { None };
-    let mut operands = vec![array_value.value, index_value.value];
-    if matches!(op, Op::RuntimeCall) {
-        let warning_flag = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
-        operands.push(warning_flag.value);
+    // Native dimension syntax is distinct from explicit ArrayAccess method calls, even
+    // when a nullable subclass implements that interface and overrides offsetGet.
+    let native_method = (op == Op::RuntimeCall).then(|| {
+        native_dimension_method_for_type(ctx, &ctx.builder.value_php_type(array_value.value),
+            elephc_builtin_contract::ObjectDimension::Get)
+    }).flatten();
+    if native_method.is_some() {
+        index_value.value = claim_owned_string_operand(ctx, index_value.value, index.span);
     }
-    let result = ctx.emit_value(
-        op,
-        operands,
-        (op == Op::StrCharAt).then_some(Immediate::Bool(warn_on_missing)),
-        result_type,
-        op.default_effects(),
-        Some(expr.span),
-    );
+    let owns_string_key = (matches!(op, Op::HashGet | Op::HashGetSilent) || native_method.is_some())
+        && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Str
+        && ctx.value_is_owning_temporary(index_value);
+    let key_pins = if owns_string_key || native_method.is_some() {
+        // A native getter can throw before the existing key cleanup, including on a null path.
+        super::pin_in_flight_owners(ctx, &[index_value.value], index.span)
+    } else { Vec::new() };
+    let result = if let Some(method) = native_method {
+        lower_native_dimension_read(ctx, array_value, index_value, method, warn_on_missing,
+            result_type, expr)
+    } else {
+        let mut operands = vec![array_value.value, index_value.value];
+        if op == Op::RuntimeCall {
+            let warning = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
+            operands.push(warning.value);
+        }
+        ctx.emit_value(op, operands,
+            (op == Op::StrCharAt).then_some(Immediate::Bool(warn_on_missing)),
+            result_type, op.default_effects(), Some(expr.span))
+    };
     if op == Op::StrCharAt {
         // The backend returns a view into the receiver. The common stabilization below
         // must copy that byte before an owning receiver can be retired (issue #1908).
         ctx.builder.set_value_ownership(result.value, Ownership::Borrowed);
     }
+    super::unpin_in_flight_owners(ctx, key_pins, index.span);
     super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
     // An owning boxed index temporary (e.g. `$B[$i + 1]` on the mixed-key read
     // path) is consumed by the read without any runtime refcount operation on
@@ -427,6 +626,14 @@ fn lower_array_access_from_values_with_receiver_pins(
         ctx.unguard_call_argument(result.value, expr.span);
     } else {
         release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+        let normalized_copy = ctx.builder.value_defining_instruction(index_value.value)
+            .is_some_and(|producer| producer.op == Op::StrPersist
+                && producer.immediate == Some(Immediate::Bool(true)));
+        if owns_string_key && !normalized_copy {
+            // Hash and native reads never retain the key. Ternaries and calls can own
+            // ordinary string keys independently of the normalized-cast copies below.
+            crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
+        }
         // A string key is not a coerced Mixed/array source, so the call above
         // leaves a normalized `(string)` copy alive after `hash_get_silent`.
         crate::ir_lower::ownership::release_marked_normalized_cast_copies(
@@ -441,6 +648,81 @@ fn lower_array_access_from_values_with_receiver_pins(
         return super::string_offset_owners::finish_read(ctx, result, owner, expr.span);
     }
     stabilize_borrowed_result_and_release_receiver(ctx, array_value, result, expr.span)
+}
+
+/// Keeps null offset reads on the ordinary warning path and dispatches non-null native syntax.
+fn lower_native_dimension_read(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: LoweredValue,
+    method: &str, warn: bool, result_type: PhpType, expr: &Expr,
+) -> LoweredValue {
+    let class = singular_object_class(&ctx.builder.value_php_type(object.value))
+        .filter(|(_, nullable)| *nullable).map(|(class, _)| class.to_string());
+    let Some(class) = class else {
+        return emit_native_dimension_read(ctx, object, index, method, result_type, expr);
+    };
+    let absent = ctx.builder.create_named_block("dimension.read.null", vec![]);
+    let present = ctx.builder.create_named_block("dimension.read.present", vec![]);
+    let merge = ctx.builder.create_named_block("dimension.read.merge", vec![]);
+    let temp = ctx.declare_owned_hidden_temp(result_type.clone());
+    let slot = ctx.local_slots[&temp];
+    register_owned_call_operand(ctx, slot, expr.span);
+    let initial = ctx.initialized_slots_snapshot();
+    let condition = ctx.emit_value(Op::IsNull, vec![object.value], None, PhpType::Bool,
+        Op::IsNull.default_effects(), Some(expr.span));
+    ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
+        then_target: absent, then_args: vec![], else_target: present, else_args: vec![] });
+    ctx.builder.position_at_end(absent);
+    let warning = emit_bool_literal(ctx, warn, Some(expr.span));
+    // Erase the nullable interface type on this proven-null branch so RuntimeCall cannot
+    // redispatch through an ArrayAccess vtable with a null object payload.
+    let null = ctx.emit_value(Op::Borrow, vec![object.value], None, PhpType::Mixed,
+        Op::Borrow.default_effects(), Some(expr.span));
+    ctx.builder.set_value_ownership(null.value, Ownership::Borrowed);
+    let value = ctx.emit_value(Op::RuntimeCall, vec![null.value, index.value, warning.value],
+        None, result_type.clone(), Op::RuntimeCall.default_effects(), Some(expr.span));
+    store_value_into_temp(ctx, &temp, result_type.clone(), value, expr.span);
+    branch_to(ctx, merge);
+    let absent_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(present);
+    ctx.restore_initialized_slots(initial.clone());
+    let target = PhpType::Object(class);
+    let receiver = ctx.emit_owned_value(Op::MixedUnbox, vec![object.value], None, target.clone(),
+        Op::mixed_unbox_effects(&target), Some(expr.span));
+    let receiver_pins = pin_in_flight_owners(ctx, &[receiver.value], expr.span);
+    let value = emit_native_dimension_read(ctx, receiver, index, method, result_type.clone(), expr);
+    store_value_into_temp(ctx, &temp, result_type, value, expr.span);
+    unpin_in_flight_owners(ctx, receiver_pins, expr.span);
+    crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(expr.span));
+    branch_to(ctx, merge);
+    let present_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(&initial,
+        absent_slots, true, present_slots, true));
+    unregister_owned_call_operand(ctx, slot, expr.span);
+    take_owned_temp(ctx, &temp, expr.span)
+}
+
+/// Calls a native dimension adapter while protecting its hidden argument owners during unwind.
+fn emit_native_dimension_read(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: LoweredValue,
+    method: &str, result_type: PhpType, expr: &Expr,
+) -> LoweredValue {
+    let mut operands = vec![object.value, index.value];
+    let signature = ctx.classes.get("SimpleXMLElement")
+        .and_then(|class| class.methods.get(method)).cloned();
+    let extra = object_operators::append_hidden_arguments(ctx, signature.as_ref(),
+        &mut operands, 1, expr);
+    // Array lowering already protects the receiver; the new collectors need their own pins.
+    let extra_values = extra.iter().map(|argument| argument.value).collect::<Vec<_>>();
+    let pins = pin_in_flight_owners(ctx, &extra_values, expr.span);
+    let name = ctx.intern_string(method);
+    let result = ctx.emit_value(Op::MethodCall, operands, Some(Immediate::Data(name)),
+        result_type, Op::MethodCall.default_effects(), Some(expr.span));
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    for argument in extra {
+        crate::ir_lower::ownership::release_if_owned(ctx, argument, Some(expr.span));
+    }
+    result
 }
 
 /// Converts a non-float string offset while preserving warnings for boxed float values.
@@ -637,9 +919,12 @@ pub(super) fn array_access_runtime_call_result_type(
     array: crate::ir::ValueId,
     expr: &Expr,
 ) -> PhpType {
-    match ctx.builder.value_php_type(array).codegen_repr() {
-        PhpType::Object(class_name) => array_access_offset_get_return_type(ctx, &class_name)
-            .unwrap_or_else(|| fallback_expr_type(expr)),
+    let array_ty = ctx.builder.value_php_type(array);
+    if let Some((class_name, _)) = singular_object_class(&array_ty) {
+        return array_access_offset_get_return_type(ctx, class_name)
+            .unwrap_or_else(|| fallback_expr_type(expr));
+    }
+    match array_ty.codegen_repr() {
         PhpType::Mixed => PhpType::Mixed,
         _ => fallback_expr_type(expr),
     }
@@ -650,7 +935,10 @@ pub(super) fn array_access_offset_get_return_type(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
 ) -> Option<PhpType> {
-    if !object_name_satisfies_interface_for_ir(ctx, class_name, "ArrayAccess") {
+    if crate::types::builtin_classes::has_native_dimensions(class_name, ctx.classes) {
+        return Some(nullable_result_type(PhpType::Object(class_name.to_string())));
+    }
+    if !object_name_supports_dimensions_for_ir(ctx, class_name) {
         return None;
     }
     let method_key = php_symbol_key("offsetGet");
@@ -664,13 +952,6 @@ pub(super) fn array_access_expr_satisfies_array_access(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
 ) -> bool {
-    let ty = match &array.kind {
-        ExprKind::Variable(name) => ctx
-            .local_types
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| infer_expr_type_syntactic(array)),
-        _ => infer_expr_type_syntactic(array),
-    };
+    let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, array);
     type_satisfies_array_access_for_ir(ctx, &ty)
 }

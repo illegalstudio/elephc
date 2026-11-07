@@ -1,6 +1,6 @@
 //! Purpose:
 //! Emits the canonical runtime helper for `$mixed[] = $value`.
-//! Handles indexed arrays, associative arrays, and PHP null autovivification.
+//! Handles indexed arrays, associative arrays, ArrayAccess, and PHP null autovivification.
 //!
 //! Called from:
 //! - `Op::MixedArrayAppend` lowering in `crate::codegen::lower_inst::arrays`.
@@ -43,9 +43,11 @@ fn emit_mixed_array_append_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_append_indexed");                // derive the dense-array append index
     emitter.instruction("cmp x9, #5");                                          // is the receiver an associative array?
     emitter.instruction("b.eq __rt_mixed_array_append_assoc");                  // append using the hash's next automatic integer key
+    emitter.instruction("cmp x9, #6");                                          // is the receiver an object implementing ArrayAccess?
+    emitter.instruction("b.eq __rt_mixed_array_append_object");                 // preserve PHP append as a boxed null offset
     emitter.instruction("cmp x9, #8");                                          // is the receiver PHP null?
     emitter.instruction("b.eq __rt_mixed_array_append_autovivify");             // PHP `$x[]` autovivifies null to an indexed array
-    emitter.instruction("b __rt_mixed_array_append_drop");                      // incompatible scalar/object receivers drop this write
+    emitter.instruction("b __rt_mixed_array_append_drop");                      // incompatible scalar receivers drop this write
 
     emitter.label("__rt_mixed_array_append_indexed");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the indexed-array payload pointer
@@ -84,6 +86,16 @@ fn emit_mixed_array_append_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #32");                                     // release the append helper frame before the tail call
     emitter.instruction("b __rt_mixed_array_set");                              // setter consumes the value and performs the indexed write
 
+    // -- object append uses the shared setter's internal null-key tuple --
+    emitter.label("__rt_mixed_array_append_object");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the boxed object receiver to the shared setter
+    emitter.instruction("mov x1, #0");                                          // the null offset carries no low payload
+    emitter.instruction("mov x2, #-2");                                         // key_hi = -2 is reserved for an object append
+    emitter.instruction("ldr x3, [sp, #8]");                                    // transfer the owned value to the setter
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame state before the tail call
+    emitter.instruction("add sp, sp, #32");                                     // release the append frame
+    emitter.instruction("b __rt_mixed_array_set");                              // shared object dispatch consumes the value
+
     emitter.label("__rt_mixed_array_append_drop");
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the unused boxed Mixed value
     emitter.instruction("bl __rt_decref_mixed");                                // release the value when the append cannot be applied
@@ -111,9 +123,11 @@ fn emit_mixed_array_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_append_indexed");                  // derive the dense-array append index
     emitter.instruction("cmp r10, 5");                                          // is the receiver an associative array?
     emitter.instruction("je __rt_mixed_array_append_assoc");                    // append using the hash's next automatic integer key
+    emitter.instruction("cmp r10, 6");                                          // is the receiver an object implementing ArrayAccess?
+    emitter.instruction("je __rt_mixed_array_append_object");                   // preserve PHP append as a boxed null offset
     emitter.instruction("cmp r10, 8");                                          // is the receiver PHP null?
     emitter.instruction("je __rt_mixed_array_append_autovivify");               // PHP `$x[]` autovivifies null to an indexed array
-    emitter.instruction("jmp __rt_mixed_array_append_drop");                    // incompatible scalar/object receivers drop this write
+    emitter.instruction("jmp __rt_mixed_array_append_drop");                    // incompatible scalar receivers drop this write
 
     emitter.label("__rt_mixed_array_append_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the indexed-array payload pointer
@@ -153,6 +167,16 @@ fn emit_mixed_array_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // release the append helper frame before the tail call
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before the tail call
     emitter.instruction("jmp __rt_mixed_array_set");                            // setter consumes the value and performs the indexed write
+
+    // -- object append uses the shared setter's internal null-key tuple --
+    emitter.label("__rt_mixed_array_append_object");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the boxed object receiver to the shared setter
+    emitter.instruction("xor esi, esi");                                        // the null offset carries no low payload
+    emitter.instruction("mov rdx, -2");                                         // key_hi = -2 is reserved for an object append
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // transfer the owned value to the setter
+    emitter.instruction("mov rsp, rbp");                                        // release the append frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame before the tail call
+    emitter.instruction("jmp __rt_mixed_array_set");                            // shared object dispatch consumes the value
 
     emitter.label("__rt_mixed_array_append_drop");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the unused boxed Mixed value

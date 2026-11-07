@@ -23,6 +23,7 @@ use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::Result;
 use crate::ir::{Immediate, Instruction};
+use crate::types::PhpType;
 use crate::ir_passes::rematerialize::immediate_use;
 use crate::codegen_support::abi::immediate::IntImmediate;
 
@@ -63,17 +64,59 @@ pub(super) fn lower_checked_int_to_int(
     let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
     let saved_lhs_reg = abi::tertiary_scratch_reg(ctx.emitter);
     let immediate = immediate_use(ctx.function, inst, ctx.emitter.target);
+    let register_operands = if immediate.is_none() {
+        match (ctx.allocation.register_of(lhs), ctx.allocation.register_of(rhs)) {
+            (Some(lhs_reg), Some(rhs_reg))
+                if lhs_reg != result_reg
+                    && rhs_reg != result_reg
+                    && matches!(ctx.value_php_type(lhs)?.codegen_repr(), PhpType::Int | PhpType::Bool)
+                    && matches!(ctx.value_php_type(rhs)?.codegen_repr(), PhpType::Int | PhpType::Bool) =>
+            {
+                Some((lhs_reg, rhs_reg))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    // The in-range result may be written straight into its allocated home. The
+    // home must differ from both operands, because an overflow branches to the
+    // cold path, which still needs the original operand values.
+    let direct_home = if immediate.is_none() {
+        match (register_operands, inst.result.and_then(|value| ctx.allocation.register_of(value))) {
+            (Some((lhs_reg, rhs_reg)), Some(home))
+                if home != lhs_reg && home != rhs_reg && home != result_reg =>
+            {
+                Some(home)
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     if let Some(usage) = &immediate {
         load_integer_operand(ctx, usage.other, result_reg, inst)?;
-    } else {
+    } else if register_operands.is_none() {
         load_integer_operand(ctx, lhs, result_reg, inst)?;
         load_integer_operand(ctx, rhs, rhs_reg, inst)?;
     }
+    let cold_lhs = register_operands.map_or(saved_lhs_reg, |(lhs_reg, _)| lhs_reg);
+    let cold_rhs = register_operands.map_or(rhs_reg, |(_, rhs_reg)| rhs_reg);
     let overflow_label = ctx.next_label("checked_int_to_int_overflow");
     let done_label = ctx.next_label("checked_int_to_int_done");
 
     if let Some(usage) = &immediate {
         emit_immediate_checked(ctx, &usage.encoding, &overflow_label);
+    } else if let Some((lhs_reg, rhs_reg)) = register_operands {
+        emit_checked_register_operands(
+            ctx,
+            op,
+            direct_home.as_deref().unwrap_or(result_reg),
+            lhs_reg,
+            rhs_reg,
+            &overflow_label,
+        );
     } else {
         match ctx.emitter.target.arch {
             Arch::AArch64 => emit_aarch64_checked(
@@ -99,23 +142,41 @@ pub(super) fn lower_checked_int_to_int(
     let constant_index = immediate.as_ref().map(|usage| usage.constant_index);
     ctx.emit_cold_path(|ctx| {
         ctx.emitter.label(&overflow_label);
-        // `Immediate::Bool(true)` means an explicit `(int)` cast observed this value, and php's
-        // own answer there is the promoted double converted back to an int. Anything else means
-        // the narrowing came from a raw int SLOT, where php would have kept the float — so the
-        // program stops rather than print a number php never produces.
-        if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        // `Immediate::Data` is a declared-`int` return boundary: the promoted float must throw
+        // PHP's catchable TypeError with the boundary's message prefix. `Bool(true)` means an
+        // explicit `(int)` cast observed this value, and php's own answer there is the promoted
+        // double converted back to an int. Anything else means the narrowing came from a raw int
+        // SLOT, where php would have kept the float — so the program stops rather than print a
+        // number php never produces.
+        if let Some(Immediate::Data(data_id)) = &inst.immediate {
+            let prefix = ctx
+                .module
+                .data
+                .strings
+                .get(data_id.as_raw() as usize)
+                .cloned()
+                .unwrap_or_default();
+            let message = format!("{prefix}float returned");
+            super::exceptions::emit_type_error(ctx, &message);
+        } else if matches!(inst.immediate, Some(Immediate::Bool(true))) {
             if let Some(index) = constant_index {
-                load_integer_operand(ctx, inst.operands[index], rhs_reg, inst)?;
+                load_integer_operand(ctx, inst.operands[index], cold_rhs, inst)?;
             }
-            emit_overflow_conversion(ctx, op, saved_lhs_reg, rhs_reg);
+            emit_overflow_conversion(ctx, op, cold_lhs, cold_rhs);
             abi::emit_php_float_to_int(ctx.emitter, result_reg);
+            if let Some(home) = direct_home {
+                abi::emit_reg_move(ctx.emitter, home, result_reg);
+            }
         } else {
             emit_int_overflow_fatal(ctx);
         }
         abi::emit_jump(ctx.emitter, &done_label);
         Ok(())
     })?;
-    store_if_result(ctx, inst)
+    if direct_home.is_none() {
+        store_if_result(ctx, inst)?;
+    }
+    Ok(())
 }
 
 /// Branches to the cold overflow path when the signed-overflow condition holds.
@@ -157,6 +218,54 @@ fn emit_immediate_checked(ctx: &mut FunctionContext<'_>, immediate: &IntImmediat
         }
     }
     emit_overflow_branch(ctx, "vc", "jo", overflow);
+}
+
+/// Emits a checked binary operation whose two operands already live in registers.
+///
+/// The operands are read before the result register is written, so the cold
+/// overflow path can recompute the promoted float from the original homes without
+/// copying them to scratch registers on the hot path.
+fn emit_checked_register_operands(
+    ctx: &mut FunctionContext<'_>,
+    op: CheckedIntOp,
+    result_reg: &str,
+    lhs_reg: &str,
+    rhs_reg: &str,
+    overflow_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            match op {
+                CheckedIntOp::Add => {
+                    ctx.emitter.instruction(&format!("adds {result_reg}, {lhs_reg}, {rhs_reg}")); // compute addition and set the signed-overflow flag
+                    emit_overflow_branch(ctx, "vc", "jo", overflow_label);
+                }
+                CheckedIntOp::Sub => {
+                    ctx.emitter.instruction(&format!("subs {result_reg}, {lhs_reg}, {rhs_reg}")); // compute subtraction and set the signed-overflow flag
+                    emit_overflow_branch(ctx, "vc", "jo", overflow_label);
+                }
+                CheckedIntOp::Mul => {
+                    let high_reg = abi::symbol_scratch_reg(ctx.emitter);
+                    ctx.emitter.instruction(&format!("smulh {high_reg}, {lhs_reg}, {rhs_reg}")); // compute the signed high product for overflow detection
+                    ctx.emitter.instruction(&format!("mul {result_reg}, {lhs_reg}, {rhs_reg}")); // compute the low 64 bits of the signed product
+                    ctx.emitter.instruction(&format!("cmp {high_reg}, {result_reg}, asr #63")); // compare the high product with the low half's sign extension
+                    emit_overflow_branch(ctx, "eq", "jne", overflow_label);
+                }
+            }
+        }
+        Arch::X86_64 => {
+            if result_reg != lhs_reg {
+                ctx.emitter.instruction(&format!("mov {result_reg}, {lhs_reg}")); // move the left operand into the result register
+            }
+            let mnemonic = match op {
+                CheckedIntOp::Add => "add",
+                CheckedIntOp::Sub => "sub",
+                CheckedIntOp::Mul => "imul",
+            };
+            ctx.emitter.instruction(&format!("{mnemonic} {result_reg}, {rhs_reg}")); // compute the scalar result and set the signed-overflow flag
+            emit_overflow_branch(ctx, "vc", "jo", overflow_label);
+        }
+    }
 }
 
 /// Emits the AArch64 scalar fast path, branching to `overflow_label` only on overflow.

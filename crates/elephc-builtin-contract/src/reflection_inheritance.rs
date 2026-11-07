@@ -126,6 +126,9 @@ pub fn inherited_declaring_class(class: &str, method: &str) -> Option<&'static s
                 lookupprefix normalize removechild replacechild contains getrootnode comparedocumentposition \
                 __sleep __wakeup"),
         ],
+        "domexception" => &[
+            ("Exception", "__construct __wakeup getmessage getcode getfile getline gettrace getprevious gettraceasstring __tostring"),
+        ],
         "domprocessinginstruction" => &[
             ("DOMNode", "appendchild c14n c14nfile clonenode getlineno getnodepath hasattributes haschildnodes \
                 insertbefore isdefaultnamespace issamenode isequalnode issupported lookupnamespaceuri \

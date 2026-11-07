@@ -139,6 +139,17 @@ static struct result import(const unsigned char *bytes, uint64_t length) {
 int mb_test_native(void *const *callbacks) {
     functions = callbacks;
     CHECK(((reset_fn)functions[8])() == 0);
+    /* Binding an imported identity must mark a destination that has no fresh/persist origin. */
+    void *bound = mb_test_allocate(5);
+    memcpy(bound, "bound", 5);
+    struct result imported = import((const unsigned char *)"bound", 5);
+    uint64_t bound_identity = (uint64_t)imported.value;
+    mb_test_bind(bound, 5, bound_identity);
+    ((result_free_fn)functions[1])(&imported);
+    mb_test_free(bound);
+    CHECK(live == 0 && offset == 0 && ((one_fn)functions[2])(bound_identity) == 1);
+    mb_test_reset();
+    copies = frees = 0;
     void *source = mb_test_persist("ASCII", 5);
     CHECK(copies == 1 && frees == 0 && active == 1);
     copies = 0;

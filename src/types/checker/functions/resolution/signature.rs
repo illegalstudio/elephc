@@ -28,13 +28,35 @@ impl Checker {
     ///
     /// Returns the resolved return type, or a `CompileError` if the body fails to type-check
     /// or return types are incompatible with any declared annotation.
+    ///
+    /// The body is walked again while a walk denies a local the promotable `?int` read view
+    /// (`Checker::end_promotable_walk`), so the result is the one of the walk whose views match
+    /// its promotions. Denials only grow, which bounds the repetition.
     pub(crate) fn resolve_function_signature(
         &mut self,
         name: &str,
         decl: &FnDecl,
         param_types: Vec<(String, PhpType)>,
     ) -> Result<PhpType, CompileError> {
+        loop {
+            let denials = self.promotable_view_denials_within(name);
+            let result = self.resolve_function_signature_walk(name, decl, param_types.clone());
+            if self.promotable_view_denials_within(name) == denials {
+                return result;
+            }
+        }
+    }
+
+    /// Walks a function body once for `resolve_function_signature`.
+    fn resolve_function_signature_walk(
+        &mut self,
+        name: &str,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> Result<PhpType, CompileError> {
         self.completed_function_signatures.remove(name);
+        // This walk replaces whatever a previous failed walk of the body recorded.
+        self.failed_function_body_errors.remove(name);
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());
@@ -139,6 +161,7 @@ impl Checker {
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
         self.clear_loop_storage_scope(&function_key);
+        self.begin_promotable_walk(&function_key);
         let previous_loop_storage_scope =
             std::mem::replace(&mut self.current_loop_storage_scope, function_key.clone());
         self.resolving_functions.insert(function_key.clone());
@@ -182,6 +205,7 @@ impl Checker {
                 Ok(())
             },
         ));
+        self.end_promotable_walk(&function_key);
         self.current_function = previous_function;
         self.resolving_functions.remove(&function_key);
         self.current_loop_storage_scope = previous_loop_storage_scope;
@@ -209,6 +233,9 @@ impl Checker {
             }
         }
         if !errors.is_empty() {
+            // Kept so the driver can find the bodies whose errors it may drop as stale initial
+            // top-level errors, and walk them again (`recheck_failed_function_bodies`).
+            self.failed_function_body_errors.insert(name.to_string(), errors.clone());
             return Err(CompileError::from_many(errors));
         }
 

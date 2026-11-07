@@ -49,6 +49,26 @@ pub(super) fn lower_string_offset_assignment_expr(
     {
         return None;
     }
+    if ctx.native_mutation_payload_type(name).is_some()
+        && !ctx.live_native_mutation_locals.contains_key(name)
+    {
+        let result_target = result_target?;
+        let temp = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+        crate::ir_lower::stmt::lower_native_reference_mutation(ctx, name, span, |ctx| {
+            if let Some(result) = lower_string_offset_assignment_expr(ctx, target, value,
+                Some(result_target), prelude, span, key_already_diagnosed)
+            {
+                store_value_into_temp(ctx, &temp, PhpType::Mixed, result, span);
+            } else {
+                lower_non_local_assignment_write_with_diagnosed_key(ctx,
+                    target, value, span, key_already_diagnosed);
+                if !ctx.builder.insertion_block_is_terminated() {
+                    store_expr_into_temp(ctx, &temp, PhpType::Mixed, result_target, span);
+                }
+            }
+        });
+        return Some(take_owned_temp(ctx, &temp, span));
+    }
     let owner = result_target.and_then(|result| {
         super::assignment_rhs_capture::publish_assignment_rhs(ctx, target, value, result, prelude, span)
     });
@@ -107,7 +127,6 @@ fn lower_boxed_offset_assign_expr(
     let other_block = ctx.builder.create_named_block("str.offset.assign.other", Vec::new());
     let merge = ctx.builder.create_named_block("str.offset.assign.merge", Vec::new());
     let subject = ctx.load_local(name, Some(span));
-    ctx.builder.set_value_ownership(subject.value, Ownership::Borrowed);
     let is_string = ctx.emit_value(
         Op::TypePredicate,
         vec![subject.value],
@@ -116,6 +135,9 @@ fn lower_boxed_offset_assign_expr(
         Op::TypePredicate.default_effects(),
         Some(span),
     );
+    if ctx.value_needs_release_after_use(subject) {
+        crate::ir_lower::ownership::release_if_owned(ctx, subject, Some(span));
+    }
     ctx.builder.terminate(Terminator::CondBr {
         cond: is_string.value,
         then_target: string_block,
@@ -134,7 +156,9 @@ fn lower_boxed_offset_assign_expr(
     ctx.builder.position_at_end(other_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     lower_non_local_assignment_write_with_diagnosed_key(ctx, target, value, span, key_already_diagnosed);
-    store_expr_into_temp(ctx, &temp_name, result_type, result_target, span);
+    if !ctx.builder.insertion_block_is_terminated() {
+        store_expr_into_temp(ctx, &temp_name, result_type, result_target, span);
+    }
     let other_reachable = !ctx.builder.insertion_block_is_terminated();
     let other_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);

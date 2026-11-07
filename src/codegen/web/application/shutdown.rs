@@ -30,6 +30,11 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     }
     let (properties, hosting) = static_properties_hosting_last(module);
     for (index, (symbol, ty)) in properties.into_iter().chain(hosting).enumerate() {
+        if module.required_runtime_features.native_reference_validation && ty.codegen_repr() == PhpType::Mixed {
+            abi::emit_symbol_address(emitter, value, &symbol);
+            scope.call(emitter, "__rt_reference_static_mixed_release", false);
+            continue;
+        }
         let skip = format!("__rt_web_app_shutdown_property_{index}");
         abi::emit_load_symbol_to_reg(emitter, value, &symbol, 8);
         super::super::emit_branch_if_equals_sentinel(emitter, &skip);

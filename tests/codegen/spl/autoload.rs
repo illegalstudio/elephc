@@ -1256,6 +1256,32 @@ echo is_subclass_of($d, "Animal") ? "y" : "n";
     assert_eq!(out, "yynny");
 }
 
+/// Runtime class names retain case-insensitive class/interface relations and allow-string flags.
+#[test]
+fn test_is_a_runtime_class_string_relations() {
+    let out = compile_and_run(r#"<?php
+interface RuntimeRelationRoot {}
+interface RuntimeRelationLeaf extends RuntimeRelationRoot {}
+class RuntimeRelationBase implements RuntimeRelationLeaf {}
+class RuntimeRelationChild extends RuntimeRelationBase {}
+function runtime_relation(string $name, bool $allow): void {
+    var_dump(is_a($name, "RuntimeRelationBase", $allow));
+    var_dump(is_subclass_of($name, "RuntimeRelationBase"));
+    var_dump(is_a($name, "RuntimeRelationRoot", true));
+    var_dump(is_a($name, "RuntimeRelationChild", true));
+    var_dump(is_subclass_of($name, "RuntimeRelationChild"));
+}
+runtime_relation($argc > 0 ? "\\runtimerelationchild" : "missing", true);
+runtime_relation("RuntimeRelationChild", false);
+function runtime_interface(string $name): void {
+    var_dump(is_subclass_of($name, "RuntimeRelationRoot"));
+    var_dump(is_a($name, "RuntimeRelationLeaf", true));
+}
+runtime_interface($argc > 0 ? "RuntimeRelationLeaf" : "missing");
+"#);
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\n");
+}
+
 /// Verifies is a target string is case insensitive.
 #[test]
 fn test_is_a_target_string_is_case_insensitive() {

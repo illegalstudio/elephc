@@ -261,6 +261,32 @@ foreach ($a as $k => $v) {
     assert_eq!(out, "2|3=x;5=y;");
 }
 
+/// Sparse writes to an already non-empty packed array preserve PHP keys instead of filling
+/// holes, for both literal and runtime integer keys, and keep the next append/insertion order.
+#[test]
+fn test_sparse_integer_keys_after_a_contiguous_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[0] = 1;
+$a[5] = 2;
+echo count($a), "|", isset($a[1]) ? "y" : "n", "|", implode(",", array_keys($a)), "|";
+foreach ($a as $k => $v) { echo $k, "=", $v, ","; }
+$a[] = 3;
+$a[1] = 4;
+echo "|", implode(",", array_keys($a)), "|", implode(",", $a), "\n";
+$b = [0];
+$i = $argc > 0 ? 5 : 1;
+$b[$i] = 2;
+echo count($b), "|", isset($b[1]) ? "y" : "n", "|", implode(",", array_keys($b)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2|n|0,5|0=1,5=2,|0,5,6,1|1,2,3,4\n2|n|0,5\n"
+    );
+}
+
 /// Compiles a PHP script that performs array union (+) with two assoc arrays sharing a key "a" and verifies the left operand's value is retained for the duplicate key.
 #[test]
 fn test_assoc_array_union_keeps_left_duplicate_keys() {
