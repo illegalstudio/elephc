@@ -606,13 +606,17 @@ complete expression at each cast and removes the now-unobserved boxed storage.
 
 `src/ir_lower/expr/static_array_callbacks.rs` fuses
 `array_reduce($ints, fn($carry, $item) => $carry + $item, C)` when `$ints` is a
-local `array<int>` and `C` is an integer literal. Zero lowers to `ArraySum`; any
-other literal lowers to `ArrayReduceSumSeed`, which calls the same
-`__rt_array_sum_int_i64` reducer with the literal seed. The carry stays a raw
-integer until the first overflow, then continues as a double exactly like PHP's
-left-to-right addition, and only the final int-or-float result is boxed. A
-declared parameter/return type, a capture, a non-add body, a float or non-literal
-initial, or a non-variable source keeps the generic boxed reduce.
+local `array<int>` and `C` is a raw int or float whose type is proven before
+lowering — a literal, or a local/parameter already lowered as a raw scalar. Zero
+lowers to `ArraySum`; another raw int lowers to `ArrayReduceSumSeed`, which calls
+`__rt_array_sum_int_i64`; a raw float (including a float literal) lowers to
+`ArrayReduceSumFloatSeed`, which calls `__rt_array_sum_float_i64` and starts the
+accumulator in double mode. The carry never boxes a Mixed cell per element: the
+integer path stays raw until the first overflow, then continues as a double
+exactly like PHP's left-to-right addition, and only the final result is boxed. A
+declared parameter/return type, a capture, a non-add body, an initial whose raw
+type is not proven (string/bool/null/expression/reference), or a non-variable
+source keeps the generic boxed reduce.
 
 ## Loop-invariant array caches
 

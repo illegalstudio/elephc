@@ -311,13 +311,15 @@ pub(super) fn instance_callable_signature(target: &StaticCallableBinding) -> Opt
     }
 }
 
-/// Lowers `array_reduce($ints, fn($carry, $item) => $carry + $item, C)` to a raw int sum.
+/// Lowers `array_reduce($ints, fn($carry, $item) => $carry + $item, C)` to a raw sum.
 ///
 /// The closure is an untyped pure addition of its two parameters. With initial zero, PHP's
 /// left-to-right reduction and `array_sum()` perform the same integer additions with the same
-/// overflow-to-float promotion. With a nonzero literal initial, `ArrayReduceSumSeed` seeds the
-/// same raw reducer so the carry never boxes a Mixed cell per element. A declared return type,
-/// a capture, a non-literal initial, or any other body keeps the generic reduce path.
+/// overflow-to-float promotion. A nonzero raw int initial (literal or a local proven `int`)
+/// uses `ArrayReduceSumSeed`; a raw float initial (literal or a local proven `float`) uses
+/// `ArrayReduceSumFloatSeed`, whose accumulator starts in double mode. Either way the carry
+/// never boxes a Mixed cell per element. A declared return type, a capture, an initial whose
+/// raw type is not proven before lowering, or any other body keeps the generic reduce path.
 pub(super) fn lower_reduce_sum(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -341,7 +343,7 @@ pub(super) fn lower_reduce_sum(
     {
         return None;
     }
-    let initial = integer_literal(&args[2])?;
+    let seed = reduce_seed(ctx, &args[2])?;
     let ExprKind::Closure {
         params,
         variadic: None,
@@ -378,36 +380,108 @@ pub(super) fn lower_reduce_sum(
         return None;
     }
     let source = lower_expr(ctx, &args[0]);
-    if initial == 0 {
-        return Some(ctx.emit_value(
-            Op::RuntimeCall,
-            vec![source.value],
-            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-                crate::ir::RuntimeFnId::ArraySum,
-            ))),
-            PhpType::Mixed,
-            crate::ir::RuntimeFnId::ArraySum.intrinsic_effects(),
-            Some(expr.span),
-        ));
-    }
-    let initial = ctx.emit_value(
-        Op::ConstI64,
-        Vec::new(),
-        Some(Immediate::I64(initial)),
-        PhpType::Int,
-        Op::ConstI64.default_effects(),
-        Some(expr.span),
-    );
+    let (target, seed) = match seed {
+        ReduceSeed::IntLiteral(0) => {
+            return Some(ctx.emit_value(
+                Op::RuntimeCall,
+                vec![source.value],
+                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::ArraySum,
+                ))),
+                PhpType::Mixed,
+                crate::ir::RuntimeFnId::ArraySum.intrinsic_effects(),
+                Some(expr.span),
+            ));
+        }
+        ReduceSeed::IntLiteral(value) => (
+            crate::ir::RuntimeFnId::ArrayReduceSumSeed,
+            ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(value)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            )
+            .value,
+        ),
+        ReduceSeed::IntValue => (
+            crate::ir::RuntimeFnId::ArrayReduceSumSeed,
+            lower_expr(ctx, &args[2]).value,
+        ),
+        ReduceSeed::FloatLiteral(value) => (
+            crate::ir::RuntimeFnId::ArrayReduceSumFloatSeed,
+            ctx.emit_value(
+                Op::ConstF64,
+                Vec::new(),
+                Some(Immediate::F64(value)),
+                PhpType::Float,
+                Op::ConstF64.default_effects(),
+                Some(expr.span),
+            )
+            .value,
+        ),
+        ReduceSeed::FloatValue => (
+            crate::ir::RuntimeFnId::ArrayReduceSumFloatSeed,
+            lower_expr(ctx, &args[2]).value,
+        ),
+    };
     Some(ctx.emit_value(
         Op::RuntimeCall,
-        vec![source.value, initial.value],
+        vec![source.value, seed],
         Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-            crate::ir::RuntimeFnId::ArrayReduceSumSeed,
+            target,
         ))),
         PhpType::Mixed,
-        crate::ir::RuntimeFnId::ArrayReduceSumSeed.intrinsic_effects(),
+        target.intrinsic_effects(),
         Some(expr.span),
     ))
+}
+
+/// The statically proven accumulator shape of an `array_reduce()` initial value.
+enum ReduceSeed {
+    /// A literal integer: zero may use `array_sum()`, other values seed the raw reducer.
+    IntLiteral(i64),
+    /// A local lowered as a raw PHP int.
+    IntValue,
+    /// A literal float.
+    FloatLiteral(f64),
+    /// A local lowered as a raw PHP float.
+    FloatValue,
+}
+
+/// Classifies the initial value before lowering so an unsupported shape can fall back
+/// without lowering (and evaluating) it twice.
+fn reduce_seed(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<ReduceSeed> {
+    if let Some(value) = integer_literal(expr) {
+        return Some(ReduceSeed::IntLiteral(value));
+    }
+    if let Some(value) = float_literal(expr) {
+        return Some(ReduceSeed::FloatLiteral(value));
+    }
+    let ExprKind::Variable(name) = &expr.kind else {
+        return None;
+    };
+    if ctx.is_ref_bound_local(name) || ctx.is_borrowed_element_ref_local(name) {
+        return None;
+    }
+    match ctx.local_type(name).codegen_repr() {
+        PhpType::Int => Some(ReduceSeed::IntValue),
+        PhpType::Float => Some(ReduceSeed::FloatValue),
+        _ => None,
+    }
+}
+
+/// Returns a floating-point literal, including a parser-level unary negation.
+fn float_literal(expr: &Expr) -> Option<f64> {
+    match &expr.kind {
+        ExprKind::FloatLiteral(value) => Some(*value),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::FloatLiteral(value) => Some(-value),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Returns an integer literal, including a parser-level unary negation.

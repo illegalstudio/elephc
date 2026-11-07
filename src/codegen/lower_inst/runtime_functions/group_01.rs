@@ -34,6 +34,11 @@ pub(super) fn lower(
         RuntimeFnId::ArrayReduceSumSeed => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_reduce_sum_seed(ctx, inst)
         }),
+        RuntimeFnId::ArrayReduceSumFloatSeed => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_reduce_sum_float_seed(
+                ctx, inst,
+            )
+        }),
         RuntimeFnId::Base64EncodedLen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_base64_encoded_len(ctx, inst)
         }),

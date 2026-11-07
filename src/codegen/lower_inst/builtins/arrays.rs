@@ -115,7 +115,9 @@ pub(crate) use filter::{
 pub(crate) use map_dispatch::{
     lower_array_map,
 };
-pub(crate) use reduce_sum_seed::lower_array_reduce_sum_seed;
+pub(crate) use reduce_sum_seed::{
+    lower_array_reduce_sum_float_seed, lower_array_reduce_sum_seed,
+};
 pub(crate) use reduce_sets::{
     lower_array_walk, lower_array_merge, lower_array_diff,
     lower_array_intersect, lower_array_diff_key, lower_array_intersect_key, lower_array_slice,
