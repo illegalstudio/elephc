@@ -871,6 +871,10 @@
   "reason": "",
   "status": "PASS"
  },
+ "formatter/currencies.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
  "formatter/rounding_modes.phpt": {
   "reason": "",
   "status": "PASS"
@@ -980,6 +984,10 @@
   "status": "PASS"
  },
  "gh12020.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh12243.phpt": {
   "reason": "",
   "status": "PASS"
  },
