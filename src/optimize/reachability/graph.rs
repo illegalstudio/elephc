@@ -783,69 +783,88 @@ impl GraphState {
     /// * every other test in the loop (`has_vtable_slot`, the behavioral lookup) is untouched.
     fn seed_vtable_slot_families(&mut self) {
         let live_classes = classes_with_vtable_slots(&self.reach.classes, &self.vtable_slot_classes);
-        let kept_methods: Vec<_> = self.reach.methods.iter().cloned().collect();
         let descendants_by_root = live_descendants_by_root(&self.index, &live_classes);
-        for (class, method, is_static) in kept_methods {
-            if !self.has_vtable_slot(&class, &method, is_static) {
+        // MOVED out, not cloned: this runs every fixed-point round over every kept method. The
+        // pairs found go in afterwards, so the walk still sees the round's snapshot.
+        let kept_methods = std::mem::take(&mut self.reach.methods);
+        let mut found = Vec::new();
+        let mut key: (String, String, bool) = (String::new(), String::new(), false);
+        for visible in &kept_methods {
+            if !self.vtable_slots.contains(visible) {
                 continue;
             }
-            let lineage_root = self.vtable_lineage_root(&class, &method, is_static);
-            let behavioral = self.behavioral.methods.contains(&(
-                class.clone(),
-                method.clone(),
-                is_static,
-            ));
+            let (class, method, is_static) = visible;
+            let lineage_root = self.vtable_lineage_root(class, method, *is_static);
+            let behavioral = self.behavioral.methods.contains(visible);
             let Some(descendants) = descendants_by_root.get(&lineage_root) else {
                 continue;
             };
             for position in descendants {
-                let candidate = &live_classes[*position];
-                let visible_method = (candidate.clone(), method.clone(), is_static);
-                if !self.has_vtable_slot(candidate, &method, is_static) {
+                fill_method_key(&mut key, &live_classes[*position], method, *is_static);
+                if !self.vtable_slots.contains(&key) {
                     continue;
                 }
-                self.reach.methods.insert(visible_method.clone());
+                if !kept_methods.contains(&key) {
+                    found.push(key.clone());
+                }
                 if behavioral {
-                    self.behavioral.methods.insert(visible_method);
+                    insert_new_method(&mut self.behavioral.methods, &key);
                 }
             }
         }
+        self.reach.methods = kept_methods;
+        self.reach.methods.extend(found);
     }
 
     /// Resolves class-qualified method edges to the checker-selected implementation body.
     fn seed_explicit_method_implementations(&mut self) {
-        let methods: Vec<_> = self.reach.methods.iter().cloned().collect();
-        for (class, method, is_static) in methods {
-            let visible_method = (class.clone(), method.clone(), is_static);
-            let behavioral = self.behavioral.methods.contains(&visible_method);
-            let owner = self
+        // MOVED out, not cloned, as in `seed_vtable_slot_families`.
+        let methods = std::mem::take(&mut self.reach.methods);
+        let mut found = Vec::new();
+        let mut key: (String, String, bool) = (String::new(), String::new(), false);
+        let mut probe: (String, bool) = (String::new(), false);
+        let mut chain: Vec<&str> = Vec::new();
+        for visible_method in &methods {
+            let (class, method, is_static) = visible_method;
+            let behavioral = self.behavioral.methods.contains(visible_method);
+            let mut owner = self
                 .checker_method_implementations
-                .get(&visible_method)
-                .cloned()
-                .or_else(|| {
-                    let mut current = Some(class.clone());
-                    let mut seen = HashSet::default();
-                    while let Some(candidate) = current {
-                        if !seen.insert(candidate.clone()) {
-                            return None;
-                        }
-                        let node = self.index.classes.get(&candidate)?;
-                        if node.methods.contains_key(&(method.clone(), is_static)) {
-                            return Some(candidate);
-                        }
-                        current = node.parent.clone();
+                .get(visible_method)
+                .map(String::as_str);
+            if owner.is_none() {
+                probe.0.clear();
+                probe.0.push_str(method);
+                probe.1 = *is_static;
+                chain.clear();
+                let mut current = Some(class.as_str());
+                while let Some(candidate) = current {
+                    if chain.contains(&candidate) {
+                        break;
                     }
-                    None
-                });
+                    chain.push(candidate);
+                    let Some(node) = self.index.classes.get(candidate) else {
+                        break;
+                    };
+                    if node.methods.contains_key(&probe) {
+                        owner = Some(candidate);
+                        break;
+                    }
+                    current = node.parent.as_deref();
+                }
+            }
             let Some(owner) = owner else {
                 continue;
             };
-            let owner_method = (owner, method.clone(), is_static);
-            self.reach.methods.insert(owner_method.clone());
+            fill_method_key(&mut key, owner, method, *is_static);
+            if !methods.contains(&key) {
+                found.push(key.clone());
+            }
             if behavioral {
-                self.behavioral.methods.insert(owner_method);
+                insert_new_method(&mut self.behavioral.methods, &key);
             }
         }
+        self.reach.methods = methods;
+        self.reach.methods.extend(found);
     }
 
     /// Keeps the first concrete implementation of each implicit magic hook on instantiated classes.
@@ -993,13 +1012,15 @@ impl GraphState {
                     if !done.insert((method.as_str(), *is_static)) {
                         continue;
                     }
-                    let owner_method = ((*owner).to_string(), method.clone(), *is_static);
-                    let visible_method = (class.clone(), method.clone(), *is_static);
-                    self.reach.methods.insert(owner_method.clone());
-                    self.reach.methods.insert(visible_method.clone());
+                    fill_method_key(&mut key, owner, method, *is_static);
+                    insert_new_method(&mut self.reach.methods, &key);
                     if behavioral {
-                        self.behavioral.methods.insert(owner_method);
-                        self.behavioral.methods.insert(visible_method);
+                        insert_new_method(&mut self.behavioral.methods, &key);
+                    }
+                    fill_method_key(&mut key, class, method, *is_static);
+                    insert_new_method(&mut self.reach.methods, &key);
+                    if behavioral {
+                        insert_new_method(&mut self.behavioral.methods, &key);
                     }
                 }
             }
