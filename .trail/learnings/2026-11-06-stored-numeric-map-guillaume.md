@@ -51,3 +51,12 @@
 - Preliminary formal benchmark under the concurrent `runtime_gc::` load (3 runs, 1 warmup):
   elephc 1.655 ms vs PHP 21.113, PHP+JIT 22.498, C -O2 0.504. A final 5/2 run is recorded
   after the suite finishes.
+- Final A/B with the committed release (parent `ffc6f17fe1` vs `05145e31a3`), interleaved:
+  parent 20.4 / 27.8 / 23.0 / 39.8 / 43.2 ms; new 1.85 / 1.01 / 1.67 / 0.828 / 3.35 ms.
+  Both printed `75750000`; the parent IR has one `runtime.array_map`, the new IR has one
+  `runtime.array_map_numeric` and no generic map. Median about 27.8 -> 1.67 ms (~17x) under
+  the concurrent runtime_gc load.
+- Final formal benchmark (5 runs, 2 warmups, same concurrent load): `array_map_stored_numeric`
+  elephc 1.413 ms vs PHP 16.187, PHP+JIT 17.070, C -O2 0.643. Neighbouring rows:
+  `array_map_foreach` 3.601 vs 17.869 / 16.889 / 1.007; `array_map_mul_reads` 1.902 vs
+  15.931 / 15.918 / 0.469.
