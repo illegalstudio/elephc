@@ -144,6 +144,11 @@ pub enum RuntimeFnId {
     /// Multiplication and addition happen entirely in double precision, producing a raw
     /// `array<float>` with value_type 2.
     ArrayMapFloatAffine,
+    /// Stored `array_map(fn($x) => $x / F, $packedInts)` raw float-division kernel.
+    ///
+    /// Every element is converted to double and divided by the nonzero literal divisor,
+    /// producing a raw `array<float>` with value_type 2.
+    ArrayMapFloatDiv,
     /// Fused `array_sum(array_map(fn($x) => $x + $literal, $packedInts))` scalar kernel.
     ArrayMapSumAdd,
     /// Raw-int observation of the fused map+sum kernel; avoids boxing the result.
@@ -1049,7 +1054,9 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMapNumeric | RuntimeFnId::ArrayMapAffine => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSquare => Some((1, Some(1))),
             RuntimeFnId::ArrayMapSquareAffine => Some((2, Some(2))),
-            RuntimeFnId::ArrayMapFloatScale => Some((2, Some(2))),
+            RuntimeFnId::ArrayMapFloatScale | RuntimeFnId::ArrayMapFloatDiv => {
+                Some((2, Some(2)))
+            }
             RuntimeFnId::ArrayMapFloatAffine => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSumAddIntCached => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSumAddSafe => Some((2, Some(2))),
@@ -1969,7 +1976,8 @@ impl RuntimeFnId {
             | RuntimeFnId::ArrayMapSquare
             | RuntimeFnId::ArrayMapSquareAffine
             | RuntimeFnId::ArrayMapFloatScale
-            | RuntimeFnId::ArrayMapFloatAffine => {
+            | RuntimeFnId::ArrayMapFloatAffine
+            | RuntimeFnId::ArrayMapFloatDiv => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
             // The fused map+sum kernel walks a packed payload and boxes one result cell.
@@ -2979,6 +2987,15 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
                 | RuntimeFnId::ArrayMap
+                // Every stored numeric/float map allocates a new destination container and
+                // never returns storage from its source operand.
+                | RuntimeFnId::ArrayMapNumeric
+                | RuntimeFnId::ArrayMapAffine
+                | RuntimeFnId::ArrayMapSquare
+                | RuntimeFnId::ArrayMapSquareAffine
+                | RuntimeFnId::ArrayMapFloatScale
+                | RuntimeFnId::ArrayMapFloatAffine
+                | RuntimeFnId::ArrayMapFloatDiv
                 | RuntimeFnId::ArrayMapSumAdd
                 | RuntimeFnId::ArrayMerge
                 | RuntimeFnId::ArrayPad
@@ -3328,6 +3345,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMapSquareAffine => "array_map_square_affine",
             RuntimeFnId::ArrayMapFloatScale => "array_map_float_scale",
             RuntimeFnId::ArrayMapFloatAffine => "array_map_float_affine",
+            RuntimeFnId::ArrayMapFloatDiv => "array_map_float_div",
             RuntimeFnId::ArrayMapSumAdd => "array_map_sum_add",
             RuntimeFnId::ArrayMapSumAddInt => "array_map_sum_add_int",
             RuntimeFnId::ArrayMapSumProbeInt => "array_map_sum_probe_int",

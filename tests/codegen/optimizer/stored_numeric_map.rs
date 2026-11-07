@@ -1,6 +1,7 @@
 //! Purpose:
 //! End-to-end coverage for the stored `array_map(fn($v) => $v + C | $v - C | $v * C |
-//! $v * A + B | $v * $v | $v * $v + C | $v * F | $v * F + G, $ints)` kernels. Integer
+//! $v * A + B | $v * $v | $v * $v + C | $v * F | $v * F + G | $v + F | $v - F |
+//! $v / F, $ints)` kernels, including non-empty all-int array-literal sources. Integer
 //! callbacks keep a raw `array<int>` when no element overflows; float callbacks keep a raw
 //! `array<float>`.
 //!
@@ -780,4 +781,203 @@ echo $sum, "\n";
 "#;
     assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "23475\n");
     assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "23475\n");
+}
+
+/// Float addition and subtraction reuse the float-affine kernel with a unit scale.
+#[test]
+fn test_stored_numeric_map_float_add_and_sub() {
+    let source = r#"<?php
+$values = [-2, -1, 0, 1, 2];
+$a = array_map(fn($v) => $v + 1.5, $values);
+$b = array_map(fn($v) => 1.5 + $v, $values);
+$c = array_map(fn($v) => $v - 1.5, $values);
+$d = array_map(fn($v) => $v + -0.0, $values);
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implode(",", $d), "|";
+foreach ($a as $v) { echo gettype($v), ":", $v, ","; }
+$empty = array_slice($values, 0, 0);
+$e = array_map(fn($v) => $v + 1.5, $empty);
+echo "|", count($e), "|", json_encode($e), "\n";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "-0.5,0.5,1.5,2.5,3.5|-0.5,0.5,1.5,2.5,3.5|-3.5,-2.5,-1.5,-0.5,0.5|\
+         -2,-1,0,1,2|double:-0.5,double:0.5,double:1.5,double:2.5,double:3.5,|0|[]\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_float_affine").count(), 5, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// A nonzero float divisor uses the raw double division kernel; zero and int divisors keep the
+/// generic map so PHP's DivisionByZeroError and int/float result distinction survive.
+#[test]
+fn test_stored_numeric_map_float_div() {
+    let source = r#"<?php
+$values = [1, 2, 3, 4];
+$a = array_map(fn($v) => $v / 2.0, $values);
+$b = array_map(fn($v) => $v / -2.5, $values);
+$c = array_map(fn($v) => $v / INF, [-2, 1]);
+$d = array_map(fn($v) => $v / 2, [1, 2, 3]);
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implode(",", $d), "|";
+foreach ($a as $v) { echo gettype($v), ":", $v, ","; }
+echo "|", json_encode($a), "\n";
+try {
+    array_map(fn($v) => $v / 0.0, $values);
+} catch (DivisionByZeroError $e) {
+    echo "zero-division\n";
+}
+try {
+    array_map(fn($v) => $v / -0.0, $values);
+} catch (DivisionByZeroError $e) {
+    echo "negzero-division\n";
+}
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "0.5,1,1.5,2|-0.4,-0.8,-1.2,-1.6|-0,0|0.5,1,1.5|\
+         double:0.5,double:1,double:1.5,double:2,|[0.5,1,1.5,2]\n\
+         zero-division\n\
+         negzero-division\n"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_float_div").count(), 3, "{main}");
+    // The int-divisor map and both zero-divisor maps stay generic.
+    assert_eq!(main.matches("runtime.array_map ").count(), 3, "{main}");
+}
+
+/// Non-empty all-int array literals are proven packed `array<int>` sources and use the raw
+/// kernels instead of the generic boxed map.
+#[test]
+fn test_stored_numeric_map_array_literal_sources() {
+    let source = r#"<?php
+$values = [-2, 0, 3];
+$scale = array_map(fn($v) => $v * 1.5, [1, 2, 3]);
+$add = array_map(fn($v) => $v + 1.5, $values);
+$div = array_map(fn($v) => $v / 2.0, [2, 4, 5]);
+$square = array_map(fn($v) => $v * $v, [1, 2, 3]);
+$intadd = array_map(fn($v) => $v + 1, [1, 2, 3]);
+echo implode(",", $scale), "|", implode(",", $add), "|", implode(",", $div), "|", implode(",", $square), "|", implode(",", $intadd), "\n";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "1.5,3,4.5|-0.5,1.5,4.5|1,2,2.5|1,4,9|2,3,4\n"
+    );
+    let main = emit_main_ir(source, true);
+    for target in [
+        "runtime.array_map_float_scale",
+        "runtime.array_map_float_affine",
+        "runtime.array_map_float_div",
+        "runtime.array_map_square",
+        "runtime.array_map_numeric",
+    ] {
+        assert_eq!(main.matches(target).count(), 1, "{target}: {main}");
+    }
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
+/// Element writes on a literal-source result keep the generic map and still run.
+#[test]
+fn test_stored_numeric_map_array_literal_element_write_keeps_generic() {
+    let source = r#"<?php
+$mapped = array_map(fn($v) => $v + 1.5, [1, 2, 3]);
+$mapped[0] = 9.5;
+echo implode(",", $mapped), "\n";
+"#;
+    assert_eq!(compile_and_run(source), "9.5,3.5,4.5\n");
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map ").count(), 1, "{main}");
+    assert!(!main.contains("runtime.array_map_float_affine"), "{main}");
+}
+
+/// The new float shapes and literal sources produce the same output with the EIR optimizer on
+/// and off.
+#[test]
+fn test_stored_numeric_map_float_shapes_ir_opt_parity() {
+    let source = r#"<?php
+$values = range(1, 100);
+$sum = 0;
+for ($i = 0; $i < 3; $i++) {
+    $add = array_map(fn($v) => $v + 1.5, $values);
+    $div = array_map(fn($v) => $v / 2.0, $values);
+    $lit = array_map(fn($v) => $v * 2.5, [1, 2, 3]);
+    $sum += array_sum($add) + array_sum($div) + array_sum($lit);
+}
+echo $sum, "\n";
+"#;
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "23220\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "23220\n");
+}
+
+/// Literal-source results release their temporary source and result arrays cleanly.
+#[test]
+fn test_stored_numeric_map_float_literals_heap_debug_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = [-2, 0, 3];
+$scale = array_map(fn($v) => $v * 1.5, [1, 2, 3]);
+$add = array_map(fn($v) => $v + 1.5, $values);
+$div = array_map(fn($v) => $v / 2.0, [2, 4, 5]);
+$square = array_map(fn($v) => $v * $v, [1, 2, 3]);
+$intadd = array_map(fn($v) => $v + 1, [1, 2, 3]);
+echo implode(",", $scale), "|", implode(",", $add), "|", implode(",", $div), "|", implode(",", $square), "|", implode(",", $intadd), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "1.5,3,4.5|-0.5,1.5,4.5|1,2,2.5|1,4,9|2,3,4\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Emits target assembly for one fixture, using staticlib output for every target.
+fn emit_target_assembly(source: &str, target: &str) -> String {
+    let dir = make_cli_test_dir("elephc_stored_float_map_targets");
+    let path = dir.join("main.php");
+    fs::write(&path, source).expect("write stored float map target fixture");
+    let output = elephc_cli_command(&dir)
+        .args(["--emit", "staticlib", "--emit-asm", "--target", target])
+        .arg(&path)
+        .output()
+        .expect("run elephc --emit-asm");
+    assert!(
+        output.status.success(),
+        "emit-asm for {target} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let assembly = fs::read_to_string(path.with_extension("s"))
+        .expect("read stored float map target assembly");
+    let _ = fs::remove_dir_all(dir);
+    assembly
+}
+
+/// Every supported target materializes the float add/div/scale calls and the literal source.
+#[test]
+fn test_stored_numeric_map_float_shapes_emit_all_supported_targets() {
+    let source = r#"<?php
+#[Export]
+function floatShapes(int $seed): float {
+    $add = array_map(fn($v) => $v + 1.5, [1, 2, 3]);
+    $div = array_map(fn($v) => $v / 2.0, [1, 2, 3]);
+    $lit = array_map(fn($v) => $v * 1.5, [1, 2, 3]);
+    return array_sum($add) + array_sum($div) + array_sum($lit) + $seed;
+}
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let assembly = emit_target_assembly(source, target);
+        assert!(assembly.contains("__rt_array_map_float_affine"), "{target}");
+        assert!(assembly.contains("__rt_array_map_float_div"), "{target}");
+        assert!(assembly.contains("__rt_array_map_float_scale"), "{target}");
+        assert!(!assembly.contains("__rt_array_map_boxed"), "{target}");
+    }
 }

@@ -673,8 +673,8 @@ terminates in PHP's warned float-to-int conversion.
 
 `src/ir_lower/stmt/stored_numeric_map.rs` marks a stored
 `$mapped = array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v |
-$v * $v + C | $v * F | $v * F + G, $ints)` when every use of `$mapped` and its
-value aliases is storage-neutral: indexed
+$v * $v + C | $v * F | $v * F + G | $v + F | $v - F | $v / F, $ints)` when every
+use of `$mapped` and its value aliases is storage-neutral: indexed
 reads, value-`foreach`, read-only aliasing, or a whitelisted builtin such as
 `count`, `array_sum`, `implode`, `json_encode`, `var_dump`, `array_values`, or
 `array_keys`. The affine form also accepts `B + $v * A`, `B - $v * A`,
@@ -684,9 +684,15 @@ callback `$v * $v` uses its own single-product kernel, and `$v * $v + C` (includ
 literal scale `$v * F` (or `F * $v`) builds a raw `array<float>` with 8-byte
 IEEE-754 slots; every element is a double, matching PHP without boxing. The
 affine form `$v * F + G` (including `G + $v * F`, `$v * F - G`, and
-`G - $v * F`) does the multiply and add entirely in double precision. The boxed
-`array_sum()` aggregate recognizes that value_type and reduces the slots with a
-double loop, boxing only the final float. Any
+`G - $v * F`) does the multiply and add entirely in double precision. The float
+add/sub forms `$v + F` (or `F + $v`) and `$v - F` reuse that kernel with a unit
+scale, and `$v / F` uses a dedicated division kernel; integer divisors and zero
+divisors keep the generic map so PHP's per-element int/float result and
+`DivisionByZeroError` stay exact. A non-empty array literal whose items are all
+integer literals is a proven packed `array<int>` source too, and the lowered
+literal temporary is released after the map call. The boxed
+`array_sum()` aggregate recognizes the raw-float value_type and reduces the slots
+with a double loop, boxing only the final float. Any
 element write, direct or through an alias, keeps the generic boxed map so
 copy-on-write and ownership stay on the established path. The marker becomes a
 synthetic call consumed by lowering, so the checker's `array<mixed>` type is

@@ -383,7 +383,7 @@ pub use array_type_check::emit_array_type_check;
 pub use keyed_kernels::emit_keyed_kernels;
 pub use array_map_affine::emit_array_map_affine;
 pub use array_map_float_affine::emit_array_map_float_affine;
-pub use array_map_float_scale::emit_array_map_float_scale;
+pub use array_map_float_scale::{emit_array_map_float_div, emit_array_map_float_scale};
 pub use array_map_numeric::emit_array_map_numeric;
 pub use array_map_square::emit_array_map_square;
 pub use array_map_square_affine::emit_array_map_square_affine;

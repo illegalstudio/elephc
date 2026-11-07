@@ -1,8 +1,9 @@
 //! Purpose:
 //! Marks `array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v |
-//! $v * $v + C | $v * F | $v * F + G, $ints)` assignments whose
-//! result is only observed through storage-neutral consumers, so lowering may build
-//! a raw `array<int>` instead of boxing one Mixed cell per element.
+//! $v * $v + C | $v * F | $v * F + G | $v + F | $v - F | $v / F, $ints)`
+//! assignments whose result is only observed through storage-neutral consumers, so
+//! lowering may build a raw `array<int>` or `array<float>` instead of boxing one
+//! Mixed cell per element.
 //!
 //! Called from:
 //! - `crate::ir_lower::function::lower_body_into_function` before pre-lowering fusion.
@@ -128,7 +129,10 @@ pub(crate) enum StoredNumericMapShape {
     /// `$v * F` (or `F * $v`) with a floating-point literal scale.
     FloatScale { scale: f64 },
     /// `$v * F + G` (and its commutative/negated forms), evaluated multiply-then-add.
+    /// The float add/sub shapes reuse it with a unit scale.
     FloatAffine { scale: f64, offset: f64 },
+    /// `$v / F` with a nonzero floating-point literal divisor.
+    FloatDiv { divisor: f64 },
 }
 
 /// The single-operation map selector carried in `StoredNumericMapShape::Single`.
@@ -152,7 +156,69 @@ pub(crate) fn parse_stored_numeric_map(
         .or_else(|| parse_square_affine(left, op, right, param))
         .or_else(|| parse_affine(left, op, right, param))
         .or_else(|| parse_float_affine(left, op, right, param))
+        .or_else(|| parse_float_add(left, op, right, param))
+        .or_else(|| parse_float_div(left, op, right, param))
         .or_else(|| parse_float_scale(left, op, right, param))
+}
+
+/// Parses `$v + F`, `F + $v`, and `$v - F` with a floating-point literal operand.
+///
+/// The float-affine kernel with a unit scale evaluates `double($v) * 1.0 + offset`, which
+/// is exactly PHP's int-to-double conversion followed by the float addition.
+fn parse_float_add(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    param: &str,
+) -> Option<StoredNumericMapShape> {
+    match op {
+        BinOp::Add => {
+            if matches!(&left.kind, ExprKind::Variable(name) if name == param) {
+                return literal_f64(right).map(|offset| {
+                    StoredNumericMapShape::FloatAffine { scale: 1.0, offset }
+                });
+            }
+            if matches!(&right.kind, ExprKind::Variable(name) if name == param) {
+                return literal_f64(left).map(|offset| {
+                    StoredNumericMapShape::FloatAffine { scale: 1.0, offset }
+                });
+            }
+        }
+        BinOp::Sub => {
+            if matches!(&left.kind, ExprKind::Variable(name) if name == param) {
+                return literal_f64(right).map(|offset| {
+                    StoredNumericMapShape::FloatAffine {
+                        scale: 1.0,
+                        offset: -offset,
+                    }
+                });
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+/// Parses `$v / F` with a nonzero floating-point literal divisor.
+///
+/// An integer divisor is rejected because PHP returns an int for evenly divisible int
+/// operands. A zero divisor is rejected so the generic map keeps PHP's DivisionByZeroError.
+fn parse_float_div(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    param: &str,
+) -> Option<StoredNumericMapShape> {
+    if !matches!(op, BinOp::Div)
+        || !matches!(&left.kind, ExprKind::Variable(name) if name == param)
+    {
+        return None;
+    }
+    let divisor = literal_f64(right)?;
+    if divisor == 0.0 {
+        return None;
+    }
+    Some(StoredNumericMapShape::FloatDiv { divisor })
 }
 
 /// Parses `$v * F + G`, `G + $v * F`, `$v * F - G`, and `G - $v * F`.
@@ -414,18 +480,37 @@ fn stored_map_shape(value: &Expr, env: &TypeEnv, aliased: &HashSet<String>) -> O
     if name.as_str().trim_start_matches('\\') != "array_map" || args.len() != 2 {
         return None;
     }
-    let ExprKind::Variable(source) = &args[1].kind else {
-        return None;
-    };
-    if env.get(source).map(PhpType::codegen_repr)
-        != Some(PhpType::Array(Box::new(PhpType::Int)))
-        || aliased.contains(source)
-    {
-        return None;
+    match &args[1].kind {
+        ExprKind::Variable(source) => {
+            if env.get(source).map(PhpType::codegen_repr)
+                != Some(PhpType::Array(Box::new(PhpType::Int)))
+                || aliased.contains(source)
+            {
+                return None;
+            }
+        }
+        ExprKind::ArrayLiteral(_) if is_int_literal_array(&args[1]) => {}
+        _ => return None,
     }
     let (param, body) = single_param_closure(&args[0])?;
     parse_stored_numeric_map(body, param)?;
     Some(())
+}
+
+/// Returns whether the expression is a non-empty array literal whose items are all integer
+/// literals, which the checker always types as a packed `array<int>`.
+pub(crate) fn is_int_literal_array(expr: &Expr) -> bool {
+    let ExprKind::ArrayLiteral(items) = &expr.kind else {
+        return false;
+    };
+    !items.is_empty()
+        && items.iter().all(|item| {
+            matches!(item.kind, ExprKind::IntLiteral(_))
+                || matches!(
+                    &item.kind,
+                    ExprKind::Negate(inner) if matches!(inner.kind, ExprKind::IntLiteral(_))
+                )
+        })
 }
 
 /// Extracts the single parameter and return expression of a capture-free untyped closure.

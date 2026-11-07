@@ -678,19 +678,33 @@ pub(super) fn lower_stored_numeric_map(
     {
         return None;
     }
-    let ExprKind::Variable(source_name) = &args[1].kind else {
-        return None;
+    let source_is_variable = match &args[1].kind {
+        ExprKind::Variable(source_name) => {
+            if ctx.local_type(source_name).codegen_repr()
+                != PhpType::Array(Box::new(PhpType::Int))
+            {
+                return None;
+            }
+            true
+        }
+        ExprKind::ArrayLiteral(_)
+            if crate::ir_lower::stmt::stored_numeric_map::is_int_literal_array(&args[1]) =>
+        {
+            false
+        }
+        _ => return None,
     };
-    if ctx.local_type(source_name).codegen_repr()
-        != PhpType::Array(Box::new(PhpType::Int))
-    {
-        return None;
-    }
     let (param, body) = scalar_single_param_closure(&args[0], false)?;
     let shape =
         crate::ir_lower::stmt::stored_numeric_map::parse_stored_numeric_map(body, param)?;
     let source = lower_expr(ctx, &args[1]);
-    match shape {
+    if ctx.builder.value_php_type(source.value).codegen_repr()
+        != PhpType::Array(Box::new(PhpType::Int))
+    {
+        debug_assert!(!source_is_variable, "a variable source was already proven array<int>");
+        return None;
+    }
+    let result = match shape {
         crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::Single {
             constant,
             op,
@@ -716,28 +730,20 @@ pub(super) fn lower_stored_numeric_map(
                 Op::ConstI64.default_effects(),
                 Some(expr.span),
             );
-            Some(ctx.emit_value(
-                Op::RuntimeCall,
+            emit_stored_map_call(
+                ctx,
                 vec![source.value, constant.value, op_code.value],
-                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-                    crate::ir::RuntimeFnId::ArrayMapNumeric,
-                ))),
-                PhpType::Array(Box::new(PhpType::Mixed)),
-                crate::ir::RuntimeFnId::ArrayMapNumeric.intrinsic_effects(),
-                Some(expr.span),
-            ))
+                crate::ir::RuntimeFnId::ArrayMapNumeric,
+                expr.span,
+            )
         }
         crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::Square => {
-            Some(ctx.emit_value(
-                Op::RuntimeCall,
+            emit_stored_map_call(
+                ctx,
                 vec![source.value],
-                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-                    crate::ir::RuntimeFnId::ArrayMapSquare,
-                ))),
-                PhpType::Array(Box::new(PhpType::Mixed)),
-                crate::ir::RuntimeFnId::ArrayMapSquare.intrinsic_effects(),
-                Some(expr.span),
-            ))
+                crate::ir::RuntimeFnId::ArrayMapSquare,
+                expr.span,
+            )
         }
         crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::FloatAffine {
             scale,
@@ -759,16 +765,30 @@ pub(super) fn lower_stored_numeric_map(
                 Op::ConstF64.default_effects(),
                 Some(expr.span),
             );
-            Some(ctx.emit_value(
-                Op::RuntimeCall,
+            emit_stored_map_call(
+                ctx,
                 vec![source.value, scale.value, offset.value],
-                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-                    crate::ir::RuntimeFnId::ArrayMapFloatAffine,
-                ))),
-                PhpType::Array(Box::new(PhpType::Mixed)),
-                crate::ir::RuntimeFnId::ArrayMapFloatAffine.intrinsic_effects(),
+                crate::ir::RuntimeFnId::ArrayMapFloatAffine,
+                expr.span,
+            )
+        }
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::FloatDiv {
+            divisor,
+        } => {
+            let divisor = ctx.emit_value(
+                Op::ConstF64,
+                Vec::new(),
+                Some(Immediate::F64(divisor)),
+                PhpType::Float,
+                Op::ConstF64.default_effects(),
                 Some(expr.span),
-            ))
+            );
+            emit_stored_map_call(
+                ctx,
+                vec![source.value, divisor.value],
+                crate::ir::RuntimeFnId::ArrayMapFloatDiv,
+                expr.span,
+            )
         }
         crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::FloatScale {
             scale,
@@ -781,16 +801,12 @@ pub(super) fn lower_stored_numeric_map(
                 Op::ConstF64.default_effects(),
                 Some(expr.span),
             );
-            Some(ctx.emit_value(
-                Op::RuntimeCall,
+            emit_stored_map_call(
+                ctx,
                 vec![source.value, scale.value],
-                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-                    crate::ir::RuntimeFnId::ArrayMapFloatScale,
-                ))),
-                PhpType::Array(Box::new(PhpType::Mixed)),
-                crate::ir::RuntimeFnId::ArrayMapFloatScale.intrinsic_effects(),
-                Some(expr.span),
-            ))
+                crate::ir::RuntimeFnId::ArrayMapFloatScale,
+                expr.span,
+            )
         }
         crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::SquareAffine {
             offset,
@@ -803,16 +819,12 @@ pub(super) fn lower_stored_numeric_map(
                 Op::ConstI64.default_effects(),
                 Some(expr.span),
             );
-            Some(ctx.emit_value(
-                Op::RuntimeCall,
+            emit_stored_map_call(
+                ctx,
                 vec![source.value, offset.value],
-                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-                    crate::ir::RuntimeFnId::ArrayMapSquareAffine,
-                ))),
-                PhpType::Array(Box::new(PhpType::Mixed)),
-                crate::ir::RuntimeFnId::ArrayMapSquareAffine.intrinsic_effects(),
-                Some(expr.span),
-            ))
+                crate::ir::RuntimeFnId::ArrayMapSquareAffine,
+                expr.span,
+            )
         }
         crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::Affine {
             scale,
@@ -834,18 +846,37 @@ pub(super) fn lower_stored_numeric_map(
                 Op::ConstI64.default_effects(),
                 Some(expr.span),
             );
-            Some(ctx.emit_value(
-                Op::RuntimeCall,
+            emit_stored_map_call(
+                ctx,
                 vec![source.value, scale.value, offset.value],
-                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-                    crate::ir::RuntimeFnId::ArrayMapAffine,
-                ))),
-                PhpType::Array(Box::new(PhpType::Mixed)),
-                crate::ir::RuntimeFnId::ArrayMapAffine.intrinsic_effects(),
-                Some(expr.span),
-            ))
+                crate::ir::RuntimeFnId::ArrayMapAffine,
+                expr.span,
+            )
         }
+    };
+    if !source_is_variable {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(expr.span));
     }
+    Some(result)
+}
+
+/// Emits one stored map runtime call and returns its `array<mixed>` value.
+fn emit_stored_map_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: Vec<crate::ir::ValueId>,
+    target: crate::ir::RuntimeFnId,
+    span: Span,
+) -> LoweredValue {
+    ctx.emit_value(
+        Op::RuntimeCall,
+        operands,
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            target,
+        ))),
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        target.intrinsic_effects(),
+        Some(span),
+    )
 }
 
 /// Lowers `array_sum(array_map(fn($x) => $x + $c, $ints))` into one packed-int kernel.
