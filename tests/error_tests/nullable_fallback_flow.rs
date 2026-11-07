@@ -136,7 +136,6 @@ fn test_nullable_fallback_flow_r51_foreach_retirement_admission() {
     for (params, iteration) in [
         ("", "foreach ([1] as $e) { break; }"),
         ("", "foreach ([7 => 'v'] as $e => $v) { break; }"),
-        ("array $xs", "foreach ($xs as $e) { return; }"),
         ("", "$xs = [1]; foreach ($xs as &$e) { break; }"),
     ] {
         let source = format!("<?php class D {{ public function __destruct() {{ throw new Exception('d'); }} }} function need(D $x): void {{}} function run({params}): void {{ $e = new D(); try {{ {iteration} }} catch (Exception $c) {{ need($e); }} }}");
@@ -146,6 +145,17 @@ fn test_nullable_fallback_flow_r51_foreach_retirement_admission() {
     expect_error("<?php class D { public function __destruct() { throw new Exception('d'); } } function need(D $x): void {} $e = new D(); try { foreach ([1] as $e) { break; } } catch (Exception $c) { need($e); }", "expects D");
     expect_error("<?php class D { public function __destruct() { throw new Exception('d'); } } function need(int $x): void {} function run(): void { $key = new D(); $value = 5; try { foreach ([7 => 'v'] as $key => $value) { break; } } catch (Exception $c) { need($value); } }", "expects int");
     expect_error("<?php function need(int $x): void {} function run(): void { foreach (['key' => 7] as $e => $e) { need($e); } }", "expects int");
+}
+
+/// An unknown foreach element reaches the normal runtime object guard after retirement throws.
+#[test]
+fn test_nullable_fallback_flow_foreach_mixed_retirement_object_guard_admission() {
+    // A declared array leaves its element Mixed. Mixed-to-object calls are guarded at runtime,
+    // while the known scalar and incompatible object cases above remain compile-time errors.
+    check_source("<?php class D { public function __destruct() { throw new Exception('d'); } } \
+        function need(D $x): void {} function run(array $xs): void { $e = new D(); \
+        try { foreach ($xs as $e) { return; } } catch (Exception $c) { need($e); } }")
+        .unwrap_or_else(|error| panic!("Mixed foreach elements require a runtime object guard: {error}"));
 }
 
 /// Empty foreach sources and non-heap displaced values add no retirement exits.

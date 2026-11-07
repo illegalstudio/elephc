@@ -1511,10 +1511,10 @@ foreach ($o->x as &$v) { $v = $v * 2; }
     let body = &body[..end];
 
     let (slot_load, cell_reload, cell_store) = match target().arch {
-        Arch::AArch64 => ("ldr x0, [x9, #8]", "ldr x10, [x9, #8]", "str x0, [x10]"),
+        Arch::AArch64 => ("ldr x10, [x9, #8]", "ldr x10, [sp, #16]", "str x0, [x10]"),
         Arch::X86_64 => (
-            "mov rax, QWORD PTR [r11 + 8]",
             "mov r10, QWORD PTR [r11 + 8]",
+            "mov r10, QWORD PTR [rsp + 16]",
             "mov QWORD PTR [r10], rax",
         ),
     };
@@ -1539,11 +1539,13 @@ foreach ($o->x as &$v) { $v = $v * 2; }
         .unwrap_or_else(|| panic!("missing cell republish `{cell_store}` in:\n{body}"));
     assert!(
         load_pos < call_pos
-            && call_pos < release_pos
-            && release_pos < cell_reload_pos
-            && cell_reload_pos < store_pos,
-        "expected cell payload load -> clone -> old owner release -> cell reload -> republish, got:\n{body}"
+            && call_pos < cell_reload_pos
+            && cell_reload_pos < store_pos
+            && store_pos < release_pos,
+        "expected cell load -> clone -> child-slot restore -> publish -> old owner release, got:\n{body}"
     );
+    assert!(body.contains("mixed_property_split_phpref_payload"),
+        "property COW must follow a live PHPRef without replacing its wrapper:\n{body}");
 }
 
 // --- Issue #642 review round 2: the two shapes the first fix got wrong ---
@@ -1963,23 +1965,25 @@ foreach ($o->x as &$v) { $v = $v * 2; }
     let body = &body[..end];
 
     // The property holds a managed cell, whose payload owns the declared array's Mixed box.
-    // Retiring that old box must precede publication without replacing the cell pointer.
-    let steps: [&str; 6] = match target().arch {
+    // Publish the separated child before retiring its old box, preserving the managed cell and wrapper.
+    let steps: [&str; 7] = match target().arch {
         Arch::AArch64 => [
-            "ldr x0, [x9, #8]",
-            "ldr x0, [x0]",
-            "bl __rt_mixed_clone",
-            "bl __rt_decref_mixed",
             "ldr x10, [x9, #8]",
+            "mixed_property_split_phpref_payload",
+            "ldr x0, [x10]",
+            "bl __rt_mixed_clone",
+            "ldr x10, [sp, #16]",
             "str x0, [x10]",
+            "bl __rt_decref_mixed",
         ],
         Arch::X86_64 => [
-            "mov rax, QWORD PTR [r11 + 8]",
-            "mov rax, QWORD PTR [rax]",
-            "call __rt_mixed_clone",
-            "call __rt_decref_mixed",
             "mov r10, QWORD PTR [r11 + 8]",
+            "mixed_property_split_phpref_payload",
+            "mov rax, QWORD PTR [r10]",
+            "call __rt_mixed_clone",
+            "mov r10, QWORD PTR [rsp + 16]",
             "mov QWORD PTR [r10], rax",
+            "call __rt_decref_mixed",
         ],
     };
     let mut cursor = 0usize;

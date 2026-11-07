@@ -11,6 +11,31 @@ use super::*;
 
 /// Lowers a direct function, builtin, or extern call.
 pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
+    let value = lower_function_call_unviewed(ctx, name, args, expr);
+    // A call returning a promotable `array<int>` may hand back hash storage; where the checker
+    // typed the result as a whole value, it takes the kind-aware `array<mixed>` view. The result
+    // is a fresh owner, so the conversion consumes it directly.
+    let key = (ctx.loop_storage_scope.clone(), expr.span);
+    let viewed = ctx.promotable_arrays.call_views.contains(&key)
+        && !ctx.promotable_arrays.raw_sites.contains(&key);
+    if viewed
+        && matches!(ctx.builder.value_php_type(value.value).codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+    {
+        return ctx.emit_value(
+            Op::ArrayToMixed,
+            vec![value.value],
+            None,
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            Op::ArrayToMixed.default_effects(),
+            Some(expr.span),
+        );
+    }
+    value
+}
+
+/// Lowers a function call without the promotable-result view `lower_function_call` applies.
+fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
     constants::register_static_define_call(ctx, name, args);
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;
@@ -131,7 +156,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if is_user_function {
         if let Some(signature) = sig.as_ref() {
             if let Some(rewrite) =
-                ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
+                ref_place_args::rewrite_direct_function_property_ref_args(ctx, signature, args)
             {
                 let previous = ctx.call_description.replace(canonical.to_string());
                 let result = lower_function_call(ctx, name, &rewrite.args, expr);
@@ -196,6 +221,10 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
                 super::call_arg_coercion::box_heap_element_array_local(ctx, name, arg.span);
             }
         }
+    }
+    if is_user_function {
+        ctx.call_argument_evaluation_scopes.last_mut().expect("call argument scope")
+            .live_property_reference_arguments = !args.iter().any(is_spread_arg);
     }
     let mut operands = if is_user_function {
         // A source-declared `array` has packed-or-hash Mixed storage. Its unpack must walk
@@ -270,7 +299,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if is_user_function {
         let return_alias = user_return_alias
             .expect("a user function call resolved its return-alias summary before its arguments");
-        let evaluation_intermediates = finish_user_call_argument_evaluation(ctx, &mut operands);
+        let evaluation_intermediates = finish_user_call_argument_evaluation(ctx, &mut operands, &php_type);
         let roots = root_user_call_operands(
             ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
         );
@@ -463,7 +492,7 @@ pub(super) fn emit_builtin_call_value(
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),
             };
-            // `substr()` can return an interior view into its source string. When source-order
+            // Substring and trim calls can return interior views into their source string. When source-order
             // evaluation transferred a pinned temporary into the final call operand, letting
             // that pin flow through the result would either leak its base allocation forever
             // or free an interior pointer. Persist the view before retiring the base owner so
@@ -471,9 +500,13 @@ pub(super) fn emit_builtin_call_value(
             let stabilizes_evaluation_pin = matches!(
                 def.spec.semantics.lowering,
                 crate::builtins::semantics::BuiltinLowering::Runtime(
-                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Substr)
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Substr
+                        | crate::ir::RuntimeFnId::Trim | crate::ir::RuntimeFnId::Ltrim
+                        | crate::ir::RuntimeFnId::Rtrim | crate::ir::RuntimeFnId::Chop)
                         | crate::ir::RuntimeCallTarget::ProfiledFunction {
-                            target: crate::ir::RuntimeFnId::Substr,
+                            target: crate::ir::RuntimeFnId::Substr | crate::ir::RuntimeFnId::Trim
+                                | crate::ir::RuntimeFnId::Ltrim | crate::ir::RuntimeFnId::Rtrim
+                                | crate::ir::RuntimeFnId::Chop,
                             ..
                         },
                 ),
@@ -484,6 +517,7 @@ pub(super) fn emit_builtin_call_value(
                 && operands.first().is_some_and(|operand| {
                     value_is_call_argument_evaluation_pin(ctx, *operand)
                         || ctx.borrowed_string_call_operands.contains(operand)
+                        || ctx.value_is_owning_mixed_string_cast(*operand)
                 });
             let call = if stabilizes_evaluation_pin {
                 ctx.emit_owned_value(
@@ -611,6 +645,8 @@ pub(super) fn emit_builtin_call_value(
     // Scope widening can make the already-lowered source load an owned string cast.
     // Eval guards that owner through exceptional exits, then releases it normally here.
     if let Some(slot) = eval_source_owner {
+        // The argument guard sits above the root and must not survive this call.
+        ctx.unguard_call_argument(operands[0], span);
         retire_owned_call_operand(ctx, slot, span);
     } else {
         release_owned_call_arg_temporaries(
@@ -624,10 +660,12 @@ pub(super) fn emit_builtin_call_value(
     if is_eval {
         ctx.mark_eval_executed();
         if eval_needs_barrier {
+            crate::ir_lower::eval_reference_layouts::refuse_unboxed_array_aliases(ctx, span, None);
             ctx.apply_eval_barrier();
         } else if let Some(write_names) = eval_literal
             .and_then(|fragment| eval_literal_scope_barrier_writes(ctx, fragment))
         {
+            crate::ir_lower::eval_reference_layouts::refuse_unboxed_array_aliases(ctx, span, Some(&write_names));
             ctx.apply_eval_scope_barrier(&write_names);
         }
     }

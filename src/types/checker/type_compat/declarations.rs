@@ -267,6 +267,13 @@ impl Checker {
         can_widen_local: bool,
         context: &str,
     ) -> Result<(), CompileError> {
+        if matches!(expected_ty.codegen_repr(), PhpType::Mixed | PhpType::Object(_))
+            && self.is_native_selection_reference_argument(arg, env)?
+        {
+            // Native XML selections receive independent managed cells instead of borrowing
+            // the parent's physical property or dimension storage.
+            return Ok(());
+        }
         // Guards refine the current value, while a reference still addresses the original
         // slot. Coalescing assignments likewise keep nullable parameter storage alive.
         let storage_ty = self.guarded_local_storage_type(arg, env).unwrap_or(actual_ty).clone();
@@ -780,12 +787,17 @@ impl Checker {
         // name with something outside. A marked name from this map is announced only when
         // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
         self.run_mixed_storage_scan(body, &pre_bound_own_storage);
+        let candidates = super::super::promotable_arrays::find_candidates(self, body);
+        let saved_promotable_array_candidates =
+            std::mem::replace(&mut self.promotable_array_candidates, candidates);
+        self.activate_promotable_params(&pre_bound_own_storage);
         let (sites, dependents) = super::super::numeric_regions::find(body, &pre_bound_own_storage);
         self.numeric_region_sites = sites;
         self.numeric_region_dependents = dependents;
 
         let result = f(self);
 
+        self.promotable_array_candidates = saved_promotable_array_candidates;
         self.active_ref_params = saved_ref_params;
         self.active_external_ref_bindings = saved_external_ref_bindings;
         self.active_globals = saved_globals;

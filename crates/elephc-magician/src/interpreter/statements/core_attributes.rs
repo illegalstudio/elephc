@@ -92,7 +92,7 @@ pub(super) fn eval_discarded_core_expr(
                 if matches!(expression, EvalExpr::NullsafeMethodCall { .. }) && values.is_null(receiver[0])? {
                     return values.null();
                 }
-                with_eval_method_arguments(args, context, scope, values, |arguments, context, _, values| {
+                with_eval_object_method_arguments(args, receiver[0], method, context, scope, values, |arguments, context, _, values| {
                     let result = eval_method_call_result_with_evaluated_args(receiver[0], method, arguments, context, values)?;
                     warn_eval_discarded_instance_result(receiver[0], method, result, context, values)
                 })
@@ -105,7 +105,7 @@ pub(super) fn eval_discarded_core_expr(
                     return values.null();
                 }
                 let method = eval_dynamic_member_name(method, context, scope, values)?;
-                with_eval_method_arguments(args, context, scope, values, |arguments, context, _, values| {
+                with_eval_object_method_arguments(args, receiver[0], &method, context, scope, values, |arguments, context, _, values| {
                     let result = eval_method_call_result_with_evaluated_args(receiver[0], &method, arguments, context, values)?;
                     warn_eval_discarded_instance_result(receiver[0], &method, result, context, values)
                 })

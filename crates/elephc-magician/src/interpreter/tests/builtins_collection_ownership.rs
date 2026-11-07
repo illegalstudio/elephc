@@ -12,6 +12,93 @@ use super::super::*;
 use super::support::*;
 use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
+/// Array-key projection retires each produced key and index, including a failed insertion.
+#[test]
+fn array_keys_builder_releases_keys_indexes_and_partial_results() {
+    for failed_insert in [None, Some(0), Some(1)] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let first = values.int(4).unwrap();
+        let second = values.int(5).unwrap();
+        let source = values.alloc(FakeValue::Assoc(vec![
+            (FakeKey::String(b"first".to_vec()), first), (FakeKey::Int(7), second),
+        ]));
+        let existing = values.values.keys().copied().collect::<Vec<_>>();
+        if let Some(index) = failed_insert { values.fail_array_set_call(index); }
+        let result = eval_array_declared_values_result(
+            "array_keys", &[source], None, &mut context, &mut values,
+        );
+        if failed_insert.is_some() {
+            assert_eq!(result, Err(EvalStatus::UnsupportedConstruct));
+        } else {
+            let result = result.unwrap();
+            assert!(matches!(values.get(result), FakeValue::Array(items) if items.len() == 2));
+            values.release(result).unwrap();
+        }
+        for id in values.values.keys().filter(|id| !existing.contains(id)) {
+            assert_eq!(values.cell_owners[id], 0, "failed={failed_insert:?}, cell={id}");
+        }
+        for source in [source, first, second] {
+            assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 1);
+        }
+    }
+}
+
+/// Joining consumes traversal leases on success and even when operand retirement fails.
+#[test]
+fn implode_releases_traversal_keys_and_values_on_every_exit() {
+    for fail_release in [false, true] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let first = values.string("first").unwrap();
+        let second = values.string("second").unwrap();
+        let separator = values.string("|").unwrap();
+        let source = values.alloc(FakeValue::Array(vec![first, second]));
+        let existing = values.values.keys().copied().collect::<Vec<_>>();
+        if fail_release { values.fail_release_call = Some(0); }
+        let result = eval_implode_result(separator, source, &mut context, &mut values);
+        if fail_release {
+            assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+        } else {
+            let result = result.unwrap();
+            assert_eq!(values.get(result), FakeValue::String("first|second".to_string()));
+            values.release(result).unwrap();
+        }
+        for id in values.values.keys().filter(|id| !existing.contains(id)) {
+            assert_eq!(values.cell_owners[id], 0, "failed={fail_release}, cell={id}");
+        }
+        for source in [source, separator, first, second] {
+            assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 1);
+        }
+    }
+}
+
+/// String splitting retires segment keys and values and abandons partially populated arrays.
+#[test]
+fn explode_builder_releases_segment_operands_and_failed_results() {
+    for failed_insert in [None, Some(0), Some(1)] {
+        let mut values = FakeOps::default();
+        let separator = values.string("|").unwrap();
+        let string = values.string("|middle|").unwrap();
+        if let Some(index) = failed_insert { values.fail_array_set_call(index); }
+        let result = eval_explode_result(separator, string, None, &mut values);
+        let returned = if failed_insert.is_some() {
+            assert_eq!(result, Err(EvalStatus::UnsupportedConstruct));
+            None
+        } else {
+            let result = result.unwrap();
+            assert!(matches!(values.get(result), FakeValue::Array(entries) if entries.len() == 3));
+            Some(result)
+        };
+        for id in values.values.keys() {
+            let cell = RuntimeCellHandle::from_raw(*id as *mut crate::value::RuntimeCell);
+            let expected = usize::from(cell != separator && cell != string && Some(cell) != returned);
+            assert_eq!(values.releases.iter().filter(|released| **released == cell).count(), expected,
+                "failed insertion {failed_insert:?}, cell {id}");
+        }
+    }
+}
+
 /// Builtin exceptions own their object but release constructor arguments, including failed construction.
 #[test]
 fn builtin_throwable_construction_releases_argument_owners() {
@@ -255,5 +342,24 @@ fn core_integer_arguments_release_conversion_cells() {
                 assert!(values.releases.contains(&cell), "{name} leaked its integer conversion");
             }
         }
+    }
+}
+
+/// Reflection insertions consume operand leases and abandon a failed metadata array.
+#[test]
+fn reflection_metadata_insertion_releases_owned_operands() {
+    for fail in [false, true] {
+        let mut values = FakeOps::default();
+        let array = values.array_new(1).unwrap();
+        let key = values.int(0).unwrap();
+        let value = values.string("metadata").unwrap();
+        if fail { values.fail_array_set_call(0); }
+        let result = crate::interpreter::reflection::owned_collections::insert_owned_element(
+            &mut values, array, key, value,
+        );
+        assert_eq!(result, if fail { Err(EvalStatus::UnsupportedConstruct) } else { Ok(array) });
+        assert_eq!(values.releases.iter().filter(|cell| **cell == key).count(), 1);
+        assert_eq!(values.releases.iter().filter(|cell| **cell == value).count(), 1);
+        assert_eq!(values.releases.iter().filter(|cell| **cell == array).count(), usize::from(fail));
     }
 }

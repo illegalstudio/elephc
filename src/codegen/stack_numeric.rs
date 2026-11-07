@@ -5,11 +5,13 @@
 //! - Frame layout before any generated instruction is emitted.
 //!
 //! Key details:
-//! - Numeric consumers copy payloads; one local or owned operand slot may retain the pointer.
+//! - Numeric consumers copy payloads; one local or owned operand slot may retain the pointer,
+//!   beside any block-scoped call-operand temporaries that pin it while an operand is evaluated.
 //! - A string cast is a payload observation: numeric tags render into concat scratch without
 //!   adopting the cell, so an accumulator echoed at loop exit keeps its frame storage.
 //! - Pointer reads cannot survive another execution of the producing instruction.
 //! - Independent producers may intervene, but owning-slot replacements invalidate borrowed reads.
+//! - Array and hash keys only copy the cell into key registers, so they are numeric observations.
 //! - References, eval, suspension, unknown consumers and escaping values fail closed.
 //! - A raw integer/float seed stored into a proven numeric local gets one cell per slot; the
 //!   slot exclusively owns that cell, so only a later store to the same slot rewrites it.
@@ -203,7 +205,9 @@ impl Proof<'_> {
             return false;
         }
         let mut stores = HashSet::new();
-        if !self.value_uses(value, id, &mut HashSet::new(), &mut stores) || stores.len() > 1 {
+        if !self.value_uses(value, id, &mut HashSet::new(), &mut stores)
+            || stores.iter().filter(|&&slot| !self.scoped_temp(slot)).count() > 1
+        {
             return false;
         }
         // A box is selected only as a local seed (a guarded counter's exit publication).
@@ -245,6 +249,7 @@ impl Proof<'_> {
                         .result
                         .is_some_and(|result| self.value_uses(result, producer, seen, stores)),
                     Op::Cast | Op::ReturnBoundaryMixedToInt => scalar_observation(user),
+                    _ if key_observation(user, value) => true,
                     _ if (domain::comparison(user) || domain::identity(user))
                         && self.numeric_inputs(&user.operands) => true,
                     _ if tagged_producer(user) && self.numeric_inputs(&user.operands) => true,
@@ -300,7 +305,7 @@ impl Proof<'_> {
                         self.load_uses(id, value)
                     }),
                     Op::ReleaseLocalSlot => true,
-                    Op::PushCallOperandOwner | Op::PopCallOperandOwner => {
+                    Op::PushCallOperandOwner | Op::PopCallOperandOwner | Op::UnsetLocal => {
                         scoped && inst.operands.is_empty()
                     }
                     _ => false,
@@ -309,6 +314,17 @@ impl Proof<'_> {
         });
         self.slots.insert(slot, safe);
         safe
+    }
+
+    /// Returns whether `slot` is a call-operand temporary scoped to one block.
+    ///
+    /// Such a slot pins the cell only while an operand is evaluated and is retired in the same
+    /// block before the producer can run again, so several of them may hold one cell beside its
+    /// single ordinary destination.
+    fn scoped_temp(&self, slot: LocalSlotId) -> bool {
+        self.function.locals.get(slot.as_raw() as usize).is_some_and(|local| {
+            matches!(local.kind, LocalKind::OwnedTemp | LocalKind::HiddenTemp)
+        }) && self.scoped_operand(slot)
     }
 
     /// Requires one same-block stored operand with balanced publication and final retirement.
@@ -333,7 +349,9 @@ impl Proof<'_> {
                     let Some(next) = depth.checked_sub(1) else { return false; };
                     depth = next;
                 }
-                Op::ReleaseLocalSlot if stored => {
+                // An operand temporary's `unset_local` only zeroes the slot; the value's own
+                // `release` retires it, exactly like a `release_local_slot` after the scope.
+                Op::ReleaseLocalSlot | Op::UnsetLocal if stored => {
                     if depth != 0 { return false; }
                     retired = true;
                 }
@@ -359,6 +377,7 @@ impl Proof<'_> {
                 return false;
             };
             match inst.op {
+                Op::Acquire if numeric_box(self.function, inst) => return true,
                 Op::Acquire if inst.immediate.is_none() => {
                     let Some(&source) = inst.operands.first() else {
                         return false;
@@ -379,7 +398,8 @@ impl Proof<'_> {
                     let mut stores = HashSet::new();
                     return (!tagged_producer(inst) || self.numeric_inputs(&inst.operands))
                         && self.value_uses(value, id, &mut HashSet::new(), &mut stores)
-                        && stores == HashSet::from([slot]);
+                        && stores.contains(&slot)
+                        && stores.iter().all(|&other| other == slot || self.scoped_temp(other));
                 }
                 _ => return false,
             }
@@ -407,7 +427,12 @@ impl Proof<'_> {
                 }
                 let arithmetic = tagged_producer(inst) && self.numeric_inputs(&inst.operands);
                 let comparison = domain::comparison(inst) && self.numeric_inputs(&inst.operands);
-                if !scalar_observation(inst) && !tag_or_payload_copy(inst) && !arithmetic && !comparison {
+                if !scalar_observation(inst)
+                    && !tag_or_payload_copy(inst)
+                    && !arithmetic
+                    && !comparison
+                    && !key_observation(inst, value)
+                {
                     return false;
                 }
                 self.stable_read(load, user)
@@ -466,9 +491,15 @@ fn checked(op: Op) -> bool {
     matches!(op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
 }
 
-/// Recognizes an explicit Mixed box of a raw integer or float, such as a guarded exit seed.
+/// Recognizes a Mixed box of a raw integer or float, such as a guarded exit seed.
+///
+/// An `acquire` boxes too when range analysis has narrowed the checked producer it retained to a
+/// raw scalar (`$j = $i - 1` into an `int|float` local): its lowering allocates the same cell.
 pub(super) fn numeric_box(function: &Function, inst: &crate::ir::Instruction) -> bool {
-    inst.op == Op::MixedBox
+    (inst.op == Op::MixedBox
+        || (inst.op == Op::Acquire
+            && inst.immediate.is_none()
+            && inst.result_type == IrType::Heap(IrHeapKind::Mixed)))
         && inst.operands.len() == 1
         && function
             .value(inst.operands[0])
@@ -544,6 +575,22 @@ fn int_property_observation(inst: &crate::ir::Instruction) -> bool {
         && inst.operands.len() == 1
         && inst.result_type == IrType::I64
         && inst.result_php_type == PhpType::Int
+}
+
+/// Accepts a cell read only as the key of an array or hash access.
+///
+/// Every key materializer (`materialize_hash_key_*`, inline for a proven numeric cell and
+/// through `__rt_mixed_unbox` otherwise) copies the cell's tag and payload into key registers
+/// before the access runs; `__rt_array_set_mixed_key` only unboxes its borrowed key cell. None
+/// retains the cell, so the pointer cannot outlive the instruction. The value must not also be the stored
+/// element or the receiver, which would publish the frame address into the container.
+fn key_observation(inst: &crate::ir::Instruction, value: ValueId) -> bool {
+    matches!(
+        inst.op,
+        Op::ArrayGet | Op::ArrayGetSilent | Op::ArraySet | Op::HashGet | Op::HashGetSilent | Op::HashSet
+            | Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent | Op::ArraySetMixedKey
+    ) && inst.operands.get(1) == Some(&value)
+        && inst.operands.iter().enumerate().all(|(position, &operand)| position == 1 || operand != value)
 }
 
 /// Finds the defining instruction for a non-parameter SSA value.

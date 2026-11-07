@@ -132,6 +132,9 @@ pub(super) fn lower_static_call_user_func(
                 return None;
             }
             if let Some(callback_args) = static_call_user_func_array_args(arg_array) {
+                if callback_args.iter().any(|arg| is_native_selection_reference_argument(ctx, arg)) {
+                    return lower_eval_call_user_func_array_fallback(ctx, callback_arg, arg_array, expr);
+                }
                 if let Some(callback) = instance_call_user_func_callback(ctx, callback_arg) {
                     return lower_instance_callable_call_user_func(
                         ctx,

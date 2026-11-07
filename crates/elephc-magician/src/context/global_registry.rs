@@ -9,6 +9,54 @@
 
 use super::*;
 
+thread_local! {
+    /// Stable ABI handles, removed before their owning contexts are reclaimed.
+    static LIVE_NATIVE_CONTEXTS: RefCell<Vec<*mut ElephcEvalContext>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Publishes a heap context after all initialization is complete and its address is stable.
+pub(crate) fn register_live_native_context(context: *mut ElephcEvalContext) {
+    LIVE_NATIVE_CONTEXTS.with(|contexts| contexts.borrow_mut().push(context));
+}
+
+/// Removes a context before any owner or callback can observe reclaimed metadata.
+pub(crate) fn unregister_live_native_context(context: *mut ElephcEvalContext) {
+    LIVE_NATIVE_CONTEXTS.with(|contexts| contexts.borrow_mut().retain(|entry| *entry != context));
+}
+
+/// Finds a live request owner for class-based factories called after an eval activation returns.
+///
+/// # Safety
+/// Context handles must be registered and removed on their owning thread before reclamation.
+pub(crate) unsafe fn live_native_context_for_class(name: &str) -> Option<*mut ElephcEvalContext> {
+    let contexts = LIVE_NATIVE_CONTEXTS.with(|contexts| contexts.borrow().clone());
+    for context in contexts {
+        let Some(owner) = (unsafe { context.as_mut() }) else { continue; };
+        if !owner.has_abi_owners() || owner.teardown_active() { continue; }
+        #[cfg(not(test))]
+        owner.sync_global_eval_classes();
+        if owner.resolve_class_like_name(name).is_some() { return Some(context); }
+    }
+    None
+}
+
+/// Tests eval class-like names against the target followed by its compiled positive candidates.
+pub(crate) fn native_class_string_relation(
+    context: &ElephcEvalContext, source: &str, candidates: &[&str], exclude_self: bool,
+) -> bool {
+    let Some(source) = context.resolve_class_like_name(source) else { return false; };
+    let Some(target) = candidates.first() else { return false; };
+    let target = context.resolve_class_like_name(target).unwrap_or_else(|| target.trim_start_matches('\\').into());
+    if exclude_self && source.eq_ignore_ascii_case(&target) { return false; }
+    let interface_parents = context.interface_parent_names(&source);
+    candidates.iter().any(|candidate| {
+        let candidate = candidate.trim_start_matches('\\');
+        source.eq_ignore_ascii_case(candidate)
+            || context.class_is_a(&source, candidate, false)
+            || interface_parents.iter().any(|parent| parent.eq_ignore_ascii_case(candidate))
+    })
+}
+
 /// Late-static override installed while eval dispatches into a generated/AOT frame.
 #[derive(Clone)]
 pub(super) struct NativeFrameCalledClassOverride {
@@ -37,6 +85,13 @@ pub(crate) fn push_native_frame_called_class_override(
             });
     });
     NativeFrameCalledClassOverrideGuard
+}
+
+/// Keeps an interpreter context active across a native call without changing class resolution.
+pub(crate) fn push_native_frame_context(
+    context: *mut ElephcEvalContext,
+) -> NativeFrameCalledClassOverrideGuard {
+    push_native_frame_called_class_override(context, "", "")
 }
 
 impl Drop for NativeFrameCalledClassOverrideGuard {
@@ -114,8 +169,79 @@ pub(crate) fn native_frame_called_class_override_context(
     })
 }
 
-#[cfg(not(test))]
+/// Borrows the active eval context while an interpreter call is inside generated code.
+///
+/// Prelude factories can cross ordinary helper frames without an eval context local.
+/// The owning interpreter frame keeps this context alive until the native call returns.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn native_frame_active_eval_context() -> Option<*mut ElephcEvalContext> {
+    NATIVE_FRAME_CALLED_CLASS_OVERRIDES.with(|overrides| {
+        overrides.borrow().last().map(|entry| entry.context).filter(|context| !context.is_null())
+    })
+}
+
+#[cfg(test)]
+mod active_context_tests {
+    use super::*;
+
+    /// Factories reuse a live ABI owner and never return a handle after its final reclamation.
+    #[test]
+    fn class_factory_context_lookup_tracks_retained_abi_lifetimes() {
+        let context = crate::ffi::__elephc_eval_context_new();
+        unsafe {
+            assert!((*context).define_class(EvalClass::new("LiveFactoryContextNode", vec![], vec![])));
+            assert_eq!(live_native_context_for_class("\\livefactorycontextnode"), Some(context));
+            assert_eq!(crate::ffi::__elephc_eval_context_retain(context), 0);
+            crate::ffi::__elephc_eval_context_free(context);
+            assert_eq!(live_native_context_for_class("LiveFactoryContextNode"), Some(context));
+            crate::ffi::__elephc_eval_context_free(context);
+            assert_eq!(live_native_context_for_class("LiveFactoryContextNode"), None);
+        }
+    }
+
+    /// Compiled positive candidates include native ancestors implementing the requested interface.
+    #[test]
+    fn eval_class_string_relations_preserve_aliases_self_and_compiled_parents() {
+        let mut context = ElephcEvalContext::new();
+        assert!(context.define_class(EvalClass::with_relations("DynamicFactoryChild",
+            Some("NativeFactoryParent".into()), vec![], vec![], vec![])));
+        assert!(context.define_interface(EvalInterface::new("DynamicFactoryInterface",
+            vec!["NativeFactoryInterface".into()], vec![])));
+        assert!(context.define_class_alias("DynamicFactoryChild", "DynamicFactoryAlias"));
+        assert!(native_class_string_relation(&context, "\\dynamicfactoryalias", &["NativeFactoryParent"], false));
+        assert!(native_class_string_relation(&context, "DynamicFactoryChild", &["NativeFactoryParent"], true));
+        assert!(native_class_string_relation(&context, "DynamicFactoryChild", &["Countable", "NativeFactoryParent"], false));
+        assert!(native_class_string_relation(&context, "DynamicFactoryInterface", &["NativeFactoryInterface"], true));
+        assert!(!native_class_string_relation(&context, "DynamicFactoryAlias", &["DynamicFactoryChild"], true));
+        assert!(native_class_string_relation(&context, "DynamicFactoryAlias", &["DynamicFactoryChild"], false));
+        assert!(!native_class_string_relation(&context, "MissingFactoryClass", &["MissingFactoryClass"], false));
+    }
+
+    /// Nested global calls restore their caller's context without masking called-class metadata.
+    #[test]
+    fn context_only_native_frames_preserve_class_overrides_and_restore_context() {
+        let mut outer = ElephcEvalContext::new();
+        let mut inner = ElephcEvalContext::new();
+        let outer_ptr = &mut outer as *mut ElephcEvalContext;
+        let inner_ptr = &mut inner as *mut ElephcEvalContext;
+        {
+            let _method = push_native_frame_called_class_override(outer_ptr, "Parent", "Child");
+            assert_eq!(native_frame_active_eval_context(), Some(outer_ptr));
+            {
+                let _function = push_native_frame_context(inner_ptr);
+                assert_eq!(native_frame_active_eval_context(), Some(inner_ptr));
+                assert_eq!(native_frame_called_class_override_for_frame("Parent"), Some("Child".into()));
+                assert_eq!(native_frame_called_class_override_context("Parent"), Some((outer_ptr, "Child".into())));
+                assert_eq!(native_frame_called_class_override_for_frame(""), None);
+            }
+            assert_eq!(native_frame_active_eval_context(), Some(outer_ptr));
+        }
+        assert_eq!(native_frame_active_eval_context(), None);
+    }
+}
+
 #[derive(Default)]
+#[cfg_attr(test, allow(dead_code))]
 pub(super) struct GlobalEvalClassRegistry {
     pub(super) classes: HashMap<String, EvalClass>,
     pub(super) declared_class_names: Vec<String>,
@@ -126,6 +252,22 @@ pub(super) struct GlobalEvalClassRegistry {
     pub(super) enums: HashMap<String, EvalEnum>,
     pub(super) declared_enum_names: Vec<String>,
     pub(super) aliases: HashMap<String, EvalClassAlias>,
+}
+
+impl GlobalEvalClassRegistry {
+    /// Rejects undeclared names without copying declaration bodies into a temporary context.
+    fn contains_class_like(&self, name: &str) -> bool {
+        let key = normalize_class_name(name);
+        self.classes.contains_key(&key) || self.interfaces.contains_key(&key)
+            || self.traits.contains_key(&key) || self.enums.contains_key(&key)
+            || self.aliases.contains_key(&key)
+    }
+}
+
+/// Probes PHP-global declaration keys before a context-free relation lookup builds a snapshot.
+#[cfg(not(test))]
+pub(crate) fn global_eval_class_like_exists(name: &str) -> bool {
+    global_eval_classes().lock().is_ok_and(|registry| registry.contains_class_like(name))
 }
 
 /// Returns the process-local eval class registry for generated-code eval contexts.
@@ -194,5 +336,30 @@ pub(super) fn register_global_eval_alias(alias_name: &str, alias: &EvalClassAlia
     let key = normalize_class_name(alias_name);
     if let Ok(mut registry) = global_eval_classes().lock() {
         registry.aliases.insert(key, alias.clone());
+    }
+}
+
+#[cfg(test)]
+mod registry_probe_tests {
+    use super::*;
+
+    /// Negative lookups inspect only map keys, while aliases and qualified names remain visible.
+    #[test]
+    fn class_like_presence_probe_preserves_case_and_aliases_without_a_snapshot() {
+        let mut registry = GlobalEvalClassRegistry::default();
+        assert!(!registry.contains_class_like("MissingRegistryClass"));
+        registry.classes.insert(normalize_class_name("RegistryClass"),
+            EvalClass::new("RegistryClass", vec![], vec![]));
+        registry.interfaces.insert(normalize_class_name("RegistryInterface"),
+            EvalInterface::new("RegistryInterface", vec![], vec![]));
+        registry.aliases.insert(normalize_class_name("RegistryAlias"), EvalClassAlias {
+            target: "RegistryClass".into(), kind: EvalClassAliasKind::Class,
+        });
+        assert!(registry.contains_class_like("\\registryclass"));
+        assert!(registry.contains_class_like("REGISTRYINTERFACE"));
+        assert!(registry.contains_class_like("registryalias"));
+        assert!(!registry.contains_class_like("MissingRegistryClass"));
+        assert_eq!(registry.classes.len(), 1);
+        assert_eq!(registry.aliases.len(), 1);
     }
 }

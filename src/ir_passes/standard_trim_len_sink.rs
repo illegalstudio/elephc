@@ -9,8 +9,8 @@
 //! Key details:
 //! - Only the standard one- or two-operand trim forms are eligible. A mask
 //!   containing PHP's `..` range syntax stays on the runtime path.
-//! - The trim result may be observed only by the `str_len` and release
-//!   scaffolding; any other use keeps the call.
+//! - The trim result, including an optional owned persistence, may be observed only
+//!   by the `str_len` and release scaffolding; any other use keeps the call.
 //! - The folded length is PHP's byte length after applying the mask; the default
 //!   mask is `" \t\n\r\0\x0B"`.
 
@@ -95,13 +95,34 @@ fn fold(function: &mut Function, data: &DataPool, length_id: InstId) -> bool {
         return false;
     };
     let crate::ir::ValueDef::Instruction {
-        inst: producer_id, ..
+        inst: mut producer_id, ..
     } = definition.def
     else {
         return false;
     };
-    let Some(producer) = function.instruction(producer_id) else {
+    let Some(mut producer) = function.instruction(producer_id) else {
         return false;
+    };
+    // Argument parking can require an owned copy of a borrowed trim view. Length-only
+    // observations do not need that copy, but its complete use graph must be proven too.
+    let mut observations = vec![(subject_value, length_id)];
+    let persistence = if producer.op == Op::StrPersist && producer.operands.len() == 1 {
+        let trim_value = producer.operands[0];
+        let Some(crate::ir::ValueDef::Instruction { inst, .. }) =
+            function.value(trim_value).map(|value| value.def)
+        else {
+            return false;
+        };
+        observations.push((trim_value, producer_id));
+        let persistence = producer_id;
+        producer_id = inst;
+        let Some(trim) = function.instruction(producer_id) else {
+            return false;
+        };
+        producer = trim;
+        Some(persistence)
+    } else {
+        None
     };
     let Some(target) = trim_target(producer) else {
         return false;
@@ -110,17 +131,25 @@ fn fold(function: &mut Function, data: &DataPool, length_id: InstId) -> bool {
         return false;
     }
     let mut releases = Vec::new();
-    for (raw, inst) in function.instructions.iter().enumerate() {
-        if !inst.operands.contains(&subject_value) {
-            continue;
+    for (value, consumer) in observations {
+        if function.blocks.iter().any(|block| block.terminator.as_ref()
+            .is_some_and(|term| term.used_values().contains(&value)))
+        {
+            return false;
         }
-        let id = InstId::from_raw(raw as u32);
-        if id == length_id {
-            continue;
-        }
-        match inst.op {
-            Op::Release | Op::ReleaseUnlessAliases => releases.push(id),
-            _ => return false,
+        for (raw, inst) in function.instructions.iter().enumerate() {
+            if !inst.operands.contains(&value) {
+                continue;
+            }
+            let id = InstId::from_raw(raw as u32);
+            if id == consumer {
+                continue;
+            }
+            match inst.op {
+                Op::Release | Op::ReleaseUnlessAliases
+                    if inst.operands.first() == Some(&value) => releases.push(id),
+                _ => return false,
+            }
         }
     }
     let Some(subject) = literal_string(function, data, producer.operands[0]) else {
@@ -154,6 +183,11 @@ fn fold(function: &mut Function, data: &DataPool, length_id: InstId) -> bool {
     length.effects = Op::ConstI64.default_effects();
     if let Some(inst) = function.instruction_mut(producer_id) {
         neutralize_to_nop(inst);
+    }
+    if let Some(persistence) = persistence {
+        if let Some(inst) = function.instruction_mut(persistence) {
+            neutralize_to_nop(inst);
+        }
     }
     for id in releases {
         if let Some(inst) = function.instruction_mut(id) {

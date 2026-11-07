@@ -385,8 +385,8 @@ mod tests {
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
-        assert_eq!(eval_registry, 755 + curl_surface);
-        // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
+        assert_eq!(eval_registry, 758 + curl_surface);
+        // Compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
         //
@@ -404,7 +404,8 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        assert_eq!(eval_internal, 134);
+        // Also includes the SimpleXML allocation and diagnostic adapters.
+        assert_eq!(eval_internal, 136);
         // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`), plus
         // the 187 Intl contracts that route through the managed ICU bridge.
@@ -418,11 +419,12 @@ mod tests {
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
-        assert_eq!(aot_registry, 874);
+        assert_eq!(aot_registry, 876);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         // Includes the 137 Intl procedural contracts declared by the synthetic prelude.
-        assert_eq!(aot_external, 561 + curl_surface);
+        assert_eq!(aot_external, 564 + curl_surface);
+
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -474,12 +476,13 @@ mod tests {
         assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters, plus the fifty-one GMP homes forwarding to the compiled prelude.
-        assert_eq!(interpreter_adapter, 660 + curl_surface);
+        assert_eq!(interpreter_adapter, 663 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls.
         // Includes the 187 Intl contracts: the managed ICU bridge has no eval route.
-        assert_eq!(unsupported, 680);
+        assert_eq!(unsupported, 682);
+
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

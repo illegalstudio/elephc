@@ -494,13 +494,9 @@ fn lower_wait(
                 symbol
             });
             ctx.emitter.instruction("str x0, [sp, #8]");                        // preserve returned child id across status writeback
-            if ctx.local_php_type(status_slot)?.codegen_repr() == PhpType::Mixed {
-                ctx.release_local_before_refcounted_writeback(status_slot)?;
-            }
             ctx.emitter.instruction("ldrsw x0, [sp]");                          // load the target-native status as a PHP integer
             store_pcntl_status(ctx, status_slot)?;
             if let Some(slot) = usage_slot {
-                ctx.release_local_before_refcounted_writeback(slot)?;
                 ctx.emitter.instruction("ldr x9, [sp, #8]");                    // inspect the returned child id before reading resource usage
                 ctx.emitter.instruction("cmp x9, #0");                          // PHP fills usage only for a reaped child
                 ctx.emitter.instruction(&format!("b.gt {usage_from_result}"));  // materialize usage only for a reaped child
@@ -555,13 +551,9 @@ fn lower_wait(
                 symbol
             });
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // preserve returned child id across status writeback
-            if ctx.local_php_type(status_slot)?.codegen_repr() == PhpType::Mixed {
-                ctx.release_local_before_refcounted_writeback(status_slot)?;
-            }
             ctx.emitter.instruction("movsxd rax, DWORD PTR [rsp]");             // load the target-native status as a PHP integer
             store_pcntl_status(ctx, status_slot)?;
             if let Some(slot) = usage_slot {
-                ctx.release_local_before_refcounted_writeback(slot)?;
                 ctx.emitter.instruction("cmp QWORD PTR [rsp + 8], 0");          // PHP fills usage only for a reaped child
                 ctx.emitter.instruction(&format!("jg {usage_from_result}"));    // materialize usage only for a reaped child
                 ctx.emitter.instruction("mov rdi, 8");                          // allocate an empty associative array on failure/WNOHANG
@@ -631,14 +623,12 @@ fn lower_waitid(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
             abi::emit_store_to_sp(ctx.emitter, "x0", RESULT_OFFSET);
             if let Some(slot) = info_slot {
                 ctx.emitter.instruction(&format!("cbz x0, {no_writeback}"));    // leave caller output unchanged on failure
-                ctx.release_local_before_refcounted_writeback(slot)?;
                 abi::emit_temporary_stack_address(ctx.emitter, "x0", INFO_OFFSET);
                 abi::emit_call_label(ctx.emitter, "__rt_pcntl_siginfo_array");
                 store_pcntl_siginfo_array(ctx, slot)?;
                 ctx.emitter.label(&no_writeback);
             }
             if let Some(slot) = usage_slot {
-                ctx.release_local_before_refcounted_writeback(slot)?;
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", RESULT_OFFSET);
                 ctx.emitter.instruction(&format!("cbnz x9, {usage_from_result}")); // successful waitid always publishes all 17 usage fields
                 ctx.emitter.instruction("mov x0, #8");                          // failed Linux waitid initializes the by-ref output to []
@@ -675,14 +665,12 @@ fn lower_waitid(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
             if let Some(slot) = info_slot {
                 ctx.emitter.instruction("test eax, eax");                       // leave caller output unchanged on failure
                 ctx.emitter.instruction(&format!("jz {no_writeback}"));         // preserve caller output when waitid fails
-                ctx.release_local_before_refcounted_writeback(slot)?;
                 abi::emit_temporary_stack_address(ctx.emitter, "rdi", INFO_OFFSET);
                 abi::emit_call_label(ctx.emitter, "__rt_pcntl_siginfo_array");
                 store_pcntl_siginfo_array(ctx, slot)?;
                 ctx.emitter.label(&no_writeback);
             }
             if let Some(slot) = usage_slot {
-                ctx.release_local_before_refcounted_writeback(slot)?;
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "r9", RESULT_OFFSET);
                 ctx.emitter.instruction("test r9, r9");                         // distinguish a successful raw waitid syscall
                 ctx.emitter.instruction(&format!("jnz {usage_from_result}"));   // successful WNOHANG also publishes 17 zero fields
@@ -722,7 +710,7 @@ fn pcntl_int_output_local_slot(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
         return Err(CodegenIrError::unsupported(format!(
             "{name} status argument that is not a local variable",
         )));
@@ -806,7 +794,7 @@ pub(super) fn pcntl_optional_output_local_slot(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
         return Ok(None);
     }
     let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
@@ -819,16 +807,13 @@ pub(super) fn pcntl_optional_output_local_slot(
 
 /// Stores a fresh resource-usage hash into its typed or boxed PHP output local.
 fn store_pcntl_rusage_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
+    let produced_type = PhpType::AssocArray {
+        key: Box::new(PhpType::Str), value: Box::new(PhpType::Int),
+    };
     if ctx.local_php_type(slot)?.codegen_repr() == PhpType::Mixed {
-        emit_box_current_owned_value_as_mixed(
-            ctx.emitter,
-            &PhpType::AssocArray {
-                key: Box::new(PhpType::Str),
-                value: Box::new(PhpType::Int),
-            },
-        );
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &produced_type);
     }
-    ctx.store_current_result_to_local(slot)
+    super::super::local_stores::publish_current_owned_output(ctx, slot, &produced_type)
 }
 
 /// Stores a fresh signal-information hash into its typed or boxed PHP output local.
@@ -836,16 +821,13 @@ pub(super) fn store_pcntl_siginfo_array(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
 ) -> Result<()> {
+    let produced_type = PhpType::AssocArray {
+        key: Box::new(PhpType::Str), value: Box::new(PhpType::Mixed),
+    };
     if ctx.local_php_type(slot)?.codegen_repr() == PhpType::Mixed {
-        emit_box_current_owned_value_as_mixed(
-            ctx.emitter,
-            &PhpType::AssocArray {
-                key: Box::new(PhpType::Str),
-                value: Box::new(PhpType::Mixed),
-            },
-        );
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &produced_type);
     }
-    ctx.store_current_result_to_local(slot)
+    super::super::local_stores::publish_current_owned_output(ctx, slot, &produced_type)
 }
 
 /// Stores a target-native wait status into raw integer or boxed Mixed output storage.
@@ -853,7 +835,7 @@ fn store_pcntl_status(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resul
     if ctx.local_php_type(slot)?.codegen_repr() == PhpType::Mixed {
         emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
     }
-    ctx.store_current_result_to_local(slot)
+    super::super::local_stores::publish_current_owned_output(ctx, slot, &PhpType::Int)
 }
 
 /// Lowers a zero-argument PCNTL bridge that returns one machine integer.

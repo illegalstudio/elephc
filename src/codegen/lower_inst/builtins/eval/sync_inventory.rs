@@ -233,6 +233,7 @@ pub(super) fn eval_sync_type_supported(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
         PhpType::Int
+            | PhpType::TaggedScalar
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
@@ -266,24 +267,40 @@ fn flush_eval_scope_locals_with_mask(
     for local in locals {
         let skip = access_mask_offset.map(|offset| {
             let skip = ctx.next_label("eval_scope_flush_unaccessed");
-            emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, offset, &skip);
-            skip
+            (offset, skip)
         });
-        let ty = ctx.load_local_to_result(local.slot)?.codegen_repr();
-        if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-            emit_box_current_value_as_mixed(ctx.emitter, &ty);
-        } else {
-            // Keep an independent snapshot while eval or another alias replaces the native slot.
-            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        if let Some((offset, skip)) = &skip {
+            emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, *offset, skip);
         }
+        ctx.load_eval_local_snapshot_to_mixed(local.slot)?;
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-        emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED);
-        if let Some(skip) = skip {
+        emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED | EVAL_SCOPE_FLAG_NATIVE_SNAPSHOT);
+        emit_eval_native_local_type(ctx, local);
+        if let Some((_, skip)) = skip {
             ctx.emitter.label(&skip);
         }
     }
     Ok(())
+}
+
+/// Rejects invalid object-reference assignments inside eval, before a surrounding catch executes.
+fn emit_eval_native_local_type(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal) {
+    let expected = match &local.ty {
+        PhpType::Object(class) if !class.is_empty() => class.as_str(),
+        PhpType::Object(_) => "object",
+        _ => "",
+    };
+    let (name, name_len) = ctx.data.add_string(local.name.as_bytes());
+    let (ty, ty_len) = ctx.data.add_string(expected.as_bytes());
+    load_eval_scope_to_arg(ctx, 0);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &name);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), name_len as i64);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), &ty);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), ty_len as i64);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_native_type_v1");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
 }
 
 /// Flushes only dynamic-eval globals selected by the parsed fragment's access mask.
@@ -294,7 +311,7 @@ pub(super) fn flush_dynamic_eval_global_scope(
     flush_eval_global_scope_with_mask(ctx, globals, Some(EVAL_SCOPE_ACCESS_MASK_OFFSET))
 }
 
-/// Flushes supported program globals, optionally guarding each name through a runtime mask.
+/// Flushes independently owned program-global cells, optionally guarded by a runtime mask.
 fn flush_eval_global_scope_with_mask(
     ctx: &mut FunctionContext<'_>,
     globals: &[EvalSyncGlobal],
@@ -310,12 +327,10 @@ fn flush_eval_global_scope_with_mask(
             skip
         });
         load_global_to_result(ctx, global);
-        if !matches!(global.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-            emit_box_current_value_as_mixed(ctx.emitter, &global.ty);
-        }
+        emit_owned_eval_scope_value(ctx.emitter, &global.ty);
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-        emit_eval_global_scope_set(ctx, global, scope_set_flags_for_type(&global.ty));
+        emit_eval_global_scope_set(ctx, global, EVAL_SCOPE_FLAG_OWNED);
         if let Some(skip) = skip {
             ctx.emitter.label(&skip);
         }
@@ -358,19 +373,17 @@ fn eval_scope_name_mask(name: &str) -> u64 {
     1_u64 << (hash & 63)
 }
 
-/// Flushes global-backed variables into the local eval scope for scope-read EIR AOT.
+/// Gives scope-read EIR AOT an independent owner for every synchronized global cell.
 pub(super) fn flush_eval_globals_to_local_scope(ctx: &mut FunctionContext<'_>, globals: &[EvalSyncGlobal]) {
     for global in globals {
         if main_eval_local_supplies_global(ctx, &global.name) {
             continue;
         }
         load_global_to_result(ctx, global);
-        if !matches!(global.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-            emit_box_current_value_as_mixed(ctx.emitter, &global.ty);
-        }
+        emit_owned_eval_scope_value(ctx.emitter, &global.ty);
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-        emit_eval_scope_set_name(ctx, &global.name, scope_set_flags_for_type(&global.ty));
+        emit_eval_scope_set_name(ctx, &global.name, EVAL_SCOPE_FLAG_OWNED);
     }
 }
 
@@ -393,12 +406,15 @@ pub(super) fn load_global_to_result(ctx: &mut FunctionContext<'_>, global: &Eval
     abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
 }
 
-/// Returns ABI flags for a scope value produced from the given native type.
-pub(super) fn scope_set_flags_for_type(ty: &PhpType) -> i64 {
+/// Retains existing Mixed cells or boxes raw values before transferring ownership to eval.
+/// Native reentry can replace the source slot while eval still reads its original cell.
+pub(super) fn emit_owned_eval_scope_value(
+    emitter: &mut crate::codegen_support::emit::Emitter, ty: &PhpType,
+) {
     if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-        0
+        abi::emit_incref_if_refcounted(emitter, &PhpType::Mixed);
     } else {
-        EVAL_SCOPE_FLAG_OWNED
+        emit_box_current_value_as_mixed(emitter, ty);
     }
 }
 

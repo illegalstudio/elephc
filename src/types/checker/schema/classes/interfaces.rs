@@ -127,6 +127,18 @@ fn interface_self_return_conforms(
     actual_return: &PhpType,
 ) -> bool {
     match (required_return, actual_return) {
+        (PhpType::Union(expected), PhpType::Union(actual)) => actual.iter().all(|actual| {
+            expected.iter().any(|expected| interface_self_return_conforms(checker, class, interface_name, expected, actual)
+                || declared_return_type_compatible(checker, expected, actual))
+        }),
+        (PhpType::Union(expected), actual) => expected.iter().any(|expected| {
+            interface_self_return_conforms(checker, class, interface_name, expected, actual)
+                || declared_return_type_compatible(checker, expected, actual)
+        }),
+        (expected, PhpType::Union(actual)) => actual.iter().all(|actual| {
+            interface_self_return_conforms(checker, class, interface_name, expected, actual)
+                || declared_return_type_compatible(checker, expected, actual)
+        }),
         (PhpType::Object(expected_name), PhpType::Object(actual_name)) => {
             actual_name == &class.name
                 && (expected_name == interface_name
@@ -501,7 +513,7 @@ fn validate_interface_method(
                 .insert(method_name.to_string(), Visibility::Public);
             state
                 .method_declaring_classes
-                .insert(method_name.to_string(), class.name.clone());
+                .insert(method_name.to_string(), interface_name.to_string());
             state.method_impl_classes.remove(method_name);
             state.abstract_methods.insert(method_name.to_string());
             if !state.vtable_slots.contains_key(method_name) {

@@ -120,7 +120,8 @@ pub(super) fn compute_program_callable_effects(
                                 let effect = never_declared_effect(
                                     function.declared_never,
                                     parameter_guard_effect(function.parameter_guard_may_throw,
-                                        with_return_boundary_facts(Some(&function.return_boundary), || block_effect(function.body))),
+                                        with_reference_parameter_scope(false, function.reference_parameters.clone(), ||
+                                            with_return_boundary_facts(Some(&function.return_boundary), || block_effect(function.body)))),
                                 );
                                 if function_effects.get(name).copied() != Some(effect) {
                                     function_updates.push((name.clone(), effect));
@@ -130,7 +131,8 @@ pub(super) fn compute_program_callable_effects(
                             for (name, method) in &static_method_bodies {
                                 let effect = with_class_effect_context(
                                     Some(method.context.clone()),
-                                    || with_return_boundary_facts(Some(&method.return_boundary), || block_effect(method.body)),
+                                    || with_reference_parameter_scope(false, method.reference_parameters.clone(), ||
+                                        with_return_boundary_facts(Some(&method.return_boundary), || block_effect(method.body))),
                                 );
                                 let effect = never_declared_effect(method.declared_never,
                                     parameter_guard_effect(method.parameter_guard_may_throw, effect));
@@ -142,7 +144,8 @@ pub(super) fn compute_program_callable_effects(
                             for (name, method) in &instance_method_bodies {
                                 let effect = with_class_effect_context(
                                     Some(method.context.clone()),
-                                    || with_return_boundary_facts(Some(&method.return_boundary), || block_effect(method.body)),
+                                    || with_reference_parameter_scope(false, method.reference_parameters.clone(), ||
+                                        with_return_boundary_facts(Some(&method.return_boundary), || block_effect(method.body))),
                                 );
                                 let effect = never_declared_effect(method.declared_never,
                                     parameter_guard_effect(method.parameter_guard_may_throw, effect));
@@ -204,6 +207,8 @@ fn collect_program_function_bodies<'a>(
                 name,
                 body,
                 params,
+                variadic,
+                variadic_by_ref,
                 return_type,
                 ..
             } => {
@@ -213,6 +218,7 @@ fn collect_program_function_bodies<'a>(
                         body,
                         declared_never: is_never_return_type(return_type),
                         parameter_guard_may_throw: params.iter().any(|(_, ty, _, _)| type_guard_may_throw(ty.as_ref())),
+                        reference_parameters: reference_parameter_names(params, variadic.as_deref(), *variadic_by_ref),
                         return_boundary: ReturnBoundaryFacts::new(return_type.as_ref(),
                             params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body),
                     },
@@ -250,6 +256,8 @@ fn collect_program_static_method_bodies<'a>(
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
                                 parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| type_guard_may_throw(ty.as_ref())),
+                                reference_parameters: reference_parameter_names(&method.params,
+                                    method.variadic.as_deref(), method.variadic_by_ref),
                                 return_boundary: ReturnBoundaryFacts::new(method.return_type.as_ref(),
                                     method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body),
                             },
@@ -289,6 +297,8 @@ fn collect_program_instance_method_bodies<'a>(
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
                                 parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| type_guard_may_throw(ty.as_ref())),
+                                reference_parameters: reference_parameter_names(&method.params,
+                                    method.variadic.as_deref(), method.variadic_by_ref),
                                 return_boundary: ReturnBoundaryFacts::new(method.return_type.as_ref(),
                                     method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body),
                             },

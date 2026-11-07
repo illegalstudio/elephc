@@ -86,6 +86,14 @@ impl Parser {
         &mut self,
         name: String,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let mut expression = self.clone();
+        if let Ok(target) = expression.parse_expr() {
+            if needs_dimension_tail(&target, expression.current()) {
+                let statements = expression.parse_property_like_stmt_tail(target, false)?;
+                *self = expression;
+                return Ok(statements);
+            }
+        }
         self.advance();
         self.expect(TokenKind::LBracket)?;
         if self.consume(TokenKind::RBracket) {
@@ -469,6 +477,29 @@ impl Parser {
         target: EvalExpr,
         require_semicolon: bool,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let target = match target {
+            EvalExpr::PropertyCompoundAssign { object, property, dynamic, op, value } => {
+                if require_semicolon { self.expect_semicolon()?; }
+                let statement = match (*property, dynamic) {
+                    (EvalExpr::Const(EvalConst::String(property)), false) => EvalStmt::PropertyCompoundAssign {
+                        object: *object, property, op, value: *value,
+                    },
+                    (property, _) => EvalStmt::DynamicPropertyCompoundAssign {
+                        object: *object, property, op, value: *value,
+                    },
+                };
+                return Ok(vec![statement]);
+            }
+            EvalExpr::PropertyIncDec { object, property, dynamic, increment, .. } => {
+                if require_semicolon { self.expect_semicolon()?; }
+                let place = match (*property, dynamic) {
+                    (EvalExpr::Const(EvalConst::String(property)), false) => EvalExpr::PropertyGet { object, property },
+                    (property, _) => EvalExpr::DynamicPropertyGet { object, property: Box::new(property) },
+                };
+                return property_inc_dec_stmt(place, increment).map(|stmt| vec![stmt]);
+            }
+            target => target,
+        };
         if matches!(self.current(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
             let increment = matches!(self.current(), TokenKind::PlusPlus);
             self.advance();

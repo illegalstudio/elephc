@@ -73,6 +73,33 @@ pub(super) struct RefPlaceRewrite {
     plans: Vec<RefPlacePlan>,
 }
 
+/// Selects an owned exact-Mixed physical slot whose ordinary PHP binding can cross a native call.
+pub(super) fn live_mixed_property_argument(
+    ctx: &LoweringContext<'_, '_>, arg: &Expr, expected: &PhpType,
+) -> bool {
+    if *expected != PhpType::Mixed { return false; }
+    let ExprKind::PropertyAccess { object, property } = &arg.kind else { return false; };
+    let Some(class_name) = place_object_class_name(ctx, object) else { return false; };
+    let Some(info) = ctx.classes.get(class_name.as_str()) else { return false; };
+    let (index, metadata) = match crate::types::resolve_property_name(
+        ctx.classes, &class_name, property, ctx.current_class.as_deref(),
+    ) {
+        crate::types::PropertyNameResolution::Visible => {
+            let Some(index) = info.visible_property_index(property) else { return false; };
+            (index, info)
+        }
+        crate::types::PropertyNameResolution::ScopePrivate { scope, index } => {
+            let Some(metadata) = ctx.classes.get(&scope) else { return false; };
+            (index, metadata)
+        }
+        _ => return false,
+    };
+    info.properties.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
+        && info.property_slot_owns_reference(index)
+        && !metadata.is_internal && !metadata.readonly_properties.contains(property)
+        && metadata.property_hooks.get(property).is_none_or(|hooks| !hooks.any())
+}
+
 /// Rewrites a direct user method/constructor call whose by-reference argument is a property
 /// with the parameter's exact storage type.
 ///
@@ -83,6 +110,20 @@ pub(super) fn rewrite_typed_property_ref_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     args: &[Expr],
+) -> Option<RefPlaceRewrite> {
+    rewrite_property_ref_args(ctx, sig, args, false)
+}
+
+/// Keeps eligible source-function property references live instead of detaching their value.
+pub(super) fn rewrite_direct_function_property_ref_args(
+    ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, args: &[Expr],
+) -> Option<RefPlaceRewrite> {
+    rewrite_property_ref_args(ctx, sig, args, true)
+}
+
+/// Shares the legacy rewrite while selecting only explicitly supported live argument bindings.
+fn rewrite_property_ref_args(
+    ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, args: &[Expr], live_arguments: bool,
 ) -> Option<RefPlaceRewrite> {
     if args.iter().any(is_spread_arg) {
         return None;
@@ -100,22 +141,28 @@ pub(super) fn rewrite_typed_property_ref_args(
         });
     let regular_count = crate::types::call_args::regular_param_count(sig);
     for (index, arg) in args.iter().enumerate() {
-        let (place_arg, expected_ty) =
+        let (place_arg, expected_ty, regular_reference) =
             if let Some((param_index, place_arg)) = ref_param_binding(sig, index, arg) {
                 let Some((_, expected_ty)) = sig.params.get(param_index) else {
                     continue;
                 };
-                (place_arg, expected_ty.clone())
+                (place_arg, expected_ty.clone(), param_index < regular_count)
             } else if variadic_by_ref
                 && index >= regular_count
                 && !matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))
             {
-                (arg, PhpType::Mixed)
+                (arg, PhpType::Mixed, false)
             } else {
                 continue;
             };
         let mapped_place = alias_property_place(ctx, place_arg);
         let place_arg = mapped_place.as_ref().unwrap_or(place_arg);
+        if super::call_arg_coercion::is_native_selection_reference_argument(ctx, place_arg) {
+            continue;
+        }
+        if live_arguments && regular_reference && live_mixed_property_argument(ctx, place_arg, &expected_ty) {
+            continue;
+        }
         match &place_arg.kind {
             // `stabilize_place` retains a nested receiver in a synthetic local, so the
             // rewrite targets the same object PHP resolved when it bound the reference.
@@ -950,6 +997,9 @@ fn ref_param_place<'a>(sig: &FunctionSig, index: usize, arg: &'a Expr) -> Option
 /// back to their frame slot. Scalar places are excluded so builtins that re-type their
 /// by-reference argument keep their current lowering and diagnostics.
 fn is_array_place(ctx: &LoweringContext<'_, '_>, arg: &Expr, param_type: &PhpType) -> bool {
+    if super::call_arg_coercion::is_native_selection_reference_argument(ctx, arg) {
+        return false;
+    }
     if !is_candidate_place_shape(arg) {
         return false;
     }

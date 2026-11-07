@@ -325,3 +325,13 @@ fn parse_fragment_accepts_unary_numeric_source() {
         }))]
     );
 }
+
+/// Verifies the array cast used by native object projections survives runtime parsing.
+#[test]
+fn parse_fragment_accepts_array_cast_source() {
+    let program = parse_fragment(b"return (array)$value;").expect("array cast should parse");
+    assert_eq!(program.statements(), &[EvalStmt::Return(Some(EvalExpr::Cast {
+        target: EvalCastType::Array,
+        expr: Box::new(EvalExpr::LoadVar("value".to_string())),
+    }))]);
+}

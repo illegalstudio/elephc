@@ -76,12 +76,11 @@ echo strlen(strtolower($s));
 /// Literal standard trims fold to their byte length without the runtime call.
 #[test]
 fn literal_trim_lengths_fold_without_the_trim_call() {
-    let ir = emit_main_ir(
-        r#"<?php
+    let source = r#"<?php
 $s = "   hello world   ";
 echo strlen(ltrim($s)), "|", strlen(rtrim($s)), "|", strlen(trim($s)), "|", strlen(ltrim($s, " h"));
-"#,
-    );
+"#;
+    let ir = emit_main_ir(source);
     for producer in ["runtime.ltrim", "runtime.rtrim", "runtime.trim", "str_len"] {
         assert!(!ir.contains(producer), "trim producer survived ({producer}):
 {ir}");
@@ -90,6 +89,30 @@ echo strlen(ltrim($s)), "|", strlen(rtrim($s)), "|", strlen(trim($s)), "|", strl
 {ir}");
     assert!(ir.contains("const_i64 11"), "missing folded trim length:
 {ir}");
+    for optimized in [true, false] {
+        let check = || {
+            let out = compile_and_run_with_heap_debug(source);
+            assert!(out.success, "{}", out.stderr);
+            assert_eq!(out.stdout, "14|14|11|13");
+            assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        };
+        if optimized { check(); } else { without_ir_opt(check); }
+    }
+}
+
+/// A trim result saved alongside its length keeps its content and independent owner.
+#[test]
+fn trim_length_keeps_an_escaping_persisted_result() {
+    let source = r#"<?php
+$s = "   hello world   ";
+echo strlen($saved = ltrim($s, " h")), "|", $saved;
+"#;
+    let ir = emit_main_ir(source);
+    assert!(ir.contains("runtime.ltrim"), "escaping trim producer disappeared: {ir}");
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "13|ello world   ");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Folding the length keeps `strtr()` argument evaluation and side effects.

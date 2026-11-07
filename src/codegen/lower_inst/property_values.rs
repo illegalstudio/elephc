@@ -16,6 +16,22 @@ use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
 
+/// Refuses null before a declared non-null object property loses the source's null tag.
+pub(super) fn emit_nonnull_object_store_guard(
+    ctx: &mut FunctionContext<'_>, value: crate::ir::ValueId,
+    slot_ty: &PhpType, message: &str,
+) -> crate::codegen::Result<()> {
+    if !crate::types::builtin_classes::native_object_sink_needs_null_guard(
+        slot_ty, &ctx.module.class_infos, &ctx.module.interface_infos,
+    ) { return Ok(()); }
+    super::predicates::emit_is_null_result(ctx, value)?;
+    let accepted = ctx.next_label("object_property_nonnull");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &accepted);
+    super::exceptions::emit_type_error(ctx, message);
+    ctx.emitter.label(&accepted);
+    Ok(())
+}
+
 /// Returns true when a boxed Mixed value can be unboxed into an object property slot.
 pub(super) fn can_unbox_mixed_to_object_property(
     value_ty: &PhpType,

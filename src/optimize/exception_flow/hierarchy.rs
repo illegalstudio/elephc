@@ -405,7 +405,7 @@ impl ExceptionHierarchy {
 /// declared property list never mentions, so a class with either is refused outright.
 fn class_info_owns_only_scalar_storage(info: &ClassInfo) -> bool {
     !info.has_property_hash_storage()
-        && info.owned_reference_properties.is_empty()
+        && info.owned_reference_property_slots.is_empty()
         && info
             .properties
             .iter()

@@ -36,8 +36,16 @@ use super::null_coalesce::{
 ///
 /// A `string` stays `mixed`: `"9"++` is `int(10)`, `"a"++` is `"b"` and `""++` is `"1"`, so the
 /// result genuinely spans three types and none of them is knowable here.
-/// A fixed tagged reference stays Int on normal continuation; overflow exits with a diagnostic.
-fn incremented_local_type(current: Option<&PhpType>, fixed_tagged_reference: bool) -> Option<PhpType> {
+/// A fixed tagged reference remains Int on normal continuation; overflow exits.
+fn incremented_local_type(checker: &Checker, current: Option<&PhpType>, fixed_tagged_reference: bool) -> Option<PhpType> {
+    if let Some(ty) = current {
+        if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
+            &BinOp::Add, ty, &PhpType::Int, &checker.classes,
+        ) {
+            let result = plan.result_type(&BinOp::Add);
+            if result.is_int_float_union() { return Some(result); }
+        }
+    }
     match current {
         Some(PhpType::Int) if fixed_tagged_reference => Some(PhpType::Int),
         Some(PhpType::Int) => Some(PhpType::Union(vec![PhpType::Int, PhpType::Float])),
@@ -131,7 +139,7 @@ impl Checker {
                 let old_ty = env.get(name).cloned();
                 let fixed_tagged_reference = self.has_fixed_tagged_reference_storage(name, env);
                 let result_ty = self.infer_type(expr, env)?;
-                if let Some(updated) = incremented_local_type(old_ty.as_ref(), fixed_tagged_reference) {
+                if let Some(updated) = incremented_local_type(self, old_ty.as_ref(), fixed_tagged_reference) {
                     self.record_local_storage_effect(name, &updated);
                     env.insert(name.clone(), updated);
                 }
@@ -143,7 +151,7 @@ impl Checker {
                 let result_ty = self.infer_type(expr, env)?;
                 // Same retype as the pre-form: only the RESULT differs, and it was already
                 // computed above against the type the local held before the update.
-                if let Some(updated) = incremented_local_type(old_ty.as_ref(), fixed_tagged_reference) {
+                if let Some(updated) = incremented_local_type(self, old_ty.as_ref(), fixed_tagged_reference) {
                     self.record_local_storage_effect(name, &updated);
                     env.insert(name.clone(), updated);
                 }
@@ -387,7 +395,7 @@ impl Checker {
                         }
                         if is_empty {
                             let probe = null_probe::begin_null_probe_root(self, arg, env);
-                            let effects = self.infer_type_with_assignment_effects(arg, env);
+                            let effects = self.infer_null_probe_operand_with_effects(arg, env);
                             null_probe::end_null_probe_root(probe, env);
                             effects?;
                             continue;

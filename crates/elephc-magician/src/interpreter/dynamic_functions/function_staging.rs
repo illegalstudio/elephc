@@ -8,14 +8,22 @@
 //! - Each staged reference owns its current payload independently of the caller.
 //! - Partial staging releases markers, payload leases, and transferred value arguments.
 //! - PHP array declarations use boxed slots because native callees can change the array layout.
+//! - Compiled nullable integers use an explicit two-word payload/tag slot, never a boxed payload address.
 //! - The caller's container keys ride along untouched: staging replaces a by-reference argument's
 //!   VALUE with a marker cell but never changes how many entries there are or their order, so the
 //!   `named_keys` vector stays index-aligned with `values`.
 
 use super::*;
 
+/// Identifies native parameters whose retaining consumers need a persistent boxed reference.
+pub(super) fn native_reference_uses_boxed_staging(
+    param_type: Option<&EvalParameterType>, tagged_scalar: bool,
+) -> bool {
+    !tagged_scalar && native_function_raw_ref_kind(param_type).is_none()
+}
+
 /// Transfers value arguments or prepares reference markers, rolling back partial staging on errors.
-pub(super) fn stage_native_function_invoker_args(
+pub(in crate::interpreter) fn stage_native_function_invoker_args(
     function: &NativeFunction,
     variadic_index: Option<usize>,
     bound_args: &mut [BoundMethodArg],
@@ -30,6 +38,7 @@ pub(super) fn stage_native_function_invoker_args(
         "every bound native argument owns exactly one container key"
     );
     let mut staged = BoundNativeFunctionArgs {
+        evaluation_owners: Vec::new(),
         values: Vec::with_capacity(bound_args.len()),
         ref_slots: Vec::new(),
         named_keys,
@@ -48,11 +57,12 @@ pub(super) fn stage_native_function_invoker_args(
                 (None, EvalByRefBindingMode::WarnByValue { .. }) => None,
                 (None, EvalByRefBindingMode::RequireTarget) => return Err(EvalStatus::RuntimeFatal),
             };
-            let (marker, slot) = stage_native_function_ref_arg(
-                function.param_type(param_index), original, target, values,
+            let (marker, slot) = stage_native_function_shared_ref_arg(
+                function.param_type(param_index), function.param_tagged_scalar_ref(param_index), original,
+                function.param_boxed_ref(param_index), target, &mut staged, context, values,
             )?;
             staged.values.push(marker);
-            staged.ref_slots.push(slot);
+            if let Some(slot) = slot { staged.ref_slots.push(slot); }
             bound.value = original.borrowed();
             release_expr_result(original, context, values)?;
         }
@@ -68,19 +78,91 @@ pub(super) fn stage_native_function_invoker_args(
     Ok(staged)
 }
 
-/// Creates one reference marker and retires an acquired payload if marker allocation fails.
-fn stage_native_function_ref_arg(
+/// Reuses one staging owner when several boxed parameters name the same persistent reference.
+pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
     param_type: Option<&EvalParameterType>,
+    tagged_scalar: bool,
+    original: RuntimeCellHandle,
+    boxed_storage: bool,
+    target: Option<EvalReferenceTarget>,
+    staged: &mut BoundNativeFunctionArgs,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<BoundNativeFunctionRefSlot>), EvalStatus> {
+    let guarded_writeback = target.as_ref()
+        .is_none_or(|target| !generic_reference_contracts(target, context).is_empty());
+    if boxed_storage && target.is_some() && native_reference_uses_boxed_staging(param_type, tagged_scalar)
+        && values.is_reference(original)?
+    {
+        for existing in &mut staged.ref_slots {
+            if let BoundNativeFunctionRefSlot::ManagedMixed { original: first, cell, .. } = existing {
+                if !guarded_writeback && first.as_ptr() == original.as_ptr() {
+                    return values.invoker_ref_cell(*cell as *mut *mut crate::value::RuntimeCell)
+                        .map(|marker| (marker, None));
+                }
+            }
+            if let BoundNativeFunctionRefSlot::Mixed { original: first, slot, target: Some(_) } = existing {
+                if first.as_ptr() == original.as_ptr() {
+                    return values.invoker_ref_cell(slot.as_mut()).map(|marker| (marker, None));
+                }
+            }
+        }
+        if !guarded_writeback {
+            let pin = Box::new(std::cell::UnsafeCell::new([0u64; 4]));
+            let record = pin.get().cast();
+            if let Some(cell) = values.native_mixed_reference_cell(original, record)? {
+                let marker = match values.invoker_ref_cell(cell as *mut *mut crate::value::RuntimeCell) {
+                    Ok(marker) => marker,
+                    Err(status) => {
+                        let _ = values.release_native_mixed_reference_cell(cell, record);
+                        return Err(status);
+                    }
+                };
+                return Ok((marker, Some(BoundNativeFunctionRefSlot::ManagedMixed { original, cell, pin })));
+            }
+        }
+    }
+    stage_native_function_ref_arg(param_type, tagged_scalar, original, target,
+        guarded_writeback || !boxed_storage, values)
+        .map(|(marker, slot)| (marker, Some(slot)))
+}
+
+/// Creates one reference marker and retires an acquired payload if marker allocation fails.
+pub(in crate::interpreter) fn stage_native_function_ref_arg(
+    param_type: Option<&EvalParameterType>,
+    tagged_scalar: bool,
     original: RuntimeCellHandle,
     target: Option<EvalReferenceTarget>,
+    guarded_writeback: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, BoundNativeFunctionRefSlot), EvalStatus> {
+    if tagged_scalar {
+        let tag = values.type_tag(original)?;
+        if !matches!(tag, EVAL_TAG_INT | EVAL_TAG_NULL) { return Err(EvalStatus::RuntimeFatal); }
+        let original = [values.raw_value_word(original)?, tag];
+        let mut slot = Box::new(original);
+        let marker = values.invoker_raw_ref_cell(
+            (slot.as_mut() as *mut [u64; 2]).cast(), EVAL_INVOKER_TAGGED_SCALAR_SOURCE,
+        )?;
+        return Ok((marker, BoundNativeFunctionRefSlot::TaggedScalar { original, slot, target }));
+    }
     match native_function_raw_ref_kind(param_type) {
         Some(NativeFunctionRawRefKind::Scalar { tag }) => {
             let original = values.raw_value_word(original)?;
-            let mut slot = Box::new(original);
-            let marker = values.invoker_raw_ref_cell((slot.as_mut() as *mut u64).cast(), tag)?;
-            Ok((marker, BoundNativeFunctionRefSlot::RawWord { tag, original, slot, target }))
+            // Generated marker writers publish the complete two-word source slot even for
+            // scalar tags. Keep the second word addressable so a typed by-ref variadic cannot
+            // write past this Rust allocation after its marker enters an Array(Mixed) collector.
+            let mut slot = Box::new([original, 0]);
+            let marker = values.invoker_raw_ref_cell(
+                (slot.as_mut() as *mut [u64; 2]).cast(), tag,
+            )?;
+            Ok((marker, BoundNativeFunctionRefSlot::RawWord {
+                tag,
+                original,
+                slot,
+                target,
+                force_writeback: false,
+            }))
         }
         Some(NativeFunctionRawRefKind::String) => {
             let ptr = values.raw_value_word(original)?;
@@ -98,15 +180,18 @@ fn stage_native_function_ref_arg(
                 }
             };
             Ok((marker, BoundNativeFunctionRefSlot::RawString {
-                original: [retained.0, retained.1], slot, target,
+                original: [retained.0, retained.1],
+                slot,
+                target,
+                force_writeback: false,
             }))
         }
         Some(NativeFunctionRawRefKind::OwnedHeap) => {
             let tag = values.type_tag(original)?;
             let original = values.raw_value_word(original)?;
             let retained = values.retain_raw_heap_word(original)?;
-            let mut slot = Box::new(retained);
-            let marker = values.invoker_raw_ref_cell((slot.as_mut() as *mut u64).cast(), tag);
+            let mut slot = Box::new([retained, 0]);
+            let marker = values.invoker_raw_ref_cell((slot.as_mut() as *mut [u64; 2]).cast(), tag);
             let marker = match marker {
                 Ok(marker) => marker,
                 Err(status) => {
@@ -117,7 +202,11 @@ fn stage_native_function_ref_arg(
             Ok((marker, BoundNativeFunctionRefSlot::OwnedRawWord { original, slot, target }))
         }
         None => {
-            let retained = values.retain(original)?;
+            // Generic contracts and raw object adapters need a concrete detached value.
+            // Only physically boxed parameters can preserve a live PHPRef in this slot.
+            let retained = if guarded_writeback && values.is_reference(original)? {
+                values.copy_value(original)?
+            } else { values.retain(original)? };
             let mut slot = Box::new(retained.as_ptr());
             let marker = match values.invoker_ref_cell(slot.as_mut()) {
                 Ok(marker) => marker,
@@ -145,8 +234,8 @@ fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Optio
         return None;
     }
     match param_type.variants().first()? {
-        // AOT object references use Mixed cells even though eval retains the declared
-        // class type for argument validation. A raw object pointer would be read as a box.
+        // Normal function EIR normalizes object references to Mixed. A closure descriptor
+        // may retain a raw Object payload; its physical flag selects detached adaptation.
         EvalParameterTypeVariant::Class(_)
         | EvalParameterTypeVariant::Object => None,
         EvalParameterTypeVariant::Iterable => Some(NativeFunctionRawRefKind::OwnedHeap),
@@ -156,5 +245,27 @@ fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Optio
         EvalParameterTypeVariant::Int => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_INT }),
         EvalParameterTypeVariant::String => Some(NativeFunctionRawRefKind::String),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    /// Logical object contracts do not decide whether an invoker has boxed physical storage.
+    #[test]
+    fn persistent_native_reference_modes_follow_physical_object_layouts() {
+        for variant in [EvalParameterTypeVariant::Object, EvalParameterTypeVariant::Class("ReferenceLayoutContract".into())] {
+            let exact = EvalParameterType::new(vec![variant.clone()], false);
+            let nullable = EvalParameterType::new(vec![variant], true);
+            assert!(native_reference_uses_boxed_staging(Some(&exact), false));
+            assert!(native_reference_uses_boxed_staging(Some(&nullable), false));
+        }
+        let mixed = EvalParameterType::new(vec![EvalParameterTypeVariant::Mixed], false);
+        assert!(native_reference_uses_boxed_staging(Some(&mixed), false));
+        let text = EvalParameterType::new(vec![EvalParameterTypeVariant::String], false);
+        assert!(!native_reference_uses_boxed_staging(Some(&text), false));
+        let nullable_int = EvalParameterType::new(vec![EvalParameterTypeVariant::Int], true);
+        assert!(!native_reference_uses_boxed_staging(Some(&nullable_int), true));
     }
 }

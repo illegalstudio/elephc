@@ -138,6 +138,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_bridge_support(
 }
 
 /// Registers one generated native PHP function parameter's by-ref and variadic flags.
+/// `is_by_ref` uses bit0 for a reference and bit1 for its compiled two-word tagged scalar layout.
+/// The original boolean0/1 registrations retain their existing storage policy.
 ///
 /// # Safety
 /// `ctx` must be a valid eval context handle. Function name must be readable for

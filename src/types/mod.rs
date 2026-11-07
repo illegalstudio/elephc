@@ -72,9 +72,9 @@ pub(crate) use array_literals::{fold_spreadless_mixed_array_literal, php_float_a
 pub(crate) use array_keys::{
     array_key_contiguity_is_unproven, array_key_type_from_value_type,
     empty_array_key_requires_hash_storage, is_php_integer_array_key,
-    nonempty_array_key_forces_hash_storage,
-    merge_array_key_types, normalized_array_key_type, parse_php_string_offset_literal,
-    static_array_key_forces_hash_storage,
+    merge_array_key_types, nonempty_array_key_forces_hash_storage,
+    nonempty_array_key_stays_in_range, normalized_array_key_type,
+    parse_php_string_offset_literal, static_array_key_forces_hash_storage,
 };
 pub(crate) use array_cast::{array_cast_result_type, php_cast_result_type, ArrayCast};
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
@@ -95,7 +95,7 @@ pub(crate) use return_alias::{
     collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
     ReturnArgAlias,
 };
-pub(crate) use result::{LocalValueReadTypes, LoopStorageTypes};
+pub(crate) use result::{LocalValueReadTypes, LoopStorageTypes, PromotableArrays};
 pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the
 // production compile path; it stays public for tests that don't need `CheckOptions`.
@@ -142,6 +142,12 @@ pub fn check_with_options(
 ) -> Result<CheckResult, crate::errors::CompileError> {
     result::check_with_options(program, options)
 }
+
+/// The checker/EIR scope key of the top-level program body.
+///
+/// `#` is never part of a PHP identifier, so no user function (not even one named `main`) can
+/// share this key, its loop storage facts, or its promotable-array walk state.
+pub(crate) const TOP_LEVEL_SCOPE: &str = "#main";
 
 /// Returns the stable checker/EIR scope key for a closure nested at `span`.
 pub(crate) fn nested_loop_storage_scope(parent: &str, span: crate::span::Span) -> String {

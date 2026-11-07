@@ -18,6 +18,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Evaluates PHP `explode()` over separator, string, and optional limit expressions.
 pub(in crate::interpreter) fn eval_builtin_explode(
@@ -61,9 +62,9 @@ pub(in crate::interpreter) fn eval_explode_result(
     let string = values.string_bytes(string)?;
     let segments = eval_explode_segments(&string, &separator);
     let (cap, extend_last) = eval_explode_element_budget(limit, segments.len() as i64);
-    let mut result = values.array_new(0)?;
+    let mut result = EvalArrayBuilder::indexed(values, 0)?;
     if cap <= 0 {
-        return Ok(result);
+        return Ok(result.finish());
     }
     for (index, (start, end)) in segments.iter().copied().enumerate() {
         if index as i64 >= cap {
@@ -75,10 +76,9 @@ pub(in crate::interpreter) fn eval_explode_result(
         } else {
             end
         };
-        result =
-            eval_push_explode_segment(result, index as i64, &string[start..end], values)?;
+        result.index(index, |values| values.string_bytes_value(&string[start..end]))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Returns the `[start, end)` byte range of every segment a non-empty separator produces.
@@ -120,16 +120,4 @@ pub(in crate::interpreter) fn eval_explode_declared_values_result(
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
-}
-
-/// Appends one split segment to an indexed `explode()` result array.
-pub(in crate::interpreter) fn eval_push_explode_segment(
-    array: RuntimeCellHandle,
-    index: i64,
-    segment: &[u8],
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.int(index)?;
-    let value = values.string_bytes_value(segment)?;
-    values.array_set(array, key, value)
 }

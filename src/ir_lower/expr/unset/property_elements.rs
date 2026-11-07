@@ -285,14 +285,11 @@ fn lower_unset_receiver_and_key(
     if matches!(object.kind, ExprKind::Variable(_) | ExprKind::This) {
         let index_value = lower_expr(ctx, index);
         let object_value = lower_expr(ctx, object);
-        return (object_value, None, index_value);
+        let (object_value, object_owner) = root_owned_call_operand(ctx, object_value, object.span);
+        return (object_value, object_owner, index_value);
     }
     let object_value = lower_expr(ctx, object);
-    let (object_value, object_owner) = if ctx.value_is_owning_temporary(object_value) {
-        root_owned_call_operand(ctx, object_value, object.span)
-    } else {
-        (object_value, None)
-    };
+    let (object_value, object_owner) = root_owned_call_operand(ctx, object_value, object.span);
     let index_value = lower_expr(ctx, index);
     (object_value, object_owner, index_value)
 }
@@ -371,6 +368,11 @@ pub(super) fn lower_unset_array_access_property_offset(
     let key = park_unset_operand(ctx, index, &mut owners);
     let join_block = if typed {
         let object_value = lower_expr(ctx, &receiver);
+        if !matches!(object.kind, ExprKind::Variable(_) | ExprKind::This) {
+            // This private parked slot already owns the receiver. Its guard read shares
+            // the exact storage representation, unlike a PHP local projected from Mixed.
+            ctx.builder.set_value_ownership(object_value.value, Ownership::Borrowed);
+        }
         let data = ctx.intern_string(property);
         let initialized = ctx.emit_value(
             Op::PropInitialized,
@@ -380,6 +382,7 @@ pub(super) fn lower_unset_array_access_property_offset(
             Op::PropInitialized.default_effects(),
             Some(expr.span),
         );
+        crate::ir_lower::ownership::release_if_owned(ctx, object_value, Some(expr.span));
         let call_block = ctx
             .builder
             .create_named_block("unset.array_access_property.call", Vec::new());
@@ -410,15 +413,10 @@ pub(super) fn lower_unset_array_access_property_offset(
     let fetched = lower_expr(ctx, &fetch);
     let guarded_from = owners.len();
     let container = park_lowered_unset_operand(ctx, fetched, array.span, &mut owners);
-    let call = Expr::new(
-        ExprKind::MethodCall {
-            object: Box::new(container),
-            method: "offsetUnset".to_string(),
-            args: vec![key],
-        },
-        expr.span,
-    );
-    lower_expr(ctx, &call);
+    let object = lower_expr(ctx, &container);
+    let source_type = ctx.builder.value_php_type(object.value);
+    native_dimension_probes::lower(ctx, object, &source_type, &key,
+        elephc_builtin_contract::ObjectDimension::Unset, expr);
     if let Some(join_block) = join_block {
         // The container slot is written only on the initialized path, so it is retired there.
         for slot in owners.split_off(guarded_from).into_iter().rev() {
@@ -443,7 +441,7 @@ pub(super) fn lower_unset_array_access_property_offset(
 /// side effect and sees what PHP's delayed fetch sees. Anything else is lowered once and parked
 /// by [`park_lowered_unset_operand`]. The caller retires every slot pushed onto `owners` after
 /// the operation.
-fn park_unset_operand(
+pub(super) fn park_unset_operand(
     ctx: &mut LoweringContext<'_, '_>,
     operand: &Expr,
     owners: &mut Vec<crate::ir::LocalSlotId>,
@@ -469,19 +467,26 @@ fn park_unset_operand(
 /// The value is retained into a hidden temporary registered as a call-operand owner, so a
 /// throwing `offsetUnset()` releases it on unwind, and an owning source temporary is released
 /// right away. The slot is pushed onto `owners` for the caller to retire.
-fn park_lowered_unset_operand(
+pub(super) fn park_lowered_unset_operand(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
     owners: &mut Vec<crate::ir::LocalSlotId>,
 ) -> Expr {
+    // A literal string has static storage and cannot be replaced by later PHP code.
+    // Preserve its identity so quiet property reads only emit matching slot arms.
+    if let Some(instruction) = ctx.builder.value_defining_instruction(value.value) {
+        if instruction.op == Op::ConstStr {
+            if let Some(Immediate::Data(data)) = instruction.immediate {
+                return Expr::new(ExprKind::StringLiteral(ctx.data.strings[data.as_raw() as usize].clone()), span);
+            }
+        }
+    }
     let ty = ctx.builder.value_php_type(value.value);
     let name = ctx.declare_hidden_temp(ty.clone());
-    let retained = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
-    ctx.store_local(&name, retained, ty, Some(span));
-    if ctx.value_is_owning_temporary(value) {
-        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
-    }
+    // Local reads can acquire conversion storage only after frame types settle.
+    // Use the shared retaining-store cleanup, which preserves that provisional release.
+    store_value_into_temp(ctx, &name, ty, value, span);
     let slot = ctx.local_slots[&name];
     register_owned_call_operand(ctx, slot, span);
     owners.push(slot);

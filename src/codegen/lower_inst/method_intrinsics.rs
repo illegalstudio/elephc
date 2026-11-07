@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Eval-owned interface receivers dispatch dynamically before consulting native interface tables.
 
 use super::*;
 
@@ -23,6 +24,23 @@ pub(super) fn lower_interface_method_call(
         let object = expect_operand(inst, 0)?;
         return lower_throwable_standard_method(ctx, inst, object, method_name);
     }
+    let eval_done_label = if ctx.module.required_runtime_features.eval_bridge {
+        let native_fallback_label = ctx.next_label("interface_dispatch_native");
+        let done_label = ctx.next_label("interface_dispatch_eval_done");
+        let object = expect_operand(inst, 0)?;
+        builtins::lower_eval_context_free_method_call(
+            ctx,
+            inst,
+            object,
+            method_name,
+            &native_fallback_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&native_fallback_label);
+        Some(done_label)
+    } else {
+        None
+    };
     let (normalized, method_key, callee_sig) =
         resolve_interface_call_signature(ctx, interface_name, method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(callee_sig.params.len() + 1);
@@ -49,9 +67,13 @@ pub(super) fn lower_interface_method_call(
     let return_ty = iterators::emit_interface_dispatch_call(ctx, &normalized, &method_key, None)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &return_ty)?;
+    store_compiled_call_result(ctx, inst, &return_ty, callee_sig.by_ref_return)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks(ctx, &call_args)?;
+    if let Some(done_label) = eval_done_label {
+        ctx.emitter.label(&done_label);
+    }
+    Ok(())
 }
 
 /// Resolves interface method metadata and validates the EIR ABI operand count.
@@ -234,7 +256,7 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
     let return_ty = iterators::emit_interface_dispatch_call(ctx, normalized, &method_key, None)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &return_ty)?;
+    store_compiled_call_result(ctx, inst, &return_ty, callee_sig.by_ref_return)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)?;
     abi::emit_jump(ctx.emitter, &done_label);

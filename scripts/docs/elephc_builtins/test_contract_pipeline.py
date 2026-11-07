@@ -56,7 +56,8 @@ class ContractPipelineTests(unittest.TestCase):
                     # plus the one internal random helper, the 137 procedural Intl entries the
                     # synthetic prelude injects, and the functions the other injected preludes
                     # declare.
-                    "prelude": 532,
+                    "prelude": 535,
+
                     # Calls rewritten from their enclosing lexical function frame.
                     "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.

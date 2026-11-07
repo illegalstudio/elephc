@@ -144,7 +144,7 @@ fn runtime_type(value: &Expr, expected: &PhpType, span: Span) -> Expr {
 }
 
 /// Produces PHP's `get_debug_type()` spelling for a runtime diagnostic.
-pub(super) fn runtime_debug_type(value: &Expr, span: Span) -> Expr {
+pub(crate) fn runtime_debug_type(value: &Expr, span: Span) -> Expr {
     runtime_type_with_bool_literals(value, true, span)
 }
 
@@ -167,10 +167,17 @@ fn runtime_type_with_bool_literals(value: &Expr, bool_literals: bool, span: Span
             else_expr: Box::new(result),
         }, span);
     }
-    Expr::new(ExprKind::Ternary {
+    let object_type = Expr::new(ExprKind::Ternary {
         condition: Box::new(predicate("is_object", value, span)),
         then_expr: Box::new(predicate("get_class", value, span)),
         else_expr: Box::new(result),
+    }, span);
+    // A native object hint can still carry a missing-selection null word.
+    // Test that representation before static object predicates select get_class.
+    Expr::new(ExprKind::Ternary {
+        condition: Box::new(predicate("is_null", value, span)),
+        then_expr: Box::new(Expr::string_lit("null")),
+        else_expr: Box::new(object_type),
     }, span)
 }
 

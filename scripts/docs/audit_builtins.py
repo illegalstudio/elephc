@@ -8,7 +8,8 @@ Checks:
 3. Every cross-link in a generated page resolves to an actual file.
 4. Per-area indexes only contain builtins that belong to that area.
 5. No stray top-level files (everything should be inside an area folder).
-6. Backend availability and all 595 non-registry contract routes remain coherent.
+6. Backend availability and all 598 non-registry contract routes remain coherent.
+
 7. User-facing pages contain no runs of multiple blank lines.
 8. No override table in ``registry.py`` declares the same builtin twice.
 
@@ -144,7 +145,8 @@ def _check_backend_contracts(
         # functions the mysqli, PDO, web, image, OPcache, tz, var_export, tokenizer,
         # version and Intl preludes declare, all injected-prelude routes. The 137 Intl
         # entries are the procedural half of ext/intl, injected as synthetic functions.
-        "prelude": 532,
+        "prelude": 535,
+
         # Calls rewritten from their enclosing lexical function frame.
         "compiler-transform": 3,
         # The date/calendar procedural families the name resolver rewrites onto the

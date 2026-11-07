@@ -371,16 +371,6 @@ unset($items);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Eval dispatch can construct and query the prelude that the host program registers.
-#[test]
-fn dom_html_sixth_review_eval_registered_surface() {
-    let out = compile_and_run(r#"<?php
-function enableDom(DOMDocument $doc): void {}
-echo eval('$doc = new DOMDocument(); $doc->loadHTML("<div>X</div>"); return $doc->getElementsByTagName("div")->item(0)->nodeValue;');
-"#);
-    assert_eq!(out, "X");
-}
-
 /// The real CLI repeats DOM discovery after loading a namespaced Composer renderer.
 #[test]
 fn dom_html_sixth_review_autoload_cli() {
@@ -412,25 +402,6 @@ class Renderer {
     let output = output.expect("successful compilation must run");
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Hello");
-}
-
-/// Runtime existence probes verify the registry's native and eval class support declarations.
-#[test]
-fn dom_html_sixth_review_class_catalog_support() {
-    let out = compile_and_run(r#"<?php
-$doc = new DOMDocument();
-echo class_exists('DOMCharacterData') ? '1' : '0';
-echo class_exists('DOMComment') ? '1' : '0';
-echo class_exists('DOMDocument') ? '1' : '0';
-echo class_exists('DOMElement') ? '1' : '0';
-echo class_exists('DOMNode') ? '1' : '0';
-echo class_exists('DOMNodeList') ? '1' : '0';
-echo class_exists('DOMProcessingInstruction') ? '1' : '0';
-echo class_exists('DOMText') ? '1' : '0';
-echo '|';
-echo eval('$names = ["DOMCharacterData", "DOMComment", "DOMDocument", "DOMElement", "DOMNode", "DOMNodeList", "DOMProcessingInstruction", "DOMText"]; $bits = ""; foreach ($names as $name) { $bits .= class_exists($name, false) ? "1" : "0"; } return $bits;');
-"#);
-    assert_eq!(out, "11111111|11111111");
 }
 
 /// Descendant queries must not consume the iterator of an active child traversal.
@@ -1075,4 +1046,43 @@ echo count($stack), ':';
 foreach ($stack as $key => $node) { echo $key, '=', $node['name'], ';'; }
 "#);
     assert_eq!(out, "2:0=div;1=b;");
+}
+
+/// Shares one native catalog compile across two independent process fixtures.
+/// Original eval forms, caller scopes, outputs and ownership assertions are retained.
+#[test]
+fn test_dom_html_eval_catalog_and_registered_surface_bundle() {
+    let runs = compile_and_run_capture_per_argv(r####"<?php
+function enableDom(DOMDocument $doc): void {}
+if ($argc === 1) {
+$doc = new DOMDocument();
+echo class_exists('DOMCharacterData') ? '1' : '0';
+echo class_exists('DOMComment') ? '1' : '0';
+echo class_exists('DOMDocument') ? '1' : '0';
+echo class_exists('DOMElement') ? '1' : '0';
+echo class_exists('DOMNode') ? '1' : '0';
+echo class_exists('DOMNodeList') ? '1' : '0';
+echo class_exists('DOMProcessingInstruction') ? '1' : '0';
+echo class_exists('DOMText') ? '1' : '0';
+echo '|';
+echo eval('$names = ["DOMCharacterData", "DOMComment", "DOMDocument", "DOMElement", "DOMNode", "DOMNodeList", "DOMProcessingInstruction", "DOMText"]; $bits = ""; foreach ($names as $name) { $bits .= class_exists($name, false) ? "1" : "0"; } return $bits;');
+} else {
+echo eval('$doc = new DOMDocument(); $doc->loadHTML("<div>X</div>"); return $doc->getElementsByTagName("div")->item(0)->nodeValue;');
+}
+"####, &[&[], &["second-case"]]);
+    assert_eq!(runs.len(), 2);
+    // dom_html_sixth_review_class_catalog_support
+    {
+        let output = &runs[0];
+        assert!(output.success, "case=dom_html_sixth_review_class_catalog_support stdout={:?} stderr={}", output.stdout, output.stderr);
+        let out = output.stdout.as_str();
+        assert_eq!(out, "11111111|11111111");
+    }
+    // dom_html_sixth_review_eval_registered_surface
+    {
+        let output = &runs[1];
+        assert!(output.success, "case=dom_html_sixth_review_eval_registered_surface stdout={:?} stderr={}", output.stdout, output.stderr);
+        let out = output.stdout.as_str();
+        assert_eq!(out, "X");
+    }
 }

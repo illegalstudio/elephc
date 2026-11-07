@@ -286,6 +286,48 @@ pub(crate) fn emit_release_pushed_refcounted_temp_after_array_push(
     }
 }
 
+/// Boxes a compiled PHP return according to its private owner marker.
+///
+/// Newly allocated cells publish an owned result. Already boxed returns keep
+/// their original marker, and native C intrinsics must not use this helper.
+pub(crate) fn emit_box_current_php_return_as_mixed(
+    emitter: &mut Emitter,
+    ty: &PhpType,
+    owned_label: &str,
+    done_label: &str,
+) {
+    let representation = ty.codegen_repr();
+    if matches!(representation, PhpType::Mixed | PhpType::Union(_)) { return; }
+    if representation.is_refcounted() || matches!(representation, PhpType::Str | PhpType::Callable) {
+        abi::emit_branch_if_php_return_owned(emitter, owned_label);
+        emit_box_current_value_as_mixed(emitter, ty);
+        abi::emit_jump(emitter, done_label);
+        emitter.label(owned_label);
+        if representation == PhpType::Str {
+            // Fresh string helpers may use concat scratch. Persist first, then
+            // validating release retires only an actual heap allocation. Claim
+            // transient concat storage so persistence duplicates rather than
+            // adopting the exact block that the original owner will release.
+            abi::emit_call_label(emitter, "__rt_str_claim");
+            let (pointer, _) = abi::string_result_regs(emitter);
+            abi::emit_push_reg(emitter, pointer);
+            emit_box_current_value_as_mixed(emitter, ty);
+            let result = abi::int_result_reg(emitter);
+            abi::emit_push_reg(emitter, result);
+            abi::emit_load_temporary_stack_slot(emitter, result, 16);
+            abi::emit_call_label(emitter, "__rt_heap_free_safe");
+            abi::emit_pop_reg(emitter, result);
+            abi::emit_release_temporary_stack(emitter, 16);
+        } else {
+            emit_box_current_owned_value_as_mixed(emitter, ty);
+        }
+        emitter.label(done_label);
+    } else {
+        emit_box_current_value_as_mixed(emitter, ty);
+    }
+    abi::emit_php_return_status(emitter, true);
+}
+
 /// Boxes an owned current result into Mixed and releases the original owner afterward.
 pub(crate) fn emit_box_current_owned_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
     match ty {

@@ -68,13 +68,10 @@ pub(super) enum RefArgCellLifetime {
     /// The caller owns a managed lease until return or throw. An escaping closure may
     /// retain the cell independently, so this lifetime does not prohibit reference escape.
     CallOnly,
-    /// The callee may KEEP the reference. A constructor that promotes a by-reference
-    /// parameter (`__construct(public int &$value = 1)`) BORROWS the cell for the whole life
-    /// of the object it builds — `crate::types::checker`'s
-    /// `apply_reference_property_promotions` documents that such a property holds a borrowed
-    /// cell rather than an owned one — so the cell must be heap storage that outlives this
-    /// frame. It is never freed, which is a narrower pre-existing defect (one cell per
-    /// constructed object, not one per call) that only the object model can fix.
+    /// The callee may keep an unowned raw reference property. Exact Mixed constructor
+    /// references retain managed cells and use CallOnly. Other promoted payloads still
+    /// borrow their cell for the object's lifetime, so their persistent fallback outlives
+    /// this frame. That legacy fallback is not freed until their ownership model changes.
     MayOutliveCall,
 }
 

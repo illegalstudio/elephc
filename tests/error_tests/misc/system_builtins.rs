@@ -946,3 +946,14 @@ fn test_error_get_defined_vars_first_class_callable() {
         "Cannot call get_defined_vars() dynamically",
     );
 }
+
+/// Frozen native scalar reference layouts cannot silently receive boxed capture arrays.
+#[test]
+fn test_error_regex_capture_retyping_raw_reference_payload() {
+    for (ty, value) in [("int", "7"), ("bool", "true"), ("float", "1.5"), ("string", "'old'")] {
+        for builtin in ["preg_match", "preg_match_all"] {
+            expect_error(&format!("<?php function capture({ty} &$matches): void {{ {builtin}('/a/', 'a', $matches); }} $value = {value}; capture($value);"),
+                "regex capture output cannot retype a native reference");
+        }
+    }
+}

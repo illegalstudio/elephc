@@ -1,3 +1,6 @@
+[test-groups.simplexml-large-bundles]
+max-threads = 1
+
 # Every test gets three 60s periods: nextest marks a test SLOW at each period and kills it
 # at 180s. One budget replaces the dozens of per-family overrides that used to raise single
 # tests, whole binaries and both platforms from 60s to the same 180s one at a time, after
@@ -6,6 +9,56 @@
 # report still single out everything slower than a minute.
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 3 }
+
+# ARM shard 11 lost its runner while these four catalog-sized XML bundles ran together.
+# Serialize only their scheduling, preserving their assertions and existing bundle budget.
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and (test(=codegen::runtime_gc::property_dimension_fetch_modes::test_property_dimension_xml_fetch_modes_bundle) or test(=codegen::runtime_gc::property_magic_dimension_guards::test_magic_property_dimension_xml_guards_bundle) or test(=codegen::simplexml::debug::test_simplexml_native_debug_projection_bundle) or test(=codegen::simplexml::dimension_owners::test_simplexml_dimension_write_owners_isolated_bundle))'
+test-group = 'simplexml-large-bundles'
+
+# These two single-compile XML catalog probes each reached 360s twice while
+# sharing a macOS shard. Reserve the existing pool without changing their cases
+# or timeout, and use CI fixture phase records to distinguish assembly from run.
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary(codegen_tests) and (test(=codegen::simplexml::comparisons_and_files::test_simplexml_native_comparison_and_default_namespace_bundle) or test(=codegen::simplexml::dimension_updates::test_simplexml_saved_empty_dimension_write_bundle))'
+threads-required = "num-test-threads"
+
+# The 200,000-node projection completed AOT but exceeded the unchanged 60s runtime
+# limit in eval while sharing its ARM64 shard. Preserve both modes and reserve the pool.
+# The indexed-incdec eval probe also reached its 360s deadline twice in x86_64
+# assembly after 211s of EIR work and 131s of codegen. Keep its source and deadline.
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and (test(=codegen::simplexml::projections::test_simplexml_large_repeated_projection_bundle) or test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle))'
+threads-required = "num-test-threads"
+
+# This AOT/eval GMP/XML pair reached its 360s deadline twice during x86_64
+# linking under shared workers. Keep both programs and reserve the existing pool.
+[[profile.ci.overrides]]
+platform = 'cfg(target_arch = "x86_64")'
+filter = 'binary(codegen_tests) and test(=codegen::simplexml::native_operators::test_simplexml_gmp_mixed_operator_dispatch_bundle)'
+threads-required = "num-test-threads"
+
+# These target probes hit 60s twice under concurrent x86_64 CI work. Preserve their
+# assertions and deadlines while reserving the pool for each catalog-sized probe.
+[[profile.ci.overrides]]
+platform = 'cfg(target_arch = "x86_64")'
+filter = 'test(/^ir_lower::tests::instance_dimension_incdec::instance_dimension_incdec_values::/) or test(/^ir_lower::tests::property_element_unset::property_element_unset_known_name_bounds_slot_dispatch::/)'
+threads-required = "num-test-threads"
+
+# These five-target native reference probes pass in 125-154s but reached their
+# 180s deadline while sharing x86_64 workers; repeated attempts then exhausted
+# the 30-minute shard. Reserve the pool, preserving every target and deadline.
+[[profile.ci.overrides]]
+platform = 'cfg(target_arch = "x86_64")'
+filter = 'test(=ir_lower::tests::eval_native_reference_layout::dynamic_eval_unset_keeps_numeric_alias_payloads_in_the_sync_inventory_on_every_target) or test(=ir_lower::tests::eval_native_reference_layout::dynamic_eval_object_aliases_guard_tags_and_classes_on_every_target) or test(=codegen::eval_property_helpers::reference_getter::tests::hidden_mixed_reference_cells_keep_physical_ownership_on_every_target)'
+threads-required = "num-test-threads"
+
+# Phase records show these XML probes reached assembly or linking under shared work.
+# The factory pair reached its unchanged 360s limit in assembly. Keep every case and budget.
+[[profile.ci.overrides]]
+filter = 'test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_constructorless_factories) or test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_factories_after_eval_returns) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval) or test(=codegen::simplexml::factory_owners::test_simplexml_constructorless_factory_owners_bundle)'
+threads-required = "num-test-threads"
 
 # A fixture bundle (tests/codegen/support/bundle.rs) compiles several opaque-eval programs as
 # one: one catalog compile per optimizer mode instead of one per fixture, but the run itself
@@ -69,12 +122,15 @@ slow-timeout = { period = "60s", terminate-after = 6 }
 # These opaque-eval families compile the whole builtin catalog and run under heap
 # diagnostics; measured 76-196s on a local macOS host and 100-170s on loaded Linux
 # shards. Give the families a bounded 300s allowance.
+# Native XML factory/accessor eval probes compile the same catalog. The constructorless
+# factory probe generated 249 MB of assembly and reached 180s before linking finished.
+# Include that workload here rather than giving each probe a separate timeout override.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::instanceof_operand_owners::/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(/^codegen::io::output_handler_exceptions::/))'
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::instanceof_operand_owners::/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(/^codegen::io::output_handler_exceptions::/) or test(/^codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_/) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval))'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::instanceof_operand_owners::/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(/^codegen::io::output_handler_exceptions::/))'
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::instanceof_operand_owners::/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(/^codegen::io::output_handler_exceptions::/) or test(/^codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_/) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval))'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 # `retries = 1`: a test that fails once is run again on its own before the shard reports, and
@@ -170,6 +226,9 @@ relative-to = "target"
 path = "debug/libelephc_magician.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_reference.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_web.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
@@ -252,6 +311,15 @@ slow-timeout = { period = "300s", terminate-after = 1 }
 filter = 'test(native_debug_ranges_stay_in_their_function_sections_on_all_targets)'
 slow-timeout = { period = "300s", terminate-after = 1 }
 
+# Standalone eval integration binaries retain their existing longer branch budget.
+# The global 180s default replaces the redundant three-period overrides.
+[[profile.default.overrides]]
+filter = 'binary(/^eval_/)'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+[[profile.ci.overrides]]
+filter = 'binary(/^eval_/)'
+slow-timeout = { period = "60s", terminate-after = 10 }
 # The profile-differential corpus compiles and runs each case once per maintained
 # `--php-version`, so one test is four complete compile-link-run cycles. Most cases stay
 # around 10s, but the `eval_*` ones link the 65MB Magician archive four times and measure

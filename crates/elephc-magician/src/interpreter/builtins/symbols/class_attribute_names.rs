@@ -137,7 +137,7 @@ fn eval_class_attribute_names_result(
     for (index, attribute) in attributes.iter().enumerate() {
         let key = values.int(index as i64)?;
         let value = values.string(attribute.name())?;
-        result = values.array_set(result, key, value)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, value)?;
     }
     Ok(result)
 }
@@ -162,7 +162,7 @@ pub(in crate::interpreter) fn eval_reflection_attribute_array_result(
         let identity = values.object_identity(reflection_attribute)?;
         context.register_eval_reflection_attribute(identity, attribute.clone(), target, repeated);
         values.release(args)?;
-        result = values.array_set(result, key, reflection_attribute)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, reflection_attribute)?;
     }
     Ok(result)
 }
@@ -192,7 +192,7 @@ pub(in crate::interpreter) fn eval_class_attribute_args_result(
             None => values.int(index as i64)?,
         };
         let value = eval_class_attribute_arg_value(arg.value(), values)?;
-        result = values.array_set(result, key, value)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, value)?;
     }
     Ok(result)
 }
@@ -235,7 +235,7 @@ fn eval_class_attribute_array_arg_value(
             None => values.int(element.int_key().unwrap_or(index as i64))?,
         };
         let value = eval_class_attribute_arg_value(element.value(), values)?;
-        result = values.array_set(result, key, value)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, value)?;
     }
     Ok(result)
 }

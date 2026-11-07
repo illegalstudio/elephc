@@ -131,6 +131,7 @@ pub mod tz_prelude;
 pub mod xml_prelude;
 /// Managed ICU-backed `ext/intl` synthetic AST surface.
 pub mod intl;
+mod simplexml_prelude;
 pub mod fileinfo_prelude;
 pub mod tokenizer_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).

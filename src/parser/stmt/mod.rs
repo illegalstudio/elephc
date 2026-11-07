@@ -38,7 +38,7 @@ pub(crate) use params::{
 };
 pub(crate) use assign::{
     assignment_target_store_stmt, lower_nested_append_assignment,
-    can_replay_assignment_target, lower_postfix_incdec_assignment,
+    can_replay_assignment_target, lower_postfix_incdec_assignment, lower_scoped_instance_dimension_incdec,
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 pub(crate) use blocks::{expect_semicolon, expect_token};
@@ -271,6 +271,7 @@ fn parse_stmt_dispatch(
         | Token::New
         | Token::LParen
         | Token::LBracket
+        | Token::Tilde
         | Token::Match => parse_expression_led_stmt(tokens, pos, span),
         // Control flow — delegated to control.rs
         Token::Switch => control::parse_switch(tokens, pos, span),
@@ -325,6 +326,9 @@ fn parse_expression_led_stmt(
         }
     }
     if let Some(stmt) = assign::try_parse_postfix_assignment(tokens, pos, span)? {
+        return Ok(stmt);
+    }
+    if let Some(stmt) = assign::try_parse_computed_property_element_postfix_incdec(tokens, pos, span)? {
         return Ok(stmt);
     }
     let expr = parse_expr(tokens, pos)?;

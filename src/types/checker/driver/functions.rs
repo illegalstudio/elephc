@@ -197,6 +197,10 @@ impl Checker {
             }
         }
         self.resolve_function_variant_groups(errors);
+        // A promotable decision found while a body was on the resolution stack re-checks it here.
+        if let Err(error) = self.flush_promotable_reresolutions() {
+            errors.extend(error.flatten());
+        }
     }
 
     /// Walks again, once method bodies have refined property and return types, every function

@@ -916,6 +916,13 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
             }
         }
         ExprKind::StaticMethodCall { receiver: crate::parser::ast::StaticReceiver::Named(class), method, args } => {
+            if class.as_str().trim_start_matches('\\').eq_ignore_ascii_case("Fiber")
+                && method.eq_ignore_ascii_case("getCurrent") && args.is_empty()
+            {
+                // The native helper returns a fresh Mixed wrapper around the current Fiber.
+                // Its owner is independent even when a parameter refers to that same Fiber.
+                return ReturnArgAlias::None;
+            }
             let key = (class.as_str().trim_start_matches('\\').to_string(), php_symbol_key(method));
             match state.callees.0.and_then(|callees| callees.methods.get(&key)) {
                 Some(summary) => call_alias(summary, args, state),
@@ -1381,6 +1388,18 @@ mod tests {
         );
         let summaries = collect_return_alias_summaries(&program);
         assert_eq!(summaries.method("S", "scan"), Some(&ReturnArgAlias::None));
+    }
+
+    /// The current Fiber's fresh boxed result cannot reuse a default argument's storage.
+    #[test]
+    fn current_fiber_result_is_independent_of_callable_parameters() {
+        let program = parse("<?php class CurrentFiberFactory { \
+            function instance(mixed $argument): mixed { return \\Fiber::getCurrent(); } \
+            static function stat(mixed $argument): mixed { return fIbEr::GETCURRENT(); } }");
+        let summaries = collect_return_alias_summaries(&program);
+        for method in ["instance", "stat"] {
+            assert_eq!(summaries.method("CurrentFiberFactory", method), Some(&ReturnArgAlias::None));
+        }
     }
 
     /// Verifies `implode()` returns storage independent of a method's string parameters.

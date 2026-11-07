@@ -1,6 +1,6 @@
 ---
 title: "XML"
-description: "The ext/xml SAX parser (XMLParser, xml_* functions, XML_* constants) and ext/xmlwriter (XMLWriter, xmlwriter_* functions)."
+description: "XML parsing and writing with XMLParser, XMLWriter, SimpleXMLElement, and SimpleXMLIterator."
 sidebar:
   order: 24
 ---
@@ -17,6 +17,83 @@ uses — pinned at 2.15.3 and supplied by the managed native catalog as the
 still standalone binaries: the target machine needs neither PHP nor a system
 libxml2. Both surfaces behave the same inside `eval()`, which runs the very
 same compiled `XMLParser` / `XMLWriter` declarations as native code.
+
+## SimpleXML
+
+The same bridge exposes `simplexml_load_string()`, `simplexml_load_file()`,
+`simplexml_import_dom()`, `SimpleXMLElement`, and `SimpleXMLIterator`.
+SimpleXML uses the managed libxml2 package and is enabled automatically when
+one of these functions or classes is referenced. `--with-xml` also exposes it
+when XML source is only available to dynamic `eval()`.
+
+```php
+$catalog = new SimpleXMLElement('<catalog><product sku="A1">Notebook</product></catalog>');
+foreach ($catalog->product as $product) {
+    echo (string)$product['sku'], ': ', (string)$product, "\n";
+}
+$catalog->addChild('product', 'Pencil')->addAttribute('sku', 'B2');
+foreach ($catalog->xpath('//product[@sku="B2"]') as $product) {
+    echo (string)$product, "\n";
+}
+echo $catalog->asXML();
+```
+
+Element properties select children with the requested name. Integer offsets
+select repeated elements; string offsets select attributes. `children()` and
+`attributes()` accept either a namespace URI or a prefix, selected by their
+second argument. `registerXPathNamespace()` registers prefixes for XPath queries.
+In-scope declarations take precedence over registered aliases with the same prefix.
+`getNamespaces()` reports used namespaces and `getDocNamespaces()` reports
+namespace declarations. Both support recursive traversal.
+
+Assignments, `unset()`, `addChild()`, and `addAttribute()` modify the underlying
+document. Property and string-offset writes keep the complete literal name,
+including colons. `addChild()` and `addAttribute()` interpret a nonempty prefix
+before a colon as part of a qualified name. Existing selections observe subsequent
+changes and retain their document after the original root variable is released.
+String conversion reads direct text and CDATA. `asXML()` and its `saveXML()` alias return XML, or write
+to a filename and return success. Both classes support `count()`, `foreach`,
+and the `RecursiveIterator` methods. Integer and float casts read the selected
+node text. Array casts, `get_object_vars()`, `__debugInfo()`, and JSON encoding expose XML
+properties, including `@attributes` and repeated children. DOM imports share
+their document, so edits through either API remain visible through the other.
+`simplexml_import_dom()` also accepts a SimpleXML selection and returns an alias
+of its first element, using the requested subclass. Importing an attribute or
+another non-element node emits a warning and returns `null`; an empty selection
+raises `TypeError`.
+DOM node objects keep their identity across child and sibling queries; their parent
+and sibling links follow SimpleXML edits. HTML DOM output keeps the documented
+[legacy subset format](dom-html.md) after import.
+Importing a DOM node created by `ReflectionClass::newInstanceWithoutConstructor()`
+raises `TypeError`, matching PHP's rejection of uninitialized native nodes.
+
+Cloning a root copies its document. Cloning an indexed child such as
+`$xml->item[0]` creates a detached copy of that subtree.
+
+`print_r()` and `var_dump()` render SimpleXML's native debug projection, including
+subclass `__debugInfo()` overrides, both in compiled code and opaque dynamic
+`eval()`. Nested debug calls share the native recursion guard. `var_dump()` streams
+the prefix before invoking a user hook; `print_r()` captures the complete result
+before echoing or returning it. A throwing debug hook is fatal, while an exception
+from a diagnostic handler for a null debug result remains catchable.
+
+The loading functions return `false` when parsing fails. A constructor with
+invalid XML throws `Exception`. The optional class name lets the loading
+functions return a subclass of `SimpleXMLElement`. File factories and the
+constructor's `dataIsURL` mode read local files, `data://`, HTTP/HTTPS, FTP/FTPS,
+PHAR and registered PHP stream wrappers. Standard-input, memory/temp and
+`php://filter` URLs use the existing PHP stream implementation. The original
+URL remains available to libxml2 for diagnostics and relative references.
+
+Selections and factories preserve subclasses declared by dynamic `eval()`. Their
+wrapper allocation initializes property defaults without invoking the subclass
+constructor again, including when that constructor requires additional arguments.
+
+A compiled by-reference function with a non-null object return can return a nullable
+selection after checking it. Later writes through that reference, including in
+`finally`, must preserve the object result type. Assigning null through this fixed
+object reference raises an explicit `TypeError`; PHP's untyped reference cells allow
+that replacement.
 
 ## Enabling xml
 
@@ -42,7 +119,7 @@ elephc feed.php
 
 Use `--with-xml` when the surface is only reached at runtime, for example
 through opaque dynamic `eval()`; it force-links the whole `elephc_xml` archive
-and force-injects the `XMLParser` / `XMLWriter` prelude even when the compiler
+and force-injects the `XMLParser`, `XMLWriter`, `SimpleXMLElement`, and `SimpleXMLIterator` prelude even when the compiler
 sees no xml usage:
 
 ```bash
@@ -56,6 +133,18 @@ SDK's `libiconv` for libxml2's encoding handlers; on Linux, glibc provides
 iconv from libc. On Linux a program that links the bridge also needs the zlib
 and bzip2 development libraries at link time (`-lz -lbz2`, the runtime's
 stream layer), exactly like any program that uses `fopen()`.
+
+`DOMDocument::loadXML()` also activates this bridge, including supported
+`parent::loadXML()` / `self::loadXML()` forwarding and dynamic callable forms
+in DOM programs. These programs must declare `libxml2` with
+`elephc native add libxml2`. HTML-only DOM loading remains independent of XML
+when receivers and callable names are known to be unrelated. Unknown callback
+receivers or method names remain conservative: a two-element array that could
+represent a DOM XML loader can activate the bridge even when its values are
+determined only at runtime. Use a declared `libxml2` package for those programs.
+Reflective discovery of `loadXML` through `ReflectionMethod` or
+`ReflectionClass::getMethod()` / `getMethods()` also plans the bridge when its
+target might be a DOM document. Opaque reflected targets remain conservative.
 
 `extension_loaded('xml')` and `extension_loaded('xmlwriter')` report `true`
 whenever the bridge is linked, natively and inside `eval()`. `function_exists()`
@@ -258,6 +347,19 @@ leaked block and byte totals), not guarantees.
 
 ## Differences from PHP
 
+- SimpleXML `++` and `--` replace a local object value with a number. Typed
+  by-reference parameters and static locals are rejected at compile time because
+  their storage cannot change to the numeric representation. Copy the object
+  into a plain local before applying the counter operator.
+- SimpleXML URL inputs are buffered before parsing. Registered wrapper close
+  callbacks run after reading, before parser diagnostics are dispatched. External
+  DTDs and entities use libxml2's native file loader, so PHP stream wrappers apply
+  to the main document only. `php://fd` and compressed stream URLs are not
+  supported by the SimpleXML reader. Network read failures use the stream
+  layer's warning text before the native SimpleXML I/O warning. Stream and filter
+  registrations used by the native prelude must come from compiled PHP; Magician's
+  eval-local registrations remain in its separate stream context.
+
 - The parser is libxml2 2.15.3 itself, driven through the same push-parser
   entry points php-src's `ext/xml` uses, so event boundaries, positions, error
   codes and character-data chunking are libxml2's own. Only the internal DTD
@@ -322,6 +424,16 @@ the neighboring XML builtin pages for individual signatures and backend support.
 ## Functions {#functions}
 
 Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+### simplexml
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`simplexml_import_dom()`](./builtins/xml/simplexml_import_dom.md) | `(object $node, ?string $class_name = 'SimpleXMLElement'): ?SimpleXMLElement` | `?SimpleXMLElement` | ✓ | ✓ |
+| [`simplexml_load_file()`](./builtins/xml/simplexml_load_file.md) | `(string $filename, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): SimpleXMLElement|false` | `SimpleXMLElement|false` | ✓ | ✓ |
+| [`simplexml_load_string()`](./builtins/xml/simplexml_load_string.md) | `(string $data, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): SimpleXMLElement|false` | `SimpleXMLElement|false` | ✓ | ✓ |
+
+Classes: `SimpleXMLElement`, `SimpleXMLIterator`.
 
 ### xml
 

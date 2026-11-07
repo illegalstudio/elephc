@@ -154,6 +154,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &[],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_reference",
+        package: "elephc-reference",
+        php_extensions: &[],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_curl",
         package: "elephc-curl",
         php_extensions: &["curl"],
@@ -166,7 +171,7 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_xml",
         package: "elephc-xml",
-        php_extensions: &["xml", "xmlwriter"],
+        php_extensions: &["xml", "xmlwriter", "SimpleXML"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_intl",
@@ -223,6 +228,8 @@ impl std::ops::Deref for TestLinkRequirements {
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
 /// no intermediate `.s` file is created.
 pub(crate) fn assemble_from_stdin(asm: &str, obj_path: &Path) {
+    let _phase = fixture_phase_timing("assemble");
+    if let Some(phase) = &_phase { phase.assembly_input(asm); }
     let mut cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
         cmd.args(["-arch", target().darwin_arch_name()]);
@@ -230,13 +237,17 @@ pub(crate) fn assemble_from_stdin(asm: &str, obj_path: &Path) {
     cmd.arg("-o").arg(obj_path).arg("-");
     cmd.stdin(Stdio::piped());
     let mut child = cmd.spawn().expect("failed to spawn assembler");
-    child
+    let written = child
         .stdin
         .as_mut()
         .expect("assembler stdin missing")
-        .write_all(asm.as_bytes())
-        .expect("failed to feed assembler");
+        .write_all(asm.as_bytes());
+    if let Err(error) = written {
+        super::diagnostics::preserve_assembler_failure(asm);
+        panic!("failed to feed assembler: {error}");
+    }
     let status = child.wait().expect("failed to wait for assembler");
+    if !status.success() { super::diagnostics::preserve_assembler_failure(asm); }
     assert!(status.success(), "assembler failed");
 }
 
@@ -314,6 +325,7 @@ pub(crate) fn get_runtime_obj() -> &'static Path {
 /// shared on-disk cache behind it answers them across processes, which is what nextest's
 /// process-per-test model needs for the cache to pay off at all.
 pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
+    let _phase = fixture_phase_timing("runtime-obj");
     let hash = runtime_asm_hash(runtime_asm);
     let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let mut cache = cache.lock().expect("runtime asm cache poisoned");
@@ -1104,6 +1116,7 @@ pub(crate) fn link_binary(
     extra_link_paths: &[String],
     extra_frameworks: &[String],
 ) {
+    let _phase = fixture_phase_timing("link");
     let plan = test_link_plan(requirements, extra_link_paths, extra_frameworks);
     let actual_link_libs = named_libraries(&plan);
 
@@ -1609,6 +1622,7 @@ fn run_binary_with_env_and_args(
     env: &[(&str, &std::ffi::OsStr)],
     args: &[&str],
 ) -> Output {
+    let _phase = fixture_phase_timing("run");
     let mut output = if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
         && cfg!(target_arch = "x86_64")
@@ -1625,7 +1639,45 @@ fn run_binary_with_env_and_args(
         run_command_with_timeout(cmd)
     };
     append_macos_signal_diagnostics(&mut output, bin_path, dir, env, args);
+    #[cfg(target_os = "linux")]
+    append_linux_property_signal_diagnostics(&mut output, bin_path, dir, env, args);
     output
+}
+
+/// Replays focused property and Fiber bridge regressions after a native Linux signal.
+#[cfg(target_os = "linux")]
+fn append_linux_property_signal_diagnostics(
+    output: &mut Output,
+    bin_path: &Path,
+    dir: &Path,
+    env: &[(&str, &std::ffi::OsStr)],
+    args: &[&str],
+) {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    if target().platform != Platform::Linux || target().arch != Arch::X86_64
+        || output.status.signal().is_none()
+        || !std::thread::current().name().is_some_and(|name|
+            name.contains("test_shared_property_read_owners_bundle")
+            || name.contains("test_eval_callable_argument_owners_retire_abandoned_bridge_frames_bundle")
+            || name.contains("test_eval_callable_argument_owner_fiber_cycle_is_collected"))
+    { return; }
+    let available = std::env::var_os("PATH").is_some_and(|paths|
+        std::env::split_paths(&paths).any(|path| path.join("gdb").is_file()));
+    if !available {
+        output.stderr.extend_from_slice(b"\nGDB replay unavailable: gdb is not installed.\n");
+        return;
+    }
+    let mut command = Command::new("gdb");
+    command.current_dir(dir).envs(env.iter().copied()).args([
+        "--batch", "-ex", "set pagination off", "-ex", "run", "-ex", "bt",
+        "-ex", "info registers", "-ex", "x/32gx $rsp", "-ex", "x/16i $pc",
+        "-ex", "disassemble __rt_throw_current", "--args",
+    ]).arg(bin_path).args(args);
+    let diagnostic = run_command_with_timeout(command);
+    output.stderr.extend_from_slice(b"\nGDB replay after signal:\n");
+    output.stderr.extend_from_slice(&diagnostic.stdout);
+    output.stderr.extend_from_slice(&diagnostic.stderr);
 }
 
 /// Replays a signalled native macOS fixture under LLDB and appends its crash context.
@@ -1643,7 +1695,44 @@ fn append_macos_signal_diagnostics(
         return;
     }
 
+    // A damaged frame pointer can hide the native caller from LLDB's ordinary unwinder.
+    // Resolve at most 32 executable addresses from a bounded stack snapshot in that case.
+    let stack_symbols = concat!(
+        "script t = lldb.debugger.GetSelectedTarget(); p = t.GetProcess(); ",
+        "f = p.GetSelectedThread().GetFrameAtIndex(0); ",
+        "s = f.FindRegister('sp').GetValueAsUnsigned(); e = lldb.SBError(); ",
+        "b = p.ReadMemory(s, 16384, e) or b''; ",
+        "a = [(i, int.from_bytes(b[i:i+8], 'little')) for i in range(0, len(b)-7, 8)]; ",
+        "v = [(i, w, t.ResolveLoadAddress(w)) for i, w in a]; ",
+        "v = [(i, w, x.GetSymbol().GetName() or x.GetFunction().GetName() or '?') ",
+        "for i, w, x in v if x.GetModule().IsValid() ",
+        "and x.GetModule().GetFileSpec().GetFilename() == t.GetExecutable().GetFilename()]; ",
+        "print('Bounded executable stack candidates (may include stale values):'); ",
+        "[print('sp+%04x 0x%x %s' % (i, w, n[:240])) for i, w, n in v[:32]]"
+    );
     let mut cmd = Command::new("lldb");
+    let trace_spl_boundary = std::thread::current().name().is_some_and(|name|
+        name.ends_with("test_opaque_eval_spl_nested_write_keeps_attached_storage_through_reentry")
+            || name.ends_with("test_simplexml_eval_indirect_dimension_copies_bundle"));
+    if trace_spl_boundary {
+        // Inspect the linked runtime, since the user assembly artifact omits cached helpers.
+        // Bound each disassembly and the raw stack dump even when the frame chain is damaged.
+        cmd.args([
+            "-o", "breakpoint set --skip-prologue false --name __elephc_eval_spl_storage_write_v1",
+            "-k", "thread backtrace all",
+            "-k", "register read",
+            "-k", stack_symbols,
+            "-k", "memory read --format x --size 8 --count 64 $sp",
+            "-k", "disassemble --name __elephc_eval_spl_storage_write_v1 --count 128",
+            "-k", "disassemble --name _rt_mixed_array_get_for_write --count 64",
+            "-k", "disassemble --name _rt_mixed_array_get --count 32",
+            "-k", "disassemble --name _rt_mixed_array_get_php_offset_get --count 80",
+            "-k", "disassemble --name _rt_array_get_mixed_key --count 48",
+            "-k", "disassemble --name _rt_array_get_mixed_key_detach_indexed --count 48",
+            "-k", "disassemble --name _rt_array_ensure_unique --count 32",
+            "-k", "disassemble --name _rt_mixed_clone --count 16",
+        ]);
+    }
     cmd.args([
         "--batch",
         "-o",
@@ -1652,6 +1741,8 @@ fn append_macos_signal_diagnostics(
         "thread backtrace all",
         "-k",
         "register read",
+        "-k",
+        stack_symbols,
         "-k",
         "disassemble --frame",
         "-k",
@@ -1672,9 +1763,30 @@ fn append_macos_signal_diagnostics(
         "disassemble --name _rt_gc_request_start",
         "-k",
         "disassemble --name _rt_gc_collector_begin",
-        "--",
-    ])
-    .arg(bin_path)
+    ]);
+    if trace_spl_boundary {
+        // Stop at the exact return PC rather than trusting an already damaged frame chain.
+        cmd.args([
+            "-o", concat!(
+                "script spl_frame = lldb.debugger.GetSelectedTarget().GetProcess().GetSelectedThread().GetFrameAtIndex(0); ",
+                "spl_names = ['sp'] + ['x%d' % i for i in range(19, 30)]; ",
+                "spl_before = {n: spl_frame.FindRegister(n).GetValueAsUnsigned() for n in spl_names}; ",
+                "print('SPL C ABI entry:', spl_before); ",
+                "spl_return = spl_frame.FindRegister('lr').GetValueAsUnsigned(); ",
+                "lldb.debugger.HandleCommand('breakpoint disable'); ",
+                "lldb.debugger.HandleCommand('breakpoint set --one-shot true --address 0x%x' % spl_return)",
+            ),
+            "-o", "continue",
+            "-o", concat!(
+                "script spl_frame = lldb.debugger.GetSelectedTarget().GetProcess().GetSelectedThread().GetFrameAtIndex(0); ",
+                "spl_after = {n: spl_frame.FindRegister(n).GetValueAsUnsigned() for n in spl_names}; ",
+                "print('SPL C ABI return mismatches:', [(n, hex(spl_before[n]), hex(spl_after[n])) ",
+                "for n in spl_names if spl_before[n] != spl_after[n]])",
+            ),
+            "-o", "continue",
+        ]);
+    }
+    cmd.arg("--").arg(bin_path)
     .args(args)
     .current_dir(dir)
     .envs(env.iter().copied());
@@ -1790,6 +1902,7 @@ pub(crate) fn assemble_and_run(
     );
 
     let output = run_binary(&bin_path, dir);
+    super::diagnostics::preserve_native_fixture_failure(user_asm, &output);
     assert!(
         output.status.success(),
         "binary exited with status {}\nstdout: {}\nstderr: {}",
@@ -1873,6 +1986,9 @@ pub(crate) fn assemble_and_run_capture(
 
     let output = run_binary(&bin_path, dir);
 
+    if std::str::from_utf8(&output.stdout).is_err() || std::str::from_utf8(&output.stderr).is_err() {
+        super::diagnostics::preserve_invalid_utf8_output(user_asm, &output);
+    }
     ProgramOutput {
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),

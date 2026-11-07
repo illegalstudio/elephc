@@ -76,7 +76,7 @@ fn loop_carried_storage_types(
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) -> Vec<(String, PhpType)> {
     analyze_loop_storage(body, update, None, entry, packed_counter,
-        tagged_integer_locals, infer_value).contracts
+        tagged_integer_locals, &Default::default(), infer_value).contracts
 }
 
 /// Assignment values and executable calls collected without entering nested function bodies.
@@ -106,6 +106,7 @@ pub(super) struct LoopStorageAnalysis {
 pub(super) fn analyze_loop_storage<'a>(
     body: &'a [Stmt], update: Option<&'a Stmt>, condition: Option<&'a Expr>,
     entry: &TypeEnv, packed_counter: Option<&str>, tagged_integer_locals: &HashSet<String>,
+    promotable_candidates: &super::promotable_arrays::PromotableCandidates,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) -> LoopStorageAnalysis {
     let mut assignments = LoopWrites::default();
@@ -139,6 +140,7 @@ pub(super) fn analyze_loop_storage<'a>(
             packed_counter,
             &foreach_keys,
             &foreach_values,
+            promotable_candidates,
             infer_value,
         );
         if fixed == previous {
@@ -247,6 +249,7 @@ fn apply_array_write_evidence(
     packed_counter: Option<&str>,
     foreach_keys: &HashSet<&str>,
     foreach_values: &HashSet<&str>,
+    promotable_candidates: &super::promotable_arrays::PromotableCandidates,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) {
     for write in writes {
@@ -289,6 +292,23 @@ fn apply_array_write_evidence(
                 && array_key_contiguity_is_unproven(index);
             literal_string_key || unbounded_integer_key
         });
+        // `check_array_assign` keeps a promotable candidate's `array<int>` storage under a boxed
+        // or unbounded key when the value is an integer or `?int` (codegen promotes the storage at
+        // run time instead), so this pass must not widen the loop's contract to `mixed` either.
+        let promotable_keep = !forces_hash
+            && promotable_candidates.contains(write.name)
+            && matches!(&current, PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+            && matches!(incoming.codegen_repr(), PhpType::Int | PhpType::TaggedScalar)
+            && write.index.is_some_and(|index| {
+                !matches!(&index.kind, ExprKind::Variable(name) if foreach_keys.contains(name.as_str()))
+                    && !crate::types::nonempty_array_key_stays_in_range(index)
+                    && infer_value(index, env).is_some_and(|key| {
+                        matches!(key, PhpType::Mixed | PhpType::Int) || key.is_int_float_union()
+                    })
+            });
+        if promotable_keep {
+            continue;
+        }
         let updated = match current {
             PhpType::Array(element) if forces_hash => {
                 let was_empty = matches!(element.as_ref(), PhpType::Never);
@@ -700,6 +720,32 @@ fn precise_scalar_expr_type(value: &Expr) -> Option<PhpType> {
         ExprKind::ErrorSuppress(inner) => precise_scalar_expr_type(inner),
         _ => None,
     }
+}
+
+/// Returns every local a loop may assign on some iteration: in its condition, body, or update.
+///
+/// EIR lowering uses it for the entry shape the checker's environment cannot see: a local whose
+/// LOWERING fact is `null` at the loop head (`$o = new C; $o = null; for (…) { … $o = new C; }`
+/// keeps the checker's `C` type) while the body assigns it. See
+/// `ir_lower::stmt::conditionals::apply_null_entry_boxing`.
+pub(crate) fn loop_assigned_local_names(
+    condition: Option<&Expr>,
+    body: &[Stmt],
+    update: Option<&Stmt>,
+) -> HashSet<String> {
+    let mut assignments = LoopWrites::default();
+    if let Some(condition) = condition {
+        collect_value_assignments_from_expr(condition, &mut assignments);
+    }
+    collect_value_assignments(body, &mut assignments);
+    if let Some(update) = update {
+        collect_value_assignment_stmt(update, &mut assignments);
+    }
+    assignments
+        .values
+        .into_iter()
+        .map(|(name, _)| name.to_string())
+        .collect()
 }
 
 /// Collects local assignments from every statement in source traversal order.

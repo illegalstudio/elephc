@@ -50,7 +50,7 @@ builtin! {
         target_strategy: BuiltinTargetStrategy::EirGraph,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
-        argument_lowering: BuiltinArgumentLowering::Standard,
+        argument_lowering: BuiltinArgumentLowering::WriteOnlyMixedOutputs(&[2, 3]),
         callable: BuiltinCallablePolicy::StaticOnly(
             "xml_parse_into_struct() writes by-reference outputs into caller variables",
         ),
@@ -180,10 +180,12 @@ fn lower(
         );
         // The helper runs before the operand's home is resolved so the parser drops its
         // copy of the array even for a materialized default.
-        if !ctx.store_operand_local(index_target, index.value, PhpType::Mixed, Some(call.span))
-            && !is_omitted_output_default(ctx, index_target)
-        {
-            return Err(output_not_storable("index"));
+        if !ctx.store_operand_local(index_target, index.value, PhpType::Mixed, Some(call.span)) {
+            if !is_omitted_output_default(ctx, index_target) {
+                return Err(output_not_storable("index"));
+            }
+            ctx.emit_void(Op::Release, vec![index.value], None,
+                Op::Release.default_effects(), Some(call.span));
         }
     }
     Ok(status)

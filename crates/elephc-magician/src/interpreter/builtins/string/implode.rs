@@ -29,13 +29,14 @@ pub(in crate::interpreter) fn eval_builtin_implode(
     };
     let separator = eval_expr(separator, context, scope, values)?;
     let array = eval_expr(array, context, scope, values)?;
-    eval_implode_result(separator, array, values)
+    eval_implode_result(separator, array, context, values)
 }
 
 /// Joins array values in eval iteration order using PHP string conversion.
 pub(in crate::interpreter) fn eval_implode_result(
     separator: RuntimeCellHandle,
     array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !values.is_array_like(array)? {
@@ -49,9 +50,13 @@ pub(in crate::interpreter) fn eval_implode_result(
             output.extend_from_slice(&separator);
         }
         let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        let value = values.string_bytes(value)?;
-        output.extend_from_slice(&value);
+        with_eval_value_lease(key, context, values, |key, context, values| {
+            let value = values.array_get(array, key)?;
+            with_eval_value_lease(value, context, values, |value, _, values| {
+                output.extend_from_slice(&values.string_bytes(value)?);
+                Ok(())
+            })
+        })?;
     }
     values.string_bytes_value(&output)
 }
@@ -59,10 +64,11 @@ pub(in crate::interpreter) fn eval_implode_result(
 /// Dispatches evaluated `implode()` calls through the builtin leaf.
 pub(in crate::interpreter) fn eval_implode_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [separator, array] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    eval_implode_result(*separator, *array, values)
+    eval_implode_result(*separator, *array, context, values)
 }

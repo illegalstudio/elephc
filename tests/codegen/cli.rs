@@ -1102,14 +1102,17 @@ echo second('plus_one');
     );
 
     let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read callable assembly");
-    assert!(
-        asm.contains("_eir_first_callable_invoker"),
-        "the first dynamic call site must emit shared invokers"
-    );
-    assert!(
-        !asm.contains("_eir_second_callable_invoker"),
-        "the second equivalent call site must reuse the first site's invokers"
-    );
+    assert_eq!(asm.matches("_eir_callable_argument_normalizer:\n").count(), 1,
+        "unrestricted call sites must share one candidate resolver");
+    assert!(asm.contains("_callable_invoker_"), "the shared resolver emits native invokers");
+    for name in ["first", "second"] {
+        let body = asm.split_once(&format!("@fn name={name} symbol=")).unwrap().1
+            .split_once(&format!("@endfn name={name}")).unwrap().0;
+        assert_eq!(body.matches("_eir_callable_argument_normalizer").count(), 1,
+            "{name}: each call site reuses the module resolver");
+        assert!(!asm.contains(&format!("_eir_{name}_callable_invoker")),
+            "{name}: candidate invokers must not be attributed to a call site");
+    }
 
     let run = run_binary(&dir.join("main"), &dir);
     assert!(

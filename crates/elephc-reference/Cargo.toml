@@ -1,0 +1,10 @@
+[package]
+name = "elephc-reference"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Native property reference metadata and validation coordination for elephc"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]

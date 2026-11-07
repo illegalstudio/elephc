@@ -34,6 +34,7 @@ MODULE_PAGES: dict[str, str] = {
     "posix": "pcntl.md",
     "session": "sessions.md",
     "spl": "spl.md",
+    "simplexml": "xml.md",
     "tokenizer": "tokenizer.md",
     "xml": "xml.md",
     "xmlwriter": "xml.md",

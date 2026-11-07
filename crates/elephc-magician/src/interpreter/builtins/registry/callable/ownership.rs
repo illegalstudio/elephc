@@ -47,7 +47,6 @@ impl ResolvedEvalCallable {
     }
 
     /// Validates a registration callback while balancing its temporary receiver on failure too.
-    #[cfg(feature = "curl")]
     pub(in crate::interpreter) fn with_probe<V: RuntimeValueOps>(
         self, context: &mut ElephcEvalContext, values: &mut V,
         probe: impl FnOnce(&EvaluatedCallable, &mut ElephcEvalContext, &mut V) -> Result<bool, EvalStatus>,

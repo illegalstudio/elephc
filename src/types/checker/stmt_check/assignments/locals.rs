@@ -114,7 +114,18 @@ pub(super) fn check_assign(
     checker: &mut Checker, name: &str, value: &Expr, span: Span,
     env: &mut TypeEnv, stmt_form: bool,
 ) -> Result<(), CompileError> {
-    check_assign_value_type(checker, name, value, span, env, stmt_form).map(|_| ())
+    // A promotable `array<int>` stored into a candidate local stays raw, and the local is then
+    // promotable itself: its element ops dispatch on the heap kind the value may already have.
+    let promotes = checker.prepare_promotable_assignment(name, value, env);
+    check_assign_value_type(checker, name, value, span, env, stmt_form)?;
+    // Judged once the value is checked: a call is known to return a promotable value only now.
+    if promotes
+        && checker.is_promotable_value_expr(value, env)
+        && matches!(env.get(name), Some(PhpType::Array(elem)) if elem.codegen_repr() == PhpType::Int)
+    {
+        checker.record_promotable_array_local(name);
+    }
+    Ok(())
 }
 
 /// Type-checks a simple variable assignment (`$name = value`).
@@ -441,6 +452,14 @@ pub(super) fn check_ref_assign(
             checker
                 .property_ref_aliased_locals
                 .insert(target.to_string());
+            clear_callable_metadata(checker, target);
+            Ok(())
+        }
+        ExprKind::StaticPropertyAccess { .. } => {
+            let target_ty = checker.infer_type(source, env)?;
+            target_has_boxed_ref_provenance = target_ty.codegen_repr() == PhpType::Mixed;
+            env.insert(target.to_string(), target_ty);
+            checker.active_ref_params.insert(target.to_string());
             clear_callable_metadata(checker, target);
             Ok(())
         }
@@ -1441,7 +1460,14 @@ pub(super) fn check_typed_assign(
             return Err(error);
         }
     };
-    if !checker.type_accepts(&declared_ty, &value_ty) {
+    // A runtime-named constructor has no statically known class, so inference keeps its result
+    // as Mixed. The expression still either produces an object or throws before assignment, which
+    // is sufficient for the non-nominal `object` contract. Do not extend this exception to an
+    // arbitrary Mixed value or to a named class, because neither has a runtime nominal guard here.
+    let dynamic_new_satisfies_object =
+        matches!(&declared_ty, PhpType::Object(class) if class.is_empty())
+            && matches!(value.kind, ExprKind::NewDynamic { .. });
+    if !checker.type_accepts(&declared_ty, &value_ty) && !dynamic_new_satisfies_object {
         // The initializer typed successfully but violates the declared type. Poison
         // `$name` as `Mixed` for recovery so later uses do not cascade, then report
         // the initialization mismatch as the one real diagnostic.

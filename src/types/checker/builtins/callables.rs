@@ -18,6 +18,7 @@ use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
 use crate::types::call_args;
+use crate::types::checker::type_compat::unions::normalize_union_members;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::canonical_builtin_function_name;
@@ -194,6 +195,27 @@ const CALLBACK_ARG_PLACEHOLDER_PREFIX: &str = "0__elephc_callback_arg";
 /// Identifies checker-owned callback arguments whose environment entries are always present.
 pub(in crate::types::checker) fn is_callback_argument_placeholder(name: &str) -> bool {
     name.starts_with(CALLBACK_ARG_PLACEHOLDER_PREFIX)
+}
+
+/// Reports whether a callback argument stands for an array slot whose type is statically opaque.
+///
+/// `callback_dummy_arg_for_type` binds an opaque `Mixed`/`Never` slot (the carry of
+/// `array_reduce`, the elements of a boxed array) to a bottom-typed placeholder, and a walk across
+/// such a placeholder refuses bodies the runtime value satisfies (`$carry + $item`). Errors of
+/// that walk prove nothing, so a callback check neither reports them nor walks a marked failed
+/// body again from such arguments (`Checker::rewalk_marked_callable_target`).
+pub(in crate::types::checker) fn callback_args_have_opaque_placeholder(
+    args: &[Expr],
+    env: &TypeEnv,
+) -> bool {
+    args.iter().any(|arg| {
+        matches!(
+            &arg.kind,
+            ExprKind::Variable(name)
+                if is_callback_argument_placeholder(name)
+                    && matches!(env.get(name), Some(PhpType::Mixed | PhpType::Never))
+        )
+    })
 }
 
 /// Returns the contextual closure-parameter type for one callback argument.
@@ -1074,6 +1096,9 @@ fn check_callback_builtin_call_in_engine_frame(
     }
 
     if let ExprKind::StringLiteral(cb_name) = &callback.kind {
+        // A marked failed body is walked again before the descriptor promotion below
+        // re-resolves the signature, so the promotion starts from the settled one.
+        checker.rewalk_marked_callable_target(cb_name, callback_args, span, env)?;
         // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
         // this function a named entry, so its collector has to be compiled for the descriptor
         // container before its signature is read here.
@@ -1106,8 +1131,17 @@ fn check_callback_builtin_call_in_engine_frame(
                 ));
             }
             // Keep function-variant discovery, but do not treat scalar dummy args
-            // as authoritative parameter types for callbacks over refcounted arrays.
-            let _ = checker.check_function_call(cb_name, callback_args, span, env);
+            // as authoritative parameter types for callbacks over refcounted arrays. The
+            // errors of a failed body are still reported (`failed_callback_body_errors`),
+            // unless an opaque placeholder argument may have caused them.
+            if let Err(error) = checker.check_function_call(cb_name, callback_args, span, env) {
+                if !callback_args_have_opaque_placeholder(callback_args, env) {
+                    if let Some(body_errors) = checker.failed_callback_body_errors(&error)
+                    {
+                        return Err(body_errors);
+                    }
+                }
+            }
             return Ok(PhpType::Int);
         }
         // A BUILTIN named by string. `check_function_call` below resolves user functions and
@@ -1302,6 +1336,125 @@ fn validate_static_cufa_reference_arguments(
 }
 
 
+/// Returns the type the final-pass re-walk of a marked failed body binds each untyped
+/// parameter to for a variable `call_user_func_array` argument list (or a sole spread source),
+/// or `None` when the source is no array storage (an iterator or an object the call refuses or
+/// iterates at run time).
+///
+/// The rules follow the spread binder (`spread_source_element_type`): a packed or keyed list
+/// binds its value type, and a declared `array` or a `mixed` value binds `mixed`. A union of
+/// array shapes binds the union of its members' value types (`mixed` when one of them is
+/// `mixed`), so `array<int>|array<float>` binds `int|float` as a packed `array<int|float>`
+/// does. An empty list (`never`) binds `mixed` as well, so a body error that no argument
+/// decides is still reported. Only a body whose first walk already ran is re-walked here: a
+/// string `call_user_func_array` callee without a by-reference parameter first walks through
+/// a spread of the list, which refuses a union of array shapes as on main.
+fn variable_list_value_type(list_ty: &PhpType) -> Option<PhpType> {
+    let value_ty = array_storage_value_type(list_ty)?;
+    Some(if value_ty == PhpType::Never { PhpType::Mixed } else { value_ty })
+}
+
+/// Returns the value type of an array-storage source for `variable_list_value_type`, keeping
+/// `never` for an empty list so a union with one joins the other members' value type.
+fn array_storage_value_type(list_ty: &PhpType) -> Option<PhpType> {
+    match list_ty {
+        PhpType::Array(elem_ty) => Some((**elem_ty).clone()),
+        PhpType::AssocArray { value, .. } => Some((**value).clone()),
+        PhpType::Mixed => Some(PhpType::Mixed),
+        ty if ty.is_php_array() => Some(PhpType::Mixed),
+        PhpType::Union(members) => {
+            let mut value_tys = Vec::new();
+            for member in members {
+                let value_ty = array_storage_value_type(member)?;
+                if value_ty != PhpType::Never {
+                    value_tys.push(value_ty);
+                }
+            }
+            Some(if value_tys.is_empty() {
+                PhpType::Never
+            } else {
+                normalize_union_members(value_tys)
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Walks a marked failed body of the function `name` again for a `call_user_func_array` call
+/// over the variable argument list `arg_array`, binding its untyped by-value parameters and
+/// variadic tail to the list's value type (`rewalk_marked_function_from_initial_params`).
+///
+/// It runs before the call reads the callee's signature, whether the callee is named by a
+/// string or by a first-class callable, so a body error the final pass would otherwise drop
+/// as stale is reported for this statement.
+fn rewalk_marked_function_over_variable_list(
+    checker: &mut Checker,
+    name: &str,
+    arg_array: &Expr,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let name = checker
+        .canonical_function_name_folded(name)
+        .unwrap_or_else(|| name.to_string());
+    let list_ty = checker.infer_type(arg_array, env)?;
+    match variable_list_value_type(&list_ty) {
+        Some(value_ty) => checker.rewalk_marked_function_from_initial_params(&name, &value_ty),
+        None => Ok(()),
+    }
+}
+
+/// Walks a marked failed body of the function `name` again for a `call_user_func` call with
+/// the arguments `call_args`, before the call reads the callee's signature.
+///
+/// Positional arguments and spreads of array storage the spread binder accepts (an array, a
+/// keyed array, a declared `array`, `mixed`) re-walk through `check_function_call`, like a
+/// direct call. The binder refuses a union of array shapes (`array<int>|array<string, int>`),
+/// so a call whose only argument spreads one binds its parameters directly to the union's value
+/// type (`rewalk_marked_function_from_initial_params`). Any other spread, an `iterable` or an
+/// object that only a runtime iterator walk unpacks, keeps the provisional signature, as does a
+/// union spread beside other arguments.
+fn rewalk_marked_descriptor_call_target(
+    checker: &mut Checker,
+    name: &str,
+    call_args: &[Expr],
+    span: crate::span::Span,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let mut binder_accepts_spreads = true;
+    let mut sole_spread_value_ty = None;
+    for arg in call_args {
+        let ExprKind::Spread(inner) = &arg.kind else {
+            continue;
+        };
+        let ty = checker.infer_type(inner, env)?;
+        if spread_binder_accepts_source(&ty) {
+            continue;
+        }
+        binder_accepts_spreads = false;
+        if call_args.len() == 1 {
+            sole_spread_value_ty = variable_list_value_type(&ty);
+        }
+    }
+    if binder_accepts_spreads {
+        return checker.rewalk_marked_callable_target(name, call_args, span, env);
+    }
+    let Some(value_ty) = sole_spread_value_ty else {
+        return Ok(());
+    };
+    let name = checker
+        .canonical_function_name_folded(name)
+        .unwrap_or_else(|| name.to_string());
+    checker.rewalk_marked_function_from_initial_params(&name, &value_ty)
+}
+
+/// Reports whether the spread binder (`spread_source_element_type`) unpacks a source of type
+/// `ty` statically: an array, a keyed array, a declared `array` or a `mixed` value. It refuses
+/// a union of array shapes, which only the descriptor paths accept.
+fn spread_binder_accepts_source(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed)
+        || ty.is_php_array()
+}
+
 /// Type-checks a `call_user_func_array` call: resolves the callback (first-class callable,
 /// variable-bound callable, string name, extern/builtin, or object/array descriptor),
 /// validates the argument array, and returns the callee's inferred return type (or `Mixed`
@@ -1320,6 +1473,9 @@ pub(crate) fn check_call_user_func_array(
         let sig = if let Some(elems) = static_args.as_deref() {
             checker.specialize_first_class_callable_target(target, elems, span, env)?
         } else {
+            if let CallableTarget::Function(name) = target {
+                rewalk_marked_function_over_variable_list(checker, name.as_str(), &args[1], env)?;
+            }
             checker.resolve_first_class_callable_sig(target, span, env)?
         };
         validate_call_user_func_array_dynamic_arg_array(checker, &sig, &args[1], span, env)?;
@@ -1359,6 +1515,14 @@ pub(crate) fn check_call_user_func_array(
             let sig = if let Some(elems) = static_args.as_deref() {
                 checker.specialize_first_class_callable_target(&target, elems, span, env)?
             } else {
+                if let CallableTarget::Function(name) = &target {
+                    rewalk_marked_function_over_variable_list(
+                        checker,
+                        name.as_str(),
+                        &args[1],
+                        env,
+                    )?;
+                }
                 checker.resolve_first_class_callable_sig(&target, span, env)?
             };
             checker.callable_sigs.insert(var_name.clone(), sig.clone());
@@ -1449,6 +1613,13 @@ pub(crate) fn check_call_user_func_array(
                     checker.resolve_function_signature(&cb_name, &decl, param_types)?;
                 }
             }
+        }
+        // A marked failed body is walked again before the descriptor promotion below
+        // re-resolves the signature, so the promotion starts from the settled one.
+        if let Some(elems) = static_args.as_deref() {
+            checker.rewalk_marked_callable_target(&cb_name, elems, span, env)?;
+        } else {
+            rewalk_marked_function_over_variable_list(checker, &cb_name, &args[1], env)?;
         }
         // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
         // this function a named entry, so its collector has to be compiled for the descriptor
@@ -1616,6 +1787,9 @@ pub(crate) fn check_call_user_func(
         )? {
             return Ok(ret_ty);
         }
+        if let CallableTarget::Function(name) = target {
+            rewalk_marked_descriptor_call_target(checker, name.as_str(), &args[1..], span, env)?;
+        }
         let sig = if has_traversable_spread {
             checker.resolve_first_class_callable_sig(target, span, env)?
         } else {
@@ -1644,6 +1818,15 @@ pub(crate) fn check_call_user_func(
                 env,
             )? {
                 return Ok(ret_ty);
+            }
+            if let CallableTarget::Function(name) = &target {
+                rewalk_marked_descriptor_call_target(
+                    checker,
+                    name.as_str(),
+                    &args[1..],
+                    span,
+                    env,
+                )?;
             }
             let sig = if has_traversable_spread {
                 checker.resolve_first_class_callable_sig(&target, span, env)?
@@ -1707,6 +1890,9 @@ pub(crate) fn check_call_user_func(
         let cb_name = canonical_function_name
             .clone()
             .unwrap_or_else(|| cb_name.clone());
+        // A marked failed body is walked again before the descriptor promotion below
+        // re-resolves the signature, so the promotion starts from the settled one.
+        rewalk_marked_descriptor_call_target(checker, &cb_name, &args[1..], span, env)?;
         // A literal callee name is a DESCRIPTOR target: the invoker's tail collector may hand
         // this function a named entry, so its collector has to be compiled for the descriptor
         // container before its signature is read here.

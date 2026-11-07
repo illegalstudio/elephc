@@ -403,7 +403,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed property key to Rust
 
-    emitter.label("__elephc_eval_key_normalize");
+    emitter.label_global("__elephc_eval_key_normalize");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while classifying the eval key
     emitter.instruction("mov rbp, rsp");                                        // establish a stable key-normalizer frame
     emitter.instruction("sub rsp, 16");                                         // reserve an aligned slot for the original boxed key

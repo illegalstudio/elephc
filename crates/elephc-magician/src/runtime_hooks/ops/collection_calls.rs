@@ -120,6 +120,46 @@ macro_rules! impl_collection_call_ops {
         })
     }
 
+    /// Fetches attached internal SPL storage without allowing a public offsetGet fallback.
+    fn spl_storage_fetch_for_write(
+        &mut self,
+        array: RuntimeCellHandle,
+        index: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let mut output = std::ptr::null_mut();
+        let status = unsafe {
+            __elephc_eval_spl_storage_write_v1(
+                0,
+                array.as_ptr(),
+                index.as_ptr(),
+                (&mut output as *mut *mut RuntimeCell).cast(),
+            )
+        };
+        if status == 1 {
+            return Err(EvalStatus::UnsupportedConstruct);
+        }
+        self.handle_native_cleanup_status(status)?;
+        Self::handle(output)
+    }
+
+    /// Mutates an attached child array through the same exception-contained native ABI.
+    fn spl_storage_array_set(
+        &mut self,
+        array: RuntimeCellHandle,
+        index: RuntimeCellHandle,
+        value: RuntimeCellHandle,
+    ) -> Result<(), EvalStatus> {
+        let status = unsafe {
+            __elephc_eval_spl_storage_write_v1(
+                1,
+                array.as_ptr(),
+                index.as_ptr(),
+                value.as_ptr(),
+            )
+        };
+        self.handle_native_cleanup_status(status)
+    }
+
     /// Reads a boxed Mixed object property through the generated user helper.
     fn property_get(
         &mut self,
@@ -136,6 +176,17 @@ macro_rules! impl_collection_call_ops {
                 scope_len,
             )
         })
+    }
+
+    /// Retains an eligible native property's persistent reference without copying its value.
+    fn property_reference(
+        &mut self, object: RuntimeCellHandle, property: &str, scope: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let reference = unsafe {
+            __elephc_eval_value_property_reference(object.as_ptr(), property.as_ptr(),
+                property.len() as u64, scope.as_ptr(), scope.len() as u64)
+        };
+        if reference.is_null() { Ok(None) } else { Self::handle(reference).map(Some) }
     }
 
     /// Checks an AOT instance property initialization marker through the generated helper.
@@ -248,6 +299,30 @@ macro_rules! impl_collection_call_ops {
                 property.len() as u64,
                 scope_ptr,
                 scope_len,
+            )
+        };
+        if ptr.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(RuntimeCellHandle::from_raw(ptr)))
+        }
+    }
+
+    /// Retains an eligible native static reference through the scoped user helper.
+    fn static_property_reference(
+        &mut self,
+        class_name: &str,
+        property: &str,
+        scope: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let ptr = unsafe {
+            __elephc_eval_value_static_property_reference(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                property.as_ptr(),
+                property.len() as u64,
+                scope.as_ptr(),
+                scope.len() as u64,
             )
         };
         if ptr.is_null() {
@@ -372,18 +447,20 @@ macro_rules! impl_collection_call_ops {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let arg_array = self.arg_array(args)?;
-        let result = unsafe {
-            __elephc_eval_value_method_call(
-                object.as_ptr(),
-                method.as_ptr(),
-                method.len() as u64,
-                arg_array.as_ptr(),
-                scope_ptr,
-                scope_len,
-                self.context.cast(),
-            )
-        };
-        self.finish_native_call(result, arg_array)
+        crate::runtime_hooks::owner_frames::with_owned_runtime_cell(arg_array, |owner| {
+            let result = unsafe {
+                __elephc_eval_value_method_call(
+                    object.as_ptr(),
+                    method.as_ptr(),
+                    method.len() as u64,
+                    owner.borrowed().as_ptr(),
+                    scope_ptr,
+                    scope_len,
+                    self.context.cast(),
+                )
+            };
+            self.finish_native_call_releasing(result, || owner.take())
+        })
     }
 
     /// Calls an AOT static method through the generated user helper.
@@ -395,19 +472,21 @@ macro_rules! impl_collection_call_ops {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let arg_array = self.arg_array(args)?;
-        let result = unsafe {
-            __elephc_eval_value_static_method_call(
-                class_name.as_ptr(),
-                class_name.len() as u64,
-                method.as_ptr(),
-                method.len() as u64,
-                arg_array.as_ptr(),
-                scope_ptr,
-                scope_len,
-                self.context.cast(),
-            )
-        };
-        self.finish_native_call(result, arg_array)
+        crate::runtime_hooks::owner_frames::with_owned_runtime_cell(arg_array, |owner| {
+            let result = unsafe {
+                __elephc_eval_value_static_method_call(
+                    class_name.as_ptr(),
+                    class_name.len() as u64,
+                    method.as_ptr(),
+                    method.len() as u64,
+                    owner.borrowed().as_ptr(),
+                    scope_ptr,
+                    scope_len,
+                    self.context.cast(),
+                )
+            };
+            self.finish_native_call_releasing(result, || owner.take())
+        })
     }
 
     /// Converts a native free-function result into eval status, preserving pending throwables.

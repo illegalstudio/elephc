@@ -336,7 +336,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(walk_expr(*inner, pass))),
     };
-    Expr { kind, span }
+    Expr { kind, span: pass.transform_expr_span(span) }
 }
 
 /// Transforms a `CallableTarget` by recursively walking any boxed expression inside it.

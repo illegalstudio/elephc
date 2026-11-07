@@ -8,7 +8,8 @@
 //! - Constructor names never replace the lexical scope of their arguments.
 //! - Free-function defaults cannot borrow the caller's class scope.
 
-use crate::support::{compile_and_run, compile_and_run_with_heap_debug, without_ir_opt};
+use crate::support::{compile_and_run, compile_and_run_with_heap_debug,
+    compile_and_run_capture_and_asm_per_argv, selected_function_assembly, without_ir_opt};
 
 /// Checks the observable value and retirement of every native owner.
 fn check(source: &str, expected: &str) {
@@ -21,6 +22,18 @@ fn check(source: &str, expected: &str) {
 /// Checks reflection semantics separately from its general metadata-graph ownership coverage.
 fn check_reflection(source: &str, expected: &str) {
     assert_eq!(compile_and_run(source), expected);
+}
+
+/// Preserves the ordinary runtime mode while exposing failed numeric metadata in its caller.
+fn check_reflection_with_assembly(source: &str, expected: &str) {
+    let (runs, assembly) = compile_and_run_capture_and_asm_per_argv(source, &[&[]]);
+    let out = &runs[0];
+    assert!(out.success && out.stdout == expected,
+        "stdout={:?} expected={expected:?}\nstderr={}\nReflection metadata assembly:\n{}",
+        out.stdout, out.stderr,
+        selected_function_assembly(&assembly, &["main".into(),
+            elephc::names::method_symbol("ReflectionClass", "getDefaultProperties"),
+            elephc::names::method_symbol("ReflectionProperty", "getDefaultValue")]));
 }
 
 /// Nested self factories bind to the declaring class or trait consumer across caller scopes.
@@ -355,7 +368,7 @@ fn test_nested_default_greptile_remainder_overflow_no_ir_opt() {
 /// Property defaults apply int-to-float coercion without changing parameter or array value types.
 #[test]
 fn test_nested_default_grok_float_property_metadata() {
-    check_reflection(r#"<?php
+    check_reflection_with_assembly(r#"<?php
 class Numbers { const N = 6; }
 class Probe {
     public float $div = Numbers::N / 2;
@@ -374,6 +387,9 @@ echo (int)((new ReflectionProperty('Probe', 'div'))->getDefaultValue() === 3.0),
     (int)((new ReflectionProperty('Probe', 'coerced'))->getDefaultValue() === 6.0),
     (int)((new ReflectionProperty('Probe', 'nullable'))->getDefaultValue() === 6.0), '|';
 $defaults = (new ReflectionClass('Probe'))->getDefaultProperties();
+if ($argc > 1) {
+    echo '|before:', gettype($defaults['literal']), ':', $defaults['literal'], '|';
+}
 echo (int)($defaults['div'] === 3.0), (int)($defaults['pow'] === 36.0),
     (int)($defaults['bare'] === 6.0), (int)($defaults['literal'] === 3.0),
     (int)($defaults['exact'] === 6), (int)($defaults['coerced'] === 6.0),
@@ -382,6 +398,9 @@ function value(float $number = Numbers::N): float { return $number; }
 function expression(float $number = Numbers::N / 2): float { return $number; }
 echo (int)((new ReflectionParameter('value', 0))->getDefaultValue() === 6),
     (int)((new ReflectionParameter('expression', 0))->getDefaultValue() === 3);
+if ($argc > 1) {
+    foreach ($defaults as $name => $default) { echo '|', $name, ':', gettype($default), ':', $default; }
+}
 "#, "1111111|1111111|11");
 }
 

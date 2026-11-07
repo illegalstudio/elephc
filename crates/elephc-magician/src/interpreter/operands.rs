@@ -9,6 +9,7 @@
 //! - Cleanup runs on failed argument evaluation and failed operations as well as success.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Prints a borrowed operand and releases its temporary owner and any separate string conversion.
 pub(in crate::interpreter) fn eval_echo_expr(
@@ -27,7 +28,7 @@ pub(in crate::interpreter) fn eval_echo_expr(
     })
 }
 
-/// Applies a unary operation while consuming its source and any synthetic zero operand.
+/// Applies a unary operation while consuming its source and any synthetic numeric operand.
 pub(in crate::interpreter) fn eval_unary_expr(
     op: EvalUnaryOp,
     expr: &EvalExpr,
@@ -38,9 +39,17 @@ pub(in crate::interpreter) fn eval_unary_expr(
     with_eval_operands(&[expr], context, scope, values, |args, _, _, values| {
         match op {
             EvalUnaryOp::Plus | EvalUnaryOp::Negate => {
-                if op == EvalUnaryOp::Negate && values.type_tag(args[0])? == EVAL_TAG_FLOAT {
-                    let bits = values.raw_value_word(args[0])? ^ (1_u64 << 63);
-                    return values.raw_word_value(EVAL_TAG_FLOAT, bits);
+                if op == EvalUnaryOp::Negate {
+                    let tag = values.type_tag(args[0])?;
+                    if tag == EVAL_TAG_FLOAT {
+                        let bits = values.raw_value_word(args[0])? ^ (1_u64 << 63);
+                        return values.raw_word_value(EVAL_TAG_FLOAT, bits);
+                    }
+                    if tag == EVAL_TAG_OBJECT {
+                        if let Some(result) = runtime_ops::object_operators::negate(values, args[0])? {
+                            return Ok(result);
+                        }
+                    }
                 }
                 let zero = values.int(0)?;
                 let result = if op == EvalUnaryOp::Plus {
@@ -94,6 +103,16 @@ pub(in crate::interpreter) fn release_expr_result(
     if value.is_borrowed() { Ok(()) } else { eval_release_value(context, values, value) }
 }
 
+/// Retires synthesized caller operands after a borrowing method binder has finished.
+pub(in crate::interpreter) fn finish_synthesized_method_arguments<I>(
+    result: Result<RuntimeCellHandle, EvalStatus>, owners: I,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus>
+where I: IntoIterator<Item = RuntimeCellHandle>, I::IntoIter: DoubleEndedIterator,
+{
+    finish_eval_argument_values(result, owners.into_iter().rev(), context, values)
+}
+
 /// Compares borrowed values and releases the comparison cell after reading its truthiness.
 pub(in crate::interpreter) fn eval_comparison_condition(
     op: EvalBinOp,
@@ -126,13 +145,25 @@ pub(in crate::interpreter) fn with_eval_call_arguments<V: RuntimeValueOps>(
         Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
     ) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let arguments = eval_owned_call_arg_values(args, context, scope, values)?;
-    let borrowed_arguments = arguments.iter().cloned().map(|mut argument| {
-        argument.value = argument.value.borrowed();
-        argument
-    }).collect();
-    let result = consume(borrowed_arguments, context, scope, values);
-    finish_eval_argument_values(result, arguments.into_iter().map(|argument| argument.value), context, values)
+    with_eval_call_arguments_with_modes(args, &CallArgumentModes::default(), context, scope, values, consume)
+}
+
+/// Applies resolved parameter passing modes without changing source-order argument ownership.
+pub(in crate::interpreter) fn with_eval_call_arguments_with_modes<V: RuntimeValueOps>(
+    args: &[EvalCallArg], modes: &CallArgumentModes,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (arguments, receiver_owners) = eval_owned_call_arg_values(args, modes, context, scope, values)?;
+    let (borrowed_arguments, argument_owners) = own_evaluated_call_arguments(arguments,
+        |argument, index| modes.by_reference(argument.name.as_deref(), index));
+    let receiver_owners = receiver_owners.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    with_runtime_owners(&(&argument_owners, &receiver_owners), || {
+        let result = consume(borrowed_arguments, context, scope, values);
+        let result = finish_eval_argument_owners(result, &argument_owners, context, values);
+        finish_synthesized_method_arguments(result, receiver_owners.iter().map(RuntimeOwnerSlot::take), context, values)
+    })
 }
 
 /// Retains borrowed returns before releasing argument owners, preserving the original call error.
@@ -142,25 +173,42 @@ pub(in crate::interpreter) fn finish_eval_argument_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let result = result.and_then(|value| {
-        if value.is_borrowed() { values.retain(value) } else { Ok(value) }
-    });
-    let mut released = Ok(());
-    for argument in arguments {
-        let cleanup = release_expr_result(argument, context, values);
-        if released.is_ok() { released = cleanup; }
-    }
-    match (result, released) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
+    let result = result.and_then(|value| promote_borrowed_result(value, values))
+        .map(RuntimeOwnerSlot::new);
+    let arguments = arguments.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    // Materialization moves each cleanup obligation before any release can reenter PHP.
+    let inventory = (&arguments, result.as_ref().ok());
+    with_runtime_owners(&inventory, || {
+        let mut released = Ok(());
+        for argument in &arguments {
+            let cleanup = release_expr_result(argument.take(), context, values);
+            if released.is_ok() { released = cleanup; }
         }
-        (Ok(value), Ok(())) => Ok(value),
-    }
+        match (&result, released) {
+            (Err(status), _) => Err(*status),
+            (Ok(value), Err(status)) => {
+                let _ = eval_release_value(context, values, value.take());
+                Err(status)
+            }
+            (Ok(value), Ok(())) => Ok(value.take()),
+        }
+    })
 }
 
+#[cfg(test)]
 pub(in crate::interpreter) use with_eval_call_arguments as with_eval_method_arguments;
+
+/// Uses the selected instance method's flags for discarded calls and nullsafe chain steps.
+pub(in crate::interpreter) fn with_eval_object_method_arguments<V: RuntimeValueOps>(
+    args: &[EvalCallArg], object: RuntimeCellHandle, method: &str,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_abstract_instance_method_guard(object, method, context, values)?;
+    let modes = CallArgumentModes::for_method(object, method, context, values).unwrap_or_default();
+    with_eval_call_arguments_with_modes(args, &modes, context, scope, values, consume)
+}
 
 /// Owns extracted call-array values until dispatch and reference writeback have completed.
 pub(in crate::interpreter) fn with_eval_array_call_arguments<V: RuntimeValueOps>(
@@ -172,14 +220,12 @@ pub(in crate::interpreter) fn with_eval_array_call_arguments<V: RuntimeValueOps>
     ) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let arguments = eval_array_call_arg_values(array, context, values)?;
-    let borrowed_arguments = arguments.iter().cloned().map(|mut argument| {
-        argument.value = argument.value.borrowed();
-        argument
-    }).collect();
-    let result = consume(borrowed_arguments, context, values);
-    finish_eval_argument_values(
-        result, arguments.into_iter().map(|argument| argument.value), context, values,
-    )
+    let (borrowed_arguments, argument_owners) = own_evaluated_call_arguments(arguments,
+        |argument, _| argument.ref_target.is_some());
+    with_runtime_owners(&argument_owners, || {
+        let result = consume(borrowed_arguments, context, values);
+        finish_eval_argument_owners(result, &argument_owners, context, values)
+    })
 }
 
 /// Evaluates a condition and consumes its temporary owner after reading PHP truthiness.
@@ -195,6 +241,22 @@ pub(in crate::interpreter) fn eval_condition(
     result.and_then(|result| released.map(|()| result))
 }
 
+/// Keeps a quiet probe's receiver alive and retires its lease on success or failure.
+pub(in crate::interpreter) fn with_eval_probe_operand<V: RuntimeValueOps>(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut V,
+    probe: impl FnOnce(
+        RuntimeCellHandle, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
+    ) -> Result<bool, EvalStatus>,
+) -> Result<bool, EvalStatus> {
+    let owner = eval_owned_expr(expr, context, scope, values)?;
+    let result = probe(owner.borrowed(), context, scope, values);
+    let cleanup = eval_release_value(context, values, owner);
+    result.and_then(|answer| cleanup.map(|()| answer))
+}
+
 /// Runs a consumer of borrowed operands and returns its independent result after releasing leases.
 pub(in crate::interpreter) fn with_eval_operands<V: RuntimeValueOps>(
     args: &[&EvalExpr],
@@ -206,25 +268,16 @@ pub(in crate::interpreter) fn with_eval_operands<V: RuntimeValueOps>(
     ) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut operands = Vec::with_capacity(args.len());
-    let result = (|| {
+    let prepared = (|| {
         for arg in args {
-            operands.push(eval_owned_expr(arg, context, scope, values)?);
+            let value = with_runtime_owners(&operands, || eval_owned_expr(arg, context, scope, values))?;
+            operands.push(value);
         }
-        consume(&operands, context, scope, values)
+        Ok(())
     })();
-    let mut cleanup = Ok(());
-    for operand in operands {
-        let released = eval_release_value(context, values, operand);
-        if cleanup.is_ok() { cleanup = released; }
-    }
-    match (result, cleanup) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = release_expr_result(value, context, values);
-            Err(status)
-        }
-        (Ok(value), Ok(())) => Ok(value),
-    }
+    let result = prepared.and_then(|()| with_runtime_owners(&operands, ||
+        consume(&operands, context, scope, values)));
+    finish_eval_argument_values(result, operands, context, values)
 }
 
 /// Keeps operands alive through a statement and releases every lease on success or failure.
@@ -238,17 +291,23 @@ pub(in crate::interpreter) fn with_eval_void_operands<V: RuntimeValueOps>(
     ) -> Result<(), EvalStatus>,
 ) -> Result<(), EvalStatus> {
     let mut operands = Vec::with_capacity(args.len());
-    let mut result = (|| {
+    let prepared = (|| {
         for arg in args {
-            operands.push(eval_owned_expr(arg, context, scope, values)?);
+            let value = with_runtime_owners(&operands, || eval_owned_expr(arg, context, scope, values))?;
+            operands.push(value);
         }
-        consume(&operands, context, scope, values)
+        Ok(())
     })();
-    for operand in operands {
-        let released = eval_release_value(context, values, operand);
-        if result.is_ok() { result = released; }
-    }
-    result
+    let mut result = prepared.and_then(|()| with_runtime_owners(&operands, ||
+        consume(&operands, context, scope, values)));
+    let operands = operands.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    with_runtime_owners(&operands, || {
+        for operand in &operands {
+            let released = eval_release_value(context, values, operand.take());
+            if result.is_ok() { result = released; }
+        }
+        result
+    })
 }
 
 /// Gives a statement consumer one owned lease for a materialized value and releases it on every exit.

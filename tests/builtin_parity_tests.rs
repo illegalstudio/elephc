@@ -71,7 +71,8 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     // the prelude-provided functions outside `ext/curl` (including XML, the tokenizer
     // surface, the random surface, and the 137 procedural Intl entries the synthetic
     // prelude injects), and the 54 date/calendar functions the name resolver rewrites.
-    assert_eq!(exceptional.len(), 561);
+    assert_eq!(exceptional.len(), 564);
+
 
     let mut language_constructs = 0;
     let mut dedicated_syntax = 0;
@@ -114,7 +115,8 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     );
     assert_eq!(rewrites, 54);
     // Includes the 137 procedural Intl entries the synthetic prelude injects.
-    assert_eq!(preludes.len(), 498);
+    assert_eq!(preludes.len(), 501);
+
     for name in [
         "hash_copy",
         "hash_final",
@@ -364,6 +366,7 @@ fn target_public_name_sets_filter_platform_specific_pcntl_builtins() {
         assert!(!ios_names.contains("pcntl_fork"));
         assert!(!ios_names.contains("pcntl_exec"));
         assert!(!ios_names.contains("pcntl_wait"));
+        assert!(!ios_names.contains("pcntl_waitpid"));
         assert!(!ios_names.contains("pcntl_alarm"));
         assert!(!ios_names.contains("pcntl_signal"));
         assert!(!ios_names.contains("pcntl_daemon"));

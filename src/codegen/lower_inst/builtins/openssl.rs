@@ -235,7 +235,7 @@ fn openssl_output_local_slot(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
         return Err(CodegenIrError::unsupported(
             "openssl_encrypt tag argument that is not a local variable",
         ));
@@ -291,12 +291,11 @@ fn store_openssl_tag_writeback(
         }
     }
     let storage_ty = ctx.local_php_type(slot)?.codegen_repr();
-    ctx.release_local_before_string_writeback(slot)?;
     restore_openssl_string_result(ctx, 96);
     if storage_ty == PhpType::Mixed {
         crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
     }
-    ctx.store_current_result_to_local(slot)?;
+    super::super::local_stores::publish_current_owned_output(ctx, slot, &PhpType::Str)?;
     ctx.emitter.label(&no_tag);
     Ok(())
 }

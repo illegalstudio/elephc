@@ -41,7 +41,7 @@ pub(super) fn lower_method_call(
         None
     };
     let object_expr = object;
-    let object = lower_member_receiver(ctx, object_expr, expr);
+    let mut object = lower_member_receiver(ctx, object_expr, expr);
     if op == Op::MethodCall && args.is_empty()
         && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
         && matches!(php_symbol_key(method).as_str(),
@@ -130,6 +130,11 @@ pub(super) fn lower_method_call(
     if op == Op::MethodCall && reflection_property_reflected_target(ctx, object_expr).is_some() {
         // Specialized property calls still evaluate a reflector receiver. Keep its
         // independent owner through argument/guard throws and retire it on success.
+        if ctx.value_is_owned_unboxed_local_load(object.value) {
+            let source = object;
+            object = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, source, Some(expr.span));
+            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(expr.span));
+        }
         let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
         let result = lower_reflection_property_value_call(ctx, Some(object_expr), method, args, expr);
         unpin_in_flight_owners(ctx, pins, expr.span);
@@ -149,6 +154,11 @@ pub(super) fn lower_method_call(
     }
     if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
         return call;
+    }
+    if method_call_argument_signature(ctx, object_expr, object.value, method).is_none() {
+        if let Some(call) = source_variadic_calls::lower(ctx, object, method, args, op, expr) {
+            return call;
+        }
     }
     let magic_args;
     let (dispatch_method, args) = if let Some(args) =
@@ -181,6 +191,7 @@ pub(super) fn lower_method_call(
     // A concrete local load may later unbox physical Mixed storage after eval widens
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
     let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
+    emit_native_factory_method_lookup(ctx, object, method, expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let call_description = receiver_class
@@ -253,6 +264,22 @@ pub(super) fn lower_method_call(
     }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
+}
+
+/// Native factories can create abstract wrappers, whose method error precedes argument effects.
+pub(super) fn emit_native_factory_method_lookup(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str, span: Span,
+) {
+    if !ctx.classes.contains_key("SimpleXMLElement") { return; }
+    let key = php_symbol_key(method);
+    let receiver_type = ctx.builder.value_php_type(object.value);
+    if let Some((class, _)) = singular_object_class(&receiver_type) {
+        if ctx.classes.get(class.trim_start_matches('\\'))
+            .is_some_and(|info| info.method_impl_classes.contains_key(&key)) { return; }
+    }
+    let data = ctx.intern_string(method);
+    ctx.emit_void(Op::MethodLookup, vec![object.value], Some(Immediate::Data(data)),
+        Op::MethodLookup.default_effects(), Some(span));
 }
 
 /// Builds synthetic `__call` arguments when a class lacks the requested method.
