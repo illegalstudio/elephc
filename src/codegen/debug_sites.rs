@@ -121,7 +121,8 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, label: &str, inner: &str) {
         "    pushfq\n\
          \x20   push rbp\n\
          \x20   mov rbp, rsp\n\
-         \x20   sub rsp, 344\n",
+         \x20   and rsp, -16\n\
+         \x20   sub rsp, 352\n",
     );
     for (index, register) in [
         "rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11",
@@ -160,7 +161,7 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, label: &str, inner: &str) {
         ));
     }
     asm.push_str(
-        "    add rsp, 344\n\
+        "    mov rsp, rbp\n\
          \x20   pop rbp\n\
          \x20   popfq\n\
          \x20   ret\n",
@@ -406,6 +407,9 @@ mod tests {
         assert!(asm.contains("mov QWORD PTR [rsp + 0], rax"), "{asm}");
         assert!(asm.contains("movdqu XMMWORD PTR [rsp + 80], xmm0"), "{asm}");
         assert!(asm.contains("movdqu XMMWORD PTR [rsp + 320], xmm15"), "{asm}");
+        assert!(asm.contains("and rsp, -16"), "{asm}");
+        assert!(asm.contains("sub rsp, 352"), "{asm}");
+        assert!(asm.contains("mov rsp, rbp"), "{asm}");
         assert!(asm.contains("call elephc_debug_site_inner"), "{asm}");
         assert!(asm.contains("popfq"), "{asm}");
     }
