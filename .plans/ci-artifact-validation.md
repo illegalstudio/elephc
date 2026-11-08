@@ -35,7 +35,7 @@ python3 -B scripts/ci/measure_run.py 42439918696 42439918652
 
 ## Focused checks
 
-- 54 Python infrastructure tests cover archive integrity, identities, producer
+- 59 Python infrastructure tests cover archive integrity, identities, producer
   attempts, incompatible environments, dependency graphs, the actual gate scripts,
   partial matrix reruns and development reconciliation crash recovery.
   A real Git history fixture also rejects pre-rollout commits, merged PR branch
@@ -45,26 +45,43 @@ python3 -B scripts/ci/measure_run.py 42439918696 42439918652
   checks pass. The full docs extraction suite is not needed for this change.
 - Focused Rust regressions for the PDO feature marker, OpenSSL bridge override and
   complete bridge build inventory pass through the machine-wide build queue.
+- The nightly curl packaging regression and a real prebuilt libtest runner smoke
+  pass. All 17 PDO codegen argument lists match the old workflow exactly.
 - actionlint 1.7.12 and whitespace checks pass.
 
-## Remote integration
+## Remote integration snapshot, run 42488921072
 
 The initial integration runs found and fixed container Git ownership, multi-path
 container upload mapping, specialized nextest includes, default sh versus Bash,
-and missing nextest extraction directories. The iOS producers, specialized tool
-producers and Linux x86_64 host producer have completed successfully. The full
-consumer matrix remains under validation on the latest PR head. Curl contracts,
+and missing nextest extraction directories. Every host, iOS and specialized
+producer completed successfully. This snapshot precedes final-head validation;
+the PR records its latest result. Curl contracts,
 documentation, tokenizer, differential checks, release frame assertions, all four
 Linux PHP SDK jobs and all optional PDO driver consumers have passed using their
 prebuilt payloads. Sampled completed consumer logs contain no root-package compile
 events, and their consumer build audits passed.
+
+All three host producers record two root-package compile events each, nine PDO
+producers record one each, and the two specialized producers record three in total:
+18 events across the selected build jobs, versus 85 in the baseline inventory.
+This is not a measurement of total CI elapsed time or billing savings. The core
+PDO gate, optional PDO gate and Build gate passed, with their expected check names.
+XML, Fileinfo, GMP and curl links passed on both iOS targets.
 
 Run `42488921072` exposed a migrated timeout: the 98-case GMP corpus had completed
 in 213.53 seconds under the old Cargo runner, but nextest terminated it at its
 ordinary 180-second single-test limit. An exact corpus override now allows ten
 minutes without removing any cases. CodeQL also identified the historical checkout
 as input-controlled; packaging now independently validates the retained main
-first-parent SHA before checkout, in addition to validation in its caller.
+first-parent SHA before checkout, in addition to validation in its caller. The
+nightly curl assertion now follows the shared producer, and tokenizer iOS jobs
+restore their target bridges before linking; a graph test covers all iOS consumers.
+
+The first migrated MySQL run passed all 137 tests in 1144.838 seconds, versus
+699.90 seconds under the old libtest runner. This is not a controlled benchmark,
+but the migration had changed one shared process into a process per test. PDO
+codegen selections now execute the archived binary in one process to preserve
+the original in-memory runtime caches, thread counts and fixture watchdogs.
 
 A downloaded Linux x86_64 payload from producer run `42486034417` passed the actual
 standalone package probe locally. Its synthetic PR merge source was

@@ -190,7 +190,7 @@ jobs:
 
       - name: Live native PostgreSQL codegen tests
         if: matrix.suite == 'native-postgres'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pgsql)' --run-ignored only -j 4
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pgsql --ignored --test-threads=4
 
       - name: Restore PDO libpq-gss tests
         if: matrix.suite == 'libpq-postgres'
@@ -211,7 +211,7 @@ jobs:
         if: matrix.suite == 'libpq-postgres'
         env:
           ELEPHC_PDO_LIBPQ: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pgsql)' --run-ignored only -j 4
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pgsql --ignored --test-threads=4
 
       - name: Live libpq GSSAPI handshake
         if: matrix.suite == 'libpq-postgres'
@@ -228,7 +228,7 @@ jobs:
         if: matrix.suite == 'mysql'
         env:
           ELEPHC_PDO_LIBPQ: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(mysql)' --run-ignored only -j 4
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py mysql --ignored --test-threads=4
 
       - name: Audit consumer compilation
         if: always()
@@ -389,13 +389,13 @@ jobs:
         if: matrix.suite == 'sqlsrv-oci'
         env:
           ELEPHC_PDO_SQLSRV: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_sqlsrv)' --run-ignored only -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_sqlsrv --ignored --test-threads=1
 
       - name: PDO_SQLSRV compiled surface tests
         if: matrix.suite == 'sqlsrv-oci'
         env:
           ELEPHC_PDO_SQLSRV: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_sqlsrv)' -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_sqlsrv --test-threads=1
 
       - name: Restore PDO oci tests
         if: matrix.suite == 'sqlsrv-oci'
@@ -416,13 +416,13 @@ jobs:
         if: matrix.suite == 'sqlsrv-oci'
         env:
           ELEPHC_PDO_OCI: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_oci)' --run-ignored only -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_oci --ignored --test-threads=1
 
       - name: PDO_OCI compiled surface tests
         if: matrix.suite == 'sqlsrv-oci'
         env:
           ELEPHC_PDO_OCI: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_oci_surface)' -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_oci_surface --test-threads=1
 
       - name: Install the CUBRID CCI client from the service image
         if: matrix.suite == 'cubrid-dblib'
@@ -445,14 +445,14 @@ jobs:
         if: matrix.suite == 'cubrid-dblib'
         env:
           ELEPHC_PDO_CUBRID: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_cubrid_surface)' -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_cubrid_surface --test-threads=1
 
       - name: Live PDO_CUBRID codegen test
         if: matrix.suite == 'cubrid-dblib'
         env:
           ELEPHC_PDO_CUBRID: '1'
           CUBRID_CCI_LIBRARY: '${{ runner.temp }}/libcascci.so.11.2'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_cubrid)' --run-ignored only -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_cubrid --ignored --test-threads=1
 
       - name: Restore PDO dblib tests
         if: matrix.suite == 'cubrid-dblib'
@@ -473,13 +473,13 @@ jobs:
         if: matrix.suite == 'cubrid-dblib'
         env:
           ELEPHC_PDO_DBLIB: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_dblib)' --run-ignored only -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_dblib --ignored --test-threads=1
 
       - name: PDO_DBLIB compiled surface tests
         if: matrix.suite == 'cubrid-dblib'
         env:
           ELEPHC_PDO_DBLIB: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_dblib_surface)' -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_dblib_surface --test-threads=1
 
       - name: Restore PDO firebird tests
         if: matrix.suite == 'firebird-odbc'
@@ -496,13 +496,13 @@ jobs:
         if: matrix.suite == 'firebird-odbc'
         env:
           ELEPHC_PDO_FIREBIRD: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_firebird)' --run-ignored only -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_firebird --ignored --test-threads=1
 
       - name: PDO_FIREBIRD compiled surface tests
         if: matrix.suite == 'firebird-odbc'
         env:
           ELEPHC_PDO_FIREBIRD: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_firebird_surface)' -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_firebird_surface --test-threads=1
 
       - name: Restore PDO odbc tests
         if: matrix.suite == 'firebird-odbc'
@@ -523,13 +523,13 @@ jobs:
         if: matrix.suite == 'firebird-odbc'
         env:
           ELEPHC_PDO_ODBC: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_odbc)' --run-ignored only -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_odbc --ignored --test-threads=1
 
       - name: PDO_ODBC compiled surface tests
         if: matrix.suite == 'firebird-odbc'
         env:
           ELEPHC_PDO_ODBC: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_odbc_surface)' -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_odbc_surface --test-threads=1
 
       - name: Restore PDO informix tests
         if: matrix.suite == 'informix-ibm'
@@ -546,7 +546,7 @@ jobs:
         if: matrix.suite == 'informix-ibm'
         env:
           ELEPHC_PDO_INFORMIX: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_informix)' -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_informix --test-threads=1
 
       - name: Restore PDO ibm tests
         if: matrix.suite == 'informix-ibm'
@@ -563,7 +563,7 @@ jobs:
         if: matrix.suite == 'informix-ibm'
         env:
           ELEPHC_PDO_IBM: '1'
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_ibm)' -j 1
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_ibm --test-threads=1
 
       - name: Audit consumer compilation
         if: always()
