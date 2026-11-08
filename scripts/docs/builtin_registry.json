@@ -73537,7 +73537,7 @@
     },
     "area": "String",
     "canonical_name": "html_entity_decode",
-    "description": "Converts HTML entities in a string back into their corresponding characters.",
+    "description": "Converts HTML entities in a string back into their corresponding characters. The compiled decoder supports the default quote policy (ENT_QUOTES|ENT_SUBSTITUTE|ENT_HTML401) and UTF-8 only; other flags or encodings are rejected at compile time.",
     "eval": {
       "adapter_reason": "interpreter-specific-value-semantics",
       "area": "string",
@@ -73619,7 +73619,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "html_entity_decode"
       ],
@@ -73633,7 +73633,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {

@@ -21,8 +21,8 @@ description: "Compiler internals for html_entity_decode(): lowering path, type c
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
-- **Result type source**: `declared`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
 - **Result ownership**: `independent`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
