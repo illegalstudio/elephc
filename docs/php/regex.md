@@ -207,6 +207,10 @@ requirement only when a final native link is performed.
 - Only the pattern modifiers listed above are mapped to PCRE2 flags today.
 - Pattern and subject strings cross the current shim as NUL-terminated strings,
   preserving the existing embedded-NUL limitation.
+- Match-time PCRE2 errors end the search as if no further match existed. With
+  the `u` modifier, an invalid UTF-8 subject or an `$offset` inside a multibyte
+  character makes `preg_match()` / `preg_match_all()` return `0` (or the matches
+  found so far) where PHP returns `false`; `preg_last_error()` is not available.
 
 <!-- elephc:generated:symbols:begin -->
 
