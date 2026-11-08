@@ -73,6 +73,33 @@ class ArtifactGraphTests(unittest.TestCase):
             if "  workflow_call:" in path.read_text():
                 self.assertNotIn("\nconcurrency:", path.read_text(), str(path))
 
+    def test_container_consumers_use_the_coordinators_immutable_image(self):
+        for name, body in self.jobs.items():
+            if "    container:" in body:
+                self.assertIn("plan", dependencies(body), name)
+                self.assertIn("image: ${{ needs.plan.outputs.ci-image }}", body, name)
+                self.assertIn("ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}", body, name)
+
+    def test_artifact_consumers_audit_even_swallowed_build_failures(self):
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            if path.name.startswith("ci-build-"):
+                continue
+            for name, body in jobs(path.read_text()).items():
+                if re.search(r"uses: \./\.github/actions/(restore-|download-test-archive)", body):
+                    self.assertIn("if: always()\n        uses: ./.github/actions/assert-consumer-builds", body,
+                                  f"{path.name}: {name}")
+
+    def test_workspace_cargo_compilation_is_owned_by_producers(self):
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            if path.name.startswith("ci-build-"):
+                continue
+            for line in path.read_text().splitlines():
+                command = line.strip()
+                if not command or command.startswith("#"):
+                    continue
+                self.assertIsNone(re.search(r"(?:^run: |^|[;&] )cargo (?:build|test|run|check|nextest archive)\b", command),
+                                  f"{path.name}: {command}")
+
     def test_nextest_upload_uses_one_directory_on_container_runners(self):
         producer = (ROOT / ".github/workflows/ci-build-host.yml").read_text()
         blocks = re.split(r"(?=      - (?:name:|uses:))", producer)

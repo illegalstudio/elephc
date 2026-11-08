@@ -37,7 +37,7 @@ Progress on 2026-11-08:
   at rollout; skipped commits and intermediate HEADGREEN commits build their own SHA.
 - Linux image digests are resolved once and preserved across the job graph. Actual
   Rust/native compiler, glibc and Apple SDK identities are recorded and checked.
-- 46 focused infrastructure tests pass, plus planner/queue cleanup, docs prebuilt
+- 52 focused infrastructure tests pass, plus planner/queue cleanup, docs prebuilt
   tests, actionlint and focused Rust bridge/PDO regressions. CONTRIBUTING is updated.
 - Real CI has passed iOS, specialized tool producers and the Linux x86_64 host
   producer. Full consumer matrix validation remains active; no end-to-end green

@@ -29,7 +29,7 @@ python3 -B scripts/ci/measure_run.py 42439918696 42439918652
 
 ## Focused checks
 
-- 49 Python infrastructure tests cover archive integrity, identities, producer
+- 52 Python infrastructure tests cover archive integrity, identities, producer
   attempts, incompatible environments, dependency graphs, the actual gate scripts,
   partial matrix reruns and development reconciliation crash recovery.
 - The CI tier planner and both queue cleanup shell suites pass.
