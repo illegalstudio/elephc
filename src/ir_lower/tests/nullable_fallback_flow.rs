@@ -9,6 +9,19 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Every supported target lowers and emits a nullable object's cached local initialization.
+#[test]
+fn test_nullable_object_lazy_local_join_all_targets() {
+    let source = include_str!("../../../examples/type-narrowing/main.php");
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source,
+            std::path::Path::new("examples/type-narrowing/main.php"),
+            std::path::Path::new("examples/type-narrowing"), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Every target emits guarded match labels, arms, defaults and finally inputs.
 #[test]
 fn test_nullable_fallback_flow_r62_match_guard_views_all_targets() {

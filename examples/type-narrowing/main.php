@@ -70,6 +70,16 @@ class Cart
         }
         return $this->discount; // the stable property has narrowed to Money
     }
+
+    public function discountOrDefault(): Money
+    {
+        $discount = $this->discount;
+        if ($discount === null) {
+            $discount = new Money(0);
+            $this->discount = $discount;
+        }
+        return $discount; // both exits hold Money, including the cached path
+    }
 }
 
 // A guard narrows what the branch READS. An assignment inside it is still measured
@@ -100,6 +110,10 @@ echo "fallback ", queryQuantity(null, 5), "\n";
 $snapshot = quantitySnapshot(null, true);
 echo "snapshot ", $snapshot(), "\n";
 echo "discount ", (new Cart(new Money(250)))->requireDiscount()->format(), "\n";
+$cart = new Cart(null);
+$discount = $cart->discountOrDefault();
+echo "default discount ", $discount->format(), "\n";
+echo "cached discount ", $discount === $cart->discountOrDefault() ? "same" : "different", "\n";
 
 foreach (metaFiles($dir) as $path) {
     echo "meta ", basename($path), "\n";
