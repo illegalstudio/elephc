@@ -396,7 +396,7 @@ src/
 ├── var_export_prelude.rs      var_export prelude injection entry point
 ├── var_export_prelude/        var_export prelude usage detection
 ├── dom_html_prelude.rs        Pay-for-use DOM HTML injection before name resolution and after autoload
-├── dom_html_prelude/          Cached declarations, HTML entity data, and DOM usage detection
+├── dom_html_prelude/          Built AST declarations, HTML entity builders, and DOM usage detection
 ├── image_prelude.rs           Image (GD, Exif/IPTC, Imagick, Gmagick, Cairo) prelude injection entry point
 ├── image_prelude/             Image prelude usage detection
 ├── web_prelude.rs             --web request superglobals and session prelude injection (flag-gated, not usage-detected)

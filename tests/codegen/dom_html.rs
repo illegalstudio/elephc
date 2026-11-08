@@ -28,6 +28,15 @@ fn test_libxml_termwind_flag_values() {
     assert_eq!(out, "2,4,32,256,65536");
 }
 
+/// Verifies weak scalar coercion still applies to the built prelude's constructor.
+#[test]
+fn test_dom_document_constructor_coerces_scalar_arguments() {
+    let out = compile_and_run(
+        "<?php $doc = new DOMDocument(1, 9000000000); echo $doc->nodeName;",
+    );
+    assert_eq!(out, "#document");
+}
+
 /// Verifies `loadHTML` wraps a fragment in html/body and `item(0)` returns body.
 #[test]
 fn test_load_html_body_item() {
