@@ -335,23 +335,12 @@ fn run_collecting_included_on_compiler_stack(
     loop {
         let mut declared = collect_declared_fqns(&program);
         seed_builtin_declared_fqns(&mut declared);
-        // php loads a class when code runs `new`, a static access or an autoloading lookup, never
-        // for a type declaration, an `instanceof` or a `catch`. A usage manifest already lists
-        // every class those loads reached, parents, interfaces and traits included, so the
-        // references in the code add nothing a recorded run needed: following them would compile
-        // the classes of paths that never ran.
-        let usage = crate::closed_world::usage_manifest();
-        let mut reference_points = if usage.is_some() {
-            Vec::new()
-        } else {
-            let mut points = collect_reference_points(&program);
-            points.extend(
-                dynamic_contracts::candidates(&program)
-                    .into_iter()
-                    .map(|name| (0, name)),
-            );
-            points
-        };
+        let mut reference_points = collect_reference_points(&program);
+        reference_points.extend(
+            dynamic_contracts::candidates(&program)
+                .into_iter()
+                .map(|name| (0, name)),
+        );
         // A closed world cannot load what it did not compile, and a framework reaches classes by
         // listing a directory (Symfony's `FileLoader::findClasses()`), a path no reference in the
         // code shows, its own included when a console command rebuilds the container. Without a
