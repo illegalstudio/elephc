@@ -191,7 +191,7 @@ pub(super) fn lower_array_access_with_missing_warning(
         lower_element_receiver(ctx, array)
     } else {
         // A silent subscript probe never warns about a never-declared chain root.
-        ctx.begin_quiet_undefined_reads();
+        ctx.begin_quiet_undefined_reads(array);
         let value = lower_subscript_receiver_silently(ctx, array);
         ctx.end_quiet_undefined_reads();
         value

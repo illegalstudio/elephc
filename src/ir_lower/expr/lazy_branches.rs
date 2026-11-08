@@ -19,7 +19,7 @@ pub(super) fn lower_null_coalesce(
     let value_expr = value;
     // The left operand of `??` is a PHP null probe: an undeclared root answers the default
     // without an Undefined variable warning.
-    ctx.begin_quiet_undefined_reads();
+    ctx.begin_quiet_undefined_reads(value_expr);
     let value = lower_null_coalesce_value(ctx, value_expr);
     ctx.end_quiet_undefined_reads();
     let is_null = ctx.emit_value(

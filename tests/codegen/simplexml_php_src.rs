@@ -23,7 +23,7 @@ use regex::RegexBuilder;
 use std::fs;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -123,54 +123,59 @@ fn compile_and_capture(source: &str, work: &Path) -> (bool, String) {
         &default_link_paths(),
         &[],
     );
-    let log_path = work.join("output.log");
-    let log = fs::File::create(&log_path).expect("output log");
-    let status = Command::new(&binary)
-        .current_dir(work)
-        .stdout(Stdio::from(log.try_clone().expect("log handle")))
-        .stderr(Stdio::from(log))
-        .status()
-        .expect("run fixture");
-    let output = fs::read_to_string(&log_path).unwrap_or_default();
-    (status.success(), output.replace("\r\n", "\n").trim().to_string())
+    let mut command = Command::new(&binary);
+    command.current_dir(work);
+    let output = run_command_with_merged_output(command, &work.join("output.log"));
+    (output.status.success(), String::from_utf8(output.stdout)
+        .expect("fixture UTF-8 output").replace("\r\n", "\n").trim().to_string())
 }
 
-/// Runs one inline php-src SimpleXML fixture and returns its merged output.
-///
-/// Assets under `tests/php_src/simplexml/` are available through `__DIR__`.
+/// Requires normal termination for every ordinary EXPECT/EXPECTF fixture.
 pub(super) fn run_case(source: &str) -> String {
+    run_case_with_exit(source, false)
+}
+
+/// Requires unsuccessful termination for a fixture whose expectation declares a fatal.
+pub(super) fn run_fatal_case(source: &str) -> String {
+    run_case_with_exit(source, true)
+}
+
+/// Releases all fixture artifacts even when compilation or execution panics.
+struct FixtureDirectory(std::path::PathBuf);
+
+impl Drop for FixtureDirectory {
+    /// Removes only the unique directory created for this fixture.
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Runs an isolated fixture with an explicit termination contract.
+fn run_case_with_exit(source: &str, fatal: bool) -> String {
     let id = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
-    // O_EXCL + 0700 avoids the predictable-name symlink race on shared hosts.
     let work = loop {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.subsec_nanos())
-            .unwrap_or(0);
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map(|duration| duration.subsec_nanos()).unwrap_or(0);
         let candidate = std::env::temp_dir().join(format!(
             "elephc_simplexml_phpt_{}_{:?}_{id}_{nanos}",
-            std::process::id(),
-            std::thread::current().id()
+            std::process::id(), std::thread::current().id()
         ));
         match fs::DirBuilder::new().mode(0o700).create(&candidate) {
-            Ok(()) => break candidate,
+            Ok(()) => break FixtureDirectory(candidate),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => panic!("temp fixture directory: {error}"),
         }
     };
-    link_assets(&work);
-    fs::write(work.join("test.php"), source).expect("fixture source");
-
-    let (success, actual) = compile_and_capture(source, &work);
-    let _ = fs::remove_dir_all(&work);
-    // PHP aborts on an uncaught fatal; a fixture that prints the fatal line and keeps running
-    // would otherwise satisfy the message-only comparison below.
-    if actual.contains("Fatal error:") {
-        assert!(
-            !success,
-            "fatal fixture exited successfully:\n{actual}"
-        );
-    }
+    link_assets(&work.0);
+    fs::write(work.0.join("test.php"), source).expect("fixture source");
+    let (success, actual) = compile_and_capture(source, &work.0);
+    assert_case_exit(success, fatal, &actual);
     actual
+}
+
+/// Checks process status independently of text that a program happened to print.
+fn assert_case_exit(success: bool, fatal: bool, actual: &str) {
+    assert_eq!(success, !fatal, "unexpected fixture termination (fatal={fatal}):\n{actual}");
 }
 
 /// Rewrites `var_dump()` object handles to the opaque `#N` placeholder.
@@ -244,4 +249,40 @@ fn test_handle_normalization_keeps_argument_numbers_and_entities_literal() {
         normalize_handles("Argument #1 ($qualifiedName) and a &#38; b"),
         "Argument #1 ($qualifiedName) and a &#38; b"
     );
+}
+
+/// Output equality must not hide an unsuccessful ordinary fixture (including a crash).
+#[test]
+#[should_panic(expected = "unexpected fixture termination")]
+fn test_simplexml_followup_corpus_rejects_failed_normal_exit() {
+    run_case("<?php echo 'expected output'; exit(7);");
+}
+
+/// Fatal-looking user output does not change the declared successful-exit contract.
+#[test]
+fn test_simplexml_followup_corpus_exit_is_independent_of_output() {
+    assert_eq!(run_case("<?php echo 'Fatal error: ordinary text';"),
+        "Fatal error: ordinary text");
+}
+
+/// Fatal fixtures cannot pass after printing an expected message and exiting successfully.
+#[test]
+#[should_panic(expected = "unexpected fixture termination")]
+fn test_simplexml_followup_corpus_rejects_successful_fatal_exit() {
+    run_fatal_case("<?php echo 'Fatal error: expected exception';");
+}
+
+/// Merged capture retains write order and the unsuccessful child status without compiling PHP.
+#[test]
+fn test_simplexml_followup_corpus_merged_capture_keeps_status_and_order() {
+    let id = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+    let path = std::env::temp_dir().join(format!("elephc_simplexml_capture_{}_{id}_{nanos}", std::process::id()));
+    fs::DirBuilder::new().mode(0o700).create(&path).expect("capture directory");
+    let work = FixtureDirectory(path);
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "printf first; printf second >&2; exit 7"]);
+    let output = run_command_with_merged_output(command, &work.0.join("output.log"));
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(output.stdout, b"firstsecond");
 }

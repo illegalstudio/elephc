@@ -789,3 +789,20 @@ fn test_error_mbstring_text_contracts() {
         expect_error(source, message);
     }
 }
+
+/// Array-search forms must not reach the string-only backend without the literal rewrite.
+#[test]
+fn test_simplexml_followup_str_replace_rejects_unlowerable_array_search() {
+    for source in [
+        r#"<?php function replace_runtime(string $replacement): string {
+            return str_replace(["a", "b"], $replacement, "ab");
+        }"#,
+        r#"<?php echo str_replace(search: ["a", "b"], replace: "x", subject: "ab");"#,
+        r#"<?php echo str_replace(...[["a", "b"], "x", "ab"]);"#,
+    ] {
+        expect_error(
+            source,
+            "str_replace(): Argument #1 ($search) must be of type string, array given",
+        );
+    }
+}

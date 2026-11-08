@@ -230,14 +230,16 @@ def main() -> None:
         ident = "test_php_src_simplexml_" + re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
         reason = skip_reason(sections) or BLOCKERS.get(name)
         ignore = f'    #[ignore = {rust_raw(reason)}]\n' if reason else ""
+        assertion = expected_assertion(name, sections)
+        runner = "run_fatal_case" if assertion.lstrip().startswith("assert_fatal_format(") else "run_case"
         functions.append(
             f"/// Replays php-src `{name}.phpt`.\n"
             "#[test]\n"
             f"{ignore}"
             f"fn {ident}() {{\n"
             f"    if skip_without_xml_native(\"{ident}\") {{ return; }}\n"
-            f"    let out = run_case({rust_raw(source)});\n"
-            f"{expected_assertion(name, sections)}\n"
+            f"    let out = {runner}({rust_raw(source)});\n"
+            f"{assertion}\n"
             "}"
         )
     output = (
@@ -252,7 +254,7 @@ def main() -> None:
         "//! - Each test carries its PHP source and assertion inline, and the test process\n"
         "//!   never parses a `.phpt` file at run time.\n"
         "\n"
-        "use super::{assert_exact, assert_fatal_format, assert_format, run_case, skip_without_xml_native};\n\n"
+        "use super::{assert_exact, assert_fatal_format, assert_format, run_case, run_fatal_case, skip_without_xml_native};\n\n"
         + "\n\n".join(functions)
         + "\n"
     )
