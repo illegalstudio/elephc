@@ -523,6 +523,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         &ini_overrides,
         opcache_preload_statistics.as_ref(),
         strict_opcache,
+        &autoloaded,
         &mut prelude_inventory,
     );
     timings.record_since("opcache-prelude", phase_started);
@@ -720,6 +721,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let ast = crate::version_prelude::inject_if_used(
         ast,
         php_version,
+        &autoloaded,
         &mut prelude_inventory,
     );
     timings.record_since("version-prelude", phase_started);

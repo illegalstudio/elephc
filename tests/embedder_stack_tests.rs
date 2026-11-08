@@ -387,7 +387,7 @@ fn prelude_injection_survives_the_nesting_limit_on_a_small_embedder_stack() {
         let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut inventory);
         let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut inventory);
         let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut inventory);
-        let ast = elephc::version_prelude::inject_if_used(ast, php_version, &mut inventory);
+        let ast = elephc::version_prelude::inject_if_used(ast, php_version, &|_| false, &mut inventory);
         match elephc::object_cast_prelude::inject_if_used(ast, &mut inventory) {
             Ok(ast) => summarize(ast),
             Err(error) => error.message,
@@ -414,6 +414,7 @@ fn opcache_injection_survives_the_nesting_limit_on_a_small_embedder_stack() {
             &[],
             None,
             false,
+            &|_| false,
             &mut inventory,
         );
         summarize(ast)
