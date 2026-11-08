@@ -980,6 +980,23 @@ class Settings {
     );
 }
 
+/// A pure enum case has no `->value`: the deferred default reports the missing property rather
+/// than the syntactic guess's misleading `got int`.
+#[test]
+fn test_error_pure_enum_case_value_default() {
+    expect_error(
+        r#"<?php
+enum Mode {
+    case Fast;
+}
+class Settings {
+    public function __construct(public string $mode = Mode::Fast->value) {}
+}
+"#,
+        "Undefined property: Mode::value",
+    );
+}
+
 /// Verifies that assigning an incompatible value to a static property is rejected.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]

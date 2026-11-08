@@ -2226,3 +2226,29 @@ echo Keymap::Mac->value, "|", $s->keymap, "|", $s->label, "|", $s->weight, "|", 
     );
     assert_eq!(out, "mac|linux|Linux|9|linux|bsd");
 }
+
+/// The deferred enum-case read also covers a class declared before its enum, a plain method
+/// parameter, and the nullsafe `?->` form PHP 8.2 allows in constant expressions.
+#[test]
+fn test_enum_case_value_member_defaults_before_enum_and_nullsafe() {
+    let out = compile_and_run(
+        r#"<?php
+final class Settings
+{
+    public string $keymap = Keymap::Linux?->value;
+
+    public function pick(string $name = Keymap::Mac->name): string { return $name; }
+}
+
+enum Keymap: string
+{
+    case Linux = 'linux';
+    case Mac = 'mac';
+}
+
+$s = new Settings();
+echo $s->keymap, "|", $s->pick(), "|", $s->pick('x');
+"#,
+    );
+    assert_eq!(out, "linux|Mac|x");
+}
