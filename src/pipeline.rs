@@ -959,6 +959,13 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // A closed world has no interpreter scope for `extract(..., EXTR_REFS)` to publish into.
     if crate::closed_world::is_enabled() {
         crate::closed_world_extract_refs::rewrite(&mut ast);
+        // `new ReflectionParameter(...)` named at run time, or naming nothing, answered at run
+        // time the way php does: there is no interpreter to defer it to.
+        if crate::reflection_parameter_prelude::rewrite(&mut ast) {
+            let mut combined = crate::reflection_parameter_prelude::declarations();
+            combined.append(&mut ast);
+            ast = combined;
+        }
     }
     // Which classes the program names ONLY through existence probes, taken from the program as
     // the autoload pass left it, before the check rounds rewrite it. By the time a class file is

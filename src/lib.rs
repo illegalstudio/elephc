@@ -21,6 +21,7 @@ mod eager_globals;
 mod link_planning;
 mod linker;
 mod monitor;
+mod reflection_parameter_prelude;
 mod otlp;
 mod pipeline;
 mod pprof_encode;
