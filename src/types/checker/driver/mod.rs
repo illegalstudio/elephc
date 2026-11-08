@@ -340,6 +340,10 @@ pub(super) fn check_types_impl(
     // `_class_*` metadata tables and the object header each `new` stamps.
     let mut class_names: Vec<String> = class_map.keys().cloned().collect();
     class_names.sort();
+    checker.declared_class_ancestry = class_map
+        .iter()
+        .map(|(name, class)| (name.clone(), (class.extends.clone(), class.implements.clone())))
+        .collect();
     for class_name in class_names {
         if let Err(error) = build_class_info_recursive(
             &class_name,
@@ -351,6 +355,7 @@ pub(super) fn check_types_impl(
             errors.extend(error.flatten());
         }
     }
+    checker.declared_class_ancestry.clear();
     if let Err(error) = inject_builtin_enums(program, &mut checker, &mut next_class_id) {
         errors.extend(error.flatten());
     }

@@ -452,6 +452,14 @@ pub(crate) struct Checker {
     /// covariant return such as `?SimpleXMLIterator` would otherwise look unrelated to
     /// `?SimpleXMLElement`. The hint keeps ancestry answerable during that window.
     pub pending_class_parents: HashMap<String, String>,
+    /// Every declared class's parent and directly implemented interfaces, from the flattened
+    /// declarations, while class schemas are being built.
+    ///
+    /// Covariance checks run in the class-build walk, which is name-ordered: when
+    /// `EnumDef::make(): EnumNode` overrides `ScalarDef::make(): Scalar`, `EnumNode` may not be
+    /// built yet, and without its declared ancestry it looked unrelated to `Scalar`. Cleared
+    /// once every class is built, after which `classes` answers.
+    pub declared_class_ancestry: HashMap<String, (Option<String>, Vec<String>)>,
     /// Physical instance slots refined during the current method fixed-point pass.
     /// A first constructor integer initialization may replay a placeholder from an older pass.
     pub method_property_refinements: Option<HashSet<(String, usize)>>,

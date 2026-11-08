@@ -746,3 +746,27 @@ var_dump($child->make(), $child->name());
 "#);
     assert_eq!(out, "NULL\nstring(5) \"child\"\n");
 }
+
+/// A covariant return may name a class the name-ordered class-build walk has not reached yet:
+/// `BDef::make(): ZEnumNode` overrides `ADef::make(): Node` before `ZEnumNode` is built, both
+/// for a subclass of the parent's return class and for a class implementing the parent's
+/// return interface through an ancestor.
+#[test]
+fn test_covariant_return_to_a_class_built_later() {
+    let out = compile_and_run(
+        r#"<?php
+namespace N;
+interface Node {}
+interface Scalar extends Node {}
+class Variable implements Scalar {}
+class ZEnumNode extends Variable {}
+class ADef { public function make(): Node { return new Variable(); } public function get(): Node { return $this->make(); } }
+class BDef extends ADef { public function make(): ZEnumNode { return new ZEnumNode(); } }
+class CDef extends ADef { public function make(): Scalar { return new ZEnumNode(); } }
+class ScalarDef { protected function make(): Variable { return new Variable(); } public function get(): Variable { return $this->make(); } }
+class EnumDef extends ScalarDef { protected function make(): ZEnumNode { return new ZEnumNode(); } }
+echo get_class((new BDef())->get()), "|", get_class((new CDef())->get()), "|", get_class((new EnumDef())->get());
+"#,
+    );
+    assert_eq!(out, "N\\ZEnumNode|N\\ZEnumNode|N\\ZEnumNode");
+}
