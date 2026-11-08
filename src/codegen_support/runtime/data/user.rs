@@ -25,6 +25,29 @@ use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 use super::instanceof::{escaped_ascii, escaped_bytes};
 use super::NOT_SERIALIZABLE_BUILTIN_CLASSES;
 
+/// Emits the per-class "native SimpleXML storage" flag used by the user stream-wrapper
+/// dispatch: php-src assigns the stream context resource before calling `stream_open`, and a
+/// SimpleXML object rejects that write with its initialization Error.
+fn emit_class_native_xml_table(
+    out: &mut String,
+    max_class_id: Option<u64>,
+    class_name_by_id: &HashMap<u64, &String>,
+    classes: &HashMap<String, ClassInfo>,
+) {
+    out.push_str(".globl _class_native_xml\n_class_native_xml:\n");
+    match max_class_id {
+        Some(max) => {
+            for class_id in 0..=max {
+                let native = class_name_by_id.get(&class_id).is_some_and(|name| {
+                    crate::types::builtin_classes::has_native_dimensions(name, classes)
+                });
+                out.push_str(&format!("    .byte {}\n", u8::from(native)));
+            }
+        }
+        None => out.push_str("    .byte 0\n"),
+    }
+}
+
 /// Returns whether a declared property is compiler storage hidden from PHP enumeration.
 fn class_property_is_hidden(class_name: &str, property: &str) -> bool {
     elephc_builtin_contract::lookup_class(class_name)
@@ -176,6 +199,7 @@ pub(crate) fn emit_runtime_data_user(
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
     emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id);
     super::throwable_previous::emit_previous_slots(&mut out, max_class_id, &class_info_by_id);
+    emit_class_native_xml_table(&mut out, max_class_id, &class_name_by_id, classes);
     let weak_map_retire = classes.get("WeakMap")
         .filter(|class| class.is_internal)
         .map(|class| source_static_vtable_entry(class, "__elephc_retire", classes))
@@ -695,9 +719,39 @@ pub(crate) fn emit_runtime_data_user(
                             && class_info
                                 .methods
                                 .get(&method_key)
-                                .is_some_and(|sig| sig.return_type.codegen_repr() == returns)
+                                .is_some_and(|sig| {
+                                    let ret = sig.return_type.codegen_repr();
+                                    ret == returns
+                                        || (interface == "Countable"
+                                            && method == "count"
+                                            && matches!(
+                                                ret,
+                                                PhpType::Bool
+                                                    | PhpType::Float
+                                                    | PhpType::Str
+                                                    | PhpType::Mixed
+                                            ))
+                                })
                     })
-                    .map(|class_info| source_instance_method_entry(class_info, &method_key, classes))
+                    .map(|class_info| {
+                        // `count()` hands back a bare integer, but the tentative Countable
+                        // contract lets a subclass return any scalar under
+                        // `#[ReturnTypeWillChange]`. Route every non-int/bool representation
+                        // through the adapter that applies PHP's int coercion.
+                        let coerced_count = interface == "Countable"
+                            && method == "count"
+                            && class_info.methods.get(&method_key).is_some_and(|sig| {
+                                matches!(
+                                    sig.return_type.codegen_repr(),
+                                    PhpType::Float | PhpType::Str | PhpType::Mixed
+                                )
+                            });
+                        if coerced_count {
+                            Ok(format!("_count_int_wrap_{}", class_info.class_id))
+                        } else {
+                            source_instance_method_entry(class_info, &method_key, classes)
+                        }
+                    })
                     .transpose()?
                     .unwrap_or_else(|| "0".to_string());
                 out.push_str(&format!("    .quad {}\n", entry));

@@ -179,6 +179,9 @@ function showGlobalCatch(): void {
     if ($globalCatch instanceof GlobalCatchException) { echo $globalCatch->getMessage(); }
 }
 function firstLoopCatch(): void {
+    // PHP keeps `$e` defined after the inner catch; seeding it keeps the runtime path that
+    // this fixture exercises statically known instead of the checker's null fallback.
+    $e = new LoopCatchException('seed');
     for ($i = 0; $i < 2; $i++) {
         try {
             try { throw new LoopCatchException('a' . $i); } catch (LoopCatchException $e) {}

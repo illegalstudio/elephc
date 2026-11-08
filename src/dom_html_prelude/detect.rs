@@ -42,6 +42,7 @@ const DOM_HTML_CLASSES: &[&str] = &[
     "DOMProcessingInstruction",
     "DOMCharacterData",
     "DOMNodeList",
+    "Dom\\XMLDocument",
 ];
 
 /// Returns whether any top-level statement references the Termwind DOM HTML
@@ -67,6 +68,11 @@ fn program_uses_classes(program: &[Stmt], classes: &[&str]) -> bool {
 
 /// Returns whether resolution bound this name to a seeded global DOM class.
 fn name_is_dom_class(name: &Name) -> bool {
+    if matches!(name.parts.as_slice(), [namespace, class_name]
+        if namespace.eq_ignore_ascii_case("Dom") && class_name.eq_ignore_ascii_case("XMLDocument"))
+    {
+        return true;
+    }
     DOM_HTML_CLASSES.iter().any(|candidate| {
         crate::name_resolver::is_additional_global_symbol(name, candidate)
     })
@@ -761,6 +767,11 @@ mod tests {
     #[test]
     fn ignores_user_owned_global_dom_classes() {
         for name in DOM_HTML_CLASSES {
+            // `Dom\XMLDocument` is namespaced; the namespace/import ownership test below
+            // covers that spelling. This test builds a syntactically valid global declaration.
+            if name.contains('\\') {
+                continue;
+            }
             let source = format!(
                 "<?php class {name} {{}} function f({name} $x): {name} {{ return $x; }} $x = new \\{}();",
                 name.to_ascii_lowercase(),

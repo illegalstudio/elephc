@@ -10,6 +10,17 @@ max-threads = 1
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# Each PHP 8.5.8 SimpleXML PHPT fixture compiles the complete XML/SimpleXML prelude and links
+# the managed libxml2 bridge. Keep the corpus at five slow-timeout periods; this copy is first
+# so nextest's first-match override policy sees it before the broad macOS codegen override.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(~simplexml_php_src)'
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(~simplexml_php_src)'
+slow-timeout = { period = "60s", terminate-after = 5 }
+
 # ARM shard 11 lost its runner while these four catalog-sized XML bundles ran together.
 # Serialize only their scheduling, preserving their assertions and existing bundle budget.
 [[profile.ci.overrides]]
@@ -52,6 +63,13 @@ threads-required = "num-test-threads"
 [[profile.ci.overrides]]
 platform = 'cfg(target_arch = "x86_64")'
 filter = 'test(=ir_lower::tests::eval_native_reference_layout::dynamic_eval_unset_keeps_numeric_alias_payloads_in_the_sync_inventory_on_every_target) or test(=ir_lower::tests::eval_native_reference_layout::dynamic_eval_object_aliases_guard_tags_and_classes_on_every_target) or test(=codegen::eval_property_helpers::reference_getter::tests::hidden_mixed_reference_cells_keep_physical_ownership_on_every_target)'
+threads-required = "num-test-threads"
+
+# This five-target SimpleXML native-reference probe compiles the complete AST prelude for
+# every target and reached its 180s deadline while sharing a linux-x86_64 shard. Reserve
+# the pool so the existing target coverage and deadline stay unchanged.
+[[profile.ci.overrides]]
+filter = 'test(=ir_lower::tests::simplexml_targets::native_nullable_object_reference_returns_preserve_the_named_cell_on_every_target)'
 threads-required = "num-test-threads"
 
 # Phase records show these XML probes reached assembly or linking under shared work.
@@ -331,3 +349,77 @@ slow-timeout = { period = "300s", terminate-after = 1 }
 [[profile.ci.overrides]]
 filter = 'binary(php_profile_independence_tests) and test(/^eval_/)'
 slow-timeout = { period = "300s", terminate-after = 1 }
+# On shared macOS runners, eval-linked programs (the 65MB Magician archive per link)
+# measured 60-66s in otherwise green runs, with a different fixture crossing the guard:
+# `xml::clone`, `xml::eval`, `nested_property_defaults`, `instanceof_operand_owners`. The per-test
+# entries below and above are the ones that crossed it first; on macOS the whole binary gets the
+# eval family's budget instead of a new exact-name entry per run. Linux keeps scoped
+# exceptions below, and a real hang still terminates at 180s on macOS.
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary(codegen_tests)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary(codegen_tests)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# These multi-compile mbstring, eval, and ownership families reached 60s on both
+# attempts in Linux AArch64 shards and later in x86_64 shards. Constructor, argument
+# staging, and Mixed-throw ownership comparisons each compile two eval programs;
+# the output-handler fixture compiles native, native-callback eval, and eval-declared
+# controls. Give these same families the existing eval budget on both Linux targets.
+# Unrelated codegen tests and the compiled-program watchdog retain their 60s guards.
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "linux")'
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "linux")'
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# Two more Core eval GC fixtures outside the `test_core_eval_` naming family. Each compiles,
+# links against the Magician archive and runs more than one program; both terminated at the
+# 60s global guard on the shared macOS runners (60.01s, on both tries) in runs that were
+# otherwise green, and passed on the next attempt. Same budget as the named family.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::nested_property_defaults::test_core_native_nested_default_owners_release)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::nested_property_defaults::test_core_native_nested_default_owners_release)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_throwing_target_retires_owned_and_detached_value_operands)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_throwing_target_retires_owned_and_detached_value_operands)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# This native-default ownership probe lowers/emits a deep program for all five targets.
+# Both macOS attempts hit 60s without a panic; use the existing all-target budget.
+[[profile.default.overrides]]
+filter = 'binary(elephc) and test(=ir_lower::tests::eval_default_helpers::deep_native_defaults_get_compiled_helpers_on_every_target)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(elephc) and test(=ir_lower::tests::eval_default_helpers::deep_native_defaults_get_compiled_helpers_on_every_target)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# Each PHP 8.5.8 SimpleXML PHPT fixture compiles the complete XML/SimpleXML prelude and links
+# the managed libxml2 bridge. Under a loaded host a single compile can exceed the default
+# three-minute termination window, so give the migrated corpus the same bounded budget as
+# the other catalog-sized integration probes.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(~simplexml_php_src)'
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(~simplexml_php_src)'
+slow-timeout = { period = "60s", terminate-after = 5 }
+

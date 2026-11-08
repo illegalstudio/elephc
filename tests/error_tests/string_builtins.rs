@@ -285,18 +285,14 @@ fn test_error_ord_wrong_args() {
     expect_error("<?php ord();", "ord() takes exactly 1 argument");
 }
 
-/// Verifies that a pure-data registry builtin (`ord`) infers argument types so that
-/// an undefined variable passed as an argument produces the correct diagnostic.
+/// Verifies that a pure-data registry builtin (`ord`) still infers its argument type.
 ///
-/// This is a regression test for Fix B: before the fix, the registry-first dispatch
-/// branch skipped `infer_type` for builtins with no check hook, so undefined-variable
-/// errors were silently dropped.
+/// This is a regression test for Fix B: before the fix, the registry-first dispatch branch
+/// skipped `infer_type` for builtins with no check hook. Undefined reads are now PHP 8 runtime
+/// warnings, so the program type-checks and lowering emits the warning at the read site.
 #[test]
-fn test_error_ord_undefined_variable_arg() {
-    expect_error(
-        "<?php ord($undeclared);",
-        "Undefined variable: $undeclared",
-    );
+fn test_ord_undefined_variable_arg_is_a_runtime_warning() {
+    expect_no_error("<?php ord($undeclared);");
 }
 
 /// Verifies that `explode()` with only one argument produces the correct arity error.

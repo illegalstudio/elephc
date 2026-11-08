@@ -1,7 +1,7 @@
 {
   "baseline": {
     "classes": 329,
-    "constants": 3180,
+    "constants": 3181,
     "extensions": 68,
     "functions": 2169,
     "generated_at": "2026-09-04",
@@ -187,12 +187,12 @@
   ],
   "coverage": {
     "classes": {
-      "have": 190,
+      "have": 191,
       "total": 329
     },
     "constants": {
-      "have": 1419,
-      "total": 3180
+      "have": 1420,
+      "total": 3181
     },
     "functions": {
       "have": 1078,
@@ -684,8 +684,8 @@
     },
     {
       "classes": {
-        "eval": 9,
-        "have": 9,
+        "eval": 10,
+        "have": 10,
         "total": 50
       },
       "constants": {
@@ -980,9 +980,9 @@
         "total": 1
       },
       "constants": {
-        "eval": 17,
-        "have": 17,
-        "total": 28
+        "eval": 18,
+        "have": 18,
+        "total": 29
       },
       "docs": null,
       "extension": "libxml",

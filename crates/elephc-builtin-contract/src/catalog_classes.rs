@@ -154,6 +154,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("DOMNodeList", "domnodelist", Class, Dom, Prelude),
     class!("DOMProcessingInstruction", "domprocessinginstruction", Class, Dom, Prelude),
     class!("DOMText", "domtext", Class, Dom, Prelude),
+    class!("Dom\\XMLDocument", "dom\\xmldocument", Class, Dom, Prelude, since: Php84),
     class!("Elephc\\Testing\\AssertionFailedError", "elephc\\testing\\assertionfailederror", Class, Elephc, Prelude, extension: true),
     class!("Elephc\\Testing\\IncompleteTestError", "elephc\\testing\\incompletetesterror", Class, Elephc, Prelude, extension: true),
     class!("Elephc\\Testing\\Runner", "elephc\\testing\\runner", Class, Elephc, Prelude, extension: true),

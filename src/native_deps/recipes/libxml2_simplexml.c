@@ -214,6 +214,16 @@ void elephc_libxml2_v1_sx_retired_free(void *raw) {
 void elephc_libxml2_v1_sx_content(void *node, const char *value) {
     xmlNodeSetContent(node, (const xmlChar *)value);
 }
+/* Modern Dom\XMLDocument defaults a parsed document to UTF-8. */
+int elephc_libxml2_v1_sx_set_encoding(void *raw, const char *encoding) {
+    xmlNodePtr node = raw;
+    if (!node || !node->doc || !encoding) return 0;
+    xmlChar *copy = xmlStrdup((const xmlChar *)encoding);
+    if (!copy) return 0;
+    if (node->doc->encoding) xmlFree((void *)node->doc->encoding);
+    node->doc->encoding = copy;
+    return 1;
+}
 /* PHP's property/dimension check_empty differs from a SimpleXML boolean cast. */
 int elephc_libxml2_v1_sx_empty(void *raw) {
     xmlNodePtr node = raw;
@@ -225,6 +235,14 @@ int elephc_libxml2_v1_sx_empty(void *raw) {
 /* Text assignment escapes ampersands, whereas addChild follows PHP's entity parsing. */
 void elephc_libxml2_v1_sx_assign(void *raw, const char *value) {
     xmlNodePtr node = raw;
+    if (!value || !*value) {
+        while (node->children) {
+            xmlNodePtr child = node->children;
+            xmlUnlinkNode(child);
+            xmlFreeNode(child);
+        }
+        return;
+    }
     xmlNodePtr text = xmlNewDocText(node->doc, (const xmlChar *)value);
     if (text) xmlAddChild(node, text);
 }
@@ -234,7 +252,7 @@ void *elephc_libxml2_v1_sx_add_literal(void *raw, const char *name, const char *
     xmlNodePtr parent = raw;
     if (attribute) return xmlNewProp(parent, (const xmlChar *)name, (const xmlChar *)value);
     return xmlNewChild(parent, parent->ns, (const xmlChar *)name,
-        has_value ? (const xmlChar *)value : NULL);
+        has_value && value && *value ? (const xmlChar *)value : NULL);
 }
 void *elephc_libxml2_v1_sx_add(void *raw, const char *qualified, const char *value,
         const char *uri, int has_uri, int attribute, int has_value) {
@@ -254,7 +272,8 @@ void *elephc_libxml2_v1_sx_add(void *raw, const char *qualified, const char *val
         if (has_uri && !ns) ns = xmlNewNs(parent, (const xmlChar *)uri, prefix);
         result = (xmlNodePtr)xmlNewNsProp(parent, ns, name, (const xmlChar *)value);
     } else {
-        result = xmlNewChild(parent, ns, name, has_value ? (const xmlChar *)value : NULL);
+        result = xmlNewChild(parent, ns, name,
+            has_value && value && *value ? (const xmlChar *)value : NULL);
         if (result && has_uri && !*uri) {
             xmlSetNs(result, NULL);
             xmlNewNs(result, (const xmlChar *)uri, prefix);
