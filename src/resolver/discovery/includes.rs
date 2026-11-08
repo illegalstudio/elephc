@@ -8,7 +8,7 @@
 //! Key details:
 //! - Include discovery uses the caller's constants and base path but records declarations by included file.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
@@ -20,7 +20,7 @@ use super::super::declarations::extract_discoverable_declarations;
 use super::super::engine::resolve_stmts;
 use super::super::files::{parse_file, resolve_path};
 use super::super::include_path::fold_include_path;
-use super::super::state::ResolveState;
+use super::super::state::{FileImports, ResolveState};
 
 /// Processes a statically resolvable `include`/`require` statement.
 ///
@@ -42,7 +42,7 @@ use super::super::state::ResolveState;
 /// Side effects:
 /// - Pushes to/pops from `include_chain`
 /// - Inserts into `loaded_paths`
-/// - Saves and restores `state.namespace` and `state.const_imports`
+/// - Saves and restores `state.namespace` and `state.imports`
 pub(super) fn discover_include(
     path: &Expr,
     once: bool,
@@ -93,13 +93,13 @@ pub(super) fn discover_include(
     let included_dir = resolved.parent().unwrap_or(base_dir);
     let mut declaration_state = state.clone();
     declaration_state.namespace = None;
-    declaration_state.const_imports = HashMap::new();
+    declaration_state.imports = FileImports::default();
     include_chain.push(canonical.clone());
 
     let saved_namespace = state.namespace.clone();
-    let saved_imports = state.const_imports.clone();
+    let saved_imports = state.imports.clone();
     state.namespace = None;
-    state.const_imports = HashMap::new();
+    state.imports = FileImports::default();
     let mut nested_output = DiscoveryOutput::default();
     discover_stmts(
         &included_stmts,
@@ -110,7 +110,7 @@ pub(super) fn discover_include(
         &mut nested_output,
     )?;
     state.namespace = saved_namespace;
-    state.const_imports = saved_imports;
+    state.imports = saved_imports;
 
     let entry_declaration_state = declaration_state.clone();
     let entry_include_chain = include_chain.clone();

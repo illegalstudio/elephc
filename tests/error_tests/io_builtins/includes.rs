@@ -127,6 +127,21 @@ fn test_error_include_function_call_path_is_explicitly_rejected() {
     );
 }
 
+/// Verifies `dirname()` only folds when the call can only reach the global function: an
+/// unqualified call inside a namespace, or one redirected by `use function`, may name a
+/// user function and stays dynamic.
+#[test]
+fn test_error_include_dirname_that_may_be_user_function_stays_dynamic() {
+    expect_runtime_dynamic_include_path_error(
+        "<?php namespace App; require dirname(__FILE__) . '/x.php';",
+        "function call `dirname()` is resolved at runtime",
+    );
+    expect_runtime_dynamic_include_path_error(
+        "<?php use function App\\Paths\\dirname; require dirname(__FILE__) . '/x.php';",
+        "function call `dirname()` is resolved at runtime",
+    );
+}
+
 /// Verifies that a ternary expression used as require path is rejected with a note
 /// that ternary path selection is resolved at runtime.
 #[test]

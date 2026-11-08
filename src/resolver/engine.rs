@@ -8,7 +8,7 @@
 //! Key details:
 //! - Resolver runs before namespace name canonicalization, so it preserves PHP namespace syntax context.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
@@ -23,7 +23,7 @@ use super::engine_includes::{
 use super::include_path::fold_include_path;
 use super::state::{
     is_define_call_name, namespace_string, normalize_defined_constant_name,
-    register_const_imports, ResolveState,
+    register_compile_time_imports, FileImports, ResolveState,
 };
 use super::stmt_exprs::resolve_stmt_exprs;
 
@@ -156,14 +156,14 @@ pub(super) fn resolve_stmts(
             }
             StmtKind::NamespaceDecl { name } => {
                 state.namespace = Some(namespace_string(name));
-                state.const_imports = HashMap::new();
+                state.imports = FileImports::default();
                 result.push(stmt);
             }
             StmtKind::NamespaceBlock { name, body } => {
                 let saved_namespace = state.namespace.clone();
-                let saved_imports = state.const_imports.clone();
+                let saved_imports = state.imports.clone();
                 state.namespace = Some(namespace_string(name));
-                state.const_imports = HashMap::new();
+                state.imports = FileImports::default();
                 let body_resolved = resolve_stmts(
                     body.clone(),
                     base_dir,
@@ -173,7 +173,7 @@ pub(super) fn resolve_stmts(
                     function_variants,
                 )?;
                 state.namespace = saved_namespace;
-                state.const_imports = saved_imports;
+                state.imports = saved_imports;
                 result.push(Stmt::new(
                     StmtKind::NamespaceBlock {
                         name: name.clone(),
@@ -183,7 +183,7 @@ pub(super) fn resolve_stmts(
                 ));
             }
             StmtKind::UseDecl { .. } => {
-                register_const_imports(state, &stmt);
+                register_compile_time_imports(state, &stmt);
                 result.push(stmt);
             }
             StmtKind::If { condition, then_body, elseif_clauses, else_body } => {

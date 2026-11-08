@@ -10,7 +10,7 @@
 
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 
-use super::state::{resolve_constant_ref, ResolveState};
+use super::state::{calls_global_function, resolve_constant_ref, ResolveState};
 
 /// Fold a path expression to a compile-time string. Handles string literals,
 /// concat of foldable subexpressions, and references to const/define-d string
@@ -36,8 +36,49 @@ pub(super) fn fold_include_path(expr: &Expr, state: &ResolveState) -> Result<Str
                 name.as_str()
             )
         }),
+        // `dirname(__FILE__)` and `dirname(__DIR__, 2)`: the magic constants are already
+        // literals here, so the global `dirname()` folds exactly. A call that a namespace or
+        // a `use function` import could route to another function stays dynamic.
+        ExprKind::FunctionCall { name, args } if calls_global_function(name, "dirname", state) => {
+            let levels = match args.as_slice() {
+                [_] => 1,
+                [_, levels] => match levels.kind {
+                    ExprKind::IntLiteral(levels) if levels >= 1 => levels,
+                    _ => return Err(include_path_error_message(expr)),
+                },
+                _ => return Err(include_path_error_message(expr)),
+            };
+            let path = fold_include_path(&args[0], state)?;
+            Ok(php_dirname(&path, levels))
+        }
         _ => Err(include_path_error_message(expr)),
     }
+}
+
+/// PHP's `dirname($path, $levels)` on POSIX paths, as `zend_dirname` computes it.
+///
+/// Trailing separators are ignored, the root stays `/`, a bare name yields `.`, and the
+/// empty path stays empty.
+pub(crate) fn php_dirname(path: &str, levels: i64) -> String {
+    let mut current = path.to_string();
+    for _ in 0..levels {
+        if current.is_empty() {
+            break;
+        }
+        let trimmed = current.trim_end_matches('/');
+        current = if trimmed.is_empty() {
+            "/".to_string()
+        } else {
+            match trimmed.rfind('/') {
+                None => ".".to_string(),
+                Some(slash) => {
+                    let parent = trimmed[..slash].trim_end_matches('/');
+                    if parent.is_empty() { "/".to_string() } else { parent.to_string() }
+                }
+            }
+        };
+    }
+    current
 }
 
 /// Formats the user-facing error message for a non-foldable include path expression.

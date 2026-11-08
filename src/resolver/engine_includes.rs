@@ -8,7 +8,7 @@
 //! Key details:
 //! - Include paths are folded in the caller's constant state and file base directory.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -22,7 +22,7 @@ use super::engine::resolve_stmts;
 use super::files::{parse_file, resolve_path};
 use super::include_once::include_once_label;
 use super::include_path::fold_include_path;
-use super::state::ResolveState;
+use super::state::{FileImports, ResolveState};
 
 /// Process-global counter producing unique hidden temporary names for value-position includes.
 /// Discarded probes consume names too, so concurrent compilations never recycle live temporaries.
@@ -44,7 +44,7 @@ pub(super) enum IncludeValueCapture {
 /// - `required`: when true, returns an error if the target file does not exist
 /// - `declared_once`: tracks files already processed; updated on return
 /// - `include_chain`: current include path for cycle detection; must not contain `canonical`
-/// - State (`namespace`, `const_imports`) is saved before recursion and restored after
+/// - State (`namespace`, `imports`) is saved before recursion and restored after
 /// - Returns `None` if the file does not exist and `required` is false, or if a once file was already included
 /// - For `once`: wraps body in `IncludeOnceGuard` with the file's label
 /// - For non-once: emits `IncludeOnceMark` before the body for later once/require_once checks
@@ -97,9 +97,9 @@ pub(super) fn resolve_include_stmt(
     include_chain.push(canonical.clone());
 
     let saved_namespace = state.namespace.clone();
-    let saved_imports = state.const_imports.clone();
+    let saved_imports = state.imports.clone();
     state.namespace = None;
-    state.const_imports = HashMap::new();
+    state.imports = FileImports::default();
     let resolved_stmts = resolve_stmts(
         included_stmts,
         included_dir,
@@ -109,7 +109,7 @@ pub(super) fn resolve_include_stmt(
         function_variants,
     )?;
     state.namespace = saved_namespace;
-    state.const_imports = saved_imports;
+    state.imports = saved_imports;
 
     include_chain.pop();
 

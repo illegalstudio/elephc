@@ -145,8 +145,12 @@ mod locals_retype;
 mod stack_guard;
 mod zval;
 
+mod php_tags;
 mod simplexml;
 mod simplexml_php_src;
+mod php_src_corpus;
+mod dom_php_src;
+mod libxml_php_src;
 mod fileinfo;
 mod fileinfo_autoload;
 mod fileinfo_reflection;

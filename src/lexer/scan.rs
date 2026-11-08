@@ -16,13 +16,14 @@ use crate::source::SourceMode;
 
 /// Scans the full PHP source into a stream of syntax tokens with source metadata.
 ///
-/// Requires `<?php` as the first five characters. Dispatches to `literals` for
-/// strings (which may contain interpolation), heredoc/nowdoc, numbers, variables,
-/// and keywords. Returns `Token::Eof` at end-of-input.
+/// In PHP mode text outside `<?php`/`<?=`/`<?` ... `?>` blocks is literal output, lowered
+/// to `echo` statements, and `?>` terminates a statement like `;`. Dispatches to
+/// `literals` for strings (which may contain interpolation), heredoc/nowdoc, numbers,
+/// variables, and keywords. Returns `Token::Eof` at end-of-input.
 ///
 /// # Errors
-/// Returns `CompileError` when PHP mode lacks its opening tag, LFC contains a
-/// physical PHP tag at a code boundary, or either mode contains invalid syntax.
+/// Returns `CompileError` when LFC contains a physical PHP tag at a code boundary, or
+/// either mode contains invalid syntax.
 pub fn scan_tokens(
     source: &str,
     mode: SourceMode,
@@ -41,25 +42,25 @@ pub(super) fn scan_tokens_in_source(
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut cursor = Cursor::new_in_source(source, source_id);
     let mut tokens = Vec::new();
+    let tagged = mode.requires_open_tag();
 
-    let span = cursor.span();
-    if mode.requires_open_tag() {
-        skip_whitespace_and_comments(&mut cursor);
-        let span = cursor.span();
-        if cursor.remaining().starts_with("<?php") {
-            for _ in 0..5 {
-                cursor.advance();
+    // The parser expects exactly one leading `OpenTag`; every later tag only switches the
+    // scanner between literal output and code.
+    tokens.push(spanned(Token::OpenTag, cursor.span()));
+    if tagged {
+        // The CLI skips a leading `#!` interpreter line before scanning.
+        if cursor.remaining().starts_with("#!") {
+            while let Some(ch) = cursor.advance() {
+                if ch == '\n' {
+                    break;
+                }
             }
-            tokens.push(spanned(Token::OpenTag, span));
-        } else {
-            return Err(CompileError::new(span, "Expected '<?php' at start of file"));
         }
-    } else {
-        tokens.push(spanned(Token::OpenTag, span));
+        scan_inline_html(&mut cursor, &mut tokens);
     }
 
     loop {
-        skip_whitespace_and_comments(&mut cursor);
+        skip_whitespace_and_comments(&mut cursor, tagged);
 
         if cursor.is_eof() {
             tokens.push(spanned(Token::Eof, cursor.span()));
@@ -75,6 +76,18 @@ pub(super) fn scan_tokens_in_source(
                 span,
                 "PHP opening and closing tags are not valid in .lfc source files",
             ));
+        } else if tagged && cursor.remaining().starts_with("?>") {
+            // `?>` ends the statement like `;` and swallows one directly following newline.
+            cursor.advance();
+            cursor.advance();
+            if cursor.remaining().starts_with("\r\n") {
+                cursor.advance();
+                cursor.advance();
+            } else if matches!(cursor.peek(), Some('\n' | '\r')) {
+                cursor.advance();
+            }
+            tokens.push(spanned(Token::Semicolon, span));
+            scan_inline_html(&mut cursor, &mut tokens);
         } else if cursor.peek() == Some('"') {
             // Double-quoted strings may contain interpolation ($var)
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
@@ -111,10 +124,74 @@ pub(super) fn scan_tokens_in_source(
     Ok(tokens)
 }
 
+/// Scans literal output up to the next PHP open tag, as php-src's `INITIAL` scanner state.
+///
+/// Non-empty text becomes `echo '<text>';`. Then the tag is consumed: `<?=` yields `echo`,
+/// `<?php` (any case) must be followed by whitespace or the end of input and swallows one
+/// whitespace character, and a bare `<?` is the short open tag (`short_open_tag` defaults to
+/// on). Text with no further tag runs to the end of the file.
+fn scan_inline_html(cursor: &mut Cursor, tokens: &mut Vec<SpannedToken>) {
+    let span = cursor.span();
+    let remaining = cursor.remaining();
+    // With short tags enabled, the first `<?` always opens code; only its length varies.
+    let (html_len, tag_len, tag) = match remaining.find("<?") {
+        None => (remaining.len(), 0, None),
+        Some(at) => {
+            let rest = &remaining[at..];
+            let long_tag = rest.get(..5).is_some_and(|open| open.eq_ignore_ascii_case("<?php"));
+            if rest.starts_with("<?=") {
+                (at, 3, Some(Token::Echo))
+            } else if long_tag {
+                match rest[5..].chars().next() {
+                    None => (at, 5, None),
+                    Some(' ' | '\t' | '\n') => (at, 6, None),
+                    Some('\r') if rest[6..].starts_with('\n') => (at, 7, None),
+                    Some('\r') => (at, 6, None),
+                    // `<?phpx` is the short tag `<?` followed by the code `phpx`.
+                    Some(_) => (at, 2, None),
+                }
+            } else {
+                (at, 2, None)
+            }
+        }
+    };
+    let html = &remaining[..html_len];
+    let consumed = html.chars().count() + tag_len;
+    if !html.is_empty() {
+        tokens.push(spanned(Token::Echo, span));
+        tokens.push(spanned(Token::StringLiteral(html.to_string()), span));
+        tokens.push(spanned(Token::Semicolon, span));
+    }
+    for _ in 0..html.chars().count() {
+        cursor.advance();
+    }
+    let tag_span = cursor.span();
+    for _ in html.chars().count()..consumed {
+        cursor.advance();
+    }
+    if let Some(token) = tag {
+        tokens.push(spanned(token, tag_span));
+    }
+}
+
+/// Skips one `//` or `#` line comment body. In PHP code (`tagged`) the comment also ends
+/// right before a `?>` close tag, which then closes the code block.
+fn skip_line_comment(cursor: &mut Cursor, tagged: bool) {
+    loop {
+        if tagged && cursor.remaining().starts_with("?>") {
+            break;
+        }
+        match cursor.advance() {
+            None | Some('\n') => break,
+            Some(_) => {}
+        }
+    }
+}
+
 /// Skips all whitespace, `//` line comments, `#` line comments (but not `#[` attribute
 /// groups), and `/* */` block comments. Uses `continue` to re-check after each comment
 /// type so adjacent comment forms are all skipped.
-fn skip_whitespace_and_comments(cursor: &mut Cursor) {
+fn skip_whitespace_and_comments(cursor: &mut Cursor, tagged: bool) {
     loop {
         while let Some(ch) = cursor.peek() {
             if ch.is_ascii_whitespace() {
@@ -125,17 +202,13 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
         }
 
         if cursor.remaining().starts_with("//") {
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
+            skip_line_comment(cursor, tagged);
             continue;
         }
 
         if cursor.remaining().starts_with('#') && !cursor.remaining().starts_with("#[") {
             // PHP line comment introduced by `#` (but `#[` opens an attribute group).
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
+            skip_line_comment(cursor, tagged);
             continue;
         }
 

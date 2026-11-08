@@ -48,10 +48,47 @@ fn test_consecutive_comments() {
 
 // --- Complex tokens ---
 
-/// Verifies missing `<?php` open tag produces a lex error.
+/// Verifies text without an open tag lexes as literal output, as PHP prints it verbatim.
 #[test]
-fn test_missing_open_tag() {
-    assert!(tokenize("echo \"hi\";").is_err());
+fn test_source_without_open_tag_is_inline_output() {
+    assert_eq!(
+        tokens("echo \"hi\";"),
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("echo \"hi\";".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies `?>` lexes as a statement terminator, swallows one newline, and the text up to
+/// the next `<?=` becomes an `echo`.
+#[test]
+fn test_close_tag_and_reopening_with_echo_tag() {
+    assert_eq!(
+        tokens("<?php $a ?>\n\nx<?= $a;"),
+        vec![
+            Token::OpenTag,
+            Token::Variable("a".into()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::StringLiteral("\nx".into()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::Variable("a".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies `<?php` is case-insensitive and `<?phpx` is the short tag followed by code.
+#[test]
+fn test_open_tag_case_and_short_tag_boundary() {
+    assert_eq!(tokens("<?PhP $a;")[1], Token::Variable("a".into()));
+    assert_eq!(tokens("<?phpx;")[1], Token::Identifier("phpx".into()));
 }
 
 /// Verifies an unterminated double-quoted string produces a lex error.

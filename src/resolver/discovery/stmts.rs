@@ -8,7 +8,7 @@
 //! Key details:
 //! - Discovery follows PHP statement order so constants and namespace context affect later include paths.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
@@ -26,7 +26,7 @@ use super::output::DiscoveryOutput;
 use super::super::include_path::fold_include_path;
 use super::super::state::{
     is_define_call_name, namespace_string, normalize_defined_constant_name,
-    register_const_imports, ResolveState,
+    register_compile_time_imports, FileImports, ResolveState,
 };
 
 /// Iterates over a statement list, discovering include-reachable declarations for each.
@@ -102,19 +102,19 @@ fn discover_stmt(
         }
         StmtKind::NamespaceDecl { name } => {
             state.namespace = Some(namespace_string(name));
-            state.const_imports = HashMap::new();
+            state.imports = FileImports::default();
         }
         StmtKind::NamespaceBlock { name, body } => {
             let saved_namespace = state.namespace.clone();
-            let saved_imports = state.const_imports.clone();
+            let saved_imports = state.imports.clone();
             state.namespace = Some(namespace_string(name));
-            state.const_imports = HashMap::new();
+            state.imports = FileImports::default();
             discover_stmts(body, base_dir, loaded_paths, include_chain, state, output)?;
             state.namespace = saved_namespace;
-            state.const_imports = saved_imports;
+            state.imports = saved_imports;
         }
         StmtKind::UseDecl { .. } => {
-            register_const_imports(state, stmt);
+            register_compile_time_imports(state, stmt);
         }
         StmtKind::Synthetic(body) | StmtKind::IncludeOnceGuard { body, .. } => {
             discover_isolated(

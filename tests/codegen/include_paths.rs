@@ -35,6 +35,40 @@ fn test_include_with_dunder_dir_concat() {
     assert_eq!(out, "innerafter");
 }
 
+/// Verifies `include dirname(__FILE__) . '/...'`, the classic php-src idiom: `__FILE__` is
+/// a literal after magic-constant substitution, so the global `dirname()` folds statically.
+#[test]
+fn test_include_with_dirname_of_dunder_file() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\ninclude(dirname(__FILE__) . '/lib/inner.php');\necho 'after';\n",
+            ),
+            ("lib/inner.php", "<?php\necho 'inner';\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "innerafter");
+}
+
+/// Verifies the levels argument and a fully qualified `\dirname()` call from inside a
+/// namespace: `dirname(__DIR__, 2)` climbs two directories as PHP does.
+#[test]
+fn test_include_with_qualified_dirname_levels_in_namespace() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "app/src/main.php",
+                "<?php\nnamespace App;\nrequire \\dirname(__DIR__, 2) . '/lib.php';\necho 'after';\n",
+            ),
+            ("lib.php", "<?php\necho 'lib';\n"),
+        ],
+        "app/src/main.php",
+    );
+    assert_eq!(out, "libafter");
+}
+
 /// Verifies `require LIB . '/inner.php'` where `LIB` is a top-level `const`
 /// defined before the require. The resolver resolves the const reference to
 /// the string `'lib'` before path resolution.

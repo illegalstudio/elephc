@@ -13,17 +13,27 @@ use std::collections::{HashMap, HashSet};
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{Stmt, StmtKind, UseKind};
 
-/// Tracks active namespace, constants defined via `define()`, and `use const` imports for the current resolution scope.
+/// Tracks active namespace, constants defined via `define()`, and the `use const` /
+/// `use function` imports of the current resolution scope.
 #[derive(Clone, Default)]
 pub(super) struct ResolveState {
     /// Constants registered via `define()`. Maps canonical name to canonical value.
     pub(super) constants: HashMap<String, String>,
     /// The current namespace prefix, if any.
     pub(super) namespace: Option<String>,
-    /// `use const X as Y` imports. Maps alias to canonical constant name.
-    pub(super) const_imports: HashMap<String, String>,
+    /// Imports of the current file and namespace block; reset at each boundary.
+    pub(super) imports: FileImports,
     /// Invocation-level symbols used to select `ifdef` branches in every physical file.
     pub(super) conditional_defines: HashSet<String>,
+}
+
+/// The `use const` and `use function` imports in force at one point of one file.
+#[derive(Clone, Default)]
+pub(super) struct FileImports {
+    /// `use const X as Y` imports. Maps alias to canonical constant name.
+    pub(super) constants: HashMap<String, String>,
+    /// `use function X as Y` imports. Maps the lower-cased alias to the canonical name.
+    pub(super) functions: HashMap<String, String>,
 }
 
 impl ResolveState {
@@ -59,7 +69,7 @@ fn constant_lookup_candidates(name: &Name, state: &ResolveState) -> Vec<String> 
     if name.is_unqualified() {
         if let Some(alias) = name
             .last_segment()
-            .and_then(|segment| state.const_imports.get(segment))
+            .and_then(|segment| state.imports.constants.get(segment))
         {
             return vec![alias.clone()];
         }
@@ -74,7 +84,7 @@ fn constant_lookup_candidates(name: &Name, state: &ResolveState) -> Vec<String> 
     }
 
     if let Some(first) = name.parts.first() {
-        if let Some(alias) = state.const_imports.get(first) {
+        if let Some(alias) = state.imports.constants.get(first) {
             let suffix = &name.parts[1..];
             if suffix.is_empty() {
                 return vec![alias.clone()];
@@ -106,20 +116,41 @@ pub(super) fn namespace_string(name: &Option<Name>) -> String {
     name.as_ref().map(Name::as_canonical).unwrap_or_default()
 }
 
-/// Extracts `use const` declarations from a `use` statement and registers them in the state's const imports map.
+/// Registers the `use const` and `use function` items of a `use` statement in the state.
 ///
-/// Only processes `UseKind::Const` items; other use kinds are ignored.
-pub(super) fn register_const_imports(state: &mut ResolveState, stmt: &Stmt) {
+/// Class imports are ignored: nothing before name resolution looks them up.
+pub(super) fn register_compile_time_imports(state: &mut ResolveState, stmt: &Stmt) {
     let StmtKind::UseDecl { imports } = &stmt.kind else {
         return;
     };
     for item in imports {
-        if item.kind == UseKind::Const {
-            state.const_imports.insert(
-                item.alias.clone(),
-                normalize_defined_constant_name(&item.name.as_canonical()),
-            );
+        let canonical = normalize_defined_constant_name(&item.name.as_canonical());
+        match item.kind {
+            UseKind::Const => {
+                state.imports.constants.insert(item.alias.clone(), canonical);
+            }
+            UseKind::Function => {
+                state.imports.functions.insert(item.alias.to_ascii_lowercase(), canonical);
+            }
+            _ => {}
         }
+    }
+}
+
+/// Returns whether a call by `name` can only reach PHP's global function `function`
+/// (lower-case): it is spelled fully qualified, or unqualified outside any namespace and
+/// not redirected by a `use function` import to another function.
+pub(super) fn calls_global_function(name: &Name, function: &str, state: &ResolveState) -> bool {
+    if name.parts.len() != 1 || !name.parts[0].eq_ignore_ascii_case(function) {
+        return false;
+    }
+    match name.kind {
+        NameKind::FullyQualified => true,
+        NameKind::Unqualified => match state.imports.functions.get(function) {
+            Some(target) => target.eq_ignore_ascii_case(function),
+            None => state.namespace.as_deref().unwrap_or("").is_empty(),
+        },
+        _ => false,
     }
 }
 

@@ -58,7 +58,9 @@ pub(super) fn collect(source: &str) -> HashMap<(u32, u32), DocBlock> {
                 }
             }
         }
-        if *token == Token::OpenTag && source[start..].starts_with("<?php") {
+        if *token == Token::OpenTag
+            && source[start..].get(..5).is_some_and(|tag| tag.eq_ignore_ascii_case("<?php"))
+        {
             // The opening tag has a point span rather than the ordinary token extent.
             previous_end = start + 5;
         } else if *token != Token::Eof {
