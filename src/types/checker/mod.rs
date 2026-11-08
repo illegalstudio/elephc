@@ -493,6 +493,8 @@ pub(crate) struct Checker {
     pub array_push_property_plans: HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Receiver types observed at member uses, with conflicting checker visits disabled.
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Exact element proofs at declared-array appends; conflicting visits retain no proof.
+    pub array_append_element_types: HashMap<(String, Span), Option<PhpType>>,
     /// Integer reads agreed by every authoritative flow visit to one scoped local use.
     pub local_value_read_types: crate::types::LocalValueReadTypes,
     /// Named-function contexts and body scopes queried without their local branch guards.
@@ -1651,6 +1653,7 @@ fn check_types_on_compiler_stack(
         closure_param_hints: checker.closure_param_hints,
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
+        array_append_element_types: checker.array_append_element_types,
         local_value_read_types: checker.local_value_read_types,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()

@@ -73,6 +73,7 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
     };
     let array_ty = ctx.builder.value_php_type(array_value.value);
     let value = ctx.retype_value_for_container_element(&array_ty, value, Some(span));
+    let value = coerce_declared_array_append(ctx, &array_ty, value, span);
     let pins = crate::ir_lower::expr::pin_in_flight_owners(
         ctx,
         &[array_value.value, value.value],
@@ -147,6 +148,40 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
     ctx.emit_void(op, vec![array_value.value, value.value], None, op.default_effects(), Some(span));
     finish_hash_local_write(ctx, array, array_value, hash_storeback, span);
     release_persisted_string_operand(ctx, value, span);
+}
+
+/// Extracts an admitted value into a declared builder's scalar or callable element storage.
+///
+/// The checker separately proves the declared element, current receiver and stable RHS type
+/// agree at this source point. Unknown or widening appends retain their previous semantics.
+fn coerce_declared_array_append(
+    ctx: &mut LoweringContext<'_, '_>, array_ty: &PhpType,
+    value: LoweredValue, span: Span,
+) -> LoweredValue {
+    let Some(Some(element)) = ctx.array_append_element_types
+        .get(&(ctx.loop_storage_scope.clone(), span)).cloned() else { return value; };
+    let PhpType::Array(current) = array_ty.codegen_repr() else { return value; };
+    let target = element.codegen_repr();
+    if current.codegen_repr() != target { return value; }
+    let source = ctx.builder.value_php_type(value.value).codegen_repr();
+    if source != PhpType::Mixed { return value; }
+    if target == PhpType::Callable && source == PhpType::Mixed {
+        return coerce_typed_assign_value(ctx, value, &element, span);
+    }
+    if !matches!(target, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str) {
+        return value;
+    }
+    let result = ctx.emit_value(
+        Op::Cast, vec![value.value],
+        Some(Immediate::CastTarget(crate::ir_lower::context::value_ir_type(&target))),
+        target, Op::Cast.default_effects(), Some(span),
+    );
+    // String casts detach their result; scalar casts cannot alias the source cell. Borrowed
+    // loop-local boxes keep their owner, while independent temporary sources retire here.
+    if ctx.value_needs_release_after_use(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    result
 }
 
 /// Prepares an indexed-array local for an offset assignment.
