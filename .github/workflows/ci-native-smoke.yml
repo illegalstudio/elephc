@@ -122,8 +122,14 @@ jobs:
               output.write(f"ELEPHC_ONIGURUMA_TEST_PREFIX={archives[0].parent.parent}\n")
           PY
 
+      - name: Restore shared Rust tests
+        uses: ./.github/actions/restore-test-build
+        with:
+          target: ${{ inputs.target }}
+          attempt: ${{ inputs.artifact-attempt }}
+
       - name: Compare the managed mbregex provider with the PHP oracle
-        run: cargo test -p elephc-mbstring --test regex --test regex_request --test regex_ini_abi --test invoke regex -- --include-ignored
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-mbstring) and (binary(=regex) or binary(=regex_request) or binary(=regex_ini_abi) or binary(=invoke)) and test(regex)' --run-ignored all
 
       - name: Build Oniguruma providers for iOS device and Simulator
         if: inputs.target == 'macos-aarch64'

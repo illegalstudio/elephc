@@ -69,6 +69,7 @@ jobs:
         uses: ./.github/actions/restore-test-build
         with:
           target: ${{ inputs.target }}
+          attempt: ${{ inputs.artifact-attempt }}
 
       - name: Verify runner and selected interpreter
         shell: bash

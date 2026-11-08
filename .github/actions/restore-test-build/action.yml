@@ -4,6 +4,12 @@ inputs:
   target:
     description: Host platform that produced the tests
     required: true
+  attempt:
+    description: Original build attempt
+    required: true
+  run-id:
+    description: Original build run
+    default: ${{ github.run_id }}
 runs:
   using: composite
   steps:
@@ -11,6 +17,8 @@ runs:
       uses: ./.github/actions/download-test-archive
       with:
         name: nextest-archive-${{ inputs.target }}
+        attempt: ${{ inputs.attempt }}
+        run-id: ${{ inputs.run-id }}
         path: ${{ runner.temp }}/shared-tests
     - name: Extract test binaries and metadata
       shell: bash

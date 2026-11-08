@@ -26,7 +26,11 @@ if [[ ${ELEPHC_CI_PREBUILT_COMPILER:-0} == 1 ]]; then
 else
     (cd "$PROJECT_DIR" && cargo build --locked --bin elephc)
 fi
-(cd "$PROJECT_DIR" && cargo build --locked -p elephc-tokenizer --target "$RUST_TARGET")
+if [[ ${ELEPHC_CI_PREBUILT_IOS_BRIDGES:-0} == 1 ]]; then
+    test -s "$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_tokenizer.a"
+else
+    (cd "$PROJECT_DIR" && cargo build --locked -p elephc-tokenizer --target "$RUST_TARGET")
+fi
 cp "$SCRIPT_DIR/fixtures/ios-tokenizer-link/main.php" "$SCRIPT_DIR/fixtures/ios-tokenizer-link/host.c" "$WORK_DIR/"
 "$PROJECT_DIR/target/debug/elephc" --with-tokenizer --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"
 nm -u "$WORK_DIR/libmain.a" > "$WORK_DIR/undefined"

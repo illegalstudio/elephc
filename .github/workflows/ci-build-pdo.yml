@@ -65,10 +65,11 @@ jobs:
             libpq-gss|sqlsrv|oci|cubrid|dblib|firebird|odbc|informix|ibm) ;;
             *) echo "Unexpected PDO variant: $VARIANT" >&2; exit 1 ;;
           esac
+          python3 -B scripts/ci/prepare_variant_config.py pdo "$RUNNER_TEMP/variant-nextest.toml"
           cargo build --locked -p elephc-pdo --features "$VARIANT"
           printf '%s\n' "$VARIANT" > target/debug/elephc-pdo-features.txt
           mkdir -p "target/ci-pdo/$VARIANT"
-          cargo nextest archive --locked --profile ci \
+          cargo nextest archive --config-file "$RUNNER_TEMP/variant-nextest.toml" --locked --profile ci \
             -p elephc -p elephc-pdo --lib --test codegen_tests \
             --features "elephc/pdo-$VARIANT" \
             --archive-file "target/ci-pdo/$VARIANT/nextest-archive.tar.zst"

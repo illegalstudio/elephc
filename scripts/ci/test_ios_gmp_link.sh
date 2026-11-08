@@ -59,7 +59,11 @@ fi
   --manifest-path "$PROJECT_DIR/examples/gmp/elephc.toml"
 
 echo "==> cross-building the Rust GMP bridge for $RUST_TARGET"
-(cd "$PROJECT_DIR" && cargo build -p elephc-gmp --target "$RUST_TARGET")
+if [[ ${ELEPHC_CI_PREBUILT_IOS_BRIDGES:-0} == 1 ]]; then
+    test -s "$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_gmp.a"
+else
+    (cd "$PROJECT_DIR" && cargo build -p elephc-gmp --target "$RUST_TARGET")
+fi
 BRIDGE_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_gmp.a"
 test -s "$BRIDGE_ARCHIVE"
 

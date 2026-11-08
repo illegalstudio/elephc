@@ -22,6 +22,13 @@ inputs:
     description: Directory to extract the artifact into
     required: true
 
+  run-id:
+    description: Explicit producing workflow run
+    default: ${{ github.run_id }}
+  attempt:
+    description: Build attempt for nextest payloads
+    default: ${{ github.run_attempt }}
+
 runs:
   using: composite
   steps:
@@ -29,7 +36,9 @@ runs:
       uses: actions/download-artifact@v4
       continue-on-error: true
       with:
-        name: ${{ inputs.name }}
+        name: ${{ startsWith(inputs.name, 'nextest-archive-') && format('{0}-{1}', inputs.name, inputs.attempt) || inputs.name }}
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ github.token }}
         path: ${{ inputs.path }}
 
     - id: first_archive
@@ -58,7 +67,9 @@ runs:
       uses: actions/download-artifact@v4
       continue-on-error: true
       with:
-        name: ${{ inputs.name }}
+        name: ${{ startsWith(inputs.name, 'nextest-archive-') && format('{0}-{1}', inputs.name, inputs.attempt) || inputs.name }}
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ github.token }}
         path: ${{ inputs.path }}
 
     - id: second_archive
@@ -85,7 +96,9 @@ runs:
       if: steps.second.outcome == 'failure' || steps.second_archive.outcome == 'failure'
       uses: actions/download-artifact@v4
       with:
-        name: ${{ inputs.name }}
+        name: ${{ startsWith(inputs.name, 'nextest-archive-') && format('{0}-{1}', inputs.name, inputs.attempt) || inputs.name }}
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ github.token }}
         path: ${{ inputs.path }}
 
     - if: steps.third.outcome == 'success' && startsWith(inputs.name, 'nextest-archive-')
@@ -93,3 +106,18 @@ runs:
       env:
         ARCHIVE_DIR: ${{ steps.third.outputs.download-path }}
       run: bash "$GITHUB_ACTION_PATH/validate.sh" "$ARCHIVE_DIR"
+
+    - name: Validate nextest source and producer
+      if: startsWith(inputs.name, 'nextest-archive-')
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.name }}
+        ARTIFACT_RUN: ${{ inputs.run-id }}
+        ARTIFACT_ATTEMPT: ${{ inputs.attempt }}
+        ARCHIVE_DIR: ${{ steps.third.outputs.download-path || steps.second.outputs.download-path || steps.first.outputs.download-path }}
+      run: |
+        target=${ARTIFACT_NAME#nextest-archive-}
+        variant=workspace
+        if [[ "$target" == codegen-* ]]; then target=${target#codegen-}; variant=codegen; fi
+        python3 -B scripts/ci/test_archive_manifest.py verify "$ARCHIVE_DIR" \
+          --target "$target" --variant "$variant" --run-id "$ARTIFACT_RUN" --attempt "$ARTIFACT_ATTEMPT"

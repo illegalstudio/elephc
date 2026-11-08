@@ -168,9 +168,10 @@ def host_files(root, profile, kind):
     raise ValueError("Specify --file for non-host payloads")
 
 
-def bridge_environment(root, profile):
+def bridge_environment(root, profile, target=None):
     """Pin CLI bridge lookup so checkout timestamps cannot trigger Cargo builds."""
-    directory = (root / "target" / profile).resolve()
+    triple = {"ios-arm64": "aarch64-apple-ios", "ios-sim-arm64": "aarch64-apple-ios-sim"}.get(target)
+    directory = ((root / "target" / triple if triple else root / "target") / profile).resolve()
     if "\n" in str(directory) or "\r" in str(directory):
         raise ValueError("Invalid bridge directory")
     catalog = (root / "src/linker/bridges.rs").read_text()
@@ -178,6 +179,15 @@ def bridge_environment(root, profile):
     if not variables:
         raise ValueError("No bridge environment inventory found")
     return "".join(f"{name}={directory}\n" for name in variables)
+
+
+def checkout_identity(root):
+    """Bind outputs to tracked source content, including deliberate version stamping."""
+    git = ["git", "-c", f"safe.directory={root.resolve()}"]
+    tree = subprocess.check_output(git + ["rev-parse", "HEAD^{tree}"], cwd=root, text=True).strip()
+    changes = subprocess.check_output(git + ["diff", "--no-ext-diff", "--binary", "HEAD", "--"], cwd=root)
+    return {"tree": tree, "changes_sha256": hashlib.sha256(changes).hexdigest(),
+            "lock_sha256": digest(root / "Cargo.lock"), "rust_toolchain": "1.98"}
 
 
 def main():
@@ -198,6 +208,7 @@ def main():
     parser.add_argument("--github-env", type=Path)
     args = parser.parse_args()
     expected = identity(args.sha, args.target, args.profile, args.features, args.kind, args.repository)
+    expected["source"] = checkout_identity(args.root)
     if args.command == "create":
         actual_sha = subprocess.check_output(["git", "-c", f"safe.directory={args.root.resolve()}", "rev-parse", "HEAD"], cwd=args.root, text=True).strip()
         if actual_sha != args.sha:
@@ -214,9 +225,9 @@ def main():
         verify(args.artifact, expected, args.run_id, args.attempt)
     else:
         restore(args.artifact, args.root, expected, args.run_id, args.attempt)
-        if args.kind == "bridges" and args.github_env:
+        if args.kind in ("bridges", "ios") and args.github_env:
             with args.github_env.open("a") as output:
-                output.write(bridge_environment(args.root, args.profile))
+                output.write(bridge_environment(args.root, args.profile, args.target))
     print(f"{args.command}: {args.kind} {args.target} {args.profile} {args.sha}")
 
 

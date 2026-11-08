@@ -1,6 +1,6 @@
 ---
 title: "Shared CI build artifacts"
-description: "Proposed build-once artifact flow for every Elephc CI entry point."
+description: "Implementation plan for shared build artifacts across Elephc CI."
 ---
 
 - [ ] Inventory every build command, implicit bridge build, test selector and required check.
@@ -12,13 +12,31 @@ description: "Proposed build-once artifact flow for every Elephc CI entry point.
 - [ ] Apply the same producer contract to scheduled/manual runs, nightly and release.
 - [ ] Verify failure propagation, coverage, cancellation, provenance and measured savings.
 
-Status: proposal only, implementation has not started.
+Status: implementation in progress on `ci/shared-build-artifacts`.
+Issue: https://github.com/illegalstudio/elephc/issues/2281
+Draft PR: https://github.com/illegalstudio/elephc/pull/2282
 Source baseline: main at `b62bff4ca643d7b7b6019f3d563253a8b918bb1f`, inspected on 2026-11-08.
-Compatibility review: live ruleset, actual queue/main runs, artifacts and existing
-planner/cleanup tests checked on 2026-11-08. This verifies design constraints, not
-an implementation that has yet to be written.
-The user requested a concrete proposal before implementation. No workflow, ruleset,
-release or required-check configuration has been changed.
+The user authorized implementation. Work is isolated in a ggw worktree and the PR
+remains a draft until the complete rollout and validation pass.
+
+Progress on 2026-11-08:
+
+- Host compiler/bridge producers and checksummed manifests implemented.
+- PDO and PHP SDK event ownership consolidated under the three existing top-level
+  required gates. PDO variants and NTS/ZTS consumers use shared test executables.
+- iOS cross-target bridges, curl docs/contracts, release frame assertions,
+  tokenizer, differential and managed-native consumers migrated to artifacts.
+- Exact-SHA main resolver, attempt-aware nextest bundles and development packages
+  implemented; real CI integration validation remains in progress.
+- First runner failures exposed container Git ownership and multi-path artifact
+  layout issues, plus an irrelevant mandatory Oniguruma extra in PDO archives.
+  Fixes and focused regression checks are in this branch.
+- Remaining: common nightly/release and benchmark producer usage, durable
+  reconciliation for skipped/multi-commit main updates, consumer build audit,
+  complete gate regressions, documentation and end-to-end CI validation/measurements.
+
+Compatibility review: live ruleset, actual queue/main runs and existing cleanup
+behavior were checked before implementation. No ruleset changes are planned.
 
 ## Goal
 

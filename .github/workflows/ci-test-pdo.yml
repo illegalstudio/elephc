@@ -3,6 +3,9 @@ name: Test live PDO databases
 on:
   workflow_call:
     inputs:
+      host-attempt:
+        type: string
+        default: ''
       family:
         type: string
         required: true
@@ -179,6 +182,7 @@ jobs:
         uses: ./.github/actions/restore-test-build
         with:
           target: linux-x86_64
+          attempt: ${{ inputs.host-attempt }}
 
       - name: Live native bridge tests
         if: matrix.suite == 'native-postgres'

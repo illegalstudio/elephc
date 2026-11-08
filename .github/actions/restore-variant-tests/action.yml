@@ -1,0 +1,34 @@
+name: Restore specialized test variant
+description: Restore one exact test configuration without rebuilding Rust consumers.
+inputs:
+  variant:
+    description: Specialized test variant
+    required: true
+  attempt:
+    description: Producing build attempt
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/restore-build-artifact
+      with:
+        target: linux-x86_64
+        kind: tests
+        variant: ${{ inputs.variant }}
+        features: ${{ inputs.variant == 'curl' && 'curl' || '' }}
+        profile: ${{ inputs.variant == 'release-frame' && 'release' || 'debug' }}
+        attempt: ${{ inputs.attempt }}
+    - name: Extract the selected test variant
+      shell: bash
+      env:
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        archive="$PWD/target/ci-variant/$VARIANT"
+        sh scripts/ci/validate_archived_nextest.sh "$archive"
+        destination="$RUNNER_TEMP/special-$VARIANT"
+        "$archive/cargo-nextest" nextest list --list-type binaries-only --message-format json \
+          --archive-file "$archive/nextest-archive.tar.zst" \
+          --extract-to "$destination" --workspace-remap . > /dev/null
+        echo "ELEPHC_CI_NEXTEST=$archive/cargo-nextest" >> "$GITHUB_ENV"
+        echo "ELEPHC_CI_TEST_ROOT=$destination" >> "$GITHUB_ENV"
+        echo 'ELEPHC_TEST_PREBUILT_BRIDGES=1' >> "$GITHUB_ENV"

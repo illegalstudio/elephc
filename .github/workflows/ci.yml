@@ -21,7 +21,7 @@ permissions:
 # Cancel superseded runs for the same ref (e.g. when a branch is force-pushed or
 # rebased) so stale jobs stop consuming runners the moment a newer commit lands.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -144,6 +144,8 @@ jobs:
       actions: read
       pull-requests: read
     outputs:
+      reuse-run: ${{ steps.reuse.outputs.run-id }}
+      reuse-attempts: ${{ steps.reuse.outputs.attempts }}
       run: ${{ steps.plan.outputs.run }}
       extended: ${{ steps.plan.outputs.extended }}
       sdk: ${{ steps.sdk.outputs.extended }}
@@ -154,6 +156,12 @@ jobs:
           sparse-checkout: scripts/ci
           sparse-checkout-cone-mode: true
 
+      - name: Resolve verified merge-group artifacts for main
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/resolve_main_build.py
+
       - name: Choose the tiers
         id: plan
         env:
@@ -162,6 +170,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           SHA: ${{ github.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          VERIFIED_REUSE_RUN: ${{ steps.reuse.outputs.run-id }}
           WORKFLOW_FILE: ci.yml
           EXTENDED_LABEL: ci:macos
           EXTENDED_PATHS: ^(\.github/workflows/ci\.yml|\.config/nextest\.toml|scripts/ci/|\.github/actions/)
@@ -175,6 +184,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           SHA: ${{ github.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          VERIFIED_REUSE_RUN: ${{ steps.reuse.outputs.run-id }}
           WORKFLOW_FILE: ci.yml
           EXTENDED_LABEL: ci:macos
           EXTENDED_PATHS: ^(\.github/workflows/(ci.*|phpext-host-sdk)\.yml$|Cargo\.(toml|lock)$|build\.rs$|src/|scripts/(ci|phpext)/|tests/phpext|examples/php-extension/|crates/elephc-zend/|\.github/actions/)
@@ -188,6 +198,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           SHA: ${{ github.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          VERIFIED_REUSE_RUN: ${{ steps.reuse.outputs.run-id }}
           WORKFLOW_FILE: ci.yml
           EXTENDED_LABEL: ci:pdo-live
           EXTENDED_PATHS: ^((src|crates|tests|scripts)/.*(pdo|mysqli)|\.github/workflows/(ci.*|pdo-live)\.yml$|scripts/ci/|\.github/actions/|Cargo\.lock$)
@@ -202,11 +213,12 @@ jobs:
       variants: '["libpq-gss"]'
 
   pdo-core:
-    needs: [plan, build-pdo-libpq]
+    needs: [plan, build-pdo-libpq, build-archive-linux-x86_64]
     if: needs.plan.outputs.run == 'true'
     uses: ./.github/workflows/ci-test-pdo.yml
     with:
       family: core
+      host-attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
       variant-attempt: ${{ needs.build-pdo-libpq.outputs.artifact-attempt }}
 
   pdo-core-gate:
@@ -257,11 +269,30 @@ jobs:
             (del(.plan) | all(.[]; .result == (if $selected == "true" then "success" else "skipped" end)))
           ' <<< "$RESULTS"
 
+  build-curl-tools:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    uses: ./.github/workflows/ci-build-special.yml
+    with:
+      variant: curl
+
+  build-release-frame:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    uses: ./.github/workflows/ci-build-special.yml
+    with:
+      variant: release-frame
+
+  build-ios:
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
+    uses: ./.github/workflows/ci-build-ios.yml
+
   build:
     name: Build
     runs-on: ubuntu-latest
     if: always()
-    needs: [plan, build-archive-macos-aarch64, build-archive-linux-x86_64, build-archive-linux-aarch64, build-pdo-libpq, build-pdo-drivers]
+    needs: [plan, build-archive-macos-aarch64, build-archive-linux-x86_64, build-archive-linux-aarch64, build-pdo-libpq, build-pdo-drivers, build-ios, build-curl-tools, build-release-frame]
     steps:
       - name: Require every planned build
         env:
@@ -271,7 +302,13 @@ jobs:
             .plan.result == "success" and
             (."build-pdo-libpq".result == (if .plan.outputs.run == "true" then "success" else "skipped" end)) and
             (."build-pdo-drivers".result == (if .plan.outputs["pdo-drivers"] == "true" then "success" else "skipped" end)) and
-            (del(.plan, ."build-pdo-libpq", ."build-pdo-drivers") | all(.[]; .result == "success"))
+            (."build-ios".result == (if .plan.outputs.extended == "true" then "success" else "skipped" end)) and
+            (if .plan.outputs.run == "true" then
+              del(.plan, ."build-pdo-libpq", ."build-pdo-drivers", ."build-ios") |
+              all(.[]; .result == "success" and (.outputs["artifact-attempt"] | test("^[1-9][0-9]*$")))
+            else
+              del(.plan, ."build-pdo-libpq", ."build-pdo-drivers", ."build-ios") | all(.[]; .result == "skipped")
+            end)
           ' <<< "$RESULTS"
 
   # Compile each platform once, then let that platform's tests start as soon as
@@ -279,18 +316,21 @@ jobs:
   # wait for a queued or slower macOS archive job.
   build-archive-macos-aarch64:
     needs: plan
+    if: needs.plan.outputs.run == 'true'
     uses: ./.github/workflows/ci-build-host.yml
     with:
       target: macos-aarch64
 
   build-archive-linux-x86_64:
     needs: plan
+    if: needs.plan.outputs.run == 'true'
     uses: ./.github/workflows/ci-build-host.yml
     with:
       target: linux-x86_64
 
   build-archive-linux-aarch64:
     needs: plan
+    if: needs.plan.outputs.run == 'true'
     uses: ./.github/workflows/ci-build-host.yml
     with:
       target: linux-aarch64
@@ -316,6 +356,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -333,6 +374,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -391,6 +433,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Run non-codegen tests
@@ -441,6 +484,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
+          attempt: ${{ needs.build-archive-linux-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Run non-codegen tests
@@ -489,6 +533,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -506,6 +551,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -574,6 +620,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Run CLI eval tests
@@ -637,6 +684,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
+          attempt: ${{ needs.build-archive-linux-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Run CLI eval tests
@@ -703,6 +751,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -720,6 +769,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -774,6 +824,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Run web test shard
@@ -823,6 +874,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
+          attempt: ${{ needs.build-archive-linux-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Run web test shard
@@ -873,6 +925,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -890,6 +943,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -1069,6 +1123,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-linux-x86_64
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       # Restore exact package artifacts before installs. A shared native-root cache
@@ -1232,6 +1287,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-linux-aarch64
+          attempt: ${{ needs.build-archive-linux-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       # Restore exact package artifacts before installs. A shared native-root cache
@@ -1388,6 +1444,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -1405,6 +1462,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -1452,6 +1510,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-linux-x86_64
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Run PDO codegen shard in one process
@@ -1494,6 +1553,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-linux-aarch64
+          attempt: ${{ needs.build-archive-linux-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Run PDO codegen shard in one process
@@ -1532,6 +1592,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -1549,6 +1610,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -1617,6 +1679,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-linux-x86_64
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Extract the elephc binary
@@ -1680,6 +1743,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-linux-aarch64
+          attempt: ${{ needs.build-archive-linux-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Extract the elephc binary
@@ -1766,6 +1830,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -1783,6 +1848,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -1867,6 +1933,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-linux-x86_64
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Extract test archive
@@ -1946,6 +2013,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-linux-aarch64
+          attempt: ${{ needs.build-archive-linux-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Extract test archive
@@ -1999,11 +2067,12 @@ jobs:
   # or misses a framework/archive on either platform, fails here.
   curl-ios-compile-link:
     name: Curl iOS Compile & Link (${{ matrix.elephc_target }})
-    needs: [plan, build-archive-macos-aarch64]
+    needs: [plan, build-archive-macos-aarch64, build-ios]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     env:
       ELEPHC_CI_PREBUILT_COMPILER: "1"
+      ELEPHC_CI_PREBUILT_IOS_BRIDGES: "1"
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -2027,25 +2096,12 @@ jobs:
           attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
 
 
-      - name: Install Rust with the iOS standard library
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - name: Restore shared iOS bridges
+        uses: ./.github/actions/restore-build-artifact
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: ${{ matrix.rust_target }}
-
-      - name: Cache Rust build state
-        # Dependencies only (registry, git checkouts, and the dependency
-        # artifacts under target/); the action prunes the workspace crates'
-        # own artifacts before saving. Caching the whole target/ dir put three
-        # 4 GB entries per platform plus every other job's into the repository's
-        # 10 GB allowance, so main's entries were evicted before the next run
-        # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
-        with:
-          prefix-key: rust-deps-curl-${{ matrix.elephc_target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-bin: false
-          cache-on-failure: true
+          target: ${{ matrix.elephc_target }}
+          kind: ios
+          attempt: ${{ needs.build-ios.outputs.artifact-attempt }}
 
       - name: Cache managed native curl for iOS
         uses: actions/cache@v6
@@ -2074,11 +2130,12 @@ jobs:
   # libxml2, `-liconv`, or the SDK's zlib/bzip2 on either platform, fails here.
   xml-ios-compile-link:
     name: XML iOS Compile & Link (${{ matrix.elephc_target }})
-    needs: [plan, build-archive-macos-aarch64]
+    needs: [plan, build-archive-macos-aarch64, build-ios]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     env:
       ELEPHC_CI_PREBUILT_COMPILER: "1"
+      ELEPHC_CI_PREBUILT_IOS_BRIDGES: "1"
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -2102,25 +2159,12 @@ jobs:
           attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
 
 
-      - name: Install Rust with the iOS standard library
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - name: Restore shared iOS bridges
+        uses: ./.github/actions/restore-build-artifact
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: ${{ matrix.rust_target }}
-
-      - name: Cache Rust build state
-        # Dependencies only (registry, git checkouts, and the dependency
-        # artifacts under target/); the action prunes the workspace crates'
-        # own artifacts before saving. Caching the whole target/ dir put three
-        # 4 GB entries per platform plus every other job's into the repository's
-        # 10 GB allowance, so main's entries were evicted before the next run
-        # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
-        with:
-          prefix-key: rust-deps-xml-${{ matrix.elephc_target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-bin: false
-          cache-on-failure: true
+          target: ${{ matrix.elephc_target }}
+          kind: ios
+          attempt: ${{ needs.build-ios.outputs.artifact-attempt }}
 
       - name: Cache managed native libxml2 for iOS
         uses: actions/cache@v6
@@ -2142,11 +2186,12 @@ jobs:
 
   fileinfo-ios-compile-link:
     name: Fileinfo iOS Compile & Link (${{ matrix.elephc_target }})
-    needs: [plan, build-archive-macos-aarch64]
+    needs: [plan, build-archive-macos-aarch64, build-ios]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     env:
       ELEPHC_CI_PREBUILT_COMPILER: "1"
+      ELEPHC_CI_PREBUILT_IOS_BRIDGES: "1"
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -2170,25 +2215,12 @@ jobs:
           attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
 
 
-      - name: Install Rust with the iOS standard library
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - name: Restore shared iOS bridges
+        uses: ./.github/actions/restore-build-artifact
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: ${{ matrix.rust_target }}
-
-      - name: Cache Rust build state
-        # Dependencies only (registry, git checkouts, and the dependency
-        # artifacts under target/); the action prunes the workspace crates'
-        # own artifacts before saving. Caching the whole target/ dir put three
-        # 4 GB entries per platform plus every other job's into the repository's
-        # 10 GB allowance, so main's entries were evicted before the next run
-        # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
-        with:
-          prefix-key: rust-deps-xml-${{ matrix.elephc_target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-bin: false
-          cache-on-failure: true
+          target: ${{ matrix.elephc_target }}
+          kind: ios
+          attempt: ${{ needs.build-ios.outputs.artifact-attempt }}
 
       - name: Cache managed native libmagic for iOS
         uses: actions/cache@v6
@@ -2250,6 +2282,7 @@ jobs:
         uses: ./.github/actions/restore-test-build
         with:
           target: linux-x86_64
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
 
       - name: Materialize managed GMP
         run: |
@@ -2265,11 +2298,12 @@ jobs:
 
   gmp-ios-compile-link:
     name: GMP iOS Compile & Link (${{ matrix.elephc_target }})
-    needs: [plan, build-archive-macos-aarch64]
+    needs: [plan, build-archive-macos-aarch64, build-ios]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     env:
       ELEPHC_CI_PREBUILT_COMPILER: "1"
+      ELEPHC_CI_PREBUILT_IOS_BRIDGES: "1"
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -2293,11 +2327,12 @@ jobs:
           attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
 
 
-      - name: Install Rust with the iOS standard library
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - name: Restore shared iOS bridges
+        uses: ./.github/actions/restore-build-artifact
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: ${{ matrix.rust_target }}
+          target: ${{ matrix.elephc_target }}
+          kind: ios
+          attempt: ${{ needs.build-ios.outputs.artifact-attempt }}
 
       - name: Cache managed native GMP for iOS
         uses: actions/cache@v6
@@ -2317,11 +2352,12 @@ jobs:
 
   tokenizer-ios-compile-link:
     name: Tokenizer iOS Compile & Link (${{ matrix.elephc_target }})
-    needs: [plan, build-archive-macos-aarch64]
+    needs: [plan, build-archive-macos-aarch64, build-ios]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     env:
       ELEPHC_CI_PREBUILT_COMPILER: "1"
+      ELEPHC_CI_PREBUILT_IOS_BRIDGES: "1"
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -2379,6 +2415,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -2396,6 +2433,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -2474,6 +2512,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-linux-x86_64
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Extract test archive
@@ -2544,6 +2583,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-codegen-linux-aarch64
+          attempt: ${{ needs.build-archive-linux-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Extract test archive
@@ -2664,42 +2704,21 @@ jobs:
 
   builtins-docs-sync:
     name: Builtins docs in sync
+    needs: build-curl-tools
+    env:
+      ELEPHC_DOCS_PREBUILT: '1'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - name: Restore shared curl docs exporter
+        uses: ./.github/actions/restore-build-artifact
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-
-      - name: Cache Rust build state
-        # Dependencies only (registry, git checkouts, and the dependency
-        # artifacts under target/); the action prunes the workspace crates'
-        # own artifacts before saving. Caching the whole target/ dir put three
-        # 4 GB entries per platform plus every other job's into the repository's
-        # 10 GB allowance, so main's entries were evicted before the next run
-        # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
-        with:
-          prefix-key: rust-deps-builtins-docs
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-bin: false
-          cache-on-failure: true
-
-      - name: Build the builtin docs exporter
-        # The exporter joins the shared contract to the AOT `builtin!` and
-        # Magician `eval_builtin!` bindings. `extract.py` prefers this prebuilt
-        # debug binary, so compile it before any documentation checks.
-        #
-        # `--features curl` is THE CANONICAL DOCUMENTATION CONFIGURATION, and this
-        # job is both the generator and the drift gate, so the two can never
-        # diverge. It is the only configuration in which the exporter can see the
-        # PHP-visible `curl_*` contracts (feature-gated in the shared catalog) and
-        # Magician's matching eval bindings; a default-feature build documents 34
-        # fewer functions than the compiler supports. `extract.py` fails loudly
-        # rather than regenerate the smaller catalog if this flag is ever dropped.
-        run: cargo build --example gen_builtins --features curl
+          target: linux-x86_64
+          kind: tools
+          variant: curl
+          features: curl
+          attempt: ${{ needs.build-curl-tools.outputs.artifact-attempt }}
 
       - name: Enforce builtin target architecture
         run: python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture
@@ -2760,6 +2779,7 @@ jobs:
             scripts/docs/symbol_registry.json
 
   tokenizer-tests:
+    needs: build-archive-linux-x86_64
     name: Tokenizer PHP 8.5 parity
     runs-on: ubuntu-latest
     steps:
@@ -2774,10 +2794,15 @@ jobs:
           php-version: '8.5'
           extensions: tokenizer
           coverage: none
+      - name: Restore shared tokenizer tests
+        uses: ./.github/actions/restore-test-build
+        with:
+          target: linux-x86_64
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
       - name: Check the shared tokenizer against PHP
         env:
           ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
-        run: cargo test --locked -p elephc-tokenizer-engine --lib
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-tokenizer-engine) and kind(lib)'
 
   tokenizer-native-smoke:
     name: Tokenizer native smoke
@@ -2809,6 +2834,7 @@ jobs:
         uses: ./.github/actions/restore-test-build
         with:
           target: linux-x86_64
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
       - name: Run the native tokenizer example
         run: |
           target/debug/elephc --with-tokenizer examples/tokenizer/main.php
@@ -2868,28 +2894,16 @@ jobs:
 
   curl-feature-contract:
     name: Curl feature contract coverage
+    needs: build-curl-tools
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - name: Restore shared curl contract tests
+        uses: ./.github/actions/restore-variant-tests
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-
-      - name: Cache Rust build state
-        # Dependencies only (registry, git checkouts, and the dependency
-        # artifacts under target/); the action prunes the workspace crates'
-        # own artifacts before saving. Caching the whole target/ dir put three
-        # 4 GB entries per platform plus every other job's into the repository's
-        # 10 GB allowance, so main's entries were evicted before the next run
-        # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
-        with:
-          prefix-key: rust-deps-curl-feature
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-bin: false
-          cache-on-failure: true
+          variant: curl
+          attempt: ${{ needs.build-curl-tools.outputs.artifact-attempt }}
 
       # Every other job builds the workspace with default features, and the
       # nextest archive is no exception, so nothing else in CI ever compiles
@@ -2906,13 +2920,13 @@ jobs:
       # root-level steps never reach Magician's eval dispatch table at all (they
       # read builtin metadata only), so the linker drops every reference to it.
       - name: Catalog coverage with the curl surface published
-        run: cargo test -p elephc-builtin-contract --features curl
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-builtin-contract)'
 
       - name: Magician eval bindings with the curl surface published
-        run: cargo test -p elephc-magician --features curl
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-magician)'
 
       - name: Native reference source and validation ABI
-        run: cargo test -p elephc-reference
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-reference)'
 
       # The root `curl` feature (Cargo.toml) relays both edges, which is what puts
       # the shared catalog's curl contracts and Magician's eval bindings in ONE
@@ -2920,13 +2934,13 @@ jobs:
       # per-contract assertions — name sets, signature shapes, eval coverage — to
       # the thirty-four `curl_*` surfaces instead of counting them and moving on.
       - name: Cross-backend parity with the curl surface published
-        run: cargo test --features curl --test builtin_parity_tests
+        run: bash scripts/ci/run_prebuilt_tests.sh 'binary(=builtin_parity_tests)'
 
       # The compiler-side half: `builtins::parity_tests` compares every
       # prelude-provided contract with the PHP declaration its injected prelude
       # actually ships, which is the only AOT signature a prelude route has.
       - name: Compiler prelude parity with the curl surface published
-        run: cargo test -p elephc --lib --features curl builtins::parity_tests
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(builtins::parity_tests)'
 
   managed-native-smoke-macos-aarch64:
     needs: [plan, build-archive-macos-aarch64]
@@ -2957,18 +2971,20 @@ jobs:
 
   frame-assertions-release:
     name: Frame assertions (release)
+    needs: build-release-frame
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - name: Restore release-mode test executables
+        uses: ./.github/actions/restore-variant-tests
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          variant: release-frame
+          attempt: ${{ needs.build-release-frame.outputs.artifact-attempt }}
 
       - name: Check undersized frame rejection in release mode
-        run: cargo test -p elephc --release --lib test_emit_frame_
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(test_emit_frame_)'
 
   benchmark-tooling:
     name: Benchmark tooling
@@ -3058,11 +3074,11 @@ jobs:
           RUN_TIER: ${{ needs.plan.outputs.run }}
           EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
         run: |
-          always="plan build phpext-host-sdk gmp-phpt-corpus build-archive-macos-aarch64 build-archive-linux-x86_64
-            build-archive-linux-aarch64 image-api-sync builtins-docs-sync tokenizer-tests tokenizer-native-smoke differential-tests
-            curl-feature-contract security-audit action-pins frame-assertions-release
-            benchmark-tooling"
-          run_tier="non-codegen-tests-linux-x86_64 non-codegen-tests-linux-aarch64
+          always="plan build phpext-host-sdk image-api-sync security-audit action-pins benchmark-tooling"
+          run_tier="gmp-phpt-corpus build-archive-macos-aarch64 build-archive-linux-x86_64
+            build-archive-linux-aarch64 builtins-docs-sync tokenizer-tests tokenizer-native-smoke differential-tests
+            curl-feature-contract frame-assertions-release
+            non-codegen-tests-linux-x86_64 non-codegen-tests-linux-aarch64
             cli-tests-linux-x86_64 cli-tests-linux-aarch64 web-tests-linux-x86_64
             web-tests-linux-aarch64 codegen-tests-linux-x86_64 codegen-tests-linux-aarch64
             pdo-codegen-tests-linux-x86_64 pdo-codegen-tests-linux-aarch64
@@ -3095,6 +3111,66 @@ jobs:
             fi
           done
           exit "$status"
+
+  development-artifacts:
+    name: Development package (${{ matrix.target }})
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.test.result == 'success' && needs.pdo-core-gate.result == 'success' && needs.pdo-drivers-gate.result == 'success'
+    needs: [plan, test, pdo-core-gate, pdo-drivers-gate, build-archive-linux-x86_64, build-archive-linux-aarch64, build-archive-macos-aarch64]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-24.04
+          - target: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - target: macos-aarch64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install native link prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y binutils build-essential libbz2-dev zlib1g-dev
+      - name: Restore verified compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ matrix.target }}
+          kind: compiler
+          run-id: ${{ needs.plan.outputs.reuse-run || github.run_id }}
+          attempt: ${{ needs.plan.outputs.reuse-run != '' && fromJSON(needs.plan.outputs.reuse-attempts)[matrix.target] || needs[format('build-archive-{0}', matrix.target)].outputs.artifact-attempt }}
+      - name: Restore verified bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ matrix.target }}
+          kind: bridges
+          run-id: ${{ needs.plan.outputs.reuse-run || github.run_id }}
+          attempt: ${{ needs.plan.outputs.reuse-run != '' && fromJSON(needs.plan.outputs.reuse-attempts)[matrix.target] || needs[format('build-archive-{0}', matrix.target)].outputs.artifact-attempt }}
+      - name: Package and verify the standalone installation
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          python3 -B scripts/ci/development_artifact.py --target "$TARGET" --sha "$GITHUB_SHA" \
+            --compiler-manifest "$RUNNER_TEMP/build-$TARGET-debug-compiler-default/manifest.json" \
+            --bridge-manifest "$RUNNER_TEMP/build-$TARGET-debug-bridges-default/manifest.json"
+      - name: Retain development download
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: elephc-dev-${{ matrix.target }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/development/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Link the development download
+        env:
+          TARGET: ${{ matrix.target }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          SOURCE_RUN: ${{ needs.plan.outputs.reuse-run || github.run_id }}
+        run: |
+          printf 'Development build `%s` for `%s`: [download](%s), producer run `%s`. Retained for 14 days.\n' \
+            "$GITHUB_SHA" "$TARGET" "$ARTIFACT_URL" "$SOURCE_RUN" >> "$GITHUB_STEP_SUMMARY"
 
   benchmark:
     name: Benchmark Suite

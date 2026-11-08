@@ -28,10 +28,11 @@ jobs:
       variants: '["libpq-gss"]'
 
   test-libpq:
-    needs: build-libpq
+    needs: [build-libpq, build-host]
     uses: ./.github/workflows/ci-test-pdo.yml
     with:
       family: core
+      host-attempt: ${{ needs.build-host.outputs.artifact-attempt }}
       variant-attempt: ${{ needs.build-libpq.outputs.artifact-attempt }}
 
   build-drivers:

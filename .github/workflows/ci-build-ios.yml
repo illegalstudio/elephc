@@ -1,0 +1,65 @@
+name: Build iOS bridges
+
+on:
+  workflow_call:
+    inputs:
+      targets:
+        type: string
+        default: '["ios-arm64","ios-sim-arm64"]'
+    outputs:
+      artifact-attempt:
+        value: ${{ jobs.build.outputs.artifact-attempt }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build iOS bridges (${{ matrix.target }})
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.targets) }}
+    outputs:
+      artifact-attempt: ${{ steps.publish.outputs.attempt }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: '1.98'
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        with:
+          prefix-key: rust-deps-ios-bridges-${{ matrix.target }}
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the cross-target bridge set
+        id: build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          case "$TARGET" in
+            ios-arm64) triple=aarch64-apple-ios ;;
+            ios-sim-arm64) triple=aarch64-apple-ios-sim ;;
+            *) exit 1 ;;
+          esac
+          cargo build --locked --target "$triple" \
+            -p elephc-curl -p elephc-xml -p elephc-fileinfo -p elephc-gmp \
+            -p elephc-tokenizer -p elephc-phar -p elephc-tls
+          echo "triple=$triple" >> "$GITHUB_OUTPUT"
+      - name: Publish iOS bridge outputs
+        id: publish
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          target: ${{ matrix.target }}
+          kind: ios
+          files: |
+            target/${{ steps.build.outputs.triple }}/debug/libelephc_curl.a
+            target/${{ steps.build.outputs.triple }}/debug/libelephc_xml.a
+            target/${{ steps.build.outputs.triple }}/debug/libelephc_fileinfo.a
+            target/${{ steps.build.outputs.triple }}/debug/libelephc_gmp.a
+            target/${{ steps.build.outputs.triple }}/debug/libelephc_tokenizer.a
+            target/${{ steps.build.outputs.triple }}/debug/libelephc_phar.a
+            target/${{ steps.build.outputs.triple }}/debug/libelephc_tls.a
