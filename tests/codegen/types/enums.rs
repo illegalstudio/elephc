@@ -1335,7 +1335,8 @@ fn test_enum_from_string_failure_throws_value_error() {
 
 /// Compiles and runs the checked-in `examples/enums/main.php` fixture and asserts stdout includes
 /// user-declared enum output, the `->name`/`->value` case introspection loop, the builtin
-/// `SortDirection` helper result, and the enum-case property defaults.
+/// `SortDirection` helper result, the enum-case property defaults, and backed case values written
+/// as constant expressions (a global constant concatenation and class-constant arithmetic).
 ///
 /// The last row is the #566 section: a declared property, a promoted one and a static one all
 /// defaulted to an enum case, plus `=== Level::Low` on the declared one. The identity check is
@@ -1347,7 +1348,7 @@ fn test_example_enums_compiles_and_runs() {
     assert_eq!(
         out,
         "1\n2\n3\nRed=1 Green=2 Blue=3 \nDefault=default Match=match MATCH=upper-match \nDESC\n\
-         Low High High same"
+         Low High High same\n/api/orders NotFound"
     );
 }
 
