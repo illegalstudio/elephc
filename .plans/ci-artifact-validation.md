@@ -21,6 +21,12 @@ multipliers. Stored artifact bytes are not a measurement of network transfer.
 Host build/archive jobs took 6.72 minutes (Linux x86_64), 9.10 minutes (Linux ARM64)
 and 26.93 minutes (macOS ARM64). These observations do not establish cold-cache cost.
 
+The logs of 29 compilation-bearing CI jobs contain 67 Cargo `Compiling elephc v`
+events; seven PDO jobs contain another 18. This includes six events in each of the
+six PHP SDK jobs and one in each of the ten iOS jobs. The total of 85 counts root
+package compilation events, not individual rustc invocations. Test-shard logs were
+not included in that inventory.
+
 Reproduce the inventory with:
 
 ```bash
@@ -29,9 +35,11 @@ python3 -B scripts/ci/measure_run.py 42439918696 42439918652
 
 ## Focused checks
 
-- 53 Python infrastructure tests cover archive integrity, identities, producer
+- 54 Python infrastructure tests cover archive integrity, identities, producer
   attempts, incompatible environments, dependency graphs, the actual gate scripts,
   partial matrix reruns and development reconciliation crash recovery.
+  A real Git history fixture also rejects pre-rollout commits, merged PR branch
+  heads and unmerged branches at the development dispatch trust boundary.
 - The CI tier planner and both queue cleanup shell suites pass.
 - Nextest archive validation and the isolated prebuilt documentation exporter
   checks pass. The full docs extraction suite is not needed for this change.
@@ -45,8 +53,18 @@ The initial integration runs found and fixed container Git ownership, multi-path
 container upload mapping, specialized nextest includes, default sh versus Bash,
 and missing nextest extraction directories. The iOS producers, specialized tool
 producers and Linux x86_64 host producer have completed successfully. The full
-consumer matrix remains under validation on the latest PR head. Curl contract
-consumers have also passed using only their prebuilt test payload.
+consumer matrix remains under validation on the latest PR head. Curl contracts,
+documentation, tokenizer, differential checks, release frame assertions, all four
+Linux PHP SDK jobs and all optional PDO driver consumers have passed using their
+prebuilt payloads. Sampled completed consumer logs contain no root-package compile
+events, and their consumer build audits passed.
+
+Run `42488921072` exposed a migrated timeout: the 98-case GMP corpus had completed
+in 213.53 seconds under the old Cargo runner, but nextest terminated it at its
+ordinary 180-second single-test limit. An exact corpus override now allows ten
+minutes without removing any cases. CodeQL also identified the historical checkout
+as input-controlled; packaging now independently validates the retained main
+first-parent SHA before checkout, in addition to validation in its caller.
 
 A downloaded Linux x86_64 payload from producer run `42486034417` passed the actual
 standalone package probe locally. Its synthetic PR merge source was

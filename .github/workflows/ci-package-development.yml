@@ -29,9 +29,20 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 20
     steps:
+      # Revalidate here so every caller crosses the same trust boundary before
+      # any scripts or actions from a requested historical commit are executed.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.source-sha }}
+          ref: main
+          fetch-depth: 0
+      - name: Validate the package source against retained main history
+        id: source
+        env:
+          SOURCE_SHA: ${{ inputs.source-sha }}
+        run: python3 -B scripts/ci/reconcile_development.py validate "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.source.outputs.sha }}
       - name: Install native link prerequisites
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y binutils build-essential libbz2-dev zlib1g-dev

@@ -1,7 +1,9 @@
 """Exercise skipped events, checkpoint crash recovery and bounded backfill policy."""
 
 import copy
+from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -51,6 +53,45 @@ class ReconciliationTests(unittest.TestCase):
             for invalid in ("main", "a" * 7, "c" * 40):
                 with self.assertRaises(ValueError):
                     subject.validate_source(invalid)
+
+    def test_real_main_history_rejects_pr_heads_and_pre_rollout_commits(self):
+        """The dispatch boundary must resolve real first-parent history, including merges."""
+        with tempfile.TemporaryDirectory(prefix="elephc-main-history-") as directory:
+            root = Path(directory)
+
+            def git(*args):
+                return subprocess.check_output(
+                    ["git", "-C", directory, "-c", "commit.gpgsign=false",
+                     "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", *args],
+                    text=True, stderr=subprocess.DEVNULL).strip()
+
+            def commit(message):
+                git("commit", "--allow-empty", "-m", message)
+                return git("rev-parse", "HEAD")
+
+            git("init", "--initial-branch=main")
+            before = commit("test: establish pre-rollout history")
+            git("checkout", "-b", "rollout")
+            workflow = root / ".github/workflows/development-builds.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text("name: development artifacts\n")
+            git("add", ".")
+            pr_head = commit("test: introduce development artifacts")
+            git("checkout", "main")
+            git("merge", "--no-ff", "rollout", "-m", "test: merge rollout")
+            anchor = git("rev-parse", "HEAD")
+            git("checkout", "-b", "unmerged")
+            unmerged = commit("test: create an unmerged candidate")
+            git("checkout", "main")
+            current = commit("test: advance main")
+            git("update-ref", "refs/remotes/origin/main", current)
+            with patch.object(subject, "git", side_effect=git):
+                self.assertEqual(subject.rollout(), anchor)
+                for allowed in (anchor, current):
+                    self.assertEqual(subject.validate_source(allowed), allowed)
+                for forbidden in (before, pr_head, unmerged):
+                    with self.assertRaises(ValueError):
+                        subject.validate_source(forbidden)
 
     def test_crash_at_dispatch_keeps_both_request_and_advanced_checkpoint(self):
         class Crash(subject.Reconciler):
