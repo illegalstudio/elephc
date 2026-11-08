@@ -405,8 +405,9 @@ mod tests {
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
         // Also includes the SimpleXML allocation and diagnostic adapters, and
-        // `__elephc_reflection_class_build`, which only compiled reflectors call.
-        assert_eq!(eval_internal, 137);
+        // `__elephc_reflection_class_build` / `__elephc_eval_reflection_class_build`, which
+        // only compiled reflector getters call.
+        assert_eq!(eval_internal, 138);
         // 30 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`), plus
         // the 187 Intl contracts that route through the managed ICU bridge.
@@ -420,8 +421,8 @@ mod tests {
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries, and the
-        // compiled `ReflectionClass` builder call one more.
-        assert_eq!(aot_registry, 877);
+        // compiled and eval `ReflectionClass` builder calls two more.
+        assert_eq!(aot_registry, 878);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         // Includes the 137 Intl procedural contracts declared by the synthetic prelude.
@@ -482,7 +483,7 @@ mod tests {
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls.
         // Includes the 187 Intl contracts: the managed ICU bridge has no eval route.
-        assert_eq!(unsupported, 706);
+        assert_eq!(unsupported, 707);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

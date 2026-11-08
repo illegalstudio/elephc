@@ -108,6 +108,9 @@ pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcE
 /// Drops final object metadata after receiver release, preserving it during collector destructors.
 #[cfg(not(test))]
 pub(crate) fn forget_released_object(identity: u64) {
+    // A freed reflector's address can identify the next object, so its registry entry goes
+    // first; owners untrack their identities before teardown, so the owner is live.
+    unsafe { crate::context::forget_released_reflection_identity(identity) };
     let Some(context) = dynamic_object_owner_context(identity) else { return; };
     // Context teardown unregisters its identities before freeing the context.
     let Some(context) = (unsafe { context.as_mut() }) else { return; };

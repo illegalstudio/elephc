@@ -104,6 +104,9 @@ pub(super) fn lower(
         RuntimeFnId::ElephcReflectionClassBuild => Some({
             crate::codegen::lower_inst::builtins::reflection_class_build::lower_reflection_class_build(ctx, inst)
         }),
+        RuntimeFnId::ElephcEvalReflectionClassBuild => Some({
+            crate::codegen::lower_inst::builtins::reflection_class_build::lower_eval_reflection_class_build(ctx, inst)
+        }),
         RuntimeFnId::ElephcPtrIsNull => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_is_null(ctx, inst)
         }),

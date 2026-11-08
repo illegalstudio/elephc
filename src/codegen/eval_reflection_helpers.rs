@@ -25,7 +25,8 @@ struct ReflectionAttributeLayout {
     class_id: u64,
     property_count: usize,
     public_name_lo: usize,
-    public_name_hi: usize,
+    /// Whether `$name` is an object-owned reference property (bound with `=&` somewhere).
+    public_name_owns_reference: bool,
     name_lo: usize,
     name_hi: usize,
     args_lo: usize,
@@ -90,7 +91,8 @@ fn reflection_attribute_layout(module: &Module) -> Option<ReflectionAttributeLay
         class_id: info.class_id,
         property_count: info.properties.len(),
         public_name_lo,
-        public_name_hi: public_name_lo + 8,
+        public_name_owns_reference:
+            super::eval_reflection_mirrors::reflection_property_owns_reference(info, "name"),
         name_lo,
         name_hi: name_lo + 8,
         args_lo,
@@ -246,9 +248,15 @@ fn emit_set_name_property_aarch64(emitter: &mut Emitter, layout: &ReflectionAttr
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the original name pointer for the public mirror copy
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the original name length for the public mirror copy
     emitter.instruction("bl __rt_str_persist");                                 // give the mutable public mirror independent string storage
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the ReflectionAttribute object pointer
-    abi::emit_store_to_address(emitter, "x1", "x9", layout.public_name_lo);
-    abi::emit_store_to_address(emitter, "x2", "x9", layout.public_name_hi);
+    super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+        emitter,
+        "x9",
+        layout.public_name_lo,
+        layout.public_name_owns_reference,
+        |emitter| {
+            emitter.instruction("ldr x9, [sp, #24]");                           // reload the ReflectionAttribute object pointer
+        },
+    );
 }
 
 /// Stores the incoming x86_64 attribute name into the private slot and public mirror.
@@ -262,9 +270,15 @@ fn emit_set_name_property_x86_64(emitter: &mut Emitter, layout: &ReflectionAttri
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the original name pointer for the public mirror copy
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the original name length for the public mirror copy
     emitter.instruction("call __rt_str_persist");                               // give the mutable public mirror independent string storage
-    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the ReflectionAttribute object pointer
-    abi::emit_store_to_address(emitter, "rax", "r10", layout.public_name_lo);
-    abi::emit_store_to_address(emitter, "rdx", "r10", layout.public_name_hi);
+    super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+        emitter,
+        "r10",
+        layout.public_name_lo,
+        layout.public_name_owns_reference,
+        |emitter| {
+            emitter.instruction("mov r10, QWORD PTR [rbp - 48]");               // reload the ReflectionAttribute object pointer
+        },
+    );
 }
 
 /// Stores a retained ARM64 argument-array payload into the object private slot.

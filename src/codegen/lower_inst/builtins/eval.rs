@@ -360,6 +360,8 @@ pub(super) use dynamic_calls::{
 };
 mod constructorless;
 pub(super) use constructorless::lower_eval_constructorless_fallback;
+mod reflection_class;
+pub(super) use reflection_class::lower_eval_reflection_class_build_call;
 mod method_lookup;
 pub(super) use method_lookup::lower_eval_abstract_method_guard;
 pub(super) use introspection::{

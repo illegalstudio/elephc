@@ -284,9 +284,13 @@ fn check_assign_value_type(
     let previously_bound = checker.definitely_bound_locals.contains(name);
     // A new ordinary store is measured against the binding, then owns its merge result.
     // It must not inherit a read-only flow view or have a widening overwritten afterwards.
+    // A sibling guard complement can retain nullable storage only in its narrowing origin.
+    let nullable_guard_store = !type_is_definitely_non_null(&ty)
+        && checker.guarded_local_storage_type(&Expr::var(name), env)
+            .is_some_and(Checker::union_contains_void);
     if null_coalesce_default.is_none()
-        && previous_storage.as_ref().is_some_and(|origin|
-            origin.coalesced || !type_is_definitely_non_null(&ty))
+        && (nullable_guard_store || previous_storage.as_ref().is_some_and(|origin|
+            origin.coalesced || !type_is_definitely_non_null(&ty)))
     {
         checker.invalidate_local_flow_narrowing(name, env);
     }
@@ -331,8 +335,9 @@ fn check_assign_value_type(
             if checker.local_flow_read_is_stable(name) {
                 if stored_non_null && env.get(name).is_some_and(Checker::is_raw_non_null_contract) {
                     // Keep a successful fresh-value proof available to later local copies.
-                    // A same-type contract changes no physical representation.
-                    let storage = env.get(name).expect("successful assignment").clone();
+                    // A sibling complement may retain nullable storage only in its guard origin.
+                    let storage = checker.guarded_local_storage_type(&Expr::var(name), env)
+                        .or_else(|| env.get(name)).expect("successful assignment").clone();
                     checker.guarded_union_types.entry(name.to_string())
                         .or_insert(GuardedLocalStorage { ty: storage, coalesced: false });
                 } else if checker.guarded_union_types.get(name)
