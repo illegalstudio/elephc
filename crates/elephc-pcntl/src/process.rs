@@ -137,32 +137,6 @@ pub extern "C" fn elephc_pcntl_fork() -> i64 {
     i64::from(pid)
 }
 
-/// Moves one process into a process group and records errno on failure.
-#[no_mangle]
-pub extern "C" fn elephc_posix_setpgid(process_id: i64, process_group_id: i64) -> libc::c_int {
-    let result = unsafe {
-        libc::setpgid(
-            process_id as libc::pid_t,
-            process_group_id as libc::pid_t,
-        )
-    };
-    if result == -1 {
-        record_errno();
-        return 0;
-    }
-    1
-}
-
-/// Creates a new session for the calling process and returns its session identifier.
-#[no_mangle]
-pub extern "C" fn elephc_posix_setsid() -> i64 {
-    let session_id = unsafe { libc::setsid() };
-    if session_id == -1 {
-        record_errno();
-    }
-    i64::from(session_id)
-}
-
 /// Detaches the calling process through `daemon(3)` while preserving PCNTL queue isolation.
 ///
 /// Returns one in the surviving daemon process or zero after recording errno. When `daemon(3)`
