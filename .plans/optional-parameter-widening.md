@@ -1,7 +1,7 @@
 # Optional-parameter widening for overrides and interface implementations
 
 - [x] Search existing issues and Pull Requests (#1935 is the related design discussion).
-- [x] Draft the issue text (below; not opened).
+- [x] Open the issue (#2294; text below).
 - [x] Checker: accept trailing optional parameters on instance overrides, interface
       implementations and interface redeclarations (`ParameterWidening::TrailingOptional`).
 - [x] Checker: retire the inherited instance-vtable slot under a generated key and give the
@@ -13,6 +13,8 @@
 - [x] Codegen tests (narrow and wide receivers, named arguments, constant and expression
       defaults, by-reference parameters, `func_num_args()`/`func_get_args()`, collecting
       parents, interface redeclaration and implementation) and error tests.
+- [x] Checker: keep the exact `func_args` rule for a counting override behind an optional
+      inherited prefix whose parent does not count (the narrow caller fills those defaults).
 - [x] Docs (`docs/php/classes.md`, `docs/php/types.md`, `docs/internals/the-type-checker.md`)
       and the `examples/override-widening` program.
 - [ ] Follow-ups (separate changes): static-method widening, appended variadics, making an
@@ -122,7 +124,10 @@ are unchanged. Interface calls already go through per-(class, interface) entries
 - Defaults (constants, expressions, `static`/`self`) are evaluated by the existing call
   lowering in the override's scope, not re-implemented in a thunk.
 - `func_num_args()` stays correct for free: the adapter forwards only what it received,
-  including surplus arguments collected by a `func_num_args()`-using parent.
+  including surplus arguments collected by a `func_num_args()`-using parent. The exception is
+  an optional inherited prefix: the narrow caller fills its omitted defaults before the
+  adapter runs, so a counting override there is accepted only when the parent counts too
+  (its ABI then carries the actual count); otherwise the checker keeps the `func_args` error.
 - It reuses a mechanism already proven for enums and interfaces.
 
 ### Alternatives considered
@@ -171,6 +176,10 @@ name resolver and optimizer are not involved.
   `$p->get("x")` through the parent type) sees the parent's default; PHP uses the override's.
   Calls through a retired slot are not affected (the adapter uses the override's signature),
   but calls through an intermediate wide type are. #1935 tracks inherited-default changes.
+- A counting override (`func_num_args()`/`func_get_args()`) that widens a non-counting parent
+  or interface method with an optional parameter stays rejected, as the exact shape already is.
+- Pre-existing and independent of widening: `$parentTyped->method(...)` builds a closure over
+  the parent's body instead of the runtime class's override.
 - Returning a `mixed` value from a function declared `: object` or `: SomeClass` is a
   compile error (`return type expects object, got mixed`) independently of this change; the
   PSR-style `function viaPsr(PsrDispatcher $d, object $e): object { return $d->dispatch($e); }`

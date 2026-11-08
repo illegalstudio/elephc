@@ -823,7 +823,7 @@ function fetch(PsrContainer $c) { return $c->get("svc"); }
 echo fetch(new Container()); // svc:1
 ```
 
-A call through the narrower parent or interface gets the override's defaults, and `func_num_args()` counts only the arguments the caller passed. Not yet supported: appending optional parameters to a static method, appending a variadic parameter, making an inherited required parameter optional, and calling a widened method on a `mixed`/untyped receiver whose candidate classes disagree on the parameter count (the call reports a member call on `null`).
+A call through the narrower parent or interface gets the override's defaults, and `func_num_args()` counts only the arguments the caller passed. Not yet supported: a widened override that calls `func_num_args()`/`func_get_args()` when an inherited parameter is optional and the parent method or interface does not count its own arguments, appending optional parameters to a static method, appending a variadic parameter, making an inherited required parameter optional, and calling a widened method on a `mixed`/untyped receiver whose candidate classes disagree on the parameter count (the call reports a member call on `null`).
 
 ## Traits
 Flattened at compile time. Support: `use Trait;`, multiple traits, `insteadof`, `as`, trait properties, static trait methods.
