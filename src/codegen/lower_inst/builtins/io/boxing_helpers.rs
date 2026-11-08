@@ -155,7 +155,21 @@ pub(super) fn box_stream_fd_or_false_result_kind(
     label_prefix: &str,
     cleanup: ResourceCleanupKind,
 ) {
-    let kind = cleanup.stamp();
+    box_resource_payload_or_false_result(ctx, label_prefix, cleanup.stamp());
+}
+
+/// Boxes a non-negative native payload as a PHP resource (or false when negative) whose
+/// Mixed high word is `kind`.
+///
+/// `box_stream_fd_or_false_result_kind` is the entry point for every kind that has a
+/// scope-exit destructor. This raw form exists for kinds that deliberately have none —
+/// the `proc_open()` process resource (kind 11, see `proc_resources`) only needs the high
+/// word for its `process` type name.
+pub(super) fn box_resource_payload_or_false_result(
+    ctx: &mut FunctionContext<'_>,
+    label_prefix: &str,
+    kind: u64,
+) {
     let false_label = ctx.next_label(&format!("{}_false", label_prefix));
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     match ctx.emitter.target.arch {
@@ -164,7 +178,7 @@ pub(super) fn box_stream_fd_or_false_result_kind(
             ctx.emitter.instruction(&format!("b.lt {}", false_label));          // box PHP false when stream creation failed
             abi::emit_call_label(ctx.emitter, "__rt_resource_id_mint");         // mint a FRESH resource id: the kernel reuses descriptor numbers, PHP never reuses ids
             ctx.emitter.instruction("mov x1, x0");                              // pass the native stream fd as the Mixed low payload word
-            ctx.emitter.instruction(&format!("mov x2, #{}", kind));             // resource-kind subtype in the Mixed high word (1=fd,3=popen,4=dir)
+            ctx.emitter.instruction(&format!("mov x2, #{}", kind));             // resource-kind subtype in the Mixed high word (1=fd,3=popen,4=dir,11=process)
             ctx.emitter.instruction("mov x0, #9");                              // select runtime tag 9 for a stream resource
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the resource result
@@ -180,7 +194,7 @@ pub(super) fn box_stream_fd_or_false_result_kind(
             ctx.emitter.instruction(&format!("js {}", false_label));            // box PHP false when stream creation failed
             abi::emit_call_label(ctx.emitter, "__rt_resource_id_mint");         // mint a FRESH resource id: the kernel reuses descriptor numbers, PHP never reuses ids
             ctx.emitter.instruction("mov rdi, rax");                            // pass the native stream fd as the Mixed low payload word
-            ctx.emitter.instruction(&format!("mov esi, {}", kind));             // resource-kind subtype in the Mixed high word (1=fd,3=popen,4=dir)
+            ctx.emitter.instruction(&format!("mov esi, {}", kind));             // resource-kind subtype in the Mixed high word (1=fd,3=popen,4=dir,11=process)
             ctx.emitter.instruction("mov eax, 9");                              // select runtime tag 9 for a stream resource
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the resource result
