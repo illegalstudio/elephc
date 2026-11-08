@@ -1,6 +1,6 @@
 //! Purpose:
 //! Exercises unqualified function calls in Composer-autoloaded class files that resolve to
-//! functions declared by `autoload.files` entries.
+//! functions declared by `autoload.files` entries or by the entry program.
 //!
 //! Called from:
 //! - The codegen integration harness on every executable supported target.
@@ -59,4 +59,37 @@ final class A {
     assert!(output.status.success(), "autoload files execution failed: {}",
         String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "2|ns-2|app|global\n");
+}
+
+/// A class file calls functions the entry program declares: one after the call site and one in
+/// a `require`d file, both through the namespace fallback to the global function.
+#[test]
+fn test_autoloaded_class_calls_functions_from_entry_program() {
+    let project = AutoloadFilesProject(make_cli_test_dir("elephc_autoload_entry_functions"));
+    let dir = &project.0;
+    fs::create_dir(dir.join("src")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#).unwrap();
+    fs::write(dir.join("helpers.php"), "<?php\nfunction inc(): string { return 'included'; }\n")
+        .unwrap();
+    fs::write(dir.join("src/A.php"), r#"<?php
+namespace App;
+final class A {
+    public static function go(): string { return late() . "|" . inc(); }
+}
+"#).unwrap();
+    fs::write(dir.join("main.php"), r#"<?php
+require __DIR__ . '/helpers.php';
+echo App\A::go(), "\n";
+function late(): string { return 'late'; }
+"#).unwrap();
+    let compiled = elephc_cli_command(dir)
+        .args(["--target", target().as_str(), "main.php"])
+        .output()
+        .expect("run compiler");
+    assert!(compiled.status.success(), "entry functions compilation failed: {}",
+        String::from_utf8_lossy(&compiled.stderr));
+    let output = run_binary_with_args(&dir.join("main"), dir, &[]);
+    assert!(output.status.success(), "entry functions execution failed: {}",
+        String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "late|included\n");
 }
