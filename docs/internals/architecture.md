@@ -58,8 +58,9 @@ Source (.php or .lfc)
 │              │  Injects only the compiler-owned PHP surfaces required by
 │              │  resolved source usage, forced bridge flags, or --web. Before
 │              │  injection, src/autoload/prelude_probe.rs scans an autoloaded
-│              │  copy for PDO/mysqli/tz/image/hash/curl/xml/var_export usage,
-│              │  and for Random, BcMath, GMP, and DateTimeZone::listIdentifiers.
+│              │  copy for PDO/mysqli/tz/image/hash/tokenizer/curl/xml/
+│              │  fileinfo/var_export/WeakMap/WeakReference usage, and for
+│              │  Random, BcMath, GMP, and DateTimeZone::listIdentifiers.
 │              │  Includes finfo declarations and wrappers for hosted extensions.
 │              │  The same probe retains per-request web environment copies for
 │              │  autoloaded observers in both request and application lifecycles.
