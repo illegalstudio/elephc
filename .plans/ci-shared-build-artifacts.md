@@ -10,7 +10,8 @@ description: "Implementation plan for shared build artifacts across Elephc CI."
 - [x] Migrate PDO, PHP SDK, native package, tokenizer, differential and iOS jobs.
 - [x] Reuse verified merge-group artifacts on main and expose development downloads.
 - [x] Apply the same producer contract to scheduled/manual runs, nightly and release.
-- [ ] Verify failure propagation, coverage, cancellation, provenance and measured savings.
+- [x] Verify failure propagation, coverage, cancellation, provenance and measured savings.
+- [ ] Retain only the latest three complete main packages and validate lifecycle cleanup.
 
 Status: implementation in progress on `ci/shared-build-artifacts`.
 Issue: https://github.com/illegalstudio/elephc/issues/2281
@@ -20,6 +21,12 @@ Integrated main: `145426b7fe5cc0fd60f5d56a9d7a1c9c745280b5`; its successful queu
 runs provide the updated timing baseline in `.plans/ci-artifact-validation.md`.
 The user authorized implementation. Work is isolated in a ggw worktree and the PR
 remains a draft until the complete rollout and validation pass.
+
+User-directed lifecycle revision on 2026-11-08: keep the three complete packages,
+not bare compiler executables, and retain only the latest successfully packaged
+main source. The initial build-sharing implementation passed full CI at `e17a086`;
+the latest-only retention change requires its own validation. The older progress
+notes below describe that initial implementation.
 
 Progress on 2026-11-08:
 
@@ -157,8 +164,7 @@ Actual reuse evidence: queue CI run `42439918696`, queue PDO run `42439918652`
 and current main all identify SHA `b62bff4ca643d7b7b6019f3d563253a8b918bb1f`.
 Both queue runs completed successfully; six nextest artifacts for the three
 hosts exist on the CI run with that same SHA. Their current retention is one day.
-Keep large test-archive retention separate from the proposed 14-day development
-package retention.
+Keep temporary test-archive expiry separate from the latest-main package policy.
 
 `HEADGREEN` allows an integrated group to pass even while earlier groups are
 unfinished. Main may therefore advance over multiple commits in one push. The
@@ -255,10 +261,21 @@ to make main show no builds.
 
 Produce `elephc-dev-<target>-<sha>.tar.gz` packages from verified debug outputs,
 containing the compiler, required bridge variants, notices and provenance. Expose
-them on the main Actions run with a summary link and a proposed 14-day retention.
+them on the main Actions run with a summary link and retain only the latest complete
+set. Order sources by main first-parent history, so late old builds cannot replace
+newer ones. Remove a previous set only after its replacement is complete.
 They are development artifacts, not tags or GitHub Releases. Check package
 completeness and a representative compile/link from an empty installation folder.
 Document actual Linux compatibility and runtime prerequisites of CI-built binaries.
+
+After completion, remove disposable build/test/report artifacts from every compiler
+workflow. Keep only the minimal green queue handoff while main consumers need it.
+Preserve active attempts and require Re-run all jobs after completed-run cleanup.
+Use a trusted main workflow with a durable exact-ID ledger, scheduled discovery,
+fail-closed inventories and a read-only manual preview. Serialize ledger writers.
+GitHub's maximum expiry remains 90 days: renew the latest verified bytes before
+expiry without recompiling, then replace the old set only after all three copies
+succeed. Missing retained downloads stop cleanup and require explicit recovery.
 
 The existing main concurrency policy cancels superseded runs. To satisfy the
 request for an artifact for every arriving main commit, keep artifact production

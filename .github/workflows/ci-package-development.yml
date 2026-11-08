@@ -78,7 +78,7 @@ jobs:
           path: target/development/
           if-no-files-found: error
           compression-level: 0
-          retention-days: 14
+          retention-days: 90
       - name: Link the development download
         env:
           GITHUB_SHA: ${{ inputs.source-sha }}
@@ -86,7 +86,8 @@ jobs:
           ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
           SOURCE_RUN: ${{ inputs.producer-run }}
         run: |
-          printf 'Development build `%s` for `%s`: [download](%s), producer run `%s`. Retained for 14 days.\n' \
+          # shellcheck disable=SC2016
+          printf 'Development build `%s` for `%s`: [download](%s), producer run `%s`. Retained until a newer complete main set replaces it.\n' \
             "$GITHUB_SHA" "$TARGET" "$ARTIFACT_URL" "$SOURCE_RUN" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Audit consumer compilation

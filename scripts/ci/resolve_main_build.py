@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select only complete artifacts tested by this coordinator on the exact merge-group SHA."""
+"""Select verified queue compiler/bridge payloads after disposable test archives are gone."""
 
 import argparse
 import json
@@ -41,24 +41,16 @@ def select(run, jobs, artifacts, repository, sha):
         candidates = sorted((int(name[len(prefix):]) for name in names
                              if name.startswith(prefix) and name[len(prefix):].isdigit()), reverse=True)
         for attempt in candidates:
-            required = {f"build-{target}-debug-bridges-default-{attempt}",
-                        f"nextest-archive-{target}-{attempt}",
-                        f"nextest-archive-codegen-{target}-{attempt}"}
+            required = {f"build-{target}-debug-bridges-default-{attempt}"}
             if required <= names:
                 attempts[target] = str(attempt)
                 break
         else:
             return None
-    # Extended queue builds include each optional variant. Old standalone workflows
-    # cannot meet this contract, even if their independent CI check was green.
-    prefixes = [f"build-linux-x86_64-debug-tests-pdo-{variant}-" for variant in
-                ("libpq-gss", "sqlsrv", "oci", "cubrid", "dblib", "firebird", "odbc", "informix", "ibm")]
-    prefixes += ["build-linux-x86_64-debug-tests-curl-", "build-linux-x86_64-debug-tools-curl-",
-                 "build-linux-x86_64-release-tests-release-frame-",
-                 "build-ios-arm64-debug-ios-default-", "build-ios-sim-arm64-debug-ios-default-"]
-    if any(not any(name.startswith(prefix) and name[len(prefix):].isdigit() for name in names)
-           for prefix in prefixes):
-        return None
+    # The exact top-level gate verdicts prove the tests passed. Their executables,
+    # PDO variants and iOS link inputs are no longer needed to package this SHA.
+    # Keep the original compiler/bridge pair for each producer attempt; consumers
+    # still verify its complete source, environment and file-hash manifests.
     return {"run_id": str(run["id"]), "attempts": attempts}
 
 

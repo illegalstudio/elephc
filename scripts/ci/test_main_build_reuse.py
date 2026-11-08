@@ -20,12 +20,6 @@ class MainBuildReuseTests(unittest.TestCase):
         names = []
         for target in HOSTS:
             names += [f"build-{target}-debug-{kind}-default-1" for kind in ("compiler", "bridges")]
-            names += [f"nextest-archive-{prefix}{target}-1" for prefix in ("", "codegen-")]
-        names += [f"build-linux-x86_64-debug-tests-pdo-{variant}-1" for variant in
-                  ("libpq-gss", "sqlsrv", "oci", "cubrid", "dblib", "firebird", "odbc", "informix", "ibm")]
-        names += ["build-linux-x86_64-debug-tests-curl-1", "build-linux-x86_64-debug-tools-curl-1",
-                  "build-linux-x86_64-release-tests-release-frame-1",
-                  "build-ios-arm64-debug-ios-default-1", "build-ios-sim-arm64-debug-ios-default-1"]
         self.artifacts = [{"name": name, "size_in_bytes": 10, "expired": False,
                            "workflow_run": {"head_sha": self.sha}} for name in names]
 
@@ -40,6 +34,13 @@ class MainBuildReuseTests(unittest.TestCase):
         self.jobs.append({"name": "Unrelated optional job", "conclusion": None})
         self.assertEqual(self.run["run_attempt"], 3)
         self.assertEqual(self.selected()["attempts"]["linux-x86_64"], "1")
+
+    def test_disposable_archives_are_not_needed_after_every_required_gate_passes(self):
+        """Cleaning completed test inputs must not cause main to rebuild a green queue SHA."""
+        self.assertEqual(len(self.artifacts), 6)
+        self.assertIsNotNone(self.selected())
+        self.jobs[1]["conclusion"] = "failure"
+        self.assertIsNone(self.selected())
 
     def test_pr_head_other_queue_entry_and_headgreen_intermediate_are_not_proof(self):
         for field, value in (("event", "pull_request"), ("head_sha", "b" * 40),

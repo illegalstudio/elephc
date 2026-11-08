@@ -125,6 +125,25 @@ class ArtifactGraphTests(unittest.TestCase):
                 self.assertIn(producer, dependencies(body), name)
                 self.assertIn(f"attempt: ${{{{ needs.{producer}.outputs.artifact-attempt }}}}", body)
 
+    def test_retention_executes_only_main_code_and_serializes_ledger_writes(self):
+        retention = (ROOT / ".github/workflows/artifact-retention.yml").read_text()
+        reconcile = (ROOT / ".github/workflows/reconcile-development.yml").read_text()
+        self.assertIn("types: [completed]", retention)
+        for workflow in (retention, reconcile):
+            self.assertIn("group: development-artifact-ledger", workflow)
+            self.assertIn("cancel-in-progress: false", workflow)
+        checkouts = re.findall(r"uses: actions/checkout@[^\n]+\n((?:        .+\n)+)", retention)
+        self.assertEqual(len(checkouts), 2)
+        for checkout in checkouts:
+            self.assertIn("ref: main", checkout)
+            self.assertIn("persist-credentials: false", checkout)
+        self.assertNotIn("workflow_run.head_sha", retention)
+        self.assertIn("actions: write", jobs(retention)["retain"])
+        self.assertNotIn("actions: write", jobs(retention)["refresh"])
+        self.assertIn("!inputs.dry-run", jobs(retention)["refresh"])
+        for path in ("artifact-retention.yml", "ci-package-development.yml"):
+            self.assertIn("retention-days: 90", (ROOT / ".github/workflows" / path).read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -265,8 +265,10 @@ version stamping, runner baseline and existing signing/publication steps.
 
 #### Development downloads for main commits
 
-After the three main gates pass, the Actions run retains
-`elephc-dev-<target>-<full-sha>.tar.gz` packages for 14 days. Find them in the run's
+After the three main gates pass, the Actions run publishes three complete
+`elephc-dev-<target>-<full-sha>.tar.gz` packages. Retain only the newest complete
+main set, ordered by first-parent source history, replacing the previous set only
+after all three packages pass verification. Find them in the producing run's
 Artifacts section or its summary links. These downloads create no version tags or
 GitHub Releases. Compiler, bridge archives, notices, checksums and producer manifests
 ship together, and each package passes a compile/link probe outside the checkout.
@@ -294,7 +296,36 @@ gh workflow run development-builds.yml --ref main -f source-sha=<full-main-sha>
 Release preparation explicitly dispatches this path for its `[skip ci]` version
 bump. Backfill packages validate their own SHA with the package probe; they do not
 claim full-suite verification for a commit whose ordinary CI was skipped. Large
-internal build and test artifacts have a separate three-day retention.
+internal build and test artifacts have a three-day expiry as a fallback, but the
+`artifact-retention.yml` workflow removes them when their workflow finishes,
+including failed or cancelled runs. This also removes downloadable JUnit reports
+and fixture diagnostics; Actions logs and job results remain available.
+
+Successful merge-group runs retain only six compiler/bridge payloads plus their
+small environment identity until main has consumed them. Active consumers and a
+short merge propagation grace period protect that handoff. Abandoned queue entries
+release it after the grace period. Main reuse still requires the exact source and
+all three successful gates, even after the disposable test executables are gone.
+After a concluded run has been cleaned, use **Re-run all jobs**, since a failed-only
+rerun cannot restore deleted producer inputs. Retries inside a running workflow
+continue to use their original artifacts.
+
+The janitor runs on workflow completion and hourly, using only trusted main code.
+It checkpoints exact artifact IDs in `artifact-retention.json` on the same ledger
+branch before deletion. Old runs finishing late cannot replace a newer main set.
+Scheduled discovery recovers missed completion events. Both ledger writers share
+one concurrency group. A manual run defaults to a read-only deletion preview.
+
+GitHub still requires an expiry (90 days maximum for this public repository).
+Before the retained set expires, the janitor copies and verifies the original
+package bytes into three new Actions artifacts, without recompiling or creating a
+release. Only a complete successful copy replaces the old IDs. Consequently the
+latest download can move to an Artifact retention run; its ledger records the
+current run and IDs. If scheduled automation stops long enough for that copy to
+expire, cleanup fails visibly and `development-builds.yml` can recreate that SHA.
+This is a latest-version policy, not a history of daily builds: storage settles to
+the three complete packages (about 1.1 GB in the measured build), plus artifacts of
+active workflows, temporary replacement copies and live queue handoffs.
 
 ### Third-party GitHub Actions are pinned to commit SHAs
 

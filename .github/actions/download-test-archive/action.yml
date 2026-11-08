@@ -147,3 +147,8 @@ runs:
 
     - uses: ./.github/actions/pin-test-bridges
       if: startsWith(inputs.name, 'nextest-archive-')
+
+    - name: Explain recovery after completed-run cleanup
+      if: failure() && steps.third.outcome == 'failure'
+      shell: bash
+      run: echo '::error::Completed runs discard intermediate artifacts. If this is a rerun of a concluded workflow, use Re-run all jobs to regenerate its inputs.'

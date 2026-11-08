@@ -9,6 +9,46 @@ Implementation: https://github.com/illegalstudio/elephc/pull/2282
 Original baseline: `b62bff4ca643d7b7b6019f3d563253a8b918bb1f`.
 Integrated main baseline: `145426b7fe5cc0fd60f5d56a9d7a1c9c745280b5`.
 
+## Completed build-sharing validation at e17a086
+
+[Run 42499694570](https://github.com/illegalstudio/elephc/actions/runs/42499694570)
+passed the full extended matrix on `e17a086444f09ecbc80b9d3c24b82dd2cfd0f0dc`:
+282 successful jobs, 15 expected skips, all three required top-level gates, all six
+PHP SDK consumers, ten iOS compile/link jobs and 253 consumer compilation audits.
+CodeQL passed too. Comparing 193 JUnit reports against the integrated baseline
+found 93,927 existing test identities retained and nine added identities.
+
+Elapsed time was 80.58 minutes, with 3643.53 summed runner minutes. The 14 selected
+producer jobs recorded 18 root-package compile events versus the baseline's 85.
+This is observational evidence, not a controlled cold/warm benchmark.
+
+The run uploaded 225 artifacts totaling 10,169,916,929 bytes, including 8.47 GB of
+workspace/codegen/PDO test archives. This is the temporary peak before lifecycle
+cleanup, not the intended retained download size. The three compiler and bridge
+payloads total about 1.1 GB. An actual Linux package from this run passed the
+standalone crypto compilation/link probe outside the checkout with zero Cargo
+builds; its tarball was 372,861,967 bytes.
+
+## Latest-only retention revision
+
+The user selected three complete packages and latest-main-only retention after
+the full run above. The lifecycle revision removes completed-run intermediates,
+preserves active consumers and minimal queue handoffs, orders packages by main
+history, and renews the retained bytes before GitHub expiry. Its focused tests
+cover incomplete replacement, old late completions, queue consumers, rerun races,
+API failure, durable selection and package integrity. The original full-run result
+does not by itself validate this later revision; rollout still requires observing
+the privileged default-branch completion and scheduled workflows after merge.
+
+Local revision checks pass: 84 Python infrastructure tests, the actual CI tier
+planner, both queue cleanup suites, nextest archive validation, Action pin checks,
+workflow actionlint and ShellCheck on the three edited/new retention workflows.
+The minimal queue handoff regression fails on the previous resolver and passes
+after removing disposable test archives from the packaging prerequisites.
+A read-only dry run against `42499694570` proposes deleting all 225 PR artifacts
+(10,169,916,929 bytes) and retaining none. No GitHub artifact was deleted during
+development or this validation. Main fixtures retain exactly three packages.
+
 ## Baseline observed on 2026-11-08
 
 | Run | Event | Conclusion | Elapsed minutes | Sum of runner minutes | Artifact bytes |

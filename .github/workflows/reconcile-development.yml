@@ -10,7 +10,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: reconcile-development-ledger
+  group: development-artifact-ledger
   cancel-in-progress: false
 
 jobs:
