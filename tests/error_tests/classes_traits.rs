@@ -72,6 +72,20 @@ class C { use A, B; }
     );
 }
 
+/// Two CONCRETE methods of the same name from separate `use` statements still conflict; only an
+/// abstract trait method (a requirement) merges with another declaration.
+#[test]
+fn test_error_trait_concrete_methods_from_separate_uses_conflict() {
+    expect_error(
+        r#"<?php
+trait A { public function foo() { return 1; } }
+trait B { public function foo() { return 2; } }
+class C { use A; use B; }
+"#,
+        "imports duplicate trait method 'foo'",
+    );
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]

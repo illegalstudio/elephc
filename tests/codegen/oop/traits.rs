@@ -181,3 +181,30 @@ echo $box->value;
     );
     assert_eq!(out, "9");
 }
+
+/// An abstract trait method is a requirement, not a definition: two traits may both require a
+/// method, and a concrete trait method satisfies another trait's abstract one in either order,
+/// whether the traits come in one `use` or in several.
+#[test]
+fn test_trait_abstract_method_requirements_do_not_conflict() {
+    let out = compile_and_run(
+        r#"<?php
+trait Rows { abstract public function label(): string; public function rows(): string { return "r" . $this->label(); } }
+trait Hover { abstract public function label(): string; public function hover(): string { return "h" . $this->label(); } }
+final class Panel { use Rows; use Hover; public function label(): string { return "p"; } }
+final class Pane { use Rows, Hover; public function label(): string { return "q"; } }
+
+trait NeedsLabel { abstract public function label(): string; public function show(): string { return "<" . $this->label() . ">"; } }
+trait GivesLabel { public function label(): string { return "x"; } }
+final class First { use NeedsLabel; use GivesLabel; }
+final class Second { use GivesLabel; use NeedsLabel; }
+final class Both { use NeedsLabel, GivesLabel; }
+final class Requirements { use Rows, Hover, GivesLabel; }
+
+$panel = new Panel(); $pane = new Pane(); $req = new Requirements();
+echo $panel->rows(), $panel->hover(), $pane->rows(), $pane->hover(), "|";
+echo (new First())->show(), (new Second())->show(), (new Both())->show(), $req->rows(), $req->hover();
+"#,
+    );
+    assert_eq!(out, "rphprqhq|<x><x><x>rxhx");
+}
