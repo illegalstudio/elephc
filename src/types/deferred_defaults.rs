@@ -36,7 +36,10 @@ pub(crate) fn default_value_depends_on_scoped_constant(expr: &Expr) -> bool {
         ExprKind::ScopedConstantAccess { .. } => true,
         ExprKind::ArrayAccess { .. } | ExprKind::Ternary { .. } | ExprKind::ShortTernary { .. }
         | ExprKind::NullCoalesce { .. }
-        | ExprKind::BinaryOp { op: BinOp::NullCoalesce, .. } => contains_scoped_constant(expr),
+        | ExprKind::BinaryOp { op: BinOp::NullCoalesce, .. }
+        // `Level::Low->value` / `->name` (PHP 8.2 constant expressions) read an enum case.
+        | ExprKind::PropertyAccess { .. }
+        | ExprKind::NullsafePropertyAccess { .. } => contains_scoped_constant(expr),
         _ => false,
     }
 }
@@ -61,6 +64,8 @@ fn contains_scoped_constant(expr: &Expr) -> bool {
                 || contains_scoped_constant(else_expr),
         ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
         | ExprKind::Cast { expr: inner, .. } => contains_scoped_constant(inner),
+        ExprKind::PropertyAccess { object, .. } | ExprKind::NullsafePropertyAccess { object, .. } =>
+            contains_scoped_constant(object),
         _ => false,
     }
 }

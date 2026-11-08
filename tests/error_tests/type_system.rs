@@ -963,6 +963,23 @@ class Config {
     );
 }
 
+/// A deferred `->value` default is still checked once enum cases exist: a string-backed case's
+/// value is a string, so an `int` property rejects it.
+#[test]
+fn test_error_enum_case_value_default_type_mismatch() {
+    expect_error(
+        r#"<?php
+enum Keymap: string {
+    case Linux = 'linux';
+}
+class Settings {
+    public int $keymap = Keymap::Linux->value;
+}
+"#,
+        "Property Settings::$keymap default expects int, got string",
+    );
+}
+
 /// Verifies that assigning an incompatible value to a static property is rejected.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]
