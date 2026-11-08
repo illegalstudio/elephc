@@ -69,6 +69,26 @@ fn late_static_class_string_candidates(classes: &ClassIndex<'_>) -> HashSet<Stri
                 let mut locals: HashMap<String, Value> = HashMap::new();
                 let mut derived: HashSet<String> = HashSet::new();
                 crate::parser::ast::visit::walk_stmts(&method.body, &mut |stmt| {
+                    // A returned class string counts too: symfony/validator's
+                    // `Constraint::validatedBy()` is `return static::class.'Validator';`, and the
+                    // constraint validator factory builds `new $className()` from it.
+                    if let StmtKind::Return(Some(value)) = &stmt.kind {
+                        if mentions_static_class(value) || reads_any_local(value, &derived) {
+                            if let Some(Value::String(candidate)) = evaluate_expr(
+                                classes,
+                                &class.name,
+                                &owner.name,
+                                value,
+                                &mut locals,
+                                &mut HashSet::new(),
+                            ) {
+                                if candidate.contains('\\') && !candidate.contains(char::is_whitespace) {
+                                    candidates.insert(candidate.trim_start_matches('\\').to_string());
+                                }
+                            }
+                        }
+                        return;
+                    }
                     let StmtKind::Assign { name, value } = &stmt.kind else {
                         return;
                     };
@@ -1124,4 +1144,36 @@ fn literal_regex_suffix(pattern: &str) -> Option<&str> {
         return None;
     }
     Some(suffix)
+}
+
+#[cfg(test)]
+mod tests {
+    fn candidates_of(source: &str) -> Vec<String> {
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        // As in the pipeline, which resolves names before the autoload walk.
+        let program = crate::name_resolver::resolve(program).expect("resolve names");
+        super::candidates(&program)
+    }
+
+    /// symfony/validator's `Constraint::validatedBy()` returns `static::class.'Validator'`, and
+    /// the constraint validator factory builds `new $className()` from it: each concrete
+    /// constraint names its validator through the inherited return.
+    #[test]
+    fn a_returned_static_class_string_names_each_concrete_subclass_s_class() {
+        let found = candidates_of(
+            "<?php\nnamespace Lib;\nabstract class Constraint { public function validatedBy(): string { return static::class.'Validator'; } }\nclass NotBlank extends Constraint {}\nabstract class Partial extends Constraint {}\n",
+        );
+        assert!(found.contains(&"Lib\\NotBlankValidator".to_string()), "{found:?}");
+        assert!(!found.contains(&"Lib\\PartialValidator".to_string()), "abstract classes name nothing: {found:?}");
+    }
+
+    /// A return that does not derive from `static::class` adds nothing.
+    #[test]
+    fn an_ordinary_returned_string_is_no_candidate() {
+        let found = candidates_of(
+            "<?php\nnamespace Lib;\nclass Plain { public function name(): string { return 'Lib\\\\Other'; } }\n",
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
 }
