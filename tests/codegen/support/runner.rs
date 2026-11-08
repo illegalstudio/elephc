@@ -1791,61 +1791,66 @@ fn append_macos_signal_diagnostics(
 ) {
 }
 
-/// Runs a child command with a timeout and captures stdout/stderr.
-fn run_command_with_timeout(mut cmd: Command) -> Output {
-    let label = format!("{:?}", cmd);
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .unwrap_or_else(|err| panic!("failed to run compiled binary {label}: {err}"));
-    let mut stdout_pipe = child.stdout.take().expect("compiled binary stdout missing");
-    let mut stderr_pipe = child.stderr.take().expect("compiled binary stderr missing");
-    let stdout_reader = std::thread::spawn(move || {
-        let mut stdout = Vec::new();
-        stdout_pipe
-            .read_to_end(&mut stdout)
-            .expect("failed to read compiled binary stdout");
-        stdout
-    });
-    let stderr_reader = std::thread::spawn(move || {
-        let mut stderr = Vec::new();
-        stderr_pipe
-            .read_to_end(&mut stderr)
-            .expect("failed to read compiled binary stderr");
-        stderr
-    });
+/// Runs a child command with a timeout and captures stdout/stderr separately.
+fn run_command_with_timeout(cmd: Command) -> Output {
+    run_command_with_capture(cmd, None)
+}
 
+/// Uses the ordinary executable watchdog while preserving merged stdout/stderr ordering.
+pub(crate) fn run_command_with_merged_output(cmd: Command, log: &Path) -> Output {
+    run_command_with_capture(cmd, Some(log))
+}
+
+/// Captures a command with either pipes or one shared log and the same deadline.
+fn run_command_with_capture(mut cmd: Command, merged_log: Option<&Path>) -> Output {
+    let label = format!("{:?}", cmd);
+    if let Some(path) = merged_log {
+        let log = fs::File::create(path).expect("merged command log");
+        cmd.stdout(Stdio::from(log.try_clone().expect("merged log handle")));
+        cmd.stderr(Stdio::from(log));
+    } else {
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+    }
+    let mut child = cmd.spawn()
+        .unwrap_or_else(|err| panic!("failed to run compiled binary {label}: {err}"));
+    let stdout_reader = child.stdout.take().map(|mut pipe| std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).expect("compiled binary stdout");
+        bytes
+    }));
+    let stderr_reader = child.stderr.take().map(|mut pipe| std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).expect("compiled binary stderr");
+        bytes
+    }));
     let timeout = codegen_binary_timeout();
     let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(status) = child
-            .try_wait()
+    let status = loop {
+        if let Some(status) = child.try_wait()
             .unwrap_or_else(|err| panic!("failed to wait for compiled binary {label}: {err}"))
         {
-            let stdout = stdout_reader.join().expect("stdout reader panicked");
-            let stderr = stderr_reader.join().expect("stderr reader panicked");
-            return Output {
-                status,
-                stdout,
-                stderr,
-            };
+            break Some(status);
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            let stdout = stdout_reader.join().expect("stdout reader panicked");
-            let stderr = stderr_reader.join().expect("stderr reader panicked");
-            panic!(
-                "compiled binary timed out after {}s: {}\nstdout:\n{}\nstderr:\n{}",
-                timeout.as_secs(),
-                label,
-                String::from_utf8_lossy(&stdout),
-                String::from_utf8_lossy(&stderr)
-            );
+            break None;
         }
         std::thread::sleep(Duration::from_millis(10));
-    }
+    };
+    let stdout = match merged_log {
+        Some(path) => fs::read(path).expect("merged command output"),
+        None => stdout_reader.expect("stdout reader").join().expect("stdout reader panicked"),
+    };
+    let stderr = stderr_reader.map(|reader| reader.join().expect("stderr reader panicked"))
+        .unwrap_or_default();
+    let status = status.unwrap_or_else(|| panic!(
+        "compiled binary timed out after {}s: {}\nstdout:\n{}\nstderr:\n{}",
+        timeout.as_secs(), label,
+        String::from_utf8_lossy(&stdout), String::from_utf8_lossy(&stderr),
+    ));
+    Output { status, stdout, stderr }
 }
 
 /// Returns the per-binary timeout for codegen fixtures.

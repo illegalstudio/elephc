@@ -9,7 +9,7 @@
 //! - Each test carries its PHP source and assertion inline, and the test process
 //!   never parses a `.phpt` file at run time.
 
-use super::{assert_exact, assert_fatal_format, assert_format, run_case, skip_without_xml_native};
+use super::{assert_exact, assert_fatal_format, assert_format, run_case, run_fatal_case, skip_without_xml_native};
 
 /// Replays php-src `000.phpt`.
 #[test]
@@ -4224,7 +4224,7 @@ object(SimpleXMLElement)#2 (1) {
 #[test]
 fn test_php_src_simplexml_bug74950() {
     if skip_without_xml_native("test_php_src_simplexml_bug74950") { return; }
-    let out = run_case(r#"<?php
+    let out = run_fatal_case(r#"<?php
 $xml=new SimpleXMLElement(0,9000000000);var_dump($xml->getDocNamespaces());echo '?>
 ';"#);
     assert_fatal_format(&out, r#"Fatal error: Uncaught Exception: SimpleXMLElement::__construct(): Argument #2 ($options) is invalid in %stest.php:%d
@@ -4487,7 +4487,7 @@ array(0) {
 #[test]
 fn test_php_src_simplexml_foreach_by_reference() {
     if skip_without_xml_native("test_php_src_simplexml_foreach_by_reference") { return; }
-    let out = run_case(r#"<?php
+    let out = run_fatal_case(r#"<?php
 
 $xml = <<<XML
 <people>
@@ -4567,7 +4567,7 @@ array(3) {
 #[test]
 fn test_php_src_simplexml_get_prop_address_not_initialized() {
     if skip_without_xml_native("test_php_src_simplexml_get_prop_address_not_initialized") { return; }
-    let out = run_case(r#"<?php
+    let out = run_fatal_case(r#"<?php
 
 $rc = new ReflectionClass('SimpleXMLElement');
 $sxe = $rc->newInstanceWithoutConstructor();

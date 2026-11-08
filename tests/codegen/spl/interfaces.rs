@@ -1121,3 +1121,19 @@ echo counted(new FloatCount()), ':', counted(new MixedCount()), "\n";
     assert_eq!(out.stdout, "3:1:2:4\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// An inherited internal Countable contract retains its tentative return provenance.
+#[test]
+fn test_simplexml_followup_inherited_countable_tentative_return() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+interface FollowupCountable extends Countable {}
+class FollowupStringCount implements FollowupCountable {
+    #[\ReturnTypeWillChange] public function count(): string { return "7"; }
+}
+function followup_count(mixed $value): int { return count($value); }
+echo followup_count(new FollowupStringCount());
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "7");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

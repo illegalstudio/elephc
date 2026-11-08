@@ -997,3 +997,28 @@ echo promoted(null), promoted(6), nested(null), nested(6);
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Every target preserves warnings from indices while keeping the actual probe root silent.
+#[test]
+fn test_simplexml_followup_null_probe_warnings_all_targets() {
+    let source = r#"<?php
+function followup_probe(array $values): void {
+    var_dump(isset($values[(string)$missingIndex]));
+    echo ($values[(string)$missingCoalesce] ?? 7);
+    var_dump(isset($silentRoot));
+    echo ($silentRoot ?? 'fallback');
+}
+followup_probe(['present' => 1]);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source,
+            std::path::Path::new("main.php"), std::path::Path::new("."), target);
+        let function = module.functions.iter().find(|function| function.name == "followup_probe").unwrap();
+        let warnings = function.instructions.iter().filter(|inst| inst.op == Op::RuntimeCall
+            && inst.immediate == Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::WriteDiagnostic)))
+            .count();
+        assert_eq!(warnings, 2, "{name}: only the two index reads warn");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

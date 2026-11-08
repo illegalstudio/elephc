@@ -846,6 +846,8 @@ impl Checker {
         };
         self.validate_callable_spread_elements(sig, args, &plan, caller_env, callee_desc)?;
         let source_has_spread = plan.has_spread_args();
+        let supports_literal_search_rewrite = !source_has_spread
+            && !call_args::has_named_args(args);
         let defaults = plan.default_argument_mask();
         let descriptor_projections = plan.descriptor_projection_mask();
         let normalized_args = plan.normalized_args();
@@ -1029,10 +1031,14 @@ impl Checker {
                     // `str_replace([literal, ...], 'x', $s)` is folded into scalar calls by
                     // the AST optimizer before lowering, so its array search is accepted here
                     // even though the runtime helper is string-only.
-                    let literal_str_replace_search = param_idx == 0
+                    let literal_str_replace_search = supports_literal_search_rewrite
+                        && param_idx == 0
                         && callee_desc
                             .trim_start_matches('\\')
                             .eq_ignore_ascii_case("str_replace")
+                        && args.get(1).is_some_and(|replacement| matches!(
+                            replacement.kind, ExprKind::StringLiteral(_)
+                        ))
                         && matches!(&arg.kind, crate::parser::ast::ExprKind::ArrayLiteral(items)
                             if !items.is_empty()
                                 && items.iter().all(|item| matches!(
