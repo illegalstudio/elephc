@@ -2198,3 +2198,21 @@ try { $f = \Missing\Tool::make(...); } catch (\Error $e) { echo get_class($e), '
     compile_ok(&dir, &["--closed-world"]);
     assert_eq!(text(&run(&dir).stdout), "/x\nError: Class \"Missing\\Tool\" not found\n");
 }
+
+/// A method returning a constant of a class nothing declares, the shape of Symfony's
+/// `EqualToValidator::getErrorCode()` over an `EqualTo` the program never loads: it compiles (the
+/// backend used to refuse the whole file) and raises php's catchable `Class "X" not found`.
+#[test]
+fn closed_world_constant_of_an_absent_class_is_class_not_found() {
+    let source = r#"<?php
+class Validator {
+    protected function getErrorCode(): ?string { return \Missing\EqualTo::NOT_EQUAL_ERROR; }
+    public function code(): ?string { return $this->getErrorCode(); }
+}
+echo "start\n";
+try { var_dump((new Validator)->code()); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+"#;
+    let (stdout, _, dir) = closed_run("cw_absent_constant", source);
+    assert_eq!(stdout, php_stdout(&dir));
+    assert_eq!(stdout, "start\nError: Class \"Missing\\EqualTo\" not found\n");
+}
