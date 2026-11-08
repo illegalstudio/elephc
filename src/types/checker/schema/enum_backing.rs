@@ -6,16 +6,21 @@
 //!
 //! Key details:
 //! - PHP 8.2 allows a constant expression as a backed case's value, not only a literal:
-//!   `case Focused = Glyphs::SELECTION_BAR;`, `case Ns = self::PREFIX . 'ns';`, `case Low = -1;`.
-//! - Classes and interfaces are built before enums, so a class or interface constant the value
-//!   names can be read from its `ClassInfo` / `InterfaceInfo` and folded in turn.
-//! - Anything that is not a literal, a negated integer, a concatenation or a scoped constant of a
-//!   built class-like stays unfolded, and the caller reports the existing diagnostic.
+//!   `case Focused = Glyphs::SELECTION_BAR;`, `case Ns = PREFIX . 'ns';`, `case Big = 1 << K::SHIFT;`.
+//! - Classes and interfaces are built before enums, so the value is bound and folded by the same
+//!   `property_default_selectors::bind_constants` pass that resolves property defaults: class and
+//!   interface constants (inherited ones included), global `const` declarations and predefined
+//!   constants, then the optimizer's PHP-equivalent constant folding. That folder only joins
+//!   string literals, so a concatenation with an int operand is joined here.
+//! - A value that does not fold to an int or string literal is left to the caller, which reports
+//!   the existing diagnostic. The enum's own constants (`self::X`) are not built yet at this point.
 
-use crate::names::php_symbol_key;
-use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver};
+use std::collections::HashMap;
+
+use crate::parser::ast::{BinOp, Expr, ExprKind};
 
 use super::super::Checker;
+use super::property_default_selectors::bind_constants;
 
 /// A folded backing value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,62 +29,38 @@ pub(super) enum FoldedBacking {
     Str(String),
 }
 
-/// Constant chains deeper than this are treated as unfoldable rather than walked further.
-const MAX_FOLD_DEPTH: usize = 32;
-
-/// Folds `expr` to an integer or string literal, or returns `None` when it is not a constant
-/// expression this pass can evaluate.
-pub(super) fn fold_backing_value(checker: &Checker, expr: &Expr) -> Option<FoldedBacking> {
-    fold(checker, expr, 0)
+/// Folds `expr`, declared in enum `owner`, to an integer or string literal, or returns `None`
+/// when it is not a constant expression this pass can evaluate.
+pub(super) fn fold_backing_value(
+    checker: &Checker,
+    global_constants: &HashMap<String, Expr>,
+    owner: &str,
+    expr: &Expr,
+) -> Option<FoldedBacking> {
+    let mut value = expr.clone();
+    bind_constants(&mut value, owner, checker, global_constants, 0);
+    fold_literal(&value)
 }
 
-/// Recursive worker for [`fold_backing_value`], bounded by [`MAX_FOLD_DEPTH`].
-fn fold(checker: &Checker, expr: &Expr, depth: usize) -> Option<FoldedBacking> {
-    if depth > MAX_FOLD_DEPTH {
-        return None;
-    }
+/// Reads a bound expression as a literal, also joining the `.` concatenations of int and string
+/// literals that the shared folder leaves alone (an int converts to its decimal string, as in PHP).
+fn fold_literal(expr: &Expr) -> Option<FoldedBacking> {
     match &expr.kind {
         ExprKind::IntLiteral(value) => Some(FoldedBacking::Int(*value)),
         ExprKind::StringLiteral(value) => Some(FoldedBacking::Str(value.clone())),
-        ExprKind::Negate(inner) => match fold(checker, inner, depth + 1)? {
-            FoldedBacking::Int(value) => value.checked_neg().map(FoldedBacking::Int),
-            FoldedBacking::Str(_) => None,
-        },
         ExprKind::BinaryOp { left, op: BinOp::Concat, right } => {
-            let left = fold(checker, left, depth + 1)?;
-            let right = fold(checker, right, depth + 1)?;
-            Some(FoldedBacking::Str(format!("{}{}", as_string(&left), as_string(&right))))
-        }
-        ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Named(class), name } => {
-            let value = class_like_constant(checker, class.as_str(), name)?;
-            fold(checker, value, depth + 1)
+            let mut joined = concat_operand(fold_literal(left)?);
+            joined.push_str(&concat_operand(fold_literal(right)?));
+            Some(FoldedBacking::Str(joined))
         }
         _ => None,
     }
 }
 
-/// PHP's string conversion of a folded operand inside a concatenation.
-fn as_string(value: &FoldedBacking) -> String {
+/// PHP's string conversion of a folded concatenation operand.
+fn concat_operand(value: FoldedBacking) -> String {
     match value {
         FoldedBacking::Int(value) => value.to_string(),
-        FoldedBacking::Str(value) => value.clone(),
+        FoldedBacking::Str(value) => value,
     }
-}
-
-/// The declared value of `class::name` on a built class or interface, matched case-insensitively
-/// on the class-like name as PHP does.
-fn class_like_constant<'a>(checker: &'a Checker, class: &str, name: &str) -> Option<&'a Expr> {
-    let key = php_symbol_key(class.trim_start_matches('\\'));
-    let class_constant = checker
-        .classes
-        .iter()
-        .find(|(declared, _)| php_symbol_key(declared) == key)
-        .and_then(|(_, info)| info.constants.get(name));
-    class_constant.or_else(|| {
-        checker
-            .interfaces
-            .iter()
-            .find(|(declared, _)| php_symbol_key(declared) == key)
-            .and_then(|(_, info)| info.constants.get(name))
-    })
 }

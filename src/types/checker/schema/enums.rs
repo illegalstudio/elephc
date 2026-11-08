@@ -113,6 +113,7 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 /// - `is_internal`: whether compiler-generated source declared the enum (`ClassInfo::is_internal`)
 /// - `used_traits` / `trait_aliases`: flattened direct enum trait-use metadata
 /// - `attributes`: the declaration's own attribute groups, recorded for reflection
+/// - `global_constants`: source `const` declarations, used to fold constant-expression case values
 /// - `checker`: type checker state (classes, interfaces, enums, resolve_type_expr)
 /// - `next_class_id`: incrementing class ID counter
 ///
@@ -137,6 +138,7 @@ pub(crate) fn build_enum_info(
     attributes: &[crate::parser::ast::AttributeGroup],
     span: crate::span::Span,
     is_internal: bool,
+    global_constants: &HashMap<String, crate::parser::ast::Expr>,
     checker: &mut Checker,
     next_class_id: &mut u64,
 ) -> Result<(), CompileError> {
@@ -227,7 +229,9 @@ pub(crate) fn build_enum_info(
                     "Backed enum cases must declare a value",
                 ))
             }
-            (Some(PhpType::Int), Some(expr)) => match fold_backing_value(checker, expr) {
+            (Some(PhpType::Int), Some(expr)) => match fold_backing_value(
+                checker, global_constants, name, expr,
+            ) {
                 Some(FoldedBacking::Int(value)) => {
                     if !seen_int_values.insert(value) {
                         return Err(CompileError::new(
@@ -244,7 +248,9 @@ pub(crate) fn build_enum_info(
                     ))
                 }
             },
-            (Some(PhpType::Str), Some(expr)) => match fold_backing_value(checker, expr) {
+            (Some(PhpType::Str), Some(expr)) => match fold_backing_value(
+                checker, global_constants, name, expr,
+            ) {
                 Some(FoldedBacking::Str(value)) => {
                     if !seen_string_values.insert(value.clone()) {
                         return Err(CompileError::new(
