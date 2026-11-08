@@ -419,3 +419,44 @@ echo get_resource_type($input), ':', count(get_resources('stream')) - $before;
     assert_eq!(out.stdout, "bool(false)\ncaught|stream:0");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Registering a SimpleXML class as a user stream wrapper reproduces PHP's two-stage failure.
+///
+/// php-src assigns the stream context RESOURCE to the wrapper object before `stream_open`.
+/// An uninitialized SimpleXML object raises its initialization Error, then the property type
+/// check raises the resource TypeError with that Error as `getPrevious()`. Ordinary wrapper
+/// classes still open and close cleanly.
+#[test]
+fn test_simplexml_stream_wrapper_class_registration_bundle() {
+    if skip_without_xml_native("test_simplexml_stream_wrapper_class_registration_bundle") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class PlainStreamWrapper {
+    public mixed $context = null;
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened_path): bool { return false; }
+    public function stream_read(int $count): string { return ''; }
+    public function stream_eof(): bool { return true; }
+    public function stream_close(): void { echo 'closed|'; }
+}
+stream_wrapper_register('plain', 'PlainStreamWrapper');
+var_dump(file_get_contents('plain://x'));
+foreach (['SimpleXMLIterator', 'SimpleXMLElement'] as $index => $class) {
+    stream_wrapper_register('xml' . $index, $class);
+    try { file_get_contents('xml' . $index . '://x'); }
+    catch (Error $error) {
+        echo get_class($error), ':', $error->getMessage(), '|', $error->getPrevious()->getMessage(), '|';
+    }
+}
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nTypeError:It's not possible to assign a complex type to properties, resource given|SimpleXMLElement is not properly initialized|TypeError:It's not possible to assign a complex type to properties, resource given|SimpleXMLElement is not properly initialized|"
+    );
+    assert!(
+        out.stderr
+            .contains("Warning: file_get_contents(): Failed to open stream"),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -26,6 +26,22 @@ SimpleXML uses the managed libxml2 package and is enabled automatically when
 one of these functions or classes is referenced. `--with-xml` also exposes it
 when XML source is only available to dynamic `eval()`.
 
+The committed PHP 8.5.8 `ext/simplexml/tests` corpus lives in
+`tests/php_src/simplexml/` and is replayed by
+`tests/codegen/simplexml_php_src.rs`. Each fixture is compiled as an ordinary
+Elephc program from inline Rust source; the test process never parses a
+`.phpt` file. Regenerate the cases with
+`python3 scripts/gen_php_src_simplexml_cases.py`, then run:
+
+```bash
+ELEPHC_TEST_REQUIRE_XML_NATIVE=1 cargo test --test codegen_tests php_src_simplexml
+```
+
+At the PHP 8.5.8 snapshot the migrated suite reports **154 passing, 0 failing, 2
+ignored**. Both ignored fixtures are php-src's own environment skips (`ext/xsl` and
+the test-only `zend_test` extension): every runnable SimpleXML fixture in the corpus
+passes.
+
 ```php
 $catalog = new SimpleXMLElement('<catalog><product sku="A1">Notebook</product></catalog>');
 foreach ($catalog->product as $product) {

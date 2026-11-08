@@ -68,6 +68,40 @@ pub(crate) fn core_declarations() -> Program {
             properties[0].readonly = true;
         }
         declarations.push(sensitive);
+        // Used by the parser's append autovivification lowering (`$x[]->p = v`). The
+        // `mixed` return keeps the appended element opaque so the checker cannot prove it
+        // is null and fold the following property write into a terminating throw; arrays
+        // still raise PHP's catchable "on null" Error at run time.
+        declarations.push(crate::synthetic_class::function("__elephc_append_element")
+            .param("container", t_mixed())
+            .param("key", t_mixed())
+            .returns(t_mixed())
+            .body(vec![crate::synthetic_class::s_return(e_index(e_var("container"), e_var("key")))])
+            .build());
+        // A document-root SimpleXMLElement rejects `$sxe[]->prop = v` before the append runs.
+        // The class only exists when the XML prelude is injected, so the probe goes through
+        // `is_a` with a string class name and a dynamic method call; both are legal on a
+        // `mixed` receiver and cost nothing for programs without SimpleXML.
+        declarations.push(crate::synthetic_class::function("__elephc_append_property_root_append")
+            .param("container", t_mixed())
+            .returns(TypeExpr::Bool)
+            .body(vec![
+                s_if(
+                    crate::synthetic_class::e_not(crate::synthetic_class::e_call(
+                        "is_a",
+                        vec![e_var("container"), e_str("SimpleXMLElement")],
+                    )),
+                    vec![crate::synthetic_class::s_return(crate::synthetic_class::e_bool(false))],
+                    Vec::new(),
+                    None,
+                ),
+                crate::synthetic_class::s_return(crate::synthetic_class::e_method_call(
+                    e_var("container"),
+                    "__elephc_simplexml_root_append_failure",
+                    Vec::new(),
+                )),
+            ])
+            .build());
         declarations.push(class("WeakReference").final_()
             .private_prop("__elephc_target", TypeExpr::Int, Some(e_int(0)))
             .method(method("__construct").body(vec![s_throw(e_new_fq("Error", vec![e_str(
@@ -186,6 +220,10 @@ pub fn inject_if_used(
         let weak_map = dynamic || usage.classes.contains("weakmap") || usage.literals.contains("weakmap");
         let weak_reference = weak_map || usage.classes.contains("weakreference") || usage.literals.contains("weakreference");
         declarations.retain(|stmt| {
+            if let StmtKind::FunctionDecl { name, .. } = &stmt.kind {
+                return name == "__elephc_append_element"
+                    || name == "__elephc_append_property_root_append";
+            }
             let StmtKind::ClassDecl { name, .. } = &stmt.kind else { return false };
             if name == "WeakMap" || name == "__ElephcWeakMapIterator" { return weak_map; }
             if name == "WeakReference" { return weak_reference; }

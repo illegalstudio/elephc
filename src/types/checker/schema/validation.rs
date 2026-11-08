@@ -582,7 +582,8 @@ pub(crate) fn validate_override_signature(
         parent_declaration_is_source && method.span.line != 0,
         false,
     )?;
-    if parent_sig.declared_return && !child_sig.declared_return {
+    // PHP exempts `__toString` from the must-repeat-the-parent-return-type rule.
+    if parent_sig.declared_return && !child_sig.declared_return && method.name != "__toString" {
         return Err(CompileError::new(
             method.span,
             &format!(
@@ -599,11 +600,29 @@ pub(crate) fn validate_override_signature(
         class_name,
         method.span,
     )?;
-    let return_compatible = is_pdo_exception_get_code_contract(
-        class_name,
-        &method.name,
-        &child_sig.return_type,
-    ) || late_static_compatible.unwrap_or_else(|| {
+    // PHP's `__toString` may omit its return type even when an ancestor declares one.
+    let omits_to_string_return = method.name == "__toString"
+        && matches!(child_sig.return_type, PhpType::Void);
+    // SimpleXMLElement::count() carries a tentative return type, so an internal subclass may
+    // replace it under `#[ReturnTypeWillChange]` exactly as php-src's own fixtures do.
+    let tentative_simplexml_count = class
+        .extends
+        .as_deref()
+        .is_some_and(|parent| parent.trim_start_matches('\\').eq_ignore_ascii_case("SimpleXMLElement"))
+        && method.name.eq_ignore_ascii_case("count")
+        && method.attributes.iter().any(|group| {
+            group.attributes.iter().any(|attribute| {
+                attribute.name.as_str().trim_start_matches('\\')
+                    .eq_ignore_ascii_case("ReturnTypeWillChange")
+            })
+        });
+    let return_compatible = omits_to_string_return
+        || tentative_simplexml_count
+        || is_pdo_exception_get_code_contract(
+            class_name,
+            &method.name,
+            &child_sig.return_type,
+        ) || late_static_compatible.unwrap_or_else(|| {
         declared_return_type_compatible(
             checker,
             &parent_sig.return_type,

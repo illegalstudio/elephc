@@ -256,6 +256,8 @@ pub(crate) struct LoweringSnapshot {
     /// Pending call scopes order capture cleanup by PHP parameter position.
     argument_guard_scopes: Vec<Vec<(usize, ValueId)>>,
     eval_barrier_active: bool,
+    /// Depth of `isset()`/`??` operand lowering, where a never-declared root is silent.
+    quiet_undefined_reads: usize,
     eval_executed: bool,
     consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
@@ -548,6 +550,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// read there feeds a heap-kind-dispatching element op, never the `array<mixed>` view.
     promotable_view_suppressed: bool,
     eval_barrier_active: bool,
+    /// Depth of `isset()`/`??` operand lowering, where a never-declared root is silent.
+    quiet_undefined_reads: usize,
     eval_executed: bool,
     consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
@@ -758,6 +762,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             write_operand_is_borrowed: false,
             promotable_view_suppressed: false,
             eval_barrier_active: false,
+            quiet_undefined_reads: 0,
             eval_executed: false,
             consuming_string_append_enabled: true,
             eval_scope_read_param: None,
@@ -833,6 +838,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             argument_guards: self.argument_guards.clone(),
             argument_guard_scopes: self.argument_guard_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
+            quiet_undefined_reads: self.quiet_undefined_reads,
             eval_executed: self.eval_executed,
             consuming_string_append_enabled: self.consuming_string_append_enabled,
             eval_scope_read_param: self.eval_scope_read_param.clone(),
@@ -948,6 +954,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.argument_guards = snapshot.argument_guards;
         self.argument_guard_scopes = snapshot.argument_guard_scopes;
         self.eval_barrier_active = snapshot.eval_barrier_active;
+        self.quiet_undefined_reads = snapshot.quiet_undefined_reads;
         self.eval_executed = snapshot.eval_executed;
         self.consuming_string_append_enabled = snapshot.consuming_string_append_enabled;
         self.eval_scope_read_param = snapshot.eval_scope_read_param;
@@ -2046,6 +2053,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .any(|parameter| parameter.by_ref && parameter.name == name))
     }
 
+    /// Opens a PHP null-probe operand (`isset()`/`??`) where a never-declared root is silent.
+    pub(crate) fn begin_quiet_undefined_reads(&mut self) {
+        self.quiet_undefined_reads += 1;
+    }
+
+    /// Closes one PHP null-probe operand.
+    pub(crate) fn end_quiet_undefined_reads(&mut self) {
+        self.quiet_undefined_reads = self.quiet_undefined_reads.saturating_sub(1);
+    }
+
+    /// Returns whether the current operand is a null probe and must not warn about its root.
+    pub(crate) fn suppresses_undefined_reads(&self) -> bool {
+        self.quiet_undefined_reads > 0
+    }
+
     /// Enables direct eval-scope reads for selected variable names in an AOT eval body.
     pub(crate) fn enable_eval_scope_access(
         &mut self,
@@ -2448,6 +2470,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             self.local_type(name)
         }
+    }
+
+    /// Returns whether a read is served by the active eval scope instead of a frame slot.
+    pub(crate) fn reads_from_eval_scope(&self, name: &str) -> bool {
+        self.should_load_from_eval_scope(name)
     }
 
     /// Returns true when a variable read should be sourced from the eval scope handle.

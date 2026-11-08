@@ -965,6 +965,8 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Class name must be a valid object or a string\"\n");
     out.push_str(".globl _diag_file_get_contents_failed_msg\n_diag_file_get_contents_failed_msg:\n    .ascii \"Warning: file_get_contents(): Failed to open stream\\n\"\n");
     out.push_str(".globl _diag_fopen_failed_msg\n_diag_fopen_failed_msg:\n    .ascii \"Warning: fopen(): Failed to open stream\\n\"\n");
+    out.push_str(".globl _simplexml_wrapper_init_message\n_simplexml_wrapper_init_message:\n    .ascii \"SimpleXMLElement is not properly initialized\"\n");
+    out.push_str(".globl _simplexml_wrapper_context_message\n_simplexml_wrapper_context_message:\n    .ascii \"It's not possible to assign a complex type to properties, resource given\"\n");
     out.push_str(".globl _swr_bad_proto_msg\n_swr_bad_proto_msg:\n    .ascii \"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\n\"\n");
     out.push_str(".globl _swr_dup_proto_msg\n_swr_dup_proto_msg:\n    .ascii \"Warning: stream_wrapper_register(): Protocol is already defined.\\n\"\n");
     // -- php-src's unreachable-seek warning fragments, shared with `__rt_file_get_contents_range` --
@@ -1751,6 +1753,10 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _heap_dbg_live_blocks_short_label\n_heap_dbg_live_blocks_short_label:\n    .ascii \"live_blocks=\"\n");
     out.push_str(".globl _heap_dbg_clean_label\n_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
     out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _rt_diag_leading_newline\n_rt_diag_leading_newline:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _rt_diag_in\n_rt_diag_in:\n    .ascii \" in \"\n");
+    out.push_str(".globl _rt_diag_on_line\n_rt_diag_on_line:\n    .ascii \" on line \"\n");
+    out.push_str(".globl _rt_diag_newline\n_rt_diag_newline:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _heap_dbg_block_offset\n_heap_dbg_block_offset:\n    .ascii \"HEAP DEBUG: live offset=\"\n");
     out.push_str(".globl _heap_dbg_block_bytes\n_heap_dbg_block_bytes:\n    .ascii \" bytes=\"\n");
     out.push_str(".globl _heap_dbg_block_kind\n_heap_dbg_block_kind:\n    .ascii \" kind=\"\n");

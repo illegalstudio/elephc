@@ -17,7 +17,11 @@ pub(super) fn lower_null_coalesce(
     expr: &Expr,
 ) -> LoweredValue {
     let value_expr = value;
+    // The left operand of `??` is a PHP null probe: an undeclared root answers the default
+    // without an Undefined variable warning.
+    ctx.begin_quiet_undefined_reads();
     let value = lower_null_coalesce_value(ctx, value_expr);
+    ctx.end_quiet_undefined_reads();
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![value.value],

@@ -862,13 +862,17 @@ function __elephc_dom_serialize_node(mixed $node): string {
         return "<?" . $node->nodeName . $_separator . (string) $node->nodeValue . "?>";
     }
     if ($node instanceof DOMDocument) {
+        $_prefix = $node->__elephc_dom_html ? "" : "<?xml version=\"1.0\"?>\n";
         $_out = "";
-        if ($node->childNodes !== null) {
-            foreach ($node->childNodes as $_child) {
+        $_kids = $node->childNodes;
+        if ($_kids !== null) {
+            foreach ($_kids as $_child) {
                 $_out = $_out . __elephc_dom_serialize_node($_child);
             }
         }
-        return $_out;
+        // The concatenation also keeps the empty-document declaration owned, so the caller
+        // releases exactly the string it received.
+        return $_prefix . $_out;
     }
     $_out = "<" . $node->nodeName;
     $_attrs = $node->__attrs;
@@ -1151,6 +1155,53 @@ class DOMNode {
         return true;
     }
 
+    public function appendChild(DOMNode $node): DOMNode {
+        if ($node instanceof DOMDocument) {
+            throw new DOMException('Hierarchy Request Error', 3);
+        }
+        $bound = $this->__elephc_simplexml;
+        if (is_object($bound)) {
+            $appended = $bound->__elephc_dom_append_child($this, $node);
+            if ($appended instanceof DOMNode) { return $appended; }
+            throw new DOMException('Hierarchy Request Error', 3);
+        }
+        $previous = $node->parentNode;
+        if ($previous instanceof DOMNode) { $previous->removeChild($node); }
+        $items = [];
+        $children = $this->childNodes;
+        if ($children instanceof DOMNodeList) {
+            foreach ($children as $child) { if ($child instanceof DOMNode) { $items[] = $child; } }
+        }
+        $items[] = $node;
+        $this->childNodes = new DOMNodeList($items);
+        $node->parentNode = $this;
+        $node->ownerDocument = $this instanceof DOMDocument ? $this : $this->ownerDocument;
+        return $node;
+    }
+
+    public function append(string|DOMNode ...$nodes): void {
+        foreach ($nodes as $node) {
+            if ($node instanceof DOMNode) { $this->appendChild($node); continue; }
+            $text = new DOMText();
+            $text->nodeName = '#text';
+            $text->nodeValue = (string)$node;
+            $text->ownerDocument = $this instanceof DOMDocument ? $this : $this->ownerDocument;
+            $text->childNodes = new DOMNodeList([]);
+            $this->appendChild($text);
+        }
+    }
+
+    public function removeChild(DOMNode $node): DOMNode {
+        $items = [];
+        $children = $this->childNodes;
+        if ($children instanceof DOMNodeList) {
+            foreach ($children as $child) { if ($child instanceof DOMNode && $child !== $node) { $items[] = $child; } }
+        }
+        $this->childNodes = new DOMNodeList($items);
+        $node->parentNode = null;
+        return $node;
+    }
+
     public function getElementsByTagName(string $qualifiedName): DOMNodeList {
         return new DOMNodeList(__elephc_dom_collect($this, $qualifiedName));
     }
@@ -1215,6 +1266,7 @@ class DOMNodeList implements IteratorAggregate, Countable {
 
 class DOMDocument extends DOMNode {
     public int $__elephc_flags = 0;
+    public bool $__elephc_dom_html = false;
     public array $__elephc_dom_nodes = [];
     public int $__elephc_dom_sweep = 64;
     public mixed $documentElement {
@@ -1236,8 +1288,31 @@ class DOMDocument extends DOMNode {
         $this->ownerDocument = null;
     }
 
+    public function createElement(string $localName, string $value = ""): DOMElement {
+        if ($localName === '' || !__elephc_dom_valid_attribute_name($localName)) {
+            throw new DOMException('Invalid Character Error', 5);
+        }
+        $element = new DOMElement();
+        $element->nodeName = $localName;
+        $element->ownerDocument = $this;
+        $element->__attrs = [];
+        $element->childNodes = new DOMNodeList([]);
+        if ($value !== "") {
+            $text = new DOMText();
+            $text->nodeName = '#text';
+            $text->nodeValue = $value;
+            $text->ownerDocument = $this;
+            $text->parentNode = $element;
+            $text->childNodes = new DOMNodeList([]);
+            $element->childNodes = new DOMNodeList([$text]);
+            $element->nodeValue = $value;
+        }
+        return $element;
+    }
+
     public function loadHTML(string $source, int $options = 0): bool {
         $this->__elephc_flags = $options;
+        $this->__elephc_dom_html = true;
         $_tree = __elephc_dom_parse_html($source, $options);
         $this->__elephc_simplexml = null;
         $this->nodeName = "#document";
@@ -1248,8 +1323,15 @@ class DOMDocument extends DOMNode {
         return true;
     }
 
+    public function load(string $filename, int $options = 0): bool {
+        $source = @file_get_contents($filename);
+        if ($source === false) { return false; }
+        return $this->loadXML($source, $options);
+    }
+
     public function loadXML(string $source, int $options = 0): bool {
         if ($source === '') { throw new ValueError('DOMDocument::loadXML(): Argument #1 ($source) must not be empty'); }
+        $this->__elephc_dom_html = false;
         return ("__elephc_simplexml_load_dom")($this, $source, $options);
     }
 

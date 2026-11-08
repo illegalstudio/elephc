@@ -334,7 +334,13 @@ impl Scanner<'_> {
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize"
                 => self.usage.hazards.dynamic_class = true,
             "__elephc_simplexml_allocate" => {
-                if self.current_function.as_deref() == Some("__elephc_simplexml_wrap") {
+                // The factory functions validate `$class_name` through
+                // `__elephc_simplexml_class` before this allocation, so the allocation only
+                // ever reaches the compatible SimpleXML family.
+                if matches!(
+                    self.current_function.as_deref(),
+                    Some("__elephc_simplexml_wrap" | "simplexml_load_string" | "simplexml_load_file")
+                ) {
                     self.usage.instantiated_subclass_roots.insert(php_symbol_key("SimpleXMLElement"));
                 } else {
                     self.usage.hazards.dynamic_class = true;

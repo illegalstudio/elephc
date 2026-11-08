@@ -92,6 +92,24 @@ that names one the compiled program never spelled gets it created with these
 same contents when the fragment starts; see
 [Scope behavior](eval.md#scope-behavior) for how such a value is shared.
 
+### `$GLOBALS`
+
+A `$GLOBALS` read projects the global symbol table as a `string => mixed`
+associative array. At the top level it contains every initialized top-level
+variable; inside a function it contains the `global $name` aliases and the
+superglobals spelled in that body. This is what lets an ordinary program hand
+the global table to a function such as `array_merge_recursive()`:
+
+```php
+$root = simplexml_load_string('<root><child/></root>');
+var_dump(array_merge_recursive($GLOBALS, $GLOBALS)["root"]);
+```
+
+The projection is a snapshot: writing an element of it does not update the
+corresponding top-level variable. Use an ordinary assignment or `global` for
+writes. `$GLOBALS` is not listed by `get_defined_vars()`, matching its special
+engine role rather than a normal variable.
+
 #### Known limitation
 
 Reading an **element** of the nested `$_SERVER['argv']` does not work: the index
@@ -449,7 +467,7 @@ wrappers are documented in [Streams](streams.md).
 
 | Function | Signature | Description |
 |---|---|---|
-| `file_get_contents()` | `file_get_contents($filename, $use_include_path = false, $context = null, $offset = 0, $length = null): string\|false` | Read a file, or `false` if it cannot be opened. `$offset` starts the read at a byte position, counting from the end of the data when negative; a negative offset that reaches before the first byte emits `file_get_contents(): Failed to seek to position N in the stream` and returns `false`, while an offset past the end simply returns `""`. `$length` caps the bytes returned and is bounded by what is actually available; `null` reads to the end and a negative `$length` throws `\ValueError` before the file is opened. `$use_include_path` is accepted and behaves as `false`, because elephc resolves paths against the current directory only (the same result an include path of `"."` gives). `$context` must be `null`: elephc has no stream-context plumbing on the read path, so a non-null one is a compile error rather than a silently dropped option set. A literal `phar://` URL is decoded at compile time; non-literal `phar://` is read at runtime. Native PHAR, tar-based PHAR, and zip-based PHAR containers are readable; native gzip/bzip2 entries and ZIP deflate entries are decoded transparently. Literal and runtime-string `http://`, `https://`, `ftp://`, and `ftps://` URLs open the matching wrapper, read the whole body, and return it (`false` on a failed open). |
+| `file_get_contents()` | `file_get_contents($filename, $use_include_path = false, $context = null, $offset = 0, $length = null): string\|false` | Read a file, or `false` if it cannot be opened. `$offset` starts the read at a byte position, counting from the end of the data when negative; a negative offset that reaches before the first byte emits `file_get_contents(): Failed to seek to position N in the stream` and returns `false`, while an offset past the end simply returns `""`. `$length` caps the bytes returned and is bounded by what is actually available; `null` reads to the end and a negative `$length` throws `\ValueError` before the file is opened. `$use_include_path` is accepted and behaves as `false`, because elephc resolves paths against the current directory only (the same result an include path of `"."` gives). `$context` must be `null`: elephc has no stream-context plumbing on the read path, so a non-null one is a compile error rather than a silently dropped option set. A literal `phar://` URL is decoded at compile time; non-literal `phar://` is read at runtime. Native PHAR, tar-based PHAR, and zip-based PHAR containers are readable; native gzip/bzip2 entries and ZIP deflate entries are decoded transparently. Literal and runtime-string `http://`, `https://`, `ftp://`, and `ftps://` URLs open the matching wrapper, read the whole body, and return it (`false` on a failed open). Registered userspace wrappers are opened through `stream_open()` and drained through `stream_read()`/`stream_eof()`; a refused open returns `false` after the failed-open warning. |
 | `file_put_contents()` | `file_put_contents($filename, $data, $flags = 0): int` | Write a file and return the byte count. `$flags` accepts `FILE_APPEND`, which extends the file instead of truncating it, and `LOCK_EX`, which takes an exclusive `flock` on the descriptor for the duration of the write; the two combine. `LOCK_EX` without `FILE_APPEND` opens the file without truncating it and truncates only once the lock is held, so a writer waiting for the lock cannot have its contents erased first; a lock that cannot be taken is a failed write, not an unlocked one. Every other `FILE_*` flag is ignored. A `phar://` destination rejects a non-zero `$flags`: a phar entry is rewritten whole, so there is nothing for `FILE_APPEND` to append to — a literal `phar://` path is a compile error and a runtime one returns `-1`, rather than silently truncating what the caller asked to extend. |
 | `file()` | `file($filename [, $flags]): array\|false` | Read into array of lines, or `false` when the file cannot be read — the only way to tell a failed read from a genuinely empty file, which returns `[]`. `$flags` accepts `FILE_IGNORE_NEW_LINES`, `FILE_SKIP_EMPTY_LINES` and `FILE_USE_INCLUDE_PATH` (accepted, no effect). The stream-context parameter is not supported. |
 | `file_exists()` | `file_exists($filename): bool` | Check exists |

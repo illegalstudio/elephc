@@ -97,13 +97,13 @@ fn emit_tagged_scalar_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) 
     Ok(())
 }
 
-/// Emits PHP object truthiness: every object is `true`, PHP null is `false`.
+/// Emits whether an object-typed value is a live object rather than PHP null.
 ///
 /// An object-typed slot still carries PHP null as a zero pointer or as the in-band
 /// null-container sentinel a missed read produces (the same pair `is_null()` tests), so the
-/// answer is "not null" rather than a constant. Used by conditions such as
-/// `if ($row = $it->next())` and by `(bool)` / `boolval()` on an object (issue #1492).
-fn emit_object_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+/// answer is "not null" rather than a constant. Used by object truthiness (conditions such as
+/// `if ($row = $it->next())` and by `(bool)` / `boolval()`, issue #1492) and by `is_object()`.
+pub(super) fn emit_object_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     ctx.load_value_to_result(value)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     let null_label = ctx.next_label("object_truthy_null");

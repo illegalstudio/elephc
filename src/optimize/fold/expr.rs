@@ -354,8 +354,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                     }
                 }
             }
-            // `str_replace()` with a literal search array and a scalar replacement is a chain of
-            // scalar replacements; lowering it as nested calls keeps the runtime's string path.
+            // `str_replace([literal, ...], 'replacement', $subject)` is a chain of scalar
+            // replacements. Folding it before lowering keeps the runtime's string-only
+            // helper while matching PHP's array-search form for the common literal case.
             if name
                 .as_canonical()
                 .trim_start_matches('\\')
@@ -371,6 +372,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                         && items.iter().all(|item| matches!(item.kind, ExprKind::StringLiteral(_)))
                     {
                         let mut subject = args[2].clone();
+                        // PHP applies search entries left to right. Wrapping forward puts the
+                        // first entry innermost, so it runs first; reversing applied the last
+                        // entry before it and changed overlapping replacements.
                         for item in items.iter() {
                             subject = Expr::new(
                                 ExprKind::FunctionCall {
@@ -387,7 +391,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                                 span,
                             );
                         }
-                        return subject;
+                        return fold_expr(subject);
                     }
                 }
             }

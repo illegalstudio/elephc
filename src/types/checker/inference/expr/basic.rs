@@ -32,8 +32,22 @@ impl Checker {
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
+            // `$GLOBALS` is the program's global symbol table projected as an array. It is
+            // not an ordinary variable, so it never produces the undefined-variable warning.
+            ExprKind::Variable(name) if name == "GLOBALS" => Ok(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }),
             ExprKind::Variable(name) => {
-                let ty = self.variable_type_or_eval_dynamic(name, expr.span, env)?;
+                let ty = match self.variable_type_or_eval_dynamic(name, expr.span, env) {
+                    Ok(ty) => ty,
+                    // PHP 8 reads an undefined variable as `null` and raises E_WARNING. The
+                    // warning is emitted by EIR lowering at the read site so it carries the
+                    // caller's file/line and participates in `@` suppression and handlers.
+                    Err(error) if !self.strict_locals
+                        && error.message.starts_with("Undefined variable: $") => PhpType::Void,
+                    Err(error) => return Err(error),
+                };
                 let ty = self.promotable_array_value_view(name, expr.span, ty);
                 self.record_local_value_read(name, expr.span, &ty, env);
                 Ok(ty)

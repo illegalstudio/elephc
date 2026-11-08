@@ -459,6 +459,12 @@ pub(crate) struct Checker {
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
+    /// Parent links for classes whose `ClassInfo` is still being built.
+    ///
+    /// Override validation runs while the child class is not yet registered in `classes`, so a
+    /// covariant return such as `?SimpleXMLIterator` would otherwise look unrelated to
+    /// `?SimpleXMLElement`. The hint keeps ancestry answerable during that window.
+    pub pending_class_parents: HashMap<String, String>,
     /// Physical instance slots refined during the current method fixed-point pass.
     /// A first constructor integer initialization may replay a placeholder from an older pass.
     pub method_property_refinements: Option<HashSet<(String, usize)>>,

@@ -147774,7 +147774,7 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/simplexml_prelude/surface.rs",
+      "codegen_file": "src/simplexml_prelude/generated.rs",
       "codegen_function": "simplexml_import_dom",
       "notes": [
         "Implemented by the compiler-injected xml prelude."
@@ -147918,7 +147918,7 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/simplexml_prelude/surface.rs",
+      "codegen_file": "src/simplexml_prelude/generated.rs",
       "codegen_function": "simplexml_load_file",
       "notes": [
         "Implemented by the compiler-injected xml prelude."
@@ -148083,7 +148083,7 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/simplexml_prelude/surface.rs",
+      "codegen_file": "src/simplexml_prelude/generated.rs",
       "codegen_function": "simplexml_load_string",
       "notes": [
         "Implemented by the compiler-injected xml prelude."

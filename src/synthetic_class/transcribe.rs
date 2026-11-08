@@ -897,6 +897,7 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
                 stmt_vec(body, depth)
             )
         }
+        StmtKind::Synthetic(body) => format!("s_synthetic({})", stmt_vec(body, depth)),
         other => panic!("transcribe: unmodelled statement {:?}", other),
     }
 }
@@ -1203,6 +1204,13 @@ fn ty_expr(ty: &TypeExpr) -> String {
         TypeExpr::Ptr(None) => "t_ptr()".to_string(),
         TypeExpr::Never => "TypeExpr::Never".to_string(),
         TypeExpr::Iterable => "TypeExpr::Iterable".to_string(),
+        TypeExpr::Array(inner) => format!("TypeExpr::Array(Box::new({}))", ty_expr(inner)),
+        TypeExpr::AssocArray { key, value } => format!(
+            "TypeExpr::AssocArray {{ key: Box::new({}), value: Box::new({}) }}",
+            ty_expr(key),
+            ty_expr(value)
+        ),
+        TypeExpr::Buffer(inner) => format!("TypeExpr::Buffer(Box::new({}))", ty_expr(inner)),
         TypeExpr::Nullable(inner) => format!("t_nullable({})", ty_expr(inner)),
         TypeExpr::Union(members) => {
             let rendered: Vec<String> = members.iter().map(ty_expr).collect();

@@ -68,12 +68,7 @@ var_dump($num + 42.5);
 "#,
     );
     assert!(out.success, "stderr: {}", out.stderr);
-    // PHP's display_errors diagnostics start with a newline; skip that blank line.
-    let first = out
-        .stdout
-        .lines()
-        .find(|line| !line.is_empty())
-        .unwrap_or_default();
+    let first = out.stdout.lines().find(|line| !line.is_empty()).unwrap_or_default();
     assert!(
         first.starts_with(
             "Deprecated: Implicit conversion from float 42.5 to int loses precision in "

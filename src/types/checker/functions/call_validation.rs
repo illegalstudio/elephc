@@ -1043,7 +1043,22 @@ impl Checker {
                         && self
                             .callable_array_param_target(arg, caller_env)?
                             .is_some();
-                    if !proven_callable_array && !runtime_descriptor_projection {
+                    // `str_replace([literal, ...], 'x', $s)` is folded into scalar calls by
+                    // the AST optimizer before lowering, so its array search is accepted here
+                    // even though the runtime helper is string-only.
+                    let literal_str_replace_search = param_idx == 0
+                        && callee_desc
+                            .trim_start_matches('\\')
+                            .eq_ignore_ascii_case("str_replace")
+                        && matches!(&arg.kind, crate::parser::ast::ExprKind::ArrayLiteral(items)
+                            if !items.is_empty()
+                                && items.iter().all(|item| matches!(
+                                    item.kind,
+                                    crate::parser::ast::ExprKind::StringLiteral(_)
+                                )));
+                    if !proven_callable_array && !runtime_descriptor_projection
+                        && !literal_str_replace_search
+                    {
                         if (coercive_param_binding
                             && sig.declared_params.get(param_idx).copied().unwrap_or(false))
                             || (supplied_reference && matches!(expected_ty, PhpType::Object(_)))

@@ -63,18 +63,26 @@ impl Checker {
     /// Returns true if `class_name` is or inherits from `ancestor_name` (excluding self equality).
     /// Walks the parent chain via `class_info.parent`.
     pub(crate) fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
+        // A class under construction is absent from `classes` but its parent is already known;
+        // override covariance is validated during that window.
         let mut current = self
             .classes
             .get(class_name)
-            .and_then(|class| class.parent.clone());
+            .and_then(|class| class.parent.clone())
+            .or_else(|| self.pending_class_parents.get(class_name).cloned());
+        let mut seen = std::collections::HashSet::new();
         while let Some(parent_name) = current {
             if parent_name == ancestor_name {
                 return true;
             }
+            if !seen.insert(parent_name.clone()) {
+                return false;
+            }
             current = self
                 .classes
                 .get(&parent_name)
-                .and_then(|class| class.parent.clone());
+                .and_then(|class| class.parent.clone())
+                .or_else(|| self.pending_class_parents.get(&parent_name).cloned());
         }
         false
     }

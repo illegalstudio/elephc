@@ -146,6 +146,7 @@ mod stack_guard;
 mod zval;
 
 mod simplexml;
+mod simplexml_php_src;
 mod fileinfo;
 mod fileinfo_autoload;
 mod fileinfo_reflection;
