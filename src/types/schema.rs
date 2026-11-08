@@ -19,6 +19,7 @@ use crate::span::Span;
 use super::{ExternAbiType, FunctionSig, PhpType, ScalarWidth};
 
 mod abstract_setters;
+mod narrowed_slots;
 
 /// Compile-time attribute argument value. Captures the subset of PHP
 /// attribute argument expressions that reflection helpers can materialize:
@@ -264,6 +265,15 @@ pub struct InterfaceInfo {
     pub final_constants: HashSet<String>,
 }
 
+/// One retired, narrower instance-vtable slot left behind by a widening override.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NarrowedVtableSlot {
+    /// PHP's case-insensitive key of the method the slot dispatches.
+    pub method: String,
+    /// The signature callers of the slot's owning ancestor compile against.
+    pub signature: FunctionSig,
+}
+
 /// Class metadata for resolved declarations. Tracks inheritance, properties,
 /// methods, constants, attributes, and vtable layout after name resolution and inheritance flattening.
 #[derive(Debug, Clone, PartialEq)]
@@ -426,6 +436,13 @@ pub struct ClassInfo {
     pub abstract_methods: HashSet<String>,
     pub vtable_methods: Vec<String>,
     pub vtable_slots: HashMap<String, usize>,
+    /// Inherited instance-vtable slots an override retired by adding trailing optional
+    /// parameters, keyed by the slot's generated key in `vtable_methods`.
+    ///
+    /// A call through the ancestor that owns such a slot passes the ancestor's argument count,
+    /// so the slot holds an EIR adapter that supplies the override's defaults, while the method
+    /// key itself names the new, wider slot (see `docs/internals/the-type-checker.md`).
+    pub narrowed_vtable_slots: HashMap<String, NarrowedVtableSlot>,
     pub static_method_visibilities: HashMap<String, Visibility>,
     pub final_static_methods: HashSet<String>,
     pub static_method_declaring_classes: HashMap<String, String>,

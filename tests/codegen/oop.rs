@@ -47,6 +47,8 @@ mod anonymous_classes;
 mod intersection_types;
 #[path = "oop/dynamic_dispatch.rs"]
 mod dynamic_dispatch;
+#[path = "oop/optional_parameter_widening.rs"]
+mod optional_parameter_widening;
 #[path = "oop/misc.rs"]
 mod misc;
 #[path = "oop/attributes.rs"]

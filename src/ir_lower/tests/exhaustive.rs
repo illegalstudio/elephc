@@ -256,6 +256,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         abstract_methods: Default::default(),
         vtable_methods: Vec::new(),
         vtable_slots: HashMap::new(),
+        narrowed_vtable_slots: HashMap::new(),
         static_method_visibilities: HashMap::new(),
         final_static_methods: Default::default(),
         static_method_declaring_classes: HashMap::new(),

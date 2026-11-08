@@ -61,6 +61,7 @@ pub(super) struct ClassBuildState {
     pub(super) abstract_methods: HashSet<String>,
     pub(super) vtable_methods: Vec<String>,
     pub(super) vtable_slots: HashMap<String, usize>,
+    pub(super) narrowed_vtable_slots: HashMap<String, crate::types::NarrowedVtableSlot>,
     pub(super) static_method_visibilities: HashMap<String, Visibility>,
     pub(super) final_static_methods: HashSet<String>,
     pub(super) static_method_declaring_classes: HashMap<String, String>,
@@ -237,6 +238,7 @@ impl ClassBuildState {
             abstract_methods: self.abstract_methods,
             vtable_methods: self.vtable_methods,
             vtable_slots: self.vtable_slots,
+            narrowed_vtable_slots: self.narrowed_vtable_slots,
             static_method_visibilities: self.static_method_visibilities,
             final_static_methods: self.final_static_methods,
             static_method_declaring_classes: self.static_method_declaring_classes,
@@ -438,6 +440,7 @@ impl ClassBuildState {
         }
         self.vtable_methods = parent.vtable_methods.clone();
         self.vtable_slots = parent.vtable_slots.clone();
+        self.narrowed_vtable_slots = parent.narrowed_vtable_slots.clone();
     }
 
     /// Copies all non-private, non-final static method metadata from `parent`

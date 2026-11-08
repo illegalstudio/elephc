@@ -19,6 +19,7 @@ or behavioral probes.
 | [PDO parity](pdo-full-maintained-php-parity.md) | Broader registry migration, unintended common divergences and proprietary-client/cross-target live qualification. |
 | [TLS advisory rollout](webpki-advisories-20261020.md) | Dependency update merged in #1954; affected-branch refresh remains tracked in the plan. |
 | [PhpStorm plugin](phpstorm-plugin.md) | Unimplemented IDE proposal; SDK choice, language integration and qualification remain open. |
+| [Optional-parameter widening](optional-parameter-widening.md) | Instance overrides and interface implementations are shipped by its branch; static-method widening, appended variadics, required-to-optional and `mixed`-receiver arity follow-ups remain. |
 
 Detailed execution plans, current task ownership and investigation evidence also
 live in Code Journal. The individual files link the relevant plan/task IDs.

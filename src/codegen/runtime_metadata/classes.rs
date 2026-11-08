@@ -441,6 +441,12 @@ pub(in crate::codegen) fn class_method_symbols_supported(
     emitted_methods: &HashSet<(String, String, bool)>,
 ) -> bool {
     methods.iter().all(|method_name| {
+        // A slot retired by a widening override is backed by the adapter EIR always lowers
+        // beside its method, so it is supported exactly when the method's own slot is.
+        let method_name = match class_info.narrowed_vtable_slots.get(method_name) {
+            Some(slot) if !is_static => &slot.method,
+            _ => method_name,
+        };
         let impl_class = impl_classes
             .get(method_name)
             .map(String::as_str)
