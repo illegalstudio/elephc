@@ -164,9 +164,17 @@ def main() -> None:
             r"locale_set_default(\1)",
             source,
         )
+        # `ini_restore` restores the fixture's compile-time `intl.default_locale` value,
+        # not the process system default that `locale_set_default('')` resets to.
+        ini_locale = None
+        for line in sections.get("INI", "").splitlines():
+            match = re.match(r"\s*intl\.default_locale\s*=\s*(.+)", line)
+            if match:
+                ini_locale = match.group(1).strip()
+        restore_locale = ini_locale.replace("\\", "\\\\").replace("'", "\\'") if ini_locale else ""
         source = re.sub(
             r"ini_restore\(\s*['\"]intl\.default_locale['\"]\s*\)",
-            "locale_set_default('')",
+            lambda _match: f"locale_set_default('{restore_locale}')",
             source,
         )
         source = re.sub(

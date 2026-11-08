@@ -2218,7 +2218,7 @@ fn test_php_src_intl_locale_get_all_variants() {
 /// Replays php-src `locale_get_default.phpt`.
 #[test]
 fn test_php_src_intl_locale_get_default() {
-    let out = run_case("<?php\n\n/*\n * Try getting the default Locale with different locales\n * with Procedural and Object methods.\n */\n\nfunction ut_main()\n{\n    $res_str = '';\n\n    $lang = ut_loc_get_default() ;\n    $res_str .= \"Default locale: $lang\";\n    $res_str .= \"\\n\";\n\n    locale_set_default('de-DE');\n    $lang = ut_loc_get_default() ;\n    $res_str .= \"Default locale: $lang\";\n    $res_str .= \"\\n\";\n\n    locale_set_default('fr');\n    $lang = ut_loc_get_default() ;\n    $res_str .= \"Default locale: $lang\";\n    $res_str .= \"\\n\";\n\n    locale_set_default('');\n\n    return $res_str;\n\n}\n\ninclude_once( 'ut_common.inc' );\nut_run();\n\n", "", &[(r#"intl.default_locale"#, r#"en-US"#)], &[]);
+    let out = run_case("<?php\n\n/*\n * Try getting the default Locale with different locales\n * with Procedural and Object methods.\n */\n\nfunction ut_main()\n{\n    $res_str = '';\n\n    $lang = ut_loc_get_default() ;\n    $res_str .= \"Default locale: $lang\";\n    $res_str .= \"\\n\";\n\n    locale_set_default('de-DE');\n    $lang = ut_loc_get_default() ;\n    $res_str .= \"Default locale: $lang\";\n    $res_str .= \"\\n\";\n\n    locale_set_default('fr');\n    $lang = ut_loc_get_default() ;\n    $res_str .= \"Default locale: $lang\";\n    $res_str .= \"\\n\";\n\n    locale_set_default('en-US');\n\n    return $res_str;\n\n}\n\ninclude_once( 'ut_common.inc' );\nut_run();\n\n", "", &[(r#"intl.default_locale"#, r#"en-US"#)], &[]);
     assert_eq!(out, "Default locale: en-US\nDefault locale: de-DE\nDefault locale: fr");
 }
 
