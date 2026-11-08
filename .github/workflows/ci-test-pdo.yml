@@ -1,0 +1,570 @@
+name: Test live PDO databases
+
+on:
+  workflow_call:
+    inputs:
+      host-attempt:
+        type: string
+        default: ''
+      family:
+        type: string
+        required: true
+      variant-attempts:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: always
+  ELEPHC_PDO_LIVE_REQUIRED: '1'
+  RUST_MIN_STACK: '33554432'
+
+jobs:
+  pdo-core:
+    name: PDO core live suite (${{ matrix.suite }})
+    if: inputs.family == 'core'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [native-postgres, libpq-postgres, mysql]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d testdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: testdb
+          MYSQL_USER: test
+          MYSQL_PASSWORD: test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -utest -ptest --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # The in-crate bridge tests deliberately exercise their fallback from the
+      # legacy *_TEST_DSN variables to these codegen-facing names.
+      ELEPHC_PG_DSN: 'pgsql:host=127.0.0.1;port=5432;dbname=testdb;user=test;password=test;sslmode=disable'
+      ELEPHC_MY_DSN: 'mysql:host=127.0.0.1;port=3306;dbname=testdb;user=test;password=test'
+      ELEPHC_MY_TLS_DSN: 'mysql:host=127.0.0.1;port=3306;dbname=testdb;user=test;password=test'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            krb5-user \
+            libbz2-dev \
+            libpcre2-dev \
+            libpq-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Configure the MySQL live-test server
+        run: |
+          docker exec ${{ job.services.mysql.id }} \
+            mysql -uroot -proot -e "
+              SET GLOBAL local_infile = ON;
+              GRANT ALL PRIVILEGES ON testdb.* TO 'test'@'%';
+              GRANT CREATE ROUTINE, ALTER ROUTINE, EXECUTE ON testdb.* TO 'test'@'%';
+              FLUSH PRIVILEGES;"
+
+      - name: Configure TLS on both live-test servers
+        run: |
+          docker exec ${{ job.services.mysql.id }} sh -ec '
+            openssl req -new -x509 -nodes -days 1 \
+              -subj "/CN=elephc-pdo-mysql-test-ca" \
+              -addext "basicConstraints=critical,CA:TRUE" \
+              -addext "keyUsage=critical,keyCertSign,cRLSign" \
+              -keyout /var/lib/mysql/ca-key.pem \
+              -out /var/lib/mysql/ca.pem
+            openssl req -new -nodes \
+              -subj "/CN=localhost" \
+              -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+              -keyout /var/lib/mysql/server-key.pem \
+              -out /var/lib/mysql/server.csr
+            printf "subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n" \
+              > /var/lib/mysql/server.ext
+            openssl x509 -req -days 1 -sha256 \
+              -in /var/lib/mysql/server.csr \
+              -CA /var/lib/mysql/ca.pem \
+              -CAkey /var/lib/mysql/ca-key.pem \
+              -CAcreateserial \
+              -extfile /var/lib/mysql/server.ext \
+              -out /var/lib/mysql/server-cert.pem
+            chown mysql:mysql \
+              /var/lib/mysql/ca-key.pem \
+              /var/lib/mysql/ca.pem \
+              /var/lib/mysql/server-key.pem \
+              /var/lib/mysql/server-cert.pem
+            chmod 600 /var/lib/mysql/ca-key.pem /var/lib/mysql/server-key.pem'
+          docker exec ${{ job.services.mysql.id }} \
+            mysql -uroot -proot -e "ALTER INSTANCE RELOAD TLS;"
+          docker cp ${{ job.services.mysql.id }}:/var/lib/mysql/ca.pem "$RUNNER_TEMP/mysql-ca.pem"
+          docker cp ${{ job.services.mysql.id }}:/var/lib/mysql/public_key.pem "$RUNNER_TEMP/mysql-public-key.pem"
+          echo "ELEPHC_MY_TLS_CA=$RUNNER_TEMP/mysql-ca.pem" >> "$GITHUB_ENV"
+          echo "ELEPHC_MY_SERVER_PUBLIC_KEY=$RUNNER_TEMP/mysql-public-key.pem" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/mysql-ca-dir"
+          cp "$RUNNER_TEMP/mysql-ca.pem" "$RUNNER_TEMP/mysql-ca-dir/ca.pem"
+          echo "ELEPHC_MY_TLS_CAPATH=$RUNNER_TEMP/mysql-ca-dir" >> "$GITHUB_ENV"
+
+          docker exec ${{ job.services.postgres.id }} sh -ec '
+            openssl req -new -x509 -nodes -days 1 \
+              -subj "/CN=elephc-pdo-test-ca" \
+              -addext "basicConstraints=critical,CA:TRUE" \
+              -addext "keyUsage=critical,keyCertSign,cRLSign" \
+              -keyout /var/lib/postgresql/data/root.key \
+              -out /var/lib/postgresql/data/root.crt
+            openssl req -new -nodes \
+              -subj "/CN=localhost" \
+              -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+              -keyout /var/lib/postgresql/data/server.key \
+              -out /var/lib/postgresql/data/server.csr
+            printf "subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n" \
+              > /var/lib/postgresql/data/server.ext
+            openssl x509 -req -days 1 -sha256 \
+              -in /var/lib/postgresql/data/server.csr \
+              -CA /var/lib/postgresql/data/root.crt \
+              -CAkey /var/lib/postgresql/data/root.key \
+              -CAcreateserial \
+              -extfile /var/lib/postgresql/data/server.ext \
+              -out /var/lib/postgresql/data/server.crt
+            chown postgres:postgres \
+              /var/lib/postgresql/data/server.crt \
+              /var/lib/postgresql/data/server.key
+            chmod 600 /var/lib/postgresql/data/server.key'
+          docker cp ${{ job.services.postgres.id }}:/var/lib/postgresql/data/root.crt \
+            "$RUNNER_TEMP/postgres-ca.pem"
+          echo "ELEPHC_PG_TLS_DSN=pgsql:host=localhost;port=5432;dbname=testdb;user=test;password=test;sslmode=verify-full;sslrootcert=$RUNNER_TEMP/postgres-ca.pem" \
+            >> "$GITHUB_ENV"
+          docker exec ${{ job.services.postgres.id }} \
+            psql -U test -d testdb -c "ALTER SYSTEM SET ssl = 'on';"
+          docker restart ${{ job.services.postgres.id }}
+          for attempt in $(seq 1 30); do
+            if docker exec ${{ job.services.postgres.id }} pg_isready -U test -d testdb; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs ${{ job.services.postgres.id }}
+          exit 1
+
+      - name: Restore default PDO tests
+        if: matrix.suite == 'native-postgres'
+        uses: ./.github/actions/restore-test-build
+        with:
+          target: linux-x86_64
+          attempt: ${{ inputs.host-attempt }}
+
+      - name: Live native bridge tests
+        if: matrix.suite == 'native-postgres'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo)' --run-ignored only -j 1
+
+      - name: Live native PostgreSQL codegen tests
+        if: matrix.suite == 'native-postgres'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pgsql --ignored --test-threads=4
+
+      - name: Restore PDO libpq-gss tests
+        if: matrix.suite == 'libpq-postgres'
+        uses: ./.github/actions/restore-pdo-tests
+        with:
+          variant: libpq-gss
+          attempts: ${{ inputs.variant-attempts }}
+
+      - name: Libpq bridge unit tests
+        if: matrix.suite == 'libpq-postgres'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and kind(lib)'
+
+      - name: Live libpq bridge tests
+        if: matrix.suite == 'libpq-postgres'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo)' --run-ignored only -j 1
+
+      - name: Live libpq PostgreSQL codegen tests
+        if: matrix.suite == 'libpq-postgres'
+        env:
+          ELEPHC_PDO_LIBPQ: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pgsql --ignored --test-threads=4
+
+      - name: Live libpq GSSAPI handshake
+        if: matrix.suite == 'libpq-postgres'
+        run: ./scripts/test-pdo-gss.sh
+
+      - name: Restore shared libpq tests for MySQL
+        if: matrix.suite == 'mysql'
+        uses: ./.github/actions/restore-pdo-tests
+        with:
+          variant: libpq-gss
+          attempts: ${{ inputs.variant-attempts }}
+
+      - name: Live MySQL codegen tests
+        if: matrix.suite == 'mysql'
+        env:
+          ELEPHC_PDO_LIBPQ: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py mysql --ignored --test-threads=4
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
+  pdo-drivers:
+    name: PDO optional-driver suite (${{ matrix.suite }})
+    if: inputs.family == 'drivers'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [sqlsrv-oci, cubrid-dblib, firebird-odbc, informix-ibm]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d testdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: Elephc_Pdo!2026_Test
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Elephc_Pdo!2026_Test' -Q 'SELECT 1'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
+
+      firebird:
+        image: firebirdsql/firebird:5.0.4-trixie
+        env:
+          FIREBIRD_ROOT_PASSWORD: Elephc_Firebird!2026_Test
+          FIREBIRD_DATABASE: elephc.fdb
+          FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8
+        ports:
+          - 3050:3050
+        options: >-
+          --health-cmd "bash -c '</dev/tcp/127.0.0.1/3050'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
+
+      cubrid:
+        image: cubrid/cubrid:11.4
+        env:
+          CUBRID_DB: cubdb
+          CUBRID_LOCALE: en_US
+        ports:
+          - 33000:33000
+        options: >-
+          --health-cmd "bash -lc 'gosu cubrid csql -u dba -C cubdb -c \"SELECT 1;\"'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
+
+      oracle:
+        image: gvenzl/oracle-free:23-slim-faststart
+        env:
+          ORACLE_PASSWORD: Elephc_Oracle!2026_Test
+          APP_USER: test
+          APP_USER_PASSWORD: test
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      ELEPHC_DBLIB_DSN: 'dblib:host=127.0.0.1;port=1433;user=sa;password=Elephc_Pdo!2026_Test;charset=UTF-8'
+      ELEPHC_FIREBIRD_DSN: 'firebird:dbname=127.0.0.1/3050:/var/lib/firebird/data/elephc.fdb;charset=UTF8;user=SYSDBA;password=Elephc_Firebird!2026_Test'
+      ELEPHC_ODBC_DSN: 'odbc:Driver={PostgreSQL Unicode};Servername=127.0.0.1;Port=5432;Database=testdb;UID=test;PWD=test'
+      ELEPHC_SQLSRV_DSN: 'sqlsrv:Server=127.0.0.1,1433;Database=master;Encrypt=no;TrustServerCertificate=yes;user=sa;password=Elephc_Pdo!2026_Test'
+      ELEPHC_OCI_DSN: 'oci:dbname=//127.0.0.1:1521/FREEPDB1;charset=AL32UTF8;user=test;password=test'
+      ELEPHC_CUBRID_DSN: 'cubrid:host=127.0.0.1;port=33000;dbname=cubdb'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Oracle Instant Client 23.26 Basic Light
+        if: matrix.suite == 'sqlsrv-oci'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libaio1t64 unzip
+          curl --fail --location --retry 5 --retry-all-errors \
+            --output "$RUNNER_TEMP/instantclient-basiclite.zip" \
+            https://download.oracle.com/otn_software/linux/instantclient/2326200v2/instantclient-basiclite-linux.x64-23.26.2.0.0.zip
+          test "$(cksum "$RUNNER_TEMP/instantclient-basiclite.zip" | awk '{print $1 " " $2}')" = '149323083 75797020'
+          unzip -q "$RUNNER_TEMP/instantclient-basiclite.zip" -d "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/oracle-client"
+          cp -a "$RUNNER_TEMP/instantclient_23_26/." "$RUNNER_TEMP/oracle-client/"
+          test -e "$RUNNER_TEMP/oracle-client/libclntsh.so"
+          libaio_path="$(find /usr/lib -name 'libaio.so.1t64' -print -quit)"
+          test -n "$libaio_path"
+          ln -s "$libaio_path" "$RUNNER_TEMP/oracle-client/libaio.so.1"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/oracle-client" >> "$GITHUB_ENV"
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            freetds-dev \
+            libaio1t64 \
+            libbz2-dev \
+            libpcre2-dev \
+            libpq-dev \
+            libssl-dev \
+            odbc-postgresql \
+            pkg-config \
+            tzdata \
+            unixodbc-dev \
+            zlib1g-dev
+
+      - name: Install Microsoft ODBC Driver 18 for SQL Server
+        if: matrix.suite == 'sqlsrv-oci'
+        shell: bash
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/packages-microsoft-prod.deb" https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
+          sudo dpkg -i "$RUNNER_TEMP/packages-microsoft-prod.deb"
+          sudo apt-get update
+          sudo env ACCEPT_EULA=Y DEBIAN_FRONTEND=noninteractive apt-get install -y msodbcsql18
+
+      - name: Restore PDO sqlsrv tests
+        if: matrix.suite == 'sqlsrv-oci'
+        uses: ./.github/actions/restore-pdo-tests
+        with:
+          variant: sqlsrv
+          attempts: ${{ inputs.variant-attempts }}
+
+      - name: PDO_SQLSRV bridge unit tests
+        if: matrix.suite == 'sqlsrv-oci'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and test(odbc::tests::) and not test(live_odbc_round_trip) and not test(live_sqlsrv_round_trip)'
+
+      - name: Live PDO_SQLSRV bridge test
+        if: matrix.suite == 'sqlsrv-oci'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and test(odbc::tests::live_sqlsrv_round_trip)' --run-ignored only -j 1
+
+      - name: Live PDO_SQLSRV codegen tests
+        if: matrix.suite == 'sqlsrv-oci'
+        env:
+          ELEPHC_PDO_SQLSRV: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_sqlsrv --ignored --test-threads=1
+
+      - name: PDO_SQLSRV compiled surface tests
+        if: matrix.suite == 'sqlsrv-oci'
+        env:
+          ELEPHC_PDO_SQLSRV: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_sqlsrv --test-threads=1
+
+      - name: Restore PDO oci tests
+        if: matrix.suite == 'sqlsrv-oci'
+        uses: ./.github/actions/restore-pdo-tests
+        with:
+          variant: oci
+          attempts: ${{ inputs.variant-attempts }}
+
+      - name: PDO_OCI bridge unit tests
+        if: matrix.suite == 'sqlsrv-oci'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and test(oci::tests::) and not test(live_oci_round_trip)'
+
+      - name: Live PDO_OCI bridge test
+        if: matrix.suite == 'sqlsrv-oci'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and test(oci::tests::live_oci_round_trip)' --run-ignored only -j 1
+
+      - name: Live PDO_OCI codegen tests
+        if: matrix.suite == 'sqlsrv-oci'
+        env:
+          ELEPHC_PDO_OCI: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_oci --ignored --test-threads=1
+
+      - name: PDO_OCI compiled surface tests
+        if: matrix.suite == 'sqlsrv-oci'
+        env:
+          ELEPHC_PDO_OCI: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_oci_surface --test-threads=1
+
+      - name: Install the CUBRID CCI client from the service image
+        if: matrix.suite == 'cubrid-dblib'
+        run: |
+          docker cp '${{ job.services.cubrid.id }}:/home/cubrid/CUBRID/cci/lib/libcascci.so.11.2' "$RUNNER_TEMP/libcascci.so.11.2"
+          ln -s libcascci.so.11.2 "$RUNNER_TEMP/libcascci.so"
+
+      - name: Restore PDO cubrid tests
+        if: matrix.suite == 'cubrid-dblib'
+        uses: ./.github/actions/restore-pdo-tests
+        with:
+          variant: cubrid
+          attempts: ${{ inputs.variant-attempts }}
+
+      - name: PDO_CUBRID bridge unit tests
+        if: matrix.suite == 'cubrid-dblib'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and test(cubrid::tests::)'
+
+      - name: PDO_CUBRID compiled surface tests
+        if: matrix.suite == 'cubrid-dblib'
+        env:
+          ELEPHC_PDO_CUBRID: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_cubrid_surface --test-threads=1
+
+      - name: Live PDO_CUBRID codegen test
+        if: matrix.suite == 'cubrid-dblib'
+        env:
+          ELEPHC_PDO_CUBRID: '1'
+          CUBRID_CCI_LIBRARY: '${{ runner.temp }}/libcascci.so.11.2'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_cubrid --ignored --test-threads=1
+
+      - name: Restore PDO dblib tests
+        if: matrix.suite == 'cubrid-dblib'
+        uses: ./.github/actions/restore-pdo-tests
+        with:
+          variant: dblib
+          attempts: ${{ inputs.variant-attempts }}
+
+      - name: PDO_DBLIB bridge unit tests
+        if: matrix.suite == 'cubrid-dblib'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and test(dblib::tests::)'
+
+      - name: Live PDO_DBLIB bridge tests
+        if: matrix.suite == 'cubrid-dblib'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and test(dblib::tests::)' --run-ignored only -j 1
+
+      - name: Live PDO_DBLIB codegen tests
+        if: matrix.suite == 'cubrid-dblib'
+        env:
+          ELEPHC_PDO_DBLIB: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_dblib --ignored --test-threads=1
+
+      - name: PDO_DBLIB compiled surface tests
+        if: matrix.suite == 'cubrid-dblib'
+        env:
+          ELEPHC_PDO_DBLIB: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_dblib_surface --test-threads=1
+
+      - name: Restore PDO firebird tests
+        if: matrix.suite == 'firebird-odbc'
+        uses: ./.github/actions/restore-pdo-tests
+        with:
+          variant: firebird
+          attempts: ${{ inputs.variant-attempts }}
+
+      - name: Live PDO_FIREBIRD bridge tests
+        if: matrix.suite == 'firebird-odbc'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and test(firebird::tests::)' --run-ignored only -j 1
+
+      - name: Live PDO_FIREBIRD codegen tests
+        if: matrix.suite == 'firebird-odbc'
+        env:
+          ELEPHC_PDO_FIREBIRD: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_firebird --ignored --test-threads=1
+
+      - name: PDO_FIREBIRD compiled surface tests
+        if: matrix.suite == 'firebird-odbc'
+        env:
+          ELEPHC_PDO_FIREBIRD: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_firebird_surface --test-threads=1
+
+      - name: Restore PDO odbc tests
+        if: matrix.suite == 'firebird-odbc'
+        uses: ./.github/actions/restore-pdo-tests
+        with:
+          variant: odbc
+          attempts: ${{ inputs.variant-attempts }}
+
+      - name: PDO_ODBC bridge unit tests
+        if: matrix.suite == 'firebird-odbc'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and test(odbc::tests::)'
+
+      - name: Live PDO_ODBC bridge test
+        if: matrix.suite == 'firebird-odbc'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and test(odbc::tests::live_odbc_round_trip)' --run-ignored only -j 1
+
+      - name: Live PDO_ODBC codegen tests
+        if: matrix.suite == 'firebird-odbc'
+        env:
+          ELEPHC_PDO_ODBC: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_odbc --ignored --test-threads=1
+
+      - name: PDO_ODBC compiled surface tests
+        if: matrix.suite == 'firebird-odbc'
+        env:
+          ELEPHC_PDO_ODBC: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_odbc_surface --test-threads=1
+
+      - name: Restore PDO informix tests
+        if: matrix.suite == 'informix-ibm'
+        uses: ./.github/actions/restore-pdo-tests
+        with:
+          variant: informix
+          attempts: ${{ inputs.variant-attempts }}
+
+      - name: PDO_INFORMIX bridge unit tests
+        if: matrix.suite == 'informix-ibm'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and test(odbc::tests::)'
+
+      - name: PDO_INFORMIX compiled surface tests
+        if: matrix.suite == 'informix-ibm'
+        env:
+          ELEPHC_PDO_INFORMIX: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_informix --test-threads=1
+
+      - name: Restore PDO ibm tests
+        if: matrix.suite == 'informix-ibm'
+        uses: ./.github/actions/restore-pdo-tests
+        with:
+          variant: ibm
+          attempts: ${{ inputs.variant-attempts }}
+
+      - name: PDO_IBM bridge unit tests
+        if: matrix.suite == 'informix-ibm'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-pdo) and test(odbc::tests::)'
+
+      - name: PDO_IBM compiled surface tests
+        if: matrix.suite == 'informix-ibm'
+        env:
+          ELEPHC_PDO_IBM: '1'
+        run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_ibm --test-threads=1
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds

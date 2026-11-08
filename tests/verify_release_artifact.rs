@@ -384,14 +384,24 @@ fn mock_with_xml_fails_closed_until_native_add_libxml2() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Nightly still packs the curl bridge; the verify hole is the probe, not #730.
+/// Nightly builds curl through the shared producer and retains its archive glob.
 #[test]
 fn nightly_still_packs_elephc_curl() {
     let body = fs::read_to_string(repo_root().join(".github/workflows/nightly.yml"))
         .expect("read nightly workflow");
     assert!(
-        body.contains("-p elephc-curl"),
-        "nightly.yml must still build elephc-curl; do not revert #730"
+        body.contains("uses: ./.build-ci/.github/actions/build-release-artifacts"),
+        "nightly.yml must invoke the shared release producer"
+    );
+    let producer = fs::read_to_string(repo_root().join(".github/actions/build-release-artifacts/action.yml"))
+        .expect("read shared release producer");
+    assert!(
+        producer.contains("-p elephc-curl") && producer.contains("cargo build --locked --release $BRIDGE_CRATES"),
+        "the shared producer must still build elephc-curl; do not revert #730"
+    );
+    assert!(
+        body.lines().any(|line| line.trim_start().starts_with("tar czf ") && line.contains("libelephc_*.a")),
+        "nightly packaging must retain every built bridge archive"
     );
     assert!(
         body.contains("Cache managed native"),
