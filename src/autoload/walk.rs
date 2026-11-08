@@ -1088,8 +1088,10 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet) {
 
 /// Collect class references from a catch clause.
 fn collect_refs_catch(catch: &CatchClause, out: &mut ReferenceSet) {
-    for exception_type in &catch.exception_types {
-        push_name(exception_type, out);
+    if type_positions_autoload() {
+        for exception_type in &catch.exception_types {
+            push_name(exception_type, out);
+        }
     }
     for s in &catch.body {
         collect_refs_stmt(s, out);
@@ -1240,10 +1242,22 @@ fn collect_trait_use(trait_use: &TraitUse, out: &mut ReferenceSet) {
     }
 }
 
+/// php autoloads nothing for a name in a type, an `instanceof` or a `catch`, so a closed world
+/// does not compile a class only such positions name: declaring it would also make
+/// `class_exists($name, false)` true where php answers false. A class the program uses reaches
+/// the world through that use (`new`, a static call, `extends`/`implements`).
+fn type_positions_autoload() -> bool {
+    !crate::closed_world::is_enabled()
+}
+
 /// Collect class references from a type expression.
 fn collect_type_expr(ty: &TypeExpr, out: &mut ReferenceSet) {
     match ty {
-        TypeExpr::Named(name) => push_name(name, out),
+        TypeExpr::Named(name) => {
+            if type_positions_autoload() {
+                push_name(name, out)
+            }
+        }
         TypeExpr::Array(inner) => collect_type_expr(inner, out),
         // Both halves: a class named only in `array<string, Foo>` still has to be discovered,
         // or autoloading never pulls it in and the program fails at the first use.
@@ -1301,7 +1315,11 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
         ExprKind::InstanceOf { value, target } => {
             collect_refs_expr(value, out);
             match target {
-                crate::parser::ast::InstanceOfTarget::Name(name) => push_name(name, out),
+                crate::parser::ast::InstanceOfTarget::Name(name) => {
+                    if type_positions_autoload() {
+                        push_name(name, out)
+                    }
+                }
                 // `instanceof Box<User>` demands both files, exactly as the type position does.
                 crate::parser::ast::InstanceOfTarget::Generic(class_type) => {
                     collect_type_expr(class_type, out)

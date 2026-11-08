@@ -1009,6 +1009,55 @@ final class Loader
     );
 }
 
+/// php autoloads nothing for a class named only in a parameter type, an `instanceof` or a
+/// `catch`: such a class is not compiled, and `class_exists($name, false)` stays false for it as in
+/// php. An interface a used class implements is still loaded through that class.
+#[test]
+fn closed_world_does_not_load_a_class_only_types_name() {
+    let dir = make_test_dir("cw_lazy_types");
+    fs::create_dir_all(dir.join("lib")).unwrap();
+    fs::write(dir.join("lib/Shape.php"), "<?php\ninterface Shape { public function name(): string; }\n").unwrap();
+    fs::write(
+        dir.join("lib/Used.php"),
+        "<?php\nclass Used implements Shape { public function name(): string { return 'used'; } }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("lib/OnlyTyped.php"),
+        "<?php\nclass OnlyTyped { public function marker(): string { return 'only-typed-marker'; } }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("lib/NeverThrown.php"),
+        "<?php\nclass NeverThrown extends Exception { public function marker(): string { return 'never-thrown-marker'; } }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+spl_autoload_register(function (string $c): void { $f = __DIR__ . '/lib/' . $c . '.php'; if (is_file($f)) { require $f; } });
+function show(Shape $s, ?OnlyTyped $o = null): string { return $s->name() . ($o instanceof OnlyTyped ? '!' : ''); }
+try { echo show(new Used()), "\n"; } catch (NeverThrown $e) { echo $e->marker(); }
+var_dump(class_exists('OnlyTyped', false));
+var_dump(new Used() instanceof OnlyTyped);
+var_dump(new Used() instanceof Shape);
+"#,
+    )
+    .unwrap();
+    let expected = php_stdout(&dir);
+    assert_eq!(expected, "used\nbool(false)\nbool(false)\nbool(true)\n");
+    compile_ok(&dir, &[]);
+    assert_eq!(text(&run(&dir).stdout), expected);
+    let binary = fs::read(dir.join("main")).unwrap();
+    for marker in [&b"only-typed-marker"[..], b"never-thrown-marker"] {
+        assert!(
+            !binary.windows(marker.len()).any(|window| window == marker),
+            "{} is compiled though only types name its class",
+            String::from_utf8_lossy(marker)
+        );
+    }
+}
+
 /// A bridge to an optional dependency is compiled too. Its class over the missing package cannot
 /// load, so what uses that class only has to compile: `AmpResponse` writes `AmpClientState`
 /// properties, and flex's `Downloader` indexes what a Composer method returns.
