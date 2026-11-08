@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Select only complete artifacts tested by this coordinator on the exact merge-group SHA."""
 
+import argparse
 import json
 import os
 import re
@@ -106,10 +107,13 @@ def resolve(repository, sha):
 
 def main():
     """An unavailable or incompatible source always selects a fresh build and its tests."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--main-sha", help="A full main SHA already validated by the backfill entry point")
+    args = parser.parse_args()
     result = None
-    if os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main":
+    if args.main_sha or (os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main"):
         try:
-            result = resolve(os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_SHA"])
+            result = resolve(os.environ["GITHUB_REPOSITORY"], args.main_sha or os.environ["GITHUB_SHA"])
         except (subprocess.CalledProcessError, ValueError, KeyError) as error:
             print(f"::warning::Cannot prove artifact reuse, selecting full CI: {error}", file=sys.stderr)
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
