@@ -159,6 +159,7 @@ pub(super) fn lower_builtin_call_args(
     let operands = borrowed_string_args::try_lower(ctx, name, sig, args)
         .unwrap_or_else(|| lower_planned_builtin_call_args(ctx, name, sig, args));
     let canonical = php_symbol_key(name.trim_start_matches('\\'));
+    let operands = preg_match_args::normalize_operands(ctx, &canonical, args, operands);
     let def = crate::builtins::registry::lookup(&canonical);
     let lowering = def.map(|def| def.spec.semantics.argument_lowering);
     let operands = match lowering {
@@ -449,7 +450,9 @@ fn lower_planned_builtin_call_args(
             // Publish an owner at the output's source-order evaluation point, not
             // while preparing storage before earlier arguments have run.
             lower_args_with_signature_options_for_capture(
-                ctx, sig, args, true, false, Some((2, if canonical == "preg_match" {
+                ctx, sig, args, true, false, Some((2, if canonical == "preg_match"
+                    && !crate::builtins::preg_match_uses_extended_capture(args)
+                {
                     PhpType::Array(Box::new(PhpType::Str))
                 } else { PhpType::Array(Box::new(PhpType::Mixed)) })),
             )
@@ -530,9 +533,11 @@ fn prepare_write_only_output_locals(
     args: &[Expr],
 ) -> Vec<(String, PhpType)> {
     let mut outputs = Vec::new();
+    let extended = canonical == "preg_match"
+        && crate::builtins::preg_match_uses_extended_capture(args);
     if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
         for (index, arg) in args.iter().enumerate() {
-            if let Some(output) = prepare_write_only_output_local(ctx, canonical, index, arg) {
+            if let Some(output) = prepare_write_only_output_local(ctx, canonical, index, arg, extended) {
                 outputs.push(output);
             }
         }
@@ -561,7 +566,7 @@ fn prepare_write_only_output_locals(
         let crate::types::call_args::PlannedRegularArg::Source { expr, .. } = arg else {
             continue;
         };
-        if let Some(output) = prepare_write_only_output_local(ctx, canonical, index, expr) {
+        if let Some(output) = prepare_write_only_output_local(ctx, canonical, index, expr, extended) {
             outputs.push(output);
         }
     }
@@ -569,11 +574,15 @@ fn prepare_write_only_output_locals(
 }
 
 /// Plans an output's frame representation without reinterpreting its pre-call value.
+///
+/// `extended_preg_match` is `uses_extended_capture()` for the call: a `preg_match()`
+/// passing `$flags` or `$offset` writes `array<mixed>` captures.
 fn prepare_write_only_output_local(
     ctx: &mut LoweringContext<'_, '_>,
     canonical: &str,
     parameter_index: usize,
     value: &Expr,
+    extended_preg_match: bool,
 ) -> Option<(String, PhpType)> {
     let boxed_output = crate::builtins::registry::lookup(canonical).is_some_and(|def| {
         matches!(def.spec.semantics.argument_lowering,
@@ -584,6 +593,7 @@ fn prepare_write_only_output_local(
         PhpType::Mixed
     } else {
         match (canonical, parameter_index) {
+            ("preg_match", 2) if extended_preg_match => PhpType::Array(Box::new(PhpType::Mixed)),
             ("preg_match", 2) => PhpType::Array(Box::new(PhpType::Str)),
             ("preg_match_all", 2) => PhpType::Array(Box::new(PhpType::Mixed)),
             _ => pcntl_output_type(canonical, parameter_index)?,

@@ -37,12 +37,12 @@ description: "Compiler internals for preg_match(): lowering path, type checks, a
 ## Signature summary
 
 ```php
-function preg_match(string $pattern, string $subject, array $matches = null): int|false
+function preg_match(string $pattern, string $subject, array $matches = null, int $flags = 0, int $offset = 0): int|false
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–3 arguments (1 optional).
+- **Arity**: takes 2–5 arguments (3 optional).
 - **By-reference parameters**: `$matches`.
 
 ## Eval interpreter (magician)

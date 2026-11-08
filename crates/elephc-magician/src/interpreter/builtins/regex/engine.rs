@@ -90,14 +90,13 @@ impl Regex {
         self.capture_slots
     }
 
-    /// Returns whether this regex matches the subject.
-    pub(in crate::interpreter) fn is_match(&self, subject: &[u8]) -> bool {
-        self.captures(subject).is_some()
-    }
-
-    /// Returns the first capture set for this regex and subject.
-    pub(in crate::interpreter) fn captures<'a>(&self, subject: &'a [u8]) -> Option<Captures<'a>> {
-        self.exec_at(subject, 0)
+    /// Returns the first capture set at or after `start`, matching against the whole subject.
+    pub(in crate::interpreter) fn captures_at<'a>(
+        &self,
+        subject: &'a [u8],
+        start: usize,
+    ) -> Option<Captures<'a>> {
+        self.exec_at(subject, start)
     }
 
     /// Returns every non-overlapping capture set for this regex and subject.
@@ -105,11 +104,20 @@ impl Regex {
         &self,
         subject: &'a [u8],
     ) -> std::vec::IntoIter<Captures<'a>> {
+        self.captures_iter_from(subject, 0)
+    }
+
+    /// Returns every non-overlapping capture set at or after `start`.
+    pub(in crate::interpreter) fn captures_iter_from<'a>(
+        &self,
+        subject: &'a [u8],
+        start: usize,
+    ) -> std::vec::IntoIter<Captures<'a>> {
         let mut captures = Vec::new();
         let Ok(subject_c) = CString::new(subject) else { return captures.into_iter(); };
         let mut continuation = false;
         loop {
-            let Some(next) = self.exec_subject(subject, &subject_c, 0, continuation) else {
+            let Some(next) = self.exec_subject(subject, &subject_c, start, continuation) else {
                 break;
             };
             if next.get(0).is_none() {
