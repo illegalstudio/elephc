@@ -65,7 +65,7 @@ const fn pcntl_extension_contract(
     contract
 }
 
-/// Attributes the POSIX session helpers implemented by the PCNTL bridge to ext/posix.
+/// Attributes the POSIX helpers implemented by the PCNTL bridge to ext/posix.
 const fn posix_contract(
     name: &'static str,
     params: &'static [ParamSpec],
@@ -589,6 +589,60 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "Returns the terminating signal encoded in a child wait status.",
     ),
     posix_contract(
+        "posix_errno",
+        &[],
+        TypeSpec::Int,
+        "Returns the errno recorded by the most recent failing POSIX operation.",
+    ),
+    posix_contract(
+        "posix_get_last_error",
+        &[],
+        TypeSpec::Int,
+        "Returns the errno recorded by the most recent failing POSIX operation.",
+    ),
+    posix_contract(
+        "posix_geteuid",
+        &[],
+        TypeSpec::Int,
+        "Returns the effective user id of the current process.",
+    ),
+    posix_contract(
+        "posix_getpgrp",
+        &[],
+        TypeSpec::Int,
+        "Returns the process group id of the current process.",
+    ),
+    posix_contract(
+        "posix_isatty",
+        &[ParamSpec {
+            name: "file_descriptor",
+            ty: TypeSpec::Mixed,
+            default: None,
+            by_ref: false,
+        }],
+        TypeSpec::Bool,
+        "Reports whether a file descriptor or stream refers to an interactive terminal.",
+    ),
+    posix_contract(
+        "posix_kill",
+        &[
+            ParamSpec {
+                name: "process_id",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "signal",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        TypeSpec::Bool,
+        "Sends a signal to a process or process group.",
+    ),
+    posix_contract(
         "posix_setpgid",
         &[
             ParamSpec {
@@ -612,5 +666,16 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         &[],
         TypeSpec::Int,
         "Creates a new session and makes the current process its leader.",
+    ),
+    posix_contract(
+        "posix_strerror",
+        &[ParamSpec {
+            name: "error_code",
+            ty: TypeSpec::Int,
+            default: None,
+            by_ref: false,
+        }],
+        TypeSpec::Str,
+        "Returns the system error message associated with an errno value.",
     ),
 ];
