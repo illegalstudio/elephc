@@ -751,6 +751,9 @@ mod tests {
         assert!(program_uses_xml(&parse(
             "<?php stream_wrapper_register('xml', SimpleXMLElement::class);"
         )));
+        assert!(program_uses_xml(&parse(
+            "<?php foreach (['SimpleXMLElement'] as $class) { stream_wrapper_register('xml', $class); }"
+        )));
     }
 
     /// An aliased import is detected through the import name.
