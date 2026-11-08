@@ -95,7 +95,8 @@ The ext/posix helpers below are served by the same bridge, on the same targets:
   `int`, as PHP does.
 - `posix_isatty(int|resource $file_descriptor): bool` reports whether a
   descriptor or a stream resource is a terminal. A descriptor outside
-  `0..2147483647` emits PHP's warning and returns `false`.
+  `0..2147483647` emits PHP's warning and returns `false`; a closed stream throws
+  PHP's `TypeError`.
 - `posix_geteuid(): int` and `posix_getpgrp(): int` return the effective user
   id and the process group id of the calling process.
 - `posix_get_last_error(): int` (alias `posix_errno()`) returns the errno of the

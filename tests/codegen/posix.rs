@@ -103,6 +103,39 @@ fn test_posix_isatty_warns_for_out_of_range_descriptor() {
     );
 }
 
+/// Throws PHP's `TypeError` for a closed stream, natively and inside `eval()`, without a warning.
+#[test]
+fn test_posix_isatty_rejects_closed_stream() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        function probe(mixed $fd): string {
+            try {
+                return posix_isatty($fd) ? 'tty' : 'notty';
+            } catch (TypeError $error) {
+                return $error->getMessage();
+            }
+        }
+        $path = tempnam(sys_get_temp_dir(), 'posix');
+        $file = fopen($path, 'w');
+        fclose($file);
+        echo probe($file), '|';
+        echo eval('
+            $other = fopen($path, "r");
+            fclose($other);
+            try { posix_isatty($other); return "no-error"; }
+            catch (TypeError $error) { return $error->getMessage(); }
+        '), '|', posix_get_last_error();
+        unlink($path);"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "posix_isatty(): supplied resource is not a valid stream resource|\
+         posix_isatty(): supplied resource is not a valid stream resource|0"
+    );
+    assert!(!out.stderr.contains("Warning"), "unexpected warning: {}", out.stderr);
+}
+
 /// Reports the effective user id and the process group a forked child creates for itself.
 #[test]
 fn test_posix_geteuid_and_getpgrp_report_process_identity() {
