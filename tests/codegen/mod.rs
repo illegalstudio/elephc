@@ -100,6 +100,7 @@ mod pdo_mysql;
 mod pdo_pgsql;
 mod image;
 mod pcntl;
+mod posix;
 mod xml;
 mod tokenizer;
 mod arrays;

@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3181 constants).
 
-Overall coverage: functions **1078 / 2169** (50%), classes **191 / 329** (58%), constants **1420 / 3181** (45%).
+Overall coverage: functions **1085 / 2169** (50%), classes **191 / 329** (58%), constants **1420 / 3181** (45%).
 
 ## Coverage by PHP module
 
@@ -57,7 +57,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`pdo_sqlite`](./pdo.md#functions) | - | 1 / 1 · 100% | - |
 | `pgsql` | 0 / 123 · 0% | 0 / 3 · 0% | 0 / 76 · 0% |
 | `phar` | - | 3 / 4 · 75% | - |
-| [`posix`](./pcntl.md#functions) | 2 / 41 · 5% | - | 0 / 43 · 0% |
+| [`posix`](./pcntl.md#functions) | 9 / 41 · 22% | - | 0 / 43 · 0% |
 | `random` | 9 / 9 · 100% | 11 / 11 · 100% | 2 / 2 · 100% |
 | `readline` | 1 / 13 · 8% | - | 0 / 1 · 0% |
 | `reflection` | - | 16 / 26 · 62% | - |

@@ -448,8 +448,15 @@ mod tests {
             "pcntl_wifstopped",
             "pcntl_wstopsig",
             "pcntl_wtermsig",
+            "posix_errno",
+            "posix_get_last_error",
+            "posix_geteuid",
+            "posix_getpgrp",
+            "posix_isatty",
+            "posix_kill",
             "posix_setpgid",
             "posix_setsid",
+            "posix_strerror",
         ]
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
