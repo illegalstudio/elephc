@@ -6,7 +6,8 @@ description: "Measured baseline and validation evidence for PR 2282."
 # Shared CI artifact validation
 
 Implementation: https://github.com/illegalstudio/elephc/pull/2282
-Baseline source: `b62bff4ca643d7b7b6019f3d563253a8b918bb1f`.
+Original baseline: `b62bff4ca643d7b7b6019f3d563253a8b918bb1f`.
+Integrated main baseline: `145426b7fe5cc0fd60f5d56a9d7a1c9c745280b5`.
 
 ## Baseline observed on 2026-11-08
 
@@ -32,6 +33,22 @@ Reproduce the inventory with:
 ```bash
 python3 -B scripts/ci/measure_run.py 42439918696 42439918652
 ```
+
+## Baseline after integrating SimpleXML main
+
+The final implementation includes main `145426b7fe5cc0fd60f5d56a9d7a1c9c745280b5`.
+Its successful merge-group runs provide the source-comparable timing baseline:
+
+| Run | Coverage | Elapsed minutes | Sum of runner minutes | Artifact bytes |
+| --- | --- | ---: | ---: | ---: |
+| [42485938535](https://github.com/illegalstudio/elephc/actions/runs/42485938535) | CI including SDK | 84.12 | 3592.08 | 4,459,671,663 |
+| [42485938603](https://github.com/illegalstudio/elephc/actions/runs/42485938603) | PDO | 19.63 | 109.35 | 0 |
+
+Combined runner time is 3701.43 minutes. Host build/archive jobs took 13.58 minutes
+(Linux x86_64), 12.40 minutes (Linux ARM64) and 35.38 minutes (macOS ARM64).
+The original compilation-event inventory remains a historical observation; these
+new runs have not been counted for that metric. Neither baseline controls cache
+state or hosted-runner load.
 
 ## Focused checks
 

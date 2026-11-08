@@ -15,7 +15,9 @@ description: "Implementation plan for shared build artifacts across Elephc CI."
 Status: implementation in progress on `ci/shared-build-artifacts`.
 Issue: https://github.com/illegalstudio/elephc/issues/2281
 Draft PR: https://github.com/illegalstudio/elephc/pull/2282
-Source baseline: main at `b62bff4ca643d7b7b6019f3d563253a8b918bb1f`, inspected on 2026-11-08.
+Original baseline: main at `b62bff4ca643d7b7b6019f3d563253a8b918bb1f`.
+Integrated main: `145426b7fe5cc0fd60f5d56a9d7a1c9c745280b5`; its successful queue
+runs provide the updated timing baseline in `.plans/ci-artifact-validation.md`.
 The user authorized implementation. Work is isolated in a ggw worktree and the PR
 remains a draft until the complete rollout and validation pass.
 
@@ -39,8 +41,11 @@ Progress on 2026-11-08:
   Rust/native compiler, glibc and Apple SDK identities are recorded and checked.
 - 59 focused infrastructure tests pass, plus planner/queue cleanup, docs prebuilt
   tests, actionlint and focused Rust bridge/PDO regressions. CONTRIBUTING is updated.
+- Integrated SimpleXML main, retaining its nextest overrides, XML recipe update
+  and documentation source move. All 59 infrastructure tests and actionlint pass
+  after integration. The final exact-head remote matrix remains in progress.
 - Real CI has passed both iOS producers, specialized tool producers, all three
-  host producers, all four Linux SDK consumers and both PDO aggregate gates.
+  host producers, all six SDK consumers and both PDO aggregate gates.
   The GMP corpus migration needs a dedicated whole-corpus nextest timeout; package
   jobs now independently verify historical main SHAs before their checkout.
   Nightly assertions follow the shared producer, tokenizer iOS restores its target
