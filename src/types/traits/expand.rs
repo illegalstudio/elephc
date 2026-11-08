@@ -319,7 +319,7 @@ fn select_methods(
     let mut selected_methods = Vec::new();
     for method_name in method_order {
         let imports = candidates.remove(&method_name).unwrap_or_default();
-        let remaining: Vec<ImportedMethod> = imports
+        let mut remaining: Vec<ImportedMethod> = imports
             .into_iter()
             .filter(|candidate| {
                 !suppressed
@@ -327,6 +327,14 @@ fn select_methods(
                     .is_some_and(|set| set.contains(&candidate.source_trait))
             })
             .collect();
+        // An abstract trait method is a requirement, not a definition, so it is never one of the
+        // candidates `insteadof` has to choose between: a concrete candidate satisfies it, and
+        // several abstract ones are one requirement.
+        if remaining.iter().any(|candidate| !candidate.decl.is_abstract) {
+            remaining.retain(|candidate| !candidate.decl.is_abstract);
+        } else {
+            remaining.truncate(1);
+        }
         if remaining.len() > 1 {
             let trait_list = remaining
                 .iter()

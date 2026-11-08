@@ -8,7 +8,7 @@
 //! Key details:
 //! - Merge and validation rules must report conflicts early because downstream class metadata is treated as canonical.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -89,7 +89,8 @@ pub(super) fn merge_property_into(
 /// Merges `imported` trait methods with `local` class/trait methods.
 /// Validates that `local` has no duplicate method keys (name + is_static).
 /// Imported methods with the same key as local are skipped (local wins).
-/// Duplicate imported methods (same key from multiple traits) are reported as errors.
+/// Duplicate imported methods (same key from multiple traits) are reported as errors unless one
+/// of them is abstract (see `merge_duplicate_imported_method`).
 /// Returns the merged list: imported-first, then local.
 pub(super) fn merge_methods(
     imported: Vec<ClassMethod>,
@@ -104,22 +105,18 @@ pub(super) fn merge_methods(
         local_keys.insert((php_symbol_key(&method.name), method.is_static));
     }
 
-    let mut merged = Vec::new();
-    let mut seen_imported = HashSet::new();
+    let mut merged: Vec<ClassMethod> = Vec::new();
+    let mut seen_imported = HashMap::new();
     for imported_method in imported {
         let key = (php_symbol_key(&imported_method.name), imported_method.is_static);
         if local_keys.contains(&key) {
             continue;
         }
-        if !seen_imported.insert(key.clone()) {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "{} imports duplicate trait method '{}'",
-                    owner_label, imported_method.name
-                ),
-            ));
+        if let Some(&index) = seen_imported.get(&key) {
+            merge_duplicate_imported_method(&mut merged[index], imported_method, span, owner_label)?;
+            continue;
         }
+        seen_imported.insert(key, merged.len());
         merged.push(imported_method);
     }
 
@@ -137,21 +134,44 @@ pub(super) fn merge_imported_method_set(
     span: Span,
     owner_label: &str,
 ) -> Result<(), CompileError> {
-    let mut seen: HashSet<(String, bool)> = existing
+    let mut seen: HashMap<(String, bool), usize> = existing
         .iter()
-        .map(|method| (php_symbol_key(&method.name), method.is_static))
+        .enumerate()
+        .map(|(index, method)| ((php_symbol_key(&method.name), method.is_static), index))
         .collect();
     for method in incoming {
         let key = (php_symbol_key(&method.name), method.is_static);
-        if !seen.insert(key) {
-            return Err(CompileError::new(
-                span,
-                &format!("{} imports duplicate trait method '{}'", owner_label, method.name),
-            ));
+        if let Some(&index) = seen.get(&key) {
+            merge_duplicate_imported_method(&mut existing[index], method, span, owner_label)?;
+            continue;
         }
+        seen.insert(key, existing.len());
         existing.push(method);
     }
     Ok(())
+}
+
+/// Resolves a second imported method with the key of `existing`, as PHP does: an abstract trait
+/// method is a requirement, not a definition, so it never conflicts. A concrete method replaces
+/// an abstract one (`use NeedsInvalidate, ProvidesInvalidate;`), and a second abstract one adds
+/// nothing. Only two concrete methods conflict.
+fn merge_duplicate_imported_method(
+    existing: &mut ClassMethod,
+    incoming: ClassMethod,
+    span: Span,
+    owner_label: &str,
+) -> Result<(), CompileError> {
+    if incoming.is_abstract {
+        return Ok(());
+    }
+    if existing.is_abstract {
+        *existing = incoming;
+        return Ok(());
+    }
+    Err(CompileError::new(
+        span,
+        &format!("{} imports duplicate trait method '{}'", owner_label, incoming.name),
+    ))
 }
 
 /// Merges imported trait constants with constants declared directly by a class or trait.
