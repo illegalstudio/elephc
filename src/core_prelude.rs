@@ -208,17 +208,44 @@ pub fn ensure_weak_reference(
     program
 }
 
+/// Returns true when `program` names `WeakMap`, so its prelude class must be declared.
+///
+/// Run by `crate::autoload::prelude_probe` over the autoload closure: a Composer class file
+/// that types a property `\WeakMap` is only loaded after this prelude's injection decision.
+pub fn program_uses_weak_map(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    usage.classes.contains("weakmap") || usage.literals.contains("weakmap")
+}
+
+/// Returns true when `program` names `WeakReference`; see [`program_uses_weak_map`].
+pub fn program_uses_weak_reference(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    usage.classes.contains("weakreference") || usage.literals.contains("weakreference")
+}
+
 /// Injects the reachable Core class declarations, widening for introspection and eval.
+///
+/// `autoloaded_weak_map` / `autoloaded_weak_reference` keep those classes when a file of the
+/// autoload closure uses them (`crate::autoload::prelude_probe`), which the entry program
+/// cannot show.
 pub fn inject_if_used(
     program: Program,
+    autoloaded_weak_map: bool,
+    autoloaded_weak_reference: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
         let usage = crate::prelude_prune::usage::collect(&program);
         let mut declarations = core_declarations();
         let dynamic = usage.introspects || usage.constructs_dynamic_class;
-        let weak_map = dynamic || usage.classes.contains("weakmap") || usage.literals.contains("weakmap");
-        let weak_reference = weak_map || usage.classes.contains("weakreference") || usage.literals.contains("weakreference");
+        let weak_map = autoloaded_weak_map
+            || dynamic
+            || usage.classes.contains("weakmap")
+            || usage.literals.contains("weakmap");
+        let weak_reference = weak_map
+            || autoloaded_weak_reference
+            || usage.classes.contains("weakreference")
+            || usage.literals.contains("weakreference");
         declarations.retain(|stmt| {
             if let StmtKind::FunctionDecl { name, .. } = &stmt.kind {
                 return name == "__elephc_append_element"
@@ -246,7 +273,7 @@ mod tests {
             let tokens = crate::lexer::tokenize("<?php get_declared_classes();").unwrap();
             let program = crate::parser::parse(&tokens).unwrap();
             let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-            let program = super::inject_if_used(program, &mut inventory);
+            let program = super::inject_if_used(program, false, false, &mut inventory);
             let program = crate::name_resolver::resolve(program).unwrap();
             let target = crate::codegen_support::platform::Target::parse(target).unwrap();
             let result = crate::types::checker::check_types(&program, target)
