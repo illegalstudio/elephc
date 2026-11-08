@@ -41,7 +41,11 @@ def package(root, output, target, sha, compiler_manifest, bridge_manifest):
         for path, name in files.items():
             destination = staging / name
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(root / path, destination)
+            # Installed package files acquire packaging-time mtimes. On macOS the
+            # producer's absolute checkout path can also exist on this runner;
+            # preserving old bridge mtimes would trigger its source-staleness
+            # rebuild heuristic even though the manifest verified these bytes.
+            shutil.copy(root / path, destination)
         (staging / "build-manifest.json").write_text(json.dumps(provenance, indent=2) + "\n")
         (staging / "README.txt").write_text(
             f"Elephc development build {sha} ({target}, debug profile).\n"

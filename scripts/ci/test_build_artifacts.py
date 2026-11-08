@@ -45,7 +45,7 @@ class BuildArtifactTests(unittest.TestCase):
         catalog.write_text('env_var: "ELEPHC_CRYPTO_LIB_DIR", env_var: "ELEPHC_OPENSSL_BRIDGE_LIB_DIR"')
         extracted = self.root / "relocated tests"
         environment = artifacts.bridge_environment(self.source, "debug", artifact_root=extracted)
-        directory = extracted / "target/debug"
+        directory = (extracted / "target/debug").resolve()
         self.assertEqual(environment, f"ELEPHC_CRYPTO_LIB_DIR={directory}\nELEPHC_OPENSSL_BRIDGE_LIB_DIR={directory}\n")
 
     def test_wrong_sha_platform_features_and_run_are_rejected(self):
