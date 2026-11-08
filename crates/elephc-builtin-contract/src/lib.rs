@@ -27,6 +27,7 @@ mod catalog_locale;
 mod catalog_gmp;
 mod catalog_mbstring;
 mod catalog_pcntl;
+mod catalog_proc;
 mod catalog_tidy;
 mod catalog_xml;
 #[cfg(feature = "curl")]
@@ -82,6 +83,7 @@ pub use object_operators::{
     ObjectShift, BCMATH_NUMBER_OPERATORS, GMP_CASTS, GMP_OPERATORS, TIDY_CASTS, TIDY_OPERATORS,
 };
 pub use catalog_gmp::{FUNCTIONS as GMP_FUNCTIONS, GMP_VERSION};
+pub use catalog_proc::FUNCTIONS as PROC_FUNCTIONS;
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};
 pub use catalog_constants_tokenizer::token_const_id;

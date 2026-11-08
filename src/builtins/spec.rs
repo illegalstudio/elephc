@@ -60,9 +60,8 @@ impl BuiltinCheckCtx<'_> {
 /// compile error rather than a support ticket.
 ///
 /// Call this first from the `check:` hook of any builtin that spawns a process.
-/// The set is `system`, `passthru`, `exec`, `shell_exec`, `popen` and `pclose`;
-/// `proc_open` and its family do not exist in the compiler yet, and must adopt
-/// this guard on the day they do.
+/// The set is `system`, `passthru`, `exec`, `shell_exec`, `popen`, `pclose` and the
+/// `proc_open` family (`crate::builtins::proc`).
 pub fn reject_if_process_spawn_forbidden(
     cx: &BuiltinCheckCtx<'_>,
 ) -> Result<(), crate::errors::CompileError> {

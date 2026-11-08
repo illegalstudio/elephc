@@ -29,6 +29,7 @@ mod math;
 pub(crate) mod gmp;
 mod spl;
 mod pointers;
+pub(crate) mod proc;
 mod system;
 pub(crate) use system::preg_match::{
     passes_parameter_from as preg_passes_parameter_from,

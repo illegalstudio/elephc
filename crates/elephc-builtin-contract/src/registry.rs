@@ -40,6 +40,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
                     + crate::catalog_locale::CONTRACTS.len()
                     + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
+                    + crate::catalog_proc::CONTRACTS.len()
                     + crate::catalog_tidy::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
@@ -50,6 +51,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             contracts.extend_from_slice(crate::catalog_locale::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_proc::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_tidy::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);

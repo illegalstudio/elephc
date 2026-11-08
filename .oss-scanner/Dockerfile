@@ -93,7 +93,7 @@ RUN set -e; \
     ) > /tmp/native-install.log 2>&1 & native=$!; \
     cargo build --locked \
         -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-mbstring -p elephc-iconv \
-        -p elephc-phar -p elephc-tz -p elephc-image -p elephc-pcntl -p elephc-xml -p elephc-magician \
+        -p elephc-phar -p elephc-tz -p elephc-image -p elephc-pcntl -p elephc-proc -p elephc-xml -p elephc-magician \
         -p elephc-web -p elephc-instr -p elephc-probe -p elephc-curl; \
     cargo build --locked -p elephc-magician --features curl --target-dir target/elephc-magician-curl-test-build; \
     cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a target/debug/libelephc_magician_curl.a; \
