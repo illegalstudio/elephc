@@ -10,9 +10,11 @@
 //!   continue, and a signal death is reported once and then forgotten, so a later
 //!   `proc_close()` of a child already reaped through `proc_get_status()` answers -1.
 //! - Status decoding goes through libc's `WIF*` helpers so Darwin and Linux layouts agree.
-//! - `proc_close()` CLOSES THE PIPES FIRST, like php-src's resource destructor, so a child
+//! - `proc_close()` RELEASES THE PIPES FIRST, like php-src's resource destructor, so a child
 //!   blocked on stdin sees EOF instead of deadlocking the wait. The PHP streams own those
-//!   descriptors, so each is closed only while it still names the very pipe spawned:
+//!   descriptor numbers, so each pipe end is swapped for `/dev/null` rather than closed
+//!   (a closed number could be reused and then closed by a stale `fclose()`), and only
+//!   while it still names the very pipe spawned:
 //!   the `(st_dev, st_ino)` identity recorded at spawn time must still match. A pipe the
 //!   program already closed (EBADF) or whose number was reused (another identity) is left
 //!   alone, so the bridge never closes a descriptor it no longer owns.
@@ -58,13 +60,28 @@ impl Process {
         Self { pid, command, pipes, identities, cached: None, fields: [1, 0, 0, -1, 0, 0, 0] }
     }
 
-    /// Closes every pipe end that still names the pipe it was spawned with.
+    /// Releases every pipe end that still names the pipe it was spawned with.
+    ///
+    /// The descriptor NUMBER stays owned by the PHP stream boxed around it, which a later
+    /// `fclose()` or scope exit still closes. Closing it here would free the number for the
+    /// next `fopen()`, and that stale `fclose()` would then close an unrelated file. So the
+    /// pipe end is replaced in place by `/dev/null` (`dup2`), which drops the pipe — the
+    /// child sees EOF or `EPIPE` — while the number stays reserved. `close()` is only the
+    /// fallback when `/dev/null` cannot be opened.
     fn close_pipes(&mut self) {
+        let null = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
         for ((_, fd), spawned) in self.pipes.drain(..).zip(self.identities.drain(..)) {
-            if spawned.is_some() && identity(fd) == spawned {
+            if spawned.is_none() || identity(fd) != spawned {
+                continue;
+            }
+            if null >= 0 && unsafe { libc::dup2(null, fd) } == fd {
+                // dup2 clears close-on-exec on the target; keep the placeholder private.
+                unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+            } else {
                 crate::spawn::close_quietly(fd);
             }
         }
+        crate::spawn::close_quietly(null);
     }
 
     /// php-src's `waitpid_cached()`: answers the cached status when there is one, else
