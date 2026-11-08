@@ -159,6 +159,8 @@ mod reference_return_siblings;
 mod reference_override_results;
 mod callable_operand_owners;
 mod late_string_argument_owners;
+mod native_isset_key_owners;
+mod converted_merge_owners;
 mod capture_view_owners;
 mod static_properties;
 mod nested_append_review;
