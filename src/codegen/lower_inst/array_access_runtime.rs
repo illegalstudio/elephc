@@ -452,19 +452,16 @@ pub(super) fn lower_mixed_to_mixed_indexed_array(ctx: &mut FunctionContext<'_>) 
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed-array payload to the Mixed conversion helper
-            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before Mixed-slot conversion
-            ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed array payload to the layout-normalizing conversion
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before Mixed-slot conversion
-            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
+            ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed payload into the integer result register
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+    // The unbox hands back a borrowed payload; take an owner before the conversion consumes it,
+    // then let the shared helper choose between packed-slot widening and hash rebuilding.
     abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+    abi::emit_call_label(ctx.emitter, "__rt_array_payload_to_mixed_indexed");
     Ok(())
 }
 

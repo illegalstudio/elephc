@@ -753,6 +753,12 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
     load_value_to_first_int_arg(ctx, value)?;
     let result_ty = inst.result_php_type.codegen_repr();
     emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+    if matches!(&result_ty, PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed) {
+        // A boxed PHP array can carry either packed or associative storage. The
+        // `array<mixed>` contract names packed Mixed slots, so normalize the owned payload
+        // before any indexed reader treats a hash header as an element stride.
+        abi::emit_call_label(ctx.emitter, "__rt_array_payload_to_mixed_indexed");
+    }
     store_if_result(ctx, inst)
 }
 

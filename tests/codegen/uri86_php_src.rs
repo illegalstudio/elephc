@@ -224,11 +224,6 @@ fn parse_phpt(name: &str, path: &Path) -> Option<Phpt> {
         .iter()
         .find(|section| sections.contains_key(**section))
         .map(|_| "requires a php-src harness section".to_string());
-    if name.ends_with("build_error_soft_errors_reset_without_base.phpt") {
-        // The fixture compares the exception's error types with array_map() over a mixed
-        // object array; the backend still rejects object array elements there.
-        skip = Some("array_map() over mixed object elements is not modeled".to_string());
-    }
     if name.contains("path_success_opaque_spaces") {
         // php-src preserves raw opaque-path spaces and emits one warning per space with a
         // context that includes the following delimiter; the `url` crate trims them.

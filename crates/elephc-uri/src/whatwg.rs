@@ -120,16 +120,20 @@ pub fn parse(
                     base,
                     ParseError::IdnaError,
                 );
-                log.append(&mut failures);
-                let errors = log.into_iter().rev().collect::<Vec<_>>();
+                // Preprocessing warnings precede the parse failure in php-src's list, and
+                // the combined vector is reversed to lexbor's reporting order below.
+                failures.append(&mut log);
+                let errors = failures.into_iter().rev().collect::<Vec<_>>();
                 let message = malformed_message("URI", &errors);
                 Err(UriError { message, errors })
             }
         },
         Err(error) => {
             let mut failures = failure_log(input, trimmed, base, error);
-            log.append(&mut failures);
-            let errors = log.into_iter().rev().collect::<Vec<_>>();
+            // Preprocessing warnings precede the parse failure in php-src's list, and the
+            // combined vector is reversed to lexbor's reporting order below.
+            failures.append(&mut log);
+            let errors = failures.into_iter().rev().collect::<Vec<_>>();
             let message = malformed_message("URI", &errors);
             Err(UriError { message, errors })
         }
@@ -1394,4 +1398,20 @@ fn hex_value(byte: u8) -> Option<u8> {
 /// Returns whether `scheme` is one of the WHATWG special schemes.
 fn is_special_scheme(scheme: &str) -> bool {
     matches!(scheme, "http" | "https" | "ws" | "wss" | "ftp" | "file")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies php-src exposes preprocessing warnings before the parse failure that made the
+    /// URL invalid, so a builder exception whose warnings were collected first compares equal
+    /// to the exception raised by the direct constructor.
+    #[test]
+    fn preprocessing_warnings_precede_the_parse_failure() {
+        let error = parse("ht\ttps://", None).expect_err("a missing host must fail");
+        assert_eq!(error.errors.len(), 2);
+        assert_eq!(error.errors[0].type_code, INVALID_URL_UNIT);
+        assert_eq!(error.errors[1].type_code, HOST_MISSING);
+    }
 }

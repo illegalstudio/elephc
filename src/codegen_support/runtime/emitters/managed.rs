@@ -181,6 +181,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_float_sort(emitter);
     arrays::emit_usort(emitter);
     arrays::emit_usort_str(emitter);
+    arrays::emit_array_payload_to_mixed_indexed(emitter);
     arrays::emit_array_to_mixed(emitter);
     arrays::emit_array_to_pointer_words(emitter);
     arrays::emit_array_merge_into(emitter);

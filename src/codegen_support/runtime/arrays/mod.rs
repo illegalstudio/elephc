@@ -111,6 +111,7 @@ mod array_to_hash_reverse;
 mod array_to_hash_unique;
 mod hash_to_hash_unique;
 mod array_to_mixed;
+mod array_payload_to_mixed_indexed;
 mod array_to_pointer_words;
 mod array_udiff_uintersect;
 mod array_union;
@@ -422,6 +423,8 @@ pub use array_to_hash_reverse::emit_array_to_hash_reverse;
 /// Emit key-preserving reversed indexed-array-to-hash converter helper (array_reverse preserve_keys).
 pub use array_to_hash_unique::emit_array_to_hash_unique;
 pub use hash_to_hash_unique::emit_hash_to_hash_unique;
+/// Emit the raw-array-payload to packed Mixed-indexed-array normalization helper.
+pub use array_payload_to_mixed_indexed::emit_array_payload_to_mixed_indexed;
 /// Emit key-preserving deduplicating indexed-array-to-hash converter helper (array_unique).
 pub use array_to_mixed::emit_array_to_mixed;
 pub use array_to_pointer_words::emit_array_to_pointer_words;

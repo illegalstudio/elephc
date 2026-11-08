@@ -74,6 +74,46 @@ try { new Uri\WhatWg\Url("http://localhost:99999"); } catch (Uri\WhatWg\InvalidU
     );
 }
 
+/// Verifies `array_map()` over an exception's `errors` property reads the list of validation
+/// objects instead of interpreting the property's hash storage as packed element slots.
+///
+/// The exception constructor receives an `array<mixed>` parameter from an `array_merge()`
+/// result. That value is boxed, and unboxing it used to preserve its hash layout while the
+/// declared parameter type promised packed Mixed slots, so `array_map()` read the hash header
+/// as an element stride and dereferenced a null first element.
+#[test]
+fn test_uri_builder_exception_errors_array_map() {
+    let out = compile_and_run(
+        r#"<?php
+$builder = new Uri\WhatWg\UrlBuilder();
+$builder->setScheme("ht\ttps");
+$builder->setHost(null);
+$softErrors = ["previous error"];
+try {
+    $builder->build(softErrors: $softErrors);
+} catch (Uri\WhatWg\InvalidUrlException $e) {
+    echo $e->getMessage(), "\n";
+    var_dump(array_map(static fn($error) => $error->type, $e->errors));
+}
+var_dump($softErrors);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "The specified host is malformed (HostMissing)\n",
+            "array(2) {\n",
+            "  [0]=>\n",
+            "  enum(Uri\\WhatWg\\UrlValidationErrorType::InvalidUrlUnit)\n",
+            "  [1]=>\n",
+            "  enum(Uri\\WhatWg\\UrlValidationErrorType::HostMissing)\n",
+            "}\n",
+            "array(0) {\n",
+            "}\n",
+        )
+    );
+}
+
 /// Verifies the native handle is invisible to casts, `var_export`, and serialization while
 /// `__debugInfo()` still renders the eight URI components.
 #[test]
