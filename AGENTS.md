@@ -191,6 +191,22 @@ including ABI helpers, runtime emitters, runtime data emission, target
 convention helpers, and linking support. New PHP-visible behavior must be driven
 by EIR lowering and `src/codegen/`.
 
+### PHP written by the compiler is built as AST, never parsed
+
+Outside tests, elephc's source must not parse PHP code of its own. Any PHP the
+compiler supplies (a prelude, a helper class or function, a rewrite of a call
+shape) is built directly as AST with the builders of `src/synthetic_class.rs`
+(`class()`, `method()`, `function()`, `e_*` expressions, `s_*` statements), as in
+`src/closure_from_callable_prelude.rs` or `src/reflection_parameter_prelude.rs`.
+Do not embed PHP source in a string and hand it to the lexer and parser, and do
+not add `*_SRC` constants. The parser is for the user's program and its
+dependencies only. Tests may parse PHP freely.
+
+The `*_SRC` helpers still in `src/backend_gap_prelude.rs` predate this rule and
+are owed conversions: move each to its own module returning
+`declarations() -> Program`, keep its `needs_*` flag and its
+`inventory.record_program(...)` call, and delete the source constant.
+
 ### Key modules
 
 | Module | Entry point | Responsibility |
