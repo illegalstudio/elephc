@@ -71,19 +71,23 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-// `ReflectionClass` / `ReflectionObject` / `ReflectionEnum` are table-driven and need no interpreter
-// (see `reflection_table_tests`); a runtime-built `ReflectionParameter` still does, so it stands for
-// "a construct only the interpreter can answer" here.
+// Every Reflection object and literal eval is answered natively now; a class file the compiler
+// refuses, handed to the runtime autoloader, is what still needs the interpreter.
 #[test]
 fn closed_world_refuses_to_link_the_bridge_and_lists_every_reason() {
     let dir = make_test_dir("cw_refuse");
+    // The checker refuses `strlen(1, 2, 3)`, so the class file is handed to the runtime
+    // autoloader, which only the interpreter can run.
+    fs::write(
+        dir.join("Lib.php"),
+        "<?php\nclass Lib {\n    public function hi(): string { return 'lib'; }\n    public function bad(): int { return strlen(1, 2, 3); }\n}\n",
+    )
+    .unwrap();
     fs::write(
         dir.join("main.php"),
         r#"<?php
-function f(int $a) {}
-$name = $argc > 5 ? 'g' : 'f';
-$reflector = new ReflectionParameter($name, 0);
-echo "ok\n";
+spl_autoload_register(function (string $class): void { require __DIR__ . '/' . $class . '.php'; });
+echo (new Lib())->hi(), "\n";
 "#,
     )
     .unwrap();
@@ -93,8 +97,8 @@ echo "ok\n";
     assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
     let note = text(&output.stderr);
     assert!(note.contains("note: the program needs the interpreter"), "{note}");
-    assert!(note.contains("Reflection object"), "the note must name the construct:\n{note}");
-    assert_eq!(text(&run(&dir).stdout), "ok\n");
+    assert!(note.contains("Lib.php"), "the note must name the file:\n{note}");
+    assert_eq!(text(&run(&dir).stdout), "lib\n");
     let _ = fs::remove_file(dir.join("main"));
 
     let refused = compile(&dir, &["--closed-world"]);
@@ -102,7 +106,7 @@ echo "ok\n";
     assert!(!dir.join("main").exists(), "no binary may be left behind");
     let stderr = text(&refused.stderr);
     assert!(stderr.contains("error: the program still needs the interpreter"), "{stderr}");
-    assert!(stderr.contains("Reflection object"), "the reason must name the construct:\n{stderr}");
+    assert!(stderr.contains("Lib.php"), "the reason must name the file:\n{stderr}");
 
     // The environment spelling asks for the same mode.
     let mut cmd = Command::new(elephc_bin());
@@ -112,7 +116,7 @@ echo "ok\n";
     cmd.arg("--php-version").arg("8.5").arg(dir.join("main.php"));
     let output = cmd.output().unwrap();
     assert!(!output.status.success());
-    assert!(text(&output.stderr).contains("Reflection object"));
+    assert!(text(&output.stderr).contains("Lib.php"));
 }
 
 #[test]
@@ -879,11 +883,11 @@ foreach (['App\Leaf', 'App\Middle'] as $name) {
     }
 }
 
-/// A framework reaches a dependency's classes by listing its directory, as symfony's `FileLoader`
-/// does when `debug:container` rebuilds the container: every production class is compiled. Scripts
-/// of a package are not classes, and a package installed for development stays out.
+/// A dependency class reached only through a name concatenated at run time is compiled: each
+/// branch the concatenation can spell is a candidate. Scripts of a package are not classes, and a
+/// package installed for development stays out.
 #[test]
-fn closed_world_compiles_every_production_class_of_the_dependencies() {
+fn closed_world_compiles_a_dependency_class_a_concatenated_name_reaches() {
     let dir = make_test_dir("cw_vendor_roots");
     fs::create_dir_all(dir.join("vendor/acme/lib/src/bin")).unwrap();
     fs::create_dir_all(dir.join("vendor/acme/devtool/src")).unwrap();
@@ -938,6 +942,71 @@ echo (new $name)->hi(), "\n";
     let output = compile(&dir, &["--closed-world"]);
     assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
     assert_eq!(text(&run(&dir).stdout), "listed\n");
+}
+
+/// A container registration globs a dependency's directory, as symfony's validator constraints are
+/// registered (`$loader->load('Ns\\', $dir.'/*Validator.php')`): every class the glob matches is
+/// compiled, though only the listing at run time names it. A class of the same dependency that
+/// nothing reaches stays out of the binary: the project's classes and the globbed ones are the
+/// roots, not every class of every dependency.
+#[test]
+fn closed_world_compiles_the_dependency_classes_a_registration_globs() {
+    let dir = make_test_dir("cw_glob_roots");
+    fs::create_dir_all(dir.join("vendor/acme/lib/src/Rules")).unwrap();
+    fs::create_dir_all(dir.join("vendor/composer")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\\\":"src/"}}}"#).unwrap();
+    fs::write(
+        dir.join("vendor/composer/installed.json"),
+        r#"{"packages":[{"name":"acme/lib","autoload":{"psr-4":{"Acme\\Lib\\":"src/"}},"install-path":"../acme/lib"}]}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/acme/lib/composer.json"),
+        r#"{"name":"acme/lib","autoload":{"psr-4":{"Acme\\Lib\\":"src/"}}}"#,
+    )
+    .unwrap();
+    for (class, word) in [("LengthRule", "length"), ("RangeRule", "range")] {
+        fs::write(
+            dir.join(format!("vendor/acme/lib/src/Rules/{class}.php")),
+            format!("<?php\nnamespace Acme\\Lib\\Rules;\nclass {class} {{ public function hi(): string {{ return '{word}'; }} }}\n"),
+        )
+        .unwrap();
+    }
+    fs::write(
+        dir.join("vendor/acme/lib/src/Rules/Helper.php"),
+        "<?php\nnamespace Acme\\Lib\\Rules;\nclass Helper { public function hi(): string { return 'never-reached-marker'; } }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+spl_autoload_register(function (string $class): void {
+    $file = __DIR__ . '/vendor/acme/lib/src/' . str_replace('\\', '/', substr($class, strlen('Acme\Lib\\'))) . '.php';
+    if (is_file($file)) { require $file; }
+});
+final class Loader
+{
+    public function load(string $prefix, string $resource): void
+    {
+        $found = [];
+        foreach (glob($resource) as $file) { $found[] = $prefix . basename($file, '.php'); }
+        sort($found);
+        foreach ($found as $class) { echo (new $class)->hi(), "\n"; }
+    }
+}
+(new Loader())->load('Acme\\Lib\\Rules\\', __DIR__ . '/vendor/acme/lib/src/Rules/*Rule.php');
+"#,
+    )
+    .unwrap();
+    assert_eq!(php_stdout(&dir), "length\nrange\n");
+    compile_ok(&dir, &[]);
+    assert_eq!(text(&run(&dir).stdout), "length\nrange\n");
+    let binary = fs::read(dir.join("main")).unwrap();
+    let marker = b"never-reached-marker";
+    assert!(
+        !binary.windows(marker.len()).any(|window| window == marker),
+        "a dependency class nothing reaches is not compiled"
+    );
 }
 
 /// A bridge to an optional dependency is compiled too. Its class over the missing package cannot

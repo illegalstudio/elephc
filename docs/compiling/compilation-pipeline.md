@@ -128,6 +128,25 @@ Physical source (.php or .lfc)
   [`--strict-locals`](cli-reference.md#strict-locals-mode) an incompatible
   local retype is a compile error instead.
 
+### Which classes a closed-world build compiles
+
+A closed world cannot load a class it did not compile, and a framework names
+classes no code reference shows: it lists a directory and builds the names from
+the file names. So in a Composer project the autoload pass starts from more than
+the entry program:
+
+- every production class of the project's own `autoload` section (Symfony's
+  `FileLoader::findClasses()` registers all of `src/` as services);
+- every dependency class matched by a directory registration in the compiled
+  code, `load('Vendor\\Ns\\', $dir.'/*Validator.php')` or
+  `registerClasses($definition, 'Vendor\\Ns\\', $dir.'/*')`: the namespace
+  prefix and the file-name pattern of the glob select the classes;
+- the class names the code builds from `static::class` and literals, returned
+  ones included (`return static::class.'Validator';`).
+
+The rest of a dependency is compiled only when something reaches it, so an
+unused component costs no build time and no binary size. No option is needed.
+
 ### Class files left to the runtime autoloader
 
 php parses a class file only when something asks for the class; a closed-world

@@ -6,7 +6,9 @@
 //! - `crate::autoload::run_collecting_included_with_defines_and_sources()`.
 //!
 //! Key details:
-//! - Only a `class_exists($name = $this->method()) ? new $name() : ...` shape is considered.
+//! - Shapes considered: a `class_exists($name = $this->method()) ? new $name() : ...` factory,
+//!   class strings derived from `static::class` (assigned or returned), and concatenations of
+//!   literals whose ternary branches spell a bounded set of names.
 //! - The partial evaluator is deliberately conservative: unsupported expressions produce no
 //!   candidate instead of guessing or importing optional declarations from the autoload index.
 
@@ -32,10 +34,76 @@ pub(super) fn candidates(program: &Program) -> Vec<String> {
         candidates.extend(property_mapped_dynamic_new_candidates(&classes, &root));
     }
     candidates.extend(late_static_class_string_candidates(&classes));
+    candidates.extend(concatenated_class_string_candidates(program));
 
     let mut candidates = candidates.into_iter().collect::<Vec<_>>();
     candidates.sort();
     candidates
+}
+
+/// The most strings one concatenation may spell before it stops being a candidate source.
+const MAX_CONCATENATED_SPELLINGS: usize = 16;
+
+/// Returns the class names a concatenation of literals can spell, each branch of a ternary
+/// included: `'Acme\\Lib\\' . ($argc > 5 ? 'Other' : 'Listed')` names both classes, and
+/// `new $name` reaches either one through the autoloader. Only the names the autoload index
+/// resolves are loaded, so a string that names no class costs nothing.
+fn concatenated_class_string_candidates(program: &Program) -> HashSet<String> {
+    use crate::parser::ast::visit::{walk_nodes, Node};
+    let mut candidates = HashSet::new();
+    // The operands of a visited concatenation: only the whole one spells a name, its prefix
+    // `'Acme\\Rule\\' . $branch` inside `... . 'Rule'` does not.
+    let mut inner: HashSet<*const Expr> = HashSet::new();
+    walk_nodes(program, &mut |node| {
+        let Node::Expr(expr) = node else { return };
+        let ExprKind::BinaryOp { left, op: BinOp::Concat, right } = &expr.kind else {
+            return;
+        };
+        inner.insert(&**left as *const Expr);
+        inner.insert(&**right as *const Expr);
+        if inner.contains(&(expr as *const Expr)) {
+            return;
+        }
+        for spelling in literal_spellings(expr).unwrap_or_default() {
+            if spelling.contains('\\') && !spelling.contains(char::is_whitespace) {
+                candidates.insert(spelling.trim_start_matches('\\').to_string());
+            }
+        }
+    });
+    candidates
+}
+
+/// Every string `expr` can evaluate to when it is built only from string literals, concatenation
+/// and ternary branches; `None` for anything else or past `MAX_CONCATENATED_SPELLINGS`.
+fn literal_spellings(expr: &Expr) -> Option<Vec<String>> {
+    let spellings = match &expr.kind {
+        ExprKind::StringLiteral(value) => vec![value.clone()],
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            let mut spellings = literal_spellings(then_expr)?;
+            spellings.extend(literal_spellings(else_expr)?);
+            spellings
+        }
+        ExprKind::BinaryOp {
+            left,
+            op: BinOp::Concat,
+            right,
+        } => {
+            let left = literal_spellings(left)?;
+            let right = literal_spellings(right)?;
+            if left.len() * right.len() > MAX_CONCATENATED_SPELLINGS {
+                return None;
+            }
+            left.iter()
+                .flat_map(|left| right.iter().map(move |right| format!("{left}{right}")))
+                .collect()
+        }
+        _ => return None,
+    };
+    (spellings.len() <= MAX_CONCATENATED_SPELLINGS).then_some(spellings)
 }
 
 /// Returns the class strings an inherited method derives from `static::class` for each concrete
@@ -1175,5 +1243,18 @@ mod tests {
             "<?php\nnamespace Lib;\nclass Plain { public function name(): string { return 'Lib\\\\Other'; } }\n",
         );
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A class name concatenated from literals names each class a ternary branch can spell, inside
+    /// a method too; a concatenation over a runtime value names nothing.
+    #[test]
+    fn a_concatenated_class_string_names_each_branch() {
+        let found = candidates_of(
+            "<?php\n$name = 'Acme\\\\Lib\\\\' . ($argc > 5 ? 'Other' : 'Listed');\nclass F { function m($x) { return 'Acme\\\\Rule\\\\' . ($x ? 'A' : 'B') . 'Rule'; } function n($x) { return 'Acme\\\\' . $x; } }\n",
+        );
+        for name in ["Acme\\Lib\\Other", "Acme\\Lib\\Listed", "Acme\\Rule\\ARule", "Acme\\Rule\\BRule"] {
+            assert!(found.contains(&name.to_string()), "{name} missing: {found:?}");
+        }
+        assert_eq!(found.len(), 4, "{found:?}");
     }
 }

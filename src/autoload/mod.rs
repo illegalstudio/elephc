@@ -14,6 +14,7 @@
 //!   counter (its includes too), so its spans never equal another file's in span-keyed maps.
 
 mod alias;
+mod class_globs;
 mod composer_files;
 pub mod deferral;
 pub mod deferral_memo;
@@ -331,11 +332,31 @@ fn run_collecting_included_on_compiler_stack(
                 .map(|name| (0, name)),
         );
         // A closed world cannot load what it did not compile, and a framework reaches classes by
-        // listing a directory (Symfony's `FileLoader::findClasses()`), a path no reference in the
-        // code shows, its own included when a console command rebuilds the container. Every
-        // class php could load is therefore a root.
+        // listing a directory, a path no reference in the code shows: Symfony's
+        // `FileLoader::findClasses()` registers every class of the project's `src/` as a service,
+        // and a dependency's container extension globs its own directory
+        // (`$loader->load('Vendor\\Ns\\', $dir.'/*Validator.php')`). The project's own classes
+        // are therefore roots, and so is every dependency class such a registration in the
+        // compiled code matches. The rest of a dependency is compiled only when something
+        // reaches it.
         if let (true, Some(root)) = (crate::closed_world::is_enabled(), project_root(base_dir)) {
-            reference_points.extend(registry.psr4().production_classes(&root).into_iter().map(|name| (0, name)));
+            let vendor = root.join("vendor");
+            let vendor = crate::source::canonical(&vendor).unwrap_or(vendor);
+            let globs = class_globs::registrations(&program);
+            reference_points.extend(
+                registry
+                    .psr4()
+                    .production_classes(&root)
+                    .into_iter()
+                    .filter(|name| {
+                        globs.iter().any(|glob| glob.matches(name))
+                            || registry.psr4().lookup(name).is_some_and(|path| {
+                                let path = crate::source::canonical(path).unwrap_or_else(|_| path.to_path_buf());
+                                !path.starts_with(&vendor)
+                            })
+                    })
+                    .map(|name| (0, name)),
+            );
         }
         let mut insertions: Vec<(usize, Program)> = Vec::new();
         // Class names are case-insensitive: `class_exists("demo\\thing")` names the declared
