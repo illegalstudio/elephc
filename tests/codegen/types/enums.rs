@@ -2189,3 +2189,34 @@ var_dump($fresh->level->name);
         )
     );
 }
+
+/// PHP 8.2 backed-case values may be constant expressions, not only literals: a class or
+/// interface constant, a concatenation, a negated integer. Each folds to its literal, so
+/// `cases()`, `from()` and `tryFrom()` see the same values php does.
+#[test]
+fn test_enum_case_values_from_constant_expressions() {
+    let out = compile_and_run(
+        r#"<?php
+namespace U;
+final class Glyphs { public const BAR = '▌'; public const PREFIX = 'sel-'; public const ONE = 1; }
+interface Codes { const BASE = 40; }
+enum SelectionBar: string
+{
+    case Focused = Glyphs::BAR;
+    case Prefixed = Glyphs::PREFIX . 'x';
+    case Number = 'n' . Glyphs::ONE;
+    case None = ' ';
+}
+enum Level: int
+{
+    case Low = -Glyphs::ONE;
+    case Base = Codes::BASE;
+    case Zero = 0;
+}
+foreach (SelectionBar::cases() as $c) { echo $c->name, '=', $c->value, ';'; }
+foreach (Level::cases() as $c) { echo $c->name, '=', $c->value, ';'; }
+echo SelectionBar::from('sel-x')->name, '|', Level::tryFrom(40)?->name, "\n";
+"#,
+    );
+    assert_eq!(out, "Focused=▌;Prefixed=sel-x;Number=n1;None= ;Low=-1;Base=40;Zero=0;Prefixed|Base\n");
+}
