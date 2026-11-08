@@ -186,6 +186,10 @@ pub(super) fn parse_closure(
                     ));
                 }
                 *pos += 1;
+                // A trailing comma closes the list: `use ($a, $b,)` (PHP 8.0+).
+                if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::RParen) {
+                    break;
+                }
             }
             let is_ref = if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::Ampersand) {
                 *pos += 1;
