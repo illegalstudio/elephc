@@ -134,6 +134,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["pcntl", "posix"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_proc",
+        package: "elephc-proc",
+        php_extensions: &[],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_phar",
         package: "elephc-phar",
         php_extensions: &["Phar"],

@@ -252,6 +252,7 @@ jobs:
             libelephc_instr.a \
             libelephc_web.a \
             libelephc_pcntl.a \
+            libelephc_proc.a \
             libelephc_xml.a \
             libelephc_fileinfo.a \
             libelephc_tokenizer.a \
@@ -455,6 +456,7 @@ jobs:
               lib.install "libelephc_instr.a"
               lib.install "libelephc_web.a"
               lib.install "libelephc_pcntl.a"
+              lib.install "libelephc_proc.a"
               lib.install "libelephc_xml.a"
               lib.install "libelephc_fileinfo.a"
               lib.install "libelephc_tokenizer.a"

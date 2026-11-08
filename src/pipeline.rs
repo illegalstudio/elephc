@@ -554,6 +554,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         with_crates.contains("gmp") || autoloaded("gmp"),
         &mut prelude_inventory,
     );
+    let ast = crate::proc_prelude::inject_if_used(ast, with_crates.contains("proc"), &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(
         ast,
         with_crates.contains("random") || autoloaded("random"),

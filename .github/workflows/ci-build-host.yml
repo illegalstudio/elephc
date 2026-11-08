@@ -50,6 +50,7 @@ env:
     -p elephc-tz
     -p elephc-image
     -p elephc-pcntl
+    -p elephc-proc
     -p elephc-xml
     -p elephc-fileinfo
     -p elephc-tokenizer
