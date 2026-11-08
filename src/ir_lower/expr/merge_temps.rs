@@ -5,7 +5,7 @@
 //! - `crate::ir_lower::expr`.
 //!
 //! Key details:
-//! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - Heap merge slots retain their incoming owner; scalar slots borrow conversion inputs.
 
 use super::*;
 
@@ -56,9 +56,13 @@ pub(in crate::ir_lower) fn store_value_into_temp(
 ) {
     let value = coerce_value_for_temp(ctx, value, &temp_type, span);
     let source = value;
-    let stored = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    // A tagged scalar store can read a boxed branch value without keeping its box.
+    // Retaining that input would leave an owner that the inline destination cannot retire.
+    let stored = if Ownership::php_type_needs_lifetime_tracking(&temp_type) {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    } else { value };
     ctx.store_local(temp_name, stored, temp_type, Some(span));
-    if stored.value != source.value && ctx.value_needs_release_after_retaining_store(source) {
+    if ctx.value_needs_release_after_retaining_store(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
 }
