@@ -13,9 +13,15 @@ inputs:
   features:
     description: Exact comma-separated Cargo features
     default: ''
+  variant:
+    description: Named build variant within this profile
+    default: default
   sha:
     description: Source commit checked out by the producer
     default: ${{ github.sha }}
+  files:
+    description: Newline-separated output paths; empty selects the complete host payload
+    default: ''
 outputs:
   attempt:
     description: Producing attempt, including when only consumers are rerun
@@ -29,22 +35,28 @@ runs:
     - name: Package outputs
       shell: bash
       env:
+        ARTIFACT_FILES: ${{ inputs.files }}
         ARTIFACT_TARGET: ${{ inputs.target }}
+        ARTIFACT_VARIANT: ${{ inputs.variant }}
         ARTIFACT_KIND: ${{ inputs.kind }}
         ARTIFACT_PROFILE: ${{ inputs.profile }}
         ARTIFACT_FEATURES: ${{ inputs.features }}
         ARTIFACT_SHA: ${{ inputs.sha }}
       run: |
-        python3 -B scripts/ci/build_artifacts.py create \
-          --artifact "$RUNNER_TEMP/build-$ARTIFACT_TARGET-$ARTIFACT_PROFILE-$ARTIFACT_KIND" \
+        files=()
+        while IFS= read -r path; do
+          if [[ -n "$path" ]]; then files+=(--file "$path"); fi
+        done <<< "$ARTIFACT_FILES"
+        python3 -B scripts/ci/build_artifacts.py create "${files[@]}" \
+          --artifact "$RUNNER_TEMP/build-$ARTIFACT_TARGET-$ARTIFACT_PROFILE-$ARTIFACT_KIND-$ARTIFACT_VARIANT" \
           --sha "$ARTIFACT_SHA" --target "$ARTIFACT_TARGET" \
           --profile "$ARTIFACT_PROFILE" --features "$ARTIFACT_FEATURES" --kind "$ARTIFACT_KIND"
     - name: Upload outputs
       id: upload
       uses: actions/upload-artifact@v7
       with:
-        name: build-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.kind }}-${{ github.run_attempt }}
-        path: ${{ runner.temp }}/build-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.kind }}/
+        name: build-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.kind }}-${{ inputs.variant }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/build-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.kind }}-${{ inputs.variant }}/
         compression-level: 0
         if-no-files-found: error
         retention-days: 3

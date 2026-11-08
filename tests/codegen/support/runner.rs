@@ -459,6 +459,19 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
     let _guard = lock_bridge_staticlib_build();
     for bridge in requested_bridge_staticlibs(actual_link_libs) {
         let archive_path = bridge_staticlib_dir.join(format!("lib{}.a", bridge.lib_name));
+        if prebuilt_bridge_staticlibs_are_trusted() {
+            assert!(archive_path.is_file(),
+                "missing prebuilt bridge {}; restore the matching CI build artifact", archive_path.display());
+            if bridge.lib_name == "elephc_pdo" {
+                let required = requested_pdo_features();
+                let marker = bridge_staticlib_dir.join("elephc-pdo-features.txt");
+                let advertised = std::fs::read_to_string(&marker)
+                    .expect("prebuilt PDO archive requires its validated feature manifest");
+                assert!(prebuilt_pdo_features_match(&required, &advertised),
+                    "prebuilt PDO features do not match {:?}; restore the matching CI variant", required);
+            }
+            continue;
+        }
         let requires_libpq_profile = bridge.lib_name == "elephc_pdo"
             && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
             && LIBPQ_BRIDGE_BUILT.get().is_none();
@@ -564,6 +577,52 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
         if requires_cubrid_profile {
             let _ = CUBRID_BRIDGE_BUILT.set(());
         }
+    }
+}
+
+/// Computes the optional driver configuration required by this test executable.
+fn requested_pdo_features() -> Vec<&'static str> {
+    let enabled = [
+        (std::env::var_os("ELEPHC_PDO_LIBPQ").is_some(), "libpq-gss"),
+        (pdo_dblib_enabled(), "dblib"),
+        (pdo_firebird_enabled(), "firebird"),
+        (pdo_odbc_enabled(), "odbc"),
+        (pdo_informix_enabled(), "informix"),
+        (pdo_ibm_enabled(), "ibm"),
+        (pdo_sqlsrv_enabled(), "sqlsrv"),
+        (pdo_oci_enabled(), "oci"),
+        (pdo_cubrid_enabled(), "cubrid"),
+    ];
+    enabled.into_iter().filter_map(|(enabled, name)| enabled.then_some(name)).collect()
+}
+
+/// Requires an exact driver set, independent of the feature declaration order.
+fn prebuilt_pdo_features_match(required: &[&str], advertised: &str) -> bool {
+    let required: std::collections::BTreeSet<_> = required.iter().copied().collect();
+    let advertised: std::collections::BTreeSet<_> = advertised.trim().split(',')
+        .filter(|feature| !feature.is_empty()).collect();
+    required == advertised
+}
+
+#[cfg(test)]
+mod prebuilt_pdo_feature_tests {
+    use super::prebuilt_pdo_features_match;
+
+    /// Default builds must not accidentally link an optional system driver.
+    #[test]
+    fn prebuilt_pdo_rejects_missing_and_extra_driver_features() {
+        assert!(prebuilt_pdo_features_match(&[], "\n"));
+        assert!(!prebuilt_pdo_features_match(&["libpq-gss"], "\n"));
+        assert!(!prebuilt_pdo_features_match(&[], "libpq-gss\n"));
+        assert!(!prebuilt_pdo_features_match(&["oci"], "odbc\n"));
+    }
+
+    /// Identical feature sets can be serialized in either order.
+    #[test]
+    fn prebuilt_pdo_accepts_only_the_requested_driver_set() {
+        assert!(prebuilt_pdo_features_match(&["libpq-gss"], "libpq-gss\n"));
+        assert!(prebuilt_pdo_features_match(&["oci", "odbc"], "odbc,oci\n"));
+        assert!(!prebuilt_pdo_features_match(&["oci", "odbc"], "oci\n"));
     }
 }
 

@@ -13,6 +13,9 @@ inputs:
   features:
     description: Exact comma-separated Cargo features
     default: ''
+  variant:
+    description: Named build variant within this profile
+    default: default
   sha:
     description: Expected source commit
     default: ${{ github.sha }}
@@ -22,6 +25,9 @@ inputs:
   attempt:
     description: Producing attempt returned by the build job
     required: true
+  export-bridge-env:
+    description: Pin CLI library lookup (disable while building another Rust variant)
+    default: 'true'
   token:
     description: Token with actions read permission for cross-run downloads
     default: ${{ github.token }}
@@ -31,14 +37,16 @@ runs:
     - name: Download outputs
       uses: actions/download-artifact@v8
       with:
-        name: build-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.kind }}-${{ inputs.attempt }}
-        path: ${{ runner.temp }}/build-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.kind }}/
+        name: build-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.kind }}-${{ inputs.variant }}-${{ inputs.attempt }}
+        path: ${{ runner.temp }}/build-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.kind }}-${{ inputs.variant }}/
         run-id: ${{ inputs.run-id }}
         github-token: ${{ inputs.token }}
     - name: Validate and restore outputs
       shell: bash
       env:
+        EXPORT_BRIDGE_ENV: ${{ inputs.export-bridge-env }}
         ARTIFACT_TARGET: ${{ inputs.target }}
+        ARTIFACT_VARIANT: ${{ inputs.variant }}
         ARTIFACT_KIND: ${{ inputs.kind }}
         ARTIFACT_PROFILE: ${{ inputs.profile }}
         ARTIFACT_FEATURES: ${{ inputs.features }}
@@ -46,8 +54,10 @@ runs:
         ARTIFACT_RUN: ${{ inputs.run-id }}
         ARTIFACT_ATTEMPT: ${{ inputs.attempt }}
       run: |
-        python3 -B scripts/ci/build_artifacts.py restore \
-          --artifact "$RUNNER_TEMP/build-$ARTIFACT_TARGET-$ARTIFACT_PROFILE-$ARTIFACT_KIND" \
+        environment=()
+        if [[ "$EXPORT_BRIDGE_ENV" == true ]]; then environment+=(--github-env "$GITHUB_ENV"); fi
+        python3 -B scripts/ci/build_artifacts.py restore "${environment[@]}" \
+          --artifact "$RUNNER_TEMP/build-$ARTIFACT_TARGET-$ARTIFACT_PROFILE-$ARTIFACT_KIND-$ARTIFACT_VARIANT" \
           --sha "$ARTIFACT_SHA" --target "$ARTIFACT_TARGET" \
           --profile "$ARTIFACT_PROFILE" --features "$ARTIFACT_FEATURES" --kind "$ARTIFACT_KIND" \
-          --run-id "$ARTIFACT_RUN" --attempt "$ARTIFACT_ATTEMPT" --github-env "$GITHUB_ENV"
+          --run-id "$ARTIFACT_RUN" --attempt "$ARTIFACT_ATTEMPT"

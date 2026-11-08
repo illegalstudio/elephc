@@ -53,7 +53,8 @@ expect() {
 
 expect "merge queue" "run=true extended=true" "$(plan merge_group)"
 expect "schedule" "run=true extended=true" "$(plan schedule)"
-expect "push already verified" "run=false extended=false" "$(plan push FAKE_RUNS=1)"
+expect "push already verified" "run=false extended=false" "$(plan push VERIFIED_REUSE_RUN=123)"
+expect "old workflow success is insufficient" "run=true extended=true" "$(plan push FAKE_RUNS=1)"
 expect "push not verified" "run=true extended=true" "$(plan push FAKE_RUNS=0)"
 expect "push lookup failure" "run=true extended=true" "$(plan push FAKE_FAIL=actions)"
 expect "plain pull request" "run=true extended=false" \

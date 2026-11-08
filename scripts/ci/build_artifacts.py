@@ -163,6 +163,7 @@ def host_files(root, profile, kind):
             raise ValueError("No bridge archive inventory found")
         names = {str(base / f"lib{name}.a") for name in libraries}
         names.add(str(base / "libelephc_magician_curl.a"))
+        names.add(str(base / "elephc-pdo-features.txt"))
         return sorted(names)
     raise ValueError("Specify --file for non-host payloads")
 
@@ -198,7 +199,7 @@ def main():
     args = parser.parse_args()
     expected = identity(args.sha, args.target, args.profile, args.features, args.kind, args.repository)
     if args.command == "create":
-        actual_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=args.root, text=True).strip()
+        actual_sha = subprocess.check_output(["git", "-c", f"safe.directory={args.root.resolve()}", "rev-parse", "HEAD"], cwd=args.root, text=True).strip()
         if actual_sha != args.sha:
             raise ValueError("Checked-out source does not match the requested artifact SHA")
         producer = {"run_id": args.run_id, "attempt": args.attempt,
