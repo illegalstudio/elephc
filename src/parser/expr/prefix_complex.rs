@@ -77,10 +77,9 @@ pub(super) fn parse_match_expr(
             loop {
                 patterns.push(parse_expr(tokens, pos)?);
                 if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
-                    let saved = *pos;
                     *pos += 1;
+                    // A trailing comma closes the condition list: `'a', 'b', => …`.
                     if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
-                        *pos = saved;
                         break;
                     }
                 } else {
