@@ -133,7 +133,6 @@ Modes:
   --web-isolation MODE    worker (default) | pool | request; requires --web
   --web-lifecycle MODE    request (default) | application; application requires worker isolation
   --closed-world          Link no interpreter; fail the build if anything still needs it (or ELEPHC_CLOSED_WORLD=1)
-  --usage-manifest FILE   With --closed-world, compile only the classes the app was seen using (or ELEPHC_USAGE_MANIFEST)
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
   --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
   --lint                  Report PHP-divergent lints: unused variables, unreachable code, and permissive local retypes
@@ -260,9 +259,6 @@ pub(crate) struct CliConfig {
     /// Link no interpreter (eval bridge): any construct that still needs it fails the build
     /// with the list of reasons. Also requested by `ELEPHC_CLOSED_WORLD=1`.
     pub(crate) closed_world: bool,
-    /// Usage manifest of a closed-world build: the class-likes the application was seen loading.
-    /// Also given by `ELEPHC_USAGE_MANIFEST`.
-    pub(crate) usage_manifest: Option<std::path::PathBuf>,
     /// Process-isolation architecture baked into a `--web` executable.
     pub(crate) web_isolation: WebIsolation,
     /// Retain a typed application between requests in worker isolation.
@@ -412,8 +408,6 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut lint = false;
     let mut web = false;
     let mut closed_world = crate::closed_world::requested_by_environment();
-    let mut usage_manifest: Option<std::path::PathBuf> =
-        std::env::var_os("ELEPHC_USAGE_MANIFEST").filter(|path| !path.is_empty()).map(Into::into);
     let mut web_isolation = WebIsolation::default();
     let mut web_isolation_explicit = false;
     let mut web_application = false;
@@ -601,17 +595,6 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             lint = true;
         } else if arg == "--closed-world" {
             closed_world = true;
-        } else if arg == "--usage-manifest" {
-            i += 1;
-            match args.get(i) {
-                Some(path) => usage_manifest = Some(path.into()),
-                None => {
-                    eprintln!("--usage-manifest requires a file");
-                    std::process::exit(1);
-                }
-            }
-        } else if let Some(path) = arg.strip_prefix("--usage-manifest=") {
-            usage_manifest = Some(path.into());
         } else if arg == "--web" {
             web = true;
         } else if arg == "--web-lifecycle" {
@@ -766,7 +749,6 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         lint,
         web,
         closed_world,
-        usage_manifest,
         web_isolation,
         web_application,
         with_crates,

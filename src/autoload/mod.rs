@@ -321,17 +321,6 @@ fn run_collecting_included_on_compiler_stack(
     // name three times). A namespaced declaration is excluded: PHP falls back to the global
     // namespace only, never to another one.
 
-    // A recorded file stands for the classes the index maps to it, resolved once: the manifest
-    // then names them like any recorded class.
-    if let Some(manifest) = crate::closed_world::usage_manifest().filter(|manifest| !manifest.files.is_empty()) {
-        let files: HashSet<std::path::PathBuf> = manifest
-            .files
-            .iter()
-            .map(|path| crate::source::canonical(path).unwrap_or_else(|_| path.clone()))
-            .collect();
-        crate::closed_world::add_usage_classes(&registry.psr4().classes_in_files(&files));
-    }
-
     loop {
         let mut declared = collect_declared_fqns(&program);
         seed_builtin_declared_fqns(&mut declared);
@@ -343,12 +332,9 @@ fn run_collecting_included_on_compiler_stack(
         );
         // A closed world cannot load what it did not compile, and a framework reaches classes by
         // listing a directory (Symfony's `FileLoader::findClasses()`), a path no reference in the
-        // code shows, its own included when a console command rebuilds the container. Without a
-        // usage manifest every class php could load is therefore a root; with one, the classes
-        // the application was seen loading are, and the rest follows from their references.
-        if let Some(manifest) = crate::closed_world::usage_manifest() {
-            reference_points.extend(manifest.classes.iter().map(|name| (0, name.clone())));
-        } else if let (true, Some(root)) = (crate::closed_world::is_enabled(), project_root(base_dir)) {
+        // code shows, its own included when a console command rebuilds the container. Every
+        // class php could load is therefore a root.
+        if let (true, Some(root)) = (crate::closed_world::is_enabled(), project_root(base_dir)) {
             reference_points.extend(registry.psr4().production_classes(&root).into_iter().map(|name| (0, name)));
         }
         let mut insertions: Vec<(usize, Program)> = Vec::new();

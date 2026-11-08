@@ -168,7 +168,6 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         lint,
         web,
         closed_world,
-        usage_manifest,
         web_isolation,
         web_application,
         with_crates,
@@ -176,21 +175,6 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         ini_overrides,
     } = config;
     crate::closed_world::set_enabled(closed_world);
-    let usage_manifest = match usage_manifest {
-        Some(path) if closed_world => match crate::closed_world::UsageManifest::load(&path) {
-            Ok(manifest) => Some(manifest),
-            Err(err) => {
-                eprintln!("error: {err}");
-                std::process::exit(1);
-            }
-        },
-        Some(_) => {
-            eprintln!("error: --usage-manifest requires --closed-world");
-            std::process::exit(1);
-        }
-        None => None,
-    };
-    crate::closed_world::set_usage_manifest(usage_manifest);
     let filename = filename.as_str();
     crate::progress::init(quiet);
     // Reject incompatible options before check/EIR output can return without the backend.

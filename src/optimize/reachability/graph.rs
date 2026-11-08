@@ -489,22 +489,17 @@ impl GraphState {
                 .extend(self.index.functions.keys().cloned());
         }
         if fresh[2] {
-            // A class name built at run time names any class of the program, or, under a usage
-            // manifest, only one the application was seen loading.
-            let manifest = crate::closed_world::usage_manifest();
-            let named: Vec<String> = self
-                .index
-                .classes
-                .keys()
-                .filter(|name| manifest.as_ref().is_none_or(|manifest| manifest.uses_class(name)))
-                .cloned()
-                .collect();
-            self.reach.classes.extend(named.iter().cloned());
+            self.reach.classes.extend(self.index.classes.keys().cloned());
             self.reach.classes.extend(self.index.packed_classes.iter().cloned());
             self.reach.classes.extend(self.index.extern_classes.iter().cloned());
-            self.instantiated_classes.extend(named.iter().cloned());
-            self.behavioral.classes.extend(named.iter().cloned());
-            self.behavioral.instantiated_classes.extend(named);
+            self.instantiated_classes
+                .extend(self.index.classes.keys().cloned());
+            self.behavioral
+                .classes
+                .extend(self.index.classes.keys().cloned());
+            self.behavioral
+                .instantiated_classes
+                .extend(self.index.classes.keys().cloned());
         }
     }
 
