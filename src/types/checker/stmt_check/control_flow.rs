@@ -650,16 +650,22 @@ impl Checker {
                             self.observe_conditional_flow_exit(&mut flow, env);
                         }
                     }
-                    // Preserve lazy-property joins and a nullable integer initialized on its null arm.
+                    // Preserve lazy-property joins and nullable locals initialized on their null arm.
                     if single_clause && guards.len() == 1 {
                         let guard = &guards[0];
                         let branch_exit = env.get(&guard.var);
-                        let nullable_integer_local = !Self::narrowed_place_key_is_property(&guard.var)
-                            && saved.iter().any(|(name, original)| name == &guard.var
-                                && matches!(original, Some(PhpType::Union(members)) if members.len() == 2
-                                    && members.contains(&PhpType::Int) && members.contains(&PhpType::Void)))
-                            && branch_exit == Some(&PhpType::Int);
-                        if (Self::narrowed_place_key_is_property(&guard.var) || nullable_integer_local)
+                        let nullable_initialized_local = !Self::narrowed_place_key_is_property(&guard.var)
+                            && branch_exit.is_some_and(|ty|
+                                (*ty == PhpType::Int || (matches!(ty, PhpType::Object(_))
+                                    && self.local_flow_read_is_stable(&guard.var)))
+                                && saved.iter().any(|(name, original)| name == &guard.var
+                                    && matches!(original, Some(PhpType::Union(members)) if members.len() == 2
+                                        && members.contains(&PhpType::Void)
+                                        && members.iter().any(|member|
+                                            matches!((member, ty), (PhpType::Int, PhpType::Int)
+                                                | (PhpType::Object(_), PhpType::Object(_)))
+                                                && self.type_contains_values(member, ty)))));
+                        if (Self::narrowed_place_key_is_property(&guard.var) || nullable_initialized_local)
                             && !self.body_cannot_fall_through(body)
                             && branch_exit.is_some_and(|ty| *ty != guard.then_ty)
                         {
@@ -744,6 +750,11 @@ impl Checker {
                     let then_ty = then_exit_ty.clone()?;
                     let joined = match &else_exit_ty {
                         None => then_ty,
+                        Some(Some(else_ty)) if matches!((&then_ty, else_ty),
+                            (PhpType::Object(_), PhpType::Object(_))) =>
+                        {
+                            self.join_flow_views(&then_ty, else_ty)
+                        }
                         Some(Some(else_ty)) => {
                             self.normalize_union_type(vec![then_ty, else_ty.clone()])
                         }
@@ -751,8 +762,9 @@ impl Checker {
                     };
                     Some((key.clone(), joined))
                 });
-                let joined_integer_key = joined.as_ref().filter(|(key, ty)|
-                    !Self::narrowed_place_key_is_property(key) && *ty == PhpType::Int)
+                let joined_local_key = joined.as_ref().filter(|(key, ty)|
+                    !Self::narrowed_place_key_is_property(key)
+                        && matches!(ty, PhpType::Int | PhpType::Object(_)))
                     .map(|(key, _)| key.clone());
                 if !keep_complement_after_if {
                     self.restore_guarded_storage_provenance(&storage_entry);
@@ -784,7 +796,7 @@ impl Checker {
                 if keep_complement_after_if {
                     self.keep_conditional_views(&mut flow, env, saved_vars.into_iter().map(|(name, _)| name));
                 }
-                if let Some(key) = joined_integer_key {
+                if let Some(key) = joined_local_key {
                     self.keep_conditional_views(&mut flow, env, std::iter::once(key));
                 }
                 self.finish_statement_conditional_flow(flow, env);

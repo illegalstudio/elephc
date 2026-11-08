@@ -15,6 +15,37 @@
 
 use super::*;
 
+/// Null guard spellings join a locally initialized nullable object on both reachable exits.
+#[test]
+fn test_nullable_object_lazy_local_join_guard_spellings() {
+    for guard in ["$service === null", "null === $service", "is_null($service)", "!isset($service)"] {
+        let source = format!(r#"<?php
+class Service {{ public function value(): int {{ return 7; }} }}
+final class SpecializedService extends Service {{}}
+function ensure(?Service $service): Service {{
+    if ({guard}) {{ $service = new Service(); }}
+    return $service;
+}}
+function ensureSpecialized(?Service $service): Service {{
+    if ({guard}) {{ $service = new SpecializedService(); }}
+    return $service;
+}}
+function ensureBoth(?Service $service): Service {{
+    if ({guard}) {{ $service = new Service(); }}
+    else {{ $service = new Service(); }}
+    return $service;
+}}
+$existing = new Service();
+echo ensure(null)->value(), "|", ensure($existing)->value(), "|";
+echo ensure($existing) === $existing ? "same" : "different";
+echo "|", ensureSpecialized(null)->value(), "|";
+echo ensureSpecialized($existing) === $existing ? "same" : "different";
+echo "|", ensureBoth(null)->value(), "|", ensureBoth($existing)->value();
+"#);
+        assert_eq!(compile_and_run(&source), "7|7|same|7|same|7|7", "guard: {guard}");
+    }
+}
+
 /// Verifies the literal `false` subtype remains callable and uses the normal boolean runtime
 /// representation while `int|false` narrows to int after a divergent strict-false guard.
 #[test]
