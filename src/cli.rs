@@ -132,7 +132,6 @@ Modes:
   --web                   Compile as a prefork HTTP server
   --web-isolation MODE    worker (default) | pool | request; requires --web
   --web-lifecycle MODE    request (default) | application; application requires worker isolation
-  --closed-world          Link no interpreter; fail the build if anything still needs it (or ELEPHC_CLOSED_WORLD=1)
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
   --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
   --lint                  Report PHP-divergent lints: unused variables, unreachable code, and permissive local retypes
@@ -256,9 +255,9 @@ pub(crate) struct CliConfig {
     /// Off by default so an ordinary PHP program compiles with the same silence as under php.
     pub(crate) lint: bool,
     pub(crate) web: bool,
-    /// Link no interpreter (eval bridge): any construct that still needs it fails the build
-    /// with the list of reasons. Also requested by `ELEPHC_CLOSED_WORLD=1`.
-    pub(crate) closed_world: bool,
+    /// Whether to link the interpreter (eval bridge): by default only when the program needs it.
+    /// `--with-eval` links it; `ELEPHC_CLOSED_WORLD` overrides (`crate::closed_world::Mode`).
+    pub(crate) closed_world: crate::closed_world::Mode,
     /// Process-isolation architecture baked into a `--web` executable.
     pub(crate) web_isolation: WebIsolation,
     /// Retain a typed application between requests in worker isolation.
@@ -407,7 +406,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut strict_locals = false;
     let mut lint = false;
     let mut web = false;
-    let mut closed_world = crate::closed_world::requested_by_environment();
+    let closed_world_env = crate::closed_world::mode_from_environment();
     let mut web_isolation = WebIsolation::default();
     let mut web_isolation_explicit = false;
     let mut web_application = false;
@@ -593,8 +592,6 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             strict_locals = true;
         } else if arg == "--lint" {
             lint = true;
-        } else if arg == "--closed-world" {
-            closed_world = true;
         } else if arg == "--web" {
             web = true;
         } else if arg == "--web-lifecycle" {
@@ -748,7 +745,12 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         strict_locals,
         lint,
         web,
-        closed_world,
+        // The interpreter is linked when asked for, otherwise when the program needs it.
+        closed_world: if with_crates.contains("eval") {
+            crate::closed_world::Mode::Off
+        } else {
+            closed_world_env
+        },
         web_isolation,
         web_application,
         with_crates,

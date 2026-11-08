@@ -47,7 +47,12 @@ fn compile(dir: &Path, flags: &[&str]) -> Output {
     // The table-driven reflectors are opt-in in a default build until the per-class path is retired.
     cmd.env("ELEPHC_TABLE_REFLECTION", "1");
     cmd.current_dir(dir);
-    cmd.args(flags);
+    // `--closed-world` in a test's flags asks for the strict closed world, which elephc reads
+    // from the environment: a default build is closed already and only falls back on need.
+    if flags.contains(&"--closed-world") {
+        cmd.env("ELEPHC_CLOSED_WORLD", "1");
+    }
+    cmd.args(flags.iter().filter(|flag| **flag != "--closed-world"));
     cmd.arg("--php-version").arg("8.5");
     cmd.arg(dir.join("main.php"));
     cmd.output().expect("failed to spawn elephc")
@@ -731,6 +736,8 @@ fn reflector_subclasses_read_the_table() {
     same_as_php("rt_subclass_ser", SUBCLASS_SERIALIZE, &[]);
     same_as_php("rt_subclass_name", SUBCLASS_RUNTIME_NAME, &[]);
     same_as_php("rt_subclass_name_cw", SUBCLASS_RUNTIME_NAME, &["--closed-world"]);
+    // With the interpreter linked too: a subclass has no interpreter path, so the table builds it.
+    same_as_php("rt_subclass_name_eval", SUBCLASS_RUNTIME_NAME, &["--with-eval"]);
 }
 
 /// Constructing reflectors must not accumulate memory. Closed world: ReflectionClass of a class

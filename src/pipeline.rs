@@ -174,6 +174,9 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         quiet,
         ini_overrides,
     } = config;
+    // A REPL host evaluates what the user types: it always links the interpreter.
+    let closed_world_mode = if entry.is_repl_host() { crate::closed_world::Mode::Off } else { closed_world };
+    let mut closed_world = closed_world_mode != crate::closed_world::Mode::Off;
     crate::closed_world::set_enabled(closed_world);
     let filename = filename.as_str();
     crate::progress::init(quiet);
@@ -345,6 +348,14 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // nothing, so serving the closure IS php's re-execution.
     let (ast, entry_return_injected) = crate::entry_return::inject(ast);
     timings.record_since("resolve", phase_started);
+    // The entry program (with what it includes statically) evaluates a computed string: it needs
+    // the interpreter, decided before anything is compiled for a closed world.
+    if closed_world_mode == crate::closed_world::Mode::Auto
+        && crate::closed_world::project_computed_eval(&ast).is_some()
+    {
+        closed_world = false;
+        crate::closed_world::set_enabled(false);
+    }
 
 
     // Report how the PHP profile is observable in THIS program, while `ast` is still the
@@ -2381,10 +2392,20 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             ));
         }
         reasons.extend(ir_lower::closed_world_bridge_reasons(&ir_module));
+        // A class the autoloader brought in from the project itself can evaluate a computed
+        // string too; the entry's own were caught before anything was compiled.
+        if closed_world_mode == crate::closed_world::Mode::Auto {
+            if let Some(site) = crate::closed_world::project_computed_eval(&ast) {
+                reasons.push(format!("eval() of a computed string in the project's code at {site}"));
+            }
+        }
+        if !reasons.is_empty() && closed_world_mode == crate::closed_world::Mode::Auto {
+            crate::closed_world::rerun_with_interpreter(&reasons);
+        }
         if !reasons.is_empty() {
             crate::progress::clear();
             eprintln!(
-                "error: --closed-world: the program still needs the interpreter ({} reason{}):",
+                "error: the program still needs the interpreter ({} reason{}):",
                 reasons.len(),
                 if reasons.len() == 1 { "" } else { "s" }
             );

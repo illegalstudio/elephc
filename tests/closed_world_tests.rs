@@ -42,7 +42,12 @@ fn compile(dir: &Path, flags: &[&str]) -> Output {
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
-    cmd.args(flags);
+    // `--closed-world` in a test's flags asks for the strict closed world, which elephc reads
+    // from the environment: a default build is closed already and only falls back on need.
+    if flags.contains(&"--closed-world") {
+        cmd.env("ELEPHC_CLOSED_WORLD", "1");
+    }
+    cmd.args(flags.iter().filter(|flag| **flag != "--closed-world"));
     cmd.arg("--php-version").arg("8.5");
     cmd.arg(dir.join("main.php"));
     cmd.output().expect("failed to spawn elephc")
@@ -82,8 +87,13 @@ echo "ok\n";
 "#,
     )
     .unwrap();
-    // Default builds keep today's behaviour: the interpreter is linked and the program runs.
-    compile_ok(&dir, &[]);
+    // A default build is a closed world until the program needs the interpreter: it then says why
+    // and compiles again with the interpreter linked, and the program runs.
+    let output = compile(&dir, &[]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    let note = text(&output.stderr);
+    assert!(note.contains("note: the program needs the interpreter"), "{note}");
+    assert!(note.contains("Reflection object"), "the note must name the construct:\n{note}");
     assert_eq!(text(&run(&dir).stdout), "ok\n");
     let _ = fs::remove_file(dir.join("main"));
 
@@ -91,8 +101,7 @@ echo "ok\n";
     assert!(!refused.status.success(), "a program that needs the interpreter must not build");
     assert!(!dir.join("main").exists(), "no binary may be left behind");
     let stderr = text(&refused.stderr);
-    assert!(stderr.contains("--closed-world"), "{stderr}");
-    assert!(stderr.contains("still needs the interpreter"), "{stderr}");
+    assert!(stderr.contains("error: the program still needs the interpreter"), "{stderr}");
     assert!(stderr.contains("Reflection object"), "the reason must name the construct:\n{stderr}");
 
     // The environment spelling asks for the same mode.
@@ -131,9 +140,71 @@ echo "done\n";
         text(&output.stdout),
         "Error: eval() is not available in a closed-world build\nliteral 42\ndone\n"
     );
-    // Without the flag the same program really evaluates the computed string.
+    // By default the program's own computed eval links the interpreter, which evaluates it.
     compile_ok(&dir, &[]);
     assert_eq!(text(&run(&dir).stdout), "got 2\nliteral 42\ndone\n");
+}
+
+/// Whether the binary of `dir` carries the interpreter.
+fn links_interpreter(dir: &Path) -> bool {
+    let binary = fs::read(dir.join("main")).unwrap();
+    ["elephc_magician", "__elephc_eval_execute"]
+        .iter()
+        .any(|needle| binary.windows(needle.len()).any(|window| window == needle.as_bytes()))
+}
+
+/// A default build links no interpreter when nothing needs one: no flag is needed for it.
+#[test]
+fn default_build_links_no_interpreter_when_nothing_needs_it() {
+    let dir = make_test_dir("cw_default_closed");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nclass A { public function hi(): string { return 'hi'; } }\n$n = $argc > 5 ? 'B' : 'A';\necho (new $n)->hi(), \"\\n\";\necho eval('return 6 * 7;'), \"\\n\";\n",
+    )
+    .unwrap();
+    let output = compile(&dir, &[]);
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    assert!(!text(&output.stderr).contains("needs the interpreter"), "{}", text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), "hi\n42\n");
+    assert!(!links_interpreter(&dir), "a literal eval and a dynamic new need no interpreter");
+
+    // `--with-eval` still links it on request.
+    compile_ok(&dir, &["--with-eval"]);
+    assert_eq!(text(&run(&dir).stdout), "hi\n42\n");
+    assert!(links_interpreter(&dir));
+}
+
+/// A dependency's computed eval does not link the interpreter: in a default build it raises php's
+/// `Error` if a path ever reaches it, the way a framework's proxy generators sit unused once their
+/// output is cached. The project's own computed eval does link it.
+#[test]
+fn default_build_links_the_interpreter_for_the_projects_eval_only() {
+    let dir = make_test_dir("cw_default_vendor_eval");
+    fs::create_dir_all(dir.join("vendor/acme/gen")).unwrap();
+    fs::write(
+        dir.join("vendor/acme/gen/Gen.php"),
+        "<?php\nclass Gen { public static function run(string $code): mixed { return eval($code); } }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nrequire __DIR__ . '/vendor/acme/gen/Gen.php';\ntry { echo Gen::run('return 1;'), \"\\n\"; } catch (\\Error $e) { echo $e->getMessage(), \"\\n\"; }\n",
+    )
+    .unwrap();
+    compile_ok(&dir, &[]);
+    assert_eq!(text(&run(&dir).stdout), "eval() is not available in a closed-world build\n");
+    assert!(!links_interpreter(&dir), "a dependency's eval keeps the build closed");
+
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::rename(dir.join("vendor/acme/gen/Gen.php"), dir.join("src/Gen.php")).unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nrequire __DIR__ . '/src/Gen.php';\ntry { echo Gen::run('return 1;'), \"\\n\"; } catch (\\Error $e) { echo $e->getMessage(), \"\\n\"; }\n",
+    )
+    .unwrap();
+    compile_ok(&dir, &[]);
+    assert_eq!(text(&run(&dir).stdout), "1\n");
+    assert!(links_interpreter(&dir), "the project's own computed eval links the interpreter");
 }
 
 const PRELOAD: &str = r#"<?php
@@ -758,8 +829,9 @@ echo App\Caster::name(0), "\n";
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_TYPECHECK_TIMES", "1")
+        .env("ELEPHC_CLOSED_WORLD", "1")
         .current_dir(&dir)
-        .args(["--closed-world", "--php-version", "8.5"])
+        .args(["--php-version", "8.5"])
         .arg(dir.join("main.php"))
         .output()
         .expect("failed to spawn elephc");
@@ -1084,7 +1156,8 @@ fn closed_world_rerun_keeps_the_harmless_verdict_of_a_deferred_file() {
         if harmless {
             cmd.env("ELEPHC_HARMLESS_DEFERRED_CLASS_FILES", &file);
         }
-        cmd.current_dir(&dir).arg("--closed-world").arg("--php-version").arg("8.5").arg(dir.join("main.php"));
+        cmd.env("ELEPHC_CLOSED_WORLD", "1");
+        cmd.current_dir(&dir).arg("--php-version").arg("8.5").arg(dir.join("main.php"));
         cmd.output().expect("failed to spawn elephc")
     };
     let refused = rerun(false);

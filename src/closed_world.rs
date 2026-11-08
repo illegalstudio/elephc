@@ -1,16 +1,20 @@
 //! Purpose:
-//! Owns the `--closed-world` build mode: "link no interpreter".
+//! Owns the closed-world build mode, "link no interpreter", which is how a program is compiled
+//! unless it needs the interpreter.
 //!
 //! Called from:
-//! - `crate::cli` (flag and `ELEPHC_CLOSED_WORLD`), `crate::pipeline::compile()` (sets the mode),
-//!   the lowering of `eval()` and runtime `include`/`require`, and the final bridge check.
+//! - `crate::cli` (`--with-eval`, `ELEPHC_CLOSED_WORLD`), `crate::pipeline::compile()` (sets the
+//!   mode), the lowering of `eval()` and runtime `include`/`require`, and the final bridge check.
 //!
 //! Key details:
 //! - The state is thread-local like `crate::strict_php`: the front end and lowering run on the one
 //!   compile thread, and codegen reads the copy the lowered module carries (`Module::closed_world`).
 //! - In this mode a construct that would need the eval bridge either lowers to a native
 //!   equivalent (a runtime include over the compiled-source table) or to a runtime error
-//!   (`eval()` of a non-literal string), and anything left over fails the build with the reasons.
+//!   (`eval()` of a non-literal string in a dependency).
+//! - [`Mode::Auto`] (the default) leaves the mode when the project's own code evaluates a computed
+//!   string, and otherwise re-runs the compiler with the interpreter linked when the build still
+//!   needs it, saying why; [`Mode::Strict`] fails the build with the reasons instead.
 
 use std::cell::Cell;
 
@@ -40,12 +44,91 @@ pub fn class_is_absent(name: &str, declared: impl Fn(&str) -> bool) -> bool {
         && elephc_builtin_contract::lookup_class(name).is_none()
 }
 
-/// Whether `ELEPHC_CLOSED_WORLD` asks for the mode (`1`, `true`, `on`).
-pub fn requested_by_environment() -> bool {
-    matches!(
-        std::env::var("ELEPHC_CLOSED_WORLD").as_deref(),
-        Ok("1") | Ok("true") | Ok("on")
-    )
+/// How a compilation chooses between a closed world and a linked interpreter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Link the interpreter (`--with-eval`, the REPL, or the re-run [`Mode::Auto`] asks for).
+    Off,
+    /// The default: a closed world, unless the program needs the interpreter.
+    Auto,
+    /// A closed world, and a build that still needs the interpreter fails with the reasons.
+    Strict,
+}
+
+/// Environment variable that overrides the mode: `0`/`off` links the interpreter, `1`/`on`/`strict`
+/// asks for [`Mode::Strict`]. The [`Mode::Auto`] re-run sets it to `0`.
+pub const MODE_ENV: &str = "ELEPHC_CLOSED_WORLD";
+
+/// The mode `ELEPHC_CLOSED_WORLD` asks for; [`Mode::Auto`] when unset or unrecognised.
+pub fn mode_from_environment() -> Mode {
+    match std::env::var(MODE_ENV).as_deref() {
+        Ok("0") | Ok("false") | Ok("off") => Mode::Off,
+        Ok("1") | Ok("true") | Ok("on") | Ok("strict") => Mode::Strict,
+        _ => Mode::Auto,
+    }
+}
+
+/// Whether a source path belongs to a dependency (a `vendor` directory) rather than the project.
+fn is_dependency_source(path: &str) -> bool {
+    std::path::Path::new(path).components().any(|part| part.as_os_str() == "vendor")
+}
+
+/// The first `eval()` of a computed string in the project's own code, as `file:line`.
+///
+/// A dependency's computed eval (Symfony's VarExporter, a proxy generator) does not count: in a
+/// closed world it raises php's `Error`, which those libraries never reach on the paths an
+/// application runs. The project's own one does, so it keeps the interpreter.
+pub fn project_computed_eval(program: &[crate::parser::ast::Stmt]) -> Option<String> {
+    use crate::parser::ast::visit::{walk_nodes, Node};
+    use crate::parser::ast::ExprKind;
+    let mut found = None;
+    walk_nodes(program, &mut |node| {
+        if found.is_some() {
+            return;
+        }
+        let Node::Expr(expr) = node else { return };
+        let ExprKind::FunctionCall { name, args } = &expr.kind else { return };
+        if crate::names::php_symbol_key(name.as_str().trim_start_matches('\\')) != "eval"
+            || matches!(args.first().map(|arg| &arg.kind), Some(ExprKind::StringLiteral(_)))
+        {
+            return;
+        }
+        let path = expr.span.source_path();
+        if path.as_deref().is_some_and(is_dependency_source) {
+            return;
+        }
+        found = Some(format!("{}:{}", path.unwrap_or_else(|| "<entry>".to_string()), expr.span.source_line()));
+    });
+    found
+}
+
+/// Re-runs this compiler with the interpreter linked, after saying why; returns only when the
+/// re-run could not start.
+pub fn rerun_with_interpreter(reasons: &[String]) {
+    crate::progress::clear();
+    eprintln!(
+        "note: the program needs the interpreter ({} reason{}); it is compiled with it linked:",
+        reasons.len(),
+        if reasons.len() == 1 { "" } else { "s" }
+    );
+    for reason in reasons {
+        eprintln!("  - {reason}");
+    }
+    let Ok(executable) = std::env::current_exe() else {
+        return;
+    };
+    let mut command = std::process::Command::new(executable);
+    command.args(std::env::args_os().skip(1)).env(MODE_ENV, "0");
+    // Replaces this process, as the PHPDoc erasure re-run does, so two compilations are never
+    // resident at once.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let _ = command.exec();
+    }
+    if let Ok(status) = command.status() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
 }
 
 /// The message a non-literal `eval()` raises in a closed-world program.

@@ -38,6 +38,20 @@ The compiler makes this decision per literal call. A program may therefore use
 `eval()` without linking Magician when every call is fully handled by the AOT
 paths. A program that needs interpreter fallback links the optional static
 bridge into the standalone binary; programs without that requirement do not.
+
+Whether a dynamic string counts depends on where it is evaluated. An `eval()` of a
+computed string in the project's own code links the interpreter. One inside a
+dependency (any file under a `vendor` directory) does not: a framework's proxy and
+template generators are bypassed once their output is cached, and the build then
+compiles that cached output instead. If such a call is reached anyway, it raises
+php's catchable `Error: eval() is not available in a closed-world build`. Pass
+`--with-eval` to link the interpreter regardless.
+
+Every other construct only the interpreter can answer, such as a
+`ReflectionParameter` built from a name known at run time, links it too. The build
+then prints `note: the program needs the interpreter` with the reasons, and
+compiles again with it linked. No flag is involved: a program that needs nothing
+dynamic, a Symfony application included, is compiled without it.
 `--with-eval` force-links the bridge for testing or indirect use, but it is not
 required to enable the language construct.
 
