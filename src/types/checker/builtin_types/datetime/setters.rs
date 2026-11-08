@@ -6,27 +6,28 @@
 //!
 //! Key details:
 //! - Both class variants share operations while retaining their return/mutation contract.
+//! - Every method returns late-static `static`: `$this` when mutable, a clone of `$this` when
+//!   immutable, so a subclass receiver gets its own class (and properties) back as in PHP.
 
 use super::*;
 
 /// `setTimestamp(int $timestamp)` — sets the stored UNIX timestamp.
-pub(super) fn make_set_timestamp(mutable: bool, class_name: &str) -> ClassMethod {
+pub(super) fn make_set_timestamp(mutable: bool) -> ClassMethod {
     method(
         "setTimestamp",
         vec![("timestamp".to_string(), Some(TypeExpr::Int), None, false)],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(late_static_return()),
         result_tail(
             Expr::new(ExprKind::Variable("timestamp".to_string()), dummy()),
             mutable,
-            class_name,
         ),
     )
 }
 
 /// `setMicrosecond(int $microsecond): static` — sets the sub-second component. Mutable updates
-/// `$this` in place; immutable returns a fresh instance carrying the same instant/zone with the new
-/// micros (the instant in seconds is unchanged).
-pub(super) fn make_set_microsecond(mutable: bool, class_name: &str) -> ClassMethod {
+/// `$this` in place; immutable returns a clone of `$this` carrying the same instant/zone with the
+/// new micros (the instant in seconds is unchanged).
+pub(super) fn make_set_microsecond(mutable: bool) -> ClassMethod {
     let us = || Expr::new(ExprKind::Variable("microsecond".to_string()), dummy());
     let body = if mutable {
         vec![
@@ -42,15 +43,7 @@ pub(super) fn make_set_microsecond(mutable: bool, class_name: &str) -> ClassMeth
             )
         };
         vec![
-            Stmt::assign(
-                "__new",
-                Expr::new(
-                    ExprKind::NewObject { class_name: Name::unqualified(class_name), args: Vec::new() },
-                    dummy(),
-                ),
-            ),
-            prop_assign("timestamp", this_property("timestamp")),
-            prop_assign("timezone_name", this_property("timezone_name")),
+            Stmt::assign("__new", clone_this()),
             prop_assign("microsecond", us()),
             return_expr(new_var()),
         ]
@@ -58,14 +51,14 @@ pub(super) fn make_set_microsecond(mutable: bool, class_name: &str) -> ClassMeth
     method(
         "setMicrosecond",
         vec![("microsecond".to_string(), Some(TypeExpr::Int), None, false)],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(late_static_return()),
         body,
     )
 }
 
 /// `setTime(int $hour, int $minute, int $second = 0, int $microsecond = 0)` — keeps the date,
 /// replaces the time-of-day and sub-second component (PHP 8.4+).
-pub(super) fn make_set_time(mutable: bool, class_name: &str) -> ClassMethod {
+pub(super) fn make_set_time(mutable: bool) -> ClassMethod {
     let mut body = vec![
         Stmt::assign("__y", date_component_int("Y")),
         Stmt::assign("__mo", date_component_int("n")),
@@ -75,7 +68,6 @@ pub(super) fn make_set_time(mutable: bool, class_name: &str) -> ClassMethod {
         mktime_call(["hour", "minute", "second", "__mo", "__d", "__y"]),
         Some(Expr::new(ExprKind::Variable("microsecond".to_string()), dummy())),
         mutable,
-        class_name,
     ));
     method(
         "setTime",
@@ -95,13 +87,13 @@ pub(super) fn make_set_time(mutable: bool, class_name: &str) -> ClassMethod {
                 false,
             ),
         ],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(late_static_return()),
         body,
     )
 }
 
 /// `setDate(int $year, int $month, int $day)` — keeps the time-of-day, replaces the calendar date.
-pub(super) fn make_set_date(mutable: bool, class_name: &str) -> ClassMethod {
+pub(super) fn make_set_date(mutable: bool) -> ClassMethod {
     let mut body = vec![
         Stmt::assign("__h", date_component_int("G")),
         Stmt::assign("__mi", date_component_int("i")),
@@ -110,7 +102,6 @@ pub(super) fn make_set_date(mutable: bool, class_name: &str) -> ClassMethod {
     body.extend(result_tail(
         mktime_call(["__h", "__mi", "__s", "month", "day", "year"]),
         mutable,
-        class_name,
     ));
     method(
         "setDate",
@@ -119,7 +110,7 @@ pub(super) fn make_set_date(mutable: bool, class_name: &str) -> ClassMethod {
             ("month".to_string(), Some(TypeExpr::Int), None, false),
             ("day".to_string(), Some(TypeExpr::Int), None, false),
         ],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(late_static_return()),
         body,
     )
 }
@@ -138,8 +129,8 @@ pub(super) fn var_property(var: &str, property: &str) -> Expr {
 /// `setTimezone(DateTimeZone $timezone)` — stores the zone identifier (keeps the timestamp).
 ///
 /// Reads the public `DateTimeZone::$name`. `DateTime` mutates `$this`; `DateTimeImmutable`
-/// returns a fresh instance with the same timestamp and the new timezone name.
-pub(super) fn make_set_timezone(mutable: bool, class_name: &str) -> ClassMethod {
+/// returns a clone of `$this` (same timestamp) carrying the new timezone name.
+pub(super) fn make_set_timezone(mutable: bool) -> ClassMethod {
     let tz_name = var_property("timezone", "name");
     let body = if mutable {
         vec![
@@ -149,24 +140,7 @@ pub(super) fn make_set_timezone(mutable: bool, class_name: &str) -> ClassMethod 
     } else {
         let new_var = || Expr::new(ExprKind::Variable("__new".to_string()), dummy());
         vec![
-            Stmt::assign(
-                "__new",
-                Expr::new(
-                    ExprKind::NewObject {
-                        class_name: Name::unqualified(class_name),
-                        args: Vec::new(),
-                    },
-                    dummy(),
-                ),
-            ),
-            Stmt::new(
-                StmtKind::PropertyAssign {
-                    object: Box::new(new_var()),
-                    property: "timestamp".to_string(),
-                    value: this_property("timestamp"),
-                },
-                dummy(),
-            ),
+            Stmt::assign("__new", clone_this()),
             Stmt::new(
                 StmtKind::PropertyAssign {
                     object: Box::new(new_var()),
@@ -186,7 +160,7 @@ pub(super) fn make_set_timezone(mutable: bool, class_name: &str) -> ClassMethod 
             None,
             false,
         )],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(late_static_return()),
         body,
     )
 }
@@ -196,9 +170,9 @@ pub(super) fn make_set_timezone(mutable: bool, class_name: &str) -> ClassMethod 
 /// Decomposes `$this->timestamp` into calendar components via `date()`, applies each signed interval
 /// component, then recomposes with `mktime()` (which normalizes overflow — e.g. day 32 rolls into the
 /// next month). `$interval->invert` flips the direction (`$__sign` = `1 - 2*invert` for `add`, negated
-/// for `sub`). `DateTime` mutates `$this`; `DateTimeImmutable` returns a fresh instance via
+/// for `sub`). `DateTime` mutates `$this`; `DateTimeImmutable` returns a clone via
 /// `result_tail`. `is_add` selects `add` (true) vs `sub` (false).
-pub(super) fn make_add_sub(name: &str, mutable: bool, class_name: &str, is_add: bool) -> ClassMethod {
+pub(super) fn make_add_sub(name: &str, mutable: bool, is_add: bool) -> ClassMethod {
     let bin = |l: Expr, op: BinOp, r: Expr| {
         Expr::new(ExprKind::BinaryOp { left: Box::new(l), op, right: Box::new(r) }, dummy())
     };
@@ -292,7 +266,6 @@ pub(super) fn make_add_sub(name: &str, mutable: bool, class_name: &str, is_add: 
         mktime_call(["__h", "__mi", "__s", "__mo", "__d", "__y"]),
         Some(var("__micro")),
         mutable,
-        class_name,
     ));
     method(
         name,
@@ -302,7 +275,7 @@ pub(super) fn make_add_sub(name: &str, mutable: bool, class_name: &str, is_add: 
             None,
             false,
         )],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(late_static_return()),
         body,
     )
 }
@@ -310,7 +283,7 @@ pub(super) fn make_add_sub(name: &str, mutable: bool, class_name: &str, is_add: 
 /// `modify(string $modifier)` — applies a relative date/time modifier (e.g. `"+1 day"`,
 /// `"-2 weeks"`, `"14:30"`) by re-parsing it against the object's current timestamp via
 /// `strtotime($modifier, $this->timestamp)`. Mutates in place for `DateTime` and returns a
-/// new instance for `DateTimeImmutable`. Supports exactly the forms `strtotime()` accepts.
+/// clone of `$this` for `DateTimeImmutable`. Supports exactly the forms `strtotime()` accepts.
 /// The PHP the `modify()` preamble used to be parsed from. Test-only: the compilation
 /// path builds it with `bodies::modify_preamble`, and the oracle checks the two agree.
 #[cfg(test)]
@@ -336,7 +309,7 @@ $__ts = $__ts + $__carry;
 "#;
 
 /// Builds DateTime modification with microsecond carry and mutable or immutable result semantics.
-pub(super) fn make_modify(mutable: bool, class_name: &str) -> ClassMethod {
+pub(super) fn make_modify(mutable: bool) -> ClassMethod {
     // Parsed-PHP preamble (parsing lives in static helpers to keep this frame
     // small): pull any `<±N> microsecond[s]|usec[s]` clauses out of the modifier,
     // strtotime() the remainder, then apply the microsecond delta with a carry into
@@ -346,27 +319,26 @@ pub(super) fn make_modify(mutable: bool, class_name: &str) -> ClassMethod {
         Expr::new(ExprKind::Variable("__ts".to_string()), dummy()),
         Some(Expr::new(ExprKind::Variable("__micro".to_string()), dummy())),
         mutable,
-        class_name,
     ));
     method(
         "modify",
         vec![("modifier".to_string(), Some(TypeExpr::Str), None, false)],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(late_static_return()),
         body,
     )
 }
 
 /// Builds the mutating/immutable setter set for a class.
-pub(super) fn datetime_setter_methods(mutable: bool, class_name: &str) -> Vec<ClassMethod> {
+pub(super) fn datetime_setter_methods(mutable: bool) -> Vec<ClassMethod> {
     vec![
-        make_set_timestamp(mutable, class_name),
-        make_set_microsecond(mutable, class_name),
-        make_set_time(mutable, class_name),
-        make_set_date(mutable, class_name),
-        make_set_timezone(mutable, class_name),
-        make_add_sub("add", mutable, class_name, true),
-        make_add_sub("sub", mutable, class_name, false),
-        make_modify(mutable, class_name),
+        make_set_timestamp(mutable),
+        make_set_microsecond(mutable),
+        make_set_time(mutable),
+        make_set_date(mutable),
+        make_set_timezone(mutable),
+        make_add_sub("add", mutable, true),
+        make_add_sub("sub", mutable, false),
+        make_modify(mutable),
     ]
 }
 

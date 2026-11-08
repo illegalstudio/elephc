@@ -63,6 +63,8 @@ mod abstract_properties;
 mod property_hooks;
 #[path = "oop/datetime.rs"]
 mod datetime;
+#[path = "oop/datetime_static_returns.rs"]
+mod datetime_static_returns;
 #[path = "oop/reflection_properties.rs"]
 mod reflection_properties;
 #[path = "oop/reflection_functions.rs"]

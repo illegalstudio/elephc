@@ -312,6 +312,16 @@ fn test_error_datetime_immutable_too_many_args() {
     );
 }
 
+/// Verifies `setMicrosecond()`, which php-src declares `static` outright (not tentatively), still
+/// rejects an override that narrows the return to the concrete class, as PHP's fatal does.
+#[test]
+fn test_error_datetime_immutable_set_microsecond_override_must_return_static() {
+    expect_error(
+        "<?php class Bad extends DateTimeImmutable { public function setMicrosecond(int $microsecond): DateTimeImmutable { return parent::setMicrosecond($microsecond); } } echo 1;",
+        "Cannot override method Bad::setMicrosecond with incompatible return type",
+    );
+}
+
 /// Verifies the builtin `DateInterval` constructor requires its single duration-string argument.
 #[test]
 fn test_error_date_interval_too_few_args() {

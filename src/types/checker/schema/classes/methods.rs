@@ -12,6 +12,7 @@
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Visibility};
+use crate::types::checker::builtin_types::is_tentative_late_static_return;
 use crate::types::traits::FlattenedClass;
 
 use super::super::super::Checker;
@@ -291,16 +292,22 @@ fn apply_instance_method(
     }
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {
         if !internal_exception_override {
-            let parent_is_source = state
-                .method_declaring_classes
-                .get(&method_key)
-                .is_none_or(|owner| declaration_is_source(checker, owner));
+            let parent_owner = state.method_declaring_classes.get(&method_key);
+            let parent_is_source =
+                parent_owner.is_none_or(|owner| declaration_is_source(checker, owner));
+            // php-src types the DateTime fluent methods as the class only tentatively, so an
+            // override may return the concrete class: check it covariantly, not as `static`.
+            let tentative_static = !parent_is_source
+                && parent_owner.is_some_and(|owner| is_tentative_late_static_return(owner, &method.name));
             validate_override_signature(
                 checker,
                 class,
                 method,
                 parent_sig,
-                state.late_static_method_returns.get(&method_key),
+                state
+                    .late_static_method_returns
+                    .get(&method_key)
+                    .filter(|_| !tentative_static),
                 false,
                 parent_is_source,
             )?;

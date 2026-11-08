@@ -134,13 +134,13 @@ pub(crate) fn inject_builtin_datetime(
                 properties: datetime_backing_properties(),
                 methods: {
                     let mut m = datetime_shared_methods();
-                    m.extend(datetime_setter_methods(false, "DateTimeImmutable"));
+                    m.extend(datetime_setter_methods(false));
                     m.push(datetime_create_from_format("DateTimeImmutable"));
                     m.push(datetime_get_last_errors("DateTimeImmutable"));
                     m.push(datetime_create_from_timestamp("DateTimeImmutable"));
                     m.push(datetime_create_from_object("createFromInterface", "DateTimeImmutable"));
                     m.push(datetime_create_from_object("createFromMutable", "DateTimeImmutable"));
-                    m.push(datetime_set_isodate("DateTimeImmutable"));
+                    m.push(datetime_set_isodate());
                     m
                 },
                 attributes: Vec::new(),
@@ -153,13 +153,13 @@ pub(crate) fn inject_builtin_datetime(
 
     if !class_map.contains_key("DateTime") {
         let mut methods = datetime_shared_methods();
-        methods.extend(datetime_setter_methods(true, "DateTime"));
+        methods.extend(datetime_setter_methods(true));
         methods.push(datetime_create_from_format("DateTime"));
         methods.push(datetime_get_last_errors("DateTime"));
         methods.push(datetime_create_from_timestamp("DateTime"));
         methods.push(datetime_create_from_object("createFromInterface", "DateTime"));
         methods.push(datetime_create_from_object("createFromImmutable", "DateTime"));
-        methods.push(datetime_set_isodate("DateTime"));
+        methods.push(datetime_set_isodate());
         methods.push(datetime_date_parse_from_format());
         methods.push(datetime_date_parse());
         methods.push(datetime_gettimeofday());
