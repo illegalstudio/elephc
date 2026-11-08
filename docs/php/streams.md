@@ -365,9 +365,10 @@ Differences from PHP:
 
 - `['pty']` descriptors raise PHP's `PTY (pseudoterminal) not supported on this system`
   warning and `proc_open()` answers `false`, as on a PHP build without PTY support.
-- `proc_close()` closes the parent ends of the pipes, but the `$pipes` streams still read
-  as open afterwards; close them with `fclose()` before `proc_close()`, as PHP's manual
-  recommends.
+- `proc_close()` releases the parent ends of the pipes (the child sees EOF), but the
+  `$pipes` streams still read as open afterwards: each now reads EOF and discards writes,
+  and a later `fclose()` succeeds instead of PHP's `TypeError`. Close them with `fclose()`
+  before `proc_close()`, as PHP's manual recommends.
 - A process resource dropped without `proc_close()` is not reaped.
 - `STDIN`/`STDOUT`/`STDERR` written directly inside an array literal that also holds
   arrays (`[0 => ['pipe', 'r'], 2 => STDERR]`) currently lose their resource type, so
