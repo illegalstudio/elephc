@@ -181,3 +181,31 @@ echo $box->value;
     );
     assert_eq!(out, "9");
 }
+
+/// Trait adaptations accept a semi-reserved keyword wherever they name a method: the bare target
+/// (`match as …`), the `Trait::list` target and the alias (`as print`), with or without a
+/// visibility change — as tempest/highlight's `use IsPattern { match as matchContent; }` does.
+#[test]
+fn test_trait_adaptation_keyword_method_names() {
+    let out = compile_and_run(
+        r#"<?php
+trait Patterns {
+    public function match(string $s): string { return "m:" . $s; }
+    public function list(): string { return "l"; }
+}
+
+final class Highlighter {
+    use Patterns {
+        match as protected matchContent;
+        Patterns::list as print;
+    }
+
+    public function match(string $s): string { return "[" . $this->matchContent($s) . "]"; }
+}
+
+$h = new Highlighter();
+echo $h->match("x"), "|", $h->print(), "|", $h->list();
+"#,
+    );
+    assert_eq!(out, "[m:x]|l|l");
+}
