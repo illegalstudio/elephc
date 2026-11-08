@@ -128,6 +128,10 @@ Physical source (.php or .lfc)
   their normal precedence. An unresolved local function candidate is retained
   until the target-folding pass can choose its fallback using the complete
   post-autoload declaration inventory.
+  The OPcache/INI (`ini_get`, `ini_set`, `ini_get_all`, `opcache_*`) and
+  version (`zend_version`, `php_sapi_name`, `ini_restore`) preludes decide per
+  function, so the probe reports each of those names the autoloaded files
+  reference.
 - **opcache-manifest-bake** — after autoload insertion and argument-introspection
   desugaring, replaces the placeholder OPcache manifest with the complete
   entry/include/autoload file set before constant folding and emits any preload

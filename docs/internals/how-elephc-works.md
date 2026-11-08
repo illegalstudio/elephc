@@ -131,7 +131,10 @@ that occur only in autoloaded class files. The real pipeline then injects those
 preludes before resolving names. The probe restores thread-local source IDs and
 anonymous-class numbering while keeping process-global synthetic spans and
 include temporaries monotonic. This work has the `autoload-prelude-probe`
-timing label; it does not replace the later real autoload expansion.
+timing label; it does not replace the later real autoload expansion. The
+OPcache/INI and version preludes decide per function, so the probe also reports
+each of their names (`ini_get`, `ini_set`, `opcache_get_status`, `ini_restore`,
+...) that an autoloaded file references.
 
 After includes are flattened, elephc resolves namespace-aware names. This pass applies the current `namespace`, any `use` / `use function` / `use const` imports, and rewrites references to their canonical fully-qualified names before semantic analysis.
 

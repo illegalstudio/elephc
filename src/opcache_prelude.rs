@@ -146,6 +146,7 @@ use injection::*;
 use manifest_bake::*;
 
 pub use injection::inject_if_used;
+pub(crate) use injection::PROBED_FUNCTIONS;
 pub use manifest::{collect_manifest, ScriptEntry};
 pub use manifest_bake::{bake_manifest, ManifestBakeSites};
 #[allow(unused_imports)]

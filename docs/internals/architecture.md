@@ -63,6 +63,8 @@ Source (.php or .lfc)
 │              │  Includes finfo declarations and wrappers for hosted extensions.
 │              │  The same probe retains per-request web environment copies for
 │              │  autoloaded observers in both request and application lifecycles.
+│              │  The per-function OPcache/INI and version preludes are probed
+│              │  by name (ini_get, ini_set, opcache_*, ini_restore, ...).
 └─────┬────────┘
       │
       ▼
