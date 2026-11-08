@@ -73,8 +73,9 @@ pub(in crate::parser::stmt) fn parse_trait_use(
                         }
                         _ => None,
                     };
-                    // The alias may be any semi-reserved word except a member modifier, which
-                    // PHP reads as the visibility change instead: `as list`, `as protected match`.
+                    // Right after `as`, a member modifier is the visibility change, so a bare alias
+                    // is any other semi-reserved word (`as list`). After a visibility, the alias is
+                    // any word, modifiers included (`as protected match`, `as protected static`).
                     let alias = match tokens.get(*pos).map(|(t, _)| t) {
                         Some(
                             Token::Public
@@ -84,7 +85,7 @@ pub(in crate::parser::stmt) fn parse_trait_use(
                             | Token::Abstract
                             | Token::Final
                             | Token::ReadOnly,
-                        ) => None,
+                        ) if visibility.is_none() => None,
                         _ => adaptation_bareword(tokens, *pos).inspect(|_| *pos += 1),
                     };
                     if visibility.is_none() && alias.is_none() {
