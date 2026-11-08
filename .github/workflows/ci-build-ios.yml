@@ -7,11 +7,14 @@ on:
         type: string
         default: '["ios-arm64","ios-sim-arm64"]'
     outputs:
+      artifact-attempts:
+        value: ${{ jobs.inventory.outputs.attempts }}
       artifact-attempt:
         value: ${{ jobs.build.outputs.artifact-attempt }}
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
@@ -63,3 +66,17 @@ jobs:
             target/${{ steps.build.outputs.triple }}/debug/libelephc_tokenizer.a
             target/${{ steps.build.outputs.triple }}/debug/libelephc_phar.a
             target/${{ steps.build.outputs.triple }}/debug/libelephc_tls.a
+
+  inventory:
+    needs: build
+    runs-on: ubuntu-24.04
+    outputs:
+      attempts: ${{ steps.inventory.outputs.attempts }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve each successful matrix payload
+        id: inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VARIANTS: ${{ inputs.targets }}
+        run: python3 -B scripts/ci/artifact_attempts.py ios "$VARIANTS"

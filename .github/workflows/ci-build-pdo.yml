@@ -10,6 +10,8 @@ on:
         type: string
         required: true
     outputs:
+      artifact-attempts:
+        value: ${{ jobs.inventory.outputs.attempts }}
       artifact-attempt:
         value: ${{ jobs.build.outputs.artifact-attempt }}
 
@@ -88,3 +90,17 @@ jobs:
             target/ci-pdo/${{ matrix.variant }}/nextest-archive.tar.zst
             target/ci-pdo/${{ matrix.variant }}/cargo-nextest
             target/ci-pdo/${{ matrix.variant }}/cargo-nextest.sha256
+
+  inventory:
+    needs: build
+    runs-on: ubuntu-24.04
+    outputs:
+      attempts: ${{ steps.inventory.outputs.attempts }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve each successful matrix payload
+        id: inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VARIANTS: ${{ inputs.variants }}
+        run: python3 -B scripts/ci/artifact_attempts.py pdo "$VARIANTS"

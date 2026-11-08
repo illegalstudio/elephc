@@ -75,7 +75,7 @@ jobs:
         with:
           target: ios-sim-arm64
           kind: ios
-          attempt: ${{ needs.build-ios.outputs.artifact-attempt }}
+          attempt: ${{ fromJSON(needs.build-ios.outputs.artifact-attempts)['ios-sim-arm64'] }}
 
       - name: Cache managed native curl for iOS
         uses: actions/cache@v6

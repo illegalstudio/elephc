@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import tarfile
 
+from build_environment import snapshot, validate as validate_environment
+
 
 SCHEMA = 1
 HOSTS = ("linux-x86_64", "linux-aarch64", "macos-aarch64")
@@ -218,12 +220,15 @@ def main():
                     "event": os.environ.get("GITHUB_EVENT_NAME", ""),
                     "rustc": subprocess.check_output(["rustc", "-vV"], text=True).strip(),
                     "image": os.environ.get("ImageVersion", ""),
-                    "lock_sha256": digest(args.root / "Cargo.lock")}
+                    "lock_sha256": digest(args.root / "Cargo.lock"),
+                    "environment": snapshot(args.target)}
         create(args.root, args.artifact, args.file or host_files(args.root, args.profile, args.kind),
                expected, producer)
     elif args.command == "verify":
+        validate_environment(json.loads((args.artifact / "manifest.json").read_text())["producer"]["environment"], args.target)
         verify(args.artifact, expected, args.run_id, args.attempt)
     else:
+        validate_environment(json.loads((args.artifact / "manifest.json").read_text())["producer"]["environment"], args.target)
         restore(args.artifact, args.root, expected, args.run_id, args.attempt)
         if args.kind in ("bridges", "ios") and args.github_env:
             with args.github_env.open("a") as output:

@@ -1,0 +1,90 @@
+name: Development artifacts
+run-name: Development artifacts ${{ inputs.source-sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source-sha:
+        description: Full main commit SHA to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+concurrency:
+  group: development-artifacts-${{ inputs.source-sha }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Require a retained main commit after rollout
+        id: source
+        env:
+          SOURCE_SHA: ${{ inputs.source-sha }}
+        run: python3 -B scripts/ci/reconcile_development.py validate "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+  build-linux-x86_64:
+    needs: validate
+    uses: ./.github/workflows/ci-build-host.yml
+    with:
+      target: linux-x86_64
+      scope: development
+      source-sha: ${{ needs.validate.outputs.sha }}
+
+  package-linux-x86_64:
+    needs: [validate, build-linux-x86_64]
+    uses: ./.github/workflows/ci-package-development.yml
+    with:
+      target: linux-x86_64
+      runner: ubuntu-24.04
+      source-sha: ${{ needs.validate.outputs.sha }}
+      producer-run: ${{ github.run_id }}
+      producer-attempt: ${{ needs.build-linux-x86_64.outputs.artifact-attempt }}
+
+  build-linux-aarch64:
+    needs: validate
+    uses: ./.github/workflows/ci-build-host.yml
+    with:
+      target: linux-aarch64
+      scope: development
+      source-sha: ${{ needs.validate.outputs.sha }}
+
+  package-linux-aarch64:
+    needs: [validate, build-linux-aarch64]
+    uses: ./.github/workflows/ci-package-development.yml
+    with:
+      target: linux-aarch64
+      runner: ubuntu-24.04-arm
+      source-sha: ${{ needs.validate.outputs.sha }}
+      producer-run: ${{ github.run_id }}
+      producer-attempt: ${{ needs.build-linux-aarch64.outputs.artifact-attempt }}
+
+  build-macos-aarch64:
+    needs: validate
+    uses: ./.github/workflows/ci-build-host.yml
+    with:
+      target: macos-aarch64
+      scope: development
+      source-sha: ${{ needs.validate.outputs.sha }}
+
+  package-macos-aarch64:
+    needs: [validate, build-macos-aarch64]
+    uses: ./.github/workflows/ci-package-development.yml
+    with:
+      target: macos-aarch64
+      runner: macos-15
+      source-sha: ${{ needs.validate.outputs.sha }}
+      producer-run: ${{ github.run_id }}
+      producer-attempt: ${{ needs.build-macos-aarch64.outputs.artifact-attempt }}
+

@@ -9,7 +9,7 @@ on:
       family:
         type: string
         required: true
-      variant-attempt:
+      variant-attempts:
         type: string
         required: true
 
@@ -197,7 +197,7 @@ jobs:
         uses: ./.github/actions/restore-pdo-tests
         with:
           variant: libpq-gss
-          attempt: ${{ inputs.variant-attempt }}
+          attempts: ${{ inputs.variant-attempts }}
 
       - name: Libpq bridge unit tests
         if: matrix.suite == 'libpq-postgres'
@@ -222,7 +222,7 @@ jobs:
         uses: ./.github/actions/restore-pdo-tests
         with:
           variant: libpq-gss
-          attempt: ${{ inputs.variant-attempt }}
+          attempts: ${{ inputs.variant-attempts }}
 
       - name: Live MySQL codegen tests
         if: matrix.suite == 'mysql'
@@ -375,7 +375,7 @@ jobs:
         uses: ./.github/actions/restore-pdo-tests
         with:
           variant: sqlsrv
-          attempt: ${{ inputs.variant-attempt }}
+          attempts: ${{ inputs.variant-attempts }}
 
       - name: PDO_SQLSRV bridge unit tests
         if: matrix.suite == 'sqlsrv-oci'
@@ -402,7 +402,7 @@ jobs:
         uses: ./.github/actions/restore-pdo-tests
         with:
           variant: oci
-          attempt: ${{ inputs.variant-attempt }}
+          attempts: ${{ inputs.variant-attempts }}
 
       - name: PDO_OCI bridge unit tests
         if: matrix.suite == 'sqlsrv-oci'
@@ -435,7 +435,7 @@ jobs:
         uses: ./.github/actions/restore-pdo-tests
         with:
           variant: cubrid
-          attempt: ${{ inputs.variant-attempt }}
+          attempts: ${{ inputs.variant-attempts }}
 
       - name: PDO_CUBRID bridge unit tests
         if: matrix.suite == 'cubrid-dblib'
@@ -459,7 +459,7 @@ jobs:
         uses: ./.github/actions/restore-pdo-tests
         with:
           variant: dblib
-          attempt: ${{ inputs.variant-attempt }}
+          attempts: ${{ inputs.variant-attempts }}
 
       - name: PDO_DBLIB bridge unit tests
         if: matrix.suite == 'cubrid-dblib'
@@ -486,7 +486,7 @@ jobs:
         uses: ./.github/actions/restore-pdo-tests
         with:
           variant: firebird
-          attempt: ${{ inputs.variant-attempt }}
+          attempts: ${{ inputs.variant-attempts }}
 
       - name: Live PDO_FIREBIRD bridge tests
         if: matrix.suite == 'firebird-odbc'
@@ -509,7 +509,7 @@ jobs:
         uses: ./.github/actions/restore-pdo-tests
         with:
           variant: odbc
-          attempt: ${{ inputs.variant-attempt }}
+          attempts: ${{ inputs.variant-attempts }}
 
       - name: PDO_ODBC bridge unit tests
         if: matrix.suite == 'firebird-odbc'
@@ -536,7 +536,7 @@ jobs:
         uses: ./.github/actions/restore-pdo-tests
         with:
           variant: informix
-          attempt: ${{ inputs.variant-attempt }}
+          attempts: ${{ inputs.variant-attempts }}
 
       - name: PDO_INFORMIX bridge unit tests
         if: matrix.suite == 'informix-ibm'
@@ -553,7 +553,7 @@ jobs:
         uses: ./.github/actions/restore-pdo-tests
         with:
           variant: ibm
-          attempt: ${{ inputs.variant-attempt }}
+          attempts: ${{ inputs.variant-attempts }}
 
       - name: PDO_IBM bridge unit tests
         if: matrix.suite == 'informix-ibm'

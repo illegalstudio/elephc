@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from build_environment import snapshot, validate as validate_environment
 from build_artifacts import checkout_identity, digest, identity
 
 
@@ -52,7 +53,15 @@ def main():
     parser.add_argument("--attempt", default=os.environ.get("GITHUB_RUN_ATTEMPT"))
     args = parser.parse_args()
     expected = describe(Path.cwd(), args.target, args.variant, args.sha, os.environ["GITHUB_REPOSITORY"])
-    globals()[args.command](args.directory, expected, args.run_id, args.attempt)
+    if args.command == "write":
+        write(args.directory, expected, args.run_id, args.attempt)
+        path = args.directory / "nextest-manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["environment"] = snapshot(args.target)
+        path.write_text(json.dumps(manifest, indent=2) + "\n")
+    else:
+        verify(args.directory, expected, args.run_id, args.attempt)
+        validate_environment(json.loads((args.directory / "nextest-manifest.json").read_text())["environment"], args.target)
 
 
 if __name__ == "__main__":

@@ -33,7 +33,7 @@ jobs:
     with:
       family: core
       host-attempt: ${{ needs.build-host.outputs.artifact-attempt }}
-      variant-attempt: ${{ needs.build-libpq.outputs.artifact-attempt }}
+      variant-attempts: ${{ needs.build-libpq.outputs.artifact-attempts }}
 
   build-drivers:
     needs: build-host
@@ -47,4 +47,4 @@ jobs:
     uses: ./.github/workflows/ci-test-pdo.yml
     with:
       family: drivers
-      variant-attempt: ${{ needs.build-drivers.outputs.artifact-attempt }}
+      variant-attempts: ${{ needs.build-drivers.outputs.artifact-attempts }}

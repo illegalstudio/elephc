@@ -143,7 +143,9 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
+      packages: read
     outputs:
+      ci-image: ${{ steps.image.outputs.image }}
       benchmark: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       reuse-run: ${{ steps.reuse.outputs.run-id }}
       reuse-attempts: ${{ steps.reuse.outputs.attempts }}
@@ -157,10 +159,28 @@ jobs:
           sparse-checkout: scripts/ci
           sparse-checkout-cone-mode: true
 
+      - name: Resolve immutable CI container image
+        id: image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/resolve_ci_image.sh
+
+      - name: Retain environment identity for exact-SHA reuse
+        env:
+          CI_IMAGE: ${{ steps.image.outputs.image }}
+        run: printf '%s\n' "$CI_IMAGE" > "$RUNNER_TEMP/ci-image.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-environment-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-image.txt
+          retention-days: 3
+          if-no-files-found: error
+
       - name: Resolve verified merge-group artifacts for main
         id: reuse
         env:
           GH_TOKEN: ${{ github.token }}
+          ELEPHC_CI_IMAGE: ${{ steps.image.outputs.image }}
         run: python3 -B scripts/ci/resolve_main_build.py
 
       - name: Choose the tiers
@@ -220,7 +240,7 @@ jobs:
     with:
       family: core
       host-attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
-      variant-attempt: ${{ needs.build-pdo-libpq.outputs.artifact-attempt }}
+      variant-attempts: ${{ needs.build-pdo-libpq.outputs.artifact-attempts }}
 
   pdo-core-gate:
     name: PDO core live suites (PostgreSQL 16 + MySQL 8.4)
@@ -252,7 +272,7 @@ jobs:
     uses: ./.github/workflows/ci-test-pdo.yml
     with:
       family: drivers
-      variant-attempt: ${{ needs.build-pdo-drivers.outputs.artifact-attempt }}
+      variant-attempts: ${{ needs.build-pdo-drivers.outputs.artifact-attempts }}
 
   pdo-drivers-gate:
     name: PDO optional-driver live suites
@@ -326,6 +346,7 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     uses: ./.github/workflows/ci-build-host.yml
     with:
+      ci-image: ${{ needs.plan.outputs.ci-image }}
       target: macos-aarch64
 
   build-archive-linux-x86_64:
@@ -340,6 +361,7 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     uses: ./.github/workflows/ci-build-host.yml
     with:
+      ci-image: ${{ needs.plan.outputs.ci-image }}
       target: linux-aarch64
 
   non-codegen-tests-macos-aarch64:
@@ -432,8 +454,10 @@ jobs:
       max-parallel: 8
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -487,8 +511,10 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -631,8 +657,10 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6]
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -699,8 +727,10 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6]
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -847,8 +877,10 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2]
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -901,8 +933,10 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2]
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1154,8 +1188,10 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1322,8 +1358,10 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1554,8 +1592,10 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1601,8 +1641,10 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1740,8 +1782,10 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1808,8 +1852,10 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1991,8 +2037,10 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -2075,8 +2123,10 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -2196,7 +2246,7 @@ jobs:
         with:
           target: ${{ matrix.elephc_target }}
           kind: ios
-          attempt: ${{ needs.build-ios.outputs.artifact-attempt }}
+          attempt: ${{ fromJSON(needs.build-ios.outputs.artifact-attempts)[matrix.elephc_target] }}
 
       - name: Cache managed native curl for iOS
         uses: actions/cache@v6
@@ -2264,7 +2314,7 @@ jobs:
         with:
           target: ${{ matrix.elephc_target }}
           kind: ios
-          attempt: ${{ needs.build-ios.outputs.artifact-attempt }}
+          attempt: ${{ fromJSON(needs.build-ios.outputs.artifact-attempts)[matrix.elephc_target] }}
 
       - name: Cache managed native libxml2 for iOS
         uses: actions/cache@v6
@@ -2324,7 +2374,7 @@ jobs:
         with:
           target: ${{ matrix.elephc_target }}
           kind: ios
-          attempt: ${{ needs.build-ios.outputs.artifact-attempt }}
+          attempt: ${{ fromJSON(needs.build-ios.outputs.artifact-attempts)[matrix.elephc_target] }}
 
       - name: Cache managed native libmagic for iOS
         uses: actions/cache@v6
@@ -2355,8 +2405,10 @@ jobs:
     timeout-minutes: 45
     # The prebuilt CI image already carries the pinned Rust toolchain, m4 and the
     # native build dependencies, so this job needs no per-run apt-get step.
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -2444,7 +2496,7 @@ jobs:
         with:
           target: ${{ matrix.elephc_target }}
           kind: ios
-          attempt: ${{ needs.build-ios.outputs.artifact-attempt }}
+          attempt: ${{ fromJSON(needs.build-ios.outputs.artifact-attempts)[matrix.elephc_target] }}
 
       - name: Cache managed native GMP for iOS
         uses: actions/cache@v6
@@ -2621,8 +2673,10 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -2697,8 +2751,10 @@ jobs:
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
+    env:
+      ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
-      image: ghcr.io/illegalstudio/elephc-ci:latest
+      image: ${{ needs.plan.outputs.ci-image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -3275,8 +3331,6 @@ jobs:
     name: Development package (${{ matrix.target }})
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.test.result == 'success' && needs.pdo-core-gate.result == 'success' && needs.pdo-drivers-gate.result == 'success'
     needs: [plan, test, pdo-core-gate, pdo-drivers-gate, build-archive-linux-x86_64, build-archive-linux-aarch64, build-archive-macos-aarch64]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -3287,53 +3341,13 @@ jobs:
             runner: ubuntu-24.04-arm
           - target: macos-aarch64
             runner: macos-15
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install native link prerequisites
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y binutils build-essential libbz2-dev zlib1g-dev
-      - name: Restore verified compiler
-        uses: ./.github/actions/restore-build-artifact
-        with:
-          target: ${{ matrix.target }}
-          kind: compiler
-          run-id: ${{ needs.plan.outputs.reuse-run || github.run_id }}
-          attempt: ${{ needs.plan.outputs.reuse-run != '' && fromJSON(needs.plan.outputs.reuse-attempts)[matrix.target] || needs[format('build-archive-{0}', matrix.target)].outputs.artifact-attempt }}
-      - name: Restore verified bridges
-        uses: ./.github/actions/restore-build-artifact
-        with:
-          target: ${{ matrix.target }}
-          kind: bridges
-          run-id: ${{ needs.plan.outputs.reuse-run || github.run_id }}
-          attempt: ${{ needs.plan.outputs.reuse-run != '' && fromJSON(needs.plan.outputs.reuse-attempts)[matrix.target] || needs[format('build-archive-{0}', matrix.target)].outputs.artifact-attempt }}
-      - name: Package and verify the standalone installation
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          python3 -B scripts/ci/development_artifact.py --target "$TARGET" --sha "$GITHUB_SHA" \
-            --compiler-manifest "$RUNNER_TEMP/build-$TARGET-debug-compiler-default/manifest.json" \
-            --bridge-manifest "$RUNNER_TEMP/build-$TARGET-debug-bridges-default/manifest.json"
-      - name: Retain development download
-        id: upload
-        uses: actions/upload-artifact@v7
-        with:
-          name: elephc-dev-${{ matrix.target }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: target/development/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-      - name: Link the development download
-        env:
-          TARGET: ${{ matrix.target }}
-          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
-          SOURCE_RUN: ${{ needs.plan.outputs.reuse-run || github.run_id }}
-        run: |
-          printf 'Development build `%s` for `%s`: [download](%s), producer run `%s`. Retained for 14 days.\n' \
-            "$GITHUB_SHA" "$TARGET" "$ARTIFACT_URL" "$SOURCE_RUN" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Audit consumer compilation
-        if: always()
-        uses: ./.github/actions/assert-consumer-builds
+    uses: ./.github/workflows/ci-package-development.yml
+    with:
+      target: ${{ matrix.target }}
+      runner: ${{ matrix.runner }}
+      source-sha: ${{ github.sha }}
+      producer-run: ${{ needs.plan.outputs.reuse-run || github.run_id }}
+      producer-attempt: ${{ needs.plan.outputs.reuse-run != '' && fromJSON(needs.plan.outputs.reuse-attempts)[matrix.target] || needs[format('build-archive-{0}', matrix.target)].outputs.artifact-attempt }}
 
   benchmark:
     needs: build-benchmark

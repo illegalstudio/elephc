@@ -4,8 +4,8 @@ inputs:
   variant:
     description: PDO driver feature
     required: true
-  attempt:
-    description: Producing build attempt
+  attempts:
+    description: Variant to producing attempt JSON map
     required: true
 runs:
   using: composite
@@ -16,7 +16,7 @@ runs:
         kind: tests
         variant: pdo-${{ inputs.variant }}
         features: pdo-${{ inputs.variant }}
-        attempt: ${{ inputs.attempt }}
+        attempt: ${{ fromJSON(inputs.attempts)[inputs.variant] }}
     - name: Extract the selected test variant
       shell: bash
       env:

@@ -6,6 +6,8 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 HOSTS = ("macos-aarch64", "linux-x86_64", "linux-aarch64")
 GATES = ("Build & Test", "PDO core live suites (PostgreSQL 16 + MySQL 8.4)",
@@ -70,6 +72,19 @@ def paginated(path, key):
     raise ValueError(f"GitHub pagination exceeded the bounded 2000-item inventory: {path}")
 
 
+def compatible_environment(repository, run_id, artifacts, expected):
+    """Read a tiny explicit-run identity before skipping any main validation."""
+    candidates = [a for a in artifacts if re.fullmatch(r"ci-environment-[1-9][0-9]*", a["name"])
+                  and not a.get("expired", True)]
+    if not candidates:
+        return False
+    artifact = max(candidates, key=lambda a: int(a["name"].rsplit("-", 1)[1]))
+    with tempfile.TemporaryDirectory(prefix="elephc-environment-") as directory:
+        subprocess.run(["gh", "run", "download", str(run_id), "--repo", repository,
+                        "--name", artifact["name"], "--dir", directory], check=True)
+        return (Path(directory) / "ci-image.txt").read_text().strip() == expected
+
+
 def resolve(repository, sha):
     """Never reuse another PR, queue entry, repository or merely the latest successful run."""
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
@@ -82,6 +97,9 @@ def resolve(repository, sha):
         artifacts = paginated(f"repos/{repository}/actions/runs/{run_id}/artifacts", "artifacts")
         selected = select(run, jobs, artifacts, repository, sha)
         if selected:
+            image = os.environ.get("ELEPHC_CI_IMAGE")
+            if image and not compatible_environment(repository, run_id, artifacts, image):
+                continue
             return selected
     return None
 

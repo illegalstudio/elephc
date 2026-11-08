@@ -71,6 +71,7 @@ jobs:
     # ruleset's only bypass actor. The default token needs no write access.
     permissions:
       contents: read
+      actions: write
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
     runs-on: ubuntu-latest
     needs:
@@ -146,6 +147,12 @@ jobs:
           git commit -m "chore: bump version to ${VERSION} [skip ci]" || true
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Request development artifacts for the skipped CI commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.bump.outputs.sha }}
+        run: gh workflow run development-builds.yml --ref main -f "source-sha=$SOURCE_SHA"
 
   build:
     name: Build ${{ matrix.target }}
