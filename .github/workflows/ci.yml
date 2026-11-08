@@ -360,6 +360,7 @@ jobs:
     uses: ./.github/workflows/ci-build-host.yml
     with:
       target: linux-x86_64
+      ci-image: ${{ needs.plan.outputs.ci-image }}
 
   build-archive-linux-aarch64:
     needs: plan

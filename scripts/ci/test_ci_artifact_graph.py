@@ -75,6 +75,9 @@ class ArtifactGraphTests(unittest.TestCase):
 
     def test_container_consumers_use_the_coordinators_immutable_image(self):
         for name, body in self.jobs.items():
+            if "uses: ./.github/workflows/ci-build-host.yml" in body:
+                self.assertIn("plan", dependencies(body), name)
+                self.assertIn("ci-image: ${{ needs.plan.outputs.ci-image }}", body, name)
             if "    container:" in body:
                 self.assertIn("plan", dependencies(body), name)
                 self.assertIn("image: ${{ needs.plan.outputs.ci-image }}", body, name)

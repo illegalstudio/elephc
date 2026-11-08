@@ -39,6 +39,8 @@ Progress on 2026-11-08:
   at rollout; skipped commits and intermediate HEADGREEN commits build their own SHA.
 - Linux image digests are resolved once and preserved across the job graph. Actual
   Rust/native compiler, glibc and Apple SDK identities are recorded and checked.
+  Final graph review caught and fixed an omitted x86_64 producer input that would
+  have resolved the image twice; the regression check now covers host callers too.
 - 59 focused infrastructure tests pass, plus planner/queue cleanup, docs prebuilt
   tests, actionlint and focused Rust bridge/PDO regressions. CONTRIBUTING is updated.
 - Integrated SimpleXML main, retaining its nextest overrides, XML recipe update

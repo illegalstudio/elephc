@@ -46,9 +46,9 @@ Its successful merge-group runs provide the source-comparable timing baseline:
 
 Combined runner time is 3701.43 minutes. Host build/archive jobs took 13.58 minutes
 (Linux x86_64), 12.40 minutes (Linux ARM64) and 35.38 minutes (macOS ARM64).
-The original compilation-event inventory remains a historical observation; these
-new runs have not been counted for that metric. Neither baseline controls cache
-state or hosted-runner load.
+The same 36 selected jobs in these newer runs also contain 85 root-package
+compilation events: 67 across 29 CI jobs and 18 across seven PDO jobs. Neither
+baseline controls cache state or hosted-runner load.
 
 ## Focused checks
 
@@ -112,3 +112,25 @@ runs. Final measurements must include the consolidated PDO and SDK coverage, the
 consumer compilation audit, artifact storage and the selected tiers. Development
 packages must also pass their standalone install probe. Release validation does
 not create a new release merely to test the workflow refactor.
+
+## Integration follow-up on main 145426b7
+
+Run `42493865194` passed all producers, both PDO gates, all six PHP SDK jobs, the
+GMP corpus and both tokenizer iOS links. Its 14 producers recorded 18 root-package
+compile events. All six SDK jobs, MySQL and both tokenizer iOS consumers recorded
+zero. MySQL passed the same 137 cases in 868.90 seconds, versus 905.28 seconds on
+the matching main baseline; GMP passed in 349.278 seconds, versus 380.78 seconds.
+These individual observations do not control runner load or cache state.
+
+The Linux compiler and bridges from that run passed a standalone installation
+probe after source-tree and manifest verification. The synthetic source SHA was
+`6374af557a00d322666b3ed925a2cda030a330df`, matching the tree of PR head `d350e97dc3`.
+The tarball contained 372,861,956 bytes; the crypto fixture compiled, linked and
+ran outside the checkout with zero consumer Rust builds. Temporary files were
+removed. macOS/ARM packaging, main promotion and scheduled reconciliation still
+need their actual rollout execution; no release was created for verification.
+
+A final graph review found that the Linux x86_64 producer omitted the coordinator's
+resolved image input and therefore resolved the image a second time. The caller
+now passes the same immutable digest as every other coordinated host. A regression
+check fails on that omission. This correction requires a fresh exact-head CI run.
