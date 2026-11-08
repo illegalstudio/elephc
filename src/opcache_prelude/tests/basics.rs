@@ -484,6 +484,7 @@ pub(super) fn injects_file_functions_per_function() {
             None,
             false,
             true,
+            &|_| false,
             &mut inventory,
         );
         assert!(program.iter().any(|stmt| matches!(

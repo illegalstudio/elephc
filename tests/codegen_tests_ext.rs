@@ -78,4 +78,5 @@ mod codegen {
     mod tidy;
     mod preg_replace_callback_throw;
     mod autoload_preludes;
+    mod ini_autoload;
 }

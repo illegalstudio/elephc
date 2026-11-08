@@ -7,6 +7,8 @@
 //! Called from:
 //! - `crate::opcache_prelude::inject_if_used`.
 //! - `crate::version_prelude::inject_if_used`.
+//! - `crate::autoload::prelude_probe`, which asks the same per-function question of the
+//!   autoload closure.
 //! - `crate::php_profile::sensitivity::scan`, which needs the SPAN of the first reference to
 //!   point a diagnostic at the construct that made a program profile-dependent.
 //! - `crate::optimize::exception_flow::destruction`, which asks whether a `__destruct`

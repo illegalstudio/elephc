@@ -7,9 +7,9 @@
 //!
 //! Key details:
 //! - Each prelude (PDO, mysqli, tz, image, hash, tokenizer, curl, xml, fileinfo, var_export,
-//!   web environment, web request, random, bcmath, gmp, listIdentifiers, preg_grep, and core's
-//!   WeakMap/WeakReference) is injected only when the program uses its surface, and that
-//!   decision has to be taken before name resolution so a
+//!   web environment, web request, random, bcmath, gmp, listIdentifiers, preg_grep, OPcache/INI,
+//!   version, and core's WeakMap/WeakReference) is injected only when the program uses its
+//!   surface, and that decision has to be taken before name resolution so a
 //!   namespaced caller resolves to the injected declarations. The Composer/SPL autoload pass runs
 //!   AFTER name resolution, so a class file it loads that uses `PDO` or `CurlHandle` was never
 //!   scanned: the prelude was skipped and the program failed with `Unknown type: PDO`.
@@ -22,6 +22,8 @@
 //!   include temporaries remain monotonic, preserving identities other threads allocated.
 //! - A probe failure is not reported here: the real pass hits the same error and reports it.
 //! - The web environment group retains process entries when an autoloaded file observes them.
+//! - The OPcache and version preludes decide per FUNCTION (`ini_get`, `ini_set`, `opcache_reset`,
+//!   `ini_restore`, ...), so each of their [`PROBED_FUNCTIONS`] is reported under its own name.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -60,6 +62,13 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("uri", crate::uri_prelude::program_uses_uri),
 ];
 
+/// Every prelude function decided per name, reported under that (lowercase) name when the
+/// closure references it.
+const PROBED_FUNCTIONS: &[&[&str]] = &[
+    crate::opcache_prelude::PROBED_FUNCTIONS,
+    crate::version_prelude::PROBED_FUNCTIONS,
+];
+
 /// Returns the prelude groups some file of the autoload closure uses.
 ///
 /// `program` is the include-resolved entry program, before any prelude is injected. Returns an
@@ -85,6 +94,9 @@ pub fn autoloaded_prelude_groups(
             .iter()
             .filter(|(_, detect)| detect(&closure))
             .map(|(group, _)| *group)
+            .chain(PROBED_FUNCTIONS.iter().copied().flatten().copied().filter(|name| {
+                crate::opcache_prelude::detect::program_references(&closure, name)
+            }))
             .collect()
     });
     // Usage detectors may parse literal eval fragments, so their identities are discarded too.
