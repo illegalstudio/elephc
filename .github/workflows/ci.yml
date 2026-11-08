@@ -16,6 +16,7 @@ on:
 permissions:
   contents: read
   packages: read
+  actions: read
 
 # Cancel superseded runs for the same ref (e.g. when a branch is force-pushed or
 # rebased) so stale jobs stop consuming runners the moment a newer commit lands.
@@ -127,12 +128,26 @@ jobs:
           EXTENDED_PATHS: ^(\.github/workflows/ci\.yml|\.config/nextest\.toml|scripts/ci/|\.github/actions/)
         run: bash scripts/ci/plan_tiers.sh
 
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [plan, build-archive-macos-aarch64, build-archive-linux-x86_64, build-archive-linux-aarch64]
+    steps:
+      - name: Require every planned build
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"
+
   # Compile each platform once, then let that platform's tests start as soon as
   # its archive is uploaded. This avoids a matrix-wide barrier where Linux tests
   # wait for a queued or slower macOS archive job.
   build-archive-macos-aarch64:
     name: Build & Archive Tests (macos-aarch64)
     needs: plan
+    outputs:
+      artifact-attempt: ${{ steps.publish-compiler.outputs.attempt }}
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -227,6 +242,19 @@ jobs:
             --target-dir target/elephc-magician-curl-test-build
           cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
             target/debug/libelephc_magician_curl.a
+
+      - name: Publish the shared compiler
+        id: publish-compiler
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          target: macos-aarch64
+          kind: compiler
+
+      - name: Publish the shared bridges
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          target: macos-aarch64
+          kind: bridges
 
       - name: Prepare offline Oniguruma test bundle
         run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target macos-aarch64
@@ -358,8 +386,6 @@ jobs:
             cargo test -p elephc-xml
 
       - name: Upload test archive
-        # Only when this run's test jobs for the platform consume it (see `plan`).
-        if: needs.plan.outputs.extended == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-macos-aarch64
@@ -371,8 +397,6 @@ jobs:
           if-no-files-found: error
 
       - name: Upload codegen test archive
-        # Only when this run's test jobs for the platform consume it (see `plan`).
-        if: needs.plan.outputs.extended == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-codegen-macos-aarch64
@@ -383,6 +407,8 @@ jobs:
   build-archive-linux-x86_64:
     name: Build & Archive Tests (linux-x86_64)
     needs: plan
+    outputs:
+      artifact-attempt: ${{ steps.publish-compiler.outputs.attempt }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # Every Linux job runs inside the prebuilt CI image (multi-arch, built by
@@ -473,6 +499,19 @@ jobs:
           fi
           python3 --version
 
+      - name: Publish the shared compiler
+        id: publish-compiler
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          target: linux-x86_64
+          kind: compiler
+
+      - name: Publish the shared bridges
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          target: linux-x86_64
+          kind: bridges
+
       - name: Prepare offline Oniguruma test bundle
         run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target linux-x86_64
 
@@ -480,6 +519,8 @@ jobs:
         # Two archives from one build; see the macOS job for why.
         run: |
           cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+          cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
+          (cd "$RUNNER_TEMP" && sha256sum cargo-nextest > cargo-nextest.sha256)
           mkdir -p "$RUNNER_TEMP/codegen-archive"
           cargo nextest archive --profile ci -p elephc --test codegen_tests \
             --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
@@ -594,18 +635,17 @@ jobs:
             cargo test -p elephc-xml
 
       - name: Upload test archive
-        # Only when this run's test jobs for the platform consume it (see `plan`).
-        if: needs.plan.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-linux-x86_64
-          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          path: |
+            ${{ runner.temp }}/nextest-archive.tar.zst
+            ${{ runner.temp }}/cargo-nextest
+            ${{ runner.temp }}/cargo-nextest.sha256
           retention-days: 1
           if-no-files-found: error
 
       - name: Upload codegen test archive
-        # Only when this run's test jobs for the platform consume it (see `plan`).
-        if: needs.plan.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-codegen-linux-x86_64
@@ -616,6 +656,8 @@ jobs:
   build-archive-linux-aarch64:
     name: Build & Archive Tests (linux-aarch64)
     needs: plan
+    outputs:
+      artifact-attempt: ${{ steps.publish-compiler.outputs.attempt }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     container:
@@ -701,6 +743,19 @@ jobs:
           fi
           python3 --version
 
+      - name: Publish the shared compiler
+        id: publish-compiler
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          target: linux-aarch64
+          kind: compiler
+
+      - name: Publish the shared bridges
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          target: linux-aarch64
+          kind: bridges
+
       - name: Prepare offline Oniguruma test bundle
         run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target linux-aarch64
 
@@ -708,6 +763,8 @@ jobs:
         # Two archives from one build; see the macOS job for why.
         run: |
           cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+          cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
+          (cd "$RUNNER_TEMP" && sha256sum cargo-nextest > cargo-nextest.sha256)
           mkdir -p "$RUNNER_TEMP/codegen-archive"
           cargo nextest archive --profile ci -p elephc --test codegen_tests \
             --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
@@ -822,18 +879,17 @@ jobs:
             cargo test -p elephc-xml
 
       - name: Upload test archive
-        # Only when this run's test jobs for the platform consume it (see `plan`).
-        if: needs.plan.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-linux-aarch64
-          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          path: |
+            ${{ runner.temp }}/nextest-archive.tar.zst
+            ${{ runner.temp }}/cargo-nextest
+            ${{ runner.temp }}/cargo-nextest.sha256
           retention-days: 1
           if-no-files-found: error
 
       - name: Upload codegen test archive
-        # Only when this run's test jobs for the platform consume it (see `plan`).
-        if: needs.plan.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-codegen-linux-aarch64
@@ -2554,9 +2610,11 @@ jobs:
   # or misses a framework/archive on either platform, fails here.
   curl-ios-compile-link:
     name: Curl iOS Compile & Link (${{ matrix.elephc_target }})
-    needs: plan
+    needs: [plan, build-archive-macos-aarch64]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
+    env:
+      ELEPHC_CI_PREBUILT_COMPILER: "1"
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -2572,6 +2630,13 @@ jobs:
             clang_target: arm64-apple-ios13.0-simulator
     steps:
       - uses: actions/checkout@v7
+      - name: Restore the shared macOS compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: macos-aarch64
+          kind: compiler
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
+
 
       - name: Install Rust with the iOS standard library
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
@@ -2620,9 +2685,11 @@ jobs:
   # libxml2, `-liconv`, or the SDK's zlib/bzip2 on either platform, fails here.
   xml-ios-compile-link:
     name: XML iOS Compile & Link (${{ matrix.elephc_target }})
-    needs: plan
+    needs: [plan, build-archive-macos-aarch64]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
+    env:
+      ELEPHC_CI_PREBUILT_COMPILER: "1"
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -2638,6 +2705,13 @@ jobs:
             clang_target: arm64-apple-ios13.0-simulator
     steps:
       - uses: actions/checkout@v7
+      - name: Restore the shared macOS compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: macos-aarch64
+          kind: compiler
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
+
 
       - name: Install Rust with the iOS standard library
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
@@ -2679,9 +2753,11 @@ jobs:
 
   fileinfo-ios-compile-link:
     name: Fileinfo iOS Compile & Link (${{ matrix.elephc_target }})
-    needs: plan
+    needs: [plan, build-archive-macos-aarch64]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
+    env:
+      ELEPHC_CI_PREBUILT_COMPILER: "1"
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -2697,6 +2773,13 @@ jobs:
             clang_target: arm64-apple-ios13.0-simulator
     steps:
       - uses: actions/checkout@v7
+      - name: Restore the shared macOS compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: macos-aarch64
+          kind: compiler
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
+
 
       - name: Install Rust with the iOS standard library
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
@@ -2738,7 +2821,7 @@ jobs:
 
   gmp-phpt-corpus:
     name: GMP PHPT corpus
-    needs: plan
+    needs: [plan, build-archive-linux-x86_64]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     # The prebuilt CI image already carries the pinned Rust toolchain, m4 and the
@@ -2760,10 +2843,24 @@ jobs:
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
           fi
 
-      - name: Build compiler and GMP bridge
-        run: |
-          cargo build --bin elephc
-          cargo build -p elephc-gmp
+      - name: Restore shared compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: linux-x86_64
+          kind: compiler
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
+
+      - name: Restore shared bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: linux-x86_64
+          kind: bridges
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
+
+      - name: Restore shared tests
+        uses: ./.github/actions/restore-test-build
+        with:
+          target: linux-x86_64
 
       - name: Materialize managed GMP
         run: |
@@ -2774,14 +2871,16 @@ jobs:
         env:
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
         run: |
-          cargo test --test codegen_tests test_gmp_php_src_phpt_corpus \
-            -- --ignored --nocapture
+          bash scripts/ci/run_prebuilt_tests.sh \
+            'binary(=codegen_tests) and test(test_gmp_php_src_phpt_corpus)' --run-ignored only --nocapture
 
   gmp-ios-compile-link:
     name: GMP iOS Compile & Link (${{ matrix.elephc_target }})
-    needs: plan
+    needs: [plan, build-archive-macos-aarch64]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
+    env:
+      ELEPHC_CI_PREBUILT_COMPILER: "1"
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -2797,6 +2896,13 @@ jobs:
             clang_target: arm64-apple-ios13.0-simulator
     steps:
       - uses: actions/checkout@v7
+      - name: Restore the shared macOS compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: macos-aarch64
+          kind: compiler
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
+
 
       - name: Install Rust with the iOS standard library
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
@@ -2822,9 +2928,11 @@ jobs:
 
   tokenizer-ios-compile-link:
     name: Tokenizer iOS Compile & Link (${{ matrix.elephc_target }})
-    needs: plan
+    needs: [plan, build-archive-macos-aarch64]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
+    env:
+      ELEPHC_CI_PREBUILT_COMPILER: "1"
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -2840,6 +2948,13 @@ jobs:
             clang_target: arm64-apple-ios13.0-simulator
     steps:
       - uses: actions/checkout@v7
+      - name: Restore the shared macOS compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: macos-aarch64
+          kind: compiler
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
+
       - name: Install Rust with the iOS standard library
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
@@ -3277,7 +3392,8 @@ jobs:
 
   tokenizer-native-smoke:
     name: Tokenizer native smoke
-    runs-on: ubuntu-latest
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - name: Install stream runtime libraries for opaque eval
@@ -3288,10 +3404,22 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - name: Build the compiler and tokenizer bridge
-        run: |
-          cargo build --locked -p elephc-tokenizer
-          cargo build --locked --bin elephc
+      - name: Restore shared compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: linux-x86_64
+          kind: compiler
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
+      - name: Restore shared bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: linux-x86_64
+          kind: bridges
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
+      - name: Restore shared tests
+        uses: ./.github/actions/restore-test-build
+        with:
+          target: linux-x86_64
       - name: Run the native tokenizer example
         run: |
           target/debug/elephc --with-tokenizer examples/tokenizer/main.php
@@ -3301,38 +3429,34 @@ jobs:
           grep -F 'First token: T_OPEN_TAG' "$RUNNER_TEMP/tokenizer-example.out"
       - name: Run focused native, eval and argument regressions
         run: |
-          cargo test --locked --test codegen_tests test_tokenizer_
-          cargo test --locked --test codegen_tests codegen::lfc::lfc_and_strict_php_eval_calls_do_not_leak_profiles -- --exact
-          cargo test --locked --test error_tests tokenizer_
-          cargo test --locked -p elephc --lib ir_lower::tests::corpus::lowers_tokenizer_example_on_every_target -- --exact
-          cargo test --locked -p elephc --lib autoload::prelude_probe::tests::probe_detects_tokenizer_in_autoloaded_classes -- --exact
-          cargo test --locked -p elephc --lib ir_lower::tests::string_offset_lifetime::string_offset_lifetime_stabilizes_views_on_all_targets -- --exact
-          cargo test --locked --test embedder_stack_tests prelude_injection_survives_the_nesting_limit_on_a_small_embedder_stack -- --exact
+          bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(test_tokenizer_)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(=codegen::lfc::lfc_and_strict_php_eval_calls_do_not_leak_profiles)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary(=error_tests) and test(tokenizer_)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=ir_lower::tests::corpus::lowers_tokenizer_example_on_every_target)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=autoload::prelude_probe::tests::probe_detects_tokenizer_in_autoloaded_classes)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=ir_lower::tests::string_offset_lifetime::string_offset_lifetime_stabilizes_views_on_all_targets)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary(=embedder_stack_tests) and test(=prelude_injection_survives_the_nesting_limit_on_a_small_embedder_stack)'
 
   differential-tests:
     name: Differential test run (PHPUnit vs elephc test)
-    runs-on: ubuntu-latest
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - name: Restore shared compiler
+        uses: ./.github/actions/restore-build-artifact
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          target: linux-x86_64
+          kind: compiler
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
 
-      - name: Cache Rust build state
-        uses: actions/cache@v6
+      - name: Restore shared bridges
+        uses: ./.github/actions/restore-build-artifact
         with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            target
-          key: rust-differential-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            rust-differential-
-
-      - name: Build the compiler
-        run: cargo build
+          target: linux-x86_64
+          kind: bridges
+          attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
 
       - name: Set up reference PHP
         uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
@@ -3415,297 +3539,32 @@ jobs:
       - name: Compiler prelude parity with the curl surface published
         run: cargo test -p elephc --lib --features curl builtins::parity_tests
 
-  managed-native-smoke:
-    name: Managed Native Packages (${{ matrix.target }})
-    needs: plan
+  managed-native-smoke-macos-aarch64:
+    needs: [plan, build-archive-macos-aarch64]
     if: needs.plan.outputs.run == 'true'
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: macos-aarch64
-            runner: macos-15
-          - target: linux-x86_64
-            runner: ubuntu-24.04
-          - target: linux-aarch64
-            runner: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v7
+    uses: ./.github/workflows/ci-native-smoke.yml
+    with:
+      target: macos-aarch64
+      runner: macos-15
+      artifact-attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
 
-      - name: Configure isolated native cache
-        # `runner.temp` is unavailable while GitHub validates job-level `env`;
-        # publish the runner-local path once the job is executing instead.
-        shell: bash
-        run: echo "ELEPHC_NATIVE_CACHE=$RUNNER_TEMP/elephc-managed-native-cache" >> "$GITHUB_ENV"
+  managed-native-smoke-linux-x86_64:
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
+    uses: ./.github/workflows/ci-native-smoke.yml
+    with:
+      target: linux-x86_64
+      runner: ubuntu-24.04
+      artifact-attempt: ${{ needs.build-archive-linux-x86_64.outputs.artifact-attempt }}
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-
-      - name: Cache Rust build state
-        # Dependencies only (registry, git checkouts, and the dependency
-        # artifacts under target/); the action prunes the workspace crates'
-        # own artifacts before saving. Caching the whole target/ dir put three
-        # 4 GB entries per platform plus every other job's into the repository's
-        # 10 GB allowance, so main's entries were evicted before the next run
-        # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
-        with:
-          prefix-key: rust-deps-managed-native-${{ matrix.target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-bin: false
-          cache-on-failure: true
-
-      - name: Install Linux source-build tools
-        if: startsWith(matrix.target, 'linux-')
-        # Deliberately omit system PCRE2 packages: this smoke must use only the
-        # exact shim/POSIX/8-bit archives materialized by `elephc native`.
-        # libbz2/zlib are the runtime's own stream-layer libraries (`-lz -lbz2`,
-        # src/codegen_support/runtime_features.rs), not catalog packages: every
-        # program linking the xml bridge carries them, even a parser-only one,
-        # because the bridge's prelude calls `fopen()` and that enables the
-        # runtime's phar stream feature.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
-
-      - name: Build elephc
-        run: cargo build --bin elephc
-
-      - name: Verify isolated native cache starts empty
-        shell: bash
-        run: test ! -e "$ELEPHC_NATIVE_CACHE"
-
-      - name: Materialize catalog PCRE2 from verified source
-        shell: bash
-        run: |
-          for example in date-json-regex eval_regex hello-preg; do
-            ./target/debug/elephc native add pcre2 \
-              --target "${{ matrix.target }}" \
-              --manifest-path "examples/$example/elephc.toml"
-          done
-          git diff --exit-code -- \
-            examples/date-json-regex/elephc.toml \
-            examples/date-json-regex/elephc.lock \
-            examples/eval_regex/elephc.toml \
-            examples/eval_regex/elephc.lock \
-            examples/hello-preg/elephc.toml \
-            examples/hello-preg/elephc.lock
-
-      - name: Materialize catalog zlib and verify locked offline reuse
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/zlib-project"
-          ./target/debug/elephc native add zlib \
-            --target "${{ matrix.target }}" \
-            --manifest-path "$RUNNER_TEMP/zlib-project/elephc.toml"
-          ./target/debug/elephc native install \
-            --locked \
-            --offline \
-            --target "${{ matrix.target }}" \
-            --manifest-path "$RUNNER_TEMP/zlib-project/elephc.toml"
-
-      - name: Materialize Oniguruma and verify locked offline reuse
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/oniguruma-project"
-          ./target/debug/elephc native add oniguruma \
-            --target "${{ matrix.target }}" \
-            --manifest-path "$RUNNER_TEMP/oniguruma-project/elephc.toml"
-          ./target/debug/elephc native install --locked --offline \
-            --target "${{ matrix.target }}" \
-            --manifest-path "$RUNNER_TEMP/oniguruma-project/elephc.toml"
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          root = Path(os.environ["ELEPHC_NATIVE_CACHE"]) / "artifacts/oniguruma"
-          archives = list(root.rglob("libelephc_oniguruma_shim.a"))
-          assert len(archives) == 1, archives
-          with open(os.environ["GITHUB_ENV"], "a") as output:
-              output.write(f"ELEPHC_ONIGURUMA_TEST_PREFIX={archives[0].parent.parent}\n")
-          PY
-
-      - name: Compare the managed mbregex provider with the PHP oracle
-        run: cargo test -p elephc-mbstring --test regex --test regex_request --test regex_ini_abi --test invoke regex -- --include-ignored
-
-      - name: Build Oniguruma providers for iOS device and Simulator
-        if: matrix.target == 'macos-aarch64'
-        shell: bash
-        run: |
-          for target in ios-arm64 ios-sim-arm64; do
-            source scripts/ci/configure_ios_native_toolchain.sh "$target"
-            mkdir -p "$RUNNER_TEMP/oniguruma-$target"
-            ./target/debug/elephc native add oniguruma \
-              --target "$target" \
-              --manifest-path "$RUNNER_TEMP/oniguruma-$target/elephc.toml"
-          done
-
-      - name: Materialize catalog curl (and its libssh2/nghttp2/openssl/zlib dependencies) from verified source
-        # curl's recipe declares libssh2, nghttp2, openssl and zlib as
-        # dependencies, and libssh2 declares openssl and zlib in turn (see
-        # src/native_deps/catalog.rs), so this one `native add` also
-        # materializes all four from verified source. A cold build of the whole
-        # chain measured ~6 minutes on a fast local machine, comfortably inside
-        # this job's timeout; see `crates/elephc-curl/build.rs` for why the
-        # elephc_curl BRIDGE staticlib (built via BRIDGE_CRATES elsewhere)
-        # still needs these raw libcurl/libssh2/libssl/libcrypto/libz/libnghttp2
-        # archives at PHP-program link time even though `cargo build -p
-        # elephc-curl` itself does not.
-        shell: bash
-        run: |
-          ./target/debug/elephc native add curl \
-            --target "${{ matrix.target }}" \
-            --manifest-path examples/curl-get/elephc.toml
-          git diff --exit-code -- \
-            examples/curl-get/elephc.toml \
-            examples/curl-get/elephc.lock
-
-      - name: Materialize catalog libxml2 from verified source
-        # The xml bridge's parser is libxml2 itself: `elephc_xml` calls the
-        # Elephc-owned shim (src/native_deps/recipes/libxml2_shim.c) that the
-        # recipe compiles against the freshly built libxml2 headers and archives
-        # as libelephc_libxml2_shim.a next to libxml2.a. libxml2 has no catalog
-        # dependencies, so this one `native add` materializes the whole package
-        # (~1 minute from source). See crates/elephc-xml/build.rs for why the
-        # elephc_xml BRIDGE staticlib (built via BRIDGE_CRATES elsewhere) still
-        # needs these two archives at PHP-program link time even though `cargo
-        # build -p elephc-xml` itself does not.
-        shell: bash
-        run: |
-          ./target/debug/elephc native add libxml2 \
-            --target "${{ matrix.target }}" \
-            --manifest-path examples/xml/elephc.toml
-          git diff --exit-code -- \
-            examples/xml/elephc.toml \
-            examples/xml/elephc.lock
-
-      - name: Compile and run regex through the production resolver
-        shell: bash
-        run: |
-          ./target/debug/elephc \
-            --keep-symbols \
-            --target "${{ matrix.target }}" \
-            examples/date-json-regex/main.php
-          if ./examples/date-json-regex/main > "$RUNNER_TEMP/date-json-regex.out"; then
-            cat "$RUNNER_TEMP/date-json-regex.out"
-          else
-            smoke_status=$?
-            cat "$RUNNER_TEMP/date-json-regex.out"
-            if [[ "${{ runner.os }}" == "Linux" ]]; then
-              if ! command -v gdb >/dev/null; then
-                sudo apt-get update && sudo apt-get install -y gdb
-              fi
-              gdb --batch -ex run -ex bt -ex 'x/12i $pc-16' -ex 'info registers' -ex 'x/16gx $sp' \
-                -ex up -ex 'x/20i $pc-48' \
-                --args ./examples/date-json-regex/main || true
-            else
-              lldb --batch -o run -o bt -o 'register read' \
-                -o 'memory read --count 16 --format x --size 8 $sp' \
-                -o 'frame select 1' -o 'disassemble --frame --count 24' \
-                -- ./examples/date-json-regex/main || true
-            fi
-            exit "$smoke_status"
-          fi
-          grep -F "Valid email pattern" "$RUNNER_TEMP/date-json-regex.out"
-          grep -F "Unicode letters detected" "$RUNNER_TEMP/date-json-regex.out"
-
-      - name: Preserve regex crash assembly
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: regex-crash-assembly-${{ matrix.target }}
-          path: examples/date-json-regex/main.s
-          if-no-files-found: ignore
-          retention-days: 3
-
-      - name: Compile and run curl through the production resolver
-        # Exercises the full chain the 194 curl codegen fixtures also need but
-        # cannot assume in ordinary CI (see tests/codegen/support/curl_native.rs):
-        # the elephc_curl bridge staticlib linked against a real, managed
-        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2. The GET to
-        # example.com may or may not reach the network on a given runner, so
-        # only network-independent output is asserted — the compiled binary
-        # always reaches real curl_exec()/curl_errno()/curl_error() either way.
-        shell: bash
-        run: |
-          ./target/debug/elephc \
-            --target "${{ matrix.target }}" \
-            examples/curl-get/main.php
-          ./examples/curl-get/main > "$RUNNER_TEMP/curl-get.out"
-          grep -F "GET http://example.com/" "$RUNNER_TEMP/curl-get.out"
-          grep -F "handle still usable after curl_close()" "$RUNNER_TEMP/curl-get.out"
-          grep -F "connection refused, as expected" "$RUNNER_TEMP/curl-get.out"
-
-      - name: Compile and run fileinfo through the production resolver
-        run: |
-          ./target/debug/elephc native install --locked --target "${{ matrix.target }}" --manifest-path examples/fileinfo/elephc.toml
-          ./target/debug/elephc --target "${{ matrix.target }}" examples/fileinfo/main.php
-          ./examples/fileinfo/main > "$RUNNER_TEMP/fileinfo.out"
-          grep -Fx "text/plain; charset=us-ascii" "$RUNNER_TEMP/fileinfo.out"
-
-      - name: Compile and run xml through the production resolver
-        # Exercises the chain every tests/codegen/xml fixture also needs (see
-        # tests/codegen/support/xml_native.rs) end to end through the real
-        # resolver: the elephc_xml bridge staticlib linked against the managed
-        # libelephc_libxml2_shim.a + libxml2.a from the project's lock. The example
-        # writes a document with XMLWriter and parses it back with the SAX API,
-        # so every asserted line proves both halves reached real libxml2. The
-        # lines are PHP 8.5's own output for the same program -- including the
-        # `titles:` one, where libxml2 splits the character data of
-        # `Design Patterns &amp; Friends` at the entity reference into three
-        # handler calls, exactly as PHP's ext/xml does.
-        shell: bash
-        run: |
-          ./target/debug/elephc \
-            --target "${{ matrix.target }}" \
-            examples/xml/main.php
-          ./examples/xml/main > "$RUNNER_TEMP/xml.out"
-          grep -F '<?xml version="1.0" encoding="UTF-8"?>' "$RUNNER_TEMP/xml.out"
-          grep -F '  <title>Design Patterns &amp; Friends</title>' "$RUNNER_TEMP/xml.out"
-          grep -F 'book 978-0-13-468599-1' "$RUNNER_TEMP/xml.out"
-          grep -F 'titles: The Pragmatic Programmer / Design Patterns  / & /  Friends' "$RUNNER_TEMP/xml.out"
-          grep -F 'tags: 10, price entries at 3,7' "$RUNNER_TEMP/xml.out" || {
-            cat "$RUNNER_TEMP/xml.out"
-            exit 1
-          }
-
-      - name: Compile and run SimpleXML through the production resolver
-        shell: bash
-        run: |
-          ./target/debug/elephc \
-            --target "${{ matrix.target }}" \
-            examples/simplexml/main.php
-          ./examples/simplexml/main > "$RUNNER_TEMP/simplexml.out"
-          grep -F 'A1: Notebook EUR 4.50' "$RUNNER_TEMP/simplexml.out"
-          grep -F 'B2: Pencil EUR 1.20' "$RUNNER_TEMP/simplexml.out"
-          grep -F 'Under EUR 2: Pencil' "$RUNNER_TEMP/simplexml.out"
-
-      - name: Reinstall locked state offline
-        shell: bash
-        run: |
-          ./target/debug/elephc native install \
-            --locked \
-            --offline \
-            --target "${{ matrix.target }}" \
-            --manifest-path examples/date-json-regex/elephc.toml
-          ./target/debug/elephc native install \
-            --locked \
-            --offline \
-            --target "${{ matrix.target }}" \
-            --manifest-path examples/curl-get/elephc.toml
-          ./target/debug/elephc native install \
-            --locked \
-            --offline \
-            --target "${{ matrix.target }}" \
-            --manifest-path examples/xml/elephc.toml
-          ./target/debug/elephc native install \
-            --locked \
-            --offline \
-            --target "${{ matrix.target }}" \
-            --manifest-path examples/simplexml/elephc.toml
+  managed-native-smoke-linux-aarch64:
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
+    uses: ./.github/workflows/ci-native-smoke.yml
+    with:
+      target: linux-aarch64
+      runner: ubuntu-24.04-arm
+      artifact-attempt: ${{ needs.build-archive-linux-aarch64.outputs.artifact-attempt }}
 
   frame-assertions-release:
     name: Frame assertions (release)
@@ -3739,6 +3598,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - plan
+      - build
       - build-archive-macos-aarch64
       - build-archive-linux-x86_64
       - build-archive-linux-aarch64
@@ -3767,6 +3627,8 @@ jobs:
       - xml-ios-compile-link
       - fileinfo-ios-compile-link
       - tokenizer-ios-compile-link
+      - gmp-ios-compile-link
+      - gmp-phpt-corpus
       - eval-codegen-tests-macos-aarch64
       - eval-codegen-tests-linux-x86_64
       - eval-codegen-tests-linux-aarch64
@@ -3775,7 +3637,9 @@ jobs:
       - tokenizer-tests
       - tokenizer-native-smoke
       - differential-tests
-      - managed-native-smoke
+      - managed-native-smoke-macos-aarch64
+      - managed-native-smoke-linux-x86_64
+      - managed-native-smoke-linux-aarch64
       - curl-feature-contract
       - security-audit
       - action-pins
@@ -3806,7 +3670,7 @@ jobs:
           EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
           SDK_TIER: ${{ needs.plan.outputs.run == 'true' && github.event_name != 'pull_request' }}
         run: |
-          always="plan build-archive-macos-aarch64 build-archive-linux-x86_64
+          always="plan build gmp-phpt-corpus build-archive-macos-aarch64 build-archive-linux-x86_64
             build-archive-linux-aarch64 image-api-sync builtins-docs-sync tokenizer-tests tokenizer-native-smoke differential-tests
             curl-feature-contract security-audit action-pins frame-assertions-release
             benchmark-tooling"
@@ -3816,11 +3680,11 @@ jobs:
             pdo-codegen-tests-linux-x86_64 pdo-codegen-tests-linux-aarch64
             curl-native-linux-x86_64 curl-native-linux-aarch64 curl-codegen-tests-linux-x86_64
             curl-codegen-tests-linux-aarch64 eval-codegen-tests-linux-x86_64
-            eval-codegen-tests-linux-aarch64 managed-native-smoke"
+            eval-codegen-tests-linux-aarch64 managed-native-smoke-macos-aarch64 managed-native-smoke-linux-x86_64 managed-native-smoke-linux-aarch64"
           extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
             web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
             curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64
-            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link"
+            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link gmp-ios-compile-link"
           in_list() { case " $(echo $2) " in *" $1 "*) return 0 ;; esac; return 1; }
           echo "tiers: run=$RUN_TIER extended=$EXTENDED_TIER"
           status=0

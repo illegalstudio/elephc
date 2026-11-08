@@ -1,0 +1,53 @@
+name: Restore build artifact
+description: Download an explicit producer attempt and validate it before using its outputs.
+inputs:
+  target:
+    description: Elephc host or library target
+    required: true
+  kind:
+    description: Artifact payload kind
+    required: true
+  profile:
+    description: Cargo output profile
+    default: debug
+  features:
+    description: Exact comma-separated Cargo features
+    default: ''
+  sha:
+    description: Expected source commit
+    default: ${{ github.sha }}
+  run-id:
+    description: Explicit producing workflow run
+    default: ${{ github.run_id }}
+  attempt:
+    description: Producing attempt returned by the build job
+    required: true
+  token:
+    description: Token with actions read permission for cross-run downloads
+    default: ${{ github.token }}
+runs:
+  using: composite
+  steps:
+    - name: Download outputs
+      uses: actions/download-artifact@v8
+      with:
+        name: build-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.kind }}-${{ inputs.attempt }}
+        path: ${{ runner.temp }}/build-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.kind }}/
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ inputs.token }}
+    - name: Validate and restore outputs
+      shell: bash
+      env:
+        ARTIFACT_TARGET: ${{ inputs.target }}
+        ARTIFACT_KIND: ${{ inputs.kind }}
+        ARTIFACT_PROFILE: ${{ inputs.profile }}
+        ARTIFACT_FEATURES: ${{ inputs.features }}
+        ARTIFACT_SHA: ${{ inputs.sha }}
+        ARTIFACT_RUN: ${{ inputs.run-id }}
+        ARTIFACT_ATTEMPT: ${{ inputs.attempt }}
+      run: |
+        python3 -B scripts/ci/build_artifacts.py restore \
+          --artifact "$RUNNER_TEMP/build-$ARTIFACT_TARGET-$ARTIFACT_PROFILE-$ARTIFACT_KIND" \
+          --sha "$ARTIFACT_SHA" --target "$ARTIFACT_TARGET" \
+          --profile "$ARTIFACT_PROFILE" --features "$ARTIFACT_FEATURES" --kind "$ARTIFACT_KIND" \
+          --run-id "$ARTIFACT_RUN" --attempt "$ARTIFACT_ATTEMPT" --github-env "$GITHUB_ENV"

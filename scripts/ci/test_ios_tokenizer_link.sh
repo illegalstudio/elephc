@@ -21,7 +21,11 @@ SDK_PATH="$(xcrun --sdk "$APPLE_SDK" --show-sdk-path)"
 WORK_DIR="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/elephc-ios-tokenizer-link.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-(cd "$PROJECT_DIR" && cargo build --locked --bin elephc)
+if [[ ${ELEPHC_CI_PREBUILT_COMPILER:-0} == 1 ]]; then
+    test -x "$PROJECT_DIR/target/debug/elephc"
+else
+    (cd "$PROJECT_DIR" && cargo build --locked --bin elephc)
+fi
 (cd "$PROJECT_DIR" && cargo build --locked -p elephc-tokenizer --target "$RUST_TARGET")
 cp "$SCRIPT_DIR/fixtures/ios-tokenizer-link/main.php" "$SCRIPT_DIR/fixtures/ios-tokenizer-link/host.c" "$WORK_DIR/"
 "$PROJECT_DIR/target/debug/elephc" --with-tokenizer --target "$ELEPHC_TARGET" --emit staticlib "$WORK_DIR/main.php"

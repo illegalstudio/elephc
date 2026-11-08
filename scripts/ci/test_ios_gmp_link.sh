@@ -49,7 +49,11 @@ export "ELEPHC_NATIVE_AR_${TARGET_ENV}=$AR_WRAPPER"
 export "ELEPHC_NATIVE_RANLIB_${TARGET_ENV}=$RANLIB_WRAPPER"
 
 echo "==> building compiler and materializing libgmp for $ELEPHC_TARGET"
-(cd "$PROJECT_DIR" && cargo build --bin elephc)
+if [[ ${ELEPHC_CI_PREBUILT_COMPILER:-0} == 1 ]]; then
+    test -x "$PROJECT_DIR/target/debug/elephc"
+else
+    (cd "$PROJECT_DIR" && cargo build --bin elephc)
+fi
 "$ELEPHC_BIN" native install --locked \
   --target "$ELEPHC_TARGET" \
   --manifest-path "$PROJECT_DIR/examples/gmp/elephc.toml"
