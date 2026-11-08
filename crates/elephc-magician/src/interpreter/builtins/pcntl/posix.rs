@@ -68,14 +68,25 @@ fn eval_posix_isatty(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let operand = eval_pcntl_required_arg(args, 0)?.value;
     let fd = if values.type_tag(operand)? == EVAL_TAG_RESOURCE {
-        let payload = eval_resource_payload(operand, values)?;
-        if payload >= EVAL_RESOURCE_PAYLOAD_BASE {
-            match context.stream_resources().raw_fd(payload) {
-                Some(fd) => i64::from(fd),
-                None => return values.bool_value(false),
-            }
+        let fd = if eval_resource_is_closed(operand, context, values)? {
+            None
         } else {
-            payload
+            let payload = eval_resource_payload(operand, values)?;
+            if payload >= EVAL_RESOURCE_PAYLOAD_BASE {
+                context.stream_resources().raw_fd(payload).map(i64::from)
+            } else {
+                Some(payload)
+            }
+        };
+        match fd {
+            Some(fd) => fd,
+            None => {
+                return eval_throw_type_error(
+                    elephc_pcntl::POSIX_ISATTY_CLOSED_STREAM_MESSAGE,
+                    context,
+                    values,
+                )
+            }
         }
     } else {
         eval_int_value(operand, values)?

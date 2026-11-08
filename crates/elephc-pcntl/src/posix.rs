@@ -31,6 +31,10 @@ pub const POSIX_KILL_PID_RANGE_MESSAGE: &str =
 pub const POSIX_ISATTY_FD_RANGE_WARNING: &str =
     "Warning: posix_isatty(): Argument #1 ($file_descriptor) must be between 0 and 2147483647\n";
 
+/// PHP 8.5's `TypeError` text for a closed stream resource passed to `posix_isatty()`.
+pub const POSIX_ISATTY_CLOSED_STREAM_MESSAGE: &str =
+    "posix_isatty(): supplied resource is not a valid stream resource";
+
 /// Records one errno value as the last ext/posix error.
 pub(crate) fn record_posix_error(error: libc::c_int) {
     POSIX_LAST_ERROR.store(error, Ordering::Relaxed);

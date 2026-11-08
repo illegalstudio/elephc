@@ -10,6 +10,7 @@
 //! - Both bridges return an `i64` status whose negative value selects PHP's diagnostic.
 //! - A stream resource is reduced to its native descriptor before the terminal probe; a boxed
 //!   operand is inspected at run time so `int|resource` values take the matching path.
+//! - A closed stream (negative release sentinel) throws PHP's `TypeError` before the probe.
 
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::Arch;
@@ -61,6 +62,7 @@ pub(super) fn lower_isatty(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     match ctx.raw_value_php_type(operand)? {
         PhpType::Resource(_) => {
             ctx.load_value_to_result(operand)?;
+            emit_reject_closed_stream(ctx);
         }
         PhpType::Mixed | PhpType::Union(_) => emit_boxed_descriptor(ctx, operand)?,
         _ => load_as_int(ctx, operand, "posix_isatty file_descriptor")?,
@@ -108,11 +110,32 @@ fn emit_boxed_descriptor(
             ctx.emitter.instruction("mov rax, rdi");                            // the resource payload is its native descriptor
         }
     }
+    emit_reject_closed_stream(ctx);
     abi::emit_jump(ctx.emitter, &loaded);
     ctx.emitter.label(&scalar);
     load_as_int(ctx, operand, "posix_isatty file_descriptor")?;
     ctx.emitter.label(&loaded);
     Ok(())
+}
+
+/// Throws PHP's `TypeError` when the stream descriptor in the int result register is closed.
+///
+/// `fclose()` stamps a negative release sentinel into the resource payload, so a negative
+/// descriptor here can only be a closed stream, never a caller-supplied integer.
+fn emit_reject_closed_stream(ctx: &mut FunctionContext<'_>) {
+    let open = ctx.next_label("posix_isatty_stream_open");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // a negative payload is fclose()'s release sentinel
+            ctx.emitter.instruction(&format!("b.ge {open}"));                   // open streams keep their native descriptor
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 0");                              // a negative payload is fclose()'s release sentinel
+            ctx.emitter.instruction(&format!("jge {open}"));                    // open streams keep their native descriptor
+        }
+    }
+    super::super::exceptions::emit_type_error(ctx, elephc_pcntl::POSIX_ISATTY_CLOSED_STREAM_MESSAGE);
+    ctx.emitter.label(&open);
 }
 
 /// Emits PHP's out-of-range descriptor warning through the shared diagnostic channel.
