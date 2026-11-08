@@ -125,10 +125,14 @@ pub(crate) fn lower_ref_assign_property(
     // PHP seeds the new reference with the (auto-vivified) child view, so writes through
     // `$ref` replace only that independent cell and leave the XML tree untouched.
     if reference_targets_native_xml_property(ctx, object.value, property) {
-        lower_native_xml_property_reference(ctx, target, object, property, source, span);
+        lower_native_xml_property_reference(
+            ctx, target, object, property, source, span, stable_object.as_ref(),
+        );
         return;
     }
-    bind_property_reference_cell(ctx, target, object, property, source, span);
+    bind_property_reference_cell(
+        ctx, target, object, property, source, span, stable_object.as_ref(),
+    );
 }
 
 /// Returns whether a property reference must follow the native XML selection protocol.
@@ -155,7 +159,7 @@ fn reference_targets_native_xml_property(
 /// Binds the target to the XML reference selection or to the ordinary shared property cell.
 fn lower_native_xml_property_reference(
     ctx: &mut LoweringContext<'_, '_>, target: &str, object: LoweredValue,
-    property: &str, source: &Expr, span: Span,
+    property: &str, source: &Expr, span: Span, stable_object: Option<&Expr>,
 ) {
     let method = elephc_builtin_contract::lookup_class("SimpleXMLElement")
         .and_then(|class| class.operators)
@@ -199,7 +203,7 @@ fn lower_native_xml_property_reference(
     let native_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(regular);
     ctx.restore_initialized_slots(initial.clone());
-    bind_property_reference_cell(ctx, target, object, property, source, span);
+    bind_property_reference_cell(ctx, target, object, property, source, span, stable_object);
     branch_to(ctx, merge);
     let regular_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(merge);
@@ -220,7 +224,7 @@ fn bind_independent_property_reference(
 /// Binds the target to the object's shared reference-property cell.
 fn bind_property_reference_cell(
     ctx: &mut LoweringContext<'_, '_>, target: &str, object: LoweredValue,
-    property: &str, source: &Expr, span: Span,
+    property: &str, source: &Expr, span: Span, stable_object: Option<&Expr>,
 ) {
     let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
     let owns_cell = match ctx.builder.value_php_type(object.value).codegen_repr() {
@@ -258,8 +262,8 @@ fn bind_property_reference_cell(
             target.to_string(),
             Expr::new(
                 ExprKind::PropertyAccess {
-                    object: Box::new(stable_object),
-                    property: property.clone(),
+                    object: Box::new((*stable_object).clone()),
+                    property: property.to_string(),
                 },
                 source.span,
             ),
