@@ -968,6 +968,18 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
+    test_error_proc_get_status_wrong_args,
+    "<?php proc_get_status();",
+    "proc_get_status() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_proc_nice_wrong_args,
+    "<?php proc_nice();",
+    "proc_nice() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
     test_error_proc_terminate_wrong_args,
     "<?php proc_terminate();",
     "proc_terminate() takes 1 or 2 arguments"
