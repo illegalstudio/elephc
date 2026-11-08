@@ -785,8 +785,25 @@ final class ApacheCloseTagPattern implements Pattern { public function getTokenT
 abstract class Base { abstract public function kind(): TokenType; }
 final class Child extends Base { public function kind(): TokenTypeEnum { return TokenTypeEnum::KEYWORD; } }
 echo (new ApacheCloseTagPattern())->getTokenType()->label(), "|", (new Child())->kind()->label();
-
 "#,
     );
     assert_eq!(out, "keyword|keyword");
+}
+
+/// Every enum implicitly implements `UnitEnum` (and a backed one `BackedEnum`), which its
+/// declaration does not spell: a class method may still narrow `UnitEnum`/`?UnitEnum`/
+/// `BackedEnum` to an enum, which is only built after every class.
+#[test]
+fn test_covariant_return_to_an_enum_through_its_implicit_enum_interface() {
+    let out = compile_and_run(
+        r#"<?php
+enum Kind: string { case A = 'a'; }
+abstract class Backed { abstract public function make(): BackedEnum; }
+class BackedKind extends Backed { public function make(): Kind { return Kind::A; } }
+abstract class Unit { abstract public function make(): ?UnitEnum; }
+class UnitKind extends Unit { public function make(): ?Kind { return Kind::A; } }
+echo (new BackedKind())->make()->value, "|", (new UnitKind())->make()->name;
+"#,
+    );
+    assert_eq!(out, "a|A");
 }

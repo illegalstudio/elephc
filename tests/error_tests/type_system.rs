@@ -978,6 +978,20 @@ class ZUnrelated {}
     );
 }
 
+/// A pure enum implements `UnitEnum` but not `BackedEnum`: its declared ancestry must not
+/// relate it to `BackedEnum` while class schemas are built.
+#[test]
+fn test_error_override_return_pure_enum_for_backed_enum() {
+    expect_error(
+        r#"<?php
+enum Kind { case A; }
+abstract class Base { abstract public function make(): BackedEnum; }
+class Child extends Base { public function make(): Kind { return Kind::A; } }
+"#,
+        "Cannot override method Child::make with incompatible return type Kind (parent returns BackedEnum)",
+    );
+}
+
 /// Verifies that assigning an incompatible value to a static property is rejected.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]

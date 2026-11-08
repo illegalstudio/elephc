@@ -345,10 +345,16 @@ pub(super) fn check_types_impl(
         .map(|(name, class)| (name.clone(), (class.extends.clone(), class.implements.clone())))
         .collect();
     // Enums are built after every class, so a class method may return an enum that only its
-    // declaration can relate to the interface the parent method returns.
+    // declaration can relate to the interface the parent method returns. Every enum also
+    // implements `UnitEnum`, and a backed one `BackedEnum`, as `build_enum_info` publishes.
     for stmt in program {
-        if let StmtKind::EnumDecl { name, implements, .. } = &stmt.kind {
-            let implements = implements.iter().map(|name| name.as_str().to_string()).collect();
+        if let StmtKind::EnumDecl { name, implements, backing_type, .. } = &stmt.kind {
+            let implements = implements
+                .iter()
+                .map(|name| name.as_str().to_string())
+                .chain(std::iter::once("UnitEnum".to_string()))
+                .chain(backing_type.as_ref().map(|_| "BackedEnum".to_string()))
+                .collect();
             checker.declared_class_ancestry.entry(name.clone()).or_insert((None, implements));
         }
     }
