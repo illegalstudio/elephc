@@ -144,6 +144,7 @@ jobs:
       actions: read
       pull-requests: read
     outputs:
+      benchmark: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       reuse-run: ${{ steps.reuse.outputs.run-id }}
       reuse-attempts: ${{ steps.reuse.outputs.attempts }}
       run: ${{ steps.plan.outputs.run }}
@@ -283,6 +284,11 @@ jobs:
     with:
       variant: release-frame
 
+  build-benchmark:
+    needs: plan
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci-build-benchmark.yml
+
   build-ios:
     needs: plan
     if: needs.plan.outputs.extended == 'true'
@@ -292,7 +298,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     if: always()
-    needs: [plan, build-archive-macos-aarch64, build-archive-linux-x86_64, build-archive-linux-aarch64, build-pdo-libpq, build-pdo-drivers, build-ios, build-curl-tools, build-release-frame]
+    needs: [plan, build-archive-macos-aarch64, build-archive-linux-x86_64, build-archive-linux-aarch64, build-pdo-libpq, build-pdo-drivers, build-ios, build-curl-tools, build-release-frame, build-benchmark]
     steps:
       - name: Require every planned build
         env:
@@ -302,12 +308,13 @@ jobs:
             .plan.result == "success" and
             (."build-pdo-libpq".result == (if .plan.outputs.run == "true" then "success" else "skipped" end)) and
             (."build-pdo-drivers".result == (if .plan.outputs["pdo-drivers"] == "true" then "success" else "skipped" end)) and
+            (."build-benchmark".result == (if .plan.outputs.benchmark == "true" then "success" else "skipped" end)) and
             (."build-ios".result == (if .plan.outputs.extended == "true" then "success" else "skipped" end)) and
             (if .plan.outputs.run == "true" then
-              del(.plan, ."build-pdo-libpq", ."build-pdo-drivers", ."build-ios") |
+              del(.plan, ."build-pdo-libpq", ."build-pdo-drivers", ."build-ios", ."build-benchmark") |
               all(.[]; .result == "success" and (.outputs["artifact-attempt"] | test("^[1-9][0-9]*$")))
             else
-              del(.plan, ."build-pdo-libpq", ."build-pdo-drivers", ."build-ios") | all(.[]; .result == "skipped")
+              del(.plan, ."build-pdo-libpq", ."build-pdo-drivers", ."build-ios", ."build-benchmark") | all(.[]; .result == "skipped")
             end)
           ' <<< "$RESULTS"
 
@@ -408,6 +415,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   non-codegen-tests-linux-x86_64:
     name: Non-Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-linux-x86_64]
@@ -439,7 +450,7 @@ jobs:
       - name: Run non-codegen tests
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
@@ -461,6 +472,10 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   non-codegen-tests-linux-aarch64:
     name: Non-Codegen Tests (linux-aarch64 ${{ matrix.shard }}/8)
@@ -490,7 +505,7 @@ jobs:
       - name: Run non-codegen tests
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
@@ -512,6 +527,10 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   cli-tests-macos-aarch64:
     name: CLI Eval Tests (macos-aarch64 ${{ matrix.shard }}/6)
@@ -598,6 +617,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   cli-tests-linux-x86_64:
     name: CLI Eval Tests (linux-x86_64 ${{ matrix.shard }}/6)
     needs: [plan, build-archive-linux-x86_64]
@@ -630,7 +653,7 @@ jobs:
         # memory and the runner's cores in check while halving the serial span.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
@@ -661,6 +684,10 @@ jobs:
           path: target/codegen-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   cli-tests-linux-aarch64:
     name: CLI Eval Tests (linux-aarch64 ${{ matrix.shard }}/6)
@@ -694,7 +721,7 @@ jobs:
         # memory and the runner's cores in check while halving the serial span.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
@@ -725,6 +752,10 @@ jobs:
           path: target/codegen-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   web-tests-macos-aarch64:
     name: Web Tests (macos-aarch64 ${{ matrix.shard }}/3)
@@ -802,6 +833,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   web-tests-linux-x86_64:
     name: Web Tests (linux-x86_64 ${{ matrix.shard }}/2)
     needs: [plan, build-archive-linux-x86_64]
@@ -830,7 +865,7 @@ jobs:
       - name: Run web test shard
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
@@ -851,6 +886,10 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   web-tests-linux-aarch64:
     name: Web Tests (linux-aarch64 ${{ matrix.shard }}/2)
@@ -880,7 +919,7 @@ jobs:
       - name: Run web test shard
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
@@ -901,6 +940,10 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   codegen-tests-macos-aarch64:
     name: Codegen Tests (macos-aarch64 ${{ matrix.shard }}/32)
@@ -1101,6 +1144,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   codegen-tests-linux-x86_64:
     name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/32)
     needs: [plan, build-archive-linux-x86_64]
@@ -1168,7 +1215,7 @@ jobs:
         # compiler is what materializes the managed package below.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1234,7 +1281,7 @@ jobs:
           # Preserve the last phase and assembly size if one of these fixtures times out.
           ELEPHC_FIXTURE_PHASE_TIMING: "test_simplexml_generic_property_handoff_bundle,test_simplexml_computed_indexed_incdec_bundle,test_native_dom_exception_accessors_from_eval,test_simplexml_eval_subclass_factories_after_eval_returns,test_simplexml_computed_indexed_incdec_eval_bundle,test_simplexml_reference_arguments_materialize_missing_paths_bundle,test_simplexml_gmp_mixed_operator_dispatch_bundle,test_simplexml_eval_subclass_constructorless_factories,test_simplexml_review_names_and_filter_close_bundle,test_simplexml_native_comparison_and_default_namespace_bundle,test_simplexml_saved_empty_dimension_write_bundle,test_property_dimension_xml_fetch_modes_bundle,test_magic_property_dimension_xml_guards_bundle,test_simplexml_native_debug_projection_bundle,test_simplexml_dimension_write_owners_isolated_bundle,test_simplexml_constructorless_factory_owners_bundle,test_mbstring_eval_reference_parameter_ownership,test_mbstring_regex_capture_callback_reference_array_ownership"
         run: |
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
@@ -1264,6 +1311,10 @@ jobs:
           path: target/codegen-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   codegen-tests-linux-aarch64:
     name: Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
@@ -1332,7 +1383,7 @@ jobs:
         # compiler is what materializes the managed package below.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1390,7 +1441,7 @@ jobs:
           # Preserve the last phase and assembly size if one of these fixtures times out.
           ELEPHC_FIXTURE_PHASE_TIMING: "test_simplexml_generic_property_handoff_bundle,test_simplexml_computed_indexed_incdec_bundle,test_native_dom_exception_accessors_from_eval,test_simplexml_eval_subclass_factories_after_eval_returns,test_simplexml_computed_indexed_incdec_eval_bundle,test_simplexml_reference_arguments_materialize_missing_paths_bundle,test_simplexml_gmp_mixed_operator_dispatch_bundle,test_simplexml_eval_subclass_constructorless_factories,test_simplexml_review_names_and_filter_close_bundle,test_simplexml_native_comparison_and_default_namespace_bundle,test_simplexml_saved_empty_dimension_write_bundle,test_property_dimension_xml_fetch_modes_bundle,test_magic_property_dimension_xml_guards_bundle,test_simplexml_native_debug_projection_bundle,test_simplexml_dimension_write_owners_isolated_bundle,test_simplexml_constructorless_factory_owners_bundle,test_mbstring_eval_reference_parameter_ownership,test_mbstring_regex_capture_callback_reference_array_ownership"
         run: |
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
@@ -1424,6 +1475,11 @@ jobs:
   # PDO fixtures all inject the same large standard-library prelude. Running a
   # deterministic shard in one libtest process lets parser/runtime/bridge caches
   # survive between cases while preserving the full three-target test surface.
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   pdo-codegen-tests-macos-aarch64:
     name: PDO Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
     needs: [plan, build-archive-macos-aarch64]
@@ -1488,6 +1544,10 @@ jobs:
           bash scripts/ci/run_pdo_codegen_shard.sh \
             "$pdo_test_binary" "${{ matrix.shard }}" 4
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   pdo-codegen-tests-linux-x86_64:
     name: PDO Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
     needs: [plan, build-archive-linux-x86_64]
@@ -1519,7 +1579,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1530,6 +1590,10 @@ jobs:
           test -n "$pdo_test_binary"
           bash scripts/ci/run_pdo_codegen_shard.sh \
             "$pdo_test_binary" "${{ matrix.shard }}" 4
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   pdo-codegen-tests-linux-aarch64:
     name: PDO Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
@@ -1562,7 +1626,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1579,6 +1643,11 @@ jobs:
   # where a cold cache added ~5 minutes to the critical path of every shard on the
   # platform; these jobs build it off the critical path, in parallel with the
   # ordinary shards, from the elephc binary the archive already carries.
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   curl-native-macos-aarch64:
     name: Managed Native curl (macos-aarch64)
     needs: [plan, build-archive-macos-aarch64]
@@ -1661,6 +1730,10 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   curl-native-linux-x86_64:
     name: Managed Native curl (linux-x86_64)
     needs: [plan, build-archive-linux-x86_64]
@@ -1687,7 +1760,7 @@ jobs:
         # archive notes in .config/nextest.toml); only the binary is needed here.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1725,6 +1798,10 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   curl-native-linux-aarch64:
     name: Managed Native curl (linux-aarch64)
     needs: [plan, build-archive-linux-aarch64]
@@ -1751,7 +1828,7 @@ jobs:
         # archive notes in .config/nextest.toml); only the binary is needed here.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1798,6 +1875,11 @@ jobs:
   # dedicated matrix exercises target callback trampolines, the combined
   # elephc_magician + elephc_curl link shape, and managed-native materialization inside
   # the Linux CI container.
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   curl-codegen-tests-macos-aarch64:
     name: Curl Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
     needs: [plan, build-archive-macos-aarch64, curl-native-macos-aarch64]
@@ -1899,6 +1981,10 @@ jobs:
           bash scripts/ci/run_curl_codegen_shard.sh \
             "$curl_test_binary" "${{ matrix.shard }}" 4
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   curl-codegen-tests-linux-x86_64:
     name: Curl Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
     needs: [plan, build-archive-linux-x86_64, curl-native-linux-x86_64]
@@ -1943,7 +2029,7 @@ jobs:
         # notes in .config/nextest.toml) -- one extraction gives us both.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1978,6 +2064,10 @@ jobs:
           test -n "$curl_test_binary"
           bash scripts/ci/run_curl_codegen_shard.sh \
             "$curl_test_binary" "${{ matrix.shard }}" 4
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   curl-codegen-tests-linux-aarch64:
     name: Curl Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
@@ -2023,7 +2113,7 @@ jobs:
         # notes in .config/nextest.toml) -- one extraction gives us both.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -2065,6 +2155,11 @@ jobs:
   # bridge, compile a curl-using PHP library, and perform the final application-host link
   # for both device and Simulator. A recipe that silently falls back to Unix PEM probing,
   # or misses a framework/archive on either platform, fails here.
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   curl-ios-compile-link:
     name: Curl iOS Compile & Link (${{ matrix.elephc_target }})
     needs: [plan, build-archive-macos-aarch64, build-ios]
@@ -2128,6 +2223,11 @@ jobs:
   # XMLWriter — and perform the final application-host link for both device and
   # Simulator. A recipe that loses the platform iconv, or a link plan missing the shim,
   # libxml2, `-liconv`, or the SDK's zlib/bzip2 on either platform, fails here.
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   xml-ios-compile-link:
     name: XML iOS Compile & Link (${{ matrix.elephc_target }})
     needs: [plan, build-archive-macos-aarch64, build-ios]
@@ -2183,6 +2283,10 @@ jobs:
             "${{ matrix.rust_target }}" \
             "${{ matrix.sdk }}" \
             "${{ matrix.clang_target }}"
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   fileinfo-ios-compile-link:
     name: Fileinfo iOS Compile & Link (${{ matrix.elephc_target }})
@@ -2240,6 +2344,10 @@ jobs:
             "${{ matrix.sdk }}" \
             "${{ matrix.clang_target }}"
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   gmp-phpt-corpus:
     name: GMP PHPT corpus
     needs: [plan, build-archive-linux-x86_64]
@@ -2296,6 +2404,10 @@ jobs:
           bash scripts/ci/run_prebuilt_tests.sh \
             'binary(=codegen_tests) and test(test_gmp_php_src_phpt_corpus)' --run-ignored only --nocapture
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   gmp-ios-compile-link:
     name: GMP iOS Compile & Link (${{ matrix.elephc_target }})
     needs: [plan, build-archive-macos-aarch64, build-ios]
@@ -2350,6 +2462,10 @@ jobs:
             "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
             "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   tokenizer-ios-compile-link:
     name: Tokenizer iOS Compile & Link (${{ matrix.elephc_target }})
     needs: [plan, build-archive-macos-aarch64, build-ios]
@@ -2395,6 +2511,11 @@ jobs:
   # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
   # deterministic shard in one libtest process so runtime-object and bridge caches
   # survive between cases, with two workers preserving bounded parallelism.
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   eval-codegen-tests-macos-aarch64:
     name: Eval Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-macos-aarch64]
@@ -2490,6 +2611,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   eval-codegen-tests-linux-x86_64:
     name: Eval Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-linux-x86_64]
@@ -2518,7 +2643,7 @@ jobs:
       - name: Extract test archive
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -2529,6 +2654,7 @@ jobs:
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+          EVAL_SHARD_NEXTEST_BIN: ${{ runner.temp }}/cargo-nextest
           EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
           EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
           EVAL_SHARD_JUNIT_FILE: target/nextest/ci/junit-pass1.xml
@@ -2561,6 +2687,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   eval-codegen-tests-linux-aarch64:
     name: Eval Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-linux-aarch64]
@@ -2589,7 +2719,7 @@ jobs:
       - name: Extract test archive
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -2600,6 +2730,7 @@ jobs:
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+          EVAL_SHARD_NEXTEST_BIN: ${{ runner.temp }}/cargo-nextest
           EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
           EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
           EVAL_SHARD_JUNIT_FILE: target/nextest/ci/junit-pass1.xml
@@ -2631,6 +2762,10 @@ jobs:
           path: target/codegen-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   image-api-sync:
     name: Image API stubs in sync
@@ -2778,6 +2913,10 @@ jobs:
             scripts/docs/builtin_registry.json
             scripts/docs/symbol_registry.json
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   tokenizer-tests:
     needs: build-archive-linux-x86_64
     name: Tokenizer PHP 8.5 parity
@@ -2803,6 +2942,10 @@ jobs:
         env:
           ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
         run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-tokenizer-engine) and kind(lib)'
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   tokenizer-native-smoke:
     name: Tokenizer native smoke
@@ -2852,6 +2995,10 @@ jobs:
           bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=ir_lower::tests::string_offset_lifetime::string_offset_lifetime_stabilizes_views_on_all_targets)'
           bash scripts/ci/run_prebuilt_tests.sh 'binary(=embedder_stack_tests) and test(=prelude_injection_survives_the_nesting_limit_on_a_small_embedder_stack)'
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   differential-tests:
     name: Differential test run (PHPUnit vs elephc test)
     needs: build-archive-linux-x86_64
@@ -2891,6 +3038,10 @@ jobs:
         # Every test PHPUnit reports must exist in the compiled run with the same
         # outcome; tests only elephc runs (the .lfc files) are informational.
         run: python3 scripts/test-differential.py examples/testing --elephc target/debug/elephc
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   curl-feature-contract:
     name: Curl feature contract coverage
@@ -2942,6 +3093,10 @@ jobs:
       - name: Compiler prelude parity with the curl surface published
         run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(builtins::parity_tests)'
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   managed-native-smoke-macos-aarch64:
     needs: [plan, build-archive-macos-aarch64]
     if: needs.plan.outputs.run == 'true'
@@ -2985,6 +3140,10 @@ jobs:
 
       - name: Check undersized frame rejection in release mode
         run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(test_emit_frame_)'
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   benchmark-tooling:
     name: Benchmark tooling
@@ -3172,7 +3331,12 @@ jobs:
           printf 'Development build `%s` for `%s`: [download](%s), producer run `%s`. Retained for 14 days.\n' \
             "$GITHUB_SHA" "$TARGET" "$ARTIFACT_URL" "$SOURCE_RUN" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   benchmark:
+    needs: build-benchmark
     name: Benchmark Suite
     runs-on: macos-15  # Apple Silicon runner
     env:
@@ -3196,8 +3360,21 @@ jobs:
           tools: none
           ini-values: opcache.enable_cli=0, opcache.jit=0
 
-      - name: Build release binary
-        run: cargo build --release
+      - name: Restore benchmark compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: macos-aarch64
+          profile: release
+          kind: compiler
+          attempt: ${{ needs.build-benchmark.outputs.artifact-attempt }}
+
+      - name: Restore benchmark bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: macos-aarch64
+          profile: release
+          kind: bridges
+          attempt: ${{ needs.build-benchmark.outputs.artifact-attempt }}
 
       - name: Run all benchmark suites
         run: python3 -B benchmark/run.py --suite all --require-baselines --no-build --iterations 3 --warmup 1 --json benchmark-results/results.json --markdown benchmark-results/results.md
@@ -3211,3 +3388,7 @@ jobs:
           name: benchmark-results
           path: benchmark-results/
           if-no-files-found: error
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds

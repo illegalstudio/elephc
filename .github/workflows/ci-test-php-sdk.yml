@@ -83,11 +83,11 @@ jobs:
       - name: Check SDK parsing, host build and warning cleanup
         run: |
           python3 -m unittest discover -s scripts/phpext -p test_embed_runner.py
-          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=elephc) and test(phpext::)'
-          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=elephc) and test(warning_dispatch_emits_every_supported_target)'
-          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=elephc) and test(nested_boundary_reads_linked_concat_capacity_on_all_targets)'
-          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=elephc) and test(hosted_fatal_paths_escape_before_raw_diagnostics)'
-          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=elephc) and test(phpext_pack_rejects_non_php_tags_before_normalization)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(phpext::)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(warning_dispatch_emits_every_supported_target)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(nested_boundary_reads_linked_concat_capacity_on_all_targets)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(hosted_fatal_paths_escape_before_raw_diagnostics)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(phpext_pack_rejects_non_php_tags_before_normalization)'
 
       - name: Check consumer ABI after sharing value-layout facts
         run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-zend) and binary(=abi) and test(structures_have_the_layout_rust_gives_them)'
@@ -164,3 +164,7 @@ jobs:
 
       - name: Check standalone null and void diagnostics
         run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=error_tests) and test(test_standalone_null_return_requirements)'
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds

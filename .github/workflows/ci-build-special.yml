@@ -54,6 +54,9 @@ jobs:
           esac
           cp "$(command -v cargo-nextest)" "target/ci-variant/$VARIANT/cargo-nextest"
           (cd "target/ci-variant/$VARIANT" && sha256sum cargo-nextest > cargo-nextest.sha256)
+      - name: Run feature-specific doctests
+        if: inputs.variant == 'curl'
+        run: cargo test --locked -p elephc-builtin-contract -p elephc-magician -p elephc-reference --features elephc-builtin-contract/curl,elephc-magician/curl --doc
       - name: Publish test executables
         id: publish
         uses: ./.github/actions/publish-build-artifact

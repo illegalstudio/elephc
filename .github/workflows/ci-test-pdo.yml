@@ -230,6 +230,10 @@ jobs:
           ELEPHC_PDO_LIBPQ: '1'
         run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(mysql)' --run-ignored only -j 4
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   pdo-drivers:
     name: PDO optional-driver suite (${{ matrix.suite }})
     if: inputs.family == 'drivers'
@@ -561,3 +565,6 @@ jobs:
           ELEPHC_PDO_IBM: '1'
         run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(pdo_ibm)' -j 1
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds

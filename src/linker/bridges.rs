@@ -1547,12 +1547,16 @@ mod tests {
     fn every_bridge_crate_is_in_the_build_lists() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let lists = [
-            ".github/workflows/ci.yml",
-            ".github/workflows/release.yml",
-            ".github/workflows/nightly.yml",
+            ".github/workflows/ci-build-host.yml",
+            ".github/actions/build-release-artifacts/action.yml",
             "scripts/test-linux-arm64.sh",
             "scripts/test-linux-x86_64.sh",
         ];
+        for rel in [".github/workflows/release.yml", ".github/workflows/nightly.yml"] {
+            let body = std::fs::read_to_string(root.join(rel)).expect("read publishing workflow");
+            assert!(body.contains("/.github/actions/build-release-artifacts"),
+                "{rel} must use the shared release build producer");
+        }
         for rel in lists {
             let path = root.join(rel);
             let Ok(body) = std::fs::read_to_string(&path) else {

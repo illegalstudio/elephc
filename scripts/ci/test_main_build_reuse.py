@@ -5,6 +5,7 @@ import copy
 import unittest
 
 from resolve_main_build import GATES, HOSTS, select
+from verify_ci_verdicts import successful_latest
 
 
 class MainBuildReuseTests(unittest.TestCase):
@@ -87,6 +88,17 @@ class MainBuildReuseTests(unittest.TestCase):
         for conclusion in ("cancelled", "failure", "timed_out", "action_required"):
             self.run["conclusion"] = conclusion
             self.assertIsNone(self.selected())
+
+
+class ReleaseVerdictTests(unittest.TestCase):
+    def test_latest_verdict_cannot_hide_a_pending_or_failed_rerun(self):
+        check = {"id": 1, "name": GATES[0], "head_sha": "a" * 40,
+                 "app": {"slug": "github-actions"}, "status": "completed", "conclusion": "success"}
+        self.assertTrue(successful_latest([check], GATES[0], "a" * 40))
+        self.assertFalse(successful_latest([check], GATES[0], "b" * 40))
+        for state, conclusion in (("in_progress", None), ("completed", "failure"), ("completed", "cancelled")):
+            newer = {**check, "id": 2, "status": state, "conclusion": conclusion}
+            self.assertFalse(successful_latest([newer, check], GATES[0], "a" * 40))
 
 
 if __name__ == "__main__":

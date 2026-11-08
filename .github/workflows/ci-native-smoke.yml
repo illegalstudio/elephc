@@ -307,3 +307,6 @@ jobs:
             --target "${{ inputs.target }}" \
             --manifest-path examples/simplexml/elephc.toml
 
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds

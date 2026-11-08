@@ -32,6 +32,7 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/forbid-consumer-builds
     - id: first
       uses: actions/download-artifact@v4
       continue-on-error: true
@@ -121,3 +122,4 @@ runs:
         if [[ "$target" == codegen-* ]]; then target=${target#codegen-}; variant=codegen; fi
         python3 -B scripts/ci/test_archive_manifest.py verify "$ARCHIVE_DIR" \
           --target "$target" --variant "$variant" --run-id "$ARTIFACT_RUN" --attempt "$ARTIFACT_ATTEMPT"
+        sh scripts/ci/validate_archived_nextest.sh "$ARCHIVE_DIR"

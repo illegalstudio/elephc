@@ -25,6 +25,7 @@ runs:
         archive="$PWD/target/ci-pdo/$VARIANT"
         sh scripts/ci/validate_archived_nextest.sh "$archive"
         destination="$RUNNER_TEMP/pdo-$VARIANT"
+        mkdir -p "$destination"
         "$archive/cargo-nextest" nextest list --list-type binaries-only --message-format json \
           --archive-file "$archive/nextest-archive.tar.zst" \
           --extract-to "$destination" --workspace-remap . > /dev/null

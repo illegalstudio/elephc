@@ -56,6 +56,7 @@ jobs:
           target: linux-x86_64
           kind: bridges
           export-bridge-env: 'false'
+          allow-builds: 'true'
           attempt: ${{ inputs.host-attempt }}
       - name: Build the selected driver and tests
         env:

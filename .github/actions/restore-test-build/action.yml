@@ -25,6 +25,7 @@ runs:
       run: |
         sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP/shared-tests"
         runner="$RUNNER_TEMP/shared-tests/cargo-nextest"
+        mkdir -p "$RUNNER_TEMP/shared-tests/extracted"
         "$runner" nextest list --list-type binaries-only --message-format json \
           --archive-file "$RUNNER_TEMP/shared-tests/nextest-archive.tar.zst" \
           --extract-to "$RUNNER_TEMP/shared-tests/extracted" --workspace-remap . > /dev/null

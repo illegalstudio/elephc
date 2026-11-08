@@ -124,6 +124,7 @@ jobs:
           cargo clean -p elephc-pdo
 
       - name: Build bridge/native support crates
+        shell: bash
         if: inputs.scope != 'compiler'
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
@@ -143,7 +144,7 @@ jobs:
         run: |
           set -o pipefail
           cargo build --locked $BRIDGE_CRATES 2>&1 | tee "$RUNNER_TEMP/bridge-build.log"
-          if grep -q '^warning:' "$RUNNER_TEMP/bridge-build.log"; then exit 1; fi
+          if grep -qi warning "$RUNNER_TEMP/bridge-build.log"; then exit 1; fi
           printf '\n' > target/debug/elephc-pdo-features.txt
 
       - name: Build curl-aware magician staticlib
@@ -404,6 +405,7 @@ jobs:
           cargo clean -p elephc-pdo
 
       - name: Build bridge/native support crates
+        shell: bash
         if: inputs.scope != 'compiler'
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
@@ -423,7 +425,7 @@ jobs:
         run: |
           set -o pipefail
           cargo build --locked $BRIDGE_CRATES 2>&1 | tee "$RUNNER_TEMP/bridge-build.log"
-          if grep -q '^warning:' "$RUNNER_TEMP/bridge-build.log"; then exit 1; fi
+          if grep -qi warning "$RUNNER_TEMP/bridge-build.log"; then exit 1; fi
           printf '\n' > target/debug/elephc-pdo-features.txt
 
       - name: Build curl-aware magician staticlib
@@ -682,6 +684,7 @@ jobs:
           cargo clean -p elephc-pdo
 
       - name: Build bridge/native support crates
+        shell: bash
         if: inputs.scope != 'compiler'
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
@@ -701,7 +704,7 @@ jobs:
         run: |
           set -o pipefail
           cargo build --locked $BRIDGE_CRATES 2>&1 | tee "$RUNNER_TEMP/bridge-build.log"
-          if grep -q '^warning:' "$RUNNER_TEMP/bridge-build.log"; then exit 1; fi
+          if grep -qi warning "$RUNNER_TEMP/bridge-build.log"; then exit 1; fi
           printf '\n' > target/debug/elephc-pdo-features.txt
 
       - name: Build curl-aware magician staticlib

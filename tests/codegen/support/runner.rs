@@ -641,7 +641,28 @@ pub(crate) fn configure_prebuilt_cli_bridges(command: &mut Command) {
     let directory = bridge_staticlib_dir().canonicalize()
         .expect("resolve prebuilt CLI bridge directory");
     for bridge in TEST_BRIDGE_STATICLIBS {
-        command.env(format!("{}_LIB_DIR", bridge.lib_name.to_ascii_uppercase()), &directory);
+        command.env(prebuilt_cli_bridge_variable(bridge.lib_name), &directory);
+    }
+}
+
+/// Uses the production OpenSSL bridge override, distinct from the native package path.
+fn prebuilt_cli_bridge_variable(lib_name: &str) -> String {
+    if lib_name == "elephc_openssl" {
+        "ELEPHC_OPENSSL_BRIDGE_LIB_DIR".to_string()
+    } else {
+        format!("{}_LIB_DIR", lib_name.to_ascii_uppercase())
+    }
+}
+
+#[cfg(test)]
+mod prebuilt_cli_bridge_variable_tests {
+    use super::prebuilt_cli_bridge_variable;
+
+    /// The OpenSSL exception must not trigger a hidden rebuild in archived CLI fixtures.
+    #[test]
+    fn prebuilt_cli_openssl_uses_the_bridge_override() {
+        assert_eq!(prebuilt_cli_bridge_variable("elephc_openssl"), "ELEPHC_OPENSSL_BRIDGE_LIB_DIR");
+        assert_eq!(prebuilt_cli_bridge_variable("elephc_crypto"), "ELEPHC_CRYPTO_LIB_DIR");
     }
 }
 
