@@ -65,6 +65,13 @@ platform = 'cfg(target_arch = "x86_64")'
 filter = 'test(=ir_lower::tests::eval_native_reference_layout::dynamic_eval_unset_keeps_numeric_alias_payloads_in_the_sync_inventory_on_every_target) or test(=ir_lower::tests::eval_native_reference_layout::dynamic_eval_object_aliases_guard_tags_and_classes_on_every_target) or test(=codegen::eval_property_helpers::reference_getter::tests::hidden_mixed_reference_cells_keep_physical_ownership_on_every_target)'
 threads-required = "num-test-threads"
 
+# This five-target SimpleXML native-reference probe compiles the complete AST prelude for
+# every target and reached its 180s deadline while sharing a linux-x86_64 shard. Reserve
+# the pool so the existing target coverage and deadline stay unchanged.
+[[profile.ci.overrides]]
+filter = 'test(=ir_lower::tests::simplexml_targets::native_nullable_object_reference_returns_preserve_the_named_cell_on_every_target)'
+threads-required = "num-test-threads"
+
 # Phase records show these XML probes reached assembly or linking under shared work.
 # The factory pair reached its unchanged 360s limit in assembly. Keep every case and budget.
 [[profile.ci.overrides]]
