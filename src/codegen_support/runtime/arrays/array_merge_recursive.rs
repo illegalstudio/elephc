@@ -172,7 +172,39 @@ pub fn emit_array_merge_recursive(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #120]");                                  // keep the associative array as the existing operand
     emitter.instruction("str xzr, [sp, #136]");                                 // existing operand is borrowed (not newly created)
     emitter.instruction("b __rt_amr_na");                                       // build the new operand next
-    emitter.label("__rt_amr_ea_wrap");
+    emitter.label("__rt_amr_ea_wrap");                                          // non-array existing values first get PHP's object projection
+    emitter.instruction("ldr x0, [sp, #112]");                                  // existing value runtime tag
+    emitter.instruction("cmp x0, #6");                                          // is the existing value a raw object?
+    emitter.instruction("b.eq __rt_amr_ea_object");                             // merge object properties as an array
+    emitter.instruction("cmp x0, #7");                                          // is the existing value a boxed Mixed cell?
+    emitter.instruction("b.eq __rt_amr_ea_mixed");                              // inspect the boxed payload tag
+    emitter.instruction("b __rt_amr_ea_box");                                   // other tags keep the scalar wrap path
+    emitter.label("__rt_amr_ea_mixed");                                         // boxed values may hold arrays or objects
+    emitter.instruction("ldr x0, [sp, #96]");                                   // boxed Mixed cell pointer
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = payload tag, x1 = payload low word
+    emitter.instruction("cmp x0, #5");                                          // is the boxed payload an associative array?
+    emitter.instruction("b.eq __rt_amr_ea_mixed_array");                        // reuse it as the existing operand
+    emitter.instruction("cmp x0, #6");                                          // is the boxed payload an object?
+    emitter.instruction("b.eq __rt_amr_ea_mixed_object");                       // convert the unboxed object pointer
+    emitter.instruction("b __rt_amr_ea_box");                                   // other boxed payloads keep the wrap path
+    emitter.label("__rt_amr_ea_mixed_array");                                   // the box still owns the array, so borrow it
+    emitter.instruction("str x1, [sp, #120]");                                  // use the boxed array as the existing operand
+    emitter.instruction("str xzr, [sp, #136]");                                 // existing operand is borrowed (not newly created)
+    emitter.instruction("b __rt_amr_na");                                       // build the new operand next
+    emitter.label("__rt_amr_ea_mixed_object");                                  // carry the unboxed object pointer
+    emitter.instruction("mov x0, x1");                                          // object pointer for the projection helper
+    emitter.instruction("b __rt_amr_ea_object_convert");                        // share the projection with the raw-object arm
+    emitter.label("__rt_amr_ea_object");                                        // raw object pointer from the hash entry
+    emitter.instruction("ldr x0, [sp, #96]");                                   // existing value low word is the object pointer
+    emitter.label("__rt_amr_ea_object_convert");                                // materialize PHP's object-to-array projection
+    emitter.instruction("mov x1, #1");                                          // cast mode keeps visibility-mangled property keys
+    emitter.instruction("mov x2, #-1");                                         // project from global scope
+    emitter.instruction("bl __rt_object_to_hash");                              // x0 = fresh property hash
+    emitter.instruction("str x0, [sp, #120]");                                  // use the projection as the existing operand
+    emitter.instruction("mov x9, #1");                                          // the projection is newly created
+    emitter.instruction("str x9, [sp, #136]");                                  // release it after the merge
+    emitter.instruction("b __rt_amr_na");                                       // build the new operand next
+    emitter.label("__rt_amr_ea_box");                                           // wrap a non-array existing value into a list
     emitter.instruction("ldr x0, [sp, #112]");                                  // existing value tag
     emitter.instruction("ldr x1, [sp, #96]");                                   // existing value low word
     emitter.instruction("ldr x2, [sp, #104]");                                  // existing value high word
@@ -180,7 +212,7 @@ pub fn emit_array_merge_recursive(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #120]");                                  // save the existing operand
     emitter.instruction("mov x9, #1");                                          // mark the existing operand as newly created
     emitter.instruction("str x9, [sp, #136]");                                  // save the existing-operand ownership flag
-    emitter.label("__rt_amr_na");
+    emitter.label("__rt_amr_na");                                               // build the new operand next
     emitter.instruction("ldr x3, [sp, #88]");                                   // reload the new value tag
     emitter.instruction("cmp x3, #5");                                          // is the new value an associative array?
     emitter.instruction("b.ne __rt_amr_na_wrap");                               // wrap non-assoc new values into a list
@@ -188,7 +220,39 @@ pub fn emit_array_merge_recursive(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #128]");                                  // keep the associative array as the new operand
     emitter.instruction("str xzr, [sp, #144]");                                 // new operand is borrowed (not newly created)
     emitter.instruction("b __rt_amr_merge");                                    // merge the two operands
-    emitter.label("__rt_amr_na_wrap");
+    emitter.label("__rt_amr_na_wrap");                                          // non-array new values first get PHP's object projection
+    emitter.instruction("ldr x0, [sp, #88]");                                   // new value runtime tag
+    emitter.instruction("cmp x0, #6");                                          // is the new value a raw object?
+    emitter.instruction("b.eq __rt_amr_na_object");                             // merge object properties as an array
+    emitter.instruction("cmp x0, #7");                                          // is the new value a boxed Mixed cell?
+    emitter.instruction("b.eq __rt_amr_na_mixed");                              // inspect the boxed payload tag
+    emitter.instruction("b __rt_amr_na_box");                                   // other tags keep the scalar wrap path
+    emitter.label("__rt_amr_na_mixed");                                         // boxed values may hold arrays or objects
+    emitter.instruction("ldr x0, [sp, #72]");                                   // boxed Mixed cell pointer
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = payload tag, x1 = payload low word
+    emitter.instruction("cmp x0, #5");                                          // is the boxed payload an associative array?
+    emitter.instruction("b.eq __rt_amr_na_mixed_array");                        // reuse it as the new operand
+    emitter.instruction("cmp x0, #6");                                          // is the boxed payload an object?
+    emitter.instruction("b.eq __rt_amr_na_mixed_object");                       // convert the unboxed object pointer
+    emitter.instruction("b __rt_amr_na_box");                                   // other boxed payloads keep the wrap path
+    emitter.label("__rt_amr_na_mixed_array");                                   // the box still owns the array, so borrow it
+    emitter.instruction("str x1, [sp, #128]");                                  // use the boxed array as the new operand
+    emitter.instruction("str xzr, [sp, #144]");                                 // new operand is borrowed (not newly created)
+    emitter.instruction("b __rt_amr_merge");                                    // merge the two operands
+    emitter.label("__rt_amr_na_mixed_object");                                  // carry the unboxed object pointer
+    emitter.instruction("mov x0, x1");                                          // object pointer for the projection helper
+    emitter.instruction("b __rt_amr_na_object_convert");                        // share the projection with the raw-object arm
+    emitter.label("__rt_amr_na_object");                                        // raw object pointer from the hash entry
+    emitter.instruction("ldr x0, [sp, #72]");                                   // new value low word is the object pointer
+    emitter.label("__rt_amr_na_object_convert");                                // materialize PHP's object-to-array projection
+    emitter.instruction("mov x1, #1");                                          // cast mode keeps visibility-mangled property keys
+    emitter.instruction("mov x2, #-1");                                         // project from global scope
+    emitter.instruction("bl __rt_object_to_hash");                              // x0 = fresh property hash
+    emitter.instruction("str x0, [sp, #128]");                                  // use the projection as the new operand
+    emitter.instruction("mov x9, #1");                                          // the projection is newly created
+    emitter.instruction("str x9, [sp, #144]");                                  // release it after the merge
+    emitter.instruction("b __rt_amr_merge");                                    // merge the two operands
+    emitter.label("__rt_amr_na_box");                                           // wrap a non-array new value into a list
     emitter.instruction("ldr x0, [sp, #88]");                                   // new value tag
     emitter.instruction("ldr x1, [sp, #72]");                                   // new value low word
     emitter.instruction("ldr x2, [sp, #80]");                                   // new value high word
@@ -196,7 +260,7 @@ pub fn emit_array_merge_recursive(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #128]");                                  // save the new operand
     emitter.instruction("mov x9, #1");                                          // mark the new operand as newly created
     emitter.instruction("str x9, [sp, #144]");                                  // save the new-operand ownership flag
-    emitter.label("__rt_amr_merge");
+    emitter.label("__rt_amr_merge");                                            // merge the two operands
     emitter.instruction("ldr x0, [sp, #120]");                                  // existing operand
     emitter.instruction("ldr x1, [sp, #128]");                                  // new operand
     emitter.instruction("bl __rt_array_merge_recursive");                       // recursively merge the two operands, x0 = merged
@@ -348,14 +412,45 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 128], rdi");                      // keep the associative array as the existing operand
     emitter.instruction("mov QWORD PTR [rbp - 144], 0");                        // existing operand is borrowed (not newly created)
     emitter.instruction("jmp __rt_amr_na");                                     // build the new operand next
-    emitter.label("__rt_amr_ea_wrap");
+    emitter.label("__rt_amr_ea_wrap");                                          // non-array existing values first get PHP's object projection
+    emitter.instruction("mov rax, QWORD PTR [rbp - 120]");                      // existing value runtime tag
+    emitter.instruction("cmp rax, 6");                                          // is the existing value a raw object?
+    emitter.instruction("je __rt_amr_ea_object");                               // merge object properties as an array
+    emitter.instruction("cmp rax, 7");                                          // is the existing value a boxed Mixed cell?
+    emitter.instruction("je __rt_amr_ea_mixed");                                // inspect the boxed payload tag
+    emitter.instruction("jmp __rt_amr_ea_box");                                 // other tags keep the scalar wrap path
+    emitter.label("__rt_amr_ea_mixed");                                         // boxed values may hold arrays or objects
+    emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // boxed Mixed cell pointer enters the unbox ABI in rax
+    emitter.instruction("call __rt_mixed_unbox");                               // rax = payload tag, rdi = payload low word
+    emitter.instruction("cmp rax, 5");                                          // is the boxed payload an associative array?
+    emitter.instruction("je __rt_amr_ea_mixed_array");                          // reuse it as the existing operand
+    emitter.instruction("cmp rax, 6");                                          // is the boxed payload an object?
+    emitter.instruction("je __rt_amr_ea_mixed_object");                         // convert the unboxed object pointer
+    emitter.instruction("jmp __rt_amr_ea_box");                                 // other boxed payloads keep the wrap path
+    emitter.label("__rt_amr_ea_mixed_array");                                   // the box still owns the array, so borrow it
+    emitter.instruction("mov QWORD PTR [rbp - 128], rdi");                      // use the boxed array as the existing operand
+    emitter.instruction("mov QWORD PTR [rbp - 144], 0");                        // existing operand is borrowed (not newly created)
+    emitter.instruction("jmp __rt_amr_na");                                     // build the new operand next
+    emitter.label("__rt_amr_ea_mixed_object");                                  // carry the unboxed object pointer
+    emitter.instruction("mov rax, rdi");                                        // object pointer for the projection helper
+    emitter.instruction("jmp __rt_amr_ea_object_convert");                      // share the projection with the raw-object arm
+    emitter.label("__rt_amr_ea_object");                                        // raw object pointer from the hash entry
+    emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // existing value low word is the object pointer
+    emitter.label("__rt_amr_ea_object_convert");                                // materialize PHP's object-to-array projection
+    emitter.instruction("mov rdx, 1");                                          // cast mode keeps visibility-mangled property keys
+    emitter.instruction("mov rcx, -1");                                         // project from global scope
+    emitter.instruction("call __rt_object_to_hash");                            // custom ABI: object in rax, mode in rdx, scope in rcx
+    emitter.instruction("mov QWORD PTR [rbp - 128], rax");                      // use the projection as the existing operand
+    emitter.instruction("mov QWORD PTR [rbp - 144], 1");                        // release it after the merge
+    emitter.instruction("jmp __rt_amr_na");                                     // build the new operand next
+    emitter.label("__rt_amr_ea_box");                                           // wrap a non-array existing value into a list
     emitter.instruction("mov rdi, QWORD PTR [rbp - 120]");                      // existing value tag
     emitter.instruction("mov rsi, QWORD PTR [rbp - 104]");                      // existing value low word
     emitter.instruction("mov rdx, QWORD PTR [rbp - 112]");                      // existing value high word
     emitter.instruction("call __rt_amr_box_value");                             // wrap the existing value into a list, rax = wrapper
     emitter.instruction("mov QWORD PTR [rbp - 128], rax");                      // save the existing operand
     emitter.instruction("mov QWORD PTR [rbp - 144], 1");                        // mark the existing operand as newly created
-    emitter.label("__rt_amr_na");
+    emitter.label("__rt_amr_na");                                               // build the new operand next
     emitter.instruction("mov rcx, QWORD PTR [rbp - 96]");                       // reload the new value tag
     emitter.instruction("cmp rcx, 5");                                          // is the new value an associative array?
     emitter.instruction("jne __rt_amr_na_wrap");                                // wrap non-assoc new values into a list
@@ -363,14 +458,45 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 136], rax");                      // keep the associative array as the new operand
     emitter.instruction("mov QWORD PTR [rbp - 152], 0");                        // new operand is borrowed (not newly created)
     emitter.instruction("jmp __rt_amr_merge");                                  // merge the two operands
-    emitter.label("__rt_amr_na_wrap");
+    emitter.label("__rt_amr_na_wrap");                                          // non-array new values first get PHP's object projection
+    emitter.instruction("mov rax, QWORD PTR [rbp - 96]");                       // new value runtime tag
+    emitter.instruction("cmp rax, 6");                                          // is the new value a raw object?
+    emitter.instruction("je __rt_amr_na_object");                               // merge object properties as an array
+    emitter.instruction("cmp rax, 7");                                          // is the new value a boxed Mixed cell?
+    emitter.instruction("je __rt_amr_na_mixed");                                // inspect the boxed payload tag
+    emitter.instruction("jmp __rt_amr_na_box");                                 // other tags keep the scalar wrap path
+    emitter.label("__rt_amr_na_mixed");                                         // boxed values may hold arrays or objects
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // boxed Mixed cell pointer enters the unbox ABI in rax
+    emitter.instruction("call __rt_mixed_unbox");                               // rax = payload tag, rdi = payload low word
+    emitter.instruction("cmp rax, 5");                                          // is the boxed payload an associative array?
+    emitter.instruction("je __rt_amr_na_mixed_array");                          // reuse it as the new operand
+    emitter.instruction("cmp rax, 6");                                          // is the boxed payload an object?
+    emitter.instruction("je __rt_amr_na_mixed_object");                         // convert the unboxed object pointer
+    emitter.instruction("jmp __rt_amr_na_box");                                 // other boxed payloads keep the wrap path
+    emitter.label("__rt_amr_na_mixed_array");                                   // the box still owns the array, so borrow it
+    emitter.instruction("mov QWORD PTR [rbp - 136], rdi");                      // use the boxed array as the new operand
+    emitter.instruction("mov QWORD PTR [rbp - 152], 0");                        // new operand is borrowed (not newly created)
+    emitter.instruction("jmp __rt_amr_merge");                                  // merge the two operands
+    emitter.label("__rt_amr_na_mixed_object");                                  // carry the unboxed object pointer
+    emitter.instruction("mov rax, rdi");                                        // object pointer for the projection helper
+    emitter.instruction("jmp __rt_amr_na_object_convert");                      // share the projection with the raw-object arm
+    emitter.label("__rt_amr_na_object");                                        // raw object pointer from the hash entry
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // new value low word is the object pointer
+    emitter.label("__rt_amr_na_object_convert");                                // materialize PHP's object-to-array projection
+    emitter.instruction("mov rdx, 1");                                          // cast mode keeps visibility-mangled property keys
+    emitter.instruction("mov rcx, -1");                                         // project from global scope
+    emitter.instruction("call __rt_object_to_hash");                            // custom ABI: object in rax, mode in rdx, scope in rcx
+    emitter.instruction("mov QWORD PTR [rbp - 136], rax");                      // use the projection as the new operand
+    emitter.instruction("mov QWORD PTR [rbp - 152], 1");                        // release it after the merge
+    emitter.instruction("jmp __rt_amr_merge");                                  // merge the two operands
+    emitter.label("__rt_amr_na_box");                                           // wrap a non-array new value into a list
     emitter.instruction("mov rdi, QWORD PTR [rbp - 96]");                       // new value tag
     emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // new value low word
     emitter.instruction("mov rdx, QWORD PTR [rbp - 88]");                       // new value high word
     emitter.instruction("call __rt_amr_box_value");                             // wrap the new value into a list, rax = wrapper
     emitter.instruction("mov QWORD PTR [rbp - 136], rax");                      // save the new operand
     emitter.instruction("mov QWORD PTR [rbp - 152], 1");                        // mark the new operand as newly created
-    emitter.label("__rt_amr_merge");
+    emitter.label("__rt_amr_merge");                                            // merge the two operands
     emitter.instruction("mov rdi, QWORD PTR [rbp - 128]");                      // existing operand
     emitter.instruction("mov rsi, QWORD PTR [rbp - 136]");                      // new operand
     emitter.instruction("call __rt_array_merge_recursive");                     // recursively merge the two operands, rax = merged
@@ -463,3 +589,40 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the merged hash in rax
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::emit_array_merge_recursive;
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies the linux-x86_64 object-projection arms feed `__rt_mixed_unbox` through its ABI.
+    ///
+    /// The helper reads the boxed cell from `rax` and answers the payload low word in `rdi`.
+    /// Loading the cell into `rdi` made the helper dereference the payload register as a
+    /// pointer, which crashed every colliding object projection on linux-x86_64.
+    #[test]
+    fn x86_64_object_projection_unboxes_through_rax_on_both_operands() {
+        let target = Target::parse("linux-x86_64").expect("supported target");
+        let mut emitter = Emitter::new(target);
+        emit_array_merge_recursive(&mut emitter);
+        let asm = emitter.output();
+        let lines: Vec<&str> = asm.lines().collect();
+        let mut calls = 0;
+        for (index, line) in lines.iter().enumerate() {
+            if !line.trim().ends_with("call __rt_mixed_unbox") {
+                continue;
+            }
+            calls += 1;
+            let previous = lines
+                .get(index.wrapping_sub(1))
+                .map(|line| line.trim())
+                .unwrap_or_default();
+            assert!(
+                previous.starts_with("mov rax, QWORD PTR [rbp - "),
+                "the boxed cell must enter the unbox ABI in rax, got: {previous}"
+            );
+        }
+        assert_eq!(calls, 2, "both projection directions unbox exactly once");
+    }
+}

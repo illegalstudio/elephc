@@ -82,6 +82,14 @@ PHAR_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_phar.a"
 test -s "$BRIDGE_ARCHIVE"
 test -s "$PHAR_ARCHIVE"
 
+# Read the pinned package version and recipe from the lock: hardcoding them here silently
+# diverged when the lock moved to recipe 11, leaving this job looking under r9.
+LIBXML2_LOCK="$PROJECT_DIR/examples/xml/elephc.lock"
+LIBXML2_VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$LIBXML2_LOCK" | head -n 1)"
+LIBXML2_RECIPE="$(sed -n 's/^recipe[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$LIBXML2_LOCK" | head -n 1)"
+test -n "$LIBXML2_VERSION"
+test -n "$LIBXML2_RECIPE"
+
 # Select an installed archive for this exact package recipe and target. More than one
 # toolchain fingerprint can remain after an Xcode update; every candidate has already
 # passed receipt verification during `native install`, and the source/version/recipe and
@@ -103,8 +111,8 @@ find_native_archive() {
 
 # Shim first: it reaches into libxml2's parser-context structs on the bridge's behalf,
 # so it must precede libxml2.a (src/linker/bridges.rs LIBXML2_ARCHIVES).
-SHIM_ARCHIVE="$(find_native_archive libxml2 2.15.3 9 libelephc_libxml2_shim.a)"
-LIBXML2_ARCHIVE="$(find_native_archive libxml2 2.15.3 9 libxml2.a)"
+SHIM_ARCHIVE="$(find_native_archive libxml2 "$LIBXML2_VERSION" "$LIBXML2_RECIPE" libelephc_libxml2_shim.a)"
+LIBXML2_ARCHIVE="$(find_native_archive libxml2 "$LIBXML2_VERSION" "$LIBXML2_RECIPE" libxml2.a)"
 
 WORK_DIR="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/elephc-ios-xml-link.XXXXXX")"
 cleanup() {

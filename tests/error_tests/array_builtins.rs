@@ -1286,14 +1286,11 @@ fn test_error_array_pointer_element_receiver() {
     );
 }
 
-/// Verifies a call-result receiver is a named compile error for the same reason.
+/// Verifies a call-result receiver is accepted: its temporary owns no caller-visible pointer.
 /// Fixture: `current(f())` where `f()` returns a fresh array.
 #[test]
-fn test_error_array_pointer_call_result_receiver() {
-    expect_error(
-        r#"<?php function f(): array { return [1, 2]; } echo current(f());"#,
-        "current() argument must be an array variable",
-    );
+fn test_array_pointer_call_result_receiver_is_accepted() {
+    expect_no_error(r#"<?php function f(): array { return [1, 2]; } echo current(f());"#);
 }
 
 /// Verifies an array literal receiver is a named compile error for the same reason.

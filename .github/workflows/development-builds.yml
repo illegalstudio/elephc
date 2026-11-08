@@ -112,4 +112,3 @@ jobs:
       source-sha: ${{ needs.validate.outputs.sha }}
       producer-run: ${{ needs.validate.outputs.reuse-run || github.run_id }}
       producer-attempt: ${{ needs.validate.outputs.reuse-run != '' && fromJSON(needs.validate.outputs.reuse-attempts)['macos-aarch64'] || needs.build-macos-aarch64.outputs.artifact-attempt }}
-

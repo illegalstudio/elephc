@@ -92,4 +92,3 @@ jobs:
       - name: Audit consumer compilation
         if: always()
         uses: ./.github/actions/assert-consumer-builds
-

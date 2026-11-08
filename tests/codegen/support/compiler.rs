@@ -29,6 +29,35 @@ impl Drop for ForceGmpGuard {
     }
 }
 
+/// Removes PHP's ` in <file> on line <n>` suffix and diagnostic framing blank lines.
+///
+/// Fixtures compile into per-test temporary directories, so exact stderr assertions compare
+/// the message text without the volatile path. The leading newline PHP prints before each
+/// diagnostic is dropped too, matching assertions written before location framing existed.
+pub(crate) fn normalize_diagnostic_text(stderr: &str) -> String {
+    // Remove only the trailing ` in FILE on line N` suffix. A blanket " in ... on line"
+    // regex would also swallow message text such as mb_split's
+    // "mbregex search failure in mbsplit(): ..." because the message itself contains " in ".
+    fn strip_location(line: &str) -> &str {
+        let Some(on_line) = line.rfind(" on line ") else { return line; };
+        let suffix = &line[on_line + " on line ".len()..];
+        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            return line;
+        }
+        line[..on_line].rfind(" in ").map_or(line, |in_pos| &line[..in_pos])
+    }
+    let mut normalized = String::new();
+    for line in stderr.lines() {
+        let line = strip_location(line).trim_start_matches('\n');
+        if line.is_empty() {
+            continue;
+        }
+        normalized.push_str(line);
+        normalized.push('\n');
+    }
+    normalized
+}
+
 /// Compiles and runs one corpus fixture with ext/gmp guaranteed to be loaded.
 pub(crate) fn compile_and_run_capture_merged_with_gmp(source: &str) -> ProgramOutput {
     FORCE_GMP_PRELUDE.with(|flag| flag.set(true));

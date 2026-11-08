@@ -1306,7 +1306,9 @@ fn bind_dynamic_current_value_ref(
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&object_case);
-    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+    // PHP refuses by-reference traversal of any Iterator/IteratorAggregate; SimpleXML is
+    // the common case in practice. Raise the catchable Error instead of a compiler fatal.
+    super::exceptions::emit_error(ctx, "An iterator cannot be used with foreach by reference");
     ctx.emitter.label(&done);
     Ok(())
 }
