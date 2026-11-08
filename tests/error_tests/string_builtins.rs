@@ -800,6 +800,9 @@ fn test_simplexml_followup_str_replace_rejects_unlowerable_array_search() {
         r#"<?php echo str_replace(search: ["a", "b"], replace: "x", subject: "ab");"#,
         r#"<?php echo str_replace(...[["a", "b"], "x", "ab"]);"#,
     ] {
-        expect_error(source, "str_replace parameter $search");
+        expect_error(
+            source,
+            "str_replace(): Argument #1 ($search) must be of type string, array given",
+        );
     }
 }
