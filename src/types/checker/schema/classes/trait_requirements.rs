@@ -17,12 +17,20 @@
 //! - Methods the class body declares itself are recorded too: a requirement satisfied by an
 //!   inherited method is skipped only when the abstract method is the trait's, never when the
 //!   class itself re-declares the method abstract.
+//! - A skipped requirement still checks the inherited signature against it
+//!   (`validate_inherited_implementation`), with the rules enums apply to trait requirements.
 
 use std::collections::{HashMap, HashSet};
 
+use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Program, Stmt, StmtKind, TraitUse};
 use crate::types::traits::FlattenedClass;
+use crate::types::{FunctionSig, PhpType};
+
+use super::super::super::Checker;
+use super::super::class_constants::strict_type_accepts;
+use super::super::validation::{build_method_sig, validate_abstract_trait_signature};
 
 /// The trait requirements of one class.
 #[derive(Debug, Clone, Default)]
@@ -139,4 +147,34 @@ fn used_trait_keys(trait_uses: &[TraitUse]) -> Vec<String> {
         .iter()
         .flat_map(|use_decl| use_decl.trait_names.iter().map(|name| php_symbol_key(name.as_str())))
         .collect()
+}
+
+/// Checks that an inherited implementation is compatible with the trait requirement it
+/// satisfies: parameters may only widen and a declared return type must be honoured, as PHP
+/// reports `Declaration of P::foo() must be compatible with T::foo()` otherwise.
+pub(crate) fn validate_inherited_implementation(
+    checker: &Checker,
+    class: &FlattenedClass,
+    required: &ClassMethod,
+    inherited: &FunctionSig,
+) -> Result<(), CompileError> {
+    let mut required = required.clone();
+    required.substitute_relative_class_types(&class.name, None);
+    let required_sig = build_method_sig(checker, &required, &class.name)?;
+    validate_abstract_trait_signature(
+        checker, required.span, &class.name, &required.name, inherited, &required_sig,
+    )?;
+    let late_static = required.return_type.as_ref().is_some_and(|hint| hint.contains_late_static());
+    if required_sig.declared_return
+        && !late_static
+        && !matches!(inherited.return_type, PhpType::Never)
+        && (!inherited.declared_return
+            || !strict_type_accepts(checker, &required_sig.return_type, &inherited.return_type, false))
+    {
+        return Err(CompileError::new(required.span, &format!(
+            "Cannot change return type when implementing trait method: {}::{}",
+            class.name, required.name,
+        )));
+    }
+    Ok(())
 }

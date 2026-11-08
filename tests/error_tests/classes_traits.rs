@@ -86,6 +86,28 @@ abstract class C extends P { use T; abstract public function foo(): int; }
     );
 }
 
+/// An inherited method satisfies a trait requirement only with a compatible signature: it may
+/// not narrow a parameter nor break the declared return type, as PHP reports.
+#[test]
+fn test_error_inherited_method_must_match_trait_requirement_signature() {
+    expect_error(
+        r#"<?php
+class P { public function foo(string $x): int { return 1; } }
+trait T { abstract public function foo(int $x): int; }
+final class C extends P { use T; }
+"#,
+        "Cannot narrow parameter $x when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+class P { public static function make(): int { return 1; } }
+trait T { abstract public static function make(): string; }
+final class C extends P { use T; }
+"#,
+        "Cannot change return type when implementing trait method: C::make",
+    );
+}
+
 /// `#[\Override]` on a trait-using class still needs a target: a parent method, an interface
 /// method, or an abstract method of a used trait.
 #[test]

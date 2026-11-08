@@ -13,6 +13,7 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Visibility};
 use crate::types::traits::FlattenedClass;
+use crate::types::FunctionSig;
 
 use super::super::super::Checker;
 use super::super::validation::{
@@ -20,6 +21,7 @@ use super::super::validation::{
     validate_override_signature, visibility_rank,
 };
 use super::state::ClassBuildState;
+use super::trait_requirements::validate_inherited_implementation;
 use super::{collect_attribute_args, collect_attribute_names};
 
 /// Validates and registers all methods of a flattened class into the build state.
@@ -105,7 +107,12 @@ fn apply_static_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
-    if inherited_method_satisfies_requirement(checker, class, method, &method_key, state.static_method_impl_classes.contains_key(&method_key)) {
+    let inherited = state
+        .static_method_impl_classes
+        .contains_key(&method_key)
+        .then(|| state.static_sigs.get(&method_key))
+        .flatten();
+    if inherited_method_satisfies_requirement(checker, class, method, &method_key, inherited)? {
         return Ok(());
     }
     let mut sig = build_method_sig(checker, method, &class.name)?;
@@ -243,7 +250,12 @@ fn apply_instance_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
-    if inherited_method_satisfies_requirement(checker, class, method, &method_key, state.method_impl_classes.contains_key(&method_key)) {
+    let inherited = state
+        .method_impl_classes
+        .contains_key(&method_key)
+        .then(|| state.method_sigs.get(&method_key))
+        .flatten();
+    if inherited_method_satisfies_requirement(checker, class, method, &method_key, inherited)? {
         return Ok(());
     }
     let internal_exception_override = injected_exception_final_override(class, method, &method_key);
@@ -488,23 +500,29 @@ fn satisfies_trait_requirement(checker: &Checker, class: &FlattenedClass, method
         .is_some_and(|requirements| requirements.required.contains(method_key))
 }
 
-/// Whether `method` is a used trait's abstract requirement that an inherited implementation
+/// Whether `method` is a used trait's abstract requirement that the `inherited` implementation
 /// already satisfies (`class Panel extends Widget { use Rows; }` with `Rows` requiring
 /// `Widget::invalidate()`). Such a requirement adds nothing to the schema; registering it would
-/// read as a re-abstraction, or as an override of a final method.
+/// read as a re-abstraction, or as an override of a final method. The inherited signature must
+/// still be compatible with the requirement, as PHP checks it.
 fn inherited_method_satisfies_requirement(
     checker: &Checker,
     class: &FlattenedClass,
     method: &ClassMethod,
     method_key: &str,
-    inherited_implementation: bool,
-) -> bool {
-    method.is_abstract
-        && inherited_implementation
+    inherited: Option<&FunctionSig>,
+) -> Result<bool, CompileError> {
+    let Some(inherited) = inherited else { return Ok(false) };
+    let is_requirement = method.is_abstract
         && checker
             .trait_method_requirements
             .get(&class.name)
-            .is_some_and(|requirements| requirements.is_imported_requirement(method_key))
+            .is_some_and(|requirements| requirements.is_imported_requirement(method_key));
+    if !is_requirement {
+        return Ok(false);
+    }
+    validate_inherited_implementation(checker, class, method, inherited)?;
+    Ok(true)
 }
 
 /// Constructs a `CompileError` when a method carries `#[\Override]` but no
