@@ -132,7 +132,9 @@ impl Checker {
                     || self.interface_extends_interface(class_name, ancestor_name)))
     }
 
-    /// Returns true if `class_name` directly implements `interface_name` (not via inheritance).
+    /// Returns true if `class_name` implements `interface_name`: from the built class's
+    /// flattened interface list (parents and interface parents included), or, for a class the
+    /// build walk has not reached yet, from its declared ancestry.
     pub(crate) fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
         if !self.classes.contains_key(class_name) {
             return self.declared_class_implements_interface(class_name, interface_name);
