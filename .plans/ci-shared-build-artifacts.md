@@ -3,13 +3,13 @@ title: "Shared CI build artifacts"
 description: "Implementation plan for shared build artifacts across Elephc CI."
 ---
 
-- [ ] Inventory every build command, implicit bridge build, test selector and required check.
-- [ ] Define artifact identities, manifests, payloads and producer/consumer validation.
-- [ ] Extract build producers and separate compilation from test execution.
-- [ ] Coordinate PR, merge-group and main consumers through one producer graph.
-- [ ] Migrate PDO, PHP SDK, native package, tokenizer, differential and iOS jobs.
-- [ ] Reuse verified merge-group artifacts on main and expose development downloads.
-- [ ] Apply the same producer contract to scheduled/manual runs, nightly and release.
+- [x] Inventory every build command, implicit bridge build, test selector and required check.
+- [x] Define artifact identities, manifests, payloads and producer/consumer validation.
+- [x] Extract build producers and separate compilation from test execution.
+- [x] Coordinate PR, merge-group and main consumers through one producer graph.
+- [x] Migrate PDO, PHP SDK, native package, tokenizer, differential and iOS jobs.
+- [x] Reuse verified merge-group artifacts on main and expose development downloads.
+- [x] Apply the same producer contract to scheduled/manual runs, nightly and release.
 - [ ] Verify failure propagation, coverage, cancellation, provenance and measured savings.
 
 Status: implementation in progress on `ci/shared-build-artifacts`.
@@ -31,9 +31,18 @@ Progress on 2026-11-08:
 - First runner failures exposed container Git ownership and multi-path artifact
   layout issues, plus an irrelevant mandatory Oniguruma extra in PDO archives.
   Fixes and focused regression checks are in this branch.
-- Remaining: common nightly/release and benchmark producer usage, durable
-  reconciliation for skipped/multi-commit main updates, consumer build audit,
-  complete gate regressions, documentation and end-to-end CI validation/measurements.
+- Nightly/release/benchmark now share the release producer. Consumer Cargo guards,
+  full aggregate failure/cancellation checks and per-variant rerun attempts are covered.
+- Main gap reconciliation records pending requests durably before dispatch, starting
+  at rollout; skipped commits and intermediate HEADGREEN commits build their own SHA.
+- Linux image digests are resolved once and preserved across the job graph. Actual
+  Rust/native compiler, glibc and Apple SDK identities are recorded and checked.
+- 46 focused infrastructure tests pass, plus planner/queue cleanup, docs prebuilt
+  tests, actionlint and focused Rust bridge/PDO regressions. CONTRIBUTING is updated.
+- Real CI has passed iOS, specialized tool producers and the Linux x86_64 host
+  producer. Full consumer matrix validation remains active; no end-to-end green
+  claim or percentage saving is made yet. Remaining: resolve any real-run failures,
+  verify downloadable packages and record final comparable run measurements.
 
 Compatibility review: live ruleset, actual queue/main runs and existing cleanup
 behavior were checked before implementation. No ruleset changes are planned.

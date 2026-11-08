@@ -40,12 +40,14 @@ runs:
     - uses: ./.github/actions/forbid-consumer-builds
       if: inputs.allow-builds != 'true'
     - name: Download outputs
-      uses: actions/download-artifact@v8
+      uses: ./.github/actions/download-test-archive
       with:
         name: build-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.kind }}-${{ inputs.variant }}-${{ inputs.attempt }}
         path: ${{ runner.temp }}/build-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.kind }}-${{ inputs.variant }}/
         run-id: ${{ inputs.run-id }}
-        github-token: ${{ inputs.token }}
+        token: ${{ inputs.token }}
+        allow-builds: ${{ inputs.allow-builds }}
+        validate-payload: 'true'
     - name: Validate and restore outputs
       shell: bash
       env:

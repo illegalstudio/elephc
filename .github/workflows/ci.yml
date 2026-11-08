@@ -3112,20 +3112,9 @@ jobs:
           variant: curl
           attempt: ${{ needs.build-curl-tools.outputs.artifact-attempt }}
 
-      # Every other job builds the workspace with default features, and the
-      # nextest archive is no exception, so nothing else in CI ever compiles
-      # `elephc-builtin-contract`'s `curl` feature with its tests attached. The
-      # gated curl jobs do reach it, but only through the inner `cargo build`
-      # in src/linker/bridges.rs, which is compile-only. Without the steps
-      # below, adding a `curl_*` eval home with no matching shared contract
-      # keeps all of CI green and first fails as a `validate_shared_eval_coverage`
-      # panic inside a compiled user program's `eval()`.
-      #
-      # NO STEP HERE NEEDS A NATIVE libcurl, which is what keeps this job cheap
-      # enough to be always-on. The crate-level steps satisfy `curl_ffi`'s
-      # `elephc_curl_*` externs from its own `#[cfg(test)] mod test_stubs`; the
-      # root-level steps never reach Magician's eval dispatch table at all (they
-      # read builtin metadata only), so the linker drops every reference to it.
+      # These archives use the curl-enabled shared catalog and Magician bindings.
+      # Default host archives cannot cover this feature contract. Crate test stubs
+      # satisfy the curl externs, so this consumer needs no native libcurl.
       - name: Catalog coverage with the curl surface published
         run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-builtin-contract)'
 
