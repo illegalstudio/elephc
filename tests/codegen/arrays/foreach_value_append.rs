@@ -18,6 +18,9 @@
 //!   owning temporaries: the retaining store must not release them, or the
 //!   source array's string block is freed while still referenced and the
 //!   next `__rt_str_persist` reuses it (use-after-free corruption).
+//! - A string-keyed `array<string, C>` hash binds its by-value object value as
+//!   `C` too, so it can be appended to a pinned `array<C>` builder that is then
+//!   stored into a typed property without widening to boxed storage.
 
 use crate::support::*;
 
@@ -232,4 +235,106 @@ echo count($empty), "|", $values["name"], "|", $values["role"];
 "#,
     );
     assert_eq!(out, "0|NAME|ROLE");
+}
+
+/// A by-value foreach over a string-keyed `array<string, C>` hash binds its value as `C`, so a
+/// conditional append into a pinned `array<C>` builder keeps object storage and the builder can
+/// be stored into an `array<C>` property. Before the fix the hash value was bound as boxed
+/// `Mixed`, the append widened the builder to `array<mixed>`, and EIR codegen rejected the
+/// `prop_set`. Repeated rebuilds and the keyless form must stay heap-clean.
+#[test]
+fn test_foreach_hash_object_value_appends_into_pinned_object_list() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+final class Entry
+{
+    public function __construct(public readonly int $id) {}
+}
+
+final class Entries
+{
+    private array<string, Entry> $active = [];
+    private array<Entry> $ended = [];
+
+    public function __construct()
+    {
+        $this->active['left'] = new Entry(1);
+        $this->active['right'] = new Entry(2);
+    }
+
+    public function rebuild(string $wanted): void
+    {
+        array<Entry> $ended = [];
+        foreach ($this->active as $key => $entry) {
+            if ($key === $wanted) { $ended[] = $entry; }
+        }
+        $this->ended = $ended;
+    }
+
+    public function rebuildAbove(int $floor): void
+    {
+        array<Entry> $ended = [];
+        foreach ($this->active as $entry) {
+            if ($entry->id > $floor) { $ended[] = $entry; }
+        }
+        $this->ended = $ended;
+    }
+
+    public function describe(): string
+    {
+        return count($this->ended) . ':' . $this->ended[0]->id;
+    }
+}
+
+$entries = new Entries();
+$entries->rebuild('left');
+echo $entries->describe(), "|";
+$entries->rebuild('right');
+echo $entries->describe(), "|";
+$entries->rebuildAbove(1);
+echo $entries->describe(), "|";
+$entries->rebuildAbove(0);
+echo $entries->describe();
+unset($entries);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1:1|1:2|1:2|2:1", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A hash-bound object value is an owned lease: the builder keeps every appended object alive
+/// after the source hash is released, and each destructor runs exactly once when the last
+/// owner goes away, including after a `break` leaves the loop early.
+#[test]
+fn test_foreach_hash_object_value_owner_outlives_source_hash() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+final class Tracked
+{
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "~", $this->name; }
+}
+
+function pick(): array<Tracked>
+{
+    array<string, Tracked> $source = [];
+    $source['a'] = new Tracked('a');
+    $source['b'] = new Tracked('b');
+    $source['c'] = new Tracked('c');
+    array<Tracked> $kept = [];
+    foreach ($source as $key => $item) {
+        if ($key === 'c') { break; }
+        $kept[] = $item;
+    }
+    unset($source, $item);
+    echo "|";
+    return $kept;
+}
+
+$kept = pick();
+echo count($kept), ":", $kept[0]->name, $kept[1]->name, "|";
+unset($kept);
+echo "|end";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "~c|2:ab|~a~b|end", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
