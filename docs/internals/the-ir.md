@@ -1075,6 +1075,11 @@ drifting apart silently.
 | `SplRuntimeCall` | runtime helper, args | typed value | helper effect summary |
 
 `foreach` over arrays/hashes uses container-specific iterator operations.
+Hash iteration yields each entry as a boxed `Mixed`. A by-value loop over a hash
+whose value type is a concrete class unboxes that entry into an owned object
+(`MixedUnbox`) and releases the box, so the loop variable keeps the class type,
+as it does over an indexed object list, and appending it to a typed `array<C>`
+builder keeps object storage.
 `foreach` over objects uses iterator dispatch metadata and may call user code.
 
 ### Objects, Classes, Enums, and Attributes
