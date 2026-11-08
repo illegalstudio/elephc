@@ -151,11 +151,6 @@ impl AutoloadIndex {
         classes
     }
 
-    /// The keys (`php_symbol_key`) of every class the index maps to a file.
-    pub fn class_keys(&self) -> HashSet<String> {
-        self.fqn_to_path.keys().map(|name| crate::names::php_symbol_key(name)).collect()
-    }
-
     /// True when the index has no PSR-4 mappings and no files entries.
     pub fn is_empty(&self) -> bool {
         self.fqn_to_path.is_empty() && self.files_to_include.is_empty()
