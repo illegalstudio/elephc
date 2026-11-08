@@ -213,6 +213,13 @@ pub(super) fn parse_closure(
                 }
             }
         }
+        // PHP's grammar requires at least one capture: `use ()` is a syntax error.
+        if captures.is_empty() {
+            return Err(CompileError::new(
+                span,
+                "Expected variable in use() capture list",
+            ));
+        }
         if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
             return Err(CompileError::new(
                 span,

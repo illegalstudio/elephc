@@ -337,6 +337,27 @@ fn test_error_leading_comma_in_param_list() {
     expect_error("<?php function f(,) {}", "Expected parameter variable");
 }
 
+/// Verifies that a closure `use` list must capture at least one variable: `use ()` and the
+/// lone comma `use (,)` are both rejected, matching PHP.
+#[test]
+fn test_error_closure_use_list_requires_a_capture() {
+    for source in [
+        "<?php $f = function () use () {};",
+        "<?php $f = function () use (,) {};",
+    ] {
+        expect_error(source, "Expected variable in use() capture list");
+    }
+}
+
+/// Verifies that a doubled trailing comma in a closure `use` list is rejected (`use ($a,,)`).
+#[test]
+fn test_error_closure_use_list_double_trailing_comma() {
+    expect_error(
+        "<?php $a = 1; $f = function () use ($a,,) {};",
+        "Expected variable in use() capture list",
+    );
+}
+
 /// Verifies the error diagnostic for break level must be positive.
 #[test]
 fn test_error_break_level_must_be_positive() {
