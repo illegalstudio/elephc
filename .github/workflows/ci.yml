@@ -134,7 +134,7 @@ jobs:
   # doctests and managed-native smoke; the macOS test matrix and the iOS links run in the
   # merge queue, which tests the exact commit main is fast-forwarded to. A pull request gets
   # the macOS tier too with the `ci:macos` label (then re-run) or when it changes CI
-  # scheduling (this file, nextest.toml, scripts/ci/, .github/actions/). The push to main
+  # scheduling (ci*.yml, nextest.toml, scripts/ci/, .github/actions/). The push to main
   # that the queue produces skips the test jobs, because the queue already ran them on the
   # same commit; any other push runs everything.
   plan:
@@ -195,7 +195,7 @@ jobs:
           VERIFIED_REUSE_RUN: ${{ steps.reuse.outputs.run-id }}
           WORKFLOW_FILE: ci.yml
           EXTENDED_LABEL: ci:macos
-          EXTENDED_PATHS: ^(\.github/workflows/ci\.yml|\.config/nextest\.toml|scripts/ci/|\.github/actions/)
+          EXTENDED_PATHS: ^(\.github/workflows/ci(-[^/]+)?\.yml|\.config/nextest\.toml|scripts/ci/|\.github/actions/)
         run: bash scripts/ci/plan_tiers.sh
 
       - name: Choose PHP host SDK coverage

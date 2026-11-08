@@ -41,6 +41,9 @@ Progress on 2026-11-08:
   Rust/native compiler, glibc and Apple SDK identities are recorded and checked.
   Final graph review caught and fixed an omitted x86_64 producer input that would
   have resolved the image twice; the regression check now covers host callers too.
+- Automatic extended PR coverage follows extracted `ci-*.yml` workflows. The
+  shell planner tests the actual coordinator regex against every called workflow,
+  preserving the coverage that changes to the old monolithic CI file selected.
 - 59 focused infrastructure tests pass, plus planner/queue cleanup, docs prebuilt
   tests, actionlint and focused Rust bridge/PDO regressions. CONTRIBUTING is updated.
 - Integrated SimpleXML main, retaining its nextest overrides, XML recipe update

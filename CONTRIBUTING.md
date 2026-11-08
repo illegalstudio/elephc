@@ -188,7 +188,8 @@ including the PDO live and PHP SDK suites.
 | Benchmark suite | no | no | yes |
 
 The live database suites also run every night. "CI scheduling" means
-`.github/workflows/ci.yml`, `.config/nextest.toml`, `scripts/ci/` or `.github/actions/`:
+`.github/workflows/ci.yml`, its `ci-*.yml` reusable workflows, `.config/nextest.toml`,
+`scripts/ci/` or `.github/actions/`:
 those change how every platform's tests are scheduled, so they run the macOS tier on the PR
 itself.
 

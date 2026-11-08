@@ -134,3 +134,10 @@ A final graph review found that the Linux x86_64 producer omitted the coordinato
 resolved image input and therefore resolved the image a second time. The caller
 now passes the same immutable digest as every other coordinated host. A regression
 check fails on that omission. This correction requires a fresh exact-head CI run.
+
+The planner regression suite now reads the actual macOS path policy from `ci.yml`
+and exercises every reusable workflow called by the coordinator. It exposed that
+a PR changing only an extracted workflow would lose the automatic macOS/iOS tier
+that editing the former monolithic `ci.yml` enabled. The policy now covers those
+`ci-*.yml` files too; the real shell planner fails this check before the fix and
+passes afterwards. The 59 Python checks and actionlint also remain green.
