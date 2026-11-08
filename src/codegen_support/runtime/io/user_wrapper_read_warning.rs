@@ -146,6 +146,7 @@ fn emit_x86_64_track(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the wrapper object for its class name
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the returned string length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested chunk length
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the returned string length
     emitter.instruction("sub rdx, QWORD PTR [rbp - 24]");                       // excess = returned - requested
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // keep the excess byte count
 

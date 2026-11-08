@@ -213,6 +213,7 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // helper frame plus the boxed result and converted pair
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the synthetic file descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested read length
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // no wrapper object until the handle lookup succeeds
 
     emit_x86_handle_lookup(emitter, "__rt_uwfread_empty_x86");                  // resolve obj into rdi, fall through on missing handles
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // keep the wrapper object for the excess warning
@@ -267,6 +268,8 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
 
     emitter.label("__rt_uwfread_empty_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // pass the wrapper object to missing-read tracking
+    emitter.instruction("call __rt_user_wrapper_read_missing_error");           // record the missing stream_read for the PHP dispatcher
     emitter.instruction("xor eax, eax");                                        // empty-string pointer for the missing stream_read fallback
     emitter.instruction("xor edx, edx");                                        // empty-string length for the missing stream_read fallback
     emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
