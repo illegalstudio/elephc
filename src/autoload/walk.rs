@@ -1,5 +1,6 @@
 //! Purpose:
-//! Collects declared and referenced fully-qualified class-like names from the AST.
+//! Collects declared and referenced fully-qualified class-like names, plus declared function
+//! names, from the AST.
 //! Gives the autoload pass the missing symbols it can try to resolve from disk.
 //!
 //! Called from:
