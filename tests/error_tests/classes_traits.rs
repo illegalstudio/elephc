@@ -86,6 +86,28 @@ class C { use A; use B; }
     );
 }
 
+/// A concrete trait method satisfies another trait's abstract one only when both are static or
+/// both are instance methods, in one `use A, B` as in separate `use` statements.
+#[test]
+fn test_error_trait_requirement_static_kind_mismatch() {
+    expect_error(
+        r#"<?php
+trait A { abstract public function foo(): string; }
+trait B { public static function foo(): string { return "s"; } }
+final class C { use A, B; }
+"#,
+        "Cannot change method kind when overriding C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait A { abstract public static function foo(): string; }
+trait B { public function foo(): string { return "i"; } }
+final class C { use A, B; }
+"#,
+        "Cannot change method kind when overriding C::foo",
+    );
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]
