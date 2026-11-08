@@ -552,6 +552,7 @@ pub(super) fn check_array_push(
     if arr_ty == PhpType::Str && !array.starts_with(NESTED_APPEND_TEMP_PREFIX) {
         return Err(CompileError::new(span, "[] operator not supported for strings"));
     }
+    record_array_append_element_type(checker, array, &arr_ty, value, &val_ty, span, env);
     if let PhpType::Array(elem_ty) = &arr_ty {
         if **elem_ty != val_ty {
             let merged_ty = checker
@@ -593,6 +594,36 @@ pub(super) fn check_array_push(
     }
     finish_array_write_view(checker, array, &arr_ty, had_nullable_read, storage.as_ref(), env);
     Ok(())
+}
+
+/// Records an exact append contract without changing existing widening or diagnostics.
+///
+/// Only a stable variable storage type proves a boxed scalar's representation. Narrowed
+/// mixed/nullable views, arbitrary expressions and conflicting authoritative visits do not.
+fn record_array_append_element_type(
+    checker: &mut Checker, array: &str, receiver: &PhpType, value: &Expr,
+    value_ty: &PhpType, span: Span, env: &TypeEnv,
+) {
+    if !span.identifies_a_node() || checker.member_receiver_analysis_scopes.iter().any(|(function, scope)| {
+        function == &checker.current_function
+            && crate::types::loop_storage_scope_is_within(&checker.current_loop_storage_scope, scope)
+    }) { return; }
+    let proof = match (checker.typed_local_names.get(array), receiver, &value.kind) {
+        (Some(PhpType::Array(declared)), PhpType::Array(current), ExprKind::Variable(name))
+            if declared.as_ref() == current.as_ref() && declared.as_ref() == value_ty
+                && matches!(value_ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str | PhpType::Callable)
+                && checker.local_flow_read_is_stable(name)
+                && checker.definitely_bound_locals.contains(name)
+                && checker.guarded_local_storage_type(value, env).or_else(|| env.get(name)) == Some(value_ty) =>
+        {
+            Some(value_ty.clone())
+        }
+        _ => None,
+    };
+    let key = (checker.current_loop_storage_scope.clone(), span);
+    checker.array_append_element_types.entry(key)
+        .and_modify(|previous| { if *previous != proof { *previous = None; } })
+        .or_insert(proof);
 }
 
 /// Rejects an element write that would widen a local's DECLARED element type.

@@ -147,6 +147,7 @@ impl Checker {
             closure_generator_spans: HashSet::new(),
             array_push_property_plans: HashMap::new(),
             member_receiver_types: HashMap::new(),
+            array_append_element_types: HashMap::new(),
             local_value_read_types: HashMap::new(),
             member_receiver_analysis_scopes: Vec::new(),
             boxed_reference_outputs: HashMap::new(),

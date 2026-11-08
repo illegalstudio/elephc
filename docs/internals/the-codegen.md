@@ -14,6 +14,36 @@ Codegen is a single EIR pipeline. The checked and optimized AST is always
 lowered into EIR, IR passes run over that module, and `src/codegen/` emits the
 user assembly for the selected target.
 
+An explicitly declared indexed-array builder keeps its element contract when
+an append receives a physically boxed value with an exact checker proof. The
+checker records the declaration, current receiver element, and stable RHS variable
+type agreeing at that source point; conflicting visits disable the proof.
+The RHS must be definitely bound and free of global, static, reference, or eval
+aliasing that could invalidate its checked type.
+Lowering extracts proven scalar or callable values before
+array representation discovery considers widening the builder. Scalar casts
+produce the integer, float, boolean, or independent string result; callable
+unboxing retains its descriptor. Temporary source owners retire after extraction,
+while borrowed loop-local cells retain their existing lifetime.
+
+This matters for scalar hash `foreach` bindings, which remain boxed `Mixed` so
+the loop variable preserves each entry's runtime tag. Builtins such as
+`array_flip()` can produce integer values from keys that were statically typed
+as strings before a reindexing sort. The append converts only at the declared
+`array<T>` sink, keeping the builder's storage suitable for typed property stores
+and returns. Inferred builders and unknown, nullable, or differently typed append
+values keep their existing widening behavior.
+
+Literal scalar `settype()` updates on boxed locals use the ordinary EIR cast and
+assignment path, including hash `foreach` bindings. That path publishes the write
+to storage discovery and ownership cleanup, so loop backedges retain the actual
+runtime tag and replacing a string retires its previous owner. It also preserves
+boxed storage after a conversion narrows the logical value type, so consecutive
+`settype()` calls use the same cleanup path. The assignment path preserves
+the boxed value contract for static and reference-bound cells before conversion,
+and returns `true` after a
+successful conversion.
+
 Switch dispatch uses integer comparisons only for PHP integer subjects and labels.
 Other PHP values use loose equality, preserving boolean conversion, array comparison
 rules and object-to-number warnings. Float comparisons with null test numeric zero

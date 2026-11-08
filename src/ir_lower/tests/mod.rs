@@ -65,6 +65,8 @@ mod borrowed_string_reads;
 mod mbstring_fast_semantics;
 mod buffer_element_updates;
 mod ref_local_append;
+mod foreach_hash_scalars;
+mod settype_foreach;
 mod string_offset_lifetime;
 mod string_offset_writes;
 mod arrays;

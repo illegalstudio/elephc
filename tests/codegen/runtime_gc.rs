@@ -24,6 +24,7 @@ mod owned_tostring;
 #[path = "runtime_gc/borrowed_string_reads.rs"]
 mod borrowed_string_reads;
 mod shared_property_reads;
+mod foreach_hash_scalars;
 mod global_return_owners;
 mod native_raw_property_guards;
 mod late_string_arguments;
@@ -320,6 +321,8 @@ mod coroutine_slot_set;
 mod counter_regions;
 #[path = "runtime_gc/numeric_seed_cells.rs"]
 mod numeric_seed_cells;
+#[path = "runtime_gc/settype_foreach.rs"]
+mod settype_foreach;
 #[path = "runtime_gc/static_object_exports.rs"]
 mod static_object_exports;
 #[path = "runtime_gc/gmp_exception_operands.rs"]
