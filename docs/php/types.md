@@ -318,6 +318,17 @@ echo count($files);
 
 The same applies on the `else` side (`if ($files !== false) { … } else { $files = []; }`) and inside a `while` whose condition narrows. A value the variable's own type cannot hold either — `$files = new stdClass()` above — is still rejected, because re-binding a local to an unrelated type is only allowed in straight-line code; see [Local retyping](#local-retyping). Once the branch has assigned the variable once, later assignments in the same branch are checked against what that first one stored.
 
+Storing a non-null member of a union-typed variable narrows its reads to that member until the next store or join, while the union stays its storage, so the usual normalisation forms compile:
+
+```php
+function zone(DateTimeZone|string $tz): DateTimeZone {
+    if (is_string($tz)) { $tz = new DateTimeZone($tz); }   // or: $tz = new DateTimeZone('UTC');
+    return $tz;                                             // DateTimeZone on both paths
+}
+```
+
+A single guarded `if` without `else` joins the branch's exit with the guard's complement, so `if (!$now instanceof DateTimeImmutable) { $now = new DateTimeImmutable(); }` leaves `$now` a `DateTimeImmutable`. By-reference parameters, reference-aliased or by-reference-captured locals, globals and statics keep their declared union, because code outside the function's flow may write them.
+
 Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
 
 A `null` argument is the exception, and never fixes a closure parameter's type. It carries no storage the parameter could adopt — a parameter closed to `null` alone could satisfy no other call — so `$f(null)` leaves the parameter open exactly as omitting the argument does, and both spellings of the call accept anything afterwards:
