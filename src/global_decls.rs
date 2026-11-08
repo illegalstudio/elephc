@@ -440,3 +440,105 @@ fn collect_in_expr(expr: &Expr, names: &mut HashSet<String>) {
         | ExprKind::MagicConstant(_) => {}
     }
 }
+
+/// Returns the literal global-name candidates when the program accesses `$GLOBALS` through a
+/// runtime key, or `None` when every access uses a literal key.
+///
+/// A computed key can name any top-level variable. The candidate set therefore includes every
+/// identifier-shaped string literal in the program: it makes literal fragments such as
+/// `'prefix' . $suffix` resolvable by the runtime table, while names built entirely from
+/// runtime bytes still fall back to the unknown-global diagnostic.
+pub(crate) fn dynamic_global_name_candidates(program: &[Stmt]) -> Option<HashSet<String>> {
+    use std::cell::{Cell, RefCell};
+
+    use crate::magic_constants::walker::{walk_program, Pass};
+    use crate::parser::ast::{Expr, MagicConstant};
+
+    /// Interior-mutability probe because the shared AST walker takes `&mut P`.
+    struct Probe {
+        found: Cell<bool>,
+        names: RefCell<HashSet<String>>,
+    }
+
+    /// Returns whether `name` has PHP's identifier shape.
+    fn is_variable_name(name: &str) -> bool {
+        let mut chars = name.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+        if !(first == '_' || first.is_ascii_alphabetic() || first as u32 >= 0x80) {
+            return false;
+        }
+        chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric() || ch as u32 >= 0x80)
+    }
+
+    /// Returns whether `expr` is the bare `$GLOBALS` receiver.
+    fn is_globals_root(expr: &Expr) -> bool {
+        matches!(&expr.kind, ExprKind::Variable(name) if name == "GLOBALS")
+    }
+
+    /// Returns whether a nested write target contains a computed `$GLOBALS` subscript.
+    fn target_has_computed_globals(target: &Expr) -> bool {
+        match &target.kind {
+            ExprKind::ArrayAccess { array, index } => {
+                (is_globals_root(array)
+                    && !matches!(index.kind, ExprKind::StringLiteral(_)))
+                    || target_has_computed_globals(array)
+            }
+            _ => false,
+        }
+    }
+
+    impl Pass for Probe {
+        /// Returns the magic constant unchanged; this probe only observes expressions.
+        fn transform_magic(&self, _span: crate::span::Span, magic: MagicConstant) -> ExprKind {
+            ExprKind::MagicConstant(magic)
+        }
+
+        /// Records computed reads and identifier-shaped string literals.
+        fn transform_expr(&self, expr: Expr) -> Expr {
+            match &expr.kind {
+                ExprKind::ArrayAccess { array, index }
+                    if is_globals_root(array)
+                        && !matches!(index.kind, ExprKind::StringLiteral(_)) =>
+                {
+                    self.found.set(true);
+                }
+                ExprKind::StringLiteral(name) if is_variable_name(name) => {
+                    self.names.borrow_mut().insert(name.clone());
+                }
+                _ => {}
+            }
+            expr
+        }
+
+        /// Records computed write, append, and nested-write statement shapes.
+        fn transform_stmt(&self, stmt: Stmt) -> Stmt {
+            match &stmt.kind {
+                StmtKind::ArrayAssign { array, index, .. }
+                    if array == "GLOBALS"
+                        && !matches!(index.kind, ExprKind::StringLiteral(_)) =>
+                {
+                    self.found.set(true);
+                }
+                StmtKind::ArrayPush { array, .. } if array == "GLOBALS" => {
+                    self.found.set(true);
+                }
+                StmtKind::NestedArrayAssign { target, .. }
+                    if target_has_computed_globals(target) =>
+                {
+                    self.found.set(true);
+                }
+                _ => {}
+            }
+            stmt
+        }
+    }
+
+    let mut probe = Probe {
+        found: Cell::new(false),
+        names: RefCell::new(HashSet::new()),
+    };
+    let _ = walk_program(program.to_vec(), &mut probe);
+    probe.found.get().then(|| probe.names.into_inner())
+}

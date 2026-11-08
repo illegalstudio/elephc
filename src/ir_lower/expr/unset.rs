@@ -48,7 +48,16 @@ pub(super) fn lower_unset_locals(
                         );
                         None
                     } else {
-                        lower_unset_array_access(ctx, array, index, arg)
+                        let key = lower_expr(ctx, index);
+                        let key = coerce_to_string_at_span(ctx, key, Some(index.span));
+                        ctx.emit_void(
+                            Op::StoreGlobalDynamic,
+                            vec![key.value, null.value],
+                            None,
+                            Op::StoreGlobalDynamic.default_effects(),
+                            Some(arg.span),
+                        );
+                        None
                     }
                 } else {
                     lower_unset_array_access(ctx, array, index, arg)
@@ -79,9 +88,9 @@ pub(super) fn lower_unset_locals(
 pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
     match &arg.kind {
         ExprKind::Variable(_) => true,
-        ExprKind::ArrayAccess { array, index } => {
+        ExprKind::ArrayAccess { array, .. } => {
             if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
-                return matches!(&index.kind, ExprKind::StringLiteral(_));
+                return true;
             }
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)

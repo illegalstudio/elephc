@@ -836,6 +836,23 @@ fn validate_opcode_rules(
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
         BufferNew => check_unary(function, inst_id, inst, IrType::I64, "I64"),
+        LoadGlobalDynamic => {
+            check_count(inst_id, inst, 1, "1")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")?;
+            let result = inst
+                .result
+                .ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::from_php(&PhpType::Mixed)
+                || inst.result_php_type.codegen_repr() != PhpType::Mixed
+            {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            Ok(())
+        }
+        StoreGlobalDynamic => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")
+        }
         LoadLocal
         | LoadRefCell
         | LoadGlobal

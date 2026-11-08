@@ -446,10 +446,6 @@ fn test_unsupported_globals_shapes_are_rejected_php86() {
             "The $GLOBALS array itself is not supported yet",
         ),
         (
-            "<?php $x = 1; $k = 'x'; var_dump($GLOBALS[$k]);",
-            "Computed $GLOBALS keys are not supported yet",
-        ),
-        (
             "<?php $x = 1; $GLOBALS[] = 9;",
             "Writes through $GLOBALS are not supported yet",
         ),
@@ -958,5 +954,49 @@ fclose($stream);
     assert_eq!(
         out,
         "bool(true)\nhandler: 1:UserspaceInvalidReturn\nint(4)\nint(1)\n"
+    );
+}
+
+/// Computed `$GLOBALS[$name]` reads and writes reach a top-level variable, including from a
+/// function body, and observe `isset()`/`??`/`unset()` around it.
+#[test]
+fn test_globals_computed_read_write_php86() {
+    let out = run86(
+        r#"<?php
+function setComputedGlobal(string $name, $value): void {
+    $GLOBALS[$name] = $value;
+}
+function getComputedGlobal(string $name) {
+    return $GLOBALS[$name] ?? null;
+}
+$counter = 1;
+$key = 'counter' . ($argc > 0 ? '' : 'x');
+var_dump($GLOBALS[$key]);
+setComputedGlobal($key, 7);
+var_dump($counter, getComputedGlobal($key), isset($GLOBALS[$key]));
+unset($GLOBALS[$key]);
+var_dump(isset($GLOBALS[$key]), $GLOBALS[$key] ?? 'gone');
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)\nint(7)\nint(7)\nbool(true)\nbool(false)\nstring(4) \"gone\"\n"
+    );
+}
+
+/// A computed `$GLOBALS` read whose name has no initialized value warns like php-src and
+/// returns null.
+#[test]
+fn test_globals_computed_undefined_warning_php86() {
+    let out = compile_and_run_capture_merged_with_php_version(
+        r#"<?php
+$key = 'notInitialized' . ($argc > 0 ? '' : 'x');
+var_dump($GLOBALS[$key]);
+"#,
+        PhpVersion::Php86,
+    );
+    assert_eq!(
+        out,
+        "Warning: Undefined global variable $notInitialized\nNULL\n"
     );
 }

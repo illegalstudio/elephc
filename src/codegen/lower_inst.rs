@@ -232,6 +232,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PopCallOperandOwner => ownership::lower_pop_call_operand_owner(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
+        Op::LoadGlobalDynamic => lower_load_global_dynamic(ctx, &inst),
+        Op::StoreGlobalDynamic => lower_store_global_dynamic(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
         Op::ExternGlobalStore => lower_extern_global_store(ctx, &inst),
         Op::IAdd => arithmetic::lower_int_binop(ctx, &inst, "add", "add"),

@@ -195,11 +195,7 @@ pub(super) fn lower_array_access_with_missing_warning(
                     Some(expr.span),
                 );
             }
-            crate::ir_lower::diagnostics::refuse(
-                index.span,
-                "Computed $GLOBALS keys are not supported yet; use a literal string key",
-            );
-            return lower_null(ctx, &Expr::new(ExprKind::Null, expr.span));
+            return lower_dynamic_global_load(ctx, index, expr, warn_on_missing);
         }
     }
     let array_value = if warn_on_missing {
@@ -208,6 +204,29 @@ pub(super) fn lower_array_access_with_missing_warning(
         lower_subscript_receiver_silently(ctx, array)
     };
     lower_array_access_from_receiver(ctx, array_value, index, expr, warn_on_missing)
+}
+
+/// Lowers a `$GLOBALS[$name]` read whose key is only known at run time.
+///
+/// The key is coerced to a string first; the runtime lookup returns the storage word for a
+/// program global known to this compilation. A missing name keeps PHP's null read result and
+/// optionally emits the undefined-global warning.
+fn lower_dynamic_global_load(
+    ctx: &mut LoweringContext<'_, '_>,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> LoweredValue {
+    let key = lower_expr(ctx, index);
+    let key = coerce_to_string_at_span(ctx, key, Some(index.span));
+    ctx.emit_value(
+        Op::LoadGlobalDynamic,
+        vec![key.value],
+        Some(Immediate::Bool(warn_on_missing)),
+        PhpType::Mixed,
+        Op::LoadGlobalDynamic.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Lowers array access over an already evaluated receiver, taking the null-safe route when

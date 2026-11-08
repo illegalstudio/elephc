@@ -74,7 +74,17 @@ pub(crate) fn lower_main(
     let web = module.web;
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
     function.flags.is_main = true;
-    let all_global_var_names = collect_global_var_names(program);
+    let top_level_env = web_gated_global_env(&check_result.global_env, web);
+    let dynamic_global_candidates = crate::global_decls::dynamic_global_name_candidates(program);
+    let mut all_global_var_names = collect_global_var_names(program);
+    if let Some(candidates) = &dynamic_global_candidates {
+        all_global_var_names.extend(top_level_env.keys().cloned());
+        all_global_var_names.extend(candidates.iter().cloned());
+    }
+    for name in &all_global_var_names {
+        module.data.intern_global_name(name);
+    }
+    module.program_global_names = all_global_var_names.iter().cloned().collect();
     let mut function_global_names =
         crate::ir_lower::program::collect_function_global_names(program);
     crate::ir_lower::program::close_function_global_names_over_calls(
@@ -82,7 +92,6 @@ pub(crate) fn lower_main(
         &module.functions,
         &module.data.function_names,
     );
-    let top_level_env = web_gated_global_env(&check_result.global_env, web);
     let closures = lower_body_into_function(
         &mut function,
         None,

@@ -68,6 +68,165 @@ fn global_store_owns_persisted_string(ctx: &FunctionContext<'_>, value: ValueId,
         })
 }
 
+/// Length of PHP's undefined-global warning prefix emitted by dynamic `$GLOBALS` reads.
+const UNDEFINED_GLOBAL_PREFIX_LEN: usize = "Warning: Undefined global variable $".len();
+
+/// Lowers a `$GLOBALS[$name]` read through the program's runtime global-name table.
+///
+/// The lookup returns the address of the global's Mixed storage word, or zero when the name
+/// was never a program global. A miss boxes PHP null and, for ordinary reads, emits PHP's
+/// undefined-global warning; silent `isset()`/`??` probes set the immediate Bool to false.
+pub(super) fn lower_load_global_dynamic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let name = expect_operand(inst, 0)?;
+    let warn_on_missing = matches!(inst.immediate, Some(Immediate::Bool(true)));
+    let miss = ctx.next_label("dyn_global_load_miss");
+    let done = ctx.next_label("dyn_global_load_done");
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(name, "x1", "x2")?;
+            abi::emit_store_to_sp(ctx.emitter, "x1", 0);
+            abi::emit_store_to_sp(ctx.emitter, "x2", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_global_lookup_dynamic");
+            ctx.emitter.instruction(&format!("cbz x0, {miss}"));                // no matching global: use the undefined-name path
+            ctx.emitter.instruction("ldr x0, [x0]");                            // load the global's boxed Mixed pointer
+            ctx.emitter.instruction(&format!("cbz x0, {miss}"));                // an unset global uses the same miss path
+            ctx.emitter.instruction(&format!("b {done}"));                      // the found value is ready
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(name, "rdi", "rsi")?;
+            abi::emit_store_to_sp(ctx.emitter, "rdi", 0);
+            abi::emit_store_to_sp(ctx.emitter, "rsi", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_global_lookup_dynamic");
+            ctx.emitter.instruction("test rax, rax");                           // no matching global: use the undefined-name path
+            ctx.emitter.instruction(&format!("jz {miss}"));                     // no matching global: use the undefined-name path
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // load the global's boxed Mixed pointer
+            ctx.emitter.instruction("test rax, rax");                           // an unset global uses the same miss path
+            ctx.emitter.instruction(&format!("jz {miss}"));                     // an unset global uses the same miss path
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // the found value is ready
+        }
+    }
+    ctx.emitter.label(&miss);
+    if warn_on_missing {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_symbol_address(ctx.emitter, "x1", "_diag_undefined_global_prefix");
+                abi::emit_load_int_immediate(ctx.emitter, "x2", UNDEFINED_GLOBAL_PREFIX_LEN as i64);
+                abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
+                abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+                abi::emit_symbol_address(ctx.emitter, "x1", "_diag_undefined_array_key_suffix");
+                abi::emit_load_int_immediate(ctx.emitter, "x2", 1);
+                abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            }
+            Arch::X86_64 => {
+                abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_undefined_global_prefix");
+                abi::emit_load_int_immediate(ctx.emitter, "rsi", UNDEFINED_GLOBAL_PREFIX_LEN as i64);
+                abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+                abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+                abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_undefined_array_key_suffix");
+                abi::emit_load_int_immediate(ctx.emitter, "rsi", 1);
+                abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            }
+        }
+    }
+    crate::codegen::lower_inst::objects::emit_boxed_null(ctx);
+    ctx.emitter.label(&done);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `$GLOBALS[$name] = $value` into the runtime-selected global storage word.
+///
+/// Known program globals are replaced in place, publishing the new box before retiring the
+/// previous payload so a destructor observes the assigned value. A name absent from the table
+/// is evaluated for its side effects and discarded, matching the current known-name scope.
+pub(super) fn lower_store_global_dynamic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let name = expect_operand(inst, 0)?;
+    let value = expect_operand(inst, 1)?;
+    let miss = ctx.next_label("dyn_global_store_miss");
+    let done = ctx.next_label("dyn_global_store_done");
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(name, "x1", "x2")?;
+            abi::emit_call_label(ctx.emitter, "__rt_global_lookup_dynamic");
+            abi::emit_store_to_sp(ctx.emitter, "x0", 0);
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(name, "rdi", "rsi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_global_lookup_dynamic");
+            abi::emit_store_to_sp(ctx.emitter, "rax", 0);
+        }
+    }
+    let ty = ctx.load_value_to_result(value)?;
+    let source_ty = ty.codegen_repr();
+    if source_ty != PhpType::Mixed {
+        let box_ty = ctx.mixed_box_type(value)?;
+        if ctx.value_can_transfer_ownership_to_consumer(value)?
+            || global_store_owns_persisted_string(ctx, value, &source_ty)
+        {
+            emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
+        } else {
+            emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_store_to_sp(ctx.emitter, "x0", 8);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
+            ctx.emitter.instruction(&format!("cbz x9, {miss}"));                // does the lookup return a writable global cell?
+            ctx.emitter.instruction("ldr x10, [x9]");                           // capture the previous Mixed owner
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x11", 8);
+            ctx.emitter.instruction("str x11, [x9]");                           // publish the assigned value before releasing the old one
+            ctx.emitter.instruction(&format!("cbz x10, {done}"));               // nothing to release when the global was unset
+            ctx.emitter.instruction("mov x0, x10");                             // pass the retired Mixed cell to the decrement helper
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            ctx.emitter.instruction(&format!("b {done}"));                      // the assignment is complete
+        }
+        Arch::X86_64 => {
+            abi::emit_store_to_sp(ctx.emitter, "rax", 8);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
+            ctx.emitter.instruction(&format!("test r10, r10"));                 // does the lookup return a writable global cell?
+            ctx.emitter.instruction(&format!("jz {miss}"));                     // no matching global: evaluate then discard the value
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // capture the previous Mixed owner
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 8);
+            ctx.emitter.instruction("mov QWORD PTR [r10], rax");                // publish the assigned value before releasing the old one
+            ctx.emitter.instruction("test r11, r11");                           // nothing to release when the global was unset
+            ctx.emitter.instruction(&format!("jz {done}"));                     // nothing to release when the global was unset
+            ctx.emitter.instruction("mov rax, r11");                            // pass the retired Mixed cell in the x86_64 decref argument register
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // the assignment is complete
+        }
+    }
+    ctx.emitter.label(&miss);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 8);
+            ctx.emitter.instruction(&format!("cbz x0, {done}"));                // unknown names are evaluated then discarded
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 8);
+            ctx.emitter.instruction(&format!("test rax, rax"));                 // nothing to release when the value was never owned
+            ctx.emitter.instruction(&format!("jz {done}"));                     // nothing to release when the value was never owned
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        }
+    }
+    ctx.emitter.label(&done);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
+}
+
 /// Lowers a C extern global load into the EIR result slot.
 pub(super) fn lower_extern_global_load(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data = expect_global_name(inst)?;

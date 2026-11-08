@@ -284,6 +284,9 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
                 if let ExprKind::StringLiteral(key) = &index.kind {
                     // `$GLOBALS['name'] = ...` writes the top-level `$name` slot.
                     next_env.remove(key);
+                } else {
+                    // A runtime key can update any top-level global.
+                    next_env.clear();
                 }
             }
             (

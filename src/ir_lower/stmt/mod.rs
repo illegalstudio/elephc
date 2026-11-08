@@ -21,7 +21,7 @@ use crate::ir_lower::context::{
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     array_access_element_result_type, coerce_array_key_to_int_at_span,
-    coerce_container_to_mixed_payload, coerce_to_int_at_span,
+    coerce_container_to_mixed_payload, coerce_to_int_at_span, coerce_to_string_at_span,
     index_expr_key_type, lower_array_access_from_lowered_receiver,
     lower_by_ref_foreach_element_source, lower_by_ref_foreach_property_source,
     lower_callable_array_for_assignment,
@@ -226,9 +226,15 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
                         Some(stmt.span),
                     );
                 } else {
-                    crate::ir_lower::diagnostics::refuse(
-                        index.span,
-                        "Computed $GLOBALS keys are not supported yet; use a literal string key",
+                    let key = lower_expr(ctx, index);
+    let key = coerce_to_string_at_span(ctx, key, Some(index.span));
+                    let value = lower_expr(ctx, value);
+                    ctx.emit_void(
+                        Op::StoreGlobalDynamic,
+                        vec![key.value, value.value],
+                        None,
+                        Op::StoreGlobalDynamic.default_effects(),
+                        Some(stmt.span),
                     );
                 }
             } else {

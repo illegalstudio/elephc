@@ -705,7 +705,8 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
                 if let ExprKind::StringLiteral(key) = &index.kind {
                     inv.union(Invalidation::Names([key.clone()].into_iter().collect()))
                 } else {
-                    inv
+                    // A runtime key can name any top-level global; clear every propagated value.
+                    Invalidation::All
                 }
             } else {
                 inv

@@ -150,6 +150,10 @@ pub struct Module {
     pub packed_class_infos: HashMap<String, PackedClassInfo>,
     pub packed_layouts: PackedLayoutTable,
     pub extern_globals: HashMap<String, PhpType>,
+    /// Program-global names with ordinary Mixed storage, used by the dynamic `$GLOBALS[$name]`
+    /// lookup table. Kept separate from `data.global_names`, which also carries eval-scope
+    /// variable names that are not program globals.
+    pub program_global_names: std::collections::BTreeSet<String>,
     pub required_runtime_features: RuntimeFeatures,
     /// True when this module is being lowered for a `--web` compile. Threaded
     /// down from the CLI flag (`CliConfig.web`, mirroring what
@@ -213,6 +217,7 @@ impl Module {
             packed_class_infos: HashMap::new(),
             packed_layouts: PackedLayoutTable::default(),
             extern_globals: HashMap::new(),
+            program_global_names: std::collections::BTreeSet::new(),
             required_runtime_features: RuntimeFeatures::none(),
             web: false,
             web_application: false,

@@ -130,11 +130,18 @@ $GLOBALS['count']++;
 echo $GLOBALS['count'], "\n";          // 2
 ```
 
-Only literal string keys are lowered this way. `unset($GLOBALS['name'])`
-clears the top-level value. Computed keys (`$GLOBALS[$name]`), nested writes
-(`$GLOBALS['a']['b'] = 1`), appending with `$GLOBALS[] = ...`, and enumerating
-`$GLOBALS` as an array are not supported yet; declare the variable with `global`
-or pass it explicitly instead.
+Computed keys share the same storage: `$GLOBALS[$name]`, `isset($GLOBALS[$name])`,
+`$GLOBALS[$name] ?? ...`, `unset($GLOBALS[$name])`, and writes through a runtime
+name resolve against the program globals the compiler can name — top-level
+variables, `global` declarations, literal `$GLOBALS` keys, and identifier-shaped
+string literals in the program. A direct read of an unset global warns
+`Undefined global variable $name`; `isset()` and `??` stay silent.
+
+Nested writes (`$GLOBALS['a']['b'] = 1`), appending with `$GLOBALS[] = ...`, and
+enumerating `$GLOBALS` as an array are not supported yet. A global whose name is
+built entirely from runtime bytes with no identifier-shaped literal or top-level
+occurrence cannot be created; declare it with `global` or mention it in a literal
+when that shape is needed.
 
 ## PHP version surface
 

@@ -237,6 +237,17 @@ impl DataSection {
         label
     }
 
+    /// Adds words under a caller-chosen global symbol instead of a generated `_data_N` label.
+    ///
+    /// Used for fixed runtime metadata tables whose labels emitted code references directly.
+    /// The first definition wins, matching [`Self::add_named_symbol`].
+    pub fn add_words_named(&mut self, label: &str, words: Vec<DataWord>) {
+        if self.word_entries.iter().any(|(existing, _)| existing == label) {
+            return;
+        }
+        self.word_entries.push((label.to_string(), words));
+    }
+
     /// Serializes all entries into a GNU assembly `.data` section string.
     /// Returns an empty string when no entries have been collected.
     /// Emits `.comm` directives first, then `.ascii` string literals, then `.p2align 3`/`quad` float entries.

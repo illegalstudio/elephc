@@ -1,0 +1,147 @@
+//! Purpose:
+//! Emits the per-program runtime table and lookup helper behind computed `$GLOBALS[$name]`.
+//!
+//! Called from:
+//! - `crate::codegen::finalize_user_asm()` before the user data section is serialized.
+//!
+//! Key details:
+//! - The table maps each program-global name to the address of its Mixed storage word.
+//! - The helper is emitted only when lowered code contains a dynamic global load or store, so
+//!   programs using literal `$GLOBALS['name']` keep direct symbol access and pay nothing.
+//! - Entries use a 24-byte stride: name pointer, name byte length, global storage pointer.
+
+use crate::codegen_support::data_section::{DataSection, DataWord};
+use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::platform::Arch;
+use crate::ir::{Module, Op};
+
+/// Returns whether any lowered function reads or writes a runtime-named program global.
+pub(crate) fn module_uses_dynamic_globals(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .any(|function| {
+            function
+                .instructions
+                .iter()
+                .any(|inst| matches!(inst.op, Op::LoadGlobalDynamic | Op::StoreGlobalDynamic))
+        })
+}
+
+/// Emits the named lookup table into the user data section and the lookup helper into the
+/// user text section.
+pub(crate) fn emit_dynamic_global_lookup(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    let mut entries = Vec::new();
+    for name in &module.program_global_names {
+        if module.extern_globals.contains_key(name) {
+            continue;
+        }
+        // Web superglobals use a native container representation, not the ordinary Mixed word.
+        if module.web && crate::superglobals::is_superglobal(name) {
+            continue;
+        }
+        let symbol = crate::names::ir_global_symbol(name);
+        data.add_comm(symbol.clone(), 8);
+        let (label, length) = data.add_string(name.as_bytes());
+        entries.push(DataWord::Symbol(label));
+        entries.push(DataWord::U64(length as u64));
+        entries.push(DataWord::Symbol(symbol));
+    }
+    data.add_words_named(
+        "_eir_global_lookup_count",
+        vec![DataWord::U64((entries.len() / 3) as u64)],
+    );
+    data.add_words_named("_eir_global_lookup_entries", entries);
+
+    if emitter.target.arch == Arch::X86_64 {
+        emit_x86_64_helper(emitter);
+    } else {
+        emit_aarch64_helper(emitter);
+    }
+}
+
+/// Emits the ARM64 dynamic-global lookup helper.
+fn emit_aarch64_helper(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: dynamic global lookup ---");
+    emitter.label_global("__rt_global_lookup_dynamic");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_eir_global_lookup_count");
+    emitter.instruction("ldr x3, [x9]");                                        // load the number of named program globals
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x4", "_eir_global_lookup_entries");
+    emitter.instruction("mov x5, #0");                                          // start at the first lookup entry
+    emitter.label("__rt_global_lookup_loop");
+    emitter.instruction("cmp x5, x3");                                          // visited every entry?
+    emitter.instruction("b.hs __rt_global_lookup_miss");                        // no match: report an unknown global
+    emitter.instruction("mov x9, #24");                                         // each entry is a 24-byte (ptr, len, cell) record
+    emitter.instruction("madd x6, x5, x9, x4");                                 // address the current entry
+    emitter.instruction("ldr x7, [x6, #8]");                                    // entry name length
+    emitter.instruction("cmp x7, x2");                                          // does the length match the requested name?
+    emitter.instruction("b.ne __rt_global_lookup_next");                        // length mismatch: try the next entry
+    emitter.instruction("ldr x8, [x6]");                                        // entry name pointer
+    emitter.instruction("mov x9, #0");                                          // byte comparison index
+    emitter.label("__rt_global_lookup_bytes");
+    emitter.instruction("cmp x9, x2");                                          // compared every requested byte?
+    emitter.instruction("b.hs __rt_global_lookup_hit");                         // full match: return this global's storage
+    emitter.instruction("ldrb w10, [x8, x9]");                                  // entry name byte
+    emitter.instruction("ldrb w11, [x1, x9]");                                  // requested name byte
+    emitter.instruction("cmp w10, w11");                                        // do the bytes match?
+    emitter.instruction("b.ne __rt_global_lookup_next");                        // mismatch: try the next entry
+    emitter.instruction("add x9, x9, #1");                                      // advance to the next byte
+    emitter.instruction("b __rt_global_lookup_bytes");                          // continue the byte comparison
+    emitter.label("__rt_global_lookup_hit");
+    emitter.instruction("ldr x0, [x6, #16]");                                   // return the address of the global's Mixed word
+    emitter.instruction("ret");                                                 // return to the caller
+    emitter.label("__rt_global_lookup_next");
+    emitter.instruction("add x5, x5, #1");                                      // advance to the next table entry
+    emitter.instruction("b __rt_global_lookup_loop");                           // keep searching
+    emitter.label("__rt_global_lookup_miss");
+    emitter.instruction("mov x0, #0");                                          // unknown names have no program storage
+    emitter.instruction("ret");                                                 // return to the caller
+}
+
+/// Emits the x86_64 dynamic-global lookup helper.
+fn emit_x86_64_helper(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: dynamic global lookup ---");
+    emitter.label_global("__rt_global_lookup_dynamic");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rax", "_eir_global_lookup_count");
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // load the number of named program globals
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rcx", "_eir_global_lookup_entries");
+    emitter.instruction("xor edx, edx");                                        // start at the first lookup entry
+    emitter.label("__rt_global_lookup_loop_x86");
+    emitter.instruction("cmp rdx, rax");                                        // visited every entry?
+    emitter.instruction("jae __rt_global_lookup_miss_x86");                     // no match: report an unknown global
+    emitter.instruction("imul r8, rdx, 24");                                    // each entry is a 24-byte (ptr, len, cell) record
+    emitter.instruction("add r8, rcx");                                         // address the current entry
+    emitter.instruction("cmp QWORD PTR [r8 + 8], rsi");                         // does the length match the requested name?
+    emitter.instruction("jne __rt_global_lookup_next_x86");                     // length mismatch: try the next entry
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // entry name pointer
+    emitter.instruction("xor r10d, r10d");                                      // byte comparison index
+    emitter.label("__rt_global_lookup_bytes_x86");
+    emitter.instruction("cmp r10, rsi");                                        // compared every requested byte?
+    emitter.instruction("jae __rt_global_lookup_hit_x86");                      // full match: return this global's storage
+    emitter.instruction("mov r11b, BYTE PTR [r9 + r10]");                       // entry name byte
+    emitter.instruction("cmp r11b, BYTE PTR [rdi + r10]");                      // do the bytes match?
+    emitter.instruction("jne __rt_global_lookup_next_x86");                     // mismatch: try the next entry
+    emitter.instruction("inc r10");                                             // advance to the next byte
+    emitter.instruction("jmp __rt_global_lookup_bytes_x86");                    // continue the byte comparison
+    emitter.label("__rt_global_lookup_hit_x86");
+    emitter.instruction("mov rax, QWORD PTR [r8 + 16]");                        // return the address of the global's Mixed word
+    emitter.instruction("ret");                                                 // return to the caller
+    emitter.label("__rt_global_lookup_next_x86");
+    emitter.instruction("inc rdx");                                             // advance to the next table entry
+    emitter.instruction("jmp __rt_global_lookup_loop_x86");                     // keep searching
+    emitter.label("__rt_global_lookup_miss_x86");
+    emitter.instruction("xor eax, eax");                                        // unknown names have no program storage
+    emitter.instruction("ret");                                                 // return to the caller
+}

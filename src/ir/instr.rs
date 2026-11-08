@@ -859,6 +859,12 @@ pub enum Op {
     PopCallOperandOwner,
     LoadGlobal,
     StoreGlobal,
+    /// Loads a program global selected by a runtime string name (`$GLOBALS[$name]`).
+    /// Operand 0 is the string key; the immediate Bool records whether a missing name warns.
+    LoadGlobalDynamic,
+    /// Stores one boxed Mixed value into a program global selected by a runtime string name.
+    /// Operand 0 is the string key, operand 1 the value.
+    StoreGlobalDynamic,
     LoadStaticLocal,
     StoreStaticLocal,
     InitStaticLocal,
@@ -1370,6 +1376,7 @@ impl Op {
                 E::READS_LOCAL | E::READS_GLOBAL | E::WRITES_GLOBAL
             }
             LoadGlobal
+            | LoadGlobalDynamic
             | LoadStaticProperty
             | StaticPropInitialized
             | StaticLocalUninitialized
@@ -1385,6 +1392,7 @@ impl Op {
             LoadStaticPropertyRefCell => E::READS_GLOBAL | E::MAY_THROW | E::MAY_FATAL,
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
             StoreGlobal
+            | StoreGlobalDynamic
             | StoreStaticLocal
             | StoreStaticProperty
             | StoreReflectionStaticProperty
@@ -1715,6 +1723,8 @@ impl Op {
             PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
+            LoadGlobalDynamic => "load_global_dynamic",
+            StoreGlobalDynamic => "store_global_dynamic",
             LoadStaticLocal => "load_static_local",
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
