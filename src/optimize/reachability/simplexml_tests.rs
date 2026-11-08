@@ -18,7 +18,7 @@ fn xml_reachability(source: &str, force: bool) -> graph::Reachability {
     let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
     let ast = crate::parser::parse(&tokens).expect("fixture must parse");
     let mut inventory = PreludeInventory::new();
-    let ast = crate::core_prelude::inject_if_used(ast, &mut inventory);
+    let ast = crate::core_prelude::inject_if_used(ast, false, false, &mut inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, true, &mut inventory);
     let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut inventory);
     let ast = crate::name_resolver::resolve(ast).expect("fixture must resolve");

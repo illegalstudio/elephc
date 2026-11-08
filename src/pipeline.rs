@@ -543,7 +543,12 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         with_crates.contains("tokenizer") || autoloaded("tokenizer"),
         &mut prelude_inventory,
     );
-    let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::core_prelude::inject_if_used(
+        ast,
+        autoloaded("weak_map"),
+        autoloaded("weak_reference"),
+        &mut prelude_inventory,
+    );
     let ast = crate::bcmath_prelude::inject_if_used(
         ast,
         with_crates.contains("bcmath") || autoloaded("bcmath"),
