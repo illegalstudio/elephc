@@ -72,6 +72,33 @@ class C { use A, B; }
     );
 }
 
+/// Verifies that a member modifier right after `as` is read as a visibility change, never as an
+/// alias: `foo as static;` is rejected (PHP: "Cannot use 'static' as method modifier"), while
+/// `foo as protected static;` (modifier after a visibility) is a valid alias.
+#[test]
+fn test_error_trait_alias_modifier_without_visibility_is_not_an_alias() {
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return 1; } }
+class C { use T { foo as static; } }
+"#,
+        "Trait alias adaptation requires a visibility and/or alias name",
+    );
+}
+
+/// Verifies that a `Trait::` method reference needs a word after `::`: a variable
+/// (`T::$foo as bar;`) is rejected, as in PHP.
+#[test]
+fn test_error_trait_adaptation_scoped_target_requires_method_name() {
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return 1; } }
+class C { use T { T::$foo as bar; } }
+"#,
+        "Expected method name after 'TraitName::' in adaptation",
+    );
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]
