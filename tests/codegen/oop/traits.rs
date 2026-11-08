@@ -181,3 +181,32 @@ echo $box->value;
     );
     assert_eq!(out, "9");
 }
+
+/// A used trait's abstract methods are requirements on the class, and an INHERITED method
+/// satisfies one — even a final one, an instance one or a static one, and through a nested trait
+/// use. The method that implements a requirement may carry `#[\Override]`, as PHP 8.3 accepts.
+#[test]
+fn test_trait_requirements_satisfied_by_inherited_methods_and_override() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Widget {
+    final public function invalidate(): string { return "inv"; }
+    public static function make(): string { return "made"; }
+}
+trait Rows {
+    abstract public function invalidate(): string;
+    abstract public static function make(): string;
+    abstract protected function rowPath(int $i): ?string;
+    public function rows(): string { return $this->invalidate() . ":" . static::make() . ":" . $this->rowPath(2); }
+}
+trait Nested { use Rows; }
+final class Panel extends Widget {
+    use Nested;
+    #[\Override]
+    protected function rowPath(int $i): ?string { return "r$i"; }
+}
+echo (new Panel())->rows(), "\n";
+"#,
+    );
+    assert_eq!(out, "inv:made:r2\n");
+}

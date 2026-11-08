@@ -72,6 +72,34 @@ class C { use A, B; }
     );
 }
 
+/// A class that USES a trait still may not re-declare an inherited concrete method abstract:
+/// only the trait's own abstract methods are requirements an inherited method satisfies.
+#[test]
+fn test_error_trait_using_class_cannot_make_inherited_method_abstract() {
+    expect_error(
+        r#"<?php
+class P { public function foo(): int { return 1; } }
+trait T { public function bar(): int { return 2; } }
+abstract class C extends P { use T; abstract public function foo(): int; }
+"#,
+        "Cannot make concrete method abstract: C::foo",
+    );
+}
+
+/// `#[\Override]` on a trait-using class still needs a target: a parent method, an interface
+/// method, or an abstract method of a used trait.
+#[test]
+fn test_error_override_in_trait_using_class_requires_a_target() {
+    expect_error(
+        r#"<?php
+class P {}
+trait T { public function bar(): int { return 2; } }
+final class C extends P { use T; #[\Override] public function baz(): int { return 1; } }
+"#,
+        "C::baz() has #[\\Override] attribute, but no matching parent method was found",
+    );
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]

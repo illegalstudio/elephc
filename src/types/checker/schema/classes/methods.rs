@@ -105,6 +105,9 @@ fn apply_static_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
+    if inherited_method_satisfies_requirement(checker, class, method, &method_key, state.static_method_impl_classes.contains_key(&method_key)) {
+        return Ok(());
+    }
     let mut sig = build_method_sig(checker, method, &class.name)?;
     if class.name == "WeakReference" && method_key == "create" && method.span == crate::span::Span::dummy() {
         // Box the generic object boundary so native Closure descriptors keep their runtime tag.
@@ -162,6 +165,7 @@ fn apply_static_method(
         )?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, true)
+        && !satisfies_trait_requirement(checker, class, &method_key)
     {
         return Err(missing_override_target(class, method));
     }
@@ -239,6 +243,9 @@ fn apply_instance_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
+    if inherited_method_satisfies_requirement(checker, class, method, &method_key, state.method_impl_classes.contains_key(&method_key)) {
+        return Ok(());
+    }
     let internal_exception_override = injected_exception_final_override(class, method, &method_key);
     let inherited_declaring_class = state.method_declaring_classes.get(&method_key).cloned();
     let mut sig = build_method_sig(checker, method, &class.name)?;
@@ -307,6 +314,7 @@ fn apply_instance_method(
         }
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, false)
+        && !satisfies_trait_requirement(checker, class, &method_key)
     {
         return Err(missing_override_target(class, method));
     }
@@ -469,6 +477,34 @@ fn interface_declares_method(
         queue.extend(info.parents.iter().cloned());
     }
     false
+}
+
+/// Whether `method_key` implements an abstract method of a trait `class` uses: PHP accepts
+/// `#[\Override]` on it exactly as on an implementation of an interface method.
+fn satisfies_trait_requirement(checker: &Checker, class: &FlattenedClass, method_key: &str) -> bool {
+    checker
+        .trait_method_requirements
+        .get(&class.name)
+        .is_some_and(|requirements| requirements.required.contains(method_key))
+}
+
+/// Whether `method` is a used trait's abstract requirement that an inherited implementation
+/// already satisfies (`class Panel extends Widget { use Rows; }` with `Rows` requiring
+/// `Widget::invalidate()`). Such a requirement adds nothing to the schema; registering it would
+/// read as a re-abstraction, or as an override of a final method.
+fn inherited_method_satisfies_requirement(
+    checker: &Checker,
+    class: &FlattenedClass,
+    method: &ClassMethod,
+    method_key: &str,
+    inherited_implementation: bool,
+) -> bool {
+    method.is_abstract
+        && inherited_implementation
+        && checker
+            .trait_method_requirements
+            .get(&class.name)
+            .is_some_and(|requirements| requirements.is_imported_requirement(method_key))
 }
 
 /// Constructs a `CompileError` when a method carries `#[\Override]` but no
