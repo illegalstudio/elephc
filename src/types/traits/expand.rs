@@ -319,22 +319,15 @@ fn select_methods(
     let mut selected_methods = Vec::new();
     for method_name in method_order {
         let imports = candidates.remove(&method_name).unwrap_or_default();
-        let mut remaining: Vec<ImportedMethod> = imports
+        let (requirements, remaining): (Vec<ImportedMethod>, Vec<ImportedMethod>) = imports
             .into_iter()
             .filter(|candidate| {
                 !suppressed
                     .get(&method_name)
                     .is_some_and(|set| set.contains(&candidate.source_trait))
             })
-            .collect();
-        // An abstract trait method is a requirement, not a definition, so it is never one of the
-        // candidates `insteadof` has to choose between: a concrete candidate satisfies it, and
-        // several abstract ones are one requirement.
-        if remaining.iter().any(|candidate| !candidate.decl.is_abstract) {
-            remaining.retain(|candidate| !candidate.decl.is_abstract);
-        } else {
-            remaining.truncate(1);
-        }
+            .partition(|candidate| candidate.decl.is_abstract);
+        let requirements = unsatisfied_requirements(requirements, &remaining);
         if remaining.len() > 1 {
             let trait_list = remaining
                 .iter()
@@ -349,7 +342,7 @@ fn select_methods(
                 ),
             ));
         }
-        if let Some(mut selected) = remaining.into_iter().next() {
+        for mut selected in remaining.into_iter().chain(requirements) {
             if let Some(visibility) = visibility_overrides.get(&(
                 selected.source_trait.clone(),
                 method_name.clone(),
@@ -365,6 +358,30 @@ fn select_methods(
     }
 
     Ok(selected_methods)
+}
+
+/// Keeps the abstract candidates that are still requirements once `concrete` is selected.
+///
+/// An abstract trait method is a requirement, not a definition, so it is never one of the
+/// candidates `insteadof` has to choose between: a concrete candidate of the same kind (static or
+/// instance) satisfies it, and several abstract ones of one kind are one requirement. A
+/// requirement of the other kind is kept, so the class schema reports the static/instance
+/// mismatch as it does for separate `use` statements.
+fn unsatisfied_requirements(
+    requirements: Vec<ImportedMethod>,
+    concrete: &[ImportedMethod],
+) -> Vec<ImportedMethod> {
+    let mut kept: Vec<ImportedMethod> = Vec::new();
+    for requirement in requirements {
+        let satisfied = concrete
+            .iter()
+            .chain(kept.iter())
+            .any(|other| other.decl.is_static == requirement.decl.is_static);
+        if !satisfied {
+            kept.push(requirement);
+        }
+    }
+    kept
 }
 
 /// Resolves the source trait for a trait adaptation (insteadof or alias).
