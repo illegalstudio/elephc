@@ -58,6 +58,7 @@ mod includes;
 mod exceptions;
 mod control_exit;
 mod declarations;
+mod globals_nested;
 mod instance_property_writes;
 mod readonly_receiver_guard;
 mod static_property_writes;
@@ -243,20 +244,19 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         }
         StmtKind::NestedArrayAssign { target, value } => {
             if write_target_is_globals(target) {
-                crate::ir_lower::diagnostics::refuse(
-                    stmt.span,
-                    "Writes through $GLOBALS are not supported yet; assign the top-level variable directly",
-                );
+                if !globals_nested::lower_nested_globals_assign(ctx, target, value, stmt.span) {
+                    crate::ir_lower::diagnostics::refuse(
+                        stmt.span,
+                        "Writes through $GLOBALS are not supported yet; assign the top-level variable directly",
+                    );
+                }
             } else {
                 lower_nested_array_assign(ctx, target, value, stmt.span);
             }
         }
         StmtKind::ArrayPush { array, value } => {
             if array == "GLOBALS" {
-                crate::ir_lower::diagnostics::refuse(
-                    stmt.span,
-                    "Writes through $GLOBALS are not supported yet; assign the top-level variable directly",
-                );
+                crate::ir_lower::diagnostics::refuse(stmt.span, "Cannot append to $GLOBALS");
             } else {
                 lower_array_push(ctx, array, value, stmt.span);
             }

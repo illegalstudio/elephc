@@ -137,11 +137,13 @@ variables, `global` declarations, literal `$GLOBALS` keys, and identifier-shaped
 string literals in the program. A direct read of an unset global warns
 `Undefined global variable $name`; `isset()` and `??` stay silent.
 
-Nested writes (`$GLOBALS['a']['b'] = 1`), appending with `$GLOBALS[] = ...`, and
-enumerating `$GLOBALS` as an array are not supported yet. A global whose name is
-built entirely from runtime bytes with no identifier-shaped literal or top-level
-occurrence cannot be created; declare it with `global` or mention it in a literal
-when that shape is needed.
+Nested container writes (`$GLOBALS['a']['b'] = 1`) update the top-level array and
+autovivify a missing global. Appending to `$GLOBALS` with `$GLOBALS[] = ...` is
+rejected with PHP's `Cannot append to $GLOBALS` diagnostic, and enumerating
+`$GLOBALS` as an array is not supported yet. A global whose name is built entirely
+from runtime bytes with no identifier-shaped literal or top-level occurrence cannot
+be created; declare it with `global` or mention it in a literal when that shape is
+needed.
 
 ## PHP version surface
 

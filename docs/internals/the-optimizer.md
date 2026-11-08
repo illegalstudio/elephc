@@ -405,8 +405,9 @@ retention. Literal-key `$GLOBALS['name']` reads and writes are lowered directly 
 matching program-global slot, so top-level assignments and reads share storage
 across scopes and a literal write kills the key's propagated constant. A computed
 `$GLOBALS[$key]` write lowers through the runtime name table and clears every
-propagated value, because the runtime key can name any top-level global; nested
-writes and a materialized `$GLOBALS` array remain unsupported. Likewise, an expression call such as `($value)()` intentionally
+propagated value, because the runtime key can name any top-level global. Nested
+container writes are supported and publish the mutated array back to global storage;
+a materialized `$GLOBALS` array remains unsupported. Likewise, an expression call such as `($value)()` intentionally
 sets both the dynamic-function and dynamic-method hazards because the value may
 be a function, closure, or callable array. Keeping every method of every live
 class in that case is a documented precision cost, not a correctness defect.

@@ -447,11 +447,7 @@ fn test_unsupported_globals_shapes_are_rejected_php86() {
         ),
         (
             "<?php $x = 1; $GLOBALS[] = 9;",
-            "Writes through $GLOBALS are not supported yet",
-        ),
-        (
-            "<?php $x = 1; $GLOBALS['a']['b'] = 9;",
-            "Writes through $GLOBALS are not supported yet",
+            "Cannot append to $GLOBALS",
         ),
     ];
     for (source, expected) in cases {
@@ -998,5 +994,31 @@ var_dump($GLOBALS[$key]);
     assert_eq!(
         out,
         "Warning: Undefined global variable $notInitialized\nNULL\n"
+    );
+}
+
+/// Nested `$GLOBALS[...]` writes update the top-level container, autovivify a missing
+/// global, and work through a runtime outer key.
+#[test]
+fn test_globals_nested_write_php86() {
+    let out = run86(
+        r#"<?php
+$data = ['a' => 1];
+function setNested(): void {
+    $GLOBALS['data']['b'] = 2;
+    $GLOBALS['fresh']['k'] = 5;
+}
+setNested();
+var_dump($data, $GLOBALS['fresh']);
+$name = 'data' . ($argc > 0 ? '' : 'x');
+$GLOBALS[$name]['c'] = 4;
+var_dump($data);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [\"a\"]=>\n  int(1)\n  [\"b\"]=>\n  int(2)\n}\n\
+array(1) {\n  [\"k\"]=>\n  int(5)\n}\n\
+array(3) {\n  [\"a\"]=>\n  int(1)\n  [\"b\"]=>\n  int(2)\n  [\"c\"]=>\n  int(4)\n}\n"
     );
 }
