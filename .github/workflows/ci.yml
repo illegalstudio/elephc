@@ -2553,11 +2553,12 @@ jobs:
           kind: compiler
           attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
 
-      - name: Install Rust with the iOS standard library
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - name: Restore shared iOS bridges
+        uses: ./.github/actions/restore-build-artifact
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: ${{ matrix.rust_target }}
+          target: ${{ matrix.elephc_target }}
+          kind: ios
+          attempt: ${{ fromJSON(needs.build-ios.outputs.artifact-attempts)[matrix.elephc_target] }}
       - name: Compile and link the tokenizer bridge
         run: |
           bash scripts/ci/test_ios_tokenizer_link.sh \

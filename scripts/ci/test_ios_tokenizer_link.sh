@@ -27,7 +27,10 @@ else
     (cd "$PROJECT_DIR" && cargo build --locked --bin elephc)
 fi
 if [[ ${ELEPHC_CI_PREBUILT_IOS_BRIDGES:-0} == 1 ]]; then
-    test -s "$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_tokenizer.a"
+    test -s "$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_tokenizer.a" || {
+        echo "Missing prebuilt tokenizer bridge for $RUST_TARGET; restore the iOS producer artifact" >&2
+        exit 1
+    }
 else
     (cd "$PROJECT_DIR" && cargo build --locked -p elephc-tokenizer --target "$RUST_TARGET")
 fi

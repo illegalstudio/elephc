@@ -80,6 +80,13 @@ class ArtifactGraphTests(unittest.TestCase):
                 self.assertIn("image: ${{ needs.plan.outputs.ci-image }}", body, name)
                 self.assertIn("ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}", body, name)
 
+    def test_every_ios_link_consumer_restores_its_target_variant(self):
+        for name, body in self.jobs.items():
+            if 'ELEPHC_CI_PREBUILT_IOS_BRIDGES: "1"' in body:
+                self.assertIn("build-ios", dependencies(body), name)
+                self.assertIn("target: ${{ matrix.elephc_target }}\n          kind: ios", body, name)
+                self.assertIn("fromJSON(needs.build-ios.outputs.artifact-attempts)[matrix.elephc_target]", body, name)
+
     def test_artifact_consumers_audit_even_swallowed_build_failures(self):
         for path in (ROOT / ".github/workflows").glob("*.yml"):
             if path.name.startswith("ci-build-"):
