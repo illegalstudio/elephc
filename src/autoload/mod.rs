@@ -33,7 +33,7 @@ use crate::parser::ast::Program;
 use crate::parser::ast::Stmt;
 use crate::span::Span;
 
-use walk::{collect_declared_fqns, collect_reference_points};
+use walk::{collect_declared_fqns, collect_declared_functions, collect_reference_points};
 
 
 /// Run the autoload pass over a fully resolver+name_resolver-processed
@@ -116,8 +116,11 @@ fn run_collecting_included_on_compiler_stack(
     for path in registry.always_included_files() {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if included.insert(canonical.clone()) {
+            // Earlier `files` entries and the entry program are already part of the program.
+            let known = collect_declared_functions(&prefix).into_iter()
+                .chain(collect_declared_functions(&program)).collect::<Vec<_>>();
             let (loaded, loaded_includes) =
-                load_autoloaded_file(&canonical, base_dir, defines)?;
+                load_autoloaded_file(&canonical, base_dir, defines, &known)?;
             nested_includes.extend(loaded_includes);
             prefix.extend(loaded);
         }
@@ -130,6 +133,7 @@ fn run_collecting_included_on_compiler_stack(
     for _ in 0..MAX_ITERATIONS {
         let mut declared = collect_declared_fqns(&program);
         seed_builtin_declared_fqns(&mut declared);
+        let known_functions = collect_declared_functions(&program);
         let reference_points = collect_reference_points(&program);
         let mut insertions: Vec<(usize, Program)> = Vec::new();
         for (stmt_idx, fqn) in reference_points {
@@ -140,7 +144,7 @@ fn run_collecting_included_on_compiler_stack(
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
                     let (loaded, loaded_includes) =
-                        load_autoloaded_file(&canonical, base_dir, defines)?;
+                        load_autoloaded_file(&canonical, base_dir, defines, &known_functions)?;
                     nested_includes.extend(loaded_includes);
                     insertions.push((stmt_idx, loaded));
                 }
@@ -199,13 +203,15 @@ fn resolve_class(fqn: &str, registry: &Registry) -> Option<PathBuf> {
     None
 }
 
-/// Load, parse, and resolve a single autoloaded PHP file, returning its statements plus the
+/// Load, parse, and resolve a single autoloaded PHP file — with `known_functions`, the functions
+/// the program already declares, as fallbacks for its unqualified calls — returning its statements plus the
 /// canonical paths of every `include`/`require` target the file itself pulled in (surfaced for
 /// the OPcache script manifest — see [`run_collecting_included`]).
 fn load_autoloaded_file(
     path: &Path,
     base_dir: &Path,
     defines: &HashSet<String>,
+    known_functions: &[String],
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(
@@ -237,7 +243,8 @@ fn load_autoloaded_file(
         defines,
     )?;
     let resolved = collect_aliases(resolved).map_err(|e| e.with_file(file_label.clone()))?;
-    let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
+    let canonicalized: Vec<Stmt> =
+        crate::name_resolver::resolve_with_declared_functions(resolved, known_functions)?;
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level
     // program.
