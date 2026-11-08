@@ -170,10 +170,11 @@ def host_files(root, profile, kind):
     raise ValueError("Specify --file for non-host payloads")
 
 
-def bridge_environment(root, profile, target=None):
+def bridge_environment(root, profile, target=None, artifact_root=None):
     """Pin CLI bridge lookup so checkout timestamps cannot trigger Cargo builds."""
     triple = {"ios-arm64": "aarch64-apple-ios", "ios-sim-arm64": "aarch64-apple-ios-sim"}.get(target)
-    directory = ((root / "target" / triple if triple else root / "target") / profile).resolve()
+    artifacts = artifact_root or root
+    directory = ((artifacts / "target" / triple if triple else artifacts / "target") / profile).resolve()
     if "\n" in str(directory) or "\r" in str(directory):
         raise ValueError("Invalid bridge directory")
     catalog = (root / "src/linker/bridges.rs").read_text()

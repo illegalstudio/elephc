@@ -53,6 +53,15 @@ class AggregateGateTests(unittest.TestCase):
                 changed[name]["result"] = failure
                 self.assertNotEqual(self.execute("build", changed), 0, (name, failure))
 
+    def test_missing_plan_outputs_cannot_make_skipped_builds_green(self):
+        results = self.build_results(run="false", extended="false", drivers="false")
+        results["plan"]["outputs"] = {}
+        self.assertNotEqual(self.execute("build", results), 0)
+        for gate in ("pdo-core-gate", "pdo-drivers-gate", "phpext-host-sdk"):
+            skipped = {name: {"result": "success" if name == "plan" else "skipped"}
+                       for name in dependencies(self.jobs[gate])}
+            self.assertNotEqual(self.execute(gate, skipped, SELECTED=""), 0)
+
     def test_main_reuse_and_narrow_pr_accept_only_the_planned_skips(self):
         self.assertEqual(self.execute("build", self.build_results(extended="false", drivers="false")), 0)
         results = self.build_results(run="false", extended="false", drivers="false", benchmark="true")

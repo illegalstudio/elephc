@@ -124,6 +124,7 @@ jobs:
           SELECTED: ${{ needs.plan.outputs.sdk }}
         run: |
           jq -e --arg selected "$SELECTED" '
+            ($selected == "true" or $selected == "false") and
             .plan.result == "success" and
             (del(.plan) | all(.[]; .result == (if $selected == "true" then "success" else "skipped" end)))
           ' <<< "$RESULTS"
@@ -254,6 +255,7 @@ jobs:
           SELECTED: ${{ needs.plan.outputs.run }}
         run: |
           jq -e --arg selected "$SELECTED" '
+            ($selected == "true" or $selected == "false") and
             .plan.result == "success" and
             (del(.plan) | all(.[]; .result == (if $selected == "true" then "success" else "skipped" end)))
           ' <<< "$RESULTS"
@@ -286,6 +288,7 @@ jobs:
           SELECTED: ${{ needs.plan.outputs.pdo-drivers }}
         run: |
           jq -e --arg selected "$SELECTED" '
+            ($selected == "true" or $selected == "false") and
             .plan.result == "success" and
             (del(.plan) | all(.[]; .result == (if $selected == "true" then "success" else "skipped" end)))
           ' <<< "$RESULTS"
@@ -326,6 +329,8 @@ jobs:
         run: |
           jq -e '
             .plan.result == "success" and
+            ([.plan.outputs.run, .plan.outputs.extended, .plan.outputs["pdo-drivers"], .plan.outputs.benchmark] |
+              all(.[]; . == "true" or . == "false")) and
             (."build-pdo-libpq".result == (if .plan.outputs.run == "true" then "success" else "skipped" end)) and
             (."build-pdo-drivers".result == (if .plan.outputs["pdo-drivers"] == "true" then "success" else "skipped" end)) and
             (."build-benchmark".result == (if .plan.outputs.benchmark == "true" then "success" else "skipped" end)) and
@@ -3278,6 +3283,10 @@ jobs:
           RUN_TIER: ${{ needs.plan.outputs.run }}
           EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
         run: |
+          case "$RUN_TIER/$EXTENDED_TIER" in
+            true/true|true/false|false/false) ;;
+            *) echo '::error::Missing or invalid tier outputs'; exit 1 ;;
+          esac
           always="plan build phpext-host-sdk image-api-sync security-audit action-pins benchmark-tooling"
           run_tier="gmp-phpt-corpus build-archive-macos-aarch64 build-archive-linux-x86_64
             build-archive-linux-aarch64 builtins-docs-sync tokenizer-tests tokenizer-native-smoke differential-tests

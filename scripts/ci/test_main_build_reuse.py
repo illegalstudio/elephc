@@ -5,7 +5,7 @@ import copy
 import unittest
 
 from resolve_main_build import GATES, HOSTS, select
-from verify_ci_verdicts import successful_latest
+from verify_ci_verdicts import successful_latest, trusted_verdict_run
 
 
 class MainBuildReuseTests(unittest.TestCase):
@@ -91,6 +91,17 @@ class MainBuildReuseTests(unittest.TestCase):
 
 
 class ReleaseVerdictTests(unittest.TestCase):
+    def test_publication_requires_full_integration_event_not_a_green_pr_ancestor(self):
+        run = {"head_sha": "a" * 40, "repository": {"full_name": "o/r"},
+               "path": ".github/workflows/ci.yml", "event": "merge_group",
+               "head_branch": "gh-readonly-queue/main/pr-1-a", "conclusion": "success"}
+        self.assertTrue(trusted_verdict_run(run, "o/r", "a" * 40))
+        self.assertTrue(trusted_verdict_run({**run, "event": "push", "head_branch": "main"}, "o/r", "a" * 40))
+        for changes in ({"event": "pull_request"}, {"head_sha": "b" * 40},
+                        {"event": "push", "head_branch": "feature"}, {"conclusion": "cancelled"},
+                        {"repository": {"full_name": "fork/r"}}, {"path": ".github/workflows/development-builds.yml"}):
+            self.assertFalse(trusted_verdict_run({**run, **changes}, "o/r", "a" * 40))
+
     def test_latest_verdict_cannot_hide_a_pending_or_failed_rerun(self):
         check = {"id": 1, "name": GATES[0], "head_sha": "a" * 40,
                  "app": {"slug": "github-actions"}, "status": "completed", "conclusion": "success"}

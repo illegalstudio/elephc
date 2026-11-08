@@ -38,6 +38,16 @@ class BuildArtifactTests(unittest.TestCase):
         self.assertEqual(binary.read_bytes(), (self.source / "target/debug/elephc").read_bytes())
         self.assertEqual(binary.stat().st_mode & 0o777, 0o755)
 
+    def test_cli_bridge_overrides_use_extracted_paths_and_catalog_variable_names(self):
+        """Checkout timestamps cannot cause a CLI subprocess to rebuild an archived bridge."""
+        catalog = self.source / "src/linker/bridges.rs"
+        catalog.parent.mkdir(parents=True)
+        catalog.write_text('env_var: "ELEPHC_CRYPTO_LIB_DIR", env_var: "ELEPHC_OPENSSL_BRIDGE_LIB_DIR"')
+        extracted = self.root / "relocated tests"
+        environment = artifacts.bridge_environment(self.source, "debug", artifact_root=extracted)
+        directory = extracted / "target/debug"
+        self.assertEqual(environment, f"ELEPHC_CRYPTO_LIB_DIR={directory}\nELEPHC_OPENSSL_BRIDGE_LIB_DIR={directory}\n")
+
     def test_wrong_sha_platform_features_and_run_are_rejected(self):
         """Outputs cannot satisfy a different commit, configuration or producer."""
         for field, value in (("sha", "b" * 40), ("target", "linux-aarch64"),

@@ -115,7 +115,7 @@ jobs:
           # Keep the non-relocatable SDK outside Rust's target cache. Both the
           # builder identity and its workflow configure flags invalidate this cache.
           path: ${{ runner.temp }}/phpext-test-host
-          key: phpext-embed-${{ inputs.target }}-${{ matrix.phpts }}-${{ hashFiles('scripts/phpext/build_host.py', '.github/workflows/phpext-host-sdk.yml') }}-v3
+          key: phpext-embed-${{ inputs.target }}-${{ matrix.phpts }}-${{ hashFiles('scripts/phpext/build_host.py', '.github/workflows/ci-test-php-sdk.yml') }}-v3
 
       - name: Build real PHP debug CLI and embed SDK
         shell: bash

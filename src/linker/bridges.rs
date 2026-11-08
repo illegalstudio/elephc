@@ -1744,8 +1744,11 @@ mod tests {
             .unwrap_or_else(|| panic!("{rel} no longer has an `{marker}` step to split on"));
         let (tarball, formula) = body.split_at(split);
 
+        let producer = std::fs::read_to_string(root.join(".github/actions/build-release-artifacts/action.yml"))
+            .expect("read shared release producer");
         assert!(
-            tarball.contains("-p elephc-magician --features curl")
+            tarball.contains("uses: ./.github/actions/build-release-artifacts")
+                && producer.contains("-p elephc-magician --features curl")
                 && tarball.contains("libelephc_magician_curl.a"),
             "{rel} must build and pack the curl-aware Magician archive"
         );

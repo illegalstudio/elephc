@@ -144,3 +144,6 @@ runs:
         python3 -B scripts/ci/test_archive_manifest.py verify "$ARCHIVE_DIR" \
           --target "$target" --variant "$variant" --run-id "$ARTIFACT_RUN" --attempt "$ARTIFACT_ATTEMPT"
         sh scripts/ci/validate_archived_nextest.sh "$ARCHIVE_DIR"
+
+    - uses: ./.github/actions/pin-test-bridges
+      if: startsWith(inputs.name, 'nextest-archive-')

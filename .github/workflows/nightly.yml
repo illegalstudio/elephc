@@ -73,7 +73,7 @@ jobs:
           # main. Walk back instead: an unattended build that nobody watches is
           # worth having only if it is installable.
           SHA=""
-          for CANDIDATE in $(git rev-list -n 20 HEAD); do
+          for CANDIDATE in $(git rev-list --first-parent -n 20 HEAD); do
             if python3 -B scripts/ci/verify_ci_verdicts.py "$CANDIDATE"; then
               SHA="$CANDIDATE"
               break

@@ -32,3 +32,7 @@ runs:
         echo "ELEPHC_CI_NEXTEST=$archive/cargo-nextest" >> "$GITHUB_ENV"
         echo "ELEPHC_CI_TEST_ROOT=$destination" >> "$GITHUB_ENV"
         echo 'ELEPHC_TEST_PREBUILT_BRIDGES=1' >> "$GITHUB_ENV"
+
+    - uses: ./.github/actions/pin-test-bridges
+      with:
+        root: pdo-${{ inputs.variant }}
