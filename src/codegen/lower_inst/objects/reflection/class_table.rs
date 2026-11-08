@@ -82,6 +82,18 @@ fn module_reads_table(module: &Module) -> bool {
     })
 }
 
+/// Whether a user subclass of `owner_class` is built by the owner's table-reading constructor.
+///
+/// A subclass has no interpreter path to fall back on, unlike the owner itself in a default build:
+/// whenever the module reads the table, its inherited constructor reads the row, for a name known
+/// only at run time as well as for a literal.
+pub(in crate::codegen::lower_inst::objects) fn table_builds_subclass_reflector(
+    ctx: &FunctionContext<'_>,
+    owner_class: &str,
+) -> bool {
+    is_table_reflector(owner_class) && owner_class != "ReflectionParameter" && module_reads_table(ctx.module)
+}
+
 /// Whether `new <class_name>(...)` at `inst` is answered by the constructor and the table.
 ///
 /// A closed-world build answers every construction there. A default build keeps the interpreter

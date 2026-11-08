@@ -189,13 +189,18 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             &format!("{}::__construct", constructor.impl_class),
         )?;
     }
+    // When the reflection table builds the owner's reflectors, the inherited constructor reads the
+    // row itself, for a name known only at run time too; populating the subclass from a literal
+    // on top of it was redundant, and refused `new Mine($name)` outright.
     let populate_reflection_subclass = match reflection_owner_class.as_deref() {
-        Some(owner_class) => reflection_constructor::reflection_subclass_forwards_constructor(
-            ctx,
-            &class_name,
-            owner_class,
-            constructor_impl.as_ref(),
-        ),
+        Some(owner_class) => {
+            reflection_constructor::reflection_subclass_forwards_constructor(
+                ctx,
+                &class_name,
+                owner_class,
+                constructor_impl.as_ref(),
+            ) && !reflection::table_builds_subclass_reflector(ctx, owner_class)
+        }
         None => false,
     };
     // The shared allocator builds the object from its static template when it can and hands

@@ -109,7 +109,7 @@ pub(in crate::codegen) use class_table::emit_reflection_class_table;
 pub(in crate::codegen::lower_inst) use class_table::{
     lower_refl_at, lower_refl_callable_name, lower_refl_pool_str, lower_refl_row_lookup, lower_refl_word,
 };
-pub(super) use class_table::table_builds_reflector;
+pub(super) use class_table::{table_builds_reflector, table_builds_subclass_reflector};
 use owner_dispatch::reflection_class_literal_names_a_compiled_class_like;
 
 /// Compile-time metadata used to populate one Reflection owner object.
