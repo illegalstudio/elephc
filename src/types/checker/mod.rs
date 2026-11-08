@@ -452,7 +452,7 @@ pub(crate) struct Checker {
     /// covariant return such as `?SimpleXMLIterator` would otherwise look unrelated to
     /// `?SimpleXMLElement`. The hint keeps ancestry answerable during that window.
     pub pending_class_parents: HashMap<String, String>,
-    /// Every declared class's parent and directly implemented interfaces, from the flattened
+    /// Every declared class's (and enum's) parent and directly implemented interfaces, from the
     /// declarations, while class schemas are being built.
     ///
     /// Covariance checks run in the class-build walk, which is name-ordered: when

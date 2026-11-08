@@ -344,6 +344,14 @@ pub(super) fn check_types_impl(
         .iter()
         .map(|(name, class)| (name.clone(), (class.extends.clone(), class.implements.clone())))
         .collect();
+    // Enums are built after every class, so a class method may return an enum that only its
+    // declaration can relate to the interface the parent method returns.
+    for stmt in program {
+        if let StmtKind::EnumDecl { name, implements, .. } = &stmt.kind {
+            let implements = implements.iter().map(|name| name.as_str().to_string()).collect();
+            checker.declared_class_ancestry.entry(name.clone()).or_insert((None, implements));
+        }
+    }
     for class_name in class_names {
         if let Err(error) = build_class_info_recursive(
             &class_name,

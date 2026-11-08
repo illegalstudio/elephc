@@ -770,3 +770,23 @@ echo get_class((new BDef())->get()), "|", get_class((new CDef())->get()), "|", g
     );
     assert_eq!(out, "N\\ZEnumNode|N\\ZEnumNode|N\\ZEnumNode");
 }
+
+/// Enums are built after every class, so a covariant return to an enum implementing the
+/// parent's (or interface's) return interface is related through the enum's declaration.
+#[test]
+fn test_covariant_return_to_an_enum_implementing_the_interface() {
+    let out = compile_and_run(
+        r#"<?php
+namespace T;
+interface TokenType { public function label(): string; }
+interface Pattern { public function getTokenType(): TokenType; }
+enum TokenTypeEnum: string implements TokenType { case KEYWORD = 'keyword'; public function label(): string { return $this->value; } }
+final class ApacheCloseTagPattern implements Pattern { public function getTokenType(): TokenTypeEnum { return TokenTypeEnum::KEYWORD; } }
+abstract class Base { abstract public function kind(): TokenType; }
+final class Child extends Base { public function kind(): TokenTypeEnum { return TokenTypeEnum::KEYWORD; } }
+echo (new ApacheCloseTagPattern())->getTokenType()->label(), "|", (new Child())->kind()->label();
+
+"#,
+    );
+    assert_eq!(out, "keyword|keyword");
+}
