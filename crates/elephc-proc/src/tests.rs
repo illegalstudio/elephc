@@ -232,8 +232,13 @@ fn close_closes_open_pipes_before_waiting() {
     let spawned = inode(stdin);
     assert!(spawned.is_some());
     assert_eq!(elephc_proc_close(process), 0);
-    // The number may already be reused by a parallel test, but never by this pipe.
-    assert_ne!(inode(stdin), spawned, "the pipe end must be closed");
+    assert_ne!(inode(stdin), spawned, "the pipe end must be released");
+    // The number stays reserved for the PHP stream that owns it (now `/dev/null`), so a
+    // later `fclose()` of that stream can never close an unrelated descriptor.
+    let flags = unsafe { libc::fcntl(stdin, libc::F_GETFD) };
+    assert!(flags >= 0, "the descriptor number must stay open");
+    assert_ne!(flags & libc::FD_CLOEXEC, 0, "the placeholder must stay close-on-exec");
+    unsafe { libc::close(stdin) };
 }
 
 /// A pipe end the program closed and whose number was reused is left alone.

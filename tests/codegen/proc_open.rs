@@ -237,3 +237,25 @@ echo proc_close($process), "\n";
     );
     assert_eq!(out, "from a variable\n0\nfrom a list\n0\n");
 }
+
+/// A pipe stream left open across `proc_close()` keeps its descriptor number, so a later
+/// `fclose()` of it can never close a file opened after `proc_close()` (which would
+/// otherwise reuse the freed number and lose its writes).
+#[test]
+fn test_proc_close_never_frees_a_pipe_number_a_stale_fclose_could_hit() {
+    let out = compile_and_run(
+        r#"<?php
+$path = sys_get_temp_dir() . '/elephc_proc_stale_' . getmypid() . '.txt';
+$process = proc_open(['echo', 'hi'], [1 => ['pipe', 'w']], $pipes);
+echo stream_get_contents($pipes[1]);
+echo proc_close($process), "\n";
+$file = fopen($path, 'w');
+fclose($pipes[1]);
+var_dump(fwrite($file, 'kept'));
+fclose($file);
+echo file_get_contents($path), "\n";
+unlink($path);
+"#,
+    );
+    assert_eq!(out, "hi\n0\nint(4)\nkept\n");
+}

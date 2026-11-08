@@ -38,4 +38,7 @@ The process resource is a tag-9 Mixed cell whose high word is kind 11, which
 (php-src's dtor only reaps with `WNOHANG`). `proc_close()` closes the pipes the bridge
 spawned for the process (only while each descriptor still has the spawned pipe's
 inode, so a number the program already closed and reused is never touched), waits,
-stamps the closed sentinel, and returns the status.
+stamps the closed sentinel, and returns the status. "Closes" means the pipe end is
+swapped for `/dev/null` with `dup2`: the child sees EOF, but the descriptor number stays
+reserved for the `$pipes` stream that owns it, so a later `fclose()` of that stream can
+never close a file the program opened after `proc_close()`.
