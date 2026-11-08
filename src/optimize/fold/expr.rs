@@ -326,6 +326,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 .as_canonical()
                 .trim_start_matches('\\')
                 .eq_ignore_ascii_case("strtotime")
+                && args.len() <= 2
             {
                 if let Some(Expr {
                     kind: ExprKind::StringLiteral(literal),
@@ -333,19 +334,20 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 }) = args.first()
                 {
                     if let Some(zone) = crate::date_time_zone::split_fixed_zone(literal) {
+                        let mut call_args = vec![
+                            Expr::new(ExprKind::StringLiteral(zone.stripped), *arg_span),
+                            Expr::new(ExprKind::IntLiteral(zone.offset), span),
+                        ];
+                        if let Some(base) = args.get(1) {
+                            call_args.push(base.clone());
+                        }
                         return Expr::new(
                             ExprKind::StaticMethodCall {
                                 receiver: crate::parser::ast::StaticReceiver::Named(
                                     crate::names::Name::unqualified("DateTime"),
                                 ),
                                 method: "__elephc_strtotime_zone".to_string(),
-                                args: vec![
-                                    Expr::new(
-                                        ExprKind::StringLiteral(zone.stripped),
-                                        *arg_span,
-                                    ),
-                                    Expr::new(ExprKind::IntLiteral(zone.offset), span),
-                                ],
+                                args: call_args,
                             },
                             span,
                         );
@@ -369,7 +371,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                         && items.iter().all(|item| matches!(item.kind, ExprKind::StringLiteral(_)))
                     {
                         let mut subject = args[2].clone();
-                        for item in items.iter().rev() {
+                        for item in items.iter() {
                             subject = Expr::new(
                                 ExprKind::FunctionCall {
                                     name: name.clone(),
@@ -783,6 +785,35 @@ fn fold_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
     }
 }
 
+/// Returns whether `html_entity_decode()`'s flags operand selects the default quote policy.
+///
+/// The literal spellings are `ENT_QUOTES` (3) and its combination with `ENT_SUBSTITUTE`
+/// (11); a constant reference still names `ENT_QUOTES` before constant folding runs.
+fn flags_select_default_quote_policy(flags: &Expr) -> bool {
+    // The checker runs before folding, so resolve the common `ENT_*` combinations here too.
+    // Only the default quote policy (3 or 11) is implemented by the runtime decoder.
+    fn value(expr: &Expr) -> Option<i64> {
+        match &expr.kind {
+            ExprKind::IntLiteral(flags) => Some(*flags),
+            ExprKind::ConstRef(name) => match name.as_str().trim_start_matches('\\') {
+                "ENT_QUOTES" => Some(3),
+                "ENT_SUBSTITUTE" => Some(8),
+                "ENT_HTML401" => Some(0),
+                "ENT_NOQUOTES" => Some(0),
+                "ENT_COMPAT" => Some(2),
+                _ => None,
+            },
+            ExprKind::BinaryOp {
+                left,
+                op: BinOp::BitOr,
+                right,
+            } => Some(value(left)? | value(right)?),
+            _ => None,
+        }
+    }
+    matches!(value(flags), Some(3 | 11))
+}
+
 /// Decodes a literal `html_entity_decode()` argument that contains only numeric references.
 ///
 /// Returns `None` when any argument is not a literal, the encoding is not UTF-8, the input
@@ -793,7 +824,11 @@ fn fold_numeric_html_entities(args: &[Expr]) -> Option<String> {
         return None;
     };
     if let Some(flags) = args.get(1) {
-        if !matches!(flags.kind, ExprKind::IntLiteral(_)) {
+        // Only the quote policies the runtime actually implements may fold. ENT_NOQUOTES
+        // (0) and ENT_COMPAT (2) must reach the checker's explicit refusal instead of being
+        // folded with the default policy. `ENT_QUOTES` is still a constant reference at this
+        // point and names the same policy as the literal 3.
+        if !flags_select_default_quote_policy(flags) {
             return None;
         }
     }
@@ -1110,7 +1145,9 @@ fn fold_literal_range(start: &Expr, end: &Expr) -> Option<Vec<Expr>> {
                 if current == *last {
                     break;
                 }
-                if values.len() > 10_000 {
+                // Only the tiny literal ranges used by enum-style loops are worth folding;
+                // a large range must stay a runtime allocation instead of inflating the AST.
+                if values.len() > 256 {
                     return None;
                 }
                 current = current.checked_add(step)?;

@@ -70,7 +70,7 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("libmagic", 1) => Some(BuiltInRecipe::Libmagic),
         ("libxml2", 9) => Some(BuiltInRecipe::Libxml2),
         ("gmp", 2) => Some(BuiltInRecipe::Gmp),
-        ("icu", 39) => Some(BuiltInRecipe::Icu),
+        ("icu", 40) => Some(BuiltInRecipe::Icu),
         _ => None,
     }
 }

@@ -148,6 +148,53 @@ fn callable_argument_is_clearly_incompatible(
     }
 }
 
+/// Evaluates every supplied argument for PHP-visible side effects before a guard throws.
+///
+/// PHP evaluates the argument list before it validates an internal function's arity or types,
+/// so `$f(side_effect(), ...)` runs the side effect even when the call is rejected. A value that
+/// terminates the block (`throw`, `exit`) stops the remaining arguments, matching PHP.
+fn lower_callable_guard_arguments(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) {
+    for arg in args {
+        if ctx.builder.insertion_block_is_terminated() {
+            return;
+        }
+        let value = lower_expr(ctx, arg);
+        release_discarded_branch_value(ctx, value, arg.span);
+    }
+}
+
+/// Builds PHP's argument-count message for a dynamic callable guard.
+///
+/// php-src distinguishes a fixed arity (`expects exactly N arguments`) from a range
+/// (`expects at least N arguments` / `expects at most N arguments`).
+fn callable_arity_message(function_name: &str, required: usize, maximum: usize, given: usize) -> String {
+    let (bound, relation) = if required == maximum {
+        (required, "exactly")
+    } else if given < required {
+        (required, "at least")
+    } else {
+        (maximum, "at most")
+    };
+    let noun = if bound == 1 { "argument" } else { "arguments" };
+    format!("{function_name}() expects {relation} {bound} {noun}, {given} given")
+}
+
+/// Builds PHP's standard parameter type message for a dynamic callable guard.
+fn callable_type_message(
+    function_name: &str,
+    index: usize,
+    parameter: &str,
+    expected: &PhpType,
+    actual: &PhpType,
+) -> String {
+    format!(
+        "{function_name}(): Argument #{} (${parameter}) must be of type {}, {} given",
+        index + 1,
+        crate::types::diagnostic_names::php_type_name(expected),
+        crate::types::diagnostic_names::php_type_name(actual),
+    )
+}
+
 /// Lowers one resolved static callable target to the corresponding EIR call opcode.
 pub(super) fn lower_static_callable_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -179,12 +226,15 @@ pub(super) fn lower_static_callable_call(
                         .then_some(usize::MAX)
                         .unwrap_or(crate::types::call_args::regular_param_count(sig));
                     if callback_args.len() < required || callback_args.len() > maximum {
+                        lower_callable_guard_arguments(ctx, callback_args);
                         return Some(crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
                             ctx,
                             "ArgumentCountError",
-                            &format!(
-                                "{}() expects {} arguments, {} given",
-                                function_name, required, callback_args.len()
+                            &callable_arity_message(
+                                &function_name,
+                                required,
+                                maximum,
+                                callback_args.len(),
                             ),
                             expr.span,
                             PhpType::Mixed,
@@ -202,26 +252,28 @@ pub(super) fn lower_static_callable_call(
             .is_some_and(|contract| {
                 contract.module == elephc_builtin_contract::PhpModule::Intl
             });
-            if intl_surface && statically_positional && sig.as_ref().is_some_and(|sig| {
-                let regular = crate::types::call_args::regular_param_count(sig);
-                callback_args.iter().enumerate().any(|(index, arg)| {
-                    index < regular
-                        && sig.params.get(index).is_some_and(|(_, expected)| {
-                            callable_argument_is_clearly_incompatible(
-                                ctx,
-                                expected,
-                                &callable_argument_static_type(ctx, arg),
-                            )
-                        })
+            let intl_mismatch = if intl_surface && statically_positional {
+                sig.as_ref().and_then(|sig| {
+                    let regular = crate::types::call_args::regular_param_count(sig);
+                    callback_args.iter().enumerate().find_map(|(index, arg)| {
+                        if index >= regular {
+                            return None;
+                        }
+                        let (parameter, expected) = sig.params.get(index)?;
+                        let actual = callable_argument_static_type(ctx, arg);
+                        callable_argument_is_clearly_incompatible(ctx, expected, &actual)
+                            .then(|| (index, parameter.clone(), expected.clone(), actual))
+                    })
                 })
-            }) {
+            } else {
+                None
+            };
+            if let Some((index, parameter, expected, actual)) = intl_mismatch {
+                lower_callable_guard_arguments(ctx, callback_args);
                 return Some(crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
                     ctx,
                     "TypeError",
-                    &format!(
-                        "{}() received an argument of an incompatible type",
-                        function_name
-                    ),
+                    &callable_type_message(&function_name, index, &parameter, &expected, &actual),
                     expr.span,
                     PhpType::Mixed,
                 ));
@@ -322,12 +374,15 @@ pub(super) fn lower_static_callable_call(
                         .then_some(usize::MAX)
                         .unwrap_or(sig.params.len());
                     if callback_args.len() < required || callback_args.len() > maximum {
+                        lower_callable_guard_arguments(ctx, callback_args);
                         return Some(crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
                             ctx,
                             "ArgumentCountError",
-                            &format!(
-                                "{}() expects {} arguments, {} given",
-                                function_name, required, callback_args.len()
+                            &callable_arity_message(
+                                &function_name,
+                                required,
+                                maximum,
+                                callback_args.len(),
                             ),
                             expr.span,
                             PhpType::Mixed,
@@ -335,26 +390,28 @@ pub(super) fn lower_static_callable_call(
                     }
                 }
             }
-            if enforce_signature && statically_positional && sig.as_ref().is_some_and(|sig| {
-                let regular = crate::types::call_args::regular_param_count(sig);
-                callback_args.iter().enumerate().any(|(index, arg)| {
-                    index < regular
-                        && sig.params.get(index).is_some_and(|(_, expected)| {
-                            callable_argument_is_clearly_incompatible(
-                                ctx,
-                                expected,
-                                &callable_argument_static_type(ctx, arg),
-                            )
-                        })
+            let builtin_mismatch = if enforce_signature && statically_positional {
+                sig.as_ref().and_then(|sig| {
+                    let regular = crate::types::call_args::regular_param_count(sig);
+                    callback_args.iter().enumerate().find_map(|(index, arg)| {
+                        if index >= regular {
+                            return None;
+                        }
+                        let (parameter, expected) = sig.params.get(index)?;
+                        let actual = callable_argument_static_type(ctx, arg);
+                        callable_argument_is_clearly_incompatible(ctx, expected, &actual)
+                            .then(|| (index, parameter.clone(), expected.clone(), actual))
+                    })
                 })
-            }) {
+            } else {
+                None
+            };
+            if let Some((index, parameter, expected, actual)) = builtin_mismatch {
+                lower_callable_guard_arguments(ctx, callback_args);
                 return Some(crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
                     ctx,
                     "TypeError",
-                    &format!(
-                        "{}() received an argument of an incompatible type",
-                        function_name
-                    ),
+                    &callable_type_message(&function_name, index, &parameter, &expected, &actual),
                     expr.span,
                     PhpType::Mixed,
                 ));

@@ -25,6 +25,9 @@ const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
 /// encoded Intl result (the full locale/zone/transliterator enumerations are tens of KiB).
 const CALL_RESULT_CAPACITY: usize = 1024 * 1024;
 
+/// ICU's `U_BUFFER_OVERFLOW_ERROR`: the shim cached the full payload for a fetch.
+const U_BUFFER_OVERFLOW_ERROR: i32 = 15;
+
 extern "C" {
     /// Opens one ICU-backed object and returns its handle, or zero on failure.
     fn elephc_icu_intl_open(
@@ -75,12 +78,40 @@ extern "C" {
         capacity: u64,
         needed: *mut u64,
     ) -> i32;
+    /// Copies the payload cached by the last overflowed bridge call.
+    fn elephc_icu_intl_fetch_result(out: *mut u8, capacity: u64, needed: *mut u64) -> i32;
     /// Returns the number of live handles.
     fn elephc_icu_intl_live_count() -> i64;
     /// Copies the ICU version string.
     fn elephc_icu_intl_version(buffer: *mut c_char, capacity: u64, needed: *mut u64) -> i32;
     /// Copies the ICU data version string.
     fn elephc_icu_intl_data_version(buffer: *mut c_char, capacity: u64, needed: *mut u64) -> i32;
+}
+
+/// Converts one shim result, fetching the cached full payload when the fixed buffer overflowed.
+///
+/// # Safety
+/// Calls the shim fetch entry point, which is only valid on the thread that made the call.
+unsafe fn finish_result(status: i32, written: u64, payload: &[u8]) -> String {
+    if status == U_BUFFER_OVERFLOW_ERROR {
+        let mut full = vec![0u8; written as usize];
+        let mut needed = 0u64;
+        let fetched = elephc_icu_intl_fetch_result(
+            full.as_mut_ptr(),
+            full.len() as u64,
+            &mut needed,
+        );
+        if fetched == 0 {
+            full.truncate(needed as usize);
+            return encode_hex(&full);
+        }
+        return String::new();
+    }
+    if status != 0 && written == 0 {
+        return String::new();
+    }
+    let length = (written as usize).min(payload.len());
+    encode_hex(&payload[..length])
 }
 
 thread_local! {
@@ -268,13 +299,7 @@ pub unsafe extern "C" fn elephc_intl_call(
         &mut written,
         &mut error,
     );
-    // The encoded result and the ICU error state are independent: `null`/`false` is a
-    // legitimate PHP result while the error is reported through intl_get_error_*().
-    if status != 0 && written == 0 {
-        return stash(String::new());
-    }
-    payload.truncate(written.min(payload.len() as u64) as usize);
-    stash(encode_hex(&payload))
+    stash(finish_result(status, written, &payload))
 }
 
 /// Runs one class-level Intl operation and returns the hexadecimal result.
@@ -309,13 +334,7 @@ pub unsafe extern "C" fn elephc_intl_static(
         &mut error,
     );
     record_static_error(if status == 0 { error } else { status });
-    // The encoded result and the ICU error state are independent: `null`/`false` is a
-    // legitimate PHP result while the error is reported through intl_get_error_*().
-    if status != 0 && written == 0 {
-        return stash(String::new());
-    }
-    payload.truncate(written.min(payload.len() as u64) as usize);
-    stash(encode_hex(&payload))
+    stash(finish_result(status, written, &payload))
 }
 
 /// Returns one handle's last ICU error code.

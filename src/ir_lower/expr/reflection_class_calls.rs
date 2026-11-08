@@ -17,6 +17,32 @@ pub(super) fn lower_reflection_class_new_instance(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(object_expr) = object_expr {
+        if let Some(class_name) = reflection_class_reflected_class(ctx, object_expr) {
+            let trimmed = class_name.trim_start_matches('\\');
+            let non_public_constructor = crate::types::constructor_owner(&ctx.classes, trimmed)
+                .is_some_and(|(_, owner)| {
+                    owner
+                        .method_visibilities
+                        .get(&crate::names::php_symbol_key("__construct"))
+                        .is_some_and(|visibility| {
+                            *visibility != crate::parser::ast::Visibility::Public
+                        })
+                });
+            if non_public_constructor {
+                if ctx.value_is_owning_temporary(object) {
+                    crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
+                }
+                return crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
+                    ctx,
+                    "ReflectionException",
+                    &format!("Access to non-public constructor of class {}", trimmed),
+                    expr.span,
+                    PhpType::Mixed,
+                );
+            }
+        }
+    }
     let args = reflection_class_new_instance_args(args);
     let constructor_sig =
         reflection_class_new_instance_constructor_signature(ctx, object_expr, &args).cloned();
@@ -92,11 +118,19 @@ pub(super) fn lower_reflection_class_new_instance_args(
         if let Some(class_name) = reflection_class_reflected_class(ctx, object_expr) {
             // Abstract classes and non-public constructors keep the reflective runtime path,
             // which raises PHP's ReflectionException instead of a source-scope visibility error.
+            let non_public_constructor = crate::types::constructor_owner(
+                &ctx.classes,
+                class_name.trim_start_matches('\\'),
+            )
+            .is_some_and(|(_, owner)| {
+                owner
+                    .method_visibilities
+                    .get(&crate::names::php_symbol_key("__construct"))
+                    .is_some_and(|visibility| *visibility != crate::parser::ast::Visibility::Public)
+            });
             if ctx.classes.get(class_name.trim_start_matches('\\')).is_some_and(|info| {
                 info.is_abstract
-                    || info.method_visibilities.get(&crate::names::php_symbol_key("__construct"))
-                        == Some(&crate::parser::ast::Visibility::Private)
-            }) {
+            }) || non_public_constructor {
                 return lower_reflection_class_new_instance(
                     ctx, Some(object_expr), object, &forwarded_args, expr,
                 );

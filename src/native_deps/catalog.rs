@@ -446,7 +446,7 @@ const ICU_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 27_977_255,
         body_limit: 64 * 1024 * 1024,
     },
-    recipe_revision: 39,
+    recipe_revision: 40,
     dependencies: &[],
     supported_targets: TARGETS,
     ordered_link_outputs: &[

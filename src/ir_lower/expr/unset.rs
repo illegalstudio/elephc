@@ -43,10 +43,15 @@ pub(super) fn lower_unset_locals(
             ExprKind::Variable(name) => {
                 match ctx.local_type(name).codegen_repr() {
                     PhpType::Object(class_name)
-                        if !object_class_has_destructor(ctx, &class_name) => {}
+                        if crate::ir_lower::expr::class_extends_class(
+                            ctx,
+                            class_name.trim_start_matches('\\'),
+                            "IntlIterator",
+                        ) && !object_class_has_destructor(ctx, &class_name) => {}
                     _ => {
-                        // Arrays, scalars, and destructor-bearing objects are root drops that
-                        // may expose a cycle; keep the ordinary unconditional safe point.
+                        // Every other local keeps the eager safe point: elephc has no
+                        // root-buffer threshold collector, so deferring a general object
+                        // cycle would retain it until an explicit gc_collect_cycles().
                         defer_object_cycle_collection = false;
                         unconditional = true;
                     }

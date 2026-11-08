@@ -79,7 +79,18 @@ pub(super) fn datetime_strtotime_zone() -> crate::parser::ast::ClassMethod {
     let body = vec![
         s_assign("saved", call("date_default_timezone_get", vec![])),
         s_expr(call("date_default_timezone_set", vec![e_str("UTC")])),
-        s_assign("ts", call("strtotime", vec![var("datetime")])),
+        s_if(
+            e_binop(var("base"), BinOp::StrictEq, e_null()),
+            vec![s_assign("ts", call("strtotime", vec![var("datetime")]))],
+            vec![],
+            Some(vec![s_assign(
+                "ts",
+                call(
+                    "strtotime",
+                    vec![var("datetime"), e_cast(CastType::Int, var("base"))],
+                ),
+            )]),
+        ),
         s_expr(call("date_default_timezone_set", vec![var("saved")])),
         s_if(
             e_binop(var("ts"), BinOp::StrictEq, e_bool(false)),
@@ -94,6 +105,12 @@ pub(super) fn datetime_strtotime_zone() -> crate::parser::ast::ClassMethod {
         vec![
             ("datetime".to_string(), Some(TypeExpr::Str), None, false),
             ("offset".to_string(), Some(TypeExpr::Int), None, false),
+            (
+                "base".to_string(),
+                Some(TypeExpr::Nullable(Box::new(TypeExpr::Int))),
+                Some(e_null()),
+                false,
+            ),
         ],
         Some(t_mixed()),
         body,

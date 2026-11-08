@@ -261,6 +261,11 @@ fn intl_family_and_helper(name: &str, result: &PhpType) -> (&'static str, &'stat
     if name == "normalizer_get_raw_decomposition" {
         return ("normalizer", "__elephc_intl_normalizer_raw", PhpType::Mixed);
     }
+    if matches!(name, "normalizer_normalize" | "normalizer_is_normalized") {
+        // The checked helper rejects unpublished forms with PHP's ValueError before the
+        // bridge can silently fall back to NFC.
+        return ("normalizer", "__elephc_intl_normalizer_checked", result.clone());
+    }
     let helper = match result.codegen_repr() {
         PhpType::Str => "__elephc_intl_invoke_string",
         PhpType::Int => "__elephc_intl_invoke_int",
@@ -271,4 +276,32 @@ fn intl_family_and_helper(name: &str, result: &PhpType) -> (&'static str, &'stat
         _ => "__elephc_intl_invoke_mixed",
     };
     (family, helper, result.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies every EIR-selected helper name is rooted by the shared prelude helper list.
+    ///
+    /// The usage scan only sees the source-level call, so the declaration reachability pass
+    /// has to learn these helper names from `INTL_HELPERS` instead.
+    #[test]
+    fn eir_helpers_are_rooted_from_the_prelude_helper_list() {
+        for builtin in [
+            "grapheme_strpos",
+            "grapheme_extract",
+            "grapheme_levenshtein",
+            "msgfmt_parse_message",
+            "normalizer_get_raw_decomposition",
+            "intlcal_get_now",
+            "normalizer_normalize",
+        ] {
+            let (_, helper, _) = intl_family_and_helper(builtin, &PhpType::Mixed);
+            assert!(
+                crate::intl::prelude_helpers_for(builtin).contains(&helper),
+                "{builtin} selects {helper}, which prelude_helpers_for() does not root",
+            );
+        }
+    }
 }

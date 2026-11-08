@@ -2,7 +2,7 @@
 //! Builds static ICU data, internationalization libraries and the opaque date ABI.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for ICU recipe revision 2.
+//! - `crate::native_deps::recipe::CuratedRecipes` for ICU recipe revision 40.
 //!
 //! Key details:
 //! - C++ compilation uses the selected C compiler driver, keeping target flags and

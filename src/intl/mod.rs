@@ -44,7 +44,12 @@ pub fn program_uses_intl(program: &[Stmt]) -> bool {
         .iter()
         .filter(|contract| contract.module == elephc_builtin_contract::PhpModule::Intl)
         .map(|contract| contract.name);
-    if function_names.clone().any(|name| usage.references(name)) {
+    if function_names.clone().any(|name| {
+        // A callable string (`$f = "grapheme_strlen"; $f(...)`) reaches the Intl builtin
+        // through static-callable lowering, but the source scan cannot see that edge from a
+        // variable callee. The literal is the only remaining reference, so keep the surface.
+        usage.references(name) || usage.literals.contains(&crate::names::php_symbol_key(name))
+    }) {
         return true;
     }
     let literal_or_class = |name: &str| {
@@ -85,8 +90,16 @@ fn program_needs_bridge(program: &[Stmt]) -> bool {
     if elephc_builtin_contract::contracts()
         .iter()
         .filter(|contract| contract.module == elephc_builtin_contract::PhpModule::Intl)
-        .any(|contract| usage.references(contract.name))
+        .any(|contract| {
+            usage.references(contract.name)
+                || usage.literals.contains(&crate::names::php_symbol_key(contract.name))
+        })
     {
+        return true;
+    }
+    if usage.literals.iter().any(|literal| literal.starts_with("intl.")) {
+        // `ini_set("intl.*")` is rewritten to `__elephc_intl_ini_set`, which lives in the
+        // bridge-backed function declarations. The literal alone must force the bridge.
         return true;
     }
     CLASS_NAMES.iter().any(|name| {
@@ -156,9 +169,8 @@ pub(crate) fn constant_int_value(name: &str) -> Option<i64> {
 /// before the Intl prelude is injected. Consult this predicate as a fallback so the
 /// `INTL_*`/`IDNA_*`/`GRAPHEME_*`/`ULOC_*`/`LC_*` constants report as defined.
 pub fn is_intl_constant(name: &str) -> bool {
-    ["INTL_", "IDNA_", "GRAPHEME_", "ULOC_", "LC_"]
-        .iter()
-        .any(|prefix| name.starts_with(prefix))
+    let name = name.trim_start_matches('\\');
+    intl_constant_names().iter().any(|known| *known == name)
 }
 
 /// Builds every global constant PHP's `ext/intl` publishes.
@@ -213,6 +225,8 @@ fn intl_constants() -> Vec<Stmt> {
 /// Returns the canonical names of every PHP-visible Intl global constant.
 fn intl_constant_names() -> Vec<&'static str> {
     let mut names = vec![
+        "LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MONETARY", "LC_NUMERIC", "LC_TIME",
+        "LC_MESSAGES",
         "INTL_MAX_LOCALE_LEN", "INTL_ICU_VERSION", "INTL_ICU_DATA_VERSION",
         "GRAPHEME_EXTR_COUNT", "GRAPHEME_EXTR_MAXBYTES", "GRAPHEME_EXTR_MAXCHARS",
         "IDNA_DEFAULT", "IDNA_ALLOW_UNASSIGNED", "IDNA_USE_STD3_RULES", "IDNA_CHECK_BIDI",
@@ -252,6 +266,16 @@ const INTL_HELPERS: &[&str] = &[
     "__elephc_intl_invoke_void",
     "__elephc_intl_invoke_mixed",
     "__elephc_intl_invoke_locale",
+    "__elephc_intl_invoke_checked",
+    // Builtin-specific EIR lowering targets: these are selected by name in
+    // `crate::builtins::intl::intl_family_and_helper`, so the source call site cannot
+    // discover the helper edge by itself.
+    "__elephc_intl_grapheme_pos",
+    "__elephc_intl_grapheme_extract",
+    "__elephc_intl_grapheme_levenshtein",
+    "__elephc_intl_msgfmt_parse_message",
+    "__elephc_intl_normalizer_raw",
+    "__elephc_intl_normalizer_checked",
 ];
 
 /// Returns every synthetic Intl function that must survive declaration pruning.
@@ -1402,6 +1426,36 @@ fn helper_functions() -> Vec<Stmt> {
             .build(),
     );
     helpers.push(
+        function("__elephc_intl_normalizer_checked")
+            .param("family", TypeExpr::Str)
+            .param("method", TypeExpr::Str)
+            .param("args", t_mixed())
+            .returns(t_mixed())
+            .body(vec![
+                s_assign("form", e_ternary(
+                    call_isset(e_index(e_var("args"), e_int(1))),
+                    e_cast(CastType::Int, e_index(e_var("args"), e_int(1))),
+                    e_int(16),
+                )),
+                s_if(
+                    crate::synthetic_class::e_not(normalizer_form_membership()),
+                    vec![s_throw(e_new("ValueError", vec![e_concat_all(vec![
+                        e_var("method"),
+                        e_str("(): Argument #2 ($form) must be a a valid normalization form"),
+                    ])]))],
+                    vec![],
+                    None,
+                ),
+                s_return(e_call("__elephc_intl_global_fail", vec![
+                    e_call("__elephc_intl_invoke", vec![
+                        e_var("family"), e_var("method"), e_var("args"),
+                    ]),
+                    e_concat(e_var("method"), e_str("()")),
+                ])),
+            ])
+            .build(),
+    );
+    helpers.push(
         function("__elephc_intl_normalizer_raw")
             .param("family", TypeExpr::Str)
             .param("method", TypeExpr::Str)
@@ -1779,6 +1833,28 @@ fn function_from_spec(spec: &IntlFunction) -> Stmt {
         .map(|(index, param)| (index, param.name))
         .collect();
     let mut body = Vec::new();
+    if matches!(spec.name, "intlcal_set_repeated_wall_time_option" | "intlcal_set_skipped_wall_time_option") {
+        // The OO methods validate these options; the procedural entry points share the same
+        // ICU setters and must reject out-of-range values with PHP's ValueError too.
+        let (maximum, allowed) = if spec.name == "intlcal_set_repeated_wall_time_option" {
+            (1, "either IntlCalendar::WALLTIME_FIRST or IntlCalendar::WALLTIME_LAST")
+        } else {
+            (2, "one of IntlCalendar::WALLTIME_FIRST, IntlCalendar::WALLTIME_LAST, or IntlCalendar::WALLTIME_NEXT_VALID")
+        };
+        body.push(s_if(
+            e_binop(
+                e_binop(e_var("option"), BinOp::Lt, e_int(0)),
+                BinOp::Or,
+                e_binop(e_var("option"), BinOp::Gt, e_int(maximum)),
+            ),
+            vec![s_throw(e_new("ValueError", vec![e_str(&format!(
+                "{}(): Argument #2 ($option) must be {allowed}",
+                spec.name
+            ))]))],
+            vec![],
+            None,
+        ));
+    }
     if matches!(spec.name, "datefmt_parse" | "datefmt_localtime") {
         body.extend(intl_parse_offset_preamble(&format!("{}()", spec.name), 3));
     }
@@ -1882,8 +1958,9 @@ fn function_from_spec(spec: &IntlFunction) -> Stmt {
         } else {
             "numfmt_parse_currency() function"
         };
+        let minimum = if spec.name == "numfmt_parse" { 1 } else { 0 };
         body.push(s_if(
-            e_binop(e_binop(e_var("type"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("type"), BinOp::Gt, e_int(4))),
+            e_binop(e_binop(e_var("type"), BinOp::Lt, e_int(minimum)), BinOp::Or, e_binop(e_var("type"), BinOp::Gt, e_int(4))),
             vec![s_throw(e_new("ValueError", vec![e_str(&format!(
                 "{caller}: Argument #3 ($type) must be a NumberFormatter::TYPE_* constant"
             ))]))],
@@ -2994,6 +3071,22 @@ fn build_locale_class() -> Stmt {
     builder.build()
 }
 
+/// Returns the boolean expression for the five published normalization forms.
+///
+/// PHP publishes FORM_D (4), FORM_KD (8), FORM_C (16), FORM_KC (32), and FORM_KC_CF (48).
+/// Anything else is a ValueError; it must never silently become NFC.
+fn normalizer_form_membership() -> Expr {
+    let mut membership = e_binop(e_var("form"), BinOp::StrictEq, e_int(4));
+    for form in [8, 16, 32, 48] {
+        membership = e_binop(
+            membership,
+            BinOp::Or,
+            e_binop(e_var("form"), BinOp::StrictEq, e_int(form)),
+        );
+    }
+    membership
+}
+
 /// Builds the static-only `Normalizer` class.
 fn build_normalizer_class() -> Stmt {
     let mut builder = class("Normalizer")
@@ -3024,7 +3117,16 @@ fn build_normalizer_class() -> Stmt {
             ]));
             continue;
         }
-        builder = builder.method(static_method(name, params, bridge_static_body("normalizer", normalizer_bridge_method(name), vec![e_var("string"), e_var("form")])));
+        let mut body = vec![s_if(
+            crate::synthetic_class::e_not(normalizer_form_membership()),
+            vec![s_throw(e_new("ValueError", vec![e_str(&format!(
+                "Normalizer::{name}(): Argument #2 ($form) must be a a valid normalization form"
+            ))]))],
+            vec![],
+            None,
+        )];
+        body.extend(bridge_static_body("normalizer", normalizer_bridge_method(name), vec![e_var("string"), e_var("form")]));
+        builder = builder.method(static_method(name, params, body));
     }
     builder.build()
 }
@@ -3257,6 +3359,7 @@ fn build_date_formatter_class() -> Stmt {
             e_this_prop("__elephc_handle"), e_var("method"), e_var("args"),
         ]))]));
     builder = builder.method(clone_handle_method("IntlDateFormatter"));
+    builder = builder.method(handle_destructor_method());
     builder.build()
 }
 
@@ -3782,7 +3885,8 @@ fn build_transliterator_class() -> Stmt {
             .body(vec![s_return(e_call("elephc_intl_error_code", vec![e_this_prop("__elephc_handle")]))]))
         .method(method("getErrorMessage").returns(TypeExpr::Str)
             .body(vec![s_return(e_call("elephc_intl_error_message", vec![e_this_prop("__elephc_handle")]))]))
-        .method(clone_handle_method("Transliterator"));
+        .method(clone_handle_method("Transliterator"))
+        .method(handle_destructor_method());
     builder.build()
 }
 
@@ -3843,6 +3947,7 @@ fn build_date_pattern_generator_class() -> Stmt {
                 e_str("best_pattern"), e_array(vec![e_var("skeleton")]),
             ]))]))
         .method(clone_handle_method("IntlDatePatternGenerator"))
+        .method(handle_destructor_method())
         .build()
 }
 
@@ -3961,6 +4066,7 @@ fn build_list_formatter_class() -> Stmt {
         .method(method("__clone").body(vec![
             s_throw(e_new("Error", vec![e_str("Trying to clone an uncloneable object of class IntlListFormatter")])),
         ]));
+    builder = builder.method(handle_destructor_method());
     builder.build()
 }
 
@@ -4015,6 +4121,15 @@ fn build_uconverter_class() -> Stmt {
             ]))]))
         .method(method("__destruct").body(vec![
             s_expr(e_call("__elephc_uconverter_close_callbacks", vec![e_var("this")])),
+            s_if(
+                e_binop(e_this_prop("__elephc_handle"), BinOp::StrictNotEq, e_int(0)),
+                vec![
+                    s_expr(e_call("elephc_intl_close", vec![e_this_prop("__elephc_handle")])),
+                    s_prop_assign(e_var("this"), "__elephc_handle", e_int(0)),
+                ],
+                vec![],
+                None,
+            ),
         ]))
         .method(method("getSourceEncoding").returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
             .body(vec![s_return(e_method_call(e_var("this"), "__elephc_call", vec![e_str("get_source_encoding"), e_array(vec![])]))]))
@@ -4223,7 +4338,8 @@ fn build_spoofchecker_class() -> Stmt {
                     s_throw(e_new("ValueError", vec![e_cast(CastType::String, e_var("_result"))])),
                 ], vec![], None),
             ]))
-        .method(clone_handle_method("Spoofchecker"));
+        .method(clone_handle_method("Spoofchecker"))
+        .method(handle_destructor_method());
     builder.build()
 }
 
@@ -4550,6 +4666,7 @@ fn build_time_zone_class() -> Stmt {
             s_return(e_int(1)),
         ]));
     builder = builder.method(clone_handle_method("IntlTimeZone"));
+    builder = builder.method(handle_destructor_method());
     builder.build()
 }
 
@@ -4612,6 +4729,21 @@ fn const_value_expr(value: &IntlConstValue) -> Expr {
     }
 }
 
+/// Closes a bridge handle exactly once when a synthetic Intl wrapper is destroyed.
+fn handle_destructor_method() -> crate::synthetic_class::MethodBuilder {
+    method("__destruct").body(vec![
+        s_if(
+            e_binop(e_this_prop("__elephc_handle"), BinOp::StrictNotEq, e_int(0)),
+            vec![
+                s_expr(e_call("elephc_intl_close", vec![e_this_prop("__elephc_handle")])),
+                s_prop_assign(e_var("this"), "__elephc_handle", e_int(0)),
+            ],
+            vec![],
+            None,
+        ),
+    ])
+}
+
 /// Builds `IntlIterator` with an array-backed iterator protocol.
 fn build_iterator_class() -> Stmt {
     class("IntlIterator")
@@ -4638,11 +4770,22 @@ fn build_iterator_class() -> Stmt {
             s_prop_assign(e_var("_object"), "__elephc_cycle", e_var("_object")),
             s_return(e_var("_object")),
         ]))
-        .method(method("current").returns(t_mixed()).body(vec![s_return(e_index(e_this_prop("__elephc_items"), e_index(e_this_prop("__elephc_keys"), e_this_prop("__elephc_index"))))]))
-        .method(method("key").returns(t_mixed()).body(vec![s_return(e_index(e_this_prop("__elephc_keys"), e_this_prop("__elephc_index")))]))
+        .method(method("current").returns(t_mixed()).body(vec![
+            s_if(e_not(e_method_call(e_var("this"), "valid", vec![])), vec![s_return(e_null())], vec![], None),
+            s_return(e_index(e_this_prop("__elephc_items"), e_index(e_this_prop("__elephc_keys"), e_this_prop("__elephc_index")))),
+        ]))
+        .method(method("key").returns(t_mixed()).body(vec![
+            s_if(e_not(e_method_call(e_var("this"), "valid", vec![])), vec![s_return(e_null())], vec![], None),
+            s_return(e_index(e_this_prop("__elephc_keys"), e_this_prop("__elephc_index"))),
+        ]))
         .method(method("next").returns(TypeExpr::Void).body(vec![s_prop_assign(e_var("this"), "__elephc_index", e_binop(e_this_prop("__elephc_index"), BinOp::Add, e_int(1)))]))
         .method(method("rewind").returns(TypeExpr::Void).body(vec![s_prop_assign(e_var("this"), "__elephc_index", e_int(0))]))
-        .method(method("valid").returns(TypeExpr::Bool).body(vec![s_return(e_binop(e_this_prop("__elephc_index"), BinOp::Lt, e_call("count", vec![e_this_prop("__elephc_keys")])))]))
+        .method(method("valid").returns(TypeExpr::Bool).body(vec![s_return(e_binop(
+            e_binop(e_this_prop("__elephc_index"), BinOp::GtEq, e_int(0)),
+            BinOp::And,
+            e_binop(e_this_prop("__elephc_index"), BinOp::Lt, e_call("count", vec![e_this_prop("__elephc_keys")])),
+        ))]))
+        .method(handle_destructor_method())
         .build()
 }
 
@@ -4837,6 +4980,15 @@ fn build_break_iterator_class() -> Stmt {
                     e_array(vec![]), e_var("this"), e_var("type"),
                 ])),
             ]));
+    // `getRuleStatus()`/`getRuleStatusVec()` belong to the base iterator in php-src; the
+    // parts iterator reads them from its owning `IntlBreakIterator` without knowing the
+    // concrete subclass.
+    builder = builder.method(method("getRuleStatus")
+        .returns(TypeExpr::Int)
+        .body(vec![s_return(e_method_call(e_var("this"), "__elephc_call", vec![e_str("get_rule_status"), e_array(vec![])]))]))
+        .method(method("getRuleStatusVec")
+            .returns(t_union(vec![t_array(), TypeExpr::False]))
+            .body(vec![s_return(e_method_call(e_var("this"), "__elephc_call", vec![e_str("get_rule_status_vec"), e_array(vec![])]))]));
     builder = builder.method(method("__elephc_compare").static_()
         .param("left", t_mixed())
         .param("right", t_mixed())
@@ -4863,6 +5015,7 @@ fn build_break_iterator_class() -> Stmt {
             s_return(e_int(1)),
         ]));
     builder = builder.method(clone_handle_method("IntlBreakIterator"));
+    builder = builder.method(handle_destructor_method());
     builder.build()
 }
 
@@ -4995,7 +5148,9 @@ fn build_parts_iterator_class() -> Stmt {
         .prop("__elephc_break_iterator", t_mixed(), Some(e_null()))
         .prop("__elephc_type", TypeExpr::Int, Some(e_int(0)))
         .prop("__elephc_positions", t_array(), Some(e_array(vec![])))
-        .prop("__elephc_rule_status", TypeExpr::Int, Some(e_int(0)));
+        // One ICU rule status per part, captured when `next()` reaches the part's end
+        // boundary. php-src reports the status of the part that just ended, not its start.
+        .prop("__elephc_rule_statuses", t_array(), Some(e_array(vec![])));
     for (constant, value) in constants_for("IntlPartsIterator") {
         builder = builder.constant(constant, const_value_expr(value));
     }
@@ -5012,7 +5167,7 @@ fn build_parts_iterator_class() -> Stmt {
                 s_prop_assign(e_var("_object"), "__elephc_keys", e_call("array_keys", vec![e_cast(CastType::Array, e_var("items"))])),
                 s_prop_assign(e_var("_object"), "__elephc_break_iterator", e_var("iterator")),
                 s_prop_assign(e_var("_object"), "__elephc_type", e_var("status")),
-                s_prop_assign(e_var("_object"), "__elephc_rule_status", e_int(0)),
+                s_prop_assign(e_var("_object"), "__elephc_rule_statuses", e_array(vec![])),
                 s_return(e_var("_object")),
             ]))
         .method(method("__elephc_ensure")
@@ -5033,6 +5188,7 @@ fn build_parts_iterator_class() -> Stmt {
                 s_assign("_text", e_cast(CastType::String, e_method_call(e_var("_owner"), "getText", vec![]))),
                 s_assign("_items", e_array(vec![])),
                 s_assign("_positions", e_array(vec![])),
+                s_assign("_statuses", e_array(vec![])),
                 s_assign("_p", e_method_call(e_var("_owner"), "first", vec![])),
                 s_assign("_prev", e_var("_p")),
                 s_while(
@@ -5045,6 +5201,7 @@ fn build_parts_iterator_class() -> Stmt {
                             vec![],
                             None,
                         ),
+                        s_array_push("_statuses", e_method_call(e_var("_owner"), "getRuleStatus", vec![])),
                         s_assign("_part", e_call("substr", vec![
                             e_var("_text"), e_var("_prev"),
                             e_binop(e_var("_next"), BinOp::Sub, e_var("_prev")),
@@ -5067,6 +5224,7 @@ fn build_parts_iterator_class() -> Stmt {
                 ),
                 s_prop_assign(e_var("this"), "__elephc_items", e_var("_items")),
                 s_prop_assign(e_var("this"), "__elephc_positions", e_var("_positions")),
+                s_prop_assign(e_var("this"), "__elephc_rule_statuses", e_var("_statuses")),
                 s_prop_assign(e_var("this"), "__elephc_keys", e_call("array_keys", vec![e_cast(CastType::Array, e_var("_items"))])),
                 s_prop_assign(e_var("this"), "__elephc_index", e_int(0)),
             ]))
@@ -5108,13 +5266,39 @@ fn build_parts_iterator_class() -> Stmt {
             ]))
         .method(method("getRuleStatus")
             .returns(TypeExpr::Int)
-            .body(vec![s_return(e_this_prop("__elephc_rule_status"))]));
+            .body(vec![
+                s_if(
+                    e_call("isset", vec![e_index(
+                        e_this_prop("__elephc_rule_statuses"),
+                        e_this_prop("__elephc_index"),
+                    )]),
+                    vec![s_return(e_index(
+                        e_this_prop("__elephc_rule_statuses"),
+                        e_this_prop("__elephc_index"),
+                    ))],
+                    vec![],
+                    None,
+                ),
+                s_return(e_int(0)),
+            ]));
     builder.build()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies a dynamic Intl callable string still selects the surface and bridge.
+    #[test]
+    fn dynamic_intl_callable_literal_selects_the_bridge() {
+        let tokens = crate::lexer::tokenize(
+            "<?php $callable = 'grapheme_strlen'; echo $callable('abc');",
+        )
+        .unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        assert!(program_uses_intl(&program));
+        assert!(program_needs_bridge(&program));
+    }
 
     /// Verifies the usage gate sees a synthetic Intl class before injection.
     #[test]
@@ -5527,6 +5711,7 @@ fn build_calendar_class() -> Stmt {
         builder = builder.method(instance_method(name, params, body).returns(calendar_method_return(name)));
     }
     builder = builder.method(clone_handle_method("IntlCalendar"));
+    builder = builder.method(handle_destructor_method());
     builder.build()
 }
 
@@ -6118,6 +6303,7 @@ fn build_collator_class() -> Stmt {
         ));
     }
     builder = builder.method(clone_handle_method("Collator"));
+    builder = builder.method(handle_destructor_method());
     builder.build()
 }
 
@@ -6324,7 +6510,9 @@ fn build_number_formatter_class() -> Stmt {
     }
     builder = builder.method(instance_method(
         "parse",
-        vec![("string", TypeExpr::Str, None, false), ("type", TypeExpr::Int, Some(e_int(0)), false), ("offset", t_mixed(), Some(e_int(0)), true)],
+        // PHP's omitted `$type` is TYPE_DOUBLE (3), not TYPE_DEFAULT (0). TYPE_DEFAULT is
+        // accepted by format() but rejected by parse() with the same ValueError guard below.
+        vec![("string", TypeExpr::Str, None, false), ("type", TypeExpr::Int, Some(e_int(3)), false), ("offset", t_mixed(), Some(e_int(0)), true)],
         numfmt_parse_body("parse"),
     ));
     builder = builder.method(instance_method(
@@ -6336,14 +6524,18 @@ fn build_number_formatter_class() -> Stmt {
         s_throw(e_new("Exception", vec![e_str("Serialization of 'NumberFormatter' is not allowed")])),
     ]));
     builder = builder.method(clone_handle_method("NumberFormatter"));
+    builder = builder.method(handle_destructor_method());
     builder.build()
 }
 
 /// Builds the PHP `ValueError` guards for a NumberFormatter format/parse type argument.
 fn numfmt_type_guards(caller: &str, argument: i64, currency_hint: &str) -> Vec<Stmt> {
+    // `parse()` rejects TYPE_DEFAULT (0); `format()` accepts it. Both reject out-of-range
+    // values and TYPE_CURRENCY, which has its own entry point.
+    let minimum = if caller.contains("::parse()") { 1 } else { 0 };
     vec![
         s_if(
-            e_binop(e_binop(e_var("type"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("type"), BinOp::Gt, e_int(4))),
+            e_binop(e_binop(e_var("type"), BinOp::Lt, e_int(minimum)), BinOp::Or, e_binop(e_var("type"), BinOp::Gt, e_int(4))),
             vec![s_throw(e_new("ValueError", vec![e_str(&format!(
                 "{caller}: Argument #{argument} ($type) must be a NumberFormatter::TYPE_* constant"
             ))]))],
@@ -6654,6 +6846,7 @@ fn build_message_formatter_class() -> Stmt {
         builder = builder.method(instance_method(name, params, body));
     }
     builder = builder.method(clone_handle_method("MessageFormatter"));
+    builder = builder.method(handle_destructor_method());
     builder.build()
 }
 
@@ -6852,5 +7045,6 @@ fn build_resource_bundle_class() -> Stmt {
         .method(method("getErrorCode").body(vec![s_return(e_call("elephc_intl_error_code", vec![e_this_prop("__elephc_handle")]))]))
         .method(method("getErrorMessage").body(vec![s_return(e_call("elephc_intl_error_message", vec![e_this_prop("__elephc_handle")]))]));
     builder = builder.method(clone_handle_method("ResourceBundle"));
+    builder = builder.method(handle_destructor_method());
     builder.build()
 }

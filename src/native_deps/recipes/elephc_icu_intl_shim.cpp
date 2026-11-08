@@ -459,10 +459,13 @@ std::mutex &registry_mutex() {
     return mutex;
 }
 
-std::map<int64_t, std::unique_ptr<IntlObject>> &registry() {
-    static std::map<int64_t, std::unique_ptr<IntlObject>> table;
+std::map<int64_t, std::shared_ptr<IntlObject>> &registry() {
+    static std::map<int64_t, std::shared_ptr<IntlObject>> table;
     return table;
 }
+
+/// Holds the payload of an overflowed bridge call until the Rust caller fetches it.
+thread_local std::string intl_pending_payload;
 
 int64_t &next_handle() {
     static int64_t handle = 1;
@@ -484,16 +487,16 @@ void record_error(IntlObject &object, UErrorCode status, const std::string &cont
     set_global_error(status, context);
 }
 
-IntlObject *lookup(int64_t handle) {
+std::shared_ptr<IntlObject> lookup(int64_t handle) {
     std::lock_guard<std::mutex> lock(registry_mutex());
     auto found = registry().find(handle);
-    return found == registry().end() ? nullptr : found->second.get();
+    return found == registry().end() ? nullptr : found->second;
 }
 
 int64_t insert(std::unique_ptr<IntlObject> object) {
     std::lock_guard<std::mutex> lock(registry_mutex());
     int64_t handle = next_handle()++;
-    registry().emplace(handle, std::move(object));
+    registry().emplace(handle, std::shared_ptr<IntlObject>(std::move(object)));
     return handle;
 }
 
@@ -516,6 +519,20 @@ Value wrap_object(int64_t handle, const char *class_name) {
         {Value::from_string("__elephc_class"), Value::from_string(class_name)},
     };
     return wrapper;
+}
+
+/// Returns whether an encoding is single-byte, where ICU's 0x1A substitution marker cannot
+/// collide with a legitimate payload byte.
+bool destination_is_single_byte(const std::string &name) {
+    UErrorCode status = U_ZERO_ERROR;
+    UConverter *probe = ucnv_open(name.empty() ? nullptr : name.c_str(), &status);
+    if (U_FAILURE(status) || probe == nullptr) {
+        if (probe != nullptr) ucnv_close(probe);
+        return true;
+    }
+    int8_t max_char_size = ucnv_getMaxCharSize(probe);
+    ucnv_close(probe);
+    return max_char_size <= 1;
 }
 
 /* --------------------------------------------------------------------------------------- */
@@ -633,7 +650,9 @@ struct DateFormatterObject : IntlObject {
                 };
                 return U_ZERO_ERROR;
             }
-            std::unique_ptr<Calendar> calendar(simple->getCalendar()->clone());
+            // `localtime` works for style-only formatters too: read the calendar the
+            // formatter actually owns instead of requiring a SimpleDateFormat instance.
+            std::unique_ptr<Calendar> calendar(formatter->getCalendar()->clone());
             calendar->setTime(parsed, status);
             if (U_FAILURE(status)) {
                 record_error(*this, status, "IntlDateFormatter::localtime()");
@@ -649,8 +668,7 @@ struct DateFormatterObject : IntlObject {
             int32_t wday = calendar->get(UCAL_DAY_OF_WEEK, status) - 1;
             // php reports ICU's 1-based DAY_OF_YEAR for tm_yday (only wday is decremented).
             int32_t yday = calendar->get(UCAL_DAY_OF_YEAR, status);
-            int32_t dst = 0;
-            calendar->get(UCAL_DST_OFFSET, status);
+            int32_t dst = calendar->inDaylightTime(status) ? 1 : 0;
             UDate millis = calendar->getTime(status);
             if (U_FAILURE(status)) {
                 record_error(*this, status, "IntlDateFormatter::localtime()");
@@ -955,9 +973,11 @@ struct NumberFormatterObject : IntlObject {
                 out = std::move(result);
                 return U_ZERO_ERROR;
             }
-            int64_t parse_type = 0;
-            optional_int(args, 1, 0, parse_type);
+            int64_t parse_type = 3; // PHP's default is NumberFormatter::TYPE_DOUBLE
+            optional_int(args, 1, 3, parse_type);
             bool integer_type = parse_type == 1 || parse_type == 2;
+            // TYPE_DOUBLE always yields a PHP float, even when ICU parsed an integer token.
+            bool double_type = parse_type == 3;
             NumberFormat *parser = formatter.get();
             NumberFormat *integer_parser = nullptr;
             if (integer_type) {
@@ -975,12 +995,35 @@ struct NumberFormatterObject : IntlObject {
                 return U_PARSE_ERROR;
             }
             Value result = Value::array();
-            if (integer_type || parsed.getType() == Formattable::kLong ||
-                parsed.getType() == Formattable::kInt64) {
+            if (integer_type) {
                 int64_t value = 0;
                 if (parsed.getType() == Formattable::kLong) value = parsed.getLong();
                 else if (parsed.getType() == Formattable::kInt64) value = parsed.getInt64();
                 else value = int64_t(parsed.getDouble());
+                result.entries = {
+                    {Value::from_int(0), Value::from_int(value)},
+                    {Value::from_int(1), Value::from_int(position.getIndex())},
+                };
+            } else if (double_type) {
+                // `Formattable::getDouble()` does not convert a kLong/kInt64 union in every
+                // ICU build; convert the integer payload explicitly.
+                double value = 0.0;
+                if (parsed.getType() == Formattable::kLong) value = double(parsed.getLong());
+                else if (parsed.getType() == Formattable::kInt64) value = double(parsed.getInt64());
+                else value = parsed.getDouble();
+                result.entries = {
+                    {Value::from_int(0), Value::from_double(value)},
+                    {Value::from_int(1), Value::from_int(position.getIndex())},
+                };
+            } else if (parsed.getType() == Formattable::kDouble) {
+                result.entries = {
+                    {Value::from_int(0), Value::from_double(parsed.getDouble())},
+                    {Value::from_int(1), Value::from_int(position.getIndex())},
+                };
+            } else if (parsed.getType() == Formattable::kLong ||
+                       parsed.getType() == Formattable::kInt64) {
+                int64_t value = parsed.getType() == Formattable::kLong
+                    ? parsed.getLong() : parsed.getInt64();
                 result.entries = {
                     {Value::from_int(0), Value::from_int(value)},
                     {Value::from_int(1), Value::from_int(position.getIndex())},
@@ -995,10 +1038,21 @@ struct NumberFormatterObject : IntlObject {
             return U_ZERO_ERROR;
         }
         if (method == "set_attribute") {
-            int64_t attribute = 0, value = 0;
-            if (!argument_int(args, 0, attribute) || !argument_int(args, 1, value))
-                return U_ILLEGAL_ARGUMENT_ERROR;
+            int64_t attribute = 0;
+            if (!argument_int(args, 0, attribute)) return U_ILLEGAL_ARGUMENT_ERROR;
             if (!decimal) return U_UNSUPPORTED_ERROR;
+            // `NumberFormatter::ROUNDING_INCREMENT` is the one PHP attribute whose value is a
+            // float; ICU exposes it through DecimalFormat's double rounding increment instead
+            // of the int32 attribute table.
+            if (attribute == UNUM_ROUNDING_INCREMENT) {
+                double increment = 0.0;
+                if (!argument_double(args, 1, increment)) return U_ILLEGAL_ARGUMENT_ERROR;
+                decimal->setRoundingIncrement(increment);
+                out = Value::boolean(true);
+                return U_ZERO_ERROR;
+            }
+            int64_t value = 0;
+            if (!argument_int(args, 1, value)) return U_ILLEGAL_ARGUMENT_ERROR;
             decimal->setAttribute(UNumberFormatAttribute(attribute), int32_t(value), status);
             if (U_FAILURE(status)) {
                 record_error(*this, status, "NumberFormatter::setAttribute()");
@@ -1012,6 +1066,10 @@ struct NumberFormatterObject : IntlObject {
             int64_t attribute = 0;
             if (!argument_int(args, 0, attribute)) return U_ILLEGAL_ARGUMENT_ERROR;
             if (!decimal) return U_UNSUPPORTED_ERROR;
+            if (attribute == UNUM_ROUNDING_INCREMENT) {
+                out = Value::from_double(decimal->getRoundingIncrement());
+                return U_ZERO_ERROR;
+            }
             int32_t value = decimal->getAttribute(UNumberFormatAttribute(attribute), status);
             if (U_FAILURE(status)) {
                 record_error(*this, status, "NumberFormatter::getAttribute()");
@@ -2246,8 +2304,8 @@ struct TimeZoneObject : IntlObject {
             if (args.empty() || args[0].type != Value::Type::Int) {
                 return U_ILLEGAL_ARGUMENT_ERROR;
             }
-            IntlObject *other = lookup(args[0].integer);
-            auto *other_timezone = dynamic_cast<TimeZoneObject *>(other);
+            auto other = lookup(args[0].integer);
+            auto *other_timezone = dynamic_cast<TimeZoneObject *>(other.get());
             if (other_timezone == nullptr || !other_timezone->timezone) {
                 out = Value::boolean(false);
                 return U_ZERO_ERROR;
@@ -2696,8 +2754,8 @@ struct CalendarObject : IntlObject {
         if (method == "is_equivalent_to" || method == "equals") {
             if (args.empty()) return U_ILLEGAL_ARGUMENT_ERROR;
             if (args[0].type != Value::Type::Int) return U_ILLEGAL_ARGUMENT_ERROR;
-            IntlObject *other = lookup(args[0].integer);
-            auto *other_calendar = dynamic_cast<CalendarObject *>(other);
+            auto other = lookup(args[0].integer);
+            auto *other_calendar = dynamic_cast<CalendarObject *>(other.get());
             if (other_calendar == nullptr || !other_calendar->calendar) {
                 record_error(*this, U_ILLEGAL_ARGUMENT_ERROR,
                              "IntlCalendar comparison: invalid calendar argument");
@@ -2719,8 +2777,8 @@ struct CalendarObject : IntlObject {
         }
         if (method == "after" || method == "before") {
             if (args.empty() || args[0].type != Value::Type::Int) return U_ILLEGAL_ARGUMENT_ERROR;
-            IntlObject *other = lookup(args[0].integer);
-            auto *other_calendar = dynamic_cast<CalendarObject *>(other);
+            auto other = lookup(args[0].integer);
+            auto *other_calendar = dynamic_cast<CalendarObject *>(other.get());
             if (other_calendar == nullptr || !other_calendar->calendar) {
                 record_error(*this, U_ILLEGAL_ARGUMENT_ERROR,
                              "IntlCalendar comparison: invalid calendar argument");
@@ -2853,8 +2911,8 @@ int64_t wrap_calendar(const Calendar &calendar) {
 
 /// Adopts a cloned calendar from one handle into a date formatter.
 bool adopt_calendar_from_handle(DateFormat &formatter, int64_t handle) {
-    IntlObject *other = lookup(handle);
-    auto *other_calendar = dynamic_cast<CalendarObject *>(other);
+    auto other = lookup(handle);
+    auto *other_calendar = dynamic_cast<CalendarObject *>(other.get());
     if (other_calendar == nullptr || !other_calendar->calendar) return false;
     formatter.adoptCalendar(other_calendar->calendar->clone());
     return true;
@@ -3368,7 +3426,7 @@ struct ConverterObject : IntlObject {
         }
         // ucnv_convert does not run the object's substitution callback; PHP's converter
         // reports the configured substitution string (default "?") instead of U+001A.
-        if (!subst_chars.empty()) {
+        if (!subst_chars.empty() && destination_is_single_byte(to)) {
             size_t position = 0;
             while ((position = output.find('\x1A', position)) != std::string::npos) {
                 output.replace(position, 1, subst_chars);
@@ -3652,13 +3710,16 @@ struct ListFormatterObject : IntlObject {
 
 const Normalizer2 *normalizer_for(int64_t form, UErrorCode &status) {
     // PHP publishes the Normalizer::FORM_* values (16/4/32/8/48), not ICU's
-    // UNormalization2Mode ordinals.
+    // UNormalization2Mode ordinals. An unpublished form is an error, never NFC.
     switch (form) {
         case 4: return Normalizer2::getNFDInstance(status);
         case 8: return Normalizer2::getNFKDInstance(status);
+        case 16: return Normalizer2::getNFCInstance(status);
         case 32: return Normalizer2::getNFKCInstance(status);
         case 48: return Normalizer2::getNFKCCasefoldInstance(status);
-        default: return Normalizer2::getNFCInstance(status);
+        default:
+            status = U_ILLEGAL_ARGUMENT_ERROR;
+            return nullptr;
     }
 }
 
@@ -3668,9 +3729,15 @@ Value normalize_value(const std::vector<Value> &args, bool test_only, bool raw) 
     if (!argument_string(args, 0, input)) return Value::boolean(false);
     optional_int(args, 1, 16, form);
     UErrorCode status = U_ZERO_ERROR;
+    if (raw && form != 4 && form != 8 && form != 16 && form != 32 && form != 48) {
+        // php's getRawDecomposition answers an empty string (and no error) for an
+        // unpublished form, unlike normalize()/isNormalized(), which raise ValueError.
+        set_global_error(U_ZERO_ERROR, "U_ZERO_ERROR");
+        return Value::from_string("");
+    }
     const Normalizer2 *normalizer = normalizer_for(form, status);
-    if (U_FAILURE(status)) {
-        set_global_error(status, "Normalizer");
+    if (normalizer == nullptr || U_FAILURE(status)) {
+        set_global_error(U_ILLEGAL_ARGUMENT_ERROR, "Normalizer");
         return Value::boolean(false);
     }
     UnicodeString text = from_utf8(input);
@@ -4028,12 +4095,12 @@ Value grapheme_operation(const std::string &operation, const std::vector<Value> 
 /* --------------------------------------------------------------------------------------- */
 
 thread_local std::string intl_default_locale;
-thread_local std::string intl_startup_locale;
-thread_local bool intl_locale_initialized = false;
+thread_local std::string intl_system_locale;
+thread_local bool intl_system_initialized = false;
 
 std::string effective_locale() {
     if (!intl_default_locale.empty()) return intl_default_locale;
-    if (!intl_startup_locale.empty()) return intl_startup_locale;
+    if (!intl_system_locale.empty()) return intl_system_locale;
     return Locale::getDefault().getName();
 }
 
@@ -4345,16 +4412,19 @@ Value locale_operation(const std::string &operation, const std::vector<Value> &a
     if (operation == "locale_set_default") {
         std::string locale;
         if (!argument_string(args, 0, locale)) return Value::boolean(false);
-        if (!intl_locale_initialized) {
-            intl_startup_locale = locale;
-            intl_locale_initialized = true;
+        if (!intl_system_initialized) {
+            // Capture ICU's real system default before the first fixture/INI override.
+            intl_system_locale = Locale::getDefault().getName();
+            intl_system_initialized = true;
         }
         intl_default_locale = locale;
         // ICU-owned objects (calendars, formatters, collators) read `Locale::getDefault()`
         // when PHP does not pass an explicit locale, so mirror the shim's default there.
-        if (!locale.empty()) {
+        // An empty string resets to the captured system default, not the first override.
+        const std::string &effective = locale.empty() ? intl_system_locale : locale;
+        if (!effective.empty()) {
             UErrorCode default_status = U_ZERO_ERROR;
-            Locale::setDefault(Locale(locale.c_str()), default_status);
+            Locale::setDefault(Locale(effective.c_str()), default_status);
         }
         return Value::boolean(true);
     }
@@ -4839,9 +4909,9 @@ Value char_operation(const std::string &operation, const std::vector<Value> &arg
 
 /// Reads a calendar handle's current instant in milliseconds, when the value is one.
 bool calendar_object_millis(int64_t handle, double &out) {
-    IntlObject *object = lookup(handle);
+    auto object = lookup(handle);
     if (object == nullptr) return false;
-    auto *calendar = dynamic_cast<CalendarObject *>(object);
+    auto *calendar = dynamic_cast<CalendarObject *>(object.get());
     if (calendar == nullptr || !calendar->calendar) return false;
     UErrorCode status = U_ZERO_ERROR;
     out = double(calendar->calendar->getTime(status));
@@ -4928,7 +4998,7 @@ Value static_dispatch(const std::string &family, const std::string &operation_in
             std::string prefix;
             if (!argument_int(args, 0, handle) || !argument_string(args, 1, prefix))
                 return Value::null();
-            IntlObject *object = lookup(handle);
+            auto object = lookup(handle);
             if (object == nullptr) return Value::null();
             std::string context = object->error_context;
             size_t marker = context.find("(): ");
@@ -5527,8 +5597,8 @@ Value static_dispatch(const std::string &family, const std::string &operation_in
             return Value::null();
         }
         if (args.empty() || args[0].type != Value::Type::Int) return Value::null();
-        IntlObject *object = lookup(args[0].integer);
-        auto *calendar = dynamic_cast<CalendarObject *>(object);
+        auto object = lookup(args[0].integer);
+        auto *calendar = dynamic_cast<CalendarObject *>(object.get());
         if (calendar == nullptr) return Value::boolean(false);
         std::vector<Value> rest(args.begin() + 1, args.end());
         Value result = Value::null();
@@ -5629,10 +5699,12 @@ Value static_dispatch(const std::string &family, const std::string &operation_in
                     " - " + u_errorName(transcoder_status));
                 return Value::boolean(false);
             }
-            size_t position = 0;
-            while ((position = output.find('\x1A', position)) != std::string::npos) {
-                output[position] = substitution;
-                position += 1;
+            if (destination_is_single_byte(to)) {
+                size_t position = 0;
+                while ((position = output.find('\x1A', position)) != std::string::npos) {
+                    output[position] = substitution;
+                    position += 1;
+                }
             }
             set_global_error(U_ZERO_ERROR, "U_ZERO_ERROR");
             return Value::from_string(output);
@@ -5737,7 +5809,7 @@ Value static_dispatch(const std::string &family, const std::string &operation_in
     // Procedural entry points whose first argument is an Intl object handle share the object
     // body with the OO methods. Strip the function prefix and dispatch the rest.
     if (!args.empty() && args[0].type == Value::Type::Int) {
-        IntlObject *object = lookup(args[0].integer);
+        auto object = lookup(args[0].integer);
         if (object != nullptr) {
             std::string method = operation;
             for (const char *prefix : {"datefmt_", "numfmt_", "msgfmt_", "collator_",
@@ -6242,7 +6314,7 @@ extern "C" void elephc_icu_intl_close(int64_t handle) {
 
 extern "C" int64_t elephc_icu_intl_clone(int64_t handle, int32_t *error) {
     if (error != nullptr) *error = U_ZERO_ERROR;
-    IntlObject *object = lookup(handle);
+    auto object = lookup(handle);
     if (object == nullptr) {
         if (error != nullptr) *error = U_ILLEGAL_ARGUMENT_ERROR;
         return 0;
@@ -6262,7 +6334,8 @@ extern "C" int32_t elephc_icu_intl_call(int64_t handle, const char *method,
     if (error != nullptr) *error = U_ZERO_ERROR;
     if (needed == nullptr) return U_ILLEGAL_ARGUMENT_ERROR;
     *needed = 0;
-    IntlObject *object = lookup(handle);
+    intl_pending_payload.clear();
+    auto object = lookup(handle);
     if (object == nullptr) {
         if (error != nullptr) *error = U_ILLEGAL_ARGUMENT_ERROR;
         return U_ILLEGAL_ARGUMENT_ERROR;
@@ -6277,7 +6350,10 @@ extern "C" int32_t elephc_icu_intl_call(int64_t handle, const char *method,
     if (error != nullptr) *error = status;
     std::string payload = encode_value(result);
     int32_t written = write_output(payload, out, out_cap, needed);
-    if (U_SUCCESS(status) && U_FAILURE(UErrorCode(written))) return written;
+    if (U_SUCCESS(status) && U_FAILURE(UErrorCode(written))) {
+        intl_pending_payload = std::move(payload);
+        return written;
+    }
     return status;
 }
 
@@ -6288,6 +6364,7 @@ extern "C" int32_t elephc_icu_intl_static(const char *kind, const char *method,
     if (error != nullptr) *error = U_ZERO_ERROR;
     if (needed == nullptr) return U_ILLEGAL_ARGUMENT_ERROR;
     *needed = 0;
+    intl_pending_payload.clear();
     std::vector<Value> values;
     if (!read_arguments(args, args_len, values)) {
         if (error != nullptr) *error = U_ILLEGAL_ARGUMENT_ERROR;
@@ -6300,18 +6377,21 @@ extern "C" int32_t elephc_icu_intl_static(const char *kind, const char *method,
     if (error != nullptr) *error = status;
     std::string payload = encode_value(result);
     int32_t written = write_output(payload, out, out_cap, needed);
-    if (U_SUCCESS(status) && U_FAILURE(UErrorCode(written))) return written;
+    if (U_SUCCESS(status) && U_FAILURE(UErrorCode(written))) {
+        intl_pending_payload = std::move(payload);
+        return written;
+    }
     return status;
 }
 
 extern "C" int32_t elephc_icu_intl_error_code(int64_t handle) {
-    IntlObject *object = lookup(handle);
+    auto object = lookup(handle);
     return object == nullptr ? 0 : object->error_code;
 }
 
 extern "C" int32_t elephc_icu_intl_error_message(int64_t handle, char *buffer,
                                                  uint64_t capacity, uint64_t *needed) {
-    IntlObject *object = lookup(handle);
+    auto object = lookup(handle);
     std::string message = object == nullptr ? std::string() : object->error_message;
     if (needed == nullptr) return U_ILLEGAL_ARGUMENT_ERROR;
     *needed = uint64_t(message.size());
@@ -6324,6 +6404,20 @@ extern "C" int32_t elephc_icu_intl_error_message(int64_t handle, char *buffer,
 extern "C" int64_t elephc_icu_intl_live_count(void) {
     std::lock_guard<std::mutex> lock(registry_mutex());
     return int64_t(registry().size());
+}
+
+extern "C" int32_t elephc_icu_intl_fetch_result(uint8_t *out, uint64_t capacity,
+                                                uint64_t *needed) {
+    if (needed == nullptr) return U_ILLEGAL_ARGUMENT_ERROR;
+    *needed = uint64_t(intl_pending_payload.size());
+    if (out == nullptr || capacity < intl_pending_payload.size()) {
+        return U_BUFFER_OVERFLOW_ERROR;
+    }
+    if (!intl_pending_payload.empty()) {
+        std::memcpy(out, intl_pending_payload.data(), intl_pending_payload.size());
+    }
+    intl_pending_payload.clear();
+    return U_ZERO_ERROR;
 }
 
 extern "C" int32_t elephc_icu_intl_error_name(int32_t code, char *buffer, uint64_t capacity,

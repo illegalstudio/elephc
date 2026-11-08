@@ -425,3 +425,54 @@ expect_builtin_arity_error!(
     "<?php function up(array $a): string { return strtoupper($a); } echo up([\"x\"]);",
     "strtoupper(): Argument #1 ($string) must be of type string, array given"
 );
+
+/// Verifies `html_entity_decode()` refuses `ENT_NOQUOTES` instead of decoding quotes silently.
+#[test]
+fn test_error_html_entity_decode_noquotes_flags() {
+    expect_error(
+        "<?php echo html_entity_decode(\"&quot;x&quot;\", ENT_NOQUOTES);",
+        "html_entity_decode() currently supports only the default quote flags \
+         (ENT_QUOTES|ENT_SUBSTITUTE|ENT_HTML401)",
+    );
+}
+
+/// Verifies `html_entity_decode()` refuses `ENT_COMPAT` instead of decoding quotes silently.
+#[test]
+fn test_error_html_entity_decode_compat_flags() {
+    expect_error(
+        "<?php echo html_entity_decode(\"&quot;x&quot;\", ENT_COMPAT);",
+        "html_entity_decode() currently supports only the default quote flags \
+         (ENT_QUOTES|ENT_SUBSTITUTE|ENT_HTML401)",
+    );
+}
+
+/// Verifies a runtime-only flags value is refused: the decoder cannot honour it.
+#[test]
+fn test_error_html_entity_decode_dynamic_flags() {
+    expect_error(
+        "<?php function decode(string $value, int $flags): string { \
+             return html_entity_decode($value, $flags); \
+         }",
+        "html_entity_decode() currently supports only the default quote flags \
+         (ENT_QUOTES|ENT_SUBSTITUTE|ENT_HTML401)",
+    );
+}
+
+/// Verifies a non-UTF-8 encoding is refused rather than decoded with the wrong byte mapping.
+#[test]
+fn test_error_html_entity_decode_non_utf8_encoding() {
+    expect_error(
+        "<?php echo html_entity_decode(\"&quot;x&quot;\", ENT_QUOTES, \"ISO-8859-1\");",
+        "html_entity_decode() currently supports only the UTF-8 encoding",
+    );
+}
+
+/// Verifies an HTML5 doctype flag is refused instead of decoding with HTML 4.01 semantics.
+#[test]
+fn test_error_html_entity_decode_html5_doctype() {
+    expect_error(
+        "<?php echo html_entity_decode(\"&apos;\", ENT_QUOTES | ENT_HTML5);",
+        "html_entity_decode() currently supports only the default quote flags \
+         (ENT_QUOTES|ENT_SUBSTITUTE|ENT_HTML401)",
+    );
+}
