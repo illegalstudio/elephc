@@ -150,3 +150,47 @@ echo preg_match_all('/o/', $subject, $all, $flags, $options['flags'] - 250), jso
 "#);
     assert_eq!(out, "hello@0 preg@6 world@11 1[[[\"o\",12]]]\n");
 }
+
+/// Offsets stay byte offsets with `/u`, and the single row keeps interior unmatched groups.
+#[test]
+fn test_preg_match_offset_capture_utf8_bytes() {
+    let out = compile_and_run(r#"<?php
+echo preg_match('/(é)(x)/u', 'aéx', $m, PREG_OFFSET_CAPTURE), json_encode($m), "\n";
+echo preg_match('/./u', "aéb", $m, PREG_OFFSET_CAPTURE, 3), json_encode($m), "\n";
+echo preg_match('/(a)(b)?(c)/', 'xac', $m, PREG_OFFSET_CAPTURE), json_encode($m), "\n";
+"#);
+    assert_eq!(
+        out,
+        "1[[\"\\u00e9x\",1],[\"\\u00e9\",1],[\"x\",3]]\n\
+         1[[\"b\",3]]\n\
+         1[[\"ac\",1],[\"a\",1],[\"\",-1],[\"c\",2]]\n"
+    );
+}
+
+/// Repeated window calls release every single-match row, discarded array and bad-offset result.
+#[test]
+fn test_preg_match_window_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = 'hello preg world';
+$total = 0;
+for ($i = 0; $i < 50; $i++) {
+    $offset = 0;
+    while (preg_match('/(\w)(\w+)?(z)?/', $s, $t, PREG_OFFSET_CAPTURE, $offset) === 1) {
+        $offset = $t[0][1] + strlen($t[0][0]);
+        $total++;
+    }
+    preg_match('/(o)(x)?/', $s, $u, PREG_UNMATCHED_AS_NULL | PREG_OFFSET_CAPTURE, -5);
+    preg_match('/a/', $s, $w, 0, 999);
+    $total += preg_match('/o/', $s, flags: PREG_OFFSET_CAPTURE, offset: 2);
+    $total += preg_match_all('/o/', $s, offset: 4);
+    preg_match_all('/o/', $s, $all, 0, 999);
+    try { preg_match('/a/', $s, $v, PREG_SET_ORDER); } catch (ValueError $e) { $total++; }
+}
+$subject = 'xab';
+echo $total, ':', preg_match('/([a-z])/', $subject, $subject, PREG_OFFSET_CAPTURE, 1), json_encode($subject);
+unset($subject);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "350:1[[\"a\",1],[\"a\",1]]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
