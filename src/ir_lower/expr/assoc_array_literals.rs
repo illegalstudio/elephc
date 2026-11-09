@@ -514,8 +514,20 @@ pub(in crate::ir_lower) fn method_call_expr_type_for_ir(
     let Some(class_name) = instance_callable_object_class(ctx, object) else {
         return dynamic_receiver_method_call_type_for_ir(ctx, object, &method_key);
     };
-    class_method_signature(ctx, &class_name, &method_key)
-        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
+    if let Some(signature) = class_method_signature(ctx, &class_name, &method_key) {
+        return Some(normalize_value_php_type(crate::types::eir_value_php_type(
+            &signature.return_type,
+        )));
+    }
+    // A missing method forwarded to `__call` still produces that hook's result.
+    // An undeclared return is not a precise element type: syntactic inference can
+    // answer `int` for a string body, and an int stamp prints the string as `0`.
+    let magic = class_method_signature(ctx, &class_name, &php_symbol_key("__call"))?;
+    Some(if magic.declared_return {
+        normalize_value_php_type(crate::types::eir_value_php_type(&magic.return_type))
+    } else {
+        PhpType::Mixed
+    })
 }
 
 /// Returns the result type of a call on a receiver of no single class (a `foreach` element of

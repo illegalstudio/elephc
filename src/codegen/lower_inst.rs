@@ -100,6 +100,7 @@ mod local_loads;
 pub(in crate::codegen) mod local_stores;
 mod method_call_types;
 mod method_dispatch;
+mod method_dispatch_errors;
 mod method_intrinsics;
 mod method_resolution;
 mod method_lookup;

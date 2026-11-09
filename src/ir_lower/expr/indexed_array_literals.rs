@@ -1053,7 +1053,8 @@ fn array_literal_element_type_for_ir_unboxed(
         ExprKind::FunctionCall { name, .. } => {
             let canonical = name.as_str();
             if let Some(sig) = ctx.functions.get(canonical) {
-                return ir_array_storage_type(eir_user_function_return_type(sig));
+                return materializable_array_element_type(eir_user_function_return_type(sig))
+                    .unwrap_or(PhpType::Mixed);
             }
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
@@ -1173,15 +1174,15 @@ pub(super) fn spread_source_storage_type_for_ir(
     source_ty
 }
 
-/// Returns the EIR array storage type for a resolved element type, or `None` when the type
-/// cannot be an array element. A `Void`/`Never` method return (a value-less call whose result
-/// is nonetheless collected into a literal) has no array-element representation — stamping it
-/// would emit an unsupported `array_push for PHP type Void` — so the caller keeps its syntactic
-/// fallback for that degenerate case, exactly as before this arm existed (no regression).
+/// Returns the EIR array storage type for a resolved element type.
+///
+/// A `Void` or `Never` call result is PHP `null` when a literal collects it. Stamping
+/// `mixed` makes the push box that null. Returning `None` used to fall back to a
+/// syntactic `int` stamp, and the push then rejected `array_push for PHP type Void`.
 pub(super) fn materializable_array_element_type(return_type: PhpType) -> Option<PhpType> {
     let stored = ir_array_storage_type(return_type);
     match stored.codegen_repr() {
-        PhpType::Void | PhpType::Never => None,
+        PhpType::Void | PhpType::Never => Some(PhpType::Mixed),
         _ => Some(stored),
     }
 }
