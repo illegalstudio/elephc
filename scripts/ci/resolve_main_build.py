@@ -10,6 +10,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from github_jobs import read_jobs
+
 HOSTS = ("macos-aarch64", "linux-x86_64", "linux-aarch64")
 GATES = ("Build & Test", "PDO core live suites (PostgreSQL 16 + MySQL 8.4)",
          "PDO optional-driver live suites")
@@ -17,7 +19,8 @@ GATES = ("Build & Test", "PDO core live suites (PostgreSQL 16 + MySQL 8.4)",
 
 def api(path):
     """Read GitHub through the authenticated official CLI, failing conservatively."""
-    return json.loads(subprocess.check_output(["gh", "api", path], text=True))
+    result = subprocess.run(["gh", "api", path], text=True, capture_output=True, check=True)
+    return json.loads(result.stdout)
 
 
 def select(run, jobs, artifacts, repository, sha):
@@ -56,6 +59,8 @@ def select(run, jobs, artifacts, repository, sha):
 
 def paginated(path, key):
     """Fetch all artifacts/jobs, whose counts exceed one API page on the sharded matrix."""
+    if key == "jobs":
+        return read_jobs(api, path)
     result = []
     for page in range(1, 21):
         response = api(f"{path}{'&' if '?' in path else '?'}per_page=100&page={page}")
@@ -107,7 +112,8 @@ def main():
         try:
             result = resolve(os.environ["GITHUB_REPOSITORY"], args.main_sha or os.environ["GITHUB_SHA"])
         except (subprocess.CalledProcessError, ValueError, KeyError) as error:
-            print(f"::warning::Cannot prove artifact reuse, selecting full CI: {error}", file=sys.stderr)
+            detail = getattr(error, "stderr", None) or str(error)
+            print(f"::warning::Cannot prove artifact reuse, selecting full CI: {detail}", file=sys.stderr)
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         output.write(f"run-id={result['run_id'] if result else ''}\n")
         output.write(f"attempts={json.dumps(result['attempts'] if result else {})}\n")
