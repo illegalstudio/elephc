@@ -13,6 +13,11 @@ description: >
 # Check the complete zstd frame before accepting it, so that failure participates in the
 # same three attempts. Native-cache artifacts use this action too and retain download-only
 # validation. The final download and validation fail normally if recovery is exhausted.
+#
+# A slowly progressing transfer can outlive the downloader's idle timeout and exhaust the
+# whole job before a retry. Composite steps do not support timeout-minutes, so preload a
+# process deadline only for each downloader. Node actions start in the mapped workspace;
+# a relative preload works both on the host and inside Linux job containers.
 
 inputs:
   name:
@@ -46,6 +51,8 @@ runs:
     - id: first
       uses: actions/download-artifact@v4
       continue-on-error: true
+      env:
+        NODE_OPTIONS: --require ./.github/actions/download-test-archive/deadline.cjs
       with:
         name: ${{ startsWith(inputs.name, 'nextest-archive-') && format('{0}-{1}', inputs.name, inputs.attempt) || inputs.name }}
         run-id: ${{ inputs.run-id }}
@@ -82,6 +89,8 @@ runs:
       if: steps.first.outcome == 'failure' || steps.first_archive.outcome == 'failure'
       uses: actions/download-artifact@v4
       continue-on-error: true
+      env:
+        NODE_OPTIONS: --require ./.github/actions/download-test-archive/deadline.cjs
       with:
         name: ${{ startsWith(inputs.name, 'nextest-archive-') && format('{0}-{1}', inputs.name, inputs.attempt) || inputs.name }}
         run-id: ${{ inputs.run-id }}
@@ -116,6 +125,8 @@ runs:
     - id: third
       if: steps.second.outcome == 'failure' || steps.second_archive.outcome == 'failure'
       uses: actions/download-artifact@v4
+      env:
+        NODE_OPTIONS: --require ./.github/actions/download-test-archive/deadline.cjs
       with:
         name: ${{ startsWith(inputs.name, 'nextest-archive-') && format('{0}-{1}', inputs.name, inputs.attempt) || inputs.name }}
         run-id: ${{ inputs.run-id }}
