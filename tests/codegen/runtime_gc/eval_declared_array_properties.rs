@@ -214,3 +214,33 @@ eval($source);
 "#;
     assert_eq!(compile_and_run(source), "instance|static|1:2");
 }
+
+/// A keyed write from dynamically evaluated code into a declared empty packed array property
+/// promotes that storage to a hash without leaking the packed array or its boxed owner.
+#[test]
+fn test_eval_keyed_write_into_empty_array_property_leaves_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$code = $argc > 0 ? '
+class EvalBag {
+    private array $d = [];
+    public function put(string $n, $v): void { $this->d[$n] = $v; }
+}
+function once() {
+    $cls = "EvalBag";
+    $o = new $cls();
+    $o->put("a", 1);
+}
+once(); once(); once();
+echo "done";
+' : '';
+eval($code);
+"#,
+    );
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
