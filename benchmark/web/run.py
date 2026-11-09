@@ -13,6 +13,7 @@ load generator. Results are not appended to the process-execution history.
 Examples:
     python3 benchmark/web/run.py
     python3 benchmark/web/run.py --workers 4 --threads 4 --connections 100 --duration 10s
+    python3 benchmark/web/run.py --isolation pool --workers 8 --threads 4 --connections 32
     python3 benchmark/web/run.py --compiler target/release/elephc --no-build \
         --json web-results.json --markdown web-results.md
     python3 benchmark/web/run.py --k6 vus --k6 constant
@@ -381,12 +382,20 @@ def compile_fixture(
     fixture: Path,
     work_dir: Path,
     timeout: float,
+    isolation: str = "worker",
 ) -> Path:
     """Copies a fixture into the work dir and compiles it as a `--web` binary."""
     source = work_dir / "app.php"
     shutil.copyfile(fixture, source)
     completed = subprocess.run(
-        [str(compiler), "--web", "--quiet", source.name],
+        [
+            str(compiler),
+            "--web",
+            "--web-isolation",
+            isolation,
+            "--quiet",
+            source.name,
+        ],
         cwd=work_dir,
         capture_output=True,
         text=True,
@@ -468,7 +477,8 @@ def markdown_report(results: dict[str, Any]) -> str:
     lines = [
         f"# elephc web benchmark: {results['fixture']}",
         "",
-        f"- Server: `elephc --web`, workers={results['workers']}",
+        f"- Server: `elephc --web` (isolation={results.get('isolation', 'worker')}), "
+        f"workers={results['workers']}",
         f"- Load: `wrk -t{results['threads']} -c{results['connections']} "
         f"-d{results['duration']}` x{results.get('clients', 1)} client(s)",
         f"- Platform: {results['environment']['platform']} "
@@ -594,6 +604,12 @@ def main() -> int:
     parser.add_argument("--compiler", type=Path)
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument(
+        "--isolation",
+        choices=("worker", "pool", "request"),
+        default="worker",
+        help="--web-isolation mode compiled into the benchmark binary",
+    )
     parser.add_argument("--clients", type=int, default=1)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--connections", type=int, default=100)
@@ -622,7 +638,9 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="elephc-web-bench-") as temp:
         work_dir = Path(temp)
-        binary = compile_fixture(compiler, fixture, work_dir, args.timeout)
+        binary = compile_fixture(
+            compiler, fixture, work_dir, args.timeout, args.isolation
+        )
         port = free_port()
         url = f"http://127.0.0.1:{port}/"
         log_path = work_dir / "server.log"
@@ -691,6 +709,7 @@ def main() -> int:
 
         results: dict[str, Any] = {
             "fixture": str(fixture),
+            "isolation": args.isolation,
             "workers": args.workers,
             "clients": args.clients,
             "cpu": args.cpu,

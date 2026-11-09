@@ -244,6 +244,7 @@ the historical dashboard:
 ```bash
 python3 benchmark/web/run.py
 python3 benchmark/web/run.py --workers 4 --threads 4 --connections 100 --duration 10s
+python3 benchmark/web/run.py --isolation pool --workers 8 --threads 4 --connections 32
 python3 benchmark/web/run.py --workers 8 --clients 3 --threads 4 --connections 200
 python3 benchmark/web/run.py --workers 1 --cpu
 python3 benchmark/web/run.py --no-build --compiler target/release/elephc \
@@ -261,7 +262,11 @@ whether one load generator is the bottleneck); `--cpu` samples the server
 master and workers (`proc_pid_rusage` on macOS, `/proc` on Linux) and reports
 server CPU per request, which stays meaningful when the host is busy; `--php-baseline` measures the
 same fixture under `php -S` (single process, not PHP-FPM), and `--k6` runs the
-article's 100-VU and 5,000 req/s shapes.
+article's 100-VU and 5,000 req/s shapes. `--isolation` selects the compiled
+`--web-isolation` mode: `worker` is the fastest in-process path but a blocking
+PHP handler pins a keep-alive connection to one worker; `pool` and `request`
+move PHP behind the handler broker and are the relevant modes for concurrent
+real workloads.
 
 `wrk` is required. Results depend heavily on host load: run on an otherwise idle
 machine, and keep the worker count and load-generator shape identical across
