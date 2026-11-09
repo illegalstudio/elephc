@@ -257,3 +257,27 @@ caught: unchecked(): Return value must be of type Key, float returned
 finally|caught: guarded(): Return value must be of type Key, float returned
 "#);
 }
+
+/// A `?object` parameter returned from a `?Class` function is checked at run time, so the
+/// optimizer must keep the call and the `catch`/`finally` that observe its `TypeError`.
+#[test]
+fn test_nullable_object_parameter_return_keeps_its_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+final class T {}
+function narrow(?object $o): ?T { return $o; }
+function probe(object $a): string {
+    try { narrow($a); return "no throw"; } catch (TypeError $e) { return "caught"; }
+}
+function cleanup(object $a): string {
+    $r = "none";
+    try { narrow($a); $r = "no throw"; } finally { echo "finally|"; }
+    return $r;
+}
+$a = new ArrayObject([]);
+echo probe($a), "\n";
+try { echo cleanup($a), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out, "caught\nfinally|narrow(): Return value must be of type ?T, ArrayObject returned\n");
+}

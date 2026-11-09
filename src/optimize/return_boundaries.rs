@@ -8,7 +8,8 @@
 //! - Unknown source representations stay conservative; parameter facts survive only without writes.
 //! - Lexical scopes isolate nested functions, methods, and closures.
 //! - A class-like return checks a `mixed` or `object|null` source (`types::object_boundary`);
-//!   only an object-hinted parameter that the body never writes is known to pass it.
+//!   only an object-hinted parameter that the body never writes, and whose hint does not
+//!   combine the bare `object` type with `null`, is known to pass it.
 
 use super::*;
 use crate::parser::ast::CastType;
@@ -51,7 +52,7 @@ impl ReturnBoundaryFacts {
         let stable: Vec<_> = parameters.into_iter().filter(|(name, _)|
             matches!(&invalidated, Invalidation::Names(names) if !names.contains(*name))).collect();
         let stable_object_parameters = stable.iter()
-            .filter(|(_, hint)| hint.is_some_and(object_hint))
+            .filter(|(_, hint)| hint.is_some_and(statically_object_parameter_hint))
             .map(|(name, _)| name.to_string()).collect();
         let stable_parameters = stable.into_iter()
             .map(|(name, hint)| (name.to_string(), parameter_type(hint))).collect();
@@ -154,6 +155,20 @@ pub(crate) fn active_return_boundary_checks_source(source: &PhpType) -> bool {
         declared_int_return_requires_validation(facts.declared_int, &PhpType::Int, source)
             || (facts.declared_object
                 && crate::types::object_boundary::runtime_checked_object_source(source))))
+}
+
+/// Recognizes a parameter hint whose value the class-like return boundary never re-checks.
+///
+/// A nullable or union hint that names the bare `object` type (`?object`, `object|null`) is a
+/// source the boundary checks at run time (`types::object_boundary`), so returning it may throw.
+fn statically_object_parameter_hint(hint: &TypeExpr) -> bool {
+    let bare_object = |hint: &TypeExpr| matches!(hint, TypeExpr::Named(name)
+        if name.as_str().eq_ignore_ascii_case("object"));
+    match hint {
+        TypeExpr::Nullable(inner) => !bare_object(inner) && object_hint(inner),
+        TypeExpr::Union(members) => !members.iter().any(bare_object) && object_hint(hint),
+        _ => object_hint(hint),
+    }
 }
 
 /// Recognizes a class, interface, `object` or nullable-class return hint.
