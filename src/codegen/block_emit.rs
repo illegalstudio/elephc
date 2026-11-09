@@ -2272,11 +2272,10 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
     // The text peepholes pay off in loops and in small functions (often called from loops);
     // large loop-free bodies (generated helpers and dispatch code) skip them, keeping compile
     // time flat. Block-level layout above still removes their jumps to the next block.
-    let region_bytes = ctx.emitter.text_len() - region_start;
-    if region_bytes <= machine_peephole::SMALL_REGION_BYTES
-        || block_layout::has_retreating_edge(function)
+    let target = ctx.emitter.target;
+    if block_layout::has_retreating_edge(function)
+        || machine_peephole::is_small_region(ctx.emitter.text_since(region_start), target)
     {
-        let target = ctx.emitter.target;
         ctx.emitter
             .rewrite_text_from(region_start, |text| machine_peephole::optimize_region(text, target));
     }

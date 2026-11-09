@@ -33,9 +33,22 @@ const MAX_ROUNDS: usize = 2;
 /// dispatch code (an eval-heavy program's top level reaches millions of lines), not hot user
 /// loops; skipping them keeps compile time flat. The bound is in bytes so the check is free.
 const MAX_REGION_BYTES: usize = 256 << 10;
-/// Loop-free regions up to this size (about 250 lines) are still optimized: small functions
-/// are cheap to rewrite and are often the callees of hot loops.
-pub(super) const SMALL_REGION_BYTES: usize = 8 << 10;
+/// Loop-free regions of up to this many instructions are still optimized: small functions are
+/// cheap to rewrite and are often the callees of hot loops. Counted in instructions, not bytes:
+/// the region text also holds `@src line=…` comments and hashed data labels, whose length
+/// depends on where the function sits in its program, and a byte bound let the same body lose
+/// its peepholes once the program grew past line 99.
+pub(super) const SMALL_REGION_INSTRUCTIONS: usize = 256;
+
+/// Whether a region holds at most [`SMALL_REGION_INSTRUCTIONS`] instructions. Stops counting at
+/// the bound, so a large region costs no more than a small one.
+pub(super) fn is_small_region(text: &str, target: Target) -> bool {
+    let comment = target.line_comment_prefix();
+    text.lines()
+        .filter(|line| matches!(classify(line, comment), Line::Inst(_)))
+        .nth(SMALL_REGION_INSTRUCTIONS)
+        .is_none()
+}
 
 /// One classified assembly line, borrowing the region text unless a rewrite replaced it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -545,6 +558,26 @@ mod tests {
     /// Returns the Linux target for one architecture.
     fn linux(arch: Arch) -> Target {
         Target::new(Platform::Linux, arch)
+    }
+
+    /// Verifies a region's size is its instruction count: comments and labels, however long,
+    /// leave a body small, and one instruction past the bound makes it large.
+    #[test]
+    fn a_small_region_is_counted_in_instructions() {
+        use super::{is_small_region, SMALL_REGION_INSTRUCTIONS};
+        let target = linux(Arch::X86_64);
+        let body = |instructions: usize| {
+            let mut text = String::new();
+            for index in 0..instructions {
+                text.push_str(&format!("    # @src line={index}00000 col=1 end=1:2 op=load_local\n"));
+                text.push_str(&format!(".L_eir_long_label_{index:0>40}:\n"));
+                text.push_str("    mov rax, QWORD PTR [rbp - 80]\n");
+            }
+            text
+        };
+        assert!(body(SMALL_REGION_INSTRUCTIONS).len() > 8 << 10);
+        assert!(is_small_region(&body(SMALL_REGION_INSTRUCTIONS), target));
+        assert!(!is_small_region(&body(SMALL_REGION_INSTRUCTIONS + 1), target));
     }
 
     /// Verifies self-moves and move-backs disappear, while 32-bit zero-extending moves stay.
