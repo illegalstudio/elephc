@@ -1290,6 +1290,22 @@ fclose($f);
     assert_eq!(out, "attached|hllo");
 }
 
+/// A callable route through `call_user_func()` still links the iconv bridge and runs the
+/// dynamic filter attach, not only a direct literal call site.
+#[test]
+fn test_stream_filter_iconv_through_call_user_func() {
+    let out = compile_and_run(
+        r#"<?php
+$f = fopen("php://temp", "r+");
+call_user_func("stream_filter_append", $f, "convert.iconv.UTF-8/UTF-16LE", STREAM_FILTER_WRITE);
+fwrite($f, "Hi");
+rewind($f);
+echo bin2hex(stream_get_contents($f));
+"#,
+    );
+    assert_eq!(out, "48006900");
+}
+
 /// A convert.iconv write filter on a descriptor above the old 256-entry table range
 /// (fd ~300 after opening filler files) stores and releases its per-fd state safely.
 #[test]

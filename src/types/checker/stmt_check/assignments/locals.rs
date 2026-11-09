@@ -139,6 +139,12 @@ fn check_assign_value_type(
     env: &mut TypeEnv,
     stmt_form: bool,
 ) -> Result<PhpType, CompileError> {
+    if name == "GLOBALS" {
+        return Err(CompileError::new(
+            span,
+            "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+        ));
+    }
     // A direct reassignment (`$k = ...`) makes `$k` an ordinary local: it is no
     // longer the boxed `Mixed` `foreach` iteration key. Drop the foreach-key
     // marker so a subsequent `$dst[$k] = $v` is routed by `$k`'s real type (e.g.
@@ -382,6 +388,15 @@ pub(super) fn check_ref_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    if target == "GLOBALS" {
+        return Err(CompileError::new(
+            span,
+            "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+        ));
+    }
+    if matches!(&source.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+        return Err(CompileError::new(span, "Cannot acquire reference to $GLOBALS"));
+    }
     checker.invalidate_local_flow_narrowing(target, env);
     if let ExprKind::Variable(source_name) = &source.kind {
         checker.invalidate_local_flow_narrowing(source_name, env);

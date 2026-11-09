@@ -138,3 +138,24 @@ echo isset($GLOBALS[3]) ? "set\n" : "gone\n";
         out.stderr
     );
 }
+
+/// A call result used as a computed `$GLOBALS` key on the READ path owns its string too;
+/// the load must release that owner while keeping the returned value alive.
+#[test]
+fn test_dynamic_global_load_call_result_key_leaves_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function loadKey(): string { return "load-key"; }
+$GLOBALS["load-key"] = str_repeat("v", 16);
+echo strlen($GLOBALS[loadKey()]), "\n";
+unset($GLOBALS["load-key"]);
+echo isset($GLOBALS["load-key"]) ? "set\n" : "gone\n";
+"#,
+    );
+    assert_eq!(out.stdout, "16\ngone\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}

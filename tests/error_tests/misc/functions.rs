@@ -724,3 +724,22 @@ fn test_by_ref_null_recovery_compiles() {
     )
     .is_err());
 }
+
+/// A concrete-typed by-reference parameter rejects a mismatched typed property rather
+/// than accepting it through the boxed-property write-back path.
+#[test]
+fn test_error_by_ref_int_parameter_rejects_string_property() {
+    expect_error(
+        "<?php class RefBox { public string $s = \"x\"; } function setInt(int &$v): void {} $b = new RefBox(); setInt($b->s);",
+        "must be passed a variable",
+    );
+}
+
+/// An array by-reference parameter rejects an int property with the declared type check.
+#[test]
+fn test_error_by_ref_array_parameter_rejects_int_property() {
+    expect_error(
+        "<?php class RefBox { public int $n = 1; } function setArr(array &$v): void {} $b = new RefBox(); setArr($b->n);",
+        "expects array, got int",
+    );
+}

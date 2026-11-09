@@ -320,3 +320,57 @@ fn test_error_declare_single_statement_rejects_declarations() {
             "A declaration cannot be the single-statement body of declare");
     }
 }
+
+/// PHP forbids replacing the whole `$GLOBALS` array: only `$GLOBALS[$name] = ...` may write.
+#[test]
+fn test_error_globals_whole_assignment_is_rejected() {
+    expect_error(
+        "<?php $GLOBALS = [];",
+        "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+    );
+}
+
+/// A reference assignment to `$GLOBALS` uses the same whole-array rejection.
+#[test]
+fn test_error_globals_reference_target_is_rejected() {
+    expect_error(
+        "<?php $x = 1; $GLOBALS = &$x;",
+        "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+    );
+}
+
+/// Taking a reference to `$GLOBALS` itself is PHP's dedicated fatal.
+#[test]
+fn test_error_globals_reference_source_is_rejected() {
+    expect_error(
+        "<?php $r = &$GLOBALS;",
+        "Cannot acquire reference to $GLOBALS",
+    );
+}
+
+/// `unset($GLOBALS)` is a whole-array write and is rejected like an assignment.
+#[test]
+fn test_error_globals_unset_is_rejected() {
+    expect_error(
+        "<?php unset($GLOBALS);",
+        "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+    );
+}
+
+/// `$GLOBALS++` is a whole-array write and is rejected like an assignment.
+#[test]
+fn test_error_globals_increment_is_rejected() {
+    expect_error(
+        "<?php $GLOBALS++;",
+        "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+    );
+}
+
+/// `$GLOBALS` is not an addressable by-reference argument in PHP.
+#[test]
+fn test_error_globals_by_ref_argument_is_rejected() {
+    expect_error(
+        "<?php function f(array &$a): void {} f($GLOBALS);",
+        "must be passed a variable",
+    );
+}

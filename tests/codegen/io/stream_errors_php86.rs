@@ -1053,6 +1053,25 @@ echo $text["b"], ":", $b, "\n";
     assert_eq!(out, "1:2\nx:xy\n");
 }
 
+/// PHP permits `foreach ($GLOBALS as &$v)` but does not publish writes through the loop
+/// variable back to the original globals; elephc keeps the same snapshot behavior.
+#[test]
+fn test_globals_foreach_by_reference_is_a_snapshot_php86() {
+    let out = run86(
+        r#"<?php
+$a = 1;
+$seen = 0;
+foreach ($GLOBALS as &$value) {
+    $seen++;
+    if ($value === 1) { $value = 2; }
+}
+unset($value);
+echo $a, ":", $seen > 0 ? "iterated" : "empty";
+"#,
+    );
+    assert_eq!(out, "1:iterated");
+}
+
 /// A computed `$GLOBALS` read whose name has no initialized value warns like php-src and
 /// returns null.
 #[test]

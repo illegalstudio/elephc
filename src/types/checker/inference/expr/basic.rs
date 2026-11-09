@@ -79,7 +79,14 @@ impl Checker {
                 self.infer_type(inner, env)?;
                 Ok(PhpType::Int)
             }
-            ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
+            ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
+                if name == "GLOBALS" {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+                    ));
+                }
+                match env.get(name) {
                 Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
                 Some(PhpType::Int) => Ok(if self.has_fixed_tagged_reference_storage(name, env) {
                     PhpType::Int
@@ -110,8 +117,16 @@ impl Checker {
                     expr.span,
                     &format!("Undefined variable: ${}", name),
                 )),
-            },
-            ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => match env.get(name) {
+                }
+            }
+            ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => {
+                if name == "GLOBALS" {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+                    ));
+                }
+                match env.get(name) {
                 Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
                 Some(PhpType::Int)
                 | Some(PhpType::Bool)
@@ -139,7 +154,8 @@ impl Checker {
                     expr.span,
                     &format!("Undefined variable: ${}", name),
                 )),
-            },
+                }
+            }
             ExprKind::ArrayLiteralAssoc(pairs) => {
                 if pairs.is_empty() {
                     return Err(CompileError::new(
