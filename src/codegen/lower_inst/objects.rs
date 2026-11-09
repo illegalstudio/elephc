@@ -249,6 +249,7 @@ use interface_layout::*;
 use property_resolution::*;
 #[allow(unused_imports)]
 use property_compatibility::*;
+pub(super) use property_compatibility::object_type_is_a;
 #[allow(unused_imports)]
 use property_loads::*;
 #[allow(unused_imports)]
