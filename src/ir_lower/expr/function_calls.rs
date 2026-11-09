@@ -480,7 +480,10 @@ pub(super) fn emit_builtin_call_value(
             // evaluation transferred a pinned temporary into the final call operand, letting
             // that pin flow through the result would either leak its base allocation forever
             // or free an interior pointer. Persist the view before retiring the base owner so
-            // the result has an ordinary independent string lifetime.
+            // the result has an ordinary independent string lifetime. Any other owning
+            // temporary source (an acquired property read, array element or call result) has
+            // the same problem: the possible alias suppresses its release, so it is persisted
+            // the same way.
             let stabilizes_evaluation_pin = matches!(
                 def.spec.semantics.lowering,
                 crate::builtins::semantics::BuiltinLowering::Runtime(
@@ -502,6 +505,10 @@ pub(super) fn emit_builtin_call_value(
                     value_is_call_argument_evaluation_pin(ctx, *operand)
                         || ctx.borrowed_string_call_operands.contains(operand)
                         || ctx.value_is_owning_mixed_string_cast(*operand)
+                        || ctx.value_is_owning_temporary(LoweredValue {
+                            value: *operand,
+                            ir_type: ctx.builder.value_type(*operand),
+                        })
                 });
             let call = if stabilizes_evaluation_pin {
                 ctx.emit_owned_value(

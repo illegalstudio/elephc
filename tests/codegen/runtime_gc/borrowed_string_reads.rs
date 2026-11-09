@@ -30,6 +30,30 @@ unset($error, $table);
 }
 
 
+/// Trim-family results that may be views into an acquired property read, array element or
+/// call result are persisted, so the acquired source is released instead of leaking each call.
+#[test]
+fn test_trim_family_views_release_acquired_string_sources() {
+    let source = r#"<?php
+class TrimSourceHolder {
+    public string $text;
+    public function __construct() { $this->text = ' ' . str_repeat('ab', 20) . "\n"; }
+    public function text(): string { return $this->text; }
+}
+$holder = new TrimSourceHolder();
+$items = [' ' . str_repeat('cd', 20) . "\n"];
+for ($i = 0; $i < 3; $i++) {
+    echo strlen(trim($holder->text)), strlen(rtrim($holder->text)), strlen(ltrim($items[0])),
+        strlen(chop($holder->text())), '|';
+}
+echo trim($holder->text) === str_repeat('ab', 20) ? 'same' : 'differs', "\n";
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "40414141|40414141|40414141|same\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Borrowed keys from array elements and object fields remain owned by their source containers.
 #[test]
 fn test_hash_reads_preserve_borrowed_string_keys() {
