@@ -79,7 +79,7 @@ mod runtime_class_messages;
 mod literal_parameter_guards;
 pub(in crate::codegen) use literal_parameter_guards::{
     declared_parameter_contract, emit_boxed_declared_parameter_guard, emit_boxed_literal_parameter_guard,
-    emit_boxed_variadic_parameter_guard, emit_declared_parameter_refusal,
+    emit_boxed_variadic_parameter_guard, emit_declared_parameter_refusal, emit_throw_persisted_message,
 };
 mod scoped_constants;
 mod static_locals;
@@ -171,6 +171,7 @@ pub(in crate::codegen) use builtins::arrays::union_type_guard::emit_shared_type_
 pub(in crate::codegen) use objects::emit_pending_property_guard_helpers;
 pub(in crate::codegen) use builtins::eval::emit_shared_eval_registration_helper;
 pub(in crate::codegen) use objects::emit_reflection_class_table;
+pub(in crate::codegen) use objects::emit_dynamic_new_too_few_routine;
 pub(in crate::codegen) use builtins::eval::emit_shared_eval_status_fail_cells_body;
 pub(in crate::codegen) use conversions::{
     emit_mixed_string_dispatch_from_result, MixedStringContextMode,

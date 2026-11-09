@@ -207,7 +207,7 @@ pub(super) fn dynamic_new_mixed_refusals(
                     line,
                     arg_count,
                     required,
-                    required == regular && constructor.variadic.is_none(),
+                    required == regular,
                 ),
                 argument_count: true,
             });
@@ -278,7 +278,7 @@ pub(super) fn dynamic_new_constrained_refusals(
                     line,
                     arg_count,
                     required,
-                    required == regular && constructor.variadic.is_none(),
+                    required == regular,
                 ),
                 argument_count: true,
             },
@@ -301,7 +301,7 @@ pub(super) struct DynamicNewRefusal {
 /// PHP HAS TWO SHAPES and picks by whether the class is internal, so both are reproduced.
 /// `exactly` only when there is nothing further to pass — no optional parameter and no variadic
 /// tail; php words those cases apart and so does this.
-fn too_few_arguments_message(
+pub(super) fn too_few_arguments_message(
     class_name: &str,
     source_path: &str,
     line: u32,

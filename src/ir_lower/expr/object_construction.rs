@@ -759,8 +759,28 @@ pub(super) fn lower_new_dynamic_generic(
     }
     let mut operands = vec![name_value.value];
     let mut positional_operands: Vec<crate::ir::ValueId> = Vec::new();
-    let uses_runtime_arg_container =
+    let spread_or_named =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
+    // Plain positional arguments take the same container, so the site constructs through the
+    // record table instead of a compare-and-construct arm per class: on the Symfony demo the
+    // positional constructor helpers were ~2.4 M instructions, 39 MB of the binary. A variable is
+    // passed as a reference marker, which a by-reference parameter binds; any OTHER place a
+    // by-reference parameter could bind (`$this->items`, `$a[0]`, `self::$x`) keeps the positional
+    // form, which binds it. The site's argument count travels as `I64` for the arity check.
+    let positional_container = !spread_or_named
+        && std::env::var_os("ELEPHC_NO_DYNAMIC_NEW_CONTAINER").is_none()
+        && !args.iter().any(|arg| {
+            matches!(
+                arg.kind,
+                ExprKind::ArrayAccess { .. }
+                    | ExprKind::PropertyAccess { .. }
+                    | ExprKind::DynamicPropertyAccess { .. }
+                    | ExprKind::NullsafePropertyAccess { .. }
+                    | ExprKind::StaticPropertyAccess { .. }
+                    | ExprKind::DynamicStaticPropertyAccess { .. }
+            )
+        });
+    let uses_runtime_arg_container = spread_or_named || positional_container;
     let arg_container = if uses_runtime_arg_container {
         let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
         // A variadic parameter that received a named argument is typed `iterable` (its storage
@@ -786,7 +806,11 @@ pub(super) fn lower_new_dynamic_generic(
     let result = ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
-        uses_runtime_arg_container.then_some(Immediate::Bool(true)),
+        if positional_container {
+            Some(Immediate::I64(args.len() as i64))
+        } else {
+            uses_runtime_arg_container.then_some(Immediate::Bool(true))
+        },
         PhpType::Mixed,
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),

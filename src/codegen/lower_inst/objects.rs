@@ -264,6 +264,7 @@ mod outlined_dynamic_property;
 mod arm_groups;
 mod readonly_guard;
 mod dynamic_new_table;
+pub(in crate::codegen) use dynamic_new_table::emit_too_few_routine as emit_dynamic_new_too_few_routine;
 
 #[allow(unused_imports)]
 use fixed_new::*;

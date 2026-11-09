@@ -940,8 +940,9 @@ foreach (["x", null] as $bad) {
 /// own `regular_param_count` rather than restating the rule.
 ///
 /// `__construct($a, ...$rest)` is the boundary that proves the count is right rather than merely
-/// switched off for variadics: php DOES refuse this one, because `$a` is required, and the wording
-/// is `at least` rather than `exactly` because the collector can still take more.
+/// switched off for variadics: php DOES refuse this one, because `$a` is required. The wording is
+/// `exactly`: php 8.5 says `at least` only for an optional REGULAR parameter and ignores the
+/// collector (`php -r` on this class prints "0 passed in … and exactly 1 expected").
 ///
 /// The zero-required side of that boundary — `new $c()` on `__construct(...$rest)` — is NOT
 /// asserted here. It reaches a separate, pre-existing hole: a variadic constructor is left out of
@@ -964,7 +965,7 @@ new $c();
         ),
         "{err}"
     );
-    assert!(err.contains("and at least 1 expected"), "{err}");
+    assert!(err.contains("and exactly 1 expected"), "{err}");
 }
 
 /// Verifies the refusal is CATCHABLE, which is what makes it an error object and not a fatal.

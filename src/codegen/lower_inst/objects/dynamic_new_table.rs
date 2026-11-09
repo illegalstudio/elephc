@@ -30,7 +30,8 @@
 //! - `ELEPHC_NO_DYNAMIC_NEW_TABLE=1` keeps the per-class arms.
 
 use super::*;
-use crate::codegen_support::data_section::DataWord;
+use crate::codegen_support::data_section::{DataSection, DataWord};
+use crate::codegen_support::emit::Emitter;
 
 /// Fewest table-eligible classes worth the lookup.
 const MIN_TABLE_CLASSES: usize = 4;
@@ -133,10 +134,216 @@ pub(super) fn build_table(
                     | (u64::from(ctx.module.enum_infos.contains_key(&candidate.class_name)) << 2)
                     | (u64::from(super::super::is_throwable_like_class(ctx, &candidate.class_name)) << 3),
             ),
-            DataWord::U64(0),
+            DataWord::U64(constructor_arity_word(ctx, &candidate.class_name)),
         ]);
     }
     Ok(ctx.data.add_words(words))
+}
+
+/// The record's last word, what a site that knows its argument count checks before constructing:
+/// bits 0-15 the constructor's required parameters, bits 16-31 its regular parameters, bit 32 a
+/// variadic tail, bit 33 an internal class (php words its refusal differently). Zero without a
+/// constructor, which takes any count.
+fn constructor_arity_word(ctx: &FunctionContext<'_>, class_name: &str) -> u64 {
+    let Some(constructor) = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .and_then(|info| info.methods.get(&php_symbol_key("__construct")))
+    else {
+        return 0;
+    };
+    let regular = crate::types::call_args::regular_param_count(constructor);
+    let required = constructor.defaults.iter().take(regular).filter(|default| default.is_none()).count();
+    let internal = super::dynamic_mixed_candidates::known_dynamic_new_builtin_class_names().contains(&class_name);
+    (required.min(0xffff) as u64)
+        | ((regular.min(0xffff) as u64) << 16)
+        | (u64::from(constructor.variadic.is_some()) << 32)
+        | (u64::from(internal) << 33)
+}
+
+/// The shared refusal of a site passing a table class fewer arguments than its constructor needs.
+pub(in crate::codegen) const TOO_FEW_ROUTINE: &str = "_eir_dynamic_new_too_few";
+
+/// Emits [`TOO_FEW_ROUTINE`], once per program: php's `ArgumentCountError` for `new $c(...)`.
+///
+/// In: the class's record in the first integer argument register, the site's static record
+/// `{file pointer, file length, line, argument count}` in the second. php words a user class
+/// `Too few arguments to function C::__construct(), N passed in F on line L and exactly|at least M
+/// expected` and an internal one `C::__construct() expects exactly|at least M argument(s), N
+/// given`; `exactly` when there is no optional parameter, a variadic tail or not. Never returns.
+pub(in crate::codegen) fn emit_too_few_routine(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    capture_trace: bool,
+) {
+    let target = emitter.target;
+    let (acc_ptr, acc_len) = abi::string_result_regs(emitter);
+    let (right_ptr, right_len) = super::super::runtime_class_messages::concat_right_operand_regs(emitter);
+    let int_reg = abi::int_result_reg(emitter);
+    let scratch = abi::symbol_scratch_reg(emitter);
+    // Frame: [0] record, [8] site, [16] accumulator pointer, [24] accumulator length.
+    const RECORD: usize = 0;
+    const SITE: usize = 8;
+    const ACC: usize = 16;
+    emitter.blank();
+    emitter.comment("shared dynamic-new arity refusal");
+    emitter.label_global(TOO_FEW_ROUTINE);
+    abi::emit_reserve_temporary_stack(emitter, 32);
+    abi::emit_store_to_sp(emitter, abi::int_arg_reg_name(target, 0), RECORD);
+    abi::emit_store_to_sp(emitter, abi::int_arg_reg_name(target, 1), SITE);
+    let start = |emitter: &mut Emitter, data: &mut DataSection, text: &str| {
+        let (label, len) = data.add_string(text.as_bytes());
+        abi::emit_symbol_address(emitter, acc_ptr, &label);
+        abi::emit_load_int_immediate(emitter, acc_len, len as i64);
+    };
+    let put_static = |emitter: &mut Emitter, data: &mut DataSection, text: &str| {
+        let (label, len) = data.add_string(text.as_bytes());
+        abi::emit_symbol_address(emitter, right_ptr, &label);
+        abi::emit_load_int_immediate(emitter, right_len, len as i64);
+        abi::emit_call_label(emitter, "__rt_concat");
+    };
+    // A string a frame word points at: `{pointer, length}` at `offset` inside that block.
+    let put_pointed = |emitter: &mut Emitter, slot: usize, offset: usize| {
+        abi::emit_load_temporary_stack_slot(emitter, scratch, slot);
+        abi::emit_load_from_address(emitter, right_ptr, scratch, offset);
+        abi::emit_load_from_address(emitter, right_len, scratch, offset + 8);
+        abi::emit_call_label(emitter, "__rt_concat");
+    };
+    // An integer the frame word at `slot` points at (`offset` inside it), masked to 16 bits when asked.
+    let put_int = |emitter: &mut Emitter, slot: usize, offset: usize, low16: bool| {
+        abi::emit_store_to_sp(emitter, acc_ptr, ACC);
+        abi::emit_store_to_sp(emitter, acc_len, ACC + 8);
+        abi::emit_load_temporary_stack_slot(emitter, scratch, slot);
+        abi::emit_load_from_address(emitter, int_reg, scratch, offset);
+        if low16 {
+            match emitter.target.arch {
+                Arch::AArch64 => emitter.instruction(&format!("and {int_reg}, {int_reg}, #0xffff")), // required parameters
+                Arch::X86_64 => emitter.instruction(&format!("and {int_reg}, 0xffff")), // required parameters
+            }
+        }
+        abi::emit_call_label(emitter, "__rt_itoa");
+        abi::emit_reg_move(emitter, right_ptr, acc_ptr);
+        abi::emit_reg_move(emitter, right_len, acc_len);
+        abi::emit_load_temporary_stack_slot(emitter, acc_ptr, ACC);
+        abi::emit_load_temporary_stack_slot(emitter, acc_len, ACC + 8);
+        abi::emit_call_label(emitter, "__rt_concat");
+    };
+    // Branches to `exact` when the constructor has no optional parameter: php words a variadic
+    // tail `exactly` too (`($a, ...$rest)` called with none: "exactly 1 expected").
+    let branch_exact = |emitter: &mut Emitter, exact: &str| {
+        abi::emit_load_temporary_stack_slot(emitter, scratch, RECORD);
+        let word = abi::secondary_scratch_reg(emitter);
+        abi::emit_load_from_address(emitter, word, scratch, 56);
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("and x11, {word}, #0xffff"));      // required parameters
+                emitter.instruction(&format!("ubfx x12, {word}, #16, #16"));    // regular parameters
+                emitter.instruction("cmp x11, x12");                            // none optional?
+                emitter.instruction(&format!("b.eq {exact}"));                  // exactly
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov rcx, {word}"));               // the arity word
+                emitter.instruction("and rcx, 0xffff");                         // required parameters
+                emitter.instruction(&format!("shr {word}, 16"));                // regular parameters ...
+                emitter.instruction(&format!("and {word}, 0xffff"));            // ... in the low bits
+                emitter.instruction(&format!("cmp rcx, {word}"));               // none optional?
+                emitter.instruction(&format!("je {exact}"));                    // exactly
+            }
+        }
+    };
+    let internal = format!("{TOO_FEW_ROUTINE}_internal");
+    abi::emit_load_temporary_stack_slot(emitter, scratch, RECORD);
+    let word = abi::secondary_scratch_reg(emitter);
+    abi::emit_load_from_address(emitter, word, scratch, 56);
+    match target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("tbnz {word}, #33, {internal}")), // an internal class
+        Arch::X86_64 => {
+            emitter.instruction(&format!("bt {word}, 33"));                     // an internal class?
+            emitter.instruction(&format!("jc {internal}"));                     // php's internal wording
+        }
+    }
+    // -- user class --
+    let exact = format!("{TOO_FEW_ROUTINE}_user_exact");
+    let bound_done = format!("{TOO_FEW_ROUTINE}_user_bound_done");
+    start(emitter, data, "Too few arguments to function ");
+    put_pointed(emitter, RECORD, 0);
+    put_static(emitter, data, "::__construct(), ");
+    put_int(emitter, SITE, 24, false);
+    put_static(emitter, data, " passed in ");
+    put_pointed(emitter, SITE, 0);
+    put_static(emitter, data, " on line ");
+    put_int(emitter, SITE, 16, false);
+    abi::emit_store_to_sp(emitter, acc_ptr, ACC);
+    abi::emit_store_to_sp(emitter, acc_len, ACC + 8);
+    branch_exact(emitter, &exact);
+    abi::emit_load_temporary_stack_slot(emitter, acc_ptr, ACC);
+    abi::emit_load_temporary_stack_slot(emitter, acc_len, ACC + 8);
+    put_static(emitter, data, " and at least ");
+    abi::emit_jump(emitter, &bound_done);
+    emitter.label(&exact);
+    abi::emit_load_temporary_stack_slot(emitter, acc_ptr, ACC);
+    abi::emit_load_temporary_stack_slot(emitter, acc_len, ACC + 8);
+    put_static(emitter, data, " and exactly ");
+    emitter.label(&bound_done);
+    put_int(emitter, RECORD, 56, true);
+    put_static(emitter, data, " expected");
+    let throw = format!("{TOO_FEW_ROUTINE}_throw");
+    abi::emit_jump(emitter, &throw);
+    // -- internal class --
+    emitter.label(&internal);
+    let internal_exact = format!("{TOO_FEW_ROUTINE}_internal_exact");
+    let internal_bound_done = format!("{TOO_FEW_ROUTINE}_internal_bound_done");
+    start(emitter, data, "");
+    put_pointed(emitter, RECORD, 0);
+    put_static(emitter, data, "::__construct() expects ");
+    abi::emit_store_to_sp(emitter, acc_ptr, ACC);
+    abi::emit_store_to_sp(emitter, acc_len, ACC + 8);
+    branch_exact(emitter, &internal_exact);
+    abi::emit_load_temporary_stack_slot(emitter, acc_ptr, ACC);
+    abi::emit_load_temporary_stack_slot(emitter, acc_len, ACC + 8);
+    put_static(emitter, data, "at least ");
+    abi::emit_jump(emitter, &internal_bound_done);
+    emitter.label(&internal_exact);
+    abi::emit_load_temporary_stack_slot(emitter, acc_ptr, ACC);
+    abi::emit_load_temporary_stack_slot(emitter, acc_len, ACC + 8);
+    put_static(emitter, data, "exactly ");
+    emitter.label(&internal_bound_done);
+    put_int(emitter, RECORD, 56, true);
+    // `argument` or `arguments`, by the required count.
+    let plural = format!("{TOO_FEW_ROUTINE}_plural");
+    let noun_done = format!("{TOO_FEW_ROUTINE}_noun_done");
+    abi::emit_store_to_sp(emitter, acc_ptr, ACC);
+    abi::emit_store_to_sp(emitter, acc_len, ACC + 8);
+    abi::emit_load_temporary_stack_slot(emitter, scratch, RECORD);
+    abi::emit_load_from_address(emitter, word, scratch, 56);
+    match target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("and {word}, {word}, #0xffff"));       // required parameters
+            emitter.instruction(&format!("cmp {word}, #1"));                    // exactly one?
+            emitter.instruction(&format!("b.ne {plural}"));                     // otherwise plural
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("and {word}, 0xffff"));                // required parameters
+            emitter.instruction(&format!("cmp {word}, 1"));                     // exactly one?
+            emitter.instruction(&format!("jne {plural}"));                      // otherwise plural
+        }
+    }
+    abi::emit_load_temporary_stack_slot(emitter, acc_ptr, ACC);
+    abi::emit_load_temporary_stack_slot(emitter, acc_len, ACC + 8);
+    put_static(emitter, data, " argument, ");
+    abi::emit_jump(emitter, &noun_done);
+    emitter.label(&plural);
+    abi::emit_load_temporary_stack_slot(emitter, acc_ptr, ACC);
+    abi::emit_load_temporary_stack_slot(emitter, acc_len, ACC + 8);
+    put_static(emitter, data, " arguments, ");
+    emitter.label(&noun_done);
+    put_int(emitter, SITE, 24, false);
+    put_static(emitter, data, " given");
+    // -- throw --
+    emitter.label(&throw);
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    super::super::emit_throw_persisted_message(emitter, "_spl_argument_count_error_class_id", capture_trace);
 }
 
 /// Emits the lookup: with the class name staged at the top of the temporary stack, branches to
@@ -167,10 +374,41 @@ pub(super) fn emit_table_tail(
     result: ValueId,
     done_label: &str,
     creation_line: u32,
+    static_arity: Option<(usize, &Instruction)>,
 ) -> Result<()> {
     let target = ctx.emitter.target;
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
+    // -- a site that knows its argument count refuses a record whose constructor needs more --
+    if let Some((count, inst)) = static_arity {
+        let (file, line) = site_location(ctx, inst);
+        let (file_label, file_len) = ctx.data.add_string(file.as_bytes());
+        let site = ctx.data.add_words(vec![
+            DataWord::Symbol(file_label),
+            DataWord::U64(file_len as u64),
+            DataWord::U64(u64::from(line)),
+            DataWord::U64(count as u64),
+        ]);
+        let enough = ctx.next_label("dynamic_new_table_arity_ok");
+        match target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("ldr x9, [{result_reg}, #56]"));  // the constructor's arity word
+                ctx.emitter.instruction("and x9, x9, #0xffff");                 // its required parameters
+                ctx.emitter.instruction(&format!("cmp x9, #{count}"));          // does this site pass enough?
+                ctx.emitter.instruction(&format!("b.ls {enough}"));             // yes: construct
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("mov r9, QWORD PTR [{result_reg} + 56]")); // the constructor's arity word
+                ctx.emitter.instruction("and r9, 0xffff");                      // its required parameters
+                ctx.emitter.instruction(&format!("cmp r9, {count}"));           // does this site pass enough?
+                ctx.emitter.instruction(&format!("jbe {enough}"));              // yes: construct
+            }
+        }
+        abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(target, 0), result_reg);
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &site);
+        abi::emit_call_label(ctx.emitter, TOO_FEW_ROUTINE);
+        ctx.emitter.label(&enough);
+    }
     abi::emit_push_reg(ctx.emitter, result_reg); // [record]
     // -- an abstract class cannot be instantiated --
     let abstract_label = ctx.next_label("dynamic_new_table_abstract");
@@ -383,5 +621,36 @@ pub(super) fn emit_table_tail_without_constructor(
     result: ValueId,
     done_label: &str,
 ) -> Result<()> {
-    emit_table_tail(ctx, None, result, done_label, 0)
+    emit_table_tail(ctx, None, result, done_label, 0, None)
+}
+
+/// The file and line a refusal at this site names.
+fn site_location(ctx: &FunctionContext<'_>, inst: &Instruction) -> (String, u32) {
+    let file = ctx
+        .span_source_file(inst.span)
+        .map(str::to_string)
+        .or_else(|| ctx.module.source_path.clone())
+        .unwrap_or_default();
+    (file, inst.span.map_or(0, |span| span.source_line()))
+}
+
+/// php's message when a site passing `count` arguments cannot construct `class_name`, or `None`
+/// when it can (or the class has no constructor).
+pub(super) fn too_few_message(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    count: usize,
+    inst: &Instruction,
+) -> Option<String> {
+    let word = constructor_arity_word(ctx, class_name);
+    let required = (word & 0xffff) as usize;
+    if count >= required {
+        return None;
+    }
+    let regular = ((word >> 16) & 0xffff) as usize;
+    let exact = required == regular;
+    let (file, line) = site_location(ctx, inst);
+    Some(super::dynamic_mixed_candidates::too_few_arguments_message(
+        class_name, &file, line, count, required, exact,
+    ))
 }

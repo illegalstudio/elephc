@@ -253,7 +253,13 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
     inst: &Instruction,
 ) -> Result<()> {
     let class_name_value = expect_operand(inst, 0)?;
-    let uses_runtime_arg_container = matches!(inst.immediate, Some(Immediate::Bool(true)));
+    // `I64(n)`: plain positional arguments, put in the container by the lowering, `n` of them.
+    let static_arg_count = match inst.immediate {
+        Some(Immediate::I64(count)) => Some(count as usize),
+        _ => None,
+    };
+    let uses_runtime_arg_container =
+        matches!(inst.immediate, Some(Immediate::Bool(true))) || static_arg_count.is_some();
     let constructor_arg_container = if uses_runtime_arg_container {
         Some(*inst.operands.get(1).ok_or_else(|| {
             CodegenIrError::invalid_module(
@@ -443,12 +449,28 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
             result,
             &done_label,
             inst.span.map_or(0, |span| span.source_line()),
+            static_arg_count.map(|count| (count, inst)),
         )?;
     }
 
     for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
+        // A class held by an explicit arm that this site's static argument count cannot satisfy
+        // is refused with php's ArgumentCountError, as the table's records are at run time.
+        if let Some(count) = static_arg_count {
+            if let Some(message) =
+                super::dynamic_new_table::too_few_message(ctx, &candidate.class_name, count, inst)
+            {
+                let location = ctx
+                    .module
+                    .source_path
+                    .clone()
+                    .map(|file| (file, inst.span.map_or(0, |span| span.source_line())));
+                super::super::exceptions::emit_argument_count_error(ctx, &message, location);
+                continue;
+            }
+        }
         emit_dynamic_new_mixed_candidate(
             ctx,
             candidate,

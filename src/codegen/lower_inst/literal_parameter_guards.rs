@@ -222,6 +222,16 @@ fn refuse_loaded_type(
 
 /// Transfers the persisted diagnostic to a compact TypeError and the standard unwinder.
 fn throw_type_error(emitter: &mut Emitter, capture_trace: bool) {
+    emit_throw_persisted_message(emitter, "_spl_type_error_class_id", capture_trace);
+}
+
+/// Throws the persisted message in the string-result registers as a compact Throwable of the
+/// class whose id `class_id_symbol` holds, through the standard unwinder.
+pub(in crate::codegen) fn emit_throw_persisted_message(
+    emitter: &mut Emitter,
+    class_id_symbol: &str,
+    capture_trace: bool,
+) {
     let (ptr, len) = abi::string_result_regs(emitter);
     abi::emit_push_reg_pair(emitter, ptr, len);
     // -- construct a managed Throwable while preserving the diagnostic --
@@ -233,7 +243,7 @@ fn throw_type_error(emitter: &mut Emitter, capture_trace: bool) {
             emitter.instruction("mov x9, #6");                                  // classify the allocation as a Throwable
             emitter.instruction("str x9, [x0, #-8]");                           // stamp the object heap kind
             emitter.instruction("bl __rt_object_handle_acquire");               // acquire its PHP object handle
-            abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_type_error_class_id", 0);
+            abi::emit_load_symbol_to_reg(emitter, "x9", class_id_symbol, 0);
             emitter.instruction("str x9, [x0]");                                // identify the TypeError class
             abi::emit_pop_reg_pair(emitter, ptr, len);
             emitter.instruction("str x1, [x0, #8]");                            // transfer the persisted diagnostic pointer
@@ -262,7 +272,7 @@ fn throw_type_error(emitter: &mut Emitter, capture_trace: bool) {
             );
             emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the canonical Throwable heap kind
             emitter.instruction("call __rt_object_handle_acquire");             // acquire its PHP object handle
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_type_error_class_id", 0);
+            abi::emit_load_symbol_to_reg(emitter, "r10", class_id_symbol, 0);
             emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the TypeError class
             let diagnostic_ptr = abi::symbol_scratch_reg(emitter);
             let diagnostic_len = abi::secondary_scratch_reg(emitter);

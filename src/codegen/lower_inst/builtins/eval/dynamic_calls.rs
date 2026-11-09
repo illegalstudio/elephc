@@ -461,7 +461,8 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
     let stack_bytes = eval_function_call_stack_bytes(constructor_args.len() + 5);
     // `DynamicObjectNewMixed` flags a runtime `...$args` container with `Bool(true)`: its one
     // operand is that array, which only the bridge -- knowing the class -- can bind by name.
-    let spread_container = matches!(inst.immediate, Some(Immediate::Bool(true)));
+    let spread_container =
+        matches!(inst.immediate, Some(Immediate::Bool(true)) | Some(Immediate::I64(_)));
     let eval_miss_label = ctx.next_label("eval_dynamic_new_missing_class");
     let done_label = ctx.next_label("eval_dynamic_new_done");
     let name_ptr_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);

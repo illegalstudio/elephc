@@ -624,6 +624,11 @@ fn finalize_user_asm(
         table_reg,
         module.required_runtime_features.eval_bridge || frame::module_materializes_backtrace(module),
     );
+    lower_inst::emit_dynamic_new_too_few_routine(
+        &mut emitter,
+        &mut data,
+        module.required_runtime_features.eval_bridge || frame::module_materializes_backtrace(module),
+    );
     if shared.callable_argument_normalizer || eval_callable_support.argument_normalizer_needed {
         lower_inst::emit_callable_argument_normalizer(module, &mut emitter, &mut data, &mut shared)?;
     }
