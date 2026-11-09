@@ -3,6 +3,8 @@
 //!
 //! Called from:
 //! - Function entry lowering and declared return storage coercion.
+//! - `mixed` and `object|null` returns reach their runtime class check through
+//!   `guard_runtime_object_return`.
 //!
 //! Key details:
 //! - Native property reads can return null despite their useful static object class hint.
@@ -341,24 +343,61 @@ pub(super) fn guard_return(
     reject_null(ctx, value, message, span.unwrap_or_else(Span::dummy), false);
 }
 
+/// Checks a `mixed` or `object|null` value against a declared class-like return type.
+///
+/// The checker admits that return because PHP checks it at run time; the rejected branch throws
+/// `Return value must be of type T, <type> returned`. The value stays boxed for the caller's
+/// ordinary return-storage coercion.
+pub(super) fn guard_runtime_object_return(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Option<Span>,
+) -> LoweredValue {
+    let source = ctx.builder.value_php_type(value.value);
+    if !ctx.return_type_is_declared || source == ctx.return_php_type { return value; }
+    let declared = late_static_return_type(ctx);
+    let Some(boundary) = crate::types::object_boundary::runtime_object_boundary(&declared, &source)
+    else { return value; };
+    let callable = callable_label(ctx);
+    let expected = return_type_label(ctx).unwrap_or_else(||
+        Expr::string_lit(crate::types::diagnostic_names::php_type_name(&declared)));
+    let prefix = Expr::binop(Expr::binop(
+        Expr::string_lit(format!("{callable}(): Return value must be of type ")),
+        BinOp::Concat, expected), BinOp::Concat, Expr::string_lit(", "));
+    let owned = ctx.value_is_owning_temporary(value);
+    crate::ir_lower::object_boundary_checks::guard_runtime_object_value(
+        ctx, value, &boundary, prefix, " returned", owned, span.unwrap_or_else(Span::dummy))
+}
+
+/// Returns the declared return type with lexical classes resolved and `static` kept as the
+/// late-static token, which the runtime check resolves against the called class.
+fn late_static_return_type(ctx: &LoweringContext<'_, '_>) -> PhpType {
+    match late_static_return_hint(ctx) {
+        Some(hint) => return_hint_type(ctx, crate::ir_lower::context::type_expr_to_php_type(hint)),
+        None => resolve_context_type(ctx, ctx.return_php_type.clone()),
+    }
+}
+
+/// Finds the source return hint of a method whose declaration mentions `static`.
+fn late_static_return_hint<'a>(ctx: &'a LoweringContext<'_, '_>) -> Option<&'a crate::parser::ast::TypeExpr> {
+    let (class, method) = ctx.owner_name().split_once("::")?;
+    let class = ctx.classes.get(class)?;
+    let hints = if ctx.builder.function().flags.is_static {
+        &class.late_static_static_method_returns
+    } else { &class.late_static_method_returns };
+    hints.get(&crate::names::php_symbol_key(method))
+}
+
 /// Builds a late-static expected type from the called class only on the rejected branch.
 fn return_type_label(ctx: &LoweringContext<'_, '_>) -> Option<Expr> {
-    let hint = ctx.owner_name().split_once("::").and_then(|(class, method)|
-        {
-            let class = ctx.classes.get(class)?;
-            let hints = if ctx.builder.function().flags.is_static {
-                &class.late_static_static_method_returns
-            } else { &class.late_static_method_returns };
-            hints.get(&crate::names::php_symbol_key(method))
-        });
-    let hint = hint?;
+    let hint = late_static_return_hint(ctx)?;
     let ty = return_hint_type(ctx, crate::ir_lower::context::type_expr_to_php_type(hint));
     let label = crate::types::diagnostic_names::php_type_name(&ty);
     let mut result = Expr::string_lit("");
     for (index, part) in label.split('|').enumerate() {
         if index > 0 { result = Expr::binop(result, BinOp::Concat, Expr::string_lit("|")); }
-        let part = if part.eq_ignore_ascii_case("static") {
-            Expr::new(ExprKind::ClassConstant { receiver: crate::parser::ast::StaticReceiver::Static }, Span::dummy())
+        let (nullable, name) = part.strip_prefix('?').map_or(("", part), |name| ("?", name));
+        let part = if name.eq_ignore_ascii_case("static") {
+            Expr::binop(Expr::string_lit(nullable), BinOp::Concat, Expr::new(ExprKind::ClassConstant {
+                receiver: crate::parser::ast::StaticReceiver::Static }, Span::dummy()))
         } else { Expr::string_lit(part) };
         result = Expr::binop(result, BinOp::Concat, part);
     }

@@ -611,6 +611,9 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     // its ABI expects a raw object pointer.
     let by_reference = sig.ref_params.get(index).copied().unwrap_or(false);
     if !by_reference {
+        if let Some(guarded) = guard_runtime_object_param(ctx, sig, index, value, arg) {
+            return guarded;
+        }
         if let PhpType::Object(class_name) = param_ty {
         {
             let source_ty = ctx.builder.value_php_type(value.value);
@@ -687,6 +690,54 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
         }
     }
     value
+}
+
+/// Checks a `mixed` or `object|null` argument against a class-like parameter it reaches
+/// through `ParamBinding::ObjectGuard`, when the instance guard below cannot.
+///
+/// That guard re-reads its argument to name the runtime type, so it only covers side-effect
+/// free sources bound to one class. This one names the type from a rooted copy, which covers
+/// every source and the nullable and union declarations whose storage stays boxed. A raw object
+/// declaration receives the unboxed payload.
+fn guard_runtime_object_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    value: LoweredValue,
+    arg: &Expr,
+) -> Option<LoweredValue> {
+    let (param_name, param_ty) = sig.params.get(index)?;
+    let source_ty = argument_static_type(ctx, arg)
+        .unwrap_or_else(|| ctx.builder.value_php_type(value.value));
+    let boundary = crate::types::object_boundary::runtime_object_boundary(param_ty, &source_ty)?;
+    if let PhpType::Object(class_name) = param_ty {
+        let guarded_by_rereading = union_object_guard_word(&source_ty, class_name).is_some()
+            || (matches!(arg.kind, ExprKind::Variable(_) | ExprKind::This)
+                && source_ty.codegen_repr() == PhpType::Mixed);
+        if guarded_by_rereading {
+            return None;
+        }
+    }
+    let callable = ctx.call_description.as_deref().unwrap_or("call").to_string();
+    let source = ctx.source_path().unwrap_or("unknown").to_string();
+    let prefix = Expr::string_lit(format!(
+        "{callable}(): Argument #{} (${param_name}) must be of type {}, ",
+        index + 1,
+        crate::types::diagnostic_names::php_type_name(param_ty),
+    ));
+    let suffix = format!(" given, called in {source} on line {}", arg.span.line);
+    let release = ctx.value_needs_release_after_use(value);
+    let value = crate::ir_lower::object_boundary_checks::guard_runtime_object_value(
+        ctx, value, &boundary, prefix, &suffix, release, arg.span,
+    );
+    if !matches!(param_ty, PhpType::Object(_)) {
+        return Some(value);
+    }
+    let span = Some(arg.span);
+    let result = ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, param_ty.clone(),
+        Op::mixed_unbox_effects(param_ty), span);
+    release_coerced_source_if_owned(ctx, value, span);
+    Some(result)
 }
 
 /// Returns the checker-facing type of one argument expression when lowering still knows it.
