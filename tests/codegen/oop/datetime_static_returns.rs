@@ -134,3 +134,51 @@ echo get_class((new Wall("2024-01-02", new DateTimeZone("UTC")))->setTime(1, 2))
     );
     assert_eq!(out, "Legacy\nWall\n");
 }
+
+/// Verifies the immutable clone matches PHP's internal clone: the subclass `__clone()` hook runs
+/// once per fluent call, a readonly subclass property is copied, and `parent::modify()` lowers
+/// from a grandchild and from a trait method used by a subclass.
+#[test]
+fn test_datetime_immutable_fluent_clone_runs_hook_and_reaches_parent_from_grandchild_and_trait() {
+    let out = compile_and_run(
+        r#"<?php
+class Hooked extends DateTimeImmutable {
+    public static int $clones = 0;
+    public int $n = 1;
+    public function __clone() { self::$clones++; $this->n = 100; }
+}
+final class Tagged extends DateTimeImmutable {
+    public readonly string $tag;
+    public function __construct(string $t, string $tag) { parent::__construct($t, new DateTimeZone("UTC")); $this->tag = $tag; }
+}
+class Mid extends DateTimeImmutable {}
+class Child extends Mid {
+    public function modify(string $modifier): static { return parent::modify($modifier); }
+}
+class GrandChild extends Child {
+    public function modify(string $modifier): static { return parent::modify($modifier . " +1 hour"); }
+}
+trait Bumps {
+    public function bump(): static { return parent::modify("+1 day"); }
+}
+class Bumped extends DateTimeImmutable { use Bumps; }
+$h = new Hooked("2024-01-02 03:04:05", new DateTimeZone("UTC"));
+$q = $h->modify("+1 day")->setMicrosecond(5);
+echo get_class($q), " ", $q->n, " ", Hooked::$clones, " ", $h->n, " ", $h->format("Y-m-d"), "\n";
+$t = (new Tagged("2024-01-02 03:04:05", "x"))->add(new DateInterval("PT1H"))->setTime(5, 6);
+echo get_class($t), " ", $t->tag, " ", $t->format("H:i"), "\n";
+$g = new GrandChild("2024-01-02 03:04:05", new DateTimeZone("UTC"));
+$gm = $g->modify("+1 day");
+echo get_class($gm), " ", $gm->format("Y-m-d H:i"), " ", $g->format("Y-m-d H:i"), "\n";
+$b = (new Bumped("2024-01-02", new DateTimeZone("UTC")))->bump();
+echo get_class($b), " ", $b->format("Y-m-d"), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Hooked 100 2 1 2024-01-02\n\
+         Tagged x 05:06\n\
+         GrandChild 2024-01-03 04:04 2024-01-02 03:04\n\
+         Bumped 2024-01-03\n"
+    );
+}
