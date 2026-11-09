@@ -2100,6 +2100,24 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // died with `Call to undefined function __elephc_assert_one_arg()`.
     exported_function_names.insert(crate::assert_prelude::ASSERT_ONE_ARG_NAME.to_string());
     let exported_function_names = exported_function_names;
+    // `ELEPHC_PRUNE_STATS=1`: how much of what the checker checked the pruner then drops, which
+    // bounds what pruning BEFORE checking could save.
+    let prune_stats = std::env::var_os("ELEPHC_PRUNE_STATS").is_some();
+    let declaration_counts = |ast: &[crate::parser::ast::Stmt]| {
+        let (mut classes, mut methods, mut functions) = (0usize, 0usize, 0usize);
+        crate::parser::ast::visit::walk_stmts(ast, &mut |stmt| match &stmt.kind {
+            crate::parser::ast::StmtKind::ClassDecl { methods: list, .. }
+            | crate::parser::ast::StmtKind::TraitDecl { methods: list, .. }
+            | crate::parser::ast::StmtKind::EnumDecl { methods: list, .. } => {
+                classes += 1;
+                methods += list.iter().filter(|method| !method.body.is_empty()).count();
+            }
+            crate::parser::ast::StmtKind::FunctionDecl { .. } => functions += 1,
+            _ => {}
+        });
+        (classes, methods, functions)
+    };
+    let before_prune = prune_stats.then(|| declaration_counts(&ast));
     let ast = optimize::prune_unreachable_declarations(
         ast,
         &mut check_result,
@@ -2111,6 +2129,13 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         },
     );
     timings.record_since("decl-reach", phase_started);
+    if let Some((classes, methods, functions)) = before_prune {
+        let (kept_classes, kept_methods, kept_functions) = declaration_counts(&ast);
+        eprintln!(
+            "[elephc-prune] classes {classes}->{kept_classes} methods-with-body \
+             {methods}->{kept_methods} functions {functions}->{kept_functions}"
+        );
+    }
     // Reachability removes bridge requirements belonging only to dead declarations.
     if emit == Emit::Phpext && !check_result.required_libraries.is_empty() {
         crate::progress::clear();
