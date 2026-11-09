@@ -350,6 +350,15 @@ unsafe fn parse_file(filename: *const c_char, options: i64, namespace: impl AsRe
     from_document(raw, namespace, prefix)
 }
 
+/// Clears the pending diagnostic text before a DOM parse, sharing SimpleXML's warning channel.
+pub(crate) fn diagnostics_reset() { diagnostics::reset(); }
+
+/// Hands a DOM parse's shim diagnostics to the shared warning channel (`elephc_xml_sx_diagnostics`).
+pub(crate) unsafe fn diagnostics_capture(raw: *mut c_char) { diagnostics::capture(raw); }
+
+/// Sets a document's declared encoding (`new DOMDocument('1.0', 'UTF-8')`).
+pub(crate) unsafe fn set_document_encoding(doc: Node, encoding: *const c_char) { ffi::set_encoding(doc, encoding); }
+
 /// Adopts every parsed document, including recovery results without a root element.
 fn from_document(raw: Node, namespace: impl AsRef<[u8]>, prefix: bool) -> Option<View> {
     if raw.is_null() { return None; }

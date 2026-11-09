@@ -45,6 +45,23 @@ only. The port follows SimpleXML instead:
 3. The modern `Dom\` namespace (HTML5 via Lexbor, CSS selectors, TokenList) comes after the
    legacy API.
 
+### Legacy engine design (bead `elephc-8q7.10`)
+
+- `crates/elephc-xml/src/dom/`: a thread-local registry maps each libxml2 node to ONE stable
+  `i64` handle (so the prelude can cache one wrapper per handle and `===` holds). A document
+  is `Rc`-owned by every handle into it; nodes unlinked by `removeChild()` and never re-linked
+  are freed with their document.
+- Entry points `elephc_xml_dom_*`: create/load (`loadXML`, `load`) and save (`saveXML`) with
+  php-src's diagnostics, node accessors (type, name, value, text content, parent, children,
+  siblings, owner document, document element), attributes, `create*`, `appendChild`,
+  `insertBefore`, `removeChild`, `replaceChild`, `cloneNode`, `getElementsByTagName(NS)`.
+  Rust calls libxml2's public API directly; the shim only grows for struct-field reads.
+- Prelude: the `DOM*` classes as AST (PHP form under `cfg(test)` as the transcription oracle),
+  properties as `get` hooks over the handle, `DOMNodeList`/`DOMNamedNodeMap` live over a
+  (handle, query) pair, `DOMException` with php-src's codes and messages. It replaces the
+  pure-PHP termwind prelude in `src/dom_html_prelude`, whose 125 `dom_html*` tests must stay
+  green (`loadHTML` then goes through libxml2's HTML parser, as in php-src).
+
 ## Remaining, by blocker volume (ignore reasons)
 
 - [ ] Legacy core: `DOMDocument` load/save/create*, node tree properties and mutation,

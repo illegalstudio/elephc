@@ -22,6 +22,7 @@
 //! - Nothing here touches PHP values: handles are integers, strings cross as bytes.
 
 pub mod abi;
+mod dom;
 mod ffi;
 mod libxml_errors;
 pub mod parser;
