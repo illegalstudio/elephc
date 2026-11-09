@@ -135,6 +135,7 @@ pub(super) fn rewrite_typed_property_ref_args(
             .unwrap_or(PhpType::Mixed);
         let variadic_tail = variadic_by_ref && index >= regular_count;
         let promoted = variadic_tail
+            || matches!(expected_ty, PhpType::Mixed)
             || matches!(
                 value_type.codegen_repr(),
                 PhpType::Object(_) | PhpType::Mixed

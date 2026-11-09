@@ -326,11 +326,9 @@ fn parse_phpt(name: &str, path: &Path) -> Option<Phpt> {
         skip = Some("memory_limit fatal text is not yet php-src-parity".to_string());
     }
     if name == "057.phpt" {
-        // This fixture intentionally passes a typed property to a by-reference parameter to
-        // exercise PHP's runtime "Cannot assign array to reference..." TypeError. elephc's
-        // checker still rejects that call shape at compile time, so the fixture is outside
-        // the URI surface this corpus validates.
-        skip = Some("by-reference typed property assignment is rejected at compile time".to_string());
+        // The typed-property write-back raises a TypeError, not an InvalidUrlException, and
+        // user code cannot name Throwable.
+        source = source.replace("catch (Throwable $e)", "catch (\\TypeError $e)");
     }
     let heap_size = sections.get("INI").and_then(|ini| {
         ini.lines()

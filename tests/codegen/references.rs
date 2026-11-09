@@ -833,3 +833,31 @@ ok -9223372036854775808\n\
 err Cannot assign float to reference held by property C::$n of type int\n"
     );
 }
+
+/// A `mixed &$out` parameter can bind a typed scalar property: a compatible write updates
+/// it, while an incompatible write raises PHP's typed-reference `TypeError` and leaves the
+/// property unchanged.
+#[test]
+fn test_typed_property_by_ref_writeback_guard() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public string $value = "unchanged"; }
+function replaceWithArray(mixed &$out): void { $out = ["a" => 1]; }
+function replaceWithString(mixed &$out): void { $out = "changed"; }
+$box = new Box();
+try {
+    replaceWithArray($box->value);
+    echo "unguarded|";
+} catch (TypeError $error) {
+    echo $error->getMessage(), "|";
+}
+echo $box->value, "|";
+replaceWithString($box->value);
+echo $box->value;
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign array to reference held by property Box::$value of type string|unchanged|changed"
+    );
+}

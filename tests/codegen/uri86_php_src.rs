@@ -183,6 +183,12 @@ fn parse_phpt(name: &str, path: &Path) -> Option<Phpt> {
         source.truncate(index);
     }
 
+    if name.ends_with("build_error_soft_errors_typed_reference_with_base.phpt") {
+        // The builder's by-reference write-back raises a TypeError for the typed property,
+        // not an InvalidUrlException. Name the concrete class because the checker does not
+        // expose Throwable in user code.
+        source = source.replace("catch (Throwable $e)", "catch (\\TypeError $e)");
+    }
     if source.contains("->errors") && source.contains("catch (Throwable $e)") {
         // The fixture reads the `errors` array through an interface-typed catch variable.
         // The checker cannot prove that property on `Throwable`, so name the concrete type;
@@ -220,17 +226,10 @@ fn parse_phpt(name: &str, path: &Path) -> Option<Phpt> {
         || source.contains("exit(")
         || source.contains("die(");
 
-    let mut skip = ["SKIPIF", "FILE_EXTERNAL", "ENV", "STDIN", "POST", "GET", "COOKIE"]
+    let skip = ["SKIPIF", "FILE_EXTERNAL", "ENV", "STDIN", "POST", "GET", "COOKIE"]
         .iter()
         .find(|section| sections.contains_key(**section))
         .map(|_| "requires a php-src harness section".to_string());
-    if name.ends_with("build_error_soft_errors_typed_reference_with_base.phpt") {
-        // This fixture intentionally passes a typed property to a by-reference parameter to
-        // exercise PHP's runtime "Cannot assign array to reference..." TypeError. elephc's
-        // checker still rejects that call shape at compile time.
-        skip = Some("by-reference typed property assignment is rejected at compile time".to_string());
-    }
-
 
     Some(Phpt {
         name: name.to_string(),

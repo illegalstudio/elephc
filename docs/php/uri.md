@@ -203,11 +203,10 @@ var_export($uri);
   helper built on the public `Uri\*` classes, so those fixtures validate the same
   parsing, raw/normalized component, large-port, and validation-error behavior
   without the `zend_test` extension.
-- `--INI-- memory_limit` is honored as the runtime heap ceiling and the fatal message
-  matches php-src's `Allowed memory size of N bytes exhausted …` form. All 330 vendored
-  8.5 fixtures pass, including the twelve `oom_*` cases. The 8.6 builder/getter corpus
-  passes 203 of 204 fixtures; the one skipped fixture passes a typed property to a
-  by-reference `$softErrors` parameter.
+- `--INI-- memory_limit` is honored as the runtime heap ceiling. 318 of the 330
+  vendored 8.5 fixtures pass; the twelve `oom_*` cases are skipped because elephc's
+  heap-exhaustion fatal text is not yet php-src-parity. The 8.6 builder/getter corpus
+  passes all 204 fixtures.
 - The URI implementations retain one path-segment node per segment (an estimated 32-byte
   node) plus copied text for non-empty segments. Because that storage lives inside the Rust
   bridge rather than in the elephc heap, the prelude mirrors the footprint in hidden PHP

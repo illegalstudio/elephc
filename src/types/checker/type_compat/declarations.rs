@@ -267,6 +267,29 @@ impl Checker {
         can_widen_local: bool,
         context: &str,
     ) -> Result<(), CompileError> {
+        // A supported property place with CONCRETE storage is rewritten through a hidden
+        // boxed temporary and a typed write-back guard, so the caller's property slot never
+        // receives the callee's raw write directly. Accepting it here is what lets
+        // `mixed &$out` receive a `string $property` and raise PHP's typed-reference
+        // TypeError at write-back. Union/nullable properties already carry boxed storage and
+        // keep the existing checks below.
+        let mut property_arg = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) =
+            &property_arg.kind
+        {
+            property_arg = value;
+        }
+        if matches!(
+            property_arg.kind,
+            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+        ) {
+            let property_ty = self.infer_type(property_arg, env)?;
+            if property_ty.codegen_repr() != PhpType::Mixed
+                && self.by_ref_property_place(property_arg, expected_ty, env)?
+            {
+                return Ok(());
+            }
+        }
         // Guards refine the current value, while a reference still addresses the original
         // slot. Coalescing assignments likewise keep nullable parameter storage alive.
         let storage_ty = self.guarded_local_storage_type(arg, env).unwrap_or(actual_ty).clone();
