@@ -84,6 +84,9 @@ pub(in crate::interpreter) fn eval_preg_split_result(
         }
         cursor = matched.end();
     }
+    if eval_preg_failed() {
+        return values.bool_value(false);
+    }
     eval_preg_split_push_piece(&mut pieces, &subject[cursor..], cursor, no_empty);
 
     let mut result = values.array_new(pieces.len())?;

@@ -453,6 +453,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         resolved, false, php_version, &mut prelude_inventory,
     );
     let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::pcre_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =

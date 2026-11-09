@@ -24,7 +24,7 @@ description: "Compiler internals for preg_split(): lowering path, type checks, a
 - **Validation**: `checker_hook`
 - **Result type source**: `shared`
 - **Result ownership**: `fresh`
-- **Effects**: `static (16 declared effects)`
+- **Effects**: `static (17 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`

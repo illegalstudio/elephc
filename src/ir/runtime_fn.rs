@@ -920,6 +920,8 @@ pub enum RuntimeFnId {
     Passthru,
     PhpUname,
     Phpversion,
+    PregLastError,
+    PregLastErrorMsg,
     PregMatch,
     PregMatchAll,
     PregReplace,
@@ -1617,6 +1619,8 @@ impl RuntimeFnId {
             | RuntimeFnId::Defined
             | RuntimeFnId::JsonLastError
             | RuntimeFnId::JsonLastErrorMsg
+            | RuntimeFnId::PregLastError
+            | RuntimeFnId::PregLastErrorMsg
             | RuntimeFnId::DateDefaultTimezoneGet
             | RuntimeFnId::ObGetLevel => crate::ir::Effects::READS_GLOBAL,
             RuntimeFnId::SplAutoloadExtensions => crate::ir::Effects::from_bits_retain(
@@ -1877,6 +1881,17 @@ impl RuntimeFnId {
                     | crate::ir::Effects::BLOCKING_IO.bits()
                     | crate::ir::Effects::NETWORK_IO.bits(),
             ),
+            // Every regex call records its outcome for `preg_last_error()`.
+            RuntimeFnId::PregMatch
+            | RuntimeFnId::PregMatchAll
+            | RuntimeFnId::PregReplace
+            | RuntimeFnId::PregReplaceCallback
+            | RuntimeFnId::PregSplit => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::REFCOUNT_OP.bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             _ => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
@@ -2001,7 +2016,10 @@ impl RuntimeFnId {
             | RuntimeFnId::ArrayUdiff | RuntimeFnId::ArrayUintersect
             | RuntimeFnId::ArrayWalk | RuntimeFnId::ArrayWalkRecursive => self.effects(),
             RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
-                E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
+                E::READS_HEAP.bits()
+                    | E::ALLOC_HEAP.bits()
+                    | E::MAY_WARN.bits()
+                    | E::WRITES_GLOBAL.bits(),
             ),
             RuntimeFnId::Uasort
             | RuntimeFnId::Uksort
@@ -3897,6 +3915,8 @@ impl RuntimeFnId {
             RuntimeFnId::Passthru => "passthru",
             RuntimeFnId::PhpUname => "php_uname",
             RuntimeFnId::Phpversion => "phpversion",
+            RuntimeFnId::PregLastError => "preg_last_error",
+            RuntimeFnId::PregLastErrorMsg => "preg_last_error_msg",
             RuntimeFnId::PregMatch => "preg_match",
             RuntimeFnId::PregMatchAll => "preg_match_all",
             RuntimeFnId::PregReplace => "preg_replace",

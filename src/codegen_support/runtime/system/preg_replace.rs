@@ -114,7 +114,7 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x2, #{}", PREG_REPLACE_NMATCH));          // capture full match plus replacement backreference groups
     emitter.instruction(&format!("add x3, sp, #{}", match_pairs_off));          // receive fixed signed-64-bit offset pairs
     emitter.instruction("mov x4, #0");                                          // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize all requested pairs
+    super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize all requested pairs
     emitter.instruction("cbnz x0, __rt_preg_replace_tail");                     // no more matches, copy rest
 
     // -- copy text before match (rm_so bytes) --
@@ -407,7 +407,7 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov edx, {}", PREG_REPLACE_NMATCH));          // capture full match plus replacement backreference groups
     emitter.instruction(&format!("lea rcx, [rsp + {}]", match_pairs_off));      // receive fixed signed-64-bit offset pairs
     emitter.instruction("xor r8d, r8d");                                        // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize all requested pairs
+    super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize all requested pairs
     emitter.instruction("test eax, eax");                                       // did regexec() find another match at or after the current cursor?
     emitter.instruction("jnz __rt_preg_replace_tail_linux_x86_64");             // copy the remaining subject tail once regexec() reports no further matches
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", match_pairs_off)); // load full-match signed-64-bit start

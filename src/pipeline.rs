@@ -682,6 +682,12 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     );
     timings.record_since("version-prelude", phase_started);
 
+    // Inject `preg_grep()`, a PHP function over `preg_match()`, when it is referenced.
+    crate::progress::phase("pcre-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::pcre_prelude::inject_if_used(ast, &mut prelude_inventory);
+    timings.record_since("pcre-prelude", phase_started);
+
     // Declare the real PHP extensions the project hosts (`[extension]` in
     // elephc.toml): each registered function becomes a PHP function calling it
     // through the Zend engine archive. Injected whenever the project declares

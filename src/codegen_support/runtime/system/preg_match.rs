@@ -81,7 +81,7 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #1");                                          // request only the full-match pair
     emitter.instruction(&format!("add x3, sp, #{}", match_pair_off));           // receive one fixed signed-64-bit offset pair
     emitter.instruction("mov x4, #0");                                          // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
+    super::preg_error_state::emit_exec_call(emitter);                           // execute without exposing PCRE2-owned layouts
     emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec result
 
     // -- free compiled regex --
@@ -178,7 +178,7 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x2, [sp, #{}]", nmatch_off));             // request one regmatch slot for every capture group
     emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass dynamic fixed offset-pair buffer
     emitter.instruction("mov x4, #0");                                          // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
+    super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize every requested offset pair
     emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec status across cleanup
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
@@ -322,7 +322,7 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edx, 1");                                          // request only the full-match pair
     emitter.instruction(&format!("lea rcx, [rsp + {}]", match_pair_off));       // receive one fixed signed-64-bit offset pair
     emitter.instruction("xor r8d, r8d");                                        // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
+    super::preg_error_state::emit_exec_call(emitter);                           // execute without exposing PCRE2-owned layouts
     emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // preserve the regexec() result code across the mandatory regfree() cleanup call
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
@@ -405,7 +405,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every capture group
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic fixed offset-pair buffer
     emitter.instruction("xor r8d, r8d");                                        // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
+    super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize every requested offset pair
     emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // save regexec status across regfree
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources

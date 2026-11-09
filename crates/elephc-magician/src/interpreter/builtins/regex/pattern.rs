@@ -17,9 +17,14 @@ pub(in crate::interpreter) fn eval_preg_regex(
     pattern: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Regex, EvalStatus> {
+    eval_preg_set_last_error(0);
     let pattern = values.string_bytes(pattern)?;
-    let (body, modifiers) = eval_preg_pattern_parts(&pattern)?;
-    Regex::compile(&body, modifiers)
+    let compiled = eval_preg_pattern_parts(&pattern)
+        .and_then(|(body, modifiers)| Regex::compile(&body, modifiers));
+    if compiled.is_err() {
+        eval_preg_set_last_error(EVAL_PREG_INTERNAL_ERROR);
+    }
+    compiled
 }
 
 /// Splits a PHP delimited regex into body bytes and supported modifiers.
@@ -116,8 +121,13 @@ pub(in crate::interpreter) fn eval_preg_callback_pattern(
     pattern: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalPregCallbackPattern, EvalStatus> {
+    eval_preg_set_last_error(0);
     let pattern = values.string_bytes(pattern)?;
-    Ok(compile_preg_callback_pattern(&pattern))
+    let compiled = compile_preg_callback_pattern(&pattern);
+    if !matches!(compiled, EvalPregCallbackPattern::Compiled(_)) {
+        eval_preg_set_last_error(EVAL_PREG_INTERNAL_ERROR);
+    }
+    Ok(compiled)
 }
 
 /// Classifies one pattern's delimiters and modifiers, then compiles a fully supported pattern.

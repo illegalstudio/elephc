@@ -82,6 +82,9 @@ fn eval_preg_replace_callback_result_from_scope(
             result.extend_from_slice(&callback_bytes);
             cursor = matched.end();
         }
+        if eval_preg_failed() {
+            return values.null();
+        }
         result.extend_from_slice(&subject[cursor..]);
         values.string_bytes_value(&result)
     })

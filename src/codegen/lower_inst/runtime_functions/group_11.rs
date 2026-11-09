@@ -115,6 +115,12 @@ pub(super) fn lower(
         RuntimeFnId::Phpversion => Some({
             crate::codegen::lower_inst::builtins::lower_phpversion(ctx, inst)
         }),
+        RuntimeFnId::PregLastError => Some({
+            crate::codegen::lower_inst::builtins::regex_errors::lower_preg_last_error(ctx, inst)
+        }),
+        RuntimeFnId::PregLastErrorMsg => Some({
+            crate::codegen::lower_inst::builtins::regex_errors::lower_preg_last_error_msg(ctx, inst)
+        }),
         RuntimeFnId::PregMatch => Some({
             crate::codegen::lower_inst::builtins::regex::lower_preg_match(ctx, inst)
         }),

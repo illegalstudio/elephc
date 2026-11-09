@@ -1266,6 +1266,7 @@ mod tests {
             ),
         );
         round_trip("list_id", &crate::list_id_prelude::list_id_declarations());
+        round_trip("pcre", &crate::pcre_prelude::pcre_declarations());
         for version in PhpVersion::ALL {
             round_trip(
                 "pdo",

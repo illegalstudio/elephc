@@ -95,6 +95,7 @@ mod simplexml_prelude;
 mod fileinfo_prelude;
 mod tokenizer_prelude;
 mod var_export_prelude;
+mod pcre_prelude;
 mod version_prelude;
 mod web_prelude;
 

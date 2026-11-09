@@ -80,6 +80,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
                 crate::web_prelude::PhpVersion::Php85,
             ),
         ),
+        ("pcre_prelude", crate::pcre_prelude::pcre_declarations()),
         (
             "opcache_prelude(env)",
             crate::opcache_prelude::env_override_declarations(),

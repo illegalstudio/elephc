@@ -120772,6 +120772,327 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pattern",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Regex",
+    "canonical_name": "preg_grep",
+    "description": "Returns the entries of `$array` whose string value matches `$pattern`, keeping their keys; `PREG_GREP_INVERT` keeps the entries that do not match. Returns `false` for an invalid pattern.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "regex",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/regex/preg_grep.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pattern",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/pcre_prelude.rs",
+      "codegen_function": "preg_grep",
+      "notes": [
+        "Implemented by the compiler-injected PCRE prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "pcre",
+    "name": "preg_grep",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pattern",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "array|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "preg_grep",
+    "sub_area": "Regex"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Regex",
+    "canonical_name": "preg_last_error",
+    "description": "Returns the `PREG_*_ERROR` code of the last PCRE function call: `PREG_INTERNAL_ERROR` for an invalid pattern or offset, `PREG_BACKTRACK_LIMIT_ERROR` when PCRE2 runs out of match or heap budget, `PREG_BAD_UTF8_ERROR` for a subject PCRE2 rejects as invalid UTF-8 under `/u`.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "regex",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/regex/preg_last_error.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.preg_last_error` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/preg_last_error.rs"
+    },
+    "module": "pcre",
+    "name": "preg_last_error",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "preg_last_error"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "preg_last_error"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "preg_last_error",
+    "sub_area": "Regex"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Regex",
+    "canonical_name": "preg_last_error_msg",
+    "description": "Returns PHP's message for the error code `preg_last_error()` reports.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "regex",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/regex/preg_last_error_msg.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.preg_last_error_msg` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/preg_last_error_msg.rs"
+    },
+    "module": "pcre",
+    "name": "preg_last_error_msg",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "preg_last_error_msg"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "preg_last_error_msg"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "preg_last_error_msg",
+    "sub_area": "Regex"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -120884,6 +121205,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -121079,6 +121401,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -121267,6 +121590,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -121447,6 +121771,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -121642,6 +121967,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
