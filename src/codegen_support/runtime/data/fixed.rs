@@ -1583,8 +1583,8 @@ pub(crate) fn emit_runtime_data_fixed(
     // _user_filter_instances: one wrapper-class instance per attached
     // filter, keyed by (fd, direction). Slot = _user_filter_instances[fd*2
     // + dir] where dir=0 is read, dir=1 is write. Slot is null when no
-    // user filter is attached. 256 fds × 2 dirs × 8 B = 4096 bytes.
-    out.push_str(&comm_directive("_user_filter_instances", 4096, target));
+    // user filter is attached. 1024 fds × 2 dirs × 8 B = 16384 bytes.
+    out.push_str(&comm_directive("_user_filter_instances", 16384, target));
     // _stream_context_options: pointer to the current stream-context
     // options hash (nested array of `wrapper => option => value`).
     // stream_context_create() stores its options arg here; consumers
