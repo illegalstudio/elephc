@@ -128,7 +128,8 @@ archives) that elephc links into the program: `pdo` (database access), `tls`
 `mbstring` (the shared multibyte string engine),
 `iconv` (character-set conversion and the character-oriented `iconv_*` functions),
 `phar` (Phar archives), `tz` (timezone introspection), `image` (GD/Imagick image
-processing), `pcntl` (Unix process control and signals), `xml` (the `ext/xml`
+processing), `pcntl` (Unix process control and signals), `proc` (`proc_open()`
+and its process family), `xml` (the `ext/xml`
 SAX parser, `ext/xmlwriter` and SimpleXML), `eval` (the Magician interpreter fallback for
 dynamic `eval()`), `web` (the `--web` server), and `curl` (the libcurl-backed
 `ext/curl` surface). `zend` hosts declared PECL/PIE extensions through Elephc's
@@ -138,7 +139,7 @@ By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
 calling a `bc*` function or using `BcMath\Number` pulls in `bcmath`, calling an `iconv*` function pulls in
 `iconv`, calling `mb_strlen()` pulls in `mbstring`, referencing `PDO` pulls in
-`pdo`, calling `token_get_all()` or using `PhpToken` pulls in `tokenizer`, and creating an `XMLWriter` or calling an `xml_*` function pulls in `xml`.
+`pdo`, calling `token_get_all()` or using `PhpToken` pulls in `tokenizer`, calling a `proc_*` function pulls in `proc`, and creating an `XMLWriter` or calling an `xml_*` function pulls in `xml`.
 An `eval()` call pulls in Magician
 only when it needs runtime parsing: eligible literal fragments can be parsed at
 compile time and lowered to native EIR without the interpreter bridge. Programs
@@ -151,7 +152,7 @@ the lockfile, and Cargo configuration also participate in this freshness check.
 `--with-CRATE` force-enables a bridge regardless of that auto-detection. It
 force-links the staticlib (whole-archived, so it is retained even if no symbol
 references it) and, for crates whose PHP surface comes from an injected prelude
-(`pdo`, `mysqli`, `tz`, `image`, `xml`, `tokenizer`, `random`), force-injects that prelude so the classes/functions are
+(`pdo`, `mysqli`, `tz`, `image`, `xml`, `tokenizer`, `random`, `proc`), force-injects that prelude so the classes/functions are
 available. This is useful when a program reaches a feature through indirection
 that detection cannot see. The flag is repeatable:
 
@@ -163,6 +164,7 @@ elephc app.php --with-random
 elephc app.php --with-mbstring
 elephc app.php --with-iconv
 elephc app.php --with-pcntl
+elephc app.php --with-proc
 elephc app.php --with-eval
 ```
 
@@ -170,6 +172,13 @@ elephc app.php --with-eval
 runtime calls. Statically visible `pcntl_*` calls auto-link it. See
 [PCNTL](../php/pcntl.md) for target availability, fork/signal semantics, and
 documented limits.
+
+`--with-proc` force-links `elephc_proc` and injects the `__elephc_proc_*` helpers
+behind `proc_open()`, `proc_get_status()`, `proc_close()`, `proc_terminate()` and
+`proc_nice()`. Statically visible `proc_*` calls do both automatically. The bridge
+is available on macOS and Linux; iOS targets refuse these calls at compile time. See
+[Processes with proc_open()](../php/streams.md#processes-with-proc_open) for
+descriptor specs and documented limits.
 
 `--with-reference` force-links `elephc_reference`, the native property-reference
 metadata and validation bridge. Native reference validation selects it
