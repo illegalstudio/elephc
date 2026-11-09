@@ -21,45 +21,12 @@ use super::platform::{Arch, Platform, Target};
 /// from it (`label` followed by `_` and a non-digit, or by a non-identifier byte). An occurrence
 /// followed by a digit, or by `_` and a digit, is another counter-numbered symbol that merely
 /// starts with the same text and is left alone.
+#[cfg(test)]
 fn replace_label_tokens(text: &str, label: &str, with: &str) -> String {
     let positions = label_token_positions(text, label);
     let mut out = String::with_capacity(text.len());
     for_each_label_piece(text, label.len(), &positions, with, |piece| out.push_str(piece));
     out
-}
-
-/// Whether `ELEPHC_INVOKER_MEMO_VERIFY` asks every memoized repeat to be lowered and compared.
-/// `text` without the keyed helper regions nested in it (`marker_open` … `marker_close`).
-fn without_keyed_regions(text: &str, marker_open: &str, marker_close: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut depth = 0usize;
-    for line in text.lines() {
-        if line.contains(marker_open) {
-            depth += 1;
-            continue;
-        }
-        if depth > 0 {
-            if line.contains(marker_close) {
-                depth -= 1;
-            }
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
-}
-
-thread_local! {
-    /// Under `ELEPHC_INVOKER_MEMO_VERIFY`, the label-blanked text of each memoized body, to show
-    /// where a repeat differs.
-    static MEMO_VERIFY_TEXTS: std::cell::RefCell<std::collections::HashMap<String, String>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
-fn memo_verify() -> bool {
-    static VERIFY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *VERIFY.get_or_init(|| std::env::var_os("ELEPHC_INVOKER_MEMO_VERIFY").is_some())
 }
 
 /// Where `replace_label_tokens` replaces `label` in `text`, found with one `memmem` pass: a
@@ -173,10 +140,6 @@ pub struct Emitter {
     /// Log entries below this index belong to a buffer set aside by an open out-of-line scope,
     /// whose offsets index THAT buffer: a rollback in the scope's own buffer must not pop them.
     content_body_log_floor: usize,
-    /// Shared body name per memo key (see [`Self::emit_content_shared_memo`]): a later request
-    /// with the same key jumps to that body without lowering it again, while the body is still
-    /// in `content_bodies`.
-    content_memo: crate::fast_hash::FastMap<u64, String>,
     /// Keys of the shared bodies written inside out-of-line scopes, with the length of
     /// `out_of_line` before the scope's text was appended. `end_out_of_line` moves a scope's
     /// log entries here (their buffer offsets mean nothing once the scope is closed) so that
@@ -260,7 +223,6 @@ impl Emitter {
             content_body_log: Vec::new(),
             content_body_log_floor: 0,
             out_of_line_keys: Vec::new(),
-            content_memo: Default::default(),
         }
     }
 
@@ -575,7 +537,6 @@ impl Emitter {
             content_body_log: Vec::new(),
             content_body_log_floor: 0,
             out_of_line_keys: Vec::new(),
-            content_memo: Default::default(),
         }
     }
 
@@ -664,44 +625,6 @@ impl Emitter {
         entry: impl FnOnce(&mut Self),
         emit: impl FnOnce(&mut Self),
     ) {
-        self.emit_content_shared_memo(label, None, marker_open, marker_close, entry, emit);
-    }
-
-    /// [`Self::emit_content_shared_with_entry`] that skips lowering when `memo` was seen before.
-    ///
-    /// `ELEPHC_INVOKER_MEMO_VERIFY` is read once per process.
-    ///
-    /// `memo` is a hash of every input that decides the body's text except `label` (for an
-    /// invoker: its signature with the parameter names left out, which reach a shared body
-    /// through the stub's name table). On the Symfony demo 79 474 invokers were lowered for
-    /// 8 956 distinct bodies: every repeat was emitted, hashed and rolled back only to find the
-    /// body already there. A repeat now writes its stub and jumps straight to the body.
-    /// `ELEPHC_INVOKER_MEMO_VERIFY=1` lowers every repeat anyway and panics if the body differs.
-    pub fn emit_content_shared_memo(
-        &mut self,
-        label: &str,
-        memo: Option<u64>,
-        marker_open: &str,
-        marker_close: &str,
-        entry: impl FnOnce(&mut Self),
-        emit: impl FnOnce(&mut Self),
-    ) {
-        let remembered = memo
-            .filter(|_| self.content_sharing_active())
-            .and_then(|key| self.content_memo.get(&key))
-            .filter(|shared| self.content_bodies.contains(*shared))
-            .cloned();
-        if let Some(shared) = &remembered {
-            if !memo_verify() {
-                self.label_global(label);
-                entry(self);
-                match self.target.arch {
-                    Arch::AArch64 => self.instruction(&format!("b {}", shared)),
-                    Arch::X86_64 => self.instruction(&format!("jmp {}", shared)),
-                }
-                return;
-            }
-        }
         // `ELEPHC_NO_SHARED_BODIES=1` emits every body under its own name, for size and
         // behaviour comparisons.
         // A shared body never inherits the requesting function's frame-base register (see
@@ -732,32 +655,6 @@ impl Emitter {
             std::hash::Hasher::finish(&hasher),
             body.len()
         );
-        if let Some(expected) = &remembered {
-            // The first lowering also carried the keyed helpers it was the first to need (they
-            // stay defined inside its body); a repeat finds them emitted and leaves them out. So
-            // the bodies are compared without their nested keyed regions.
-            let blanked = without_keyed_regions(&replace_label_tokens(&body, label, "@"), marker_open, marker_close);
-            let first = MEMO_VERIFY_TEXTS.with(|texts| texts.borrow().get(expected).cloned());
-            if let Some(first) = first.filter(|first| *first != blanked) {
-                let difference = first
-                    .lines()
-                    .zip(blanked.lines())
-                    .find(|(a, b)| a != b)
-                    .map_or("(one body is a prefix of the other)".to_string(), |(a, b)| {
-                        format!("first: {a}\n  this: {b}")
-                    });
-                panic!(
-                    "ELEPHC_INVOKER_MEMO_VERIFY: `{label}` lowered to another body than its memo \
-                     key's:\n  {difference}"
-                );
-            }
-        } else if memo.is_some() && memo_verify() {
-            let blanked = without_keyed_regions(&replace_label_tokens(&body, label, "@"), marker_open, marker_close);
-            MEMO_VERIFY_TEXTS.with(|texts| texts.borrow_mut().insert(shared.clone(), blanked));
-        }
-        if let Some(key) = memo {
-            self.content_memo.insert(key, shared.clone());
-        }
         self.label_global(label);
         entry(self);
         match self.target.arch {
@@ -774,11 +671,6 @@ impl Emitter {
                 self.current_text_section = Some(shared);
             }
         }
-    }
-
-    /// How many bodies [`Self::emit_content_shared_memo`] remembers (for counter tests).
-    pub fn content_memo_len(&self) -> usize {
-        self.content_memo.len()
     }
 
     /// Returns the output emitted since `checkpoint`.

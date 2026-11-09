@@ -272,10 +272,8 @@ fn emit_content_shared_invoker(
     }
     let shared = emitter.content_sharing_active();
     let stub_table = table.clone();
-    let memo = shared.then(|| invoker_memo_key(invoker, catch_native_throws));
-    emitter.emit_content_shared_memo(
+    emitter.emit_content_shared_with_entry(
         invoker.label,
-        memo,
         crate::codegen::context::HELPER_MARKER_OPEN,
         crate::codegen::context::HELPER_MARKER_CLOSE,
         move |emitter| emit_invoker_table_to_reg(emitter, stub_table.as_deref()),
@@ -293,47 +291,6 @@ fn emit_content_shared_invoker(
             }
         },
     );
-}
-
-/// The memo key of an invoker body: every input its lowering reads, except its label and the
-/// parameter names, which a shared body receives through the stub's name table.
-///
-/// The signature's default EXPRESSIONS are left out (their spans differ between two functions
-/// with the same default): the body only asks whether a slot has one, and the resolved value
-/// comes from `invoker.defaults`, which is in the key. Attributes are left out the same way.
-/// `ELEPHC_INVOKER_MEMO_VERIFY=1` checks the key against the lowered body.
-fn invoker_memo_key(invoker: &RuntimeCallableInvoker<'_>, catch_native_throws: bool) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let sig = invoker.sig;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    let mut text = String::new();
-    use std::fmt::Write as _;
-    let _ = write!(
-        text,
-        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{:?}|{}",
-        sig.params.iter().map(|(_, ty)| ty).collect::<Vec<_>>(),
-        sig.param_type_exprs,
-        sig.ref_params,
-        sig.declared_params,
-        sig.return_type,
-        (sig.declared_return, sig.by_ref_return, sig.is_generator),
-        sig.variadic.is_some(),
-        sig.defaults.iter().map(Option::is_some).collect::<Vec<_>>(),
-        sig.deprecation,
-        invoker.captures,
-        catch_native_throws,
-    );
-    let _ = write!(
-        text,
-        "|{:?}|{}|{}|{}|{:?}",
-        invoker.mbstring_operation,
-        invoker.mbstring_variable_ref_warnings,
-        invoker.owns_string_return,
-        invoker.php_return_status,
-        invoker.defaults,
-    );
-    text.hash(&mut hasher);
-    hasher.finish()
 }
 
 /// Whether `ELEPHC_INVOKER_STATS` asks for one line per emitted invoker body.
