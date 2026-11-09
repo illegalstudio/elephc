@@ -440,6 +440,14 @@ pub(crate) fn set_property_bound_promotion_sites(
     PropertyBoundPromotionSitesGuard { previous }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// `(names walked, names a full scan of the epoch map would have walked)` by
+    /// `invalidate_escaped_callable_locals`; read by `ir_lower::tests::escaped_callable_locals`.
+    pub(crate) static ESCAPED_LOCAL_PROBES: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, 0)) };
+}
+
 thread_local! {
     /// `CheckResult::by_ref_call_result_sites` for the program being lowered.
     static BY_REF_CALL_RESULT_SITES: std::cell::RefCell<HashSet<Span>> =
@@ -6333,16 +6341,46 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Invalidates every tracked callable local whose cell escaped this activation.
+    ///
+    /// Runs on every opaque instruction. The epoch map only grows (every cleared local keeps an
+    /// entry), so filtering all of it each time was 1,585 samples of a Symfony demo build's
+    /// lowering; the escaped names are the epochs ∩ (by-reference locals ∪ globals in main), and
+    /// that intersection is now walked from its smaller side. Each name is still cleared once.
     fn invalidate_escaped_callable_locals(&mut self) {
-        let escaped = self
-            .static_callable_local_epochs
-            .keys()
-            .filter(|name| {
-                self.ref_bound_locals.contains(*name)
-                    || (self.in_main && self.all_global_var_names.contains(*name))
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let epochs = &self.static_callable_local_epochs;
+        if epochs.is_empty() {
+            return;
+        }
+        let mut escaped: Vec<String> = Vec::new();
+        let ref_bound = &self.ref_bound_locals;
+        // Names visited, for the regression test's counter.
+        let visited = std::cell::Cell::new(0usize);
+        let visit = |_: &&String| visited.set(visited.get() + 1);
+        if ref_bound.len() < epochs.len() {
+            escaped.extend(ref_bound.iter().inspect(visit).filter(|name| epochs.contains_key(*name)).cloned());
+        } else {
+            escaped.extend(epochs.keys().inspect(visit).filter(|name| ref_bound.contains(*name)).cloned());
+        }
+        if self.in_main {
+            let globals = &self.all_global_var_names;
+            let fresh = |name: &&String| !ref_bound.contains(*name);
+            if globals.len() < epochs.len() {
+                escaped.extend(
+                    globals.iter().inspect(visit).filter(|name| epochs.contains_key(*name)).filter(fresh).cloned(),
+                );
+            } else {
+                escaped.extend(
+                    epochs.keys().inspect(visit).filter(|name| globals.contains(*name)).filter(fresh).cloned(),
+                );
+            }
+        }
+        #[cfg(test)]
+        ESCAPED_LOCAL_PROBES.with(|probes| {
+            let (walked, full_scan) = probes.get();
+            probes.set((walked + visited.get(), full_scan + epochs.len()));
+        });
+        #[cfg(not(test))]
+        let _ = visited;
         for name in escaped {
             self.clear_static_callable_local(&name);
         }

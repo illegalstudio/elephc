@@ -89,6 +89,7 @@ mod iterator_cleanup;
 mod iterator_aggregate_owners;
 mod lowering_complexity;
 mod frame_density;
+mod escaped_callable_locals;
 mod boxed_array_predicates;
 mod boxed_array_set_comparators;
 mod reference_loop_cleanup;
