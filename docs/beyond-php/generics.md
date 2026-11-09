@@ -323,8 +323,9 @@ A `mixed` element or value type absorbs every write, so `array<mixed>` and
 
 A class or interface element type holds instances of that class, of its subclasses, and of
 classes implementing that interface. Every object element is one object pointer, so writing
-a subclass instance keeps the declared object storage, in straight-line code and in loops, and
-methods still dispatch on each element's runtime class:
+a subclass instance with `$items[] = ...`, `$items[$i] = ...` or `array_push()` keeps the
+declared object storage, in straight-line code and in loops, and methods still dispatch on each
+element's runtime class:
 
 ```php
 <?php
