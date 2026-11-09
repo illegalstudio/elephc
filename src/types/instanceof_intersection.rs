@@ -33,6 +33,8 @@ pub(crate) fn object_type_satisfies(
     member: &str,
     target: &str,
 ) -> bool {
+    #[cfg(test)]
+    SATISFIES_TESTS.with(|tests| tests.set(tests.get() + 1));
     let member = member.trim_start_matches('\\');
     let target = target.trim_start_matches('\\');
     if member == target {
@@ -99,6 +101,33 @@ fn ancestry(classes: &FastMap<String, ClassInfo>, class_name: &str) -> Vec<Strin
     chain
 }
 
+/// Whether `member`'s parent chain reaches the class `ancestor`, by name and without allocating.
+/// Bounded by the class count, so a malformed inheritance cycle ends the walk.
+fn descends_from(classes: &FastMap<String, ClassInfo>, member: &str, ancestor: &str) -> bool {
+    #[cfg(test)]
+    DESCENT_WALKS.with(|walks| walks.set(walks.get() + 1));
+    let mut current = member.trim_start_matches('\\');
+    for _ in 0..=classes.len() {
+        let Some(parent) = classes.get(current).and_then(|info| info.parent.as_deref()) else {
+            return false;
+        };
+        let parent = parent.trim_start_matches('\\');
+        if parent == ancestor {
+            return true;
+        }
+        current = parent;
+    }
+    false
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Parent walks [`classes_satisfying_both`] made; read by the regression test below.
+    static DESCENT_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Full `object_type_satisfies` tests made; read by the regression test below.
+    static SATISFIES_TESTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The closed world's answer to `class_name & interface_name`: every declared class that descends
 /// from `class_name` and also satisfies `interface_name`, sorted so the build stays deterministic.
 pub(crate) fn classes_satisfying_both(
@@ -108,11 +137,21 @@ pub(crate) fn classes_satisfying_both(
     interface_name: &str,
 ) -> Vec<String> {
     let class_name = class_name.trim_start_matches('\\');
+    // Every class is a candidate, and `object_type_satisfies` allocates its whole ancestry: two of
+    // those per class per guard were 2,400 samples of a Symfony demo build's type check. When the
+    // left side is a class, a candidate must descend from it, which a parent walk answers without
+    // allocating; only those few pay the full test. (A class and an interface cannot share a name,
+    // so for a class target the full test reduces to exactly this walk.)
+    let left_is_interface = interfaces.contains_key(class_name);
     let mut found: Vec<String> = classes
         .keys()
         .filter(|name| {
             name.as_str() != class_name
-                && object_type_satisfies(classes, interfaces, name, class_name)
+                && if left_is_interface {
+                    object_type_satisfies(classes, interfaces, name, class_name)
+                } else {
+                    descends_from(classes, name, class_name)
+                }
                 && object_type_satisfies(classes, interfaces, name, interface_name)
         })
         .cloned()
@@ -164,5 +203,49 @@ pub(crate) fn narrow_object_to_instanceof(
     Some(PhpType::Union(
         candidates.into_iter().map(PhpType::Object).collect(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Regression tests for the cost of naming an `instanceof` intersection.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - The fixture goes through the real lexer, parser and checker, so the counters see every
+    //!   guard the checker narrows, in every pass it makes.
+
+    use super::{DESCENT_WALKS, SATISFIES_TESTS};
+
+    /// Narrowing `Base & Marker` walks each class's parent chain, but runs the allocating full
+    /// test only on the classes that descend from `Base`: 200 unrelated classes no longer each cost
+    /// two ancestry walks per guard per pass.
+    #[test]
+    fn an_intersection_runs_the_full_test_only_on_descendants() {
+        let mut source = String::from(
+            "<?php\ninterface Marker { public function mark(): int; }\n\
+             class Base { public int $n = 1; }\n\
+             class Marked extends Base implements Marker { public function mark(): int { return 2; } }\n",
+        );
+        for index in 0..200 {
+            source.push_str(&format!("class Unrelated{index} {{ public int $v = {index}; }}\n"));
+        }
+        source.push_str(
+            "function probe(Base $b): int { if ($b instanceof Marker) { return $b->mark() + $b->n; } return 0; }\n\
+             echo probe($argc > 1 ? new Marked() : new Base());\n",
+        );
+        let tokens = crate::lexer::tokenize(&source).expect("fixture must tokenize");
+        let program = crate::parser::parse(&tokens).expect("fixture must parse");
+        DESCENT_WALKS.with(|walks| walks.set(0));
+        SATISFIES_TESTS.with(|tests| tests.set(0));
+        crate::types::check(&program).expect("fixture must type check");
+        let walks = DESCENT_WALKS.with(std::cell::Cell::get);
+        let tests = SATISFIES_TESTS.with(std::cell::Cell::get);
+        eprintln!("DESCENT_WALKS={walks} SATISFIES_TESTS={tests}");
+        assert!(walks > 0, "the fixture must reach the intersection");
+        assert!(tests * 10 < walks, "{tests} full tests for {walks} candidate classes");
+    }
 }
 
