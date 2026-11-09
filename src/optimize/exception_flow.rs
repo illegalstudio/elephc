@@ -108,6 +108,36 @@ pub(super) struct ExceptionFlowAnalysis {
     /// program that also contains an unrelated throwing destructor; absence is the
     /// conservative answer and reproduces the previous behavior.
     scalar_frame_callables: HashSet<String>,
+    /// While one body is summarized, the summary keys it reads (see [`SummaryKind`]); `None`
+    /// outside summarization, where reads are not recorded.
+    summary_reads: RefCell<Option<Vec<SummaryKey>>>,
+}
+
+/// Which of the three summary maps a key belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum SummaryKind {
+    Function,
+    StaticMethod,
+    InstanceMethod,
+}
+
+/// One summary: its map and its key in that map.
+type SummaryKey = (SummaryKind, String);
+
+#[cfg(test)]
+thread_local! {
+    /// Bodies summarized by the fixed point; read by the regression test in `optimize::tests`.
+    pub(crate) static EXCEPTION_BODY_SUMMARIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether the incremental fixed point is checked against a full recompute
+/// (`ELEPHC_EXCEPTION_FLOW_VERIFY=1`, always on in tests).
+fn exception_flow_verify() -> bool {
+    if cfg!(test) {
+        return true;
+    }
+    static VERIFY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *VERIFY.get_or_init(|| std::env::var_os("ELEPHC_EXCEPTION_FLOW_VERIFY").is_some())
 }
 
 /// Returns whether a declared type makes the compiler insert a runtime nominal object check.
@@ -577,6 +607,7 @@ impl ExceptionFlowAnalysis {
             nominal_boundary_callables,
             destructor_throws: ThrownTypes::default(),
             scalar_frame_callables: HashSet::default(),
+            summary_reads: RefCell::new(None),
         };
         // Purely syntactic, so it is computed once rather than per round.
         destruction::collect_scalar_frame_callables(program, &mut analysis.scalar_frame_callables);
@@ -592,6 +623,15 @@ impl ExceptionFlowAnalysis {
             .hierarchy
             .mark_destructor_sources_open(destructor_sources_open);
 
+        // Incremental rounds. A body's summary is a function of the summaries it reads, of the
+        // destructor summary and of data fixed before the loop, so a round only has to recompute
+        // the bodies that read a summary the previous round changed -- and every body when the
+        // destructor summary changed. Each round still reads only the previous round's state, so
+        // the result is the full round-by-round recompute's; on the Symfony demo that recompute
+        // re-walked every body of the program each round. `ELEPHC_EXCEPTION_FLOW_VERIFY` (always
+        // on in tests) re-summarizes everything once converged and panics on a difference.
+        let mut readers: HashMap<SummaryKey, HashSet<SummaryKey>> = HashMap::default();
+        let mut dirty: Option<HashSet<SummaryKey>> = None;
         for _ in 0..MAX_EXCEPTION_SUMMARY_ITERATIONS {
             // Derived purely from the preceding round's instance-method summaries, and compared
             // for convergence alongside them, so the loop can never return on a stale (and
@@ -599,16 +639,41 @@ impl ExceptionFlowAnalysis {
             let next_destructor_throws = analysis.compute_destructor_throws();
             let destructor_throws_changed = next_destructor_throws != analysis.destructor_throws;
             analysis.destructor_throws = next_destructor_throws;
-            let next_functions = analysis.summarize_bodies(&function_bodies);
-            let next_static_methods = analysis.summarize_bodies(&static_method_bodies);
-            let next_instance_methods = analysis.summarize_bodies(&instance_method_bodies);
-            if !destructor_throws_changed
-                && next_functions == analysis.function_throws
-                && next_static_methods == analysis.static_method_throws
-                && next_instance_methods == analysis.instance_method_throws
-            {
+            let round_dirty = if destructor_throws_changed { None } else { dirty.as_ref() };
+            let next_functions = analysis.summarize_bodies_incrementally(
+                SummaryKind::Function, &function_bodies, &analysis.function_throws, round_dirty, &mut readers);
+            let next_static_methods = analysis.summarize_bodies_incrementally(
+                SummaryKind::StaticMethod, &static_method_bodies, &analysis.static_method_throws,
+                round_dirty, &mut readers);
+            let next_instance_methods = analysis.summarize_bodies_incrementally(
+                SummaryKind::InstanceMethod, &instance_method_bodies, &analysis.instance_method_throws,
+                round_dirty, &mut readers);
+            let mut changed: Vec<SummaryKey> = Vec::new();
+            for (kind, next, previous) in [
+                (SummaryKind::Function, &next_functions, &analysis.function_throws),
+                (SummaryKind::StaticMethod, &next_static_methods, &analysis.static_method_throws),
+                (SummaryKind::InstanceMethod, &next_instance_methods, &analysis.instance_method_throws),
+            ] {
+                changed.extend(
+                    next.iter()
+                        .filter(|(name, summary)| previous.get(*name) != Some(*summary))
+                        .map(|(name, _)| (kind, name.clone())),
+                );
+            }
+            if !destructor_throws_changed && changed.is_empty() {
+                if exception_flow_verify() {
+                    analysis.verify_converged_summaries(
+                        &function_bodies, &static_method_bodies, &instance_method_bodies);
+                }
                 return analysis;
             }
+            let mut next_dirty: HashSet<SummaryKey> = HashSet::default();
+            for key in &changed {
+                if let Some(bodies) = readers.get(key) {
+                    next_dirty.extend(bodies.iter().cloned());
+                }
+            }
+            dirty = Some(next_dirty);
             analysis.function_throws = next_functions;
             analysis.static_method_throws = next_static_methods;
             analysis.instance_method_throws = next_instance_methods;
@@ -630,18 +695,96 @@ impl ExceptionFlowAnalysis {
     fn summarize_bodies(&self, bodies: &HashMap<String, ExceptionBody<'_>>) -> HashMap<String, ThrownTypes> {
         bodies
             .iter()
-            .map(|(name, body)| {
-                let mut thrown = self
-                    .block_throws(body.body, &HashMap::default(), body.class_context)
-                    .combined(self.scope_cleanup_throws(name));
-                // The declaration's own nominal boundary, which no statement in the body spells.
-                if self.nominal_boundary_callables.contains(name) {
-                    thrown = thrown.combined(ThrownTypes::exact("TypeError"));
-                }
-                (name.clone(), thrown)
-            })
+            .map(|(name, body)| (name.clone(), self.summarize_body(name, body)))
             .collect()
     }
+
+    /// One body's summary from the preceding fixed-point state.
+    fn summarize_body(&self, name: &str, body: &ExceptionBody<'_>) -> ThrownTypes {
+        #[cfg(test)]
+        EXCEPTION_BODY_SUMMARIES.with(|count| count.set(count.get() + 1));
+        let mut thrown = self
+            .block_throws(body.body, &HashMap::default(), body.class_context)
+            .combined(self.scope_cleanup_throws(name));
+        // The declaration's own nominal boundary, which no statement in the body spells.
+        if self.nominal_boundary_callables.contains(name) {
+            thrown = thrown.combined(ThrownTypes::exact("TypeError"));
+        }
+        thrown
+    }
+
+    /// Like [`Self::summarize_bodies`], but a body outside `dirty` keeps its `previous` summary
+    /// (`None` recomputes every body). Each recomputed body's summary reads are added to
+    /// `readers`, keyed by the summary read; stale entries only ever cause extra recomputation.
+    fn summarize_bodies_incrementally(
+        &self,
+        kind: SummaryKind,
+        bodies: &HashMap<String, ExceptionBody<'_>>,
+        previous: &HashMap<String, ThrownTypes>,
+        dirty: Option<&HashSet<SummaryKey>>,
+        readers: &mut HashMap<SummaryKey, HashSet<SummaryKey>>,
+    ) -> HashMap<String, ThrownTypes> {
+        let mut out = HashMap::with_capacity_and_hasher(bodies.len(), Default::default());
+        let mut probe: SummaryKey = (kind, String::new());
+        for (name, body) in bodies {
+            if let Some(dirty) = dirty {
+                probe.1.clear();
+                probe.1.push_str(name);
+                if !dirty.contains(&probe) {
+                    if let Some(summary) = previous.get(name) {
+                        out.insert(name.clone(), summary.clone());
+                        continue;
+                    }
+                }
+            }
+            *self.summary_reads.borrow_mut() = Some(Vec::new());
+            let thrown = self.summarize_body(name, body);
+            let reads = self.summary_reads.borrow_mut().take().unwrap_or_default();
+            for read in reads {
+                readers.entry(read).or_default().insert((kind, name.clone()));
+            }
+            out.insert(name.clone(), thrown);
+        }
+        out
+    }
+
+    /// Panics unless a full recompute from the converged state reproduces it.
+    fn verify_converged_summaries(
+        &self,
+        function_bodies: &HashMap<String, ExceptionBody<'_>>,
+        static_method_bodies: &HashMap<String, ExceptionBody<'_>>,
+        instance_method_bodies: &HashMap<String, ExceptionBody<'_>>,
+    ) {
+        #[cfg(test)]
+        let summaries = EXCEPTION_BODY_SUMMARIES.with(std::cell::Cell::get);
+        let full = (
+            self.summarize_bodies(function_bodies),
+            self.summarize_bodies(static_method_bodies),
+            self.summarize_bodies(instance_method_bodies),
+        );
+        #[cfg(test)]
+        EXCEPTION_BODY_SUMMARIES.with(|count| count.set(summaries));
+        assert!(
+            full.0 == self.function_throws
+                && full.1 == self.static_method_throws
+                && full.2 == self.instance_method_throws,
+            "ELEPHC_EXCEPTION_FLOW_VERIFY: the incremental exception summaries did not converge to a fixed point"
+        );
+    }
+
+    /// Records that the body being summarized reads summary `key` of `kind`.
+    fn note_summary_read(&self, kind: SummaryKind, key: &str) {
+        if let Some(reads) = self.summary_reads.borrow_mut().as_mut() {
+            reads.push((kind, key.to_string()));
+        }
+    }
+
+    /// A function's summary, recorded as read by the body being summarized.
+    fn function_summary(&self, name: &str) -> Option<&ThrownTypes> {
+        self.note_summary_read(SummaryKind::Function, name);
+        self.function_throws.get(name)
+    }
+
 
     /// Computes escaping throwables for a statement block under catch-variable bindings.
     fn block_throws(
@@ -999,7 +1142,7 @@ impl ExceptionFlowAnalysis {
                 {
                     thrown = thrown.combined(ThrownTypes::unknown());
                 }
-                if let Some(summary) = self.function_throws.get(name.as_str()) {
+                if let Some(summary) = self.function_summary(name.as_str()) {
                     return thrown.combined(summary.clone());
                 }
                 if function_call_effect(name.as_str(), args).may_throw {
@@ -1260,8 +1403,7 @@ impl ExceptionFlowAnalysis {
         match &callee.kind {
             ExprKind::Closure { body, .. } => self.block_throws(body, bindings, class_context),
             ExprKind::FirstClassCallable(CallableTarget::Function(name)) => self
-                .function_throws
-                .get(name.as_str())
+                .function_summary(name.as_str())
                 .cloned()
                 .unwrap_or_else(ThrownTypes::unknown),
             _ => ThrownTypes::unknown(),
@@ -1318,6 +1460,28 @@ impl ExceptionFlowAnalysis {
         method: &str,
         values: &HashMap<String, T>,
     ) -> Option<T> {
+        // A lookup in one of the method SUMMARY maps is a read the incremental fixed point must
+        // see. Recognised by address rather than by a separate entry point, so no call site can
+        // read a summary unrecorded.
+        let address = values as *const HashMap<String, T> as *const ();
+        let record = if std::ptr::eq(address, &self.static_method_throws as *const _ as *const ()) {
+            Some(SummaryKind::StaticMethod)
+        } else if std::ptr::eq(address, &self.instance_method_throws as *const _ as *const ()) {
+            Some(SummaryKind::InstanceMethod)
+        } else {
+            None
+        };
+        self.resolve_method_value_recording(class_name, method, values, record)
+    }
+
+    /// [`Self::resolve_method_value`], recording each key looked up as a read of `record`.
+    fn resolve_method_value_recording<T: Clone>(
+        &self,
+        class_name: &str,
+        method: &str,
+        values: &HashMap<String, T>,
+        record: Option<SummaryKind>,
+    ) -> Option<T> {
         let mut current = Some(class_name.to_string());
         let mut seen = HashSet::default();
         while let Some(class_name) = current {
@@ -1326,6 +1490,9 @@ impl ExceptionFlowAnalysis {
                 return None;
             }
             let method_key = method_effect_key(&class_name, method);
+            if let Some(kind) = record {
+                self.note_summary_read(kind, &method_key);
+            }
             if let Some(value) = values.get(&method_key) {
                 return Some(value.clone());
             }
