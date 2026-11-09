@@ -290,8 +290,11 @@ jobs:
         env:
           CUBRID_DB: cubdb
           CUBRID_LOCALE: en_US
+        # Published on a free host port, read back as job.services.cubrid.ports['33000']: the
+        # broker's 33000 lies in the runner's ephemeral range (32768 to 60999), so a fixed
+        # 33000:33000 mapping failed container setup whenever an outbound connection held it.
         ports:
-          - 33000:33000
+          - 33000
         options: >-
           --health-cmd "bash -lc 'gosu cubrid csql -u dba -C cubdb -c \"SELECT 1;\"'"
           --health-interval 5s
@@ -318,7 +321,6 @@ jobs:
       ELEPHC_ODBC_DSN: 'odbc:Driver={PostgreSQL Unicode};Servername=127.0.0.1;Port=5432;Database=testdb;UID=test;PWD=test'
       ELEPHC_SQLSRV_DSN: 'sqlsrv:Server=127.0.0.1,1433;Database=master;Encrypt=no;TrustServerCertificate=yes;user=sa;password=Elephc_Pdo!2026_Test'
       ELEPHC_OCI_DSN: 'oci:dbname=//127.0.0.1:1521/FREEPDB1;charset=AL32UTF8;user=test;password=test'
-      ELEPHC_CUBRID_DSN: 'cubrid:host=127.0.0.1;port=33000;dbname=cubdb'
 
     steps:
       - uses: actions/checkout@v7
@@ -423,6 +425,10 @@ jobs:
         env:
           ELEPHC_PDO_OCI: '1'
         run: python3 -B scripts/ci/run_prebuilt_codegen_tests.py pdo_oci_surface --test-threads=1
+
+      - name: Point the CUBRID DSN at the service's published host port
+        if: matrix.suite == 'cubrid-dblib'
+        run: echo "ELEPHC_CUBRID_DSN=cubrid:host=127.0.0.1;port=${{ job.services.cubrid.ports['33000'] }};dbname=cubdb" >> "$GITHUB_ENV"
 
       - name: Install the CUBRID CCI client from the service image
         if: matrix.suite == 'cubrid-dblib'
