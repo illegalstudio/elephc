@@ -162,6 +162,33 @@ fn test_invoker_bodies_do_not_grow_with_parameter_names() {
     }
 }
 
+/// The number of invoker bodies a build LOWERS does not grow with signatures that differ only in
+/// parameter names: a repeat of a known shape writes its stub and jumps to the body without
+/// lowering it again. On the Symfony demo 79 474 invokers were lowered for 8 956 distinct
+/// bodies, each repeat lowered, hashed and thrown away. Counted with `ELEPHC_INVOKER_STATS`,
+/// which prints one `INVSHAPE` line per lowering.
+#[test]
+fn test_invoker_lowerings_do_not_grow_with_parameter_names() {
+    let lowerings = |count: usize| {
+        let dir = make_cli_test_dir("elephc_invoker_memo");
+        let php_path = dir.join("main.php");
+        fs::write(&php_path, many_named_signatures(count)).unwrap();
+        let output = elephc_cli_command(&dir)
+            .env("ELEPHC_INVOKER_STATS", "1")
+            .arg("--emit-asm")
+            .arg(&php_path)
+            .output()
+            .expect("failed to run elephc CLI");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stderr).lines().filter(|line| line.starts_with("INVSHAPE")).count()
+    };
+    let small = lowerings(20);
+    let large = lowerings(80);
+    assert!(small > 0, "no invoker was lowered");
+    assert_eq!(small, large, "invoker lowerings grew with the number of same-shape functions");
+}
+
 /// Callables whose signatures differ only in parameter names, and callables that differ in
 /// types, define each shared invoker body and the shared normalizer exactly once, serial pass
 /// and parallel pass alike. A body defined twice is an assembler error ("symbol
