@@ -42,14 +42,29 @@ pub(super) fn program_uses_testing(program: &[Stmt]) -> bool {
     program.iter().any(stmt_refs_testing)
 }
 
+thread_local! {
+    /// While set, only the `Elephc\Testing` runtime counts, not the PHPUnit alias.
+    static ELEPHC_RUNTIME_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Returns whether the program names elephc's own testing runtime (`Elephc\Testing\...`): an
+/// explicit opt-in, unlike a mention of PHPUnit's `TestCase`, which a dependency's helper or a
+/// `class_exists()` probe makes without meaning to run tests.
+pub(super) fn program_uses_elephc_testing_runtime(program: &[Stmt]) -> bool {
+    ELEPHC_RUNTIME_ONLY.with(|only| only.set(true));
+    let found = program.iter().any(stmt_refs_testing);
+    ELEPHC_RUNTIME_ONLY.with(|only| only.set(false));
+    found
+}
+
 /// Returns whether `name`, spelled in full with any leading `\` dropped and compared
 /// case-insensitively, is the testing namespace, a name below it, or the PHPUnit alias.
 fn name_is_testing_class(name: &Name) -> bool {
     let key = name.as_canonical().trim_start_matches('\\').to_ascii_lowercase();
-    key == TESTING_NAMESPACE
-        || key.starts_with(&format!("{TESTING_NAMESPACE}\\"))
-        || key == PHPUNIT_NAMESPACE
-        || key == PHPUNIT_TEST_CASE
+    let runtime = key == TESTING_NAMESPACE || key.starts_with(&format!("{TESTING_NAMESPACE}\\"));
+    runtime
+        || (!ELEPHC_RUNTIME_ONLY.with(|only| only.get())
+            && (key == PHPUNIT_NAMESPACE || key == PHPUNIT_TEST_CASE))
 }
 
 /// Returns whether a static receiver names a testing class (`TestCase::class`, ...).

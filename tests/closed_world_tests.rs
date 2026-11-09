@@ -77,17 +77,27 @@ fn text(bytes: &[u8]) -> String {
 fn closed_world_refuses_to_link_the_bridge_and_lists_every_reason() {
     let dir = make_test_dir("cw_refuse");
     // The checker refuses `strlen(1, 2, 3)`, so the class file is handed to the runtime
-    // autoloader, which only the interpreter can run.
+    // autoloader, which only the interpreter can run. The class is the project's, declared to
+    // Composer; the autoloader is Composer's, a dependency's: the project's own computed include
+    // would link the interpreter by itself.
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::create_dir_all(dir.join("vendor")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\\\":"src/"}}}"#).unwrap();
     fs::write(
-        dir.join("Lib.php"),
-        "<?php\nclass Lib {\n    public function hi(): string { return 'lib'; }\n    public function bad(): int { return strlen(1, 2, 3); }\n}\n",
+        dir.join("src/Lib.php"),
+        "<?php\nnamespace App;\nclass Lib {\n    public function hi(): string { return 'lib'; }\n    public function bad(): int { return strlen(1, 2, 3); }\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/autoload.php"),
+        "<?php\nspl_autoload_register(function (string $class): void { require __DIR__ . '/../src/' . substr($class, 4) . '.php'; });\n",
     )
     .unwrap();
     fs::write(
         dir.join("main.php"),
         r#"<?php
-spl_autoload_register(function (string $class): void { require __DIR__ . '/' . $class . '.php'; });
-echo (new Lib())->hi(), "\n";
+require __DIR__ . '/vendor/autoload.php';
+echo (new App\Lib())->hi(), "\n";
 "#,
     )
     .unwrap();
@@ -209,6 +219,52 @@ fn default_build_links_the_interpreter_for_the_projects_eval_only() {
     compile_ok(&dir, &[]);
     assert_eq!(text(&run(&dir).stdout), "1\n");
     assert!(links_interpreter(&dir), "the project's own computed eval links the interpreter");
+}
+
+/// The project's own include of a computed path can reach any file, run in the caller's scope, so
+/// a default build links the interpreter for it and the program runs as php runs it. A
+/// dependency's computed include keeps the build closed.
+#[test]
+fn default_build_links_the_interpreter_for_the_projects_computed_include_only() {
+    let dir = make_test_dir("cw_default_include");
+    fs::write(dir.join("payload.php"), "<?php\necho 'hello ';\nfunction payload_loaded(): string { return 'loaded'; }\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\n$file = __DIR__ . '/' . ($argc > 5 ? 'none' : 'payload') . '.php';\nrequire $file;\necho payload_loaded(), \"\\n\";\n",
+    )
+    .unwrap();
+    let expected = php_stdout(&dir);
+    assert_eq!(expected, "hello loaded\n");
+    let output = compile(&dir, &[]);
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    // Decided before anything is compiled: the late check would also catch the site, but only by
+    // running the whole compilation a second time.
+    assert!(
+        !text(&output.stderr).contains("note: the program needs the interpreter"),
+        "the entry's computed include re-ran the build: {}",
+        text(&output.stderr)
+    );
+    assert_eq!(text(&run(&dir).stdout), expected);
+    assert!(links_interpreter(&dir), "the project's computed include links the interpreter");
+
+    // The same include from a dependency is answered from the closed world, which compiles the
+    // project's data files (a Composer project) as include units.
+    fs::write(dir.join("composer.json"), "{}").unwrap();
+    fs::create_dir_all(dir.join("vendor/acme/conf")).unwrap();
+    fs::write(dir.join("vendor/acme/conf/data.php"), "<?php\nreturn ['answer' => 42];\n").unwrap();
+    fs::write(
+        dir.join("vendor/acme/conf/Loader.php"),
+        "<?php\nclass Loader { public static function load(string $name): array { return require __DIR__ . '/' . $name . '.php'; } }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nrequire __DIR__ . '/vendor/acme/conf/Loader.php';\necho Loader::load($argc > 5 ? 'none' : 'data')['answer'], \"\\n\";\n",
+    )
+    .unwrap();
+    compile_ok(&dir, &[]);
+    assert_eq!(text(&run(&dir).stdout), "42\n");
+    assert!(!links_interpreter(&dir), "a dependency's computed include keeps the build closed");
 }
 
 const PRELOAD: &str = r#"<?php
@@ -1015,30 +1071,36 @@ final class Loader
 #[test]
 fn closed_world_does_not_load_a_class_only_types_name() {
     let dir = make_test_dir("cw_lazy_types");
-    fs::create_dir_all(dir.join("lib")).unwrap();
-    fs::write(dir.join("lib/Shape.php"), "<?php\ninterface Shape { public function name(): string; }\n").unwrap();
+    // A Composer dependency: its classes are compiled only when something reaches them.
+    fs::create_dir_all(dir.join("vendor/acme/lib/src")).unwrap();
+    fs::create_dir_all(dir.join("vendor/composer")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\\\":"src/"}}}"#).unwrap();
     fs::write(
-        dir.join("lib/Used.php"),
-        "<?php\nclass Used implements Shape { public function name(): string { return 'used'; } }\n",
+        dir.join("vendor/composer/installed.json"),
+        r#"{"packages":[{"name":"acme/lib","autoload":{"psr-4":{"Acme\\":"src/"}},"install-path":"../acme/lib"}]}"#,
     )
     .unwrap();
+    fs::write(dir.join("vendor/acme/lib/composer.json"), r#"{"name":"acme/lib","autoload":{"psr-4":{"Acme\\":"src/"}}}"#).unwrap();
+    let class = |name: &str, body: &str| {
+        fs::write(dir.join(format!("vendor/acme/lib/src/{name}.php")), format!("<?php\nnamespace Acme;\n{body}\n")).unwrap();
+    };
+    class("Shape", "interface Shape { public function name(): string; }");
+    class("Used", "class Used implements Shape { public function name(): string { return 'used'; } }");
+    class("OnlyTyped", "class OnlyTyped { public function marker(): string { return 'only-typed-marker'; } }");
+    class("NeverThrown", "class NeverThrown extends \\Exception { public function marker(): string { return 'never-thrown-marker'; } }");
     fs::write(
-        dir.join("lib/OnlyTyped.php"),
-        "<?php\nclass OnlyTyped { public function marker(): string { return 'only-typed-marker'; } }\n",
-    )
-    .unwrap();
-    fs::write(
-        dir.join("lib/NeverThrown.php"),
-        "<?php\nclass NeverThrown extends Exception { public function marker(): string { return 'never-thrown-marker'; } }\n",
+        dir.join("vendor/autoload.php"),
+        "<?php\nspl_autoload_register(function (string $c): void { $f = __DIR__ . '/acme/lib/src/' . substr($c, 5) . '.php'; if (is_file($f)) { require $f; } });\n",
     )
     .unwrap();
     fs::write(
         dir.join("main.php"),
         r#"<?php
-spl_autoload_register(function (string $c): void { $f = __DIR__ . '/lib/' . $c . '.php'; if (is_file($f)) { require $f; } });
+require __DIR__ . '/vendor/autoload.php';
+use Acme\{Shape, OnlyTyped, Used, NeverThrown};
 function show(Shape $s, ?OnlyTyped $o = null): string { return $s->name() . ($o instanceof OnlyTyped ? '!' : ''); }
 try { echo show(new Used()), "\n"; } catch (NeverThrown $e) { echo $e->marker(); }
-var_dump(class_exists('OnlyTyped', false));
+var_dump(class_exists('Acme\OnlyTyped', false));
 var_dump(new Used() instanceof OnlyTyped);
 var_dump(new Used() instanceof Shape);
 "#,
@@ -1111,6 +1173,73 @@ echo $name([1]), ' ', implode(',', array_map('round', [1.4, 2.6])), ' ', call_us
     let output = compile(&dir, &["--closed-world"]);
     assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
     assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+}
+
+/// A literal that only names an array element or asks whether a function exists is never a value
+/// a call receives, so it declares no wrapper: the throwable trace prelude's `$frame['file']`
+/// gave every program that throws a `file()` wrapper and the seven stream helpers it calls, 8% of
+/// a small program's assembly. A builtin name held as a value keeps its wrapper.
+#[test]
+fn closed_world_declares_no_wrapper_for_a_literal_only_used_as_a_key() {
+    let dir = make_test_dir("cw_builtin_key_literal");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$frame = [];
+$frame['file'] = 'a.php';
+$frame['strip_tags'] = 'b';
+echo $frame['file'], isset($frame['json_encode']) ? 'y' : 'n';
+echo array_key_exists('number_format', $frame) ? 'y' : 'n', function_exists('implode') ? 'y' : 'n';
+$name = 'round';
+echo ' ', $name(1.6), "\n";
+"#,
+    )
+    .unwrap();
+    let output = compile(&dir, &["--emit-asm"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    let asm = fs::read_to_string(dir.join("main.s")).unwrap();
+    for key in ["file", "strip_tags", "json_encode", "number_format", "implode"] {
+        assert!(
+            !asm.contains(&format!("@fn name=__elephc_callable_{key} ")),
+            "a wrapper was declared for the key '{key}'"
+        );
+    }
+    assert!(asm.contains("@fn name=__elephc_callable_round "), "the called name lost its wrapper");
+    assert!(!asm.contains("@fn name=__elephc_file_context "), "the stream helpers came back");
+    let output = compile(&dir, &[]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+}
+
+/// A literal naming what a wrapper cannot call declares none, and the program runs as php's:
+/// an extension builtin `--strict-php` hides (`clamp`), the user function that shadows one, and a
+/// dedicated syntax (`buffer_new`), which is no function a name can call.
+#[test]
+fn closed_world_declares_no_wrapper_a_name_cannot_call() {
+    let cases: [(&str, &[&str], &str); 3] = [
+        (
+            "hidden",
+            &["--strict-php", "--php-version", "8.5"],
+            "<?php\n$n = $argc > 5 ? 'clamp' : 'strlen';\necho $n('abc'), \"\\n\";\n",
+        ),
+        (
+            "shadowed",
+            &["--strict-php", "--php-version", "8.5"],
+            "<?php\nfunction clamp(int $v, int $lo, int $hi): int { return max($lo, min($hi, $v)); }\n$n = $argc > 5 ? 'strlen' : 'clamp';\necho $n(15, 1, 9), \"\\n\";\n",
+        ),
+        (
+            "syntax",
+            &[],
+            "<?php\n$m = $argc > 5 ? 'buffer_new' : 'strtoupper';\necho $m('x'), \"\\n\";\n",
+        ),
+    ];
+    for (label, flags, source) in cases {
+        let dir = make_test_dir(&format!("cw_no_wrapper_{label}"));
+        fs::write(dir.join("main.php"), source).unwrap();
+        let output = compile(&dir, flags);
+        assert!(output.status.success(), "{label}: {}{}", text(&output.stdout), text(&output.stderr));
+        assert_eq!(text(&run(&dir).stdout), php_stdout(&dir), "{label}");
+    }
 }
 
 /// php evaluates a class constant when it is read, so a class naming a constant of an extension

@@ -187,10 +187,11 @@ fn test_untyped_receiver_method_call_sites_share_one_helper_per_key() {
         let prefix = "_eir_shared_mixed_method_call_";
         let defs = count_definitions(&asm, prefix);
         let calls = count_calls(&asm, prefix);
-        // `m` (string, mixed) and `k` (int): two keys, whatever the number of sites, plus the one
-        // site of the built-in `IteratorIterator::__construct`, which every program carries.
-        assert_eq!(defs, 3, "{target}: expected one helper per key, found {defs}");
-        assert_eq!(calls, 9, "{target}: expected every `m`/`k` site to call a helper, found {calls}");
+        // `m` (string, mixed) and `k` (int): two keys, whatever the number of sites. The built-in
+        // `IteratorIterator::__construct` site the open world adds is not compiled: the closed
+        // world keeps only the built-in classes the program reaches.
+        assert_eq!(defs, 2, "{target}: expected one helper per key, found {defs}");
+        assert_eq!(calls, 8, "{target}: expected every `m`/`k` site to call a helper, found {calls}");
     }
 }
 

@@ -52,14 +52,59 @@ pub fn inject_if_used(
         return Ok(program);
     }
     let mut names = BTreeSet::new();
+    // Each literal's occurrences, and those in a position where the string is never a value a call
+    // could receive: a probe's argument (`function_exists('clamp')` asks whether the name exists)
+    // and an array key (`$frame['file']`, `array_key_exists('file', $frame)` name an element; the
+    // key goes nowhere).
+    let mut occurrences: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut inert: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     walk_nodes(&program, &mut |node| {
-        if let Node::Expr(Expr { kind: ExprKind::StringLiteral(value), .. }) = node {
-            if value.len() <= 64 {
-                names.insert(value.as_str());
+        let inert_position = match node {
+            Node::Expr(Expr { kind: ExprKind::StringLiteral(value), .. }) => {
+                if value.len() <= 64 {
+                    names.insert(value.as_str());
+                    *occurrences.entry(value.as_str()).or_default() += 1;
+                }
+                None
             }
+            Node::Expr(Expr { kind: ExprKind::FunctionCall { name, args }, .. })
+                if matches!(
+                    crate::names::php_symbol_key(name.as_str().trim_start_matches('\\')).as_str(),
+                    "function_exists" | "is_callable" | "array_key_exists" | "key_exists"
+                ) =>
+            {
+                args.first()
+            }
+            Node::Expr(Expr { kind: ExprKind::ArrayAccess { index, .. }, .. }) => Some(&**index),
+            Node::Stmt(Stmt {
+                kind:
+                    StmtKind::ArrayAssign { index, .. }
+                    | StmtKind::PropertyArrayAssign { index, .. }
+                    | StmtKind::StaticPropertyArrayAssign { index, .. }
+                    | StmtKind::StaticPropertyElementRefAssign { index, .. },
+                ..
+            }) => Some(index),
+            Node::Stmt(Stmt { kind: StmtKind::DynamicStaticPropertyWrite { index, .. }, .. }) => {
+                index.as_ref()
+            }
+            _ => None,
+        };
+        if let Some(value) = literal(inert_position) {
+            *inert.entry(value).or_default() += 1;
         }
     });
-    let wrappers: Vec<Stmt> = names.iter().filter_map(|name| wrapper_of(name)).collect();
+    names.retain(|name| inert.get(name) != occurrences.get(name));
+    // Only a builtin the profile shows: `--strict-php` hides the extension builtins, and a function
+    // the program declares under one of their names (php refuses to redeclare a visible one) answers
+    // that name itself.
+    let strict = crate::strict_php::is_enabled();
+    let wrappers: Vec<Stmt> = names
+        .iter()
+        .filter(|name| {
+            crate::types::checker::builtins::is_php_visible_builtin_function_for_profile(name, strict)
+        })
+        .filter_map(|name| wrapper_of(name))
+        .collect();
     if wrappers.is_empty() {
         return Ok(program);
     }
@@ -69,12 +114,23 @@ pub fn inject_if_used(
     Ok(combined)
 }
 
+/// The string a position holds when it is a literal.
+fn literal(position: Option<&Expr>) -> Option<&str> {
+    match position {
+        Some(Expr { kind: ExprKind::StringLiteral(value), .. }) => Some(value.as_str()),
+        _ => None,
+    }
+}
+
 /// Builds `function __elephc_callable_x($a, $b = 1, ...$rest) { return x($a, $b, ...$rest); }`.
 fn wrapper_of(name: &str) -> Option<Stmt> {
     let contract = elephc_builtin_contract::lookup(name)?;
     if crate::codegen_support::callable_dispatch::builtin_may_have_runtime_wrapper(name)
         || LITERAL_ARGUMENT_BUILTINS.contains(&name)
         || contract.name != name
+        // A language construct or a dedicated syntax (`buffer_new`, `ptr_get`) is no function a
+        // name can call.
+        || !matches!(contract.kind, elephc_builtin_contract::BuiltinKind::Function)
         || contract.internal
         || contract.params.iter().any(|param| param.by_ref)
         || contract.variadic.is_some_and(|variadic| {

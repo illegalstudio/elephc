@@ -983,7 +983,9 @@ impl Checker {
                 && Self::method_call_receiver_expr(expr)
                     .is_some_and(|receiver| matches!(receiver.kind, ExprKind::This));
             // A closed world has nowhere to hand the file to: the call is php's run-time `Error`.
-            let closed_world = crate::closed_world::is_enabled();
+            // Not an explicit generic call (`id<int>(7)`): that is elephc syntax php cannot even
+            // parse, and a method that is no template refuses it at compile time.
+            let closed_world = crate::closed_world::is_enabled() && !method.contains('<');
             if !guarded && !defers_to_runtime && !rebindable_this && !closed_world {
                 // php binds the method when the call RUNS, against the run-time class; see
                 // `RuntimeFault::UndefinedMethod` for who may compile this as that fault.

@@ -64,13 +64,26 @@ pub fn inject_if_used(
     })
 }
 
+/// Whether the program asks for the testing runtime. A closed world compiles PHPUnit-based
+/// helpers its project or dependencies ship (`Symfony\Component\Form\Test\TypeTestCase`); without
+/// phpunit installed php fails to load them, which only stays true if the compiler's partial
+/// `PHPUnit\Framework\TestCase` alias does not declare their parent. So there a mention of PHPUnit
+/// is not enough: the program has to name elephc's own `Elephc\Testing` runtime.
+fn uses_testing_in_this_world(program: &[crate::parser::ast::Stmt]) -> bool {
+    if crate::closed_world::is_enabled() {
+        detect::program_uses_elephc_testing_runtime(program)
+    } else {
+        detect::program_uses_testing(program)
+    }
+}
+
 /// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
 fn inject_if_used_on_compiler_stack(
     program: Program,
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
-    if !force && (crate::closed_world::is_enabled() || !detect::program_uses_testing(&program)) {
+    if !force && !uses_testing_in_this_world(&program) {
         return program;
     }
     let mut combined = testing_declarations();
@@ -92,13 +105,7 @@ pub fn inject_after_autoload(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Result<Program, crate::errors::CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
-        // A closed world compiles every class of the project, PHPUnit-based helpers shipped by
-        // its dependencies included. Without phpunit installed php fails to load them, which
-        // only stays true if the alias does not declare their parent.
-        if crate::closed_world::is_enabled()
-            || inventory.groups.contains_key(INVENTORY_GROUP)
-            || !detect::program_uses_testing(&program)
-        {
+        if inventory.groups.contains_key(INVENTORY_GROUP) || !uses_testing_in_this_world(&program) {
             return Ok(program);
         }
         let mut combined = crate::name_resolver::resolve(testing_declarations())?;

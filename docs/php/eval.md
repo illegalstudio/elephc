@@ -47,6 +47,12 @@ compiles that cached output instead. If such a call is reached anyway, it raises
 php's catchable `Error: eval() is not available in a closed-world build`. Pass
 `--with-eval` to link the interpreter regardless.
 
+An `include` or `require` of a computed path (`require $file;`) in the project's own
+code links the interpreter the same way: the path can name any file, which runs in
+the caller's scope. A path built from literals and `__DIR__` is compiled, as is a
+dependency's computed include, whose target the build answers from the files it
+compiled.
+
 Every other construct only the interpreter can answer, such as a
 `ReflectionParameter` built from a name known at run time, links it too. The build
 then prints `note: the program needs the interpreter` with the reasons, and

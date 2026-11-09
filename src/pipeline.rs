@@ -348,10 +348,12 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // nothing, so serving the closure IS php's re-execution.
     let (ast, entry_return_injected) = crate::entry_return::inject(ast);
     timings.record_since("resolve", phase_started);
-    // The entry program (with what it includes statically) evaluates a computed string: it needs
-    // the interpreter, decided before anything is compiled for a closed world.
+    // The entry program (with what it includes statically) evaluates a computed string or includes
+    // a computed path: it needs the interpreter, decided before anything is compiled for a
+    // closed world.
     if closed_world_mode == crate::closed_world::Mode::Auto
-        && crate::closed_world::project_computed_eval(&ast).is_some()
+        && (crate::closed_world::project_computed_eval(&ast).is_some()
+            || crate::closed_world::project_computed_include(&ast).is_some())
     {
         closed_world = false;
         crate::closed_world::set_enabled(false);
@@ -960,8 +962,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     if crate::closed_world::is_enabled() {
         crate::closed_world_extract_refs::rewrite(&mut ast);
         // `new ReflectionParameter(...)` named at run time, or naming nothing, answered at run
-        // time the way php does: there is no interpreter to defer it to.
-        if crate::reflection_parameter_prelude::rewrite(&mut ast) {
+        // time the way php does: there is no interpreter to defer it to. Not under
+        // `--strict-php`: the helper is compiler code, whose profile keeps the extension
+        // builtins, so a user function shadowing one (`ptr_get`) would be reflected as the
+        // builtin; the interpreter answers it with the caller's profile instead.
+        if !crate::strict_php::is_requested() && crate::reflection_parameter_prelude::rewrite(&mut ast) {
             let mut combined = crate::reflection_parameter_prelude::declarations();
             combined.append(&mut ast);
             ast = combined;
@@ -2404,6 +2409,9 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         if closed_world_mode == crate::closed_world::Mode::Auto {
             if let Some(site) = crate::closed_world::project_computed_eval(&ast) {
                 reasons.push(format!("eval() of a computed string in the project's code at {site}"));
+            }
+            if let Some(site) = crate::closed_world::project_computed_include(&ast) {
+                reasons.push(format!("include of a computed path in the project's code at {site}"));
             }
         }
         if !reasons.is_empty() && closed_world_mode == crate::closed_world::Mode::Auto {

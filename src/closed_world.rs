@@ -102,6 +102,58 @@ pub fn project_computed_eval(program: &[crate::parser::ast::Stmt]) -> Option<Str
     found
 }
 
+/// The first `include`/`require` of a computed path in the project's own code, as `file:line`.
+///
+/// An include runs its file in the caller's scope -- its variables, `$this`, the declarations it
+/// makes -- so a closed world answers one only for the files it compiled as units of their own
+/// (data files, the preload's, literal paths). A dependency's computed include (a framework's
+/// cache or configuration loader) reaches those; the project's own one can reach any file, so it
+/// keeps the interpreter, as a computed `eval()` does.
+pub fn project_computed_include(program: &[crate::parser::ast::Stmt]) -> Option<String> {
+    use crate::parser::ast::visit::{walk_nodes, Node};
+    use crate::parser::ast::{ExprKind, StmtKind};
+    let mut found = None;
+    let mut consider = |path: &crate::parser::ast::Expr, span: crate::span::Span| {
+        if found.is_some() || literal_path(path) {
+            return;
+        }
+        let source = span.source_path();
+        if source.as_deref().is_some_and(is_dependency_source) {
+            return;
+        }
+        found = Some(format!("{}:{}", source.unwrap_or_else(|| "<entry>".to_string()), span.source_line()));
+    };
+    walk_nodes(program, &mut |node| match node {
+        Node::Expr(expr) => match &expr.kind {
+            ExprKind::IncludeValue { path, .. } => consider(path, expr.span),
+            ExprKind::FunctionCall { name, args }
+                if name.as_str().trim_start_matches('\\') == crate::names::DYNAMIC_INCLUDE_FUNCTION =>
+            {
+                if let Some(path) = args.first() {
+                    consider(path, expr.span);
+                }
+            }
+            _ => {}
+        },
+        Node::Stmt(stmt) => {
+            if let StmtKind::Include { path, .. } = &stmt.kind {
+                consider(path, stmt.span);
+            }
+        }
+    });
+    found
+}
+
+/// Whether an include path is built only from string literals and `.`, so the compiler knew it.
+fn literal_path(expr: &crate::parser::ast::Expr) -> bool {
+    use crate::parser::ast::{BinOp, ExprKind};
+    match &expr.kind {
+        ExprKind::StringLiteral(_) => true,
+        ExprKind::BinaryOp { left, op: BinOp::Concat, right } => literal_path(left) && literal_path(right),
+        _ => false,
+    }
+}
+
 /// Re-runs this compiler with the interpreter linked, after saying why; returns only when the
 /// re-run could not start.
 pub fn rerun_with_interpreter(reasons: &[String]) {
