@@ -187,6 +187,7 @@ impl Checker {
             }
             let mut pass_errors = Vec::new();
             let recursive_mixed_before = self.recursive_mixed_methods.len();
+            let recursive_mixed_snapshot = self.recursive_mixed_methods.clone();
             // Only the LAST round's answer counts: a seed that looked unrefined on an early round
             // can be specialized by a call site the same round walks later.
             self.unspecialized_seed_params.clear();
@@ -635,14 +636,20 @@ impl Checker {
             while recent_tables.len() >= PASS_CYCLE_WINDOW {
                 recent_tables.pop_front();
             }
-            if self.recursive_mixed_methods.len() == recursive_mixed_before {
-                worklist.prepare_next_pass(&classes_before_pass, &self.classes);
-            } else {
-                if trace {
-                    eprintln!("[elephc-worklist] full walk: recursive mixed methods grew");
-                }
-                worklist.check_everything();
+            worklist.prepare_next_pass(&classes_before_pass, &self.classes);
+            // A method joining `recursive_mixed_methods` changes how calls to ITSELF inside its
+            // own body are typed, and nothing else: its own name moves, so only its body (and the
+            // bodies naming it) walk again. This used to walk every body of the program.
+            let grown: Vec<&str> = self
+                .recursive_mixed_methods
+                .iter()
+                .filter(|entry| !recursive_mixed_snapshot.contains(*entry))
+                .map(|(_, method, _)| method.as_str())
+                .collect();
+            if trace && !grown.is_empty() {
+                eprintln!("[elephc-worklist] recursive mixed methods grew by {}", grown.len());
             }
+            worklist.also_moved(grown.into_iter());
             // The clone the stabilization check already made, reused rather than repeated.
             recent_tables.push_back(classes_before_pass);
             method_passes_remaining -= 1;

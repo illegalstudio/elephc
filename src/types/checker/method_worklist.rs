@@ -147,6 +147,18 @@ impl MethodWorklist {
         });
     }
 
+    /// Adds names to what the next pass treats as moved. Nothing to do when it walks everything.
+    pub(super) fn also_moved<'a>(&mut self, names: impl Iterator<Item = &'a str>) {
+        let Some(moved) = self.moved.as_mut() else {
+            return;
+        };
+        let before = moved.len();
+        moved.extend(names.map(|name| token_hash(&name.to_ascii_lowercase())));
+        if before == 0 && !moved.is_empty() {
+            moved.extend(DYNAMIC_NODES.iter().map(|node| token_hash(node)));
+        }
+    }
+
     /// Limits the next run of the fixpoint to the bodies that name a function that moved.
     ///
     /// A function is called by its last name segment, which is how a body's tokens read it.
@@ -202,14 +214,11 @@ fn trace_full_walk_reason(before: &ClassTable, after: &ClassTable) {
                     eprintln!("[elephc-worklist] full walk: new class {class_name}");
                     return;
                 };
-                if before_class.properties.len() != after_class.properties.len() {
-                    eprintln!("[elephc-worklist] full walk: {class_name} property count changed");
+                let mut names = HashSet::default();
+                let Some(rest) = name_keyed_rest(before_class, after_class, &mut names) else {
+                    eprintln!("[elephc-worklist] full walk: {class_name} slot count changed");
                     return;
-                }
-                let mut rest = before_class.clone();
-                rest.methods = after_class.methods.clone();
-                rest.static_methods = after_class.static_methods.clone();
-                rest.properties = after_class.properties.clone();
+                };
                 if rest != *after_class {
                     let (old, new) = (format!("{rest:#?}"), format!("{after_class:#?}"));
                     let line = old
@@ -238,34 +247,75 @@ fn moved_names(before: &ClassTable, after: &ClassTable) -> Option<HashSet<String
         if before_class == after_class {
             continue;
         }
-        for (method, signature) in &after_class.methods {
-            if before_class.methods.get(method) != Some(signature) {
-                names.insert(method.to_ascii_lowercase());
-            }
-        }
-        for (method, signature) in &after_class.static_methods {
-            if before_class.static_methods.get(method) != Some(signature) {
-                names.insert(method.to_ascii_lowercase());
-            }
-        }
-        if before_class.properties.len() != after_class.properties.len() {
-            return None;
-        }
-        for (old, new) in before_class.properties.iter().zip(&after_class.properties) {
-            if old != new {
-                names.insert(new.0.to_ascii_lowercase());
-            }
-        }
-        // Everything else a pass could have written, compared by taking the members above out.
-        let mut rest = before_class.clone();
-        rest.methods = after_class.methods.clone();
-        rest.static_methods = after_class.static_methods.clone();
-        rest.properties = after_class.properties.clone();
-        if rest != *after_class {
+        if name_keyed_rest(before_class, after_class, &mut names)? != *after_class {
             return None;
         }
     }
     Some(names)
+}
+
+/// Adds to `names` every member of `after_class` whose name-keyed entry differs from
+/// `before_class`, and returns `before_class` with those fields taken from `after_class`: what is
+/// left to compare. `None` when a slot list changed length, which no name describes.
+///
+/// A body reaches each of these fields only through the member's name, which its tokens hold:
+/// methods and static methods, properties and static properties (`self::$x`), and the callable
+/// signatures a method returns (`$this->m()(...)`). On the Symfony demo a static property of the
+/// mbstring polyfill moving from `string` to `mixed`, and one callable return signature, each made
+/// the second method pass walk all 23 000 bodies.
+fn name_keyed_rest(
+    before_class: &ClassInfo,
+    after_class: &ClassInfo,
+    names: &mut HashSet<String>,
+) -> Option<ClassInfo> {
+    for (method, signature) in &after_class.methods {
+        if before_class.methods.get(method) != Some(signature) {
+            names.insert(method.to_ascii_lowercase());
+        }
+    }
+    for (method, signature) in &after_class.static_methods {
+        if before_class.static_methods.get(method) != Some(signature) {
+            names.insert(method.to_ascii_lowercase());
+        }
+    }
+    for (before_sigs, after_sigs) in [
+        (&before_class.callable_method_return_sigs, &after_class.callable_method_return_sigs),
+        (&before_class.callable_array_method_return_sigs, &after_class.callable_array_method_return_sigs),
+    ] {
+        for (method, signature) in after_sigs {
+            if before_sigs.get(method) != Some(signature) {
+                names.insert(method.to_ascii_lowercase());
+            }
+        }
+        for method in before_sigs.keys() {
+            if !after_sigs.contains_key(method) {
+                names.insert(method.to_ascii_lowercase());
+            }
+        }
+    }
+    for (before_slots, after_slots) in [
+        (&before_class.properties, &after_class.properties),
+        (&before_class.static_properties, &after_class.static_properties),
+    ] {
+        if before_slots.len() != after_slots.len() {
+            return None;
+        }
+        for (old, new) in before_slots.iter().zip(after_slots) {
+            if old != new {
+                names.insert(old.0.to_ascii_lowercase());
+                names.insert(new.0.to_ascii_lowercase());
+            }
+        }
+    }
+    // Everything else a pass could have written, compared by taking the members above out.
+    let mut rest = before_class.clone();
+    rest.methods = after_class.methods.clone();
+    rest.static_methods = after_class.static_methods.clone();
+    rest.properties = after_class.properties.clone();
+    rest.static_properties = after_class.static_properties.clone();
+    rest.callable_method_return_sigs = after_class.callable_method_return_sigs.clone();
+    rest.callable_array_method_return_sigs = after_class.callable_array_method_return_sigs.clone();
+    Some(rest)
 }
 
 #[cfg(test)]
@@ -350,5 +400,51 @@ mod tests {
         moved.extend(DYNAMIC_NODES.iter().map(|node| token_hash(node)));
         worklist.moved = Some(moved);
         assert!(worklist.kept_result(unit, "own").is_none());
+    }
+
+    /// The checked class table of a small program, for the member-change tests.
+    fn checked_classes() -> ClassTable {
+        let source = "<?php\nclass Poly { public static $list = 'a'; public function cb() { return fn ($x) => $x; } }\n\
+                      echo Poly::$list;\n";
+        let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
+        let program = crate::parser::parse(&tokens).expect("fixture must parse");
+        crate::types::check(&program).expect("fixture must type check").classes
+    }
+
+    /// A static property whose type moved, or a method's callable return signature that moved,
+    /// is a NAMED change: only bodies naming it walk again, where both used to walk every body.
+    #[test]
+    fn static_properties_and_callable_returns_move_by_name() {
+        let before = checked_classes();
+        let mut after = before.clone();
+        let poly = after.get_mut("Poly").expect("Poly");
+        let slot = poly.static_properties.iter_mut().find(|(name, _)| name == "list").expect("$list");
+        slot.1 = crate::types::PhpType::Mixed;
+        let names = moved_names(&before, &after).expect("a static property type is a named change");
+        assert!(names.contains("list"), "{names:?}");
+
+        let mut after = before.clone();
+        let poly = after.get_mut("Poly").expect("Poly");
+        let signature = poly.methods.get("cb").cloned().expect("cb");
+        poly.callable_method_return_sigs.insert("cb".to_string(), signature);
+        let names = moved_names(&before, &after).expect("a callable return signature is a named change");
+        assert!(names.contains("cb"), "{names:?}");
+
+        let mut after = before.clone();
+        after.get_mut("Poly").expect("Poly").static_properties.clear();
+        assert!(moved_names(&before, &after).is_none(), "a slot list that changed length is not");
+    }
+
+    /// Names added after a pass are moved too, with the dynamic nodes, unless everything walks.
+    #[test]
+    fn names_added_after_a_pass_are_moved() {
+        let mut worklist = MethodWorklist::default();
+        worklist.also_moved(["walk"].into_iter());
+        assert!(worklist.moved.is_none(), "a pass that walks everything stays that way");
+        worklist.moved = Some(HashSet::default());
+        worklist.also_moved(["Walk"].into_iter());
+        let moved = worklist.moved.as_ref().expect("moved");
+        assert!(moved.contains(&token_hash("walk")));
+        assert!(moved.contains(&token_hash("exprcall")));
     }
 }
