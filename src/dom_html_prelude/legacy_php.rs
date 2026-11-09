@@ -62,13 +62,31 @@ final class __ElephcDOM {
             if ($cached instanceof DOMNode) {
                 return $cached;
             }
+            if ($cached instanceof WeakReference) {
+                $live = $cached->get();
+                if ($live instanceof DOMNode) {
+                    return $live;
+                }
+            }
         }
         __ElephcDOM::$minting = true;
         $object = __ElephcDOM::mint(elephc_xml_dom_type($handle));
         __ElephcDOM::$minting = false;
         $object->__elephc_bind($handle);
-        __ElephcDOM::$objects[$handle] = $object;
         return $object;
+    }
+
+    public static function remember(DOMNode $object, int $handle): void {
+        if ($handle <= 0) {
+            return;
+        }
+        if ($object instanceof DOMDocument) {
+            __ElephcDOM::$objects[$handle] = $object;
+            return;
+        }
+        $weak = WeakReference::create($object);
+        __elephc_object_forget_handle($weak);
+        __ElephcDOM::$objects[$handle] = $weak;
     }
 
     public static function mint(int $type): DOMNode {
@@ -332,6 +350,7 @@ class DOMNode {
 
     public function __elephc_bind(int $handle): void {
         $this->__elephc_handle = $handle;
+        __ElephcDOM::remember($this, $handle);
     }
 
     public function __elephc_handle(): int {
@@ -833,13 +852,56 @@ class DOMImplementation {
 }
 
 class DOMDocument extends DOMNode {
-    public bool $formatOutput = false;
-    public bool $preserveWhiteSpace = true;
-    public bool $validateOnParse = false;
-    public bool $resolveExternals = false;
-    public bool $recover = false;
-    public bool $substituteEntities = false;
-    public bool $strictErrorChecking = true;
+    private bool $__elephc_format_output = false;
+    private bool $__elephc_preserve_white_space = true;
+    private bool $__elephc_validate_on_parse = false;
+    private bool $__elephc_resolve_externals = false;
+    private bool $__elephc_recover = false;
+    private bool $__elephc_substitute_entities = false;
+    private bool $__elephc_strict_error_checking = true;
+
+    public bool $formatOutput {
+        get => $this->__elephc_format_output;
+        set(bool $value) {
+            $this->__elephc_format_output = $value;
+        }
+    }
+    public bool $preserveWhiteSpace {
+        get => $this->__elephc_preserve_white_space;
+        set(bool $value) {
+            $this->__elephc_preserve_white_space = $value;
+        }
+    }
+    public bool $validateOnParse {
+        get => $this->__elephc_validate_on_parse;
+        set(bool $value) {
+            $this->__elephc_validate_on_parse = $value;
+        }
+    }
+    public bool $resolveExternals {
+        get => $this->__elephc_resolve_externals;
+        set(bool $value) {
+            $this->__elephc_resolve_externals = $value;
+        }
+    }
+    public bool $recover {
+        get => $this->__elephc_recover;
+        set(bool $value) {
+            $this->__elephc_recover = $value;
+        }
+    }
+    public bool $substituteEntities {
+        get => $this->__elephc_substitute_entities;
+        set(bool $value) {
+            $this->__elephc_substitute_entities = $value;
+        }
+    }
+    public bool $strictErrorChecking {
+        get => $this->__elephc_strict_error_checking;
+        set(bool $value) {
+            $this->__elephc_strict_error_checking = $value;
+        }
+    }
 
     public ?DOMElement $documentElement {
         get {
@@ -926,7 +988,6 @@ class DOMDocument extends DOMNode {
     public function __construct(string $version = "1.0", string $encoding = "") {
         if (!__ElephcDOM::$minting) {
             $this->__elephc_bind(elephc_xml_dom_document_new($version, $encoding));
-            __ElephcDOM::$objects[$this->__elephc_handle()] = $this;
         }
     }
 

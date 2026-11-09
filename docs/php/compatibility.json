@@ -187,7 +187,7 @@
   ],
   "coverage": {
     "classes": {
-      "have": 192,
+      "have": 198,
       "total": 329
     },
     "constants": {
@@ -684,8 +684,8 @@
     },
     {
       "classes": {
-        "eval": 10,
-        "have": 10,
+        "eval": 16,
+        "have": 16,
         "total": 50
       },
       "constants": {

@@ -448,6 +448,7 @@ pub enum RuntimeFnId {
     Tan,
     Tanh,
     ElephcCloneOverrideReferenceGuard,
+    ElephcObjectForgetHandle,
     ElephcObjectIsEnum,
     ElephcObjectPropCount,
     ElephcObjectPropName,
@@ -1640,6 +1641,9 @@ impl RuntimeFnId {
                         | crate::ir::Effects::MAY_THROW.bits(),
                 )
             }
+            RuntimeFnId::ElephcObjectForgetHandle => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
             RuntimeFnId::ElephcObjectIsEnum
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
@@ -3547,6 +3551,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcCloneOverrideReferenceGuard => {
                 "__elephc_clone_override_reference_guard"
             }
+            RuntimeFnId::ElephcObjectForgetHandle => "__elephc_object_forget_handle",
             RuntimeFnId::ElephcObjectIsEnum => "__elephc_object_is_enum",
             RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
             RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",

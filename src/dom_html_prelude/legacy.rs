@@ -285,6 +285,22 @@ fn decl_class_elephcdom() -> Stmt {
                                 vec![],
                                 None,
                             ),
+                            s_if(
+                                e_instance_of(e_var("cached"), "WeakReference"),
+                                vec![
+                                    s_assign("live", e_method_call(e_var("cached"), "get", vec![])),
+                                    s_if(
+                                        e_instance_of(e_var("live"), "DOMNode"),
+                                        vec![
+                                            s_return(e_var("live")),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                ],
+                                vec![],
+                                None,
+                            ),
                         ],
                         vec![],
                         None,
@@ -293,8 +309,36 @@ fn decl_class_elephcdom() -> Stmt {
                     s_assign("object", e_static_call("__ElephcDOM", "mint", vec![e_call("elephc_xml_dom_type", vec![e_var("handle")])])),
                     s_static_prop_assign("__ElephcDOM", "minting", e_bool(false)),
                     s_expr(e_method_call(e_var("object"), "__elephc_bind", vec![e_var("handle")])),
-                    s_static_prop_array_assign("__ElephcDOM", "objects", e_var("handle"), e_var("object")),
                     s_return(e_var("object")),
+                ]),
+        )
+        .method(
+            method("remember")
+                .static_()
+                .param("object", t_class("DOMNode"))
+                .param("handle", TypeExpr::Int)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("handle"), BinOp::LtEq, e_int(0)),
+                        vec![
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_instance_of(e_var("object"), "DOMDocument"),
+                        vec![
+                            s_static_prop_array_assign("__ElephcDOM", "objects", e_var("handle"), e_var("object")),
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("weak", e_static_call("WeakReference", "create", vec![e_var("object")])),
+                    s_expr(e_call("__elephc_object_forget_handle", vec![e_var("weak")])),
+                    s_static_prop_array_assign("__ElephcDOM", "objects", e_var("handle"), e_var("weak")),
                 ]),
         )
         .method(
@@ -820,6 +864,7 @@ fn decl_class_domnode() -> Stmt {
                 .returns(TypeExpr::Void)
                 .body(vec![
                     s_prop_assign(e_this(), "__elephc_handle", e_var("handle")),
+                    s_expr(e_static_call("__ElephcDOM", "remember", vec![e_this(), e_var("handle")])),
                 ]),
         )
         .method(
@@ -1835,13 +1880,27 @@ fn decl_class_domimplementation() -> Stmt {
 fn decl_class_domdocument() -> Stmt {
     class("DOMDocument")
         .extends("DOMNode")
-        .prop("formatOutput", TypeExpr::Bool, Some(e_bool(false)))
-        .prop("preserveWhiteSpace", TypeExpr::Bool, Some(e_bool(true)))
-        .prop("validateOnParse", TypeExpr::Bool, Some(e_bool(false)))
-        .prop("resolveExternals", TypeExpr::Bool, Some(e_bool(false)))
-        .prop("recover", TypeExpr::Bool, Some(e_bool(false)))
-        .prop("substituteEntities", TypeExpr::Bool, Some(e_bool(false)))
-        .prop("strictErrorChecking", TypeExpr::Bool, Some(e_bool(true)))
+        .private_prop("__elephc_format_output", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("__elephc_preserve_white_space", TypeExpr::Bool, Some(e_bool(true)))
+        .private_prop("__elephc_validate_on_parse", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("__elephc_resolve_externals", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("__elephc_recover", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("__elephc_substitute_entities", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("__elephc_strict_error_checking", TypeExpr::Bool, Some(e_bool(true)))
+        .prop("formatOutput", TypeExpr::Bool, None)
+        .hooked(true, true, false)
+        .prop("preserveWhiteSpace", TypeExpr::Bool, None)
+        .hooked(true, true, false)
+        .prop("validateOnParse", TypeExpr::Bool, None)
+        .hooked(true, true, false)
+        .prop("resolveExternals", TypeExpr::Bool, None)
+        .hooked(true, true, false)
+        .prop("recover", TypeExpr::Bool, None)
+        .hooked(true, true, false)
+        .prop("substituteEntities", TypeExpr::Bool, None)
+        .hooked(true, true, false)
+        .prop("strictErrorChecking", TypeExpr::Bool, None)
+        .hooked(true, true, false)
         .prop("documentElement", t_nullable(t_class("DOMElement")), None)
         .hooked(true, false, false)
         .prop("xmlVersion", t_nullable(TypeExpr::Str), None)
@@ -1872,6 +1931,111 @@ fn decl_class_domdocument() -> Stmt {
         .hooked(true, false, false)
         .prop("childElementCount", TypeExpr::Int, None)
         .hooked(true, false, false)
+        .method(
+            method("__propget_formatOutput")
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_this_prop("__elephc_format_output")),
+                ]),
+        )
+        .method(
+            method("__propset_formatOutput")
+                .param("value", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "__elephc_format_output", e_var("value")),
+                ]),
+        )
+        .method(
+            method("__propget_preserveWhiteSpace")
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_this_prop("__elephc_preserve_white_space")),
+                ]),
+        )
+        .method(
+            method("__propset_preserveWhiteSpace")
+                .param("value", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "__elephc_preserve_white_space", e_var("value")),
+                ]),
+        )
+        .method(
+            method("__propget_validateOnParse")
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_this_prop("__elephc_validate_on_parse")),
+                ]),
+        )
+        .method(
+            method("__propset_validateOnParse")
+                .param("value", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "__elephc_validate_on_parse", e_var("value")),
+                ]),
+        )
+        .method(
+            method("__propget_resolveExternals")
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_this_prop("__elephc_resolve_externals")),
+                ]),
+        )
+        .method(
+            method("__propset_resolveExternals")
+                .param("value", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "__elephc_resolve_externals", e_var("value")),
+                ]),
+        )
+        .method(
+            method("__propget_recover")
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_this_prop("__elephc_recover")),
+                ]),
+        )
+        .method(
+            method("__propset_recover")
+                .param("value", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "__elephc_recover", e_var("value")),
+                ]),
+        )
+        .method(
+            method("__propget_substituteEntities")
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_this_prop("__elephc_substitute_entities")),
+                ]),
+        )
+        .method(
+            method("__propset_substituteEntities")
+                .param("value", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "__elephc_substitute_entities", e_var("value")),
+                ]),
+        )
+        .method(
+            method("__propget_strictErrorChecking")
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_this_prop("__elephc_strict_error_checking")),
+                ]),
+        )
+        .method(
+            method("__propset_strictErrorChecking")
+                .param("value", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "__elephc_strict_error_checking", e_var("value")),
+                ]),
+        )
         .method(
             method("__propget_documentElement")
                 .returns(t_nullable(t_class("DOMElement")))
@@ -1997,7 +2161,6 @@ fn decl_class_domdocument() -> Stmt {
                         e_not(e_static_prop("__ElephcDOM", "minting")),
                         vec![
                             s_expr(e_method_call(e_this(), "__elephc_bind", vec![e_call("elephc_xml_dom_document_new", vec![e_var("version"), e_var("encoding")])])),
-                            s_static_prop_array_assign("__ElephcDOM", "objects", e_method_call(e_this(), "__elephc_handle", vec![]), e_this()),
                         ],
                         vec![],
                         None,

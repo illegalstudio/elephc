@@ -163,11 +163,15 @@ fn inject_if_used_on_compiler_stack(
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
-    let Some((mut combined, _)) = pending_prelude(&program, force, inventory) else {
+    let Some((mut combined, walker)) = pending_prelude(&program, force, inventory) else {
         return program;
     };
     inventory.record_program("dom-html", &combined);
     combined.extend(program);
+    if walker {
+        // Node wrappers are cached weakly (`__ElephcDOM::wrap`), like php-src frees them.
+        return crate::core_prelude::ensure_weak_reference(combined, inventory);
+    }
     combined
 }
 
@@ -206,12 +210,15 @@ pub fn inject_after_autoload(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Result<Program, CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
-        let Some((prelude, _)) = pending_prelude(&program, false, inventory) else {
+        let Some((prelude, walker)) = pending_prelude(&program, false, inventory) else {
             return Ok(program);
         };
         let mut combined = crate::name_resolver::resolve(prelude)?;
         inventory.record_program("dom-html", &combined);
         combined.extend(program);
+        if walker {
+            return Ok(crate::core_prelude::ensure_weak_reference(combined, inventory));
+        }
         Ok(combined)
     })
 }
@@ -258,7 +265,8 @@ mod tests {
         let program = parse_resolved("<?php namespace App; use DOMDocument as Doc; new Doc();");
         let program = inject_after_autoload(program, &mut inventory).unwrap();
         assert!(inventory.groups.contains_key("dom-html"));
-        assert!(!inventory.groups.contains_key("core"));
+        // The node identity cache's WeakReference declaration.
+        assert!(inventory.groups.contains_key("core"));
         let len = program.len();
         assert_eq!(inject_after_autoload(program, &mut inventory).unwrap().len(), len);
 
@@ -308,7 +316,7 @@ mod tests {
             )).count(), 1, "{expected}");
         }
         assert!(inventory.groups["dom-html"].classes.contains("domdocument"));
-        assert!(!inventory.groups.contains_key("core"));
+        assert!(inventory.groups.contains_key("core"));
         let len = program.len();
         assert_eq!(inject_after_autoload(program, &mut inventory).unwrap().len(), len);
     }
@@ -324,18 +332,18 @@ mod tests {
         assert_eq!(program.iter().filter(|stmt| matches!(
             &stmt.kind, StmtKind::ClassDecl { name, .. } if name == "DOMException"
         )).count(), 1);
-        assert!(!inventory.groups.contains_key("core"));
+        assert!(inventory.groups.contains_key("core"));
     }
 
-    /// The libxml2-backed DOM keeps node identity in the native engine, so injecting it no longer
-    /// pulls in the WeakReference cache the old pure-PHP walker needed.
+    /// Node wrappers live only as long as PHP references them (php-src frees an unreferenced
+    /// wrapper), so the DOM prelude brings exactly one `WeakReference` declaration for its cache.
     #[test]
-    fn dom_injection_needs_no_weak_reference_cache() {
+    fn dom_injection_brings_the_weak_reference_cache() {
         let program = crate::parser::parse_test_source("<?php new DOMDocument();").unwrap();
         let mut inventory = crate::optimize::reachability::PreludeInventory::new();
         let program = inject_if_used(program, false, &mut inventory);
-        assert!(!inventory.groups.contains_key("core"));
-        assert_eq!(program.iter().filter(|stmt| matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name == "WeakReference")).count(), 0);
+        assert!(inventory.groups.contains_key("core"));
+        assert_eq!(program.iter().filter(|stmt| matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name == "WeakReference")).count(), 1);
     }
 
     /// Every top-level declaration carries a distinct synthetic span.

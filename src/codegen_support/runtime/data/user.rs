@@ -538,9 +538,14 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".globl _class_reflection_public_cast_flags\n_class_reflection_public_cast_flags:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
-            let flag = class_name_by_id
-                .get(&class_id)
-                .is_some_and(|class_name| REFLECTION_CLASS_NAMES.contains(&class_name.as_str()));
+            // Builtin Reflection classes, and internal prelude classes whose private storage the
+            // contract hides (the DOM nodes' `__elephc_handle`): PHP's objects expose none of it.
+            let flag = class_name_by_id.get(&class_id).is_some_and(|class_name| {
+                REFLECTION_CLASS_NAMES.contains(&class_name.as_str())
+                    || classes.get(*class_name).is_some_and(|info| info.is_internal)
+                        && elephc_builtin_contract::lookup_class(class_name)
+                            .is_some_and(|class| !class.hidden_properties.is_empty())
+            });
             out.push_str(&format!("    .quad {}\n", u8::from(flag)));
         }
     }
@@ -4084,6 +4089,7 @@ fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_nam
         .map(String::as_str)
         .unwrap_or(class_name);
     REFLECTION_CLASS_NAMES.contains(&declaring_class)
+        || class_property_is_hidden(declaring_class, prop_name)
 }
 
 /// Resolves by-name metadata on the nearest ancestor where this physical slot is visible.

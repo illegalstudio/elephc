@@ -150,6 +150,6 @@ against this subset; keep Termwind's sources in the application tree.
 
 Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
 
-Classes: `Dom\XMLDocument`, `DOMCharacterData`, `DOMComment`, `DOMDocument`, `DOMElement`, `DOMException`, `DOMNode`, `DOMNodeList`, `DOMProcessingInstruction`, `DOMText`.
+Classes: `Dom\XMLDocument`, `DOMAttr`, `DOMCdataSection`, `DOMCharacterData`, `DOMComment`, `DOMDocument`, `DOMDocumentFragment`, `DOMDocumentType`, `DOMElement`, `DOMException`, `DOMImplementation`, `DOMNamedNodeMap`, `DOMNode`, `DOMNodeList`, `DOMProcessingInstruction`, `DOMText`.
 
 <!-- elephc:generated:symbols:end -->

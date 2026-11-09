@@ -620,7 +620,7 @@ echo $second->saveXML(), "|", $div->textContent;
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(
         out.stdout,
-        "<?xml version=\"1.0\"?>\n|<style>foo</style>|style:0:foo|<?xml version=\"1.0\"?>\n<div>text</div>|text"
+        "<?xml version=\"1.0\"?>\n|<style>foo</style>|style:0:foo|<?xml version=\"1.0\"?>\n<div>text</div>\n|text"
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

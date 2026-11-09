@@ -56,6 +56,25 @@ pub(crate) fn lower_object_is_enum(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `__elephc_object_forget_handle(value)`: returns the object's PHP handle to the
+/// pool through `__rt_object_handle_release` (a non-object is a no-op), then yields `true`.
+pub(crate) fn lower_object_forget_handle(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_object_forget_handle", 1)?;
+    ctx.emitter.blank();
+    ctx.emitter.comment("__elephc_object_forget_handle()");
+    emit_object_pointer_from_operand(ctx, expect_operand(inst, 0)?)?;
+    let skip_label = ctx.next_label("obj_forget_handle_not_object");
+    emit_branch_if_result_zero(ctx, &skip_label);
+    emit_object_argument(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_object_handle_release");
+    ctx.emitter.label(&skip_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `__elephc_object_prop_count(value)` to `__rt_obj_prop_count`.
 ///
 /// A non-object operand reaches the helper as a null pointer, which reports 0.

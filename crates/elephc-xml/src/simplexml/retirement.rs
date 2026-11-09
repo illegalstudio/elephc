@@ -36,11 +36,22 @@ impl Drop for RetiredSubtree {
     /// Frees children before their document, clone, and ancestor namespace owners can die.
     fn drop(&mut self) {
         self.doc.detached.borrow_mut().remove(&self.node);
-        unsafe { ffi::retired_free(self.node); }
+        self.doc.release_detached(self.node);
     }
 }
 
 impl Document {
+    /// Frees an unlinked subtree nothing in SimpleXML observes any more. A tree borrowed from
+    /// the DOM engine (`simplexml_import_dom`) hands it to the DOM document instead: the DOM
+    /// registry maps node pointers to handles, so freeing here would let libxml2 reuse the
+    /// address for a new node that then resolved to the stale handle and wrapper.
+    fn release_detached(&self, node: Node) {
+        match &self.owner {
+            Some(owner) => owner.adopt_detached(node),
+            None => unsafe { ffi::retired_free(node) },
+        }
+    }
+
     /// Adopts an attached document with empty weak indexes and no independent tree owners.
     pub(super) fn new(raw: Node) -> Rc<Self> {
         Rc::new(Self { raw, detached: RefCell::new(HashMap::new()), pins: RefCell::new(HashMap::new()), owner: None })
@@ -104,7 +115,7 @@ impl Document {
                 while !child.is_null() { pending.push(child); child = ffi::next(child); }
             }
         }
-        if exposed.is_empty() { unsafe { ffi::retired_free(node); } return; }
+        if exposed.is_empty() { self.release_detached(node); return; }
         let mut parents = Vec::new();
         let mut seen = HashSet::new();
         for pin in &exposed {

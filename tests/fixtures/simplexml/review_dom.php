@@ -74,9 +74,6 @@ if ($cacheXml instanceof SimpleXMLElement && $cacheRoot instanceof DOMElement) {
         $cacheNode = $cacheRoot->childNodes->item(0);
         if ($cacheNode instanceof DOMNode) {
             if ($cacheNode !== $cacheRoot->childNodes->item(0)) { $cacheReleased = false; }
-            if (property_exists($cacheDocument, '__elephc_dom_nodes')) {
-                if (count($cacheDocument->__elephc_dom_nodes) === 0) { $cacheReleased = false; }
-            }
             $cacheWeak = WeakReference::create($cacheNode);
             unset($cacheNode);
             if ($cacheWeak->get() !== null) { $cacheReleased = false; }
@@ -85,9 +82,6 @@ if ($cacheXml instanceof SimpleXMLElement && $cacheRoot instanceof DOMElement) {
     }
 }
 var_dump($cacheReleased);
-$cacheBounded = true;
-if (property_exists($cacheDocument, '__elephc_dom_nodes')) { $cacheBounded = count($cacheDocument->__elephc_dom_nodes) < 128; }
-var_dump($cacheBounded);
 unset($cacheRetained, $cacheWeak, $cacheXml, $cacheRoot, $cacheDocument);
 $literalDocument = new DOMDocument();
 $literalDocument->loadHTML('<html xmlns="http://www.w3.org/1999/xhtml"><body><!-- ---- --><p xlink:href="#a" x-on:click="go" :class="active">A &amp; B</p><i>I</i></body></html>', LIBXML_NOERROR | LIBXML_NOWARNING);

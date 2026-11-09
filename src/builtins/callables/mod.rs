@@ -67,6 +67,7 @@ pub mod __elephc_clone_override_reference_guard;
 // `get_object_vars()` / `$v instanceof UnitEnum`, neither of which elephc can
 // express for a runtime `mixed` today.
 #[allow(non_snake_case)]
+pub mod __elephc_object_forget_handle;
 pub mod __elephc_object_is_enum;
 #[allow(non_snake_case)]
 pub mod __elephc_object_prop_count;

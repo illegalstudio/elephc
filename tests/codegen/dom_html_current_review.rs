@@ -740,3 +740,41 @@ fn dom_html_latest_review_reopened_tree_owners_no_flags_no_ir_opt() {
     }
     without_ir_opt(dom_html_latest_review_reopened_tree_owners_no_flags);
 }
+
+/// Node wrappers behave like php-src's: one object per node while referenced (a constructed
+/// element included), freed once unreferenced, numbered without the identity cache's weak
+/// references, and engine storage never shows through `(array)` or `get_object_vars()` — a
+/// user subclass's own private property still does. Output is the oracle's
+/// (php 8.5.8, libxml2 2.15.3).
+#[test]
+fn dom_html_wrapper_lifetime_ids_and_casts_follow_php() {
+    if skip_without_xml_native("dom_html_wrapper_lifetime_ids_and_casts_follow_php") {
+        return;
+    }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Mine extends DOMElement { private int $secret = 7; public string $extra = "x"; }
+$doc = new DOMDocument();
+$doc->loadXML('<r a="1"><c/><d/></r>');
+$root = $doc->documentElement;
+$first = $root->firstChild;
+var_dump($first === $root->childNodes->item(0), $root === $doc->documentElement);
+$weak = WeakReference::create($root->lastChild);
+var_dump($weak->get() === null);
+$created = $doc->createElement('x');
+var_dump($created === $root->appendChild($created));
+ob_start();
+var_dump($root->lastChild);
+$dump = (string) ob_get_clean();
+echo substr($dump, 0, (int) strpos($dump, "\n")), "\n";
+var_dump((array) $root, get_object_vars($root), (array) $doc, (array) $root->childNodes);
+var_dump((array) new Mine('m'));
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\nbool(true)\nbool(true)\nbool(true)\nobject(DOMElement)#4 (27) {\n\
+         array(0) {\n}\narray(0) {\n}\narray(0) {\n}\narray(0) {\n}\n\
+         array(2) {\n  [\"\0Mine\0secret\"]=>\n  int(7)\n  [\"extra\"]=>\n  string(1) \"x\"\n}\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

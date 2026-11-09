@@ -94,7 +94,7 @@ impl DomDocument {
     }
 
     /// Records a parentless subtree this document must free unless it is linked back in.
-    fn adopt_detached(&self, node: Node) {
+    pub(crate) fn adopt_detached(&self, node: Node) {
         self.detached.borrow_mut().insert(node);
     }
 

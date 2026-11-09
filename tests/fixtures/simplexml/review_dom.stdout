@@ -30,7 +30,6 @@ bool(true)
 bool(true)
 bool(true)
 #cdata-section|#text:<script>c&lt;d</script>|#text:<script>e&lt;f</script>|#text:<script>g&lt;h</script>|#cdata-section|#text:<style>c&lt;d</style>|#text:<style>e&lt;f</style>|#text:<style>g&lt;h</style>|bool(true)
-bool(true)
 i:p|1:0:http://www.w3.org/1999/xhtml|#a:go:active|A & B|<html xmlns="http://www.w3.org/1999/xhtml"><body><!-- ---- --><p xlink:href="#a" x-on:click="go" :class="active">A &amp; B</p><i>I</i></body></html>|p:#comment:i:p|#changed|b:a|bool(true)
 1:1:1:1:1|#cdata-section:raw|work:data|changed|again:<?work again?>|#cdata-section|#cdata-section|5:#comment,first,r,last,#comment,|first:last|bool(false)
 <?xml version="1.0" encoding="UTF-8"?>

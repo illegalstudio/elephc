@@ -32,7 +32,7 @@
       "internal": true,
       "kind": "class",
       "module": "elephc",
-      "name": "__ElephcDOMNodeListIterator",
+      "name": "__ElephcDOM",
       "php_manual": null,
       "since": null
     },
@@ -1508,6 +1508,42 @@
       "internal": false,
       "kind": "class",
       "module": "dom",
+      "name": "DOMAttr",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "dom",
+      "name": "DOMCdataSection",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "dom",
       "name": "DOMCharacterData",
       "php_manual": null,
       "since": null
@@ -1562,6 +1598,42 @@
       "internal": false,
       "kind": "class",
       "module": "dom",
+      "name": "DOMDocumentFragment",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "dom",
+      "name": "DOMDocumentType",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "dom",
       "name": "DOMElement",
       "php_manual": null,
       "since": null
@@ -1581,6 +1653,42 @@
       "kind": "class",
       "module": "dom",
       "name": "DOMException",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "dom",
+      "name": "DOMImplementation",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "dom",
+      "name": "DOMNamedNodeMap",
       "php_manual": null,
       "since": null
     },
