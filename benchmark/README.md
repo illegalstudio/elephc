@@ -268,6 +268,24 @@ machine, and keep the worker count and load-generator shape identical across
 comparisons. The JSON result records the load average, platform, compiler
 version, and every raw round.
 
+To compare the origin with an already-running Nginx + PHP-FPM reference, use
+the separate comparison client:
+
+```bash
+python3 benchmark/web/fpm_compare.py \
+  --elephc-url http://127.0.0.1:8080/ \
+  --fpm-url http://127.0.0.1:8081/ \
+  --threads 4 --connections 100 --duration 10s --repeat 3
+```
+
+Both URLs must serve the same fixture. The comparison runner measures
+keep-alive throughput/latency with `wrk` and a sequential new-connection path
+with a fresh TCP connection per request; it does not start or configure either
+server. It alternates the two endpoints between repeats to reduce load-drift
+bias, and its JSON output keeps every raw round. Use a quiet machine: a busy
+shared host can make high-concurrency FPM numbers unusable even when the
+Elephc side remains stable.
+
 ## Tooling checks
 
 ```bash
