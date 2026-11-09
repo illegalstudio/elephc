@@ -1153,7 +1153,20 @@ fn merge_local_assignment_type(
         return Ok(());
     }
     if let Some(existing) = env.get(name) {
-        let merged_ty = checker.merged_assignment_type(existing, ty).or_else(|| {
+        // Under `--strict-locals` the pre-scan steps aside, so reject a conditional
+        // null/typed join here instead of letting `Void` absorb the typed side and then
+        // restoring the null binding after the branch. Permissive mode never reaches this
+        // branch for the same shape because the scan marks the local Mixed first.
+        let conditional_null_join = checker.strict_locals
+            && (matches!(existing, PhpType::Void) != matches!(ty, PhpType::Void))
+            && checker.local_conditional_depth
+                > checker.local_binding_depth.get(name).copied().unwrap_or(0);
+        let merged_ty = if conditional_null_join {
+            None
+        } else {
+            checker.merged_assignment_type(existing, ty)
+        }
+        .or_else(|| {
             // An inferred boolean flag can widen into a scalar union that already contains
             // every bool value. Its ordinary local slot can become boxed; declared or
             // externally shared boolean storage must retain its existing contract.
