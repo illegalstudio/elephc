@@ -238,18 +238,20 @@ the trend CI job.
 ## HTTP server (`--web`)
 
 The process suites above time short-lived programs. A `--web` binary is a
-long-running prefork HTTP server, so it has its own runner and is **not** part of
-the historical dashboard:
+long-running prefork HTTP server, so it has its own bash runner and is **not**
+part of the historical dashboard. The rest of `benchmark/` remains Python; the
+two web scripts are bash so the long-running-server path needs no Python
+runtime:
 
 ```bash
-python3 benchmark/web/run.py
-python3 benchmark/web/run.py --workers 4 --threads 4 --connections 100 --duration 10s
-python3 benchmark/web/run.py --isolation pool --workers 8 --threads 4 --connections 32
-python3 benchmark/web/run.py --workers 8 --clients 3 --threads 4 --connections 200
-python3 benchmark/web/run.py --workers 1 --cpu
-python3 benchmark/web/run.py --no-build --compiler target/release/elephc \
+./benchmark/web/run.sh
+./benchmark/web/run.sh --workers 4 --threads 4 --connections 100 --duration 10s
+./benchmark/web/run.sh --isolation pool --workers 8 --threads 4 --connections 32
+./benchmark/web/run.sh --workers 8 --clients 3 --threads 4 --connections 200
+./benchmark/web/run.sh --workers 1 --cpu
+./benchmark/web/run.sh --no-build --compiler target/release/elephc \
   --json web-results.json --markdown web-results.md
-python3 benchmark/web/run.py --k6 vus --k6 constant
+./benchmark/web/run.sh --k6 vus --k6 constant
 ```
 
 The default fixture, `benchmark/web/hello.php`, is the minimal handler from the
@@ -259,17 +261,18 @@ with `--web`, starts the server on an ephemeral port, warms up with `wrk`, then
 takes repeated measurements and reports the median. `--clients N` starts N
 concurrent `wrk` processes and reports aggregate throughput (useful for proving
 whether one load generator is the bottleneck); `--cpu` samples the server
-master and workers (`proc_pid_rusage` on macOS, `/proc` on Linux) and reports
-server CPU per request, which stays meaningful when the host is busy; `--php-baseline` measures the
-same fixture under `php -S` (single process, not PHP-FPM), and `--k6` runs the
-article's 100-VU and 5,000 req/s shapes. `--isolation` selects the compiled
-`--web-isolation` mode: `worker` is the fastest in-process path but a blocking
-PHP handler pins a keep-alive connection to one worker; `pool` and `request`
-move PHP behind the handler broker and are the relevant modes for concurrent
-real workloads.
+master and workers (`ps -o utime,stime` on macOS, `/proc` on Linux) and reports
+server CPU per request, which stays meaningful when the host is busy;
+`--php-baseline` measures the same fixture under `php -S` (single process, not
+PHP-FPM), and `--k6` runs the article's 100-VU and 5,000 req/s shapes.
+`--isolation` selects the compiled `--web-isolation` mode: `worker` is the
+fastest in-process path but a blocking PHP handler pins a keep-alive connection
+to one worker; `pool` and `request` move PHP behind the handler broker and are
+the relevant modes for concurrent real workloads.
 
-`wrk` is required. Results depend heavily on host load: run on an otherwise idle
-machine, and keep the worker count and load-generator shape identical across
+`wrk` is required. `--k6` requires `k6` and `jq`; `--php-baseline` requires
+`php`. Results depend heavily on host load: run on an otherwise idle machine,
+and keep the worker count and load-generator shape identical across
 comparisons. The JSON result records the load average, platform, compiler
 version, and every raw round.
 
@@ -277,7 +280,7 @@ To compare the origin with an already-running Nginx + PHP-FPM reference, use
 the separate comparison client:
 
 ```bash
-python3 benchmark/web/fpm_compare.py \
+./benchmark/web/fpm_compare.sh \
   --elephc-url http://127.0.0.1:8080/ \
   --fpm-url http://127.0.0.1:8081/ \
   --threads 4 --connections 100 --duration 10s --repeat 3
@@ -285,15 +288,16 @@ python3 benchmark/web/fpm_compare.py \
 
 Both URLs must serve the same fixture. The comparison runner measures
 keep-alive throughput/latency with `wrk` and a sequential new-connection path
-with a fresh TCP connection per request; it does not start or configure either
-server. It alternates the two endpoints between repeats to reduce load-drift
-bias, and its JSON output keeps every raw round. Use a quiet machine: a busy
-shared host can make high-concurrency FPM numbers unusable even when the
-Elephc side remains stable.
+with a fresh TCP connection per request (`curl`); it does not start or configure
+either server. It alternates the two endpoints between repeats to reduce
+load-drift bias, and its JSON output keeps every raw round. `jq` is required for
+the comparison report. Use a quiet machine: a busy shared host can make
+high-concurrency FPM numbers unusable even when the Elephc side remains stable.
 
 ## Tooling checks
 
 ```bash
+bash benchmark/tests/test_web_bash.sh
 python3 -B -m unittest discover -s benchmark/tests -v
 python3 -B benchmark/report.py
 git diff --check
