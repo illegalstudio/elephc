@@ -176,7 +176,7 @@ pub(crate) struct SharedCodegenState {
     /// at every arm of every dynamic property write: on Laravel that walk -- lowercased keys and
     /// cloned names at each parent hop -- was most of the codegen phase. The relation is a pure
     /// function of the module, so remembering it changes nothing an observer can see.
-    type_is_a_memo: std::cell::RefCell<crate::fast_hash::FastMap<String, bool>>,
+    type_is_a_memo: std::cell::RefCell<crate::fast_hash::FastMap<String, crate::fast_hash::FastMap<String, bool>>>,
     /// `eval_sync_global_type` answers by global name: each one walks every instruction of every
     /// function and closure, and every dynamic include syncs every global, so Laravel paid
     /// globals x includes whole-program walks. A pure function of the module.
@@ -905,12 +905,22 @@ impl SharedCodegenState {
         target: &str,
         compute: impl FnOnce() -> bool,
     ) -> bool {
-        let key = format!("{source}\0{target}");
-        if let Some(answer) = self.type_is_a_memo.borrow().get(&key) {
+        // Keyed target, then source, so a hit looks both up in place: the `format!` key this
+        // replaces allocated on every probe, and a guard probes every class of the program.
+        if let Some(answer) = self
+            .type_is_a_memo
+            .borrow()
+            .get(target)
+            .and_then(|sources| sources.get(source))
+        {
             return *answer;
         }
         let answer = compute();
-        self.type_is_a_memo.borrow_mut().insert(key, answer);
+        self.type_is_a_memo
+            .borrow_mut()
+            .entry(target.to_string())
+            .or_default()
+            .insert(source.to_string(), answer);
         answer
     }
 

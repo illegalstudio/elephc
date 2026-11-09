@@ -114,7 +114,7 @@ fn polymorphic_property_candidates(
         .keys()
         .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == target_key);
     let mut candidates = Vec::new();
-    for (class_name, class_info) in &ctx.module.class_infos {
+    for (class_name, class_info) in classes_that_may_declare(ctx, property) {
         let satisfies_target = if target_is_any_object {
             true
         } else if target_is_interface {
@@ -1083,6 +1083,8 @@ fn table_addressable_classes_not_routed(
     routed: &[u64],
     dispatched: &[u64],
 ) -> Vec<u64> {
+    // Two linear `contains` per addressable class were 1,700 samples of a Symfony demo build.
+    let excluded: crate::fast_hash::FastSet<u64> = routed.iter().chain(dispatched).copied().collect();
     let mut ids = ctx
         .module
         .name_addressable_hash_classes()
@@ -1090,8 +1092,7 @@ fn table_addressable_classes_not_routed(
         .filter_map(|name| {
             let info = ctx.module.class_infos.get(name)?;
             (!crate::types::checker::builtin_stdclass::is_stdclass(name)
-                && !routed.contains(&info.class_id)
-                && !dispatched.contains(&info.class_id))
+                && !excluded.contains(&info.class_id))
             .then_some(info.class_id)
         })
         .collect::<Vec<_>>();
@@ -1267,7 +1268,7 @@ pub(super) fn declared_mixed_reference_property_candidates(
     inst: &Instruction,
 ) -> Result<Vec<MixedReferenceCandidate>> {
     let mut candidates = Vec::new();
-    for (class_name, class_info) in &ctx.module.class_infos {
+    for (class_name, class_info) in classes_that_may_declare(ctx, property) {
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
             continue;
         }
@@ -1315,6 +1316,42 @@ pub(super) fn declared_mixed_reference_property_candidates(
     Ok(candidates)
 }
 
+/// The classes whose own `properties` may hold `property` for a `Mixed` receiver, in
+/// `class_infos` order -- the order the scan this replaces visited them in.
+///
+/// Only `name` and `class` can be backed by another slot (a Reflection subclass's virtual
+/// property, see `reflection_backing`), so for those every class is returned; any other name is
+/// answered from the module's property index instead of scanning every class at every site.
+fn classes_that_may_declare<'a>(
+    ctx: &FunctionContext<'a>,
+    property: &str,
+) -> Vec<(&'a String, &'a ClassInfo)> {
+    let module: &'a crate::ir::Module = ctx.module;
+    let classes: Vec<(&'a String, &'a ClassInfo)> = if matches!(property, "name" | "class") {
+        module.class_infos.iter().collect()
+    } else {
+        let index = module.classes_by_property();
+        index
+            .get(property)
+            .map(|classes| {
+                classes
+                    .iter()
+                    .filter_map(|name| module.class_infos.get_key_value(name))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    #[cfg(test)]
+    MIXED_CANDIDATE_CLASSES.with(|visited| visited.set(visited.get() + classes.len()));
+    classes
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Classes `classes_that_may_declare` handed out; read by the codegen regression test.
+    pub(crate) static MIXED_CANDIDATE_CLASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Collects declared-property candidates for a property read on an unknown `Mixed` object.
 pub(super) fn declared_mixed_property_candidates(
     ctx: &FunctionContext<'_>,
@@ -1323,7 +1360,7 @@ pub(super) fn declared_mixed_property_candidates(
     inst: &Instruction,
 ) -> Result<Vec<MixedPropertyReadCandidate>> {
     let mut candidates = Vec::new();
-    for (class_name, class_info) in &ctx.module.class_infos {
+    for (class_name, class_info) in classes_that_may_declare(ctx, property) {
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
             continue;
         }
@@ -1778,7 +1815,7 @@ pub(super) fn declared_mixed_property_slot_candidates(
     inst: &Instruction,
 ) -> Result<Vec<MixedPropertyCandidate>> {
     let mut candidates = Vec::new();
-    for (class_name, class_info) in &ctx.module.class_infos {
+    for (class_name, class_info) in classes_that_may_declare(ctx, property) {
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
             continue;
         }
@@ -1799,4 +1836,45 @@ pub(super) fn declared_mixed_property_slot_candidates(
     }
     candidates.sort_by_key(|candidate| candidate.class_id);
     Ok(candidates)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Pins how many classes a `Mixed` receiver's property site considers.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Counts classes handed to the candidate collectors, not time: a site reading `->x` must
+    //!   consider the classes declaring `x`, not every class of the program.
+
+    use super::MIXED_CANDIDATE_CLASSES;
+
+    /// 300 classes declare unrelated properties and two declare `x`: every `Mixed` read of `->x`
+    /// considers those two, where it used to walk every property of all 302 classes.
+    #[test]
+    fn a_mixed_property_site_considers_only_the_classes_declaring_the_name() {
+        let mut source = String::from("<?php\nclass A { public int $x = 1; }\nclass B { public int $x = 2; }\n");
+        for index in 0..300 {
+            source.push_str(&format!("class C{index} {{ public int $p{index} = {index}; }}\n"));
+        }
+        source.push_str(
+            "$items = [$argc > 1 ? new A() : new B(), 5, 's'];\nforeach ($items as $o) { if (is_object($o)) { echo $o->x; } }\n\
+             echo count($items);\n",
+        );
+        MIXED_CANDIDATE_CLASSES.with(|count| count.set(0));
+        let module = crate::ir_lower::tests::lower_source_at_for_target(
+            &source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse("macos-aarch64").unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+        let considered = MIXED_CANDIDATE_CLASSES.with(std::cell::Cell::get);
+        eprintln!("MIXED_CANDIDATE_CLASSES={considered}");
+        assert!(considered > 0, "the fixture must reach a Mixed property site");
+        assert!(considered < 302, "{considered} classes considered for `->x` sites");
+    }
 }

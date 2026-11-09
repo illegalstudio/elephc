@@ -248,6 +248,7 @@ struct FactCache {
     strict_descendants:
         FactCell<crate::fast_hash::FastMap<String, Vec<String>>>,
     name_addressable_hash_classes: FactCell<Vec<String>>,
+    classes_by_property: FactCell<crate::fast_hash::FastMap<String, Vec<String>>>,
     dispatch_groups:
         FactCell<Vec<crate::ir::function_variants::FunctionVariantLabel>>,
     function_indexes_by_key: FactCell<crate::fast_hash::FastMap<String, usize>>,
@@ -677,6 +678,29 @@ impl Module {
                 .filter(|(_, info)| info.dynamic_property_hash_is_name_addressable())
                 .map(|(name, _)| name.clone())
                 .collect()
+        })
+    }
+
+    /// Property name -> every class whose `properties` lists it, in `class_infos` order.
+    ///
+    /// A `Mixed` receiver's property read or reference asks which classes declare the name, and
+    /// answered it by scanning every property of every class at each site: ~1,500 samples of a
+    /// sampled Symfony demo build's codegen. Classes are listed once each.
+    pub(crate) fn classes_by_property(
+        &self,
+    ) -> std::sync::Arc<crate::fast_hash::FastMap<String, Vec<String>>> {
+        self.cached_fact(&self.fact_cache.classes_by_property, || {
+            let mut index: crate::fast_hash::FastMap<String, Vec<String>> =
+                crate::fast_hash::FastMap::default();
+            for (class_name, info) in &self.class_infos {
+                for (property, _) in &info.properties {
+                    let classes = index.entry(property.clone()).or_default();
+                    if classes.last() != Some(class_name) {
+                        classes.push(class_name.clone());
+                    }
+                }
+            }
+            index
         })
     }
 
