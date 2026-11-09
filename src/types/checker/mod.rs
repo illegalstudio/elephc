@@ -446,6 +446,12 @@ pub(crate) struct Checker {
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
+    /// Parent links for classes whose `ClassInfo` is still being built.
+    ///
+    /// Override validation runs while the child class is not yet registered in `classes`, so a
+    /// covariant return such as `?SimpleXMLIterator` would otherwise look unrelated to
+    /// `?SimpleXMLElement`. The hint keeps ancestry answerable during that window.
+    pub pending_class_parents: HashMap<String, String>,
     /// Physical instance slots refined during the current method fixed-point pass.
     /// A first constructor integer initialization may replay a placeholder from an older pass.
     pub method_property_refinements: Option<HashSet<(String, usize)>>,
@@ -456,6 +462,8 @@ pub(crate) struct Checker {
     /// `mixed`, so a slot an override can reach must carry runtime-shaped storage rather than the
     /// narrow type its default happened to infer.
     pub clone_override_destinations: clone_override_storage::CloneOverrideDestinations,
+    /// Receivers of dynamic-name property writes, whose untyped slots are widened to `mixed`.
+    pub dynamic_property_write_destinations: clone_override_storage::DynamicPropertyWriteDestinations,
     /// Fixed untyped property slots that a reachable `unset()` may remove.
     ///
     /// Applied after body checking so the physical slot and every inherited view use boxed
@@ -485,6 +493,8 @@ pub(crate) struct Checker {
     pub array_push_property_plans: HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Receiver types observed at member uses, with conflicting checker visits disabled.
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Exact element proofs at declared-array appends; conflicting visits retain no proof.
+    pub array_append_element_types: HashMap<(String, Span), Option<PhpType>>,
     /// Integer reads agreed by every authoritative flow visit to one scoped local use.
     pub local_value_read_types: crate::types::LocalValueReadTypes,
     /// Named-function contexts and body scopes queried without their local branch guards.
@@ -492,6 +502,10 @@ pub(crate) struct Checker {
     /// Caller locals converted to canonical boxed storage by a validated by-reference call.
     /// Scoped call sites keep recursive signature checking from changing another body's env.
     pub boxed_reference_outputs: HashMap<(String, Span), HashMap<String, PhpType>>,
+    /// Per scoped call site: how each declared-type local passed by reference is bound, as
+    /// (through a boxed writeback cell, by its direct typed address). Both in one call cannot
+    /// alias, so `record_boxed_reference_output` rejects that combination.
+    pub declared_reference_bindings: HashMap<(String, Span), HashMap<String, (bool, bool)>>,
     /// Argument sites where the checker authorized widening an ordinary local to a Mixed cell.
     /// EIR lowering consumes this instead of inferring permission from a broad builtin signature.
     pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
@@ -1639,6 +1653,7 @@ fn check_types_on_compiler_stack(
         closure_param_hints: checker.closure_param_hints,
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
+        array_append_element_types: checker.array_append_element_types,
         local_value_read_types: checker.local_value_read_types,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()

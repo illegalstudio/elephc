@@ -363,7 +363,7 @@ impl Checker {
             actual_ty,
             call_span,
             caller_env,
-        );
+        )?;
         self.record_reference_alias_root(arg);
         Ok(())
     }
@@ -846,6 +846,8 @@ impl Checker {
         };
         self.validate_callable_spread_elements(sig, args, &plan, caller_env, callee_desc)?;
         let source_has_spread = plan.has_spread_args();
+        let supports_literal_search_rewrite = !source_has_spread
+            && !call_args::has_named_args(args);
         let defaults = plan.default_argument_mask();
         let descriptor_projections = plan.descriptor_projection_mask();
         let normalized_args = plan.normalized_args();
@@ -1000,7 +1002,7 @@ impl Checker {
                             &actual_ty,
                             span,
                             caller_env,
-                        );
+                        )?;
                     }
                     // `strict_types` applies to every declared parameter type, including the
                     // closure and first-class-callable surfaces that stay off the coercive
@@ -1026,10 +1028,32 @@ impl Checker {
                         && self
                             .callable_array_param_target(arg, caller_env)?
                             .is_some();
-                    if !proven_callable_array && !runtime_descriptor_projection {
+                    // `str_replace([literal, ...], 'x', $s)` is folded into scalar calls by
+                    // the AST optimizer before lowering, so its array search is accepted here
+                    // even though the runtime helper is string-only.
+                    let literal_str_replace_search = supports_literal_search_rewrite
+                        && param_idx == 0
+                        && callee_desc
+                            .trim_start_matches('\\')
+                            .eq_ignore_ascii_case("str_replace")
+                        && args.get(1).is_some_and(|replacement| matches!(
+                            replacement.kind, ExprKind::StringLiteral(_)
+                        ))
+                        && matches!(&arg.kind, crate::parser::ast::ExprKind::ArrayLiteral(items)
+                            if !items.is_empty()
+                                && items.iter().all(|item| matches!(
+                                    item.kind,
+                                    crate::parser::ast::ExprKind::StringLiteral(_)
+                                )));
+                    if !proven_callable_array && !runtime_descriptor_projection
+                        && !literal_str_replace_search
+                    {
                         if (coercive_param_binding
                             && sig.declared_params.get(param_idx).copied().unwrap_or(false))
                             || (supplied_reference && matches!(expected_ty, PhpType::Object(_)))
+                            || (supplied_reference
+                                && expected_ty.codegen_repr() == PhpType::Mixed
+                                && actual_ty.codegen_repr() == PhpType::Mixed)
                         {
                             self.require_bound_param_arg_type(
                                 expected_ty,

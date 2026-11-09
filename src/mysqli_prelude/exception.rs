@@ -8,23 +8,22 @@
 //!   the injected prelude).
 //!
 //! Key details:
-//! - `mysqli_sql_exception extends RuntimeException` with a public `$sqlstate`,
-//!   matching php-src's shape (there `$sqlstate` is protected with a getter; the
-//!   public property is the documented elephc divergence).
+//! - `final class mysqli_sql_exception extends RuntimeException` with a
+//!   protected `$sqlstate` behind `getSqlState()`, exactly php-src's shape; the
+//!   private `__elephcCreate` factory is how every failure path sets it.
 //! - The process-wide report mode lives on `mysqli::$reportMode` (see
 //!   `connection.rs`); its default is version-gated in `fragments.rs`
 //!   (`ERROR|STRICT` = 3 for PHP >= 8.1, `OFF` = 0 for 8.0).
 
 /// The `mysqli_sql_exception` class and `mysqli_report()` (fragment without a
 /// `<?php` header).
-pub(super) const SRC: &str = r#"
+pub(super) const SRC: &str = r##"
 // -- mysqli error surface --
 
-// php-src: class mysqli_sql_exception extends RuntimeException. The SQLSTATE is
-// exposed as a public property (php-src keeps it protected behind getSqlState();
-// documented divergence, same bucket as writable mysqli properties).
-class mysqli_sql_exception extends RuntimeException {
-    public string $sqlstate = "00000";
+// php-src: final class mysqli_sql_exception extends RuntimeException, with the
+// SQLSTATE in a protected property behind getSqlState().
+final class mysqli_sql_exception extends RuntimeException {
+    protected string $sqlstate = "00000";
 
     // The previous exception in the chain, stored in Exception's inherited Throwable slot.
     public ?Throwable $previous = null;
@@ -39,8 +38,15 @@ class mysqli_sql_exception extends RuntimeException {
         $this->previous = $previous;
     }
 
-    // php 8.1+: the documented accessor for the SQLSTATE (the property itself is
-    // protected in php-src; elephc exposes both — see the class note).
+    // Internal factory used by every mysqli failure path: the exception php
+    // throws carries the failing operation's SQLSTATE.
+    private static function __elephcCreate(string $message, int $code, string $sqlstate): mysqli_sql_exception {
+        $_e = new mysqli_sql_exception($message, $code);
+        $_e->sqlstate = $sqlstate;
+        return $_e;
+    }
+
+    // php 8.1+: the documented accessor for the SQLSTATE.
     public function getSqlState(): string {
         return $this->sqlstate;
     }
@@ -53,4 +59,4 @@ function mysqli_report(int $flags): bool {
     mysqli::$reportMode = $flags;
     return true;
 }
-"#;
+"##;

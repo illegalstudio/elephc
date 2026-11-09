@@ -172,21 +172,24 @@ and will handle reviewing, updating, and integrating it.
 
 `main` accepts changes through GitHub's merge queue. CI runs in tiers so that Pull Requests
 get fast feedback while every supported target is still tested before anything lands. A
-`plan` job at the start of `ci.yml` and `pdo-live.yml` (`scripts/ci/plan_tiers.sh`) decides
-which tiers a run executes and writes its reason to the run summary.
+`plan` job in `ci.yml` (`scripts/ci/plan_tiers.sh`) selects the tiers and writes its
+reason to the run summary. This coordinator owns PR, merge-group and main events,
+including the PDO live and PHP SDK suites.
 
 | What | Pull Request | Merge queue | Push to `main` |
 |---|---|---|---|
-| Build and archive on every platform, doctests, the macOS xml bridge tests, repository checks (docs sync, action pins, audit, ...) | yes | yes | yes |
+| Host builds, archived tests, doctests and native bridge tests | yes | yes | reuse verified exact-SHA queue outputs, otherwise build and test |
+| Repository metadata checks (action pins, audit, ...) | yes | yes | yes |
 | Linux x86_64 and ARM64 test matrix, managed native smoke on all three hosts | yes | yes | only if the queue did not test that commit |
 | macOS test matrix (non-codegen, CLI, web, codegen, eval, PDO, curl) and the iOS compile and link jobs | with `ci:macos`, or when the PR changes CI scheduling | yes | only if the queue did not test that commit |
-| Core live database suites (`pdo-live.yml`: PostgreSQL 16 and MySQL 8.4) | yes | yes | only if the queue did not test that commit |
-| Optional-driver live database suites (`pdo-live.yml`: `sqlsrv-oci`, `cubrid-dblib`, `firebird-odbc`, `informix-ibm`) | when the PR changes PDO or mysqli code or `Cargo.lock`, or with `ci:pdo-live` | yes | only if the queue did not test that commit |
+| Core live database suites (`ci-test-pdo.yml`: PostgreSQL 16 and MySQL 8.4) | yes | yes | only if the queue did not test that commit |
+| Optional-driver live database suites (`ci-test-pdo.yml`: `sqlsrv-oci`, `cubrid-dblib`, `firebird-odbc`, `informix-ibm`) | when the PR changes PDO or mysqli code or `Cargo.lock`, or with `ci:pdo-live` | yes | only if the queue did not test that commit |
 | Real PHP 8.5 extension SDK matrix (NTS/ZTS on all three hosts, Valgrind and Apple leaks) | when producer, compiler or SDK inputs change | yes, required by `Build & Test` | only if the queue did not test that commit |
 | Benchmark suite | no | no | yes |
 
 The live database suites also run every night. "CI scheduling" means
-`.github/workflows/ci.yml`, `.config/nextest.toml`, `scripts/ci/` or `.github/actions/`:
+`.github/workflows/ci.yml`, its `ci-*.yml` reusable workflows, `.config/nextest.toml`,
+`scripts/ci/` or `.github/actions/`:
 those change how every platform's tests are scheduled, so they run the macOS tier on the PR
 itself.
 
@@ -198,15 +201,17 @@ and the optional-driver live database suites run when you add the PR to the queu
 2. The queue builds a temporary commit with the latest `main`, the PRs ahead of yours, and
    your PR, and runs every tier on it. That is exactly the commit `main` will point to.
 3. When the required checks pass, the queue fast-forwards `main` to that commit. The push
-   run that follows on `main` sees the queue's successful run on the same commit and skips
-   the test jobs. The queue can land several PRs at once when the last of them passes, while
+   run that follows on `main` requires all three successful aggregate checks and a
+   complete, unexpired artifact set from the same exact SHA and compatible environment.
+   It reuses those outputs and skips the already verified build/test families. Missing
+   proof selects a fresh build and the full test matrix. The queue can land several PRs at once when the last of them passes, while
    the runs of the ones ahead are still going; `merge-queue-cleanup.yml` cancels those runs on
    the same push, since `main` already contains their commits.
 4. If a check fails, the PR leaves the queue and stays open, and the PRs behind it are
    rebuilt without it. Fix the failure, wait for the PR tier, and add it to the queue again.
    A rebuild (after a push to `main` or when an entry ahead leaves the queue) starts a new
    merge-group run for the PR while the run of the replaced group would keep going; the
-   first job of `ci.yml` and `pdo-live.yml` in a merge-group run cancels the earlier runs of
+   cleanup job of `ci.yml` in a merge-group run cancels the earlier runs of
    the same PR (`scripts/ci/cancel_rebuilt_queue_runs.sh`), so they stop holding runners.
 
 #### Labels that run the skipped tiers on a Pull Request
@@ -218,13 +223,109 @@ system calls, the iOS targets) or reproduces a failure the queue reported:
 | Label | Runs on the Pull Request |
 |---|---|
 | `ci:macos` | The macOS test matrix and the iOS compile and link jobs of `ci.yml`. |
-| `ci:pdo-live` | The optional-driver live database suites of `pdo-live.yml` (the core PostgreSQL and MySQL suites already run on every PR). |
+| `ci:pdo-live` | The optional-driver live database suites coordinated by `ci.yml` (the core PostgreSQL and MySQL suites already run on every PR). |
 
 The `plan` job reads the labels when it runs, so adding a label does not start a run by
 itself. After adding it, push a commit or re-run the whole workflow: **Re-run all jobs** in
 the Actions tab, or `gh run rerun <run-id>`. Re-running only the failed jobs does not run
 `plan` again. Adding labels requires triage access to the repository. Remove the label when
 it is no longer needed, so later pushes go back to the PR tier.
+
+#### Shared builds and consumer jobs
+
+`ci-build-host.yml` builds the compiler, complete default bridges, the distinct
+curl-enabled Magician bridge, and relocatable nextest archives once per host.
+Consumers download explicit producer runs and attempts, validate the full source,
+configuration and checksums, then execute the archived tests. They cannot quietly
+invoke Cargo to rebuild missing outputs. A `Build` aggregate fails if any selected
+producer fails or is cancelled; `Build & Test` requires that aggregate.
+
+Separate producers retain configurations that are not interchangeable: PDO driver
+features, curl-enabled tools and contract tests, release-mode frame tests, iOS device
+and Simulator bridges, and the main-only release benchmark. A partial matrix rerun
+resolves each variant's original producing attempt. Linux container jobs use one
+immutable image digest selected at the start of the run; manifests also record the
+native compiler, Rust compiler, glibc and Apple SDK identities.
+
+The required ruleset check names remain `Build & Test`,
+`PDO core live suites (PostgreSQL 16 + MySQL 8.4)` and
+`PDO optional-driver live suites`. They are ordinary top-level jobs, not renamed
+checks nested under reusable workflows. The event remains
+`merge_group: [checks_requested]`, and only the coordinator owns queue cancellation.
+
+Doctests and environment-selected GMP/fileinfo/XML bridge tests run with their
+producer, where Cargo state already exists. Compiling PHP programs, native package
+recipes, real PHP SDKs and C/link fixtures remains part of testing. These operations
+are distinct from rebuilding the Elephc workspace in each consumer.
+
+`pdo-live.yml`, `phpext-host-sdk.yml` and `ios-curl-live.yml` are standalone schedule
+or manual wrappers using the same producers. Nightly, release and benchmark builds
+share the release producer action while retaining their actual release profile,
+version stamping, runner baseline and existing signing/publication steps.
+
+#### Development downloads for main commits
+
+After the three main gates pass, the Actions run publishes three complete
+`elephc-dev-<target>-<full-sha>.tar.gz` packages. Retain only the newest complete
+main set, ordered by first-parent source history, replacing the previous set only
+after all three packages pass verification. Find them in the producing run's
+Artifacts section or its summary links. These downloads create no version tags or
+GitHub Releases. Compiler, bridge archives, notices, checksums and producer manifests
+ship together, and each package passes a compile/link probe outside the checkout.
+The debug-profile Linux packages require glibc 2.39 or newer; macOS development
+packages are unsigned. Compiling programs still requires the platform assembler and
+C linker. Keep the compiler and bridge archives together when installing.
+
+Main artifact production is keyed by source SHA, so a later main push does not cancel
+an earlier commit's packages. When HEADGREEN merges multiple entries, the passing
+tip's test verdict applies only to that tip. `development-builds.yml` can build and
+smoke-test another exact main SHA without assigning it that verdict.
+
+The hourly `reconcile-development.yml` workflow covers skipped or missing push
+events and intermediate main commits, starting at rollout. It stores a checkpoint
+and pending requests in `development-artifacts.json` on the dedicated
+`ci/development-artifact-ledger` branch. Requests are persisted before dispatch,
+processed in bounded pages, and retried at most three times. Previously produced
+packages are not rebuilt just because their retention elapsed. Exhausted requests
+fail the reconciliation job and appear in its summary for manual inspection:
+
+```bash
+gh workflow run development-builds.yml --ref main -f source-sha=<full-main-sha>
+```
+
+Release preparation explicitly dispatches this path for its `[skip ci]` version
+bump. Backfill packages validate their own SHA with the package probe; they do not
+claim full-suite verification for a commit whose ordinary CI was skipped. Large
+internal build and test artifacts have a three-day expiry as a fallback, but the
+`artifact-retention.yml` workflow removes them when their workflow finishes,
+including failed or cancelled runs. This also removes downloadable JUnit reports
+and fixture diagnostics; Actions logs and job results remain available.
+
+Successful merge-group runs retain only six compiler/bridge payloads plus their
+small environment identity until main has consumed them. Active consumers and a
+short merge propagation grace period protect that handoff. Abandoned queue entries
+release it after the grace period. Main reuse still requires the exact source and
+all three successful gates, even after the disposable test executables are gone.
+After a concluded run has been cleaned, use **Re-run all jobs**, since a failed-only
+rerun cannot restore deleted producer inputs. Retries inside a running workflow
+continue to use their original artifacts.
+
+The janitor runs on workflow completion and hourly, using only trusted main code.
+It checkpoints exact artifact IDs in `artifact-retention.json` on the same ledger
+branch before deletion. Old runs finishing late cannot replace a newer main set.
+Scheduled discovery recovers missed completion events. Both ledger writers share
+one concurrency group. A manual run defaults to a read-only deletion preview.
+
+GitHub still requires an expiry (90 days maximum for this public repository).
+Before the retained set expires, the janitor copies and verifies the original
+package bytes into three new Actions artifacts, without recompiling or creating a
+release. Only a complete successful copy replaces the old IDs. Consequently the
+latest download can move to an Artifact retention run; its ledger records the
+current run and IDs. If scheduled automation stops long enough for that copy to
+expire, cleanup fails visibly and `development-builds.yml` can recreate that SHA.
+This is a latest-version policy, not a history of daily builds: storage settles to
+the three complete packages (about 1.1 GB in the measured build), plus artifacts of
+active workflows, temporary replacement copies and live queue handoffs.
 
 ### Third-party GitHub Actions are pinned to commit SHAs
 

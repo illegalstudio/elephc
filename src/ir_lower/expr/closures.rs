@@ -211,6 +211,10 @@ pub(super) fn lower_closure_with_context(
                 PhpType::Mixed,
             )
         } else {
+            // A raw by-reference variadic holds its argument array, not a cell (see
+            // `is_raw_reference_variadic`). Its slot is part of the ABI, so it cannot be widened
+            // to Mixed in place: promote it to a cell that keeps the array payload instead.
+            let raw_reference_variadic = by_ref && ctx.is_raw_reference_variadic(capture);
             let preserves_native_reference_layout = by_ref
                 && ctx.is_ref_bound_local(capture)
                 && ctx.local_load_php_type(capture).is_some_and(|ty|
@@ -250,6 +254,8 @@ pub(super) fn lower_closure_with_context(
                     ctx.store_local(capture, null, PhpType::Mixed, Some(expr.span));
                 }
                 ctx.promote_local_mixed_ref_cell(capture, Some(expr.span));
+            } else if raw_reference_variadic {
+                ctx.promote_local_ref_cell(capture, Some(expr.span));
             } else if widens_by_ref_capture {
                 // Convert the existing payload before changing the slot contract. Merely
                 // widening metadata first leaves a raw array, object, or string in storage that

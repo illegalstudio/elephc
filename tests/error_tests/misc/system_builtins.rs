@@ -237,13 +237,10 @@ fn test_eval_barrier_allows_dynamic_function_call() {
         .expect("eval-declared function calls after the barrier should type-check");
 }
 
-/// Verifies eval does not hide undefined-variable reads that happen before the barrier.
+/// Verifies eval keeps a pre-barrier undefined-variable read on PHP 8's runtime-warning path.
 #[test]
-fn test_eval_barrier_does_not_hide_prior_undefined_variable() {
-    expect_error(
-        "<?php echo $created; eval('$created = 1;');",
-        "Undefined variable: $created",
-    );
+fn test_eval_barrier_keeps_prior_undefined_variable_runtime_warning() {
+    expect_no_error("<?php echo $created; eval('$created = 1;');");
 }
 
 /// Verifies that referencing an undefined constant produces the expected "Undefined constant" error.

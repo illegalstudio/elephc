@@ -6,7 +6,7 @@ description: "Returns how many rows a prepared write affected."
 ## mysqli_stmt_affected_rows()
 
 ```php
-function mysqli_stmt_affected_rows(mixed $statement): int
+function mysqli_stmt_affected_rows(mixed $statement): mixed
 ```
 
 Returns how many rows a prepared write affected.
@@ -14,7 +14,7 @@ Returns how many rows a prepared write affected.
 **Parameters**:
 - `$statement` (`mixed`)
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 

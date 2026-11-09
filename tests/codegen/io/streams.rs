@@ -8375,3 +8375,27 @@ try {
     assert_eq!(out.stdout, "value|".repeat(4));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Verifies `file_get_contents()` drains a registered user wrapper instead of only opening it.
+#[test]
+fn test_file_get_contents_user_wrapper_reads_content() {
+    let out = compile_and_run(
+        r#"<?php
+class FgcContentWrapper {
+    public string $data = "wrapper-content";
+    public int $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    public function stream_read(int $count): string {
+        $chunk = substr($this->data, $this->pos, $count);
+        $this->pos += strlen($chunk);
+        return $chunk;
+    }
+    public function stream_eof(): bool { return $this->pos >= strlen($this->data); }
+    public function stream_close(): void {}
+}
+stream_wrapper_register("fgccontent", "FgcContentWrapper");
+echo file_get_contents("fgccontent://x"), "|";
+"#,
+    );
+    assert_eq!(out, "wrapper-content|");
+}

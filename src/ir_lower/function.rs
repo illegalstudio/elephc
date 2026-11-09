@@ -109,6 +109,7 @@ pub(crate) fn lower_main(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -264,6 +265,7 @@ pub(crate) fn lower_user_function(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -395,6 +397,7 @@ pub(crate) fn lower_class_method(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -524,6 +527,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &boxed_reference_promotion_sites,
@@ -662,6 +666,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &boxed_reference_promotion_sites,
@@ -787,6 +792,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -1160,6 +1166,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -1289,6 +1296,7 @@ pub(crate) fn lower_clone_override_function(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -1462,6 +1470,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.closure_generator_spans,
             &check_result.array_push_property_plans,
             &check_result.member_receiver_types,
+            &check_result.array_append_element_types,
             &check_result.local_value_read_types,
             &check_result.boxed_reference_promotion_sites,
             &check_result.first_class_builtin_call_types,
@@ -1715,6 +1724,7 @@ fn lower_closure_function_with_signature(
         parent.closure_generator_spans,
         parent.array_push_property_plans,
         parent.member_receiver_types,
+        parent.array_append_element_types,
         parent.local_value_read_types,
 
         parent.boxed_reference_promotion_sites,
@@ -1776,6 +1786,7 @@ fn lower_body_into_function(
     closure_generator_spans: &std::collections::HashSet<Span>,
     array_push_property_plans: &std::collections::HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     member_receiver_types: &std::collections::HashMap<(String, Span), Option<PhpType>>,
+    array_append_element_types: &std::collections::HashMap<(String, Span), Option<PhpType>>,
     local_value_read_types: &crate::types::LocalValueReadTypes,
 
     boxed_reference_promotion_sites: &std::collections::HashMap<
@@ -1842,7 +1853,7 @@ fn lower_body_into_function(
             fiber_return_sigs, classes, enums, interfaces, declared_trait_names,
             declared_trait_methods, declared_trait_properties, packed_classes, extern_classes,
             throw_access_sites, builtin_call_types, closure_generator_spans,
-            array_push_property_plans, member_receiver_types, local_value_read_types,
+            array_push_property_plans, member_receiver_types, array_append_element_types, local_value_read_types,
             boxed_reference_promotion_sites, first_class_builtin_call_types, generic_call_sites,
             loop_storage_types, string_incdec_locals, bind_kill_sites, ref_detach_sites,
             retype_sites, mixed_storage_store_sites, sparse_key_write_sites, promotable_arrays,
@@ -1860,6 +1871,32 @@ fn lower_body_into_function(
         .iter()
         .map(|param| param.by_ref)
         .collect::<Vec<_>>();
+    // By-reference parameters of a union of null, arrays and objects are checked on entry,
+    // after the caller evaluated every argument (php's RECV order).
+    let reference_entry_guards = {
+        let display = function
+            .display_name
+            .clone()
+            .or_else(|| function.source_name.clone())
+            .unwrap_or_else(|| function.name.clone());
+        let mut position = 0;
+        let mut guards = Vec::new();
+        for (index, (name, php_type)) in params.iter().enumerate() {
+            if name == "this"
+                || name == crate::func_args::HIDDEN_ARGC_PARAM
+                || name == crate::func_args::HIDDEN_ARGS_PARAM
+            {
+                continue;
+            }
+            position += 1;
+            if by_ref_params.get(index).copied().unwrap_or(false)
+                && crate::ir_lower::expr::reference_parameter_needs_entry_guard(php_type)
+            {
+                guards.push((display.clone(), position, name.clone(), php_type.clone()));
+            }
+        }
+        guards
+    };
     let reference_variadic = function.signature.as_ref().and_then(|signature| {
         let name = signature.variadic.as_ref()?;
         let index = signature.params.iter().position(|(candidate, _)| candidate == name)?;
@@ -1892,6 +1929,7 @@ fn lower_body_into_function(
         closure_generator_spans,
         array_push_property_plans,
         member_receiver_types,
+        array_append_element_types,
         local_value_read_types,
 
         boxed_reference_promotion_sites,
@@ -1975,10 +2013,19 @@ fn lower_body_into_function(
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
     ctx.lower_with_final_string_storage(|ctx| {
-        if !eager_parameters { super::object_boundaries::guard_parameters(ctx); }
+        if !eager_parameters {
+            super::object_boundaries::guard_parameters(ctx, &reference_entry_guards);
+        }
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
+            if eager_parameters {
+                // Generators check their parameters eagerly elsewhere; these keep their
+                // place at the start of the body.
+                for (display, position, name, php_type) in &reference_entry_guards {
+                    crate::ir_lower::expr::guard_reference_parameter_entry(ctx, display, *position, name, php_type);
+                }
+            }
             crate::ir_lower::numeric_storage::lower_body(ctx, body);
         }
     });

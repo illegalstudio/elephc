@@ -18,3 +18,11 @@ echo $catalog->asXML();
 // The same factories accept PHP data URLs.
 $inline = simplexml_load_file('data://text/plain;base64,PHIvPg==');
 if ($inline instanceof SimpleXMLElement) { echo 'Inline document: ', $inline->getName(), "\n"; }
+
+// DOM nodes appended to a native document remain live through the original objects.
+$document = new DOMDocument();
+$document->loadXML('<catalog/>');
+$entry = $document->createElement('product', 'Notebook');
+$document->documentElement->appendChild($entry);
+$entry->setAttribute('sku', 'A1');
+echo $document->saveXML();

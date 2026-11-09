@@ -169,7 +169,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     store_compiled_call_result(ctx, inst, &callee_sig.return_type, callee_sig.by_ref_return)?;
     // User callees return an owner independent of the caller's materialized Mixed arguments.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)?;
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)?;
     if let Some(done_label) = eval_done_label {
         ctx.emitter.label(&done_label);
     }
@@ -231,7 +231,7 @@ pub(super) fn lower_lexical_instance_static_method_call(
     store_method_call_result(ctx, inst, &target)?;
     // The callee's parameter shadows keep any returned Mixed value independently owned.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, target.by_ref_return)
 }
 
 /// Emits late-static dispatch through either the physical or source-ABI table.

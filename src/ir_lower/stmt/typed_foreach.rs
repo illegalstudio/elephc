@@ -806,6 +806,12 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
         PhpType::AssocArray { value, .. } if matches!(value.codegen_repr(), PhpType::Buffer(_)) => {
             value.codegen_repr()
         }
+        // A hash of objects binds the object like an indexed list does, so the value keeps the
+        // checker's element type: appending it to a pinned `array<C>` builder must not widen the
+        // builder to boxed storage.
+        PhpType::AssocArray { value, .. } if matches!(value.codegen_repr(), PhpType::Object(_)) => {
+            value.codegen_repr()
+        }
         PhpType::Object(class_name) if class_name == "Phar" || class_name == "PharData" => {
             PhpType::Object("PharFileInfo".to_string())
         }
@@ -818,7 +824,8 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
 /// Hash iteration hands every entry out boxed as `Mixed`, and a pointer or buffer entry is boxed
 /// as an integer-like payload. For a hash of pointers or buffers the box is cast back to that
 /// word and retyped, so `$p->x`, `$p === null` and `$buf[$i]` see the pointer or handle instead
-/// of a boxed integer.
+/// of a boxed integer. For a hash of objects the box is unboxed into an owned object lease and
+/// then released, matching the owned concrete value an indexed object iteration produces.
 pub(super) fn lower_foreach_current_value(
     ctx: &mut LoweringContext<'_, '_>,
     iterator: LoweredValue,
@@ -826,9 +833,15 @@ pub(super) fn lower_foreach_current_value(
     value_ty: &PhpType,
     span: Span,
 ) -> LoweredValue {
-    let unbox_hash_word = matches!(source_ty, PhpType::AssocArray { .. })
+    let hash_source = matches!(source_ty, PhpType::AssocArray { .. });
+    let unbox_hash_word = hash_source
         && matches!(value_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_));
-    let current_ty = if unbox_hash_word { PhpType::Mixed } else { value_ty.clone() };
+    let unbox_hash_object = hash_source && matches!(value_ty.codegen_repr(), PhpType::Object(_));
+    let current_ty = if unbox_hash_word || unbox_hash_object {
+        PhpType::Mixed
+    } else {
+        value_ty.clone()
+    };
     let value = ctx.emit_value(
         Op::IterCurrentValue,
         vec![iterator.value],
@@ -837,6 +850,20 @@ pub(super) fn lower_foreach_current_value(
         Op::IterCurrentValue.default_effects(),
         Some(span),
     );
+    if unbox_hash_object {
+        // The unbox takes its own payload reference, so the iterator's owned box can be released
+        // at once; the source entry still holds the object, so this release runs no destructor.
+        let object = ctx.emit_owned_value(
+            Op::MixedUnbox,
+            vec![value.value],
+            None,
+            value_ty.clone(),
+            Op::mixed_unbox_effects(value_ty),
+            Some(span),
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        return object;
+    }
     if !unbox_hash_word {
         return value;
     }

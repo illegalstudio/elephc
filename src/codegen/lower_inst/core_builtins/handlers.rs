@@ -480,6 +480,9 @@ fn emit_default_user_error(
     let mask_reg = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, mask_reg, "_php_error_reporting", 0);
     emit_branch_if_no_mask_overlap(ctx, mask_reg, level_reg, &skip_output);
+    // php-src prefixes every displayed diagnostic with one newline, even when the
+    // previous output already ended its line.
+    emit_user_error_fragment(ctx, b"\n");
     if let Some(category) = internal_category { emit_user_error_fragment(ctx, category); }
     else { emit_user_error_category(ctx, level_reg); }
     match ctx.emitter.target.arch {

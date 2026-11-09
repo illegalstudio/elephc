@@ -250,6 +250,7 @@ pub(crate) use call_operand_owners::{
     PinnedInFlightOwner,
 };
 pub(crate) use property_access::singular_object_class;
+pub(crate) use enum_argument_guards::{guard_reference_parameter_entry, reference_parameter_needs_entry_guard};
 pub(crate) use property_access::class_extends_class;
 pub(crate) use property_access::packed_receiver_class;
 pub(crate) use property_access::extern_receiver_class;
@@ -323,6 +324,44 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
     value
 }
 
+/// Returns whether the process entry point has already populated the named storage.
+fn entry_initialized_local(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    (ctx.in_main && matches!(name, "argc" | "argv"))
+        || crate::superglobals::is_superglobal(name)
+        || ctx.extern_globals.contains_key(name)
+}
+
+/// Reads an undefined variable as `null` and emits PHP 8's E_WARNING at this call site.
+fn lower_undefined_variable_read(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    // `isset()` and the left operand of `??` are PHP's silent probes: they name storage that
+    // may never have been declared, and answer null/false without an Undefined variable warning.
+    if ctx.suppresses_undefined_reads(name, expr.span) {
+        return lower_null(ctx, expr);
+    }
+    let message = format!("Warning: Undefined variable ${name}\n");
+    let data = ctx.intern_string(&message);
+    let warning = ctx.emit_value(
+        Op::ConstStr,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        PhpType::Str,
+        Op::ConstStr.default_effects(),
+        Some(expr.span),
+    );
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![warning.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::WriteDiagnostic)),
+        crate::ir::Effects::all(),
+        Some(expr.span),
+    );
+    lower_null(ctx, expr)
+}
+
 /// Dispatches one expression while its reference-call context remains distinct from nested operands.
 fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
     if let Some(value) = nullsafe_chain::lower(ctx, expr) {
@@ -340,8 +379,35 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
         ExprKind::FloatLiteral(value) => lower_float_literal(ctx, *value, expr),
         ExprKind::BoolLiteral(value) => lower_bool_literal(ctx, *value, expr),
         ExprKind::Null => lower_null(ctx, expr),
+        ExprKind::Variable(name) if name == "GLOBALS" => lower_globals_read(ctx, expr),
         ExprKind::Variable(name) => super::scoped_writes::take_value(ctx, name, expr.span)
-            .unwrap_or_else(|| lower_local_value(ctx, name, expr.span)),
+            .unwrap_or_else(|| {
+                // A slot created by an earlier store, or one of the names the process entry
+                // point pre-populates, is a real local. A name the checker only learned from
+                // a later assignment has no storage yet, so it takes PHP's undefined-variable
+                // warning path instead of reading an uninitialized frame slot.
+                // An eval-scope read has no frame slot by design; its storage lives in the
+                // active eval scope, so it is initialized even when `has_local_slot` is false.
+                // A read the checker typed as anything but null is a loop-carried binding whose
+                // store (a `for` update, for example) has not been lowered yet. Allocate its
+                // slot from that typed read instead of warning: the checker already decided the
+                // assignment reaches every read that matters.
+                let checker_read = ctx.local_value_read_types.get(&(
+                    ctx.loop_storage_scope.clone(),
+                    expr.span,
+                    name.to_string(),
+                ));
+                if ctx.has_local_slot(name)
+                    || ctx.reads_from_eval_scope(name)
+                    || ctx.has_eval_barrier()
+                    || entry_initialized_local(ctx, name)
+                    || checker_read.is_some_and(|ty| *ty != PhpType::Void)
+                {
+                    lower_local_value(ctx, name, expr.span)
+                } else {
+                    lower_undefined_variable_read(ctx, name, expr)
+                }
+            }),
         ExprKind::BinaryOp { left, op, right } => lower_binary(ctx, left, op, right, expr),
         ExprKind::InstanceOf { value, target } => lower_instanceof(ctx, value, target, expr),
         ExprKind::Negate(inner) => lower_numeric_unary(ctx, inner, Op::INeg, Op::FNeg, expr),
@@ -967,11 +1033,11 @@ fn rewrite_literal_param_bindings(sig: &FunctionSig, args: &[Expr]) -> Option<Ve
 /// `ArrayPtrSeek` to compute the new cursor, stores it back, and then boxes the value at
 /// the new position — the same two-step shape PHP's own implementations use.
 ///
-/// Returns `None` for anything this path cannot own (named/spread arguments, a wrong
-/// argument count, or a receiver that is not a plain variable) so the generic builtin path
-/// still runs. The checker has already rejected those shapes with a source-level
-/// diagnostic (`crate::builtins::array::internal_pointer`), so reaching the generic path
-/// in a successful compile is not possible.
+/// Returns `None` for anything this path cannot own (named/spread arguments or a wrong
+/// argument count) so the generic builtin path still runs. The checker has already rejected
+/// addressable receivers such as properties and array elements with a source-level diagnostic
+/// (`crate::builtins::array::internal_pointer`); temporary call/match/ternary results reach
+/// this path and are materialized into a hidden local above.
 fn lower_array_internal_pointer(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -991,10 +1057,19 @@ fn lower_array_internal_pointer(
     {
         return None;
     }
-    let ExprKind::Variable(variable) = &args[0].kind else {
-        return None;
+    // A non-variable receiver (a call result such as `current($xml->xpath(...))`) has no
+    // caller-visible cursor, so materialize its value once into a hidden array local. The
+    // cursor then lives beside that local exactly like a source variable's.
+    let variable = match &args[0].kind {
+        ExprKind::Variable(variable) => variable.clone(),
+        _ => {
+            let value = lower_expr(ctx, &args[0]);
+            let ty = ctx.builder.value_php_type(value.value);
+            let temp = ctx.declare_hidden_temp(ty.clone());
+            store_value_into_temp(ctx, &temp, ty, value, args[0].span);
+            temp
+        }
     };
-    let variable = variable.clone();
     let container = ctx.load_local(&variable, Some(args[0].span));
     let cursor_slot = ctx.array_pointer_cursor_slot(&variable);
     let cursor = ctx

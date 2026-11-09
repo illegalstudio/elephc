@@ -294,6 +294,22 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
                     }
                 };
                 out.push_str(&format!("\n{}{}", pad(depth + 1), call));
+                if property.hooks.any() {
+                    assert!(
+                        !property.hooks.get_by_ref,
+                        "transcribe: by-reference get hooks are not modelled ({})",
+                        property.name
+                    );
+                    // The hook BODIES are ordinary `__propget_*` / `__propset_*`
+                    // methods emitted below; only the property's hook flags live here.
+                    out.push_str(&format!(
+                        "\n{}.hooked({}, {}, {})",
+                        pad(depth + 1),
+                        property.hooks.get,
+                        property.hooks.set,
+                        property.hooks.uses_backing_slot
+                    ));
+                }
             }
             for class_method in methods {
                 assert!(
@@ -881,6 +897,7 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
                 stmt_vec(body, depth)
             )
         }
+        StmtKind::Synthetic(body) => format!("s_synthetic({})", stmt_vec(body, depth)),
         other => panic!("transcribe: unmodelled statement {:?}", other),
     }
 }
@@ -983,15 +1000,46 @@ fn expr(value: &Expr, depth: usize) -> String {
             conditional_value_temp,
         } => {
             assert!(
-                result_target.is_none()
-                    && prelude.is_empty()
-                    && conditional_value_temp.is_none(),
-                "only plain assignments are modelled"
+                conditional_value_temp.is_none(),
+                "only plain assignments are modelled (assignment at {:?})",
+                target.span
+            );
+            if result_target.is_none() && prelude.is_empty() {
+                return format!(
+                    "e_assign({}, {})",
+                    expr(target, depth),
+                    expr(value, depth)
+                );
+            }
+            // The parser lowered a non-local target (`$o->{"k"} = v`) into a
+            // value temporary bound in `prelude`. `e_assign` re-runs that same
+            // lowering, so recover the ORIGINAL value from the temporary and emit
+            // the plain form — then prove the round trip rebuilds this exact node.
+            let original = match &value.kind {
+                ExprKind::Variable(temp) => prelude
+                    .iter()
+                    .find_map(|stmt| match &stmt.kind {
+                        StmtKind::Assign { name, value } if name == temp => Some(value.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| (**value).clone()),
+                _ => (**value).clone(),
+            };
+            let rebuilt = crate::parser::expr::plain_assignment_expression(
+                (**target).clone(),
+                original.clone(),
+                value_span_or(value),
+            );
+            assert_eq!(
+                strip_debug_spans(&format!("{:?}", rebuilt.kind)),
+                strip_debug_spans(&format!("{:?}", value_owner_kind(target, value, result_target, prelude))),
+                "transcribe: lowered assignment at {:?} does not round-trip through e_assign",
+                target.span
             );
             format!(
                 "e_assign({}, {})",
                 expr(target, depth),
-                expr(value, depth)
+                expr(&original, depth)
             )
         }
         ExprKind::FunctionCall { name, args } => format!(
@@ -1156,6 +1204,13 @@ fn ty_expr(ty: &TypeExpr) -> String {
         TypeExpr::Ptr(None) => "t_ptr()".to_string(),
         TypeExpr::Never => "TypeExpr::Never".to_string(),
         TypeExpr::Iterable => "TypeExpr::Iterable".to_string(),
+        TypeExpr::Array(inner) => format!("TypeExpr::Array(Box::new({}))", ty_expr(inner)),
+        TypeExpr::AssocArray { key, value } => format!(
+            "TypeExpr::AssocArray {{ key: Box::new({}), value: Box::new({}) }}",
+            ty_expr(key),
+            ty_expr(value)
+        ),
+        TypeExpr::Buffer(inner) => format!("TypeExpr::Buffer(Box::new({}))", ty_expr(inner)),
         TypeExpr::Nullable(inner) => format!("t_nullable({})", ty_expr(inner)),
         TypeExpr::Union(members) => {
             let rendered: Vec<String> = members.iter().map(ty_expr).collect();
@@ -1229,6 +1284,44 @@ fn bin_op(op: &BinOp) -> &'static str {
         BinOp::Spaceship => "Spaceship",
         BinOp::NullCoalesce => "NullCoalesce",
     }
+}
+
+/// The span a re-lowered assignment is stamped with: any span works, because the
+/// round-trip comparison strips spans and temp names are compared structurally.
+fn value_span_or(value: &Expr) -> crate::span::Span {
+    value.span
+}
+
+/// Rebuilds the parsed `Assignment` node kind so it can be compared with a re-lowering.
+fn value_owner_kind(
+    target: &Expr,
+    value: &Expr,
+    result_target: &Option<Box<Expr>>,
+    prelude: &[Stmt],
+) -> ExprKind {
+    ExprKind::Assignment {
+        target: Box::new(target.clone()),
+        value: Box::new(value.clone()),
+        result_target: result_target.clone(),
+        prelude: prelude.to_vec(),
+        conditional_value_temp: None,
+    }
+}
+
+/// Removes span payloads and generated temp-name positions so two lowerings of
+/// the same assignment compare on structure alone.
+fn strip_debug_spans(rendered: &str) -> String {
+    let mut cleaned = String::with_capacity(rendered.len());
+    let mut rest = rendered;
+    while let Some(at) = rest.find("Span {") {
+        cleaned.push_str(&rest[..at]);
+        cleaned.push_str("Span");
+        let after = &rest[at..];
+        let close = after.find('}').map(|end| end + 1).unwrap_or(after.len());
+        rest = &after[close..];
+    }
+    cleaned.push_str(rest);
+    crate::synthetic_class::oracle::assignment_names(&cleaned)
 }
 
 #[cfg(test)]

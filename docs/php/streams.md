@@ -283,11 +283,22 @@ When `fopen("$protocol://...")` matches a registered wrapper, elephc creates an
 instance through the runtime class registry. Declared property defaults are
 applied, but `__construct` is not invoked on this path.
 
+php-src first assigns the stream context resource to the wrapper object's
+`context` property, before calling `stream_open()`. A registered SimpleXML class
+rejects that write because the instance has no XML document, so elephc raises the
+same two-stage failure as PHP: `TypeError: It's not possible to assign a complex
+type to properties, resource given`, whose `getPrevious()` is
+`Error: SimpleXMLElement is not properly initialized`.
+
 Supported wrapper methods include `stream_open`, `stream_read`, `stream_write`,
 `stream_close`, `stream_eof`, `stream_seek`, `stream_tell`, `stream_flush`,
 `stream_stat`, `stream_lock`, `stream_truncate`, `stream_metadata`,
 `stream_set_option`, `stream_cast`, `url_stat`, and the directory methods
 `dir_opendir`, `dir_readdir`, `dir_rewinddir`, and `dir_closedir`.
+
+`file_get_contents()` on a registered wrapper path opens the wrapper and drains
+`stream_read()` to EOF through the same stream helper as `fopen()`. A refused
+`stream_open()` returns `false` after the usual failed-open warning.
 
 `url_stat` is consulted by the whole stat family: `stat()`, `lstat()`,
 `file_exists()`, the integer getters (`filesize()`, `filemtime()`, `fileatime()`,

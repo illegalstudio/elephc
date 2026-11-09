@@ -52,7 +52,7 @@ fn test_parser_block_recovery_collects_multiple_errors() {
 /// at least 2 checker errors are reported with their messages.
 #[test]
 fn test_type_checker_recovery_collects_multiple_errors() {
-    let error = check_source_full("<?php echo $missing; echo $also_missing;").unwrap_err();
+    let error = check_source_full("<?php strlen(); strlen();").unwrap_err();
     let all = error.flatten();
     assert!(
         all.len() >= 2,
@@ -143,9 +143,9 @@ fn test_failed_assignment_many_uses_single_error() {
     );
 }
 
-/// Regression for #597: recovering a failed-assignment target must not suppress a genuinely
-/// undefined variable used later. The spread error and the real `$undefined_for_real` error
-/// are both reported, while the assigned `$s` produces no `Undefined variable` noise.
+/// Regression for #597: recovering a failed-assignment target must not turn the assigned
+/// `$s` into a compile error. Undefined reads are runtime warnings in PHP 8, so the spread
+/// error is the only static diagnostic here.
 #[test]
 fn test_failed_assignment_preserves_later_real_undefined() {
     let messages = checker_error_messages(
@@ -153,18 +153,13 @@ fn test_failed_assignment_preserves_later_real_undefined() {
     );
     assert_eq!(
         messages.len(),
-        2,
-        "expected the spread error plus the genuine undefined-variable error, got {:?}",
+        1,
+        "expected only the spread error, got {:?}",
         messages,
     );
     assert!(
         messages.iter().any(|message| message.contains("Spread operator requires an array")),
         "expected the spread diagnostic, got {:?}",
-        messages,
-    );
-    assert!(
-        messages.iter().any(|message| message.contains("Undefined variable: $undefined_for_real")),
-        "a genuinely undefined variable must still be diagnosed, got {:?}",
         messages,
     );
     assert!(
@@ -240,7 +235,7 @@ fn test_failed_list_unpack_inference_targets_no_undefined_cascade() {
         checker_error_messages("<?php [$a, $b] = $missing; echo count($a); echo $b;");
     assert_eq!(
         messages,
-        vec!["Undefined variable: $missing".to_string()],
+        vec!["List unpacking requires an array on the right-hand side".to_string()],
         "failed list-unpack inference must not leave either target undefined",
     );
 }
@@ -330,10 +325,8 @@ fn test_method_cannot_read_top_level_local_without_global() {
         "<?php $value = 5; class C { public function f(): int { return $value; } }",
     );
     assert!(
-        messages
-            .iter()
-            .any(|message| message.contains("Undefined variable: $value")),
-        "method reads must not resolve ordinary top-level locals, got {:?}",
+        messages.iter().any(|message| message.contains("got null")),
+        "the method-local read must remain null rather than resolve the top-level int, got {:?}",
         messages,
     );
 }

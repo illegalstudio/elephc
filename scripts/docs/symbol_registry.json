@@ -1460,6 +1460,24 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "dom",
+      "name": "Dom\\XMLDocument",
+      "php_manual": null,
+      "since": "8.4"
+    },
+    {
+      "aot": {
         "kind": "checker-injected",
         "supported": true
       },
@@ -2588,6 +2606,24 @@
       "internal": false,
       "kind": "class",
       "module": "mysqli",
+      "name": "mysqli_driver",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "mysqli",
       "name": "mysqli_result",
       "php_manual": null,
       "since": null
@@ -2625,6 +2661,24 @@
       "kind": "class",
       "module": "mysqli",
       "name": "mysqli_stmt",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "mysqli",
+      "name": "mysqli_warning",
       "php_manual": null,
       "since": null
     },
@@ -21094,6 +21148,24 @@
       "extension": false,
       "internal": false,
       "module": "libxml",
+      "name": "LIBXML_NO_XXE",
+      "route": "predefined",
+      "since": "8.4",
+      "value": 8388608
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
       "name": "LIBXML_NSCLEAN",
       "route": "predefined",
       "since": null,
@@ -21454,10 +21526,100 @@
       "extension": false,
       "internal": false,
       "module": "mysqli",
+      "name": "MYSQLI_ASYNC",
+      "route": "prelude",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_AUTO_INCREMENT_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 512
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_BINARY_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 128
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_BLOB_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
       "name": "MYSQLI_BOTH",
       "route": "prelude",
       "since": null,
       "value": 3
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS",
+      "route": "prelude",
+      "since": null,
+      "value": 4194304
     },
     {
       "aot": {
@@ -21544,10 +21706,172 @@
       "extension": false,
       "internal": false,
       "module": "mysqli",
+      "name": "MYSQLI_CLIENT_NO_SCHEMA",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
       "name": "MYSQLI_CLIENT_SSL",
       "route": "prelude",
       "since": null,
       "value": 2048
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT",
+      "route": "prelude",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_CLIENT_SSL_VERIFY_SERVER_CERT",
+      "route": "prelude",
+      "since": null,
+      "value": 1073741824
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_CURSOR_TYPE_NO_CURSOR",
+      "route": "prelude",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_CURSOR_TYPE_READ_ONLY",
+      "route": "prelude",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_DATA_TRUNCATED",
+      "route": "prelude",
+      "since": null,
+      "value": 101
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_DEBUG_TRACE_ENABLED",
+      "route": "prelude",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_ENUM_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 256
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_GROUP_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 32768
     },
     {
       "aot": {
@@ -21580,6 +21904,96 @@
       "extension": false,
       "internal": false,
       "module": "mysqli",
+      "name": "MYSQLI_IS_MARIADB",
+      "route": "prelude",
+      "since": "8.1",
+      "value": false
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_MULTIPLE_KEY_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_NOT_NULL_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_NO_DATA",
+      "route": "prelude",
+      "since": null,
+      "value": 100
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_NO_DEFAULT_VALUE_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 4096
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
       "name": "MYSQLI_NUM",
       "route": "prelude",
       "since": null,
@@ -21598,10 +22012,460 @@
       "extension": false,
       "internal": false,
       "module": "mysqli",
+      "name": "MYSQLI_NUM_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 32768
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_ON_UPDATE_NOW_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 8192
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_OPT_CAN_HANDLE_EXPIRED_PASSWORDS",
+      "route": "prelude",
+      "since": null,
+      "value": 37
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_OPT_COMPRESS",
+      "route": "prelude",
+      "since": "8.6",
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
       "name": "MYSQLI_OPT_CONNECT_TIMEOUT",
       "route": "prelude",
       "since": null,
       "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_OPT_INT_AND_FLOAT_NATIVE",
+      "route": "prelude",
+      "since": null,
+      "value": 201
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_OPT_LOAD_DATA_LOCAL_DIR",
+      "route": "prelude",
+      "since": "8.1",
+      "value": 43
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_OPT_LOCAL_INFILE",
+      "route": "prelude",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_OPT_NET_CMD_BUFFER_SIZE",
+      "route": "prelude",
+      "since": null,
+      "value": 202
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_OPT_NET_READ_BUFFER_SIZE",
+      "route": "prelude",
+      "since": null,
+      "value": 203
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_OPT_READ_TIMEOUT",
+      "route": "prelude",
+      "since": null,
+      "value": 11
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_OPT_SSL_VERIFY_SERVER_CERT",
+      "route": "prelude",
+      "since": null,
+      "value": 21
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_PART_KEY_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 16384
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_PRI_KEY_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_READ_DEFAULT_FILE",
+      "route": "prelude",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_READ_DEFAULT_GROUP",
+      "route": "prelude",
+      "since": null,
+      "value": 5
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_REFRESH_BACKUP_LOG",
+      "route": "prelude",
+      "since": null,
+      "value": 2097152
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_REFRESH_GRANT",
+      "route": "prelude",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_REFRESH_HOSTS",
+      "route": "prelude",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_REFRESH_LOG",
+      "route": "prelude",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_REFRESH_MASTER",
+      "route": "prelude",
+      "since": null,
+      "value": 128
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_REFRESH_REPLICA",
+      "route": "prelude",
+      "since": "8.1",
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_REFRESH_SLAVE",
+      "route": "prelude",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_REFRESH_STATUS",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_REFRESH_TABLES",
+      "route": "prelude",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_REFRESH_THREADS",
+      "route": "prelude",
+      "since": null,
+      "value": 32
     },
     {
       "aot": {
@@ -21706,6 +22570,96 @@
       "extension": false,
       "internal": false,
       "module": "mysqli",
+      "name": "MYSQLI_SERVER_PS_OUT_PARAMS",
+      "route": "prelude",
+      "since": null,
+      "value": 4096
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_SERVER_PUBLIC_KEY",
+      "route": "prelude",
+      "since": null,
+      "value": 35
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_SERVER_QUERY_NO_GOOD_INDEX_USED",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_SERVER_QUERY_NO_INDEX_USED",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_SERVER_QUERY_WAS_SLOW",
+      "route": "prelude",
+      "since": null,
+      "value": 2048
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
       "name": "MYSQLI_SET_CHARSET_NAME",
       "route": "prelude",
       "since": null,
@@ -21724,10 +22678,100 @@
       "extension": false,
       "internal": false,
       "module": "mysqli",
+      "name": "MYSQLI_SET_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 2048
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_STMT_ATTR_CURSOR_TYPE",
+      "route": "prelude",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH",
+      "route": "prelude",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
       "name": "MYSQLI_STORE_RESULT",
       "route": "prelude",
       "since": null,
       "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_STORE_RESULT_COPY_DATA",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_TIMESTAMP_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 1024
     },
     {
       "aot": {
@@ -21890,6 +22934,24 @@
       "route": "prelude",
       "since": null,
       "value": 252
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_TYPE_CHAR",
+      "route": "prelude",
+      "since": null,
+      "value": 1
     },
     {
       "aot": {
@@ -22354,6 +23416,24 @@
       "extension": false,
       "internal": false,
       "module": "mysqli",
+      "name": "MYSQLI_TYPE_VECTOR",
+      "route": "prelude",
+      "since": "8.4",
+      "value": 242
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
       "name": "MYSQLI_TYPE_YEAR",
       "route": "prelude",
       "since": null,
@@ -22372,10 +23452,64 @@
       "extension": false,
       "internal": false,
       "module": "mysqli",
+      "name": "MYSQLI_UNIQUE_KEY_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_UNSIGNED_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
       "name": "MYSQLI_USE_RESULT",
       "route": "prelude",
       "since": null,
       "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
+      "name": "MYSQLI_ZEROFILL_FLAG",
+      "route": "prelude",
+      "since": null,
+      "value": 64
     },
     {
       "aot": {

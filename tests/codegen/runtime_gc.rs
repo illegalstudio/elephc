@@ -24,9 +24,12 @@ mod owned_tostring;
 #[path = "runtime_gc/borrowed_string_reads.rs"]
 mod borrowed_string_reads;
 mod shared_property_reads;
+mod foreach_hash_scalars;
 mod global_return_owners;
 mod native_raw_property_guards;
 mod late_string_arguments;
+mod native_isset_key_owners;
+mod conditional_indexed_accumulation;
 #[path = "runtime_gc/ref_local_append.rs"]
 mod ref_local_append;
 #[path = "runtime_gc/string_offset_lifetime.rs"]
@@ -151,6 +154,8 @@ mod object_supertype_rebind;
 mod boxed_property_defaults;
 #[path = "runtime_gc/by_ref_place_args.rs"]
 mod by_ref_place_args;
+#[path = "runtime_gc/nullable_ref_writeback.rs"]
+mod nullable_ref_writeback;
 #[path = "runtime_gc/by_ref_variadic_writeback.rs"]
 mod by_ref_variadic_writeback;
 #[path = "runtime_gc/variadic_key_writes.rs"]
@@ -318,6 +323,8 @@ mod coroutine_slot_set;
 mod counter_regions;
 #[path = "runtime_gc/numeric_seed_cells.rs"]
 mod numeric_seed_cells;
+#[path = "runtime_gc/settype_foreach.rs"]
+mod settype_foreach;
 #[path = "runtime_gc/static_object_exports.rs"]
 mod static_object_exports;
 #[path = "runtime_gc/gmp_exception_operands.rs"]

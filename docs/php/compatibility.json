@@ -1,7 +1,7 @@
 {
   "baseline": {
     "classes": 329,
-    "constants": 3180,
+    "constants": 3181,
     "extensions": 68,
     "functions": 2169,
     "generated_at": "2026-09-04",
@@ -187,15 +187,15 @@
   ],
   "coverage": {
     "classes": {
-      "have": 188,
+      "have": 191,
       "total": 329
     },
     "constants": {
-      "have": 1361,
-      "total": 3180
+      "have": 1420,
+      "total": 3181
     },
     "functions": {
-      "have": 1056,
+      "have": 1078,
       "total": 2169
     }
   },
@@ -684,8 +684,8 @@
     },
     {
       "classes": {
-        "eval": 9,
-        "have": 9,
+        "eval": 10,
+        "have": 10,
         "total": 50
       },
       "constants": {
@@ -980,9 +980,9 @@
         "total": 1
       },
       "constants": {
-        "eval": 17,
-        "have": 17,
-        "total": 28
+        "eval": 18,
+        "have": 18,
+        "total": 29
       },
       "docs": null,
       "extension": "libxml",
@@ -1013,20 +1013,20 @@
     },
     {
       "classes": {
-        "eval": 4,
-        "have": 4,
+        "eval": 6,
+        "have": 6,
         "total": 6
       },
       "constants": {
         "eval": 0,
-        "have": 52,
+        "have": 110,
         "total": 110
       },
       "docs": "docs/php/mysqli.md#functions",
       "extension": "mysqli",
       "functions": {
         "eval": 0,
-        "have": 84,
+        "have": 106,
         "total": 106
       },
       "name": "mysqli",
@@ -1744,8 +1744,18 @@
         "since": "8.6"
       }
     ],
-    "constants": [],
-    "functions": []
+    "constants": [
+      {
+        "name": "MYSQLI_OPT_COMPRESS",
+        "since": "8.6"
+      }
+    ],
+    "functions": [
+      {
+        "name": "mysqli_quote_string",
+        "since": "8.6"
+      }
+    ]
   },
   "pecl": [
     {

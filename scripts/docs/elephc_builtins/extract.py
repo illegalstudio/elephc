@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
 import subprocess
 import sys
@@ -99,6 +100,11 @@ def run_gen_builtins(repo: Path) -> list[dict]:
 
 def _gen_builtins_command(repo: Path) -> list[str]:
     """Return the exporter command line (prebuilt binary if fresh, else ``cargo run``)."""
+    if os.environ.get("ELEPHC_DOCS_PREBUILT") == "1":
+        exe = repo / "target/debug/examples/gen_builtins"
+        if not exe.is_file() or not os.access(exe, os.X_OK):
+            raise RuntimeError("Restore the curl docs exporter artifact before generating documentation")
+        return [str(exe), "--include-internal"]
     cmd: list[str]
     source_inputs = [repo / "Cargo.toml", repo / "Cargo.lock", repo / "tools" / "gen_builtins.rs"]
     source_inputs.extend((repo / "crates").rglob("Cargo.toml"))
@@ -597,7 +603,7 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
     # The xml surface keeps its own catalog module; the built prelude splits the parser
     # (`xml_*`) and writer (`xmlwriter_*`) declarations across two generated files.
     "xml": (
-        ("xml_prelude/build/parser.rs", "xml_prelude/build/writer.rs", "simplexml_prelude/surface.rs"),
+        ("xml_prelude/build/parser.rs", "xml_prelude/build/writer.rs", "simplexml_prelude/generated.rs"),
         "xml",
         "crates/elephc-builtin-contract/src/catalog_xml.rs",
     ),

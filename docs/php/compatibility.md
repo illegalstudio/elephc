@@ -8,9 +8,9 @@ sidebar:
 <!-- GENERATED FILE - do not edit by hand. -->
 <!-- Regenerate with: python3 scripts/docs/gen_php_comparison.py -->
 
-Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
+Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3181 constants).
 
-Overall coverage: functions **1056 / 2169** (49%), classes **188 / 329** (57%), constants **1361 / 3180** (43%).
+Overall coverage: functions **1078 / 2169** (50%), classes **191 / 329** (58%), constants **1420 / 3181** (45%).
 
 ## Coverage by PHP module
 
@@ -26,7 +26,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
 | `dba` | 0 / 15 · 0% | 0 / 1 · 0% | - |
-| [`dom`](./dom-html.md#functions) | 0 / 2 · 0% | 9 / 50 · 18% | 0 / 61 · 0% |
+| [`dom`](./dom-html.md#functions) | 0 / 2 · 0% | 10 / 50 · 20% | 0 / 61 · 0% |
 | `enchant` | 0 / 25 · 0% | 0 / 2 · 0% | 0 / 3 · 0% |
 | [`exif`](./image.md#functions) | 4 / 4 · 100% | - | 1 / 1 · 100% |
 | `ffi` | - | 0 / 5 · 0% | - |
@@ -41,9 +41,9 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `intl` | 0 / 187 · 0% | 0 / 22 · 0% | 0 / 170 · 0% |
 | `json` | 5 / 5 · 100% | 2 / 2 · 100% | 29 / 29 · 100% |
 | `ldap` | 0 / 55 · 0% | 0 / 3 · 0% | 0 / 92 · 0% |
-| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 17 / 28 · 61% |
+| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 18 / 29 · 62% |
 | `mbstring` | 65 / 65 · 100% | - | 9 / 9 · 100% |
-| [`mysqli`](./mysqli.md#functions) | 84 / 106 · 79% | 4 / 6 · 67% | 52 / 110 · 47% |
+| [`mysqli`](./mysqli.md#functions) | 106 / 106 · 100% | 6 / 6 · 100% | 110 / 110 · 100% |
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |
 | `openssl` | 4 / 64 · 6% | 0 / 3 · 0% | 3 / 70 · 4% |
 | [`pcntl`](./pcntl.md#functions) | 28 / 28 · 100% | 1 / 1 · 100% | 0 / 129 · 0% |
@@ -93,15 +93,15 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `gd` functions: 83 / 0
 - `gd` constants: 67 / 0
 - `gmp` constants: 9 / 0
-- `mysqli` functions: 84 / 0
-- `mysqli` constants: 52 / 0
+- `mysqli` functions: 106 / 0
+- `mysqli` constants: 110 / 0
 - `pdo` functions: 1 / 0
 - `random` functions: 9 / 3
 - `session` functions: 23 / 0
 - `standard` functions: 390 / 350
 - `standard` constants: 163 / 142
 
-Of those functions, 201 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
+Of those functions, 223 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
 
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
 
@@ -109,7 +109,7 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 
 elephc also defines 1 constant(s) at runtime that PHP registers only in specific states and never lists statically: `SID`.
 
-elephc also implements 1 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `SortDirection` (PHP 8.6).
+elephc also implements 3 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `MYSQLI_OPT_COMPRESS` (PHP 8.6), `SortDirection` (PHP 8.6), `mysqli_quote_string()` (PHP 8.6).
 
 The baseline PHP build does not expose these platform-dependent symbols, so they are excluded from its coverage percentages: `pcntl_getcpu()` (PHP build guard HAVE_SCHED_GETCPU), `pcntl_getqos_class()` (target-specific), `pcntl_setns()` (PHP build guard HAVE_PIDFD_OPEN), `pcntl_setqos_class()` (target-specific).
 

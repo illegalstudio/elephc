@@ -1575,44 +1575,50 @@ impl Checker {
     }
 
     /// Allows the mysqli prelude's internal static factories to stay private
-    /// (they are not part of PHP's mysqli surface): the buffered-result drain
-    /// factory is invoked by the connection's query/multi_query paths and by
-    /// `mysqli_stmt::get_result`, the prepared-statement factory by
-    /// `mysqli::prepare`, and the unprepared-statement factory by
-    /// `mysqli::stmt_init`.
+    /// (they are not part of PHP's mysqli surface): see
+    /// [`Self::is_mysqli_prelude_friend_call`] for the rule.
     fn can_access_mysqli_prelude_internal_factory(&self, class_name: &str, method: &str) -> bool {
-        let drain_factory = class_name == "mysqli_result"
-            && php_symbol_key(method) == "__elephcfromdrain"
-            && matches!(self.current_class.as_deref(), Some("mysqli" | "mysqli_stmt"));
-        let prepare_factory = class_name == "mysqli_stmt"
-            && php_symbol_key(method) == "__elephcfromprepare"
-            && self.current_class.as_deref() == Some("mysqli");
-        let init_factory = class_name == "mysqli_stmt"
-            && php_symbol_key(method) == "__elephcinit"
-            && self.current_class.as_deref() == Some("mysqli");
-        drain_factory || prepare_factory || init_factory
+        self.is_mysqli_prelude_friend_call(class_name, &php_symbol_key(method))
     }
 
-    /// Allows tightly-scoped private helper calls within the mysqli prelude:
-    /// `mysqli_stmt::requireLinkNotBusy` (the two-step prepare/execute
-    /// commands-out-of-sync guard) reads the connection's private
-    /// pending-result probe, and the procedural `mysqli_stmt_bind_param`
-    /// alias — a compiler-owned free function, identified via
-    /// `current_function` — reaches the statement's private bind-values
-    /// helper (its by-ref variadic tail cannot be spread-forwarded into
-    /// `bind_param`). Neither helper is part of PHP's mysqli surface.
+    /// Allows tightly-scoped private helper calls within the mysqli prelude: see
+    /// [`Self::is_mysqli_prelude_friend_call`] for the rule.
     fn can_access_mysqli_prelude_internal_method(&self, class_name: &str, method_key: &str) -> bool {
-        let pending_probe = class_name == "mysqli"
-            && method_key == "__elephchaspendingresults"
-            && self.current_class.as_deref() == Some("mysqli_stmt")
-            && self.current_method.as_deref() == Some("requirelinknotbusy");
-        let bind_values = class_name == "mysqli_stmt"
-            && method_key == "__elephcbindparamvalues"
+        self.is_mysqli_prelude_friend_call(class_name, method_key)
+    }
+
+    /// The mysqli prelude's friend channel: a private `__elephc*` helper of one of
+    /// the mysqli classes may be called from another mysqli class (the
+    /// connection, result, statement, warning, and exception cooperate through
+    /// such helpers — factories, pending-result probes, statistics, error
+    /// copies) or from a `mysqli_*` procedural alias (whose by-ref variadic tail
+    /// cannot be spread-forwarded into the public method). The `__elephc` prefix
+    /// keeps every ordinary private member, and PHP's whole visible surface,
+    /// under the normal visibility rules.
+    fn is_mysqli_prelude_friend_call(&self, class_name: &str, method_key: &str) -> bool {
+        const MYSQLI_CLASSES: [&str; 6] = [
+            "mysqli",
+            "mysqli_stmt",
+            "mysqli_result",
+            "mysqli_warning",
+            "mysqli_sql_exception",
+            "mysqli_driver",
+        ];
+        let is_mysqli_class = |name: &str| {
+            MYSQLI_CLASSES
+                .iter()
+                .any(|candidate| php_symbol_key(name) == *candidate)
+        };
+        if !method_key.starts_with("__elephc") || !is_mysqli_class(class_name) {
+            return false;
+        }
+        let from_mysqli_class = self.current_class.as_deref().is_some_and(is_mysqli_class);
+        let from_procedural_alias = self.current_class.is_none()
             && self
                 .current_function
                 .as_deref()
-                .is_some_and(|name| php_symbol_key(name) == "mysqli_stmt_bind_param");
-        pending_probe || bind_values
+                .is_some_and(|name| php_symbol_key(name).starts_with("mysqli_"));
+        from_mysqli_class || from_procedural_alias
     }
 }
 

@@ -77,12 +77,18 @@ fn expand_trait(
         &format!("trait {}", trait_name),
         true,
     )?;
-    let methods = merge_methods(
+    let mut methods = merge_methods(
         imported_methods,
         &trait_info.methods,
         trait_info.span,
         &format!("trait {}", trait_name),
     )?;
+    // Zend builds a trait's function table from its own declarations first and binds the
+    // methods of the traits it uses after them, so a class using it lists them in that order
+    // (`get_class_methods()`, reflection). `merge_methods` appends the locals last.
+    let local_count = trait_info.methods.len();
+    let imported_count = methods.len() - local_count;
+    methods.rotate_left(imported_count);
     let constants = merge_constants(
         &imported_constants,
         &trait_info.constants,
