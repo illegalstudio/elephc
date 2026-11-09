@@ -116,7 +116,11 @@ fn test_review_reflection_class_rejects_non_public_constructors() {
         r#"<?php
 class ProtectedCtor { protected function __construct() {} }
 class PrivateCtor { private function __construct() {} }
-foreach (["ProtectedCtor", "PrivateCtor"] as $name) {
+class ProtectedBase { protected function __construct(public int $n = 1) {} }
+class ProtectedChild extends ProtectedBase {}
+class PrivateBase { private function __construct(public int $n = 2) {} }
+class PrivateChild extends PrivateBase {}
+foreach (["ProtectedCtor", "PrivateCtor", "ProtectedChild"] as $name) {
     try {
         (new ReflectionClass($name))->newInstanceArgs([]);
         echo "$name constructed\n";
@@ -124,12 +128,17 @@ foreach (["ProtectedCtor", "PrivateCtor"] as $name) {
         echo get_class($error), ": ", $error->getMessage(), "\n";
     }
 }
+// An inherited private constructor is not callable from the descendant; the AOT
+// constructor-owner walk keeps constructing the descendant without calling it.
+echo (new ReflectionClass("PrivateChild"))->newInstance()->n, "\n";
 "#,
     );
     assert_eq!(
         out,
         "ReflectionException: Access to non-public constructor of class ProtectedCtor\n\
-         ReflectionException: Access to non-public constructor of class PrivateCtor\n"
+         ReflectionException: Access to non-public constructor of class PrivateCtor\n\
+         ReflectionException: Access to non-public constructor of class ProtectedChild\n\
+         2\n"
     );
 }
 

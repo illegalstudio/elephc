@@ -21,13 +21,24 @@ pub(super) fn lower_reflection_class_new_instance(
         if let Some(class_name) = reflection_class_reflected_class(ctx, object_expr) {
             let trimmed = class_name.trim_start_matches('\\');
             let non_public_constructor = crate::types::constructor_owner(&ctx.classes, trimmed)
-                .is_some_and(|(_, owner)| {
-                    owner
+                .is_some_and(|(owner_name, owner)| {
+                    let Some(visibility) = owner
                         .method_visibilities
                         .get(&crate::names::php_symbol_key("__construct"))
-                        .is_some_and(|visibility| {
-                            *visibility != crate::parser::ast::Visibility::Public
-                        })
+                    else {
+                        return false;
+                    };
+                    if *visibility == crate::parser::ast::Visibility::Public {
+                        return false;
+                    }
+                    // An inherited PRIVATE constructor is not callable from the
+                    // descendant; the AOT constructor-owner walk deliberately lets that
+                    // descendant be constructed without calling it (see the
+                    // inherited-private regression in tests/codegen/oop/relative_types.rs).
+                    let owner_is_class = owner_name
+                        .trim_start_matches('\\')
+                        .eq_ignore_ascii_case(trimmed);
+                    owner_is_class || *visibility != crate::parser::ast::Visibility::Private
                 });
             if non_public_constructor {
                 if ctx.value_is_owning_temporary(object) {
@@ -122,11 +133,26 @@ pub(super) fn lower_reflection_class_new_instance_args(
                 &ctx.classes,
                 class_name.trim_start_matches('\\'),
             )
-            .is_some_and(|(_, owner)| {
-                owner
+            .is_some_and(|(owner_name, owner)| {
+                let Some(visibility) = owner
                     .method_visibilities
                     .get(&crate::names::php_symbol_key("__construct"))
-                    .is_some_and(|visibility| *visibility != crate::parser::ast::Visibility::Public)
+                else {
+                    return false;
+                };
+                if *visibility == crate::parser::ast::Visibility::Public {
+                    return false;
+                }
+                // An inherited PRIVATE constructor is not part of the descendant's
+                // callable surface; the compiler's constructor-owner walk deliberately
+                // lets that descendant be constructed without calling the private
+                // ancestor constructor (see the inherited-private regression in
+                // `tests/codegen/oop/relative_types.rs`). Every other non-public
+                // constructor stays on the reflective path.
+                let owner_is_class = owner_name
+                    .trim_start_matches('\\')
+                    .eq_ignore_ascii_case(class_name.trim_start_matches('\\'));
+                owner_is_class || *visibility != crate::parser::ast::Visibility::Private
             });
             if ctx.classes.get(class_name.trim_start_matches('\\')).is_some_and(|info| {
                 info.is_abstract
