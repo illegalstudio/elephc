@@ -533,12 +533,19 @@ fn compile_and_run_files_with_defines_per_argv(
     )
     .expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    // Mirrors `pipeline::compile`: XML use (DOM included, which is libxml2-backed) inside a
+    // file only autoloading reaches is found by the autoload prelude probe, before injection.
+    let xml_autoloaded = elephc::autoload::prelude_probe::autoloaded_prelude_groups(
+        &resolved, base_dir, &autoload_registry, &define_set,
+    )
+    .contains("xml");
+    let resolved = elephc::xml_prelude::inject_if_used(resolved, xml_autoloaded, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
     // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
     // `(object)` cast that only appears in an autoloaded class file is still detected.
-    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let resolved = elephc::dom_html_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
         .expect("autoload DOM prelude injection failed");
     let resolved = elephc::testing_prelude::inject_after_autoload(resolved, &mut prelude_inventory)

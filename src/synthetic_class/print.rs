@@ -245,10 +245,17 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
                             .first()
                             .map(|(name, ..)| name.as_str())
                             .unwrap_or("value");
-                        let head = if parameter == "value" {
-                            "set".to_string()
-                        } else {
-                            format!("set(${parameter})")
+                        // A declared parameter type wider than the property's is part of the
+                        // hook (php checks writes against it), so it must survive the print.
+                        let declared = accessor
+                            .params
+                            .first()
+                            .and_then(|(_, ty, ..)| ty.as_ref())
+                            .filter(|ty| Some(*ty) != property.type_expr.as_ref());
+                        let head = match declared {
+                            Some(ty) => format!("set({} ${parameter})", type_expr(ty)),
+                            None if parameter == "value" => "set".to_string(),
+                            None => format!("set(${parameter})"),
                         };
                         hook_block.push_str(&format!(
                             "{}{head} {}\n",
@@ -779,6 +786,7 @@ fn c_type(ty: &CType) -> &'static str {
         CType::Int => "int",
         CType::Float => "float",
         CType::Str => "string",
+        CType::NullableStr => "?string",
         CType::Bool => "bool",
         CType::Void => "void",
         CType::Ptr => "ptr",

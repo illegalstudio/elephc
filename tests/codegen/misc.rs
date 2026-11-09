@@ -867,3 +867,40 @@ fn warning_display_includes_leading_newline_and_location() {
     assert!(line.ends_with("test.php on line 3"), "{}", line);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A ternary whose branches read properties through a `mixed` receiver keeps the read values:
+/// the merge temporary is boxed `mixed`, not the syntactic `int` that turned an object branch
+/// into an integer, inside and outside loops. Output is `php -n`'s.
+#[test]
+fn test_ternary_of_mixed_receiver_property_reads_keeps_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class K { public mixed $p = null; }
+function src(): mixed { $k = new K(); $k->p = new K(); return $k; }
+function plain(bool $c): string {
+    $w = src();
+    $v = $c ? $w->p : $w->p;
+    return gettype($v);
+}
+function looped(bool $c): string {
+    $v = src();
+    while ($c) {
+        $v = $c ? $v->p : $v->p;
+        $c = false;
+    }
+    return gettype($v);
+}
+function mixed_with_int(bool $c): string {
+    $w = src();
+    $v = null;
+    while ($c) {
+        $v = $c ? $w->p : 1;
+        $c = false;
+    }
+    return gettype($v);
+}
+echo plain(false), "|", looped(true), "|", looped(false), "|", mixed_with_int(true), "\n";
+"#,
+    );
+    assert_eq!(out, "object|object|object|object\n");
+}

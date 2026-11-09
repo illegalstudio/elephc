@@ -2709,7 +2709,17 @@ fn decl_fn_simplexml_import_dom() -> Stmt {
             s_if(
                 e_instance_of(e_var("node"), "DOMNode"),
                 vec![
-                    s_assign("handle", e_call("elephc_xml_sx_import_dom", vec![e_method_call(e_var("node"), "__elephc_handle", vec![])])),
+                    // An unconstructed node (`newInstanceWithoutConstructor()`) has no libxml
+                    // node: php-src's `simplexml_import_dom` rejects it as an invalid argument.
+                    s_if(
+                        e_binop(e_method_call(e_var("node"), "__elephc_raw", vec![]), BinOp::StrictEq, e_int(0)),
+                        vec![
+                            s_throw(e_new("TypeError", vec![e_str("simplexml_import_dom(): Argument #1 ($node) must be a valid XML node")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("handle", e_call("elephc_xml_sx_import_dom", vec![e_method_call(e_var("node"), "__elephc_raw", vec![])])),
                     s_if(
                         e_binop(e_var("handle"), BinOp::StrictEq, e_neg(e_int(1))),
                         vec![

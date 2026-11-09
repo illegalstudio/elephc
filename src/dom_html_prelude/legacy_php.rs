@@ -27,6 +27,7 @@ extern "elephc_xml" {
     function elephc_xml_dom_save(int $document, int $node, int $format, int $noDecl, int $noEmptyTags): ?string;
     function elephc_xml_dom_save_html(int $document, int $node, int $format): ?string;
     function elephc_xml_dom_type(int $node): int;
+    function elephc_xml_dom_standalone(int $document): int;
     function elephc_xml_dom_node(int $node, int $relation): int;
     function elephc_xml_dom_string(int $node, int $field): ?string;
     function elephc_xml_dom_set_text(int $node, string $value, int $literal): void;
@@ -92,6 +93,9 @@ final class __ElephcDOM {
         if ($type === 9 || $type === 13) {
             return new DOMDocument();
         }
+        if ($type === 10) {
+            return new DOMDocumentType();
+        }
         if ($type === 11) {
             return new DOMDocumentFragment();
         }
@@ -100,16 +104,27 @@ final class __ElephcDOM {
 
     public static function fail(int $code): void {
         $messages = [
+            1 => "Index Size Error",
+            2 => "DOM String Size Error",
             3 => "Hierarchy Request Error",
             4 => "Wrong Document Error",
+            5 => "Invalid Character Error",
+            6 => "No Data Allowed Error",
             7 => "No Modification Allowed Error",
             8 => "Not Found Error",
+            9 => "Not Supported Error",
+            10 => "Inuse Attribute Error",
             11 => "Invalid State Error",
+            12 => "Syntax Error",
+            13 => "Invalid Modification Error",
+            14 => "Namespace Error",
+            15 => "Invalid Access Error",
+            16 => "Validation Error",
         ];
         throw new DOMException($messages[$code] ?? "Invalid State Error", $code);
     }
 
-    public static function tree(int $result): DOMNode|false {
+    public static function tree(int $result): mixed {
         if ($result === -100) {
             trigger_error("Document Fragment is empty", E_USER_WARNING);
             return false;
@@ -121,8 +136,78 @@ final class __ElephcDOM {
         return $node instanceof DOMNode ? $node : false;
     }
 
+    public static function omit(mixed $value): mixed {
+        return is_object($value) ? "(object value omitted)" : $value;
+    }
+
+    public static function elementChild(int $handle, bool $last): ?DOMElement {
+        $node = __ElephcDOM::wrap(elephc_xml_dom_node($handle, $last ? 2 : 1));
+        while ($node instanceof DOMNode && !($node instanceof DOMElement)) {
+            $node = $last ? $node->previousSibling : $node->nextSibling;
+        }
+        return $node instanceof DOMElement ? $node : null;
+    }
+
+    public static function elementSibling(int $handle, bool $next): ?DOMElement {
+        $node = __ElephcDOM::wrap(elephc_xml_dom_node($handle, $next ? 4 : 3));
+        while ($node instanceof DOMNode && !($node instanceof DOMElement)) {
+            $node = $next ? $node->nextSibling : $node->previousSibling;
+        }
+        return $node instanceof DOMElement ? $node : null;
+    }
+
+    public static function elementCount(int $handle): int {
+        $count = 0;
+        $node = __ElephcDOM::elementChild($handle, false);
+        while ($node instanceof DOMElement) {
+            $count++;
+            $node = $node->nextElementSibling;
+        }
+        return $count;
+    }
+
+    public static function created(int $result): mixed {
+        if ($result < 0) {
+            __ElephcDOM::fail(-$result);
+        }
+        return __ElephcDOM::wrap($result);
+    }
+
     public static function document(): int {
         return elephc_xml_dom_document_new("1.0", "");
+    }
+
+    public static function argument(mixed $value, string $function, int $position, string $name, bool $nullable): int {
+        if ($value instanceof DOMNode) {
+            return $value->__elephc_handle();
+        }
+        if ($nullable && $value === null) {
+            return 0;
+        }
+        throw new TypeError($function . "(): Argument #" . $position . " ($" . $name . ") must be of type " . ($nullable ? "?" : "") . "DOMNode, " . __ElephcDOM::given($value) . " given");
+    }
+
+    public static function given(mixed $value): string {
+        if (is_object($value)) {
+            return get_class($value);
+        }
+        if ($value === true) {
+            return "true";
+        }
+        if ($value === false) {
+            return "false";
+        }
+        $kind = gettype($value);
+        if ($kind === "integer") {
+            return "int";
+        }
+        if ($kind === "double") {
+            return "float";
+        }
+        if ($kind === "NULL") {
+            return "null";
+        }
+        return $kind;
     }
 
     public static function nodes(DOMNode $context, array $nodes): array {
@@ -143,64 +228,106 @@ class DOMNode {
     private int $__elephc_handle = 0;
 
     public string $nodeName {
-        get => (string) elephc_xml_dom_string($this->__elephc_handle, 0);
+        get => (string) elephc_xml_dom_string($this->__elephc_state(), 0);
     }
     public ?string $nodeValue {
-        get => elephc_xml_dom_string($this->__elephc_handle, 1);
+        get => elephc_xml_dom_string($this->__elephc_state(), 1);
         set(mixed $value) {
-            elephc_xml_dom_set_text($this->__elephc_handle, (string) $value, 0);
+            elephc_xml_dom_set_text($this->__elephc_state(), (string) $value, 0);
         }
     }
     public int $nodeType {
-        get => elephc_xml_dom_type($this->__elephc_handle);
+        get => elephc_xml_dom_type($this->__elephc_state());
     }
     public mixed $parentNode {
-        get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 0));
+        get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_state(), 0));
     }
     public mixed $parentElement {
         get {
-            $parent = __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 0));
+            $parent = __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_state(), 0));
             return $parent instanceof DOMElement ? $parent : null;
         }
     }
     public mixed $childNodes {
-        get => DOMNodeList::__elephc_list($this->__elephc_handle, "");
+        get => DOMNodeList::__elephc_list($this->__elephc_state(), "");
     }
     public mixed $firstChild {
-        get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 1));
+        get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_state(), 1));
     }
     public mixed $lastChild {
-        get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 2));
+        get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_state(), 2));
     }
     public mixed $previousSibling {
-        get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 3));
+        get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_state(), 3));
     }
     public mixed $nextSibling {
-        get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 4));
+        get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_state(), 4));
     }
     public mixed $attributes {
-        get => elephc_xml_dom_type($this->__elephc_handle) === 1 ? DOMNamedNodeMap::__elephc_map($this->__elephc_handle) : null;
+        get => elephc_xml_dom_type($this->__elephc_state()) === 1 ? DOMNamedNodeMap::__elephc_map($this->__elephc_handle) : null;
     }
     public mixed $ownerDocument {
         get {
-            $owner = __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 5));
+            $owner = __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_state(), 5));
             return $owner instanceof DOMDocument ? $owner : null;
         }
     }
     public ?string $namespaceURI {
-        get => elephc_xml_dom_string($this->__elephc_handle, 5);
+        get => elephc_xml_dom_string($this->__elephc_state(), 5);
     }
     public string $prefix {
-        get => (string) elephc_xml_dom_string($this->__elephc_handle, 4);
+        get => (string) elephc_xml_dom_string($this->__elephc_state(), 4);
     }
     public ?string $localName {
-        get => elephc_xml_dom_string($this->__elephc_handle, 3);
+        get => elephc_xml_dom_string($this->__elephc_state(), 3);
     }
     public string $textContent {
-        get => (string) elephc_xml_dom_string($this->__elephc_handle, 2);
+        get => (string) elephc_xml_dom_string($this->__elephc_state(), 2);
         set(mixed $value) {
-            elephc_xml_dom_set_text($this->__elephc_handle, (string) $value, 1);
+            elephc_xml_dom_set_text($this->__elephc_state(), (string) $value, 1);
         }
+    }
+    public bool $isConnected {
+        get {
+            $top = $this->__elephc_state();
+            $parent = elephc_xml_dom_node($top, 0);
+            while ($parent > 0) {
+                $top = $parent;
+                $parent = elephc_xml_dom_node($top, 0);
+            }
+            $type = elephc_xml_dom_type($top);
+            return $type === 9 || $type === 13;
+        }
+    }
+    public ?string $baseURI {
+        get => elephc_xml_dom_string($this->__elephc_state(), 9);
+    }
+
+    protected function __elephcDebugInfo(): array {
+        return $this->__elephc_node_debug();
+    }
+
+    public function __elephc_node_debug(): array {
+        return [
+            "nodeName" => $this->nodeName,
+            "nodeValue" => $this->nodeValue,
+            "nodeType" => $this->nodeType,
+            "parentNode" => __ElephcDOM::omit($this->parentNode),
+            "parentElement" => __ElephcDOM::omit($this->parentElement),
+            "childNodes" => __ElephcDOM::omit($this->childNodes),
+            "firstChild" => __ElephcDOM::omit($this->firstChild),
+            "lastChild" => __ElephcDOM::omit($this->lastChild),
+            "previousSibling" => __ElephcDOM::omit($this->previousSibling),
+            "nextSibling" => __ElephcDOM::omit($this->nextSibling),
+            "attributes" => __ElephcDOM::omit($this->attributes),
+            "isConnected" => $this->isConnected,
+            "ownerDocument" => __ElephcDOM::omit($this->ownerDocument),
+            "namespaceURI" => $this->namespaceURI,
+            "prefix" => $this->prefix,
+            "localName" => $this->localName,
+            "baseURI" => $this->baseURI,
+            "textContent" => $this->textContent,
+        ];
     }
 
     public function __elephc_bind(int $handle): void {
@@ -208,44 +335,62 @@ class DOMNode {
     }
 
     public function __elephc_handle(): int {
+        if ($this->__elephc_handle === 0) {
+            throw new Error("Couldn't fetch " . get_class($this));
+        }
         return $this->__elephc_handle;
     }
 
-    public function appendChild(DOMNode $node) {
-        return __ElephcDOM::tree(elephc_xml_dom_insert($this->__elephc_handle, $node->__elephc_handle(), 0));
+    public function __elephc_state(): int {
+        if ($this->__elephc_handle === 0) {
+            throw new DOMException("Invalid State Error", 11);
+        }
+        return $this->__elephc_handle;
     }
 
-    public function insertBefore(DOMNode $node, ?DOMNode $child = null) {
-        $reference = $child === null ? 0 : $child->__elephc_handle();
-        return __ElephcDOM::tree(elephc_xml_dom_insert($this->__elephc_handle, $node->__elephc_handle(), $reference));
+    public function __elephc_raw(): int {
+        return $this->__elephc_handle;
     }
 
-    public function removeChild(DOMNode $child) {
-        return __ElephcDOM::tree(elephc_xml_dom_remove_child($this->__elephc_handle, $child->__elephc_handle()));
+    public function appendChild($node) {
+        $child = __ElephcDOM::argument($node, "DOMNode::appendChild", 1, "node", false);
+        return __ElephcDOM::tree(elephc_xml_dom_insert($this->__elephc_handle(), $child, 0));
     }
 
-    public function replaceChild(DOMNode $node, DOMNode $child) {
-        $inserted = __ElephcDOM::tree(elephc_xml_dom_insert($this->__elephc_handle, $node->__elephc_handle(), $child->__elephc_handle()));
-        if ($inserted === false) {
+    public function insertBefore($node, $child = null) {
+        $inserted = __ElephcDOM::argument($node, "DOMNode::insertBefore", 1, "node", false);
+        $reference = __ElephcDOM::argument($child, "DOMNode::insertBefore", 2, "child", true);
+        return __ElephcDOM::tree(elephc_xml_dom_insert($this->__elephc_handle(), $inserted, $reference));
+    }
+
+    public function removeChild($child) {
+        $removed = __ElephcDOM::argument($child, "DOMNode::removeChild", 1, "child", false);
+        return __ElephcDOM::tree(elephc_xml_dom_remove_child($this->__elephc_handle(), $removed));
+    }
+
+    public function replaceChild($node, $child) {
+        $inserted = __ElephcDOM::argument($node, "DOMNode::replaceChild", 1, "node", false);
+        $replaced = __ElephcDOM::argument($child, "DOMNode::replaceChild", 2, "child", false);
+        if (__ElephcDOM::tree(elephc_xml_dom_insert($this->__elephc_handle(), $inserted, $replaced)) === false) {
             return false;
         }
-        return __ElephcDOM::tree(elephc_xml_dom_remove_child($this->__elephc_handle, $child->__elephc_handle()));
+        return __ElephcDOM::tree(elephc_xml_dom_remove_child($this->__elephc_handle(), $replaced));
     }
 
     public function cloneNode(bool $deep = false) {
-        return __ElephcDOM::wrap(elephc_xml_dom_clone($this->__elephc_handle, $deep ? 1 : 0));
+        return __ElephcDOM::wrap(elephc_xml_dom_clone($this->__elephc_handle(), $deep ? 1 : 0));
     }
 
     public function hasChildNodes(): bool {
-        return elephc_xml_dom_node($this->__elephc_handle, 1) !== 0;
+        return elephc_xml_dom_node($this->__elephc_handle(), 1) !== 0;
     }
 
     public function hasAttributes(): bool {
-        return elephc_xml_dom_type($this->__elephc_handle) === 1 && elephc_xml_dom_attribute_at($this->__elephc_handle, 0) !== 0;
+        return elephc_xml_dom_type($this->__elephc_handle()) === 1 && elephc_xml_dom_attribute_at($this->__elephc_handle, 0) !== 0;
     }
 
-    public function isSameNode(DOMNode $otherNode): bool {
-        return $otherNode->__elephc_handle() === $this->__elephc_handle;
+    public function isSameNode($otherNode): bool {
+        return __ElephcDOM::argument($otherNode, "DOMNode::isSameNode", 1, "otherNode", false) === $this->__elephc_handle();
     }
 }
 
@@ -255,6 +400,10 @@ class DOMNodeList implements IteratorAggregate, Countable {
 
     public int $length {
         get => $this->__elephc_tag === "" ? elephc_xml_dom_child_count($this->__elephc_root) : elephc_xml_dom_tag_count($this->__elephc_root, $this->__elephc_tag);
+    }
+
+    protected function __elephcDebugInfo(): array {
+        return ["length" => $this->length];
     }
 
     public static function __elephc_list(int $root, string $tag): DOMNodeList {
@@ -301,6 +450,10 @@ class DOMNamedNodeMap implements IteratorAggregate, Countable {
         }
     }
 
+    protected function __elephcDebugInfo(): array {
+        return ["length" => $this->length];
+    }
+
     public static function __elephc_map(int $element): DOMNamedNodeMap {
         $map = new DOMNamedNodeMap();
         $map->__elephc_element = $element;
@@ -336,6 +489,24 @@ class DOMNamedNodeMap implements IteratorAggregate, Countable {
 }
 
 class DOMDocumentFragment extends DOMNode {
+    public ?DOMElement $firstElementChild {
+        get => __ElephcDOM::elementChild($this->__elephc_state(), false);
+    }
+    public ?DOMElement $lastElementChild {
+        get => __ElephcDOM::elementChild($this->__elephc_state(), true);
+    }
+    public int $childElementCount {
+        get => __ElephcDOM::elementCount($this->__elephc_state());
+    }
+
+    protected function __elephcDebugInfo(): array {
+        return [
+            "firstElementChild" => __ElephcDOM::omit($this->firstElementChild),
+            "lastElementChild" => __ElephcDOM::omit($this->lastElementChild),
+            "childElementCount" => $this->childElementCount,
+        ] + $this->__elephc_node_debug();
+    }
+
     public function __construct() {
         if (!__ElephcDOM::$minting) {
             $this->__elephc_bind(elephc_xml_dom_create(__ElephcDOM::document(), 11, "", ""));
@@ -345,13 +516,32 @@ class DOMDocumentFragment extends DOMNode {
 
 class DOMCharacterData extends DOMNode {
     public string $data {
-        get => (string) elephc_xml_dom_string($this->__elephc_handle(), 1);
+        get => (string) elephc_xml_dom_string($this->__elephc_state(), 1);
         set(string $value) {
-            elephc_xml_dom_set_text($this->__elephc_handle(), $value, 0);
+            elephc_xml_dom_set_text($this->__elephc_state(), $value, 0);
         }
     }
     public int $length {
-        get => mb_strlen((string) elephc_xml_dom_string($this->__elephc_handle(), 1), "UTF-8");
+        get => mb_strlen((string) elephc_xml_dom_string($this->__elephc_state(), 1), "UTF-8");
+    }
+    public ?DOMElement $previousElementSibling {
+        get => __ElephcDOM::elementSibling($this->__elephc_state(), false);
+    }
+    public ?DOMElement $nextElementSibling {
+        get => __ElephcDOM::elementSibling($this->__elephc_state(), true);
+    }
+
+    protected function __elephcDebugInfo(): array {
+        return $this->__elephc_character_debug() + $this->__elephc_node_debug();
+    }
+
+    public function __elephc_character_debug(): array {
+        return [
+            "data" => $this->data,
+            "length" => $this->length,
+            "previousElementSibling" => __ElephcDOM::omit($this->previousElementSibling),
+            "nextElementSibling" => __ElephcDOM::omit($this->nextElementSibling),
+        ];
     }
 
     public function appendData(string $data): true {
@@ -363,6 +553,10 @@ class DOMCharacterData extends DOMNode {
 class DOMText extends DOMCharacterData {
     public string $wholeText {
         get => $this->data;
+    }
+
+    protected function __elephcDebugInfo(): array {
+        return ["wholeText" => $this->wholeText] + parent::__elephcDebugInfo();
     }
 
     public function __construct(string $data = "") {
@@ -399,6 +593,10 @@ class DOMProcessingInstruction extends DOMNode {
         }
     }
 
+    protected function __elephcDebugInfo(): array {
+        return ["target" => $this->target, "data" => $this->data] + $this->__elephc_node_debug();
+    }
+
     public function __construct(string $name, string $value = "") {
         if (!__ElephcDOM::$minting) {
             $this->__elephc_bind(elephc_xml_dom_create(__ElephcDOM::document(), 7, $name, $value));
@@ -425,6 +623,19 @@ class DOMAttr extends DOMNode {
             return $parent instanceof DOMElement ? $parent : null;
         }
     }
+    public mixed $schemaTypeInfo {
+        get => null;
+    }
+
+    protected function __elephcDebugInfo(): array {
+        return [
+            "name" => $this->name,
+            "specified" => $this->specified,
+            "value" => $this->value,
+            "ownerElement" => __ElephcDOM::omit($this->ownerElement),
+            "schemaTypeInfo" => $this->schemaTypeInfo,
+        ] + $this->__elephc_node_debug();
+    }
 
     public function __construct(string $name, string $value = "") {
         if (!__ElephcDOM::$minting) {
@@ -438,10 +649,59 @@ class DOMElement extends DOMNode {
     public string $tagName {
         get => $this->nodeName;
     }
+    public string $className {
+        get => (string) elephc_xml_dom_attribute($this->__elephc_state(), "class");
+        set(string $value) {
+            elephc_xml_dom_set_attribute($this->__elephc_state(), "class", $value);
+        }
+    }
+    public string $id {
+        get => (string) elephc_xml_dom_attribute($this->__elephc_state(), "id");
+        set(string $value) {
+            elephc_xml_dom_set_attribute($this->__elephc_state(), "id", $value);
+        }
+    }
+    public mixed $schemaTypeInfo {
+        get => null;
+    }
+    public ?DOMElement $firstElementChild {
+        get => __ElephcDOM::elementChild($this->__elephc_state(), false);
+    }
+    public ?DOMElement $lastElementChild {
+        get => __ElephcDOM::elementChild($this->__elephc_state(), true);
+    }
+    public int $childElementCount {
+        get => __ElephcDOM::elementCount($this->__elephc_state());
+    }
+    public ?DOMElement $previousElementSibling {
+        get => __ElephcDOM::elementSibling($this->__elephc_state(), false);
+    }
+    public ?DOMElement $nextElementSibling {
+        get => __ElephcDOM::elementSibling($this->__elephc_state(), true);
+    }
+
+    protected function __elephcDebugInfo(): array {
+        return [
+            "tagName" => $this->tagName,
+            "className" => $this->className,
+            "id" => $this->id,
+            "schemaTypeInfo" => $this->schemaTypeInfo,
+            "firstElementChild" => __ElephcDOM::omit($this->firstElementChild),
+            "lastElementChild" => __ElephcDOM::omit($this->lastElementChild),
+            "childElementCount" => $this->childElementCount,
+            "previousElementSibling" => __ElephcDOM::omit($this->previousElementSibling),
+            "nextElementSibling" => __ElephcDOM::omit($this->nextElementSibling),
+        ] + $this->__elephc_node_debug();
+    }
 
     public function __construct(string $qualifiedName, ?string $value = null, string $namespace = "") {
+        $_unused = $namespace;
         if (!__ElephcDOM::$minting) {
-            $this->__elephc_bind(elephc_xml_dom_create(__ElephcDOM::document(), 1, $qualifiedName, (string) $value));
+            $_created = elephc_xml_dom_create(__ElephcDOM::document(), 1, $qualifiedName, (string) $value);
+            if ($_created < 0) {
+                __ElephcDOM::fail(-$_created);
+            }
+            $this->__elephc_bind($_created);
         }
     }
 
@@ -454,7 +714,10 @@ class DOMElement extends DOMNode {
     }
 
     public function setAttribute(string $qualifiedName, string $value) {
-        return __ElephcDOM::wrap(elephc_xml_dom_set_attribute($this->__elephc_handle(), $qualifiedName, $value));
+        if ($qualifiedName === "") {
+            throw new ValueError("DOMElement::setAttribute(): Argument #1 (\$qualifiedName) must not be empty");
+        }
+        return __ElephcDOM::created(elephc_xml_dom_set_attribute($this->__elephc_handle(), $qualifiedName, $value));
     }
 
     public function removeAttribute(string $qualifiedName): bool {
@@ -524,6 +787,51 @@ class DOMElement extends DOMNode {
     }
 }
 
+class DOMDocumentType extends DOMNode {
+    public string $name {
+        get => $this->nodeName;
+    }
+    public DOMNamedNodeMap $entities {
+        get {
+            $_unused = $this->__elephc_state();
+            return DOMNamedNodeMap::__elephc_map(0);
+        }
+    }
+    public DOMNamedNodeMap $notations {
+        get {
+            $_unused = $this->__elephc_state();
+            return DOMNamedNodeMap::__elephc_map(0);
+        }
+    }
+    public string $publicId {
+        get => (string) elephc_xml_dom_string($this->__elephc_state(), 10);
+    }
+    public string $systemId {
+        get => (string) elephc_xml_dom_string($this->__elephc_state(), 11);
+    }
+    public ?string $internalSubset {
+        get => elephc_xml_dom_string($this->__elephc_state(), 12);
+    }
+
+    protected function __elephcDebugInfo(): array {
+        return [
+            "name" => $this->name,
+            "entities" => __ElephcDOM::omit($this->entities),
+            "notations" => __ElephcDOM::omit($this->notations),
+            "publicId" => $this->publicId,
+            "systemId" => $this->systemId,
+            "internalSubset" => $this->internalSubset,
+        ] + $this->__elephc_node_debug();
+    }
+}
+
+class DOMImplementation {
+    public function hasFeature(string $feature, string $version): bool {
+        $_unused = [$feature, $version];
+        return true;
+    }
+}
+
 class DOMDocument extends DOMNode {
     public bool $formatOutput = false;
     public bool $preserveWhiteSpace = true;
@@ -535,24 +843,84 @@ class DOMDocument extends DOMNode {
 
     public ?DOMElement $documentElement {
         get {
-            $root = __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle(), 6));
+            $root = __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_state(), 6));
             return $root instanceof DOMElement ? $root : null;
         }
     }
     public ?string $xmlVersion {
-        get => elephc_xml_dom_string($this->__elephc_handle(), 6);
+        get => elephc_xml_dom_string($this->__elephc_state(), 6);
     }
     public ?string $version {
-        get => elephc_xml_dom_string($this->__elephc_handle(), 6);
+        get => elephc_xml_dom_string($this->__elephc_state(), 6);
     }
     public ?string $xmlEncoding {
-        get => elephc_xml_dom_string($this->__elephc_handle(), 7);
+        get => elephc_xml_dom_string($this->__elephc_state(), 7);
     }
     public ?string $encoding {
-        get => elephc_xml_dom_string($this->__elephc_handle(), 7);
+        get => elephc_xml_dom_string($this->__elephc_state(), 7);
     }
     public ?string $documentURI {
-        get => elephc_xml_dom_string($this->__elephc_handle(), 8);
+        get => elephc_xml_dom_string($this->__elephc_state(), 8);
+    }
+    public ?DOMDocumentType $doctype {
+        get {
+            $doctype = __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_state(), 7));
+            return $doctype instanceof DOMDocumentType ? $doctype : null;
+        }
+    }
+    public DOMImplementation $implementation {
+        get {
+            $_unused = $this->__elephc_state();
+            return new DOMImplementation();
+        }
+    }
+    public ?string $actualEncoding {
+        get => elephc_xml_dom_string($this->__elephc_state(), 7);
+    }
+    public bool $standalone {
+        get => elephc_xml_dom_standalone($this->__elephc_state()) === 1;
+    }
+    public bool $xmlStandalone {
+        get => elephc_xml_dom_standalone($this->__elephc_state()) === 1;
+    }
+    public mixed $config {
+        get => null;
+    }
+    public ?DOMElement $firstElementChild {
+        get => __ElephcDOM::elementChild($this->__elephc_state(), false);
+    }
+    public ?DOMElement $lastElementChild {
+        get => __ElephcDOM::elementChild($this->__elephc_state(), true);
+    }
+    public int $childElementCount {
+        get => __ElephcDOM::elementCount($this->__elephc_state());
+    }
+
+    protected function __elephcDebugInfo(): array {
+        return [
+            "doctype" => __ElephcDOM::omit($this->doctype),
+            "implementation" => __ElephcDOM::omit($this->implementation),
+            "documentElement" => __ElephcDOM::omit($this->documentElement),
+            "actualEncoding" => $this->actualEncoding,
+            "encoding" => $this->encoding,
+            "xmlEncoding" => $this->xmlEncoding,
+            "standalone" => $this->standalone,
+            "xmlStandalone" => $this->xmlStandalone,
+            "version" => $this->version,
+            "xmlVersion" => $this->xmlVersion,
+            "strictErrorChecking" => $this->strictErrorChecking,
+            "documentURI" => $this->documentURI,
+            "config" => $this->config,
+            "formatOutput" => $this->formatOutput,
+            "validateOnParse" => $this->validateOnParse,
+            "resolveExternals" => $this->resolveExternals,
+            "preserveWhiteSpace" => $this->preserveWhiteSpace,
+            "recover" => $this->recover,
+            "substituteEntities" => $this->substituteEntities,
+            "firstElementChild" => __ElephcDOM::omit($this->firstElementChild),
+            "lastElementChild" => __ElephcDOM::omit($this->lastElementChild),
+            "childElementCount" => $this->childElementCount,
+        ] + $this->__elephc_node_debug();
     }
 
     public function __construct(string $version = "1.0", string $encoding = "") {
@@ -598,20 +966,20 @@ class DOMDocument extends DOMNode {
         return $loaded;
     }
 
-    public function saveXML(?DOMNode $node = null, int $options = 0): string|false {
-        $target = $node === null ? 0 : $node->__elephc_handle();
+    public function saveXML($node = null, int $options = 0): string|false {
+        $target = __ElephcDOM::argument($node, "DOMDocument::saveXML", 1, "node", true);
         $xml = elephc_xml_dom_save($this->__elephc_handle(), $target, $this->formatOutput ? 1 : 0, $options & 0x2, $options & 0x4);
         return $xml === null ? false : $xml;
     }
 
-    public function saveHTML(?DOMNode $node = null): string|false {
-        $target = $node === null ? 0 : $node->__elephc_handle();
+    public function saveHTML($node = null): string|false {
+        $target = __ElephcDOM::argument($node, "DOMDocument::saveHTML", 1, "node", true);
         $html = elephc_xml_dom_save_html($this->__elephc_handle(), $target, $this->formatOutput ? 1 : 0);
         return $html === null ? false : $html;
     }
 
     public function createElement(string $localName, string $value = "") {
-        $node = __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 1, $localName, $value));
+        $node = __ElephcDOM::created(elephc_xml_dom_create($this->__elephc_handle(), 1, $localName, $value));
         if ($node instanceof DOMElement) {
             return $node;
         }
@@ -643,7 +1011,7 @@ class DOMDocument extends DOMNode {
     }
 
     public function createProcessingInstruction(string $target, string $data = "") {
-        $node = __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 7, $target, $data));
+        $node = __ElephcDOM::created(elephc_xml_dom_create($this->__elephc_handle(), 7, $target, $data));
         if ($node instanceof DOMProcessingInstruction) {
             return $node;
         }
@@ -651,7 +1019,7 @@ class DOMDocument extends DOMNode {
     }
 
     public function createAttribute(string $localName) {
-        $node = __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 2, $localName, ""));
+        $node = __ElephcDOM::created(elephc_xml_dom_create($this->__elephc_handle(), 2, $localName, ""));
         if ($node instanceof DOMAttr) {
             return $node;
         }

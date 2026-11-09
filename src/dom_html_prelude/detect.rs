@@ -44,6 +44,8 @@ const DOM_HTML_CLASSES: &[&str] = &[
     "DOMProcessingInstruction",
     "DOMCharacterData",
     "DOMDocumentFragment",
+    "DOMDocumentType",
+    "DOMImplementation",
     "DOMNodeList",
     "DOMNamedNodeMap",
     "Dom\\XMLDocument",

@@ -47,6 +47,12 @@ extern "C" {
     pub(crate) fn node_document(node: Node) -> Node;
     #[link_name = "elephc_libxml2_v1_dom_doc_string"]
     pub(crate) fn doc_string(doc: Node, which: c_int) -> *const c_char;
+    #[link_name = "elephc_libxml2_v1_dom_doc_standalone"]
+    pub(crate) fn doc_standalone(doc: Node) -> c_int;
+    #[link_name = "elephc_libxml2_v1_dom_dtd_string"]
+    pub(crate) fn dtd_string(dtd: Node, which: c_int) -> *const c_char;
+    #[link_name = "elephc_libxml2_v1_dom_internal_subset"]
+    pub(crate) fn internal_subset(dtd: Node) -> *mut c_char;
     #[link_name = "elephc_libxml2_v1_dom_parse_html"]
     pub(crate) fn parse_html(data: *const c_char, len: c_int, filename: *const c_char, options: c_int,
         diagnostics: *mut *mut c_char) -> Node;
@@ -104,6 +110,14 @@ extern "C" {
     pub(crate) fn get_prop(node: Node, name: *const c_char) -> *mut c_char;
     #[link_name = "xmlHasProp"]
     pub(crate) fn has_prop(node: Node, name: *const c_char) -> Node;
+    #[link_name = "xmlGetIntSubset"]
+    pub(crate) fn internal_dtd(doc: Node) -> Node;
+    #[link_name = "xmlNodeSetBase"]
+    pub(crate) fn set_base(node: Node, uri: *const c_char);
+    #[link_name = "xmlNodeGetBase"]
+    pub(crate) fn base(doc: Node, node: Node) -> *mut c_char;
+    #[link_name = "xmlValidateName"]
+    pub(crate) fn validate_name(value: *const c_char, space: c_int) -> c_int;
     #[link_name = "xmlSetProp"]
     pub(crate) fn set_prop(node: Node, name: *const c_char, value: *const c_char) -> Node;
 }

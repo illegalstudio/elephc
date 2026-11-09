@@ -500,6 +500,23 @@ fn check_object_property_write(
         // Its uninitialized branch still enforces that type at the runtime property store.
         let defers_to_runtime_property_typing = matches!(val_ty, PhpType::Mixed)
             || readonly_write_guard;
+        // Outside its own accessor, a write to a property with a `set` hook is a call to that
+        // hook: PHP checks the value against the hook's parameter type, which may be wider
+        // than the property's (`public ?string $p { set(mixed $value) { ... } }`).
+        let expected_ty = if has_set_hook && !in_own_accessor {
+            class_info
+                .methods
+                .get(&php_symbol_key(&property_hook_set_method(property)))
+                .filter(|sig| sig.param_type_exprs.first().is_some_and(Option::is_some))
+                .and_then(|sig| sig.params.first())
+                .map(|(_, ty)| ty.clone())
+                .unwrap_or(expected_ty)
+        } else {
+            expected_ty
+        };
+        if matches!(expected_ty, PhpType::Mixed) {
+            return Ok(());
+        }
         if class_info.visible_property_is_declared(property) && !defers_to_runtime_property_typing {
             checker.require_compatible_arg_type(
                 &expected_ty,

@@ -84,6 +84,7 @@ pub(super) fn lower_object_prop_get_with_null_guard(
 
     ctx.emitter.label(&null_label);
     if inst.op != Op::NullsafePropGet {
+        super::super::core_builtins::publish_diagnostic_site(ctx, inst);
         emit_property_on_null_warning(ctx, property);
     }
     // Property reads keep the legacy zero-float miss shape: their null result is never

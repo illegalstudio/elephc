@@ -455,10 +455,13 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::BufferNew { element_type, .. } => {
             PhpType::Buffer(Box::new(ctx.type_expr_to_php_type_for_value(element_type)))
         }
+        // A read the IR cannot type (a `mixed` receiver, an undeclared name) can yield any value:
+        // it merges as boxed `mixed`, like an unnamed call. The syntactic fallback answered `int`
+        // and coerced an object branch (`$c ? $m->p : $m->q`) into an integer temp.
         ExprKind::PropertyAccess { object, property } => {
             nullable_pointer_property_type(ctx, object, property)
                 .or_else(|| property_access_expr_type_for_ir(ctx, object, property))
-                .unwrap_or_else(|| fallback_expr_type(expr))
+                .unwrap_or(PhpType::Mixed)
         }
         // A static property holding one raw word is resolved here: a `?ptr<T>` keeps its null
         // member through the merge, and a `buffer<T>` or `ptr<T>` keeps its handle or address

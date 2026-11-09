@@ -117,9 +117,9 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
         .method(
             method("__unserialize")
                 .param("data", t_array())
-                .keep_unread_params()
                 .returns(TypeExpr::Void)
                 .body(vec![
+                    s_assign("_unused", e_var("data")),
                     s_throw(e_new("Exception", vec![e_str("Unserialization of 'XMLParser' is not allowed")])),
                 ]),
         )

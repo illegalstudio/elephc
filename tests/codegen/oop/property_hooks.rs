@@ -471,3 +471,30 @@ fn test_mixed_case_get_only_hooked_property() {
     );
     assert_eq!(out, "5");
 }
+
+/// A `set` hook may declare a parameter type WIDER than the property's: php checks the write
+/// against the hook's parameter (here `mixed`), so a Stringable object or an int reaches the
+/// hook, and an inherited property keeps that rule. Output is `php -n`'s.
+#[test]
+fn test_set_hook_parameter_type_wider_than_property_governs_writes() {
+    let out = compile_and_run(
+        r#"<?php
+class S { public function __toString(): string { echo 'cast|'; return 'v'; } }
+class P {
+    private string $s = "";
+    public ?string $p {
+        get => $this->s;
+        set(mixed $value) { $this->s = (string) $value; }
+    }
+}
+class C extends P {}
+$c = new C();
+$c->p = new S();
+echo $c->p, "\n";
+$p = new P();
+$p->p = 42;
+echo $p->p, "\n";
+"#,
+    );
+    assert_eq!(out, "cast|v\n42\n");
+}

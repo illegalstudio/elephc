@@ -445,3 +445,32 @@ echo 'after';
 "#);
     assert_eq!(out, "Call to a member function run() on null|finally|after");
 }
+
+/// Reading a property through a `mixed` receiver that holds no object warns like php, naming
+/// the value (`null`, `int`, `string`, `float`, `true`, `false`, `array`), on the read's own
+/// line, and yields null. A typed `?A` receiver reports its own line too, not the previous
+/// statement's. Output is `php -n`'s.
+#[test]
+fn test_property_read_on_non_object_mixed_receiver_warns_with_value_name_and_line() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class A { public string $p = "a"; }
+function pick(int $i): mixed { return [null, 1, "s", 1.5, true, false, [1], new A()][$i]; }
+function maybe(int $i): ?A { return $i > 0 ? new A() : null; }
+for ($i = 0; $i < 8; $i++) {
+    $v = pick($i);
+    echo "[", $v->p, "]";
+}
+$n = maybe(0);
+echo "[", $n->p, "]";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[][][][][][][][a][]");
+    for name in ["null", "int", "string", "float", "true", "false", "array"] {
+        let warning = format!("Warning: Attempt to read property \"p\" on {name} in");
+        assert!(out.stderr.contains(&warning), "missing `{warning}` in {}", out.stderr);
+    }
+    assert_eq!(out.stderr.matches(" on line 7\n").count(), 7, "{}", out.stderr);
+    assert_eq!(out.stderr.matches(" on line 10\n").count(), 1, "{}", out.stderr);
+}

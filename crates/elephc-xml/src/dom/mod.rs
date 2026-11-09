@@ -56,6 +56,7 @@ pub(crate) mod kind {
 pub(crate) mod error {
     pub(crate) const HIERARCHY_REQUEST: i64 = 3;
     pub(crate) const WRONG_DOCUMENT: i64 = 4;
+    pub(crate) const INVALID_CHARACTER: i64 = 5;
     pub(crate) const NO_MODIFICATION_ALLOWED: i64 = 7;
     pub(crate) const NOT_FOUND: i64 = 8;
     pub(crate) const INVALID_STATE: i64 = 11;
@@ -178,7 +179,22 @@ pub(crate) fn load_xml(handle: i64, data: &[u8], options: i64) -> bool {
     let mut messages = std::ptr::null_mut();
     let raw = unsafe { ffi::parse(data.as_ptr().cast(), length, options, std::ptr::null(), 2, &mut messages) };
     unsafe { crate::simplexml::diagnostics_capture(messages) };
+    set_working_directory_url(raw);
     adopt_loaded(handle, raw)
+}
+
+/// php-src `dom_document_parser` parses a string with the working directory as the context
+/// directory, and a document without a URL takes it (with a trailing slash): `documentURI` and
+/// every `baseURI` then name the current directory.
+fn set_working_directory_url(doc: Node) {
+    if doc.is_null() || unsafe { !ffi::doc_string(doc, 2).is_null() } {
+        return;
+    }
+    let Ok(directory) = std::env::current_dir() else { return };
+    let mut url = directory.into_os_string().into_encoded_bytes();
+    url.push(b'/');
+    let url = cstring(url);
+    unsafe { ffi::set_base(doc, url.as_ptr()) };
 }
 
 /// Opens `filename` into the document behind `handle`; false (and warnings) on failure.
@@ -312,12 +328,11 @@ pub(crate) fn node_value(node: Node) -> Option<Vec<u8>> {
     }
 }
 
-/// `textContent` (php-src `dom_node_text_content_read`): document-like nodes are null.
+/// `textContent` (php-src `dom_node_text_content_read` → `php_dom_get_content_into_zval`):
+/// legacy DOM is never null — `xmlNodeGetContent()`, a document's descendant text included,
+/// or the empty string.
 pub(crate) fn text_content(node: Node) -> Option<Vec<u8>> {
-    match node_type(node) {
-        kind::DOCUMENT | kind::HTML_DOCUMENT | kind::DOCUMENT_TYPE | kind::NOTATION => None,
-        _ => Some(unsafe { owned_bytes(ffi::content(node)) }.unwrap_or_default()),
-    }
+    Some(unsafe { owned_bytes(ffi::content(node)) }.unwrap_or_default())
 }
 
 /// Whether a node type can hold children (php-src `dom_node_children_valid`).
@@ -496,6 +511,14 @@ pub(crate) fn remove_child(parent: &Entry, child: &Entry) -> Result<Node, i64> {
 }
 
 /// Creates a detached node of `node_kind` in `document`; `None` if libxml2 refuses.
+/// Whether `name` is an XML Name, as php-src checks with `xmlValidateName(name, 0)` before
+/// `createElement()`, `createAttribute()`, `createProcessingInstruction()`,
+/// `new DOMElement()` and `setAttribute()` (failure is `INVALID_CHARACTER_ERR`).
+pub(crate) fn valid_name(name: &[u8]) -> bool {
+    let name = cstring(name);
+    unsafe { ffi::validate_name(name.as_ptr(), 0) == 0 }
+}
+
 pub(crate) fn create(document: &Entry, node_kind: i32, name: &[u8], value: &[u8]) -> Option<Node> {
     let doc = document.doc.raw;
     let name = cstring(name);
@@ -592,11 +615,18 @@ pub(crate) fn set_attribute(element: &Entry, name: &[u8], value: &[u8]) -> Node 
     let name = cstring(name);
     let value = cstring(value);
     unsafe {
+        // php-src `dom_element_set_attribute`: an existing attribute keeps its node (and any
+        // PHP object for it) but loses its children, then `xmlSetProp` stores the value as one
+        // LITERAL text node — `&` is not an entity reference here.
         let existing = ffi::has_prop(element.node, name.as_ptr());
         if !existing.is_null() && node_type(existing) == kind::ATTRIBUTE {
-            // Keep the attribute node (and any PHP object for it); replace only its value.
-            ffi::set_content(existing, value.as_ptr());
-            return existing;
+            loop {
+                let child = ffi::child(existing);
+                if child.is_null() {
+                    break;
+                }
+                unlink_retaining(&element.doc, child);
+            }
         }
         ffi::set_prop(element.node, name.as_ptr(), value.as_ptr())
     }

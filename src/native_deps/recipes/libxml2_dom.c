@@ -74,6 +74,37 @@ const char *elephc_libxml2_v1_dom_doc_string(void *rawdoc, int which) {
     }
 }
 
+/* A DTD's external identifiers: 0 ExternalID (publicId), 1 SystemID (systemId). */
+const char *elephc_libxml2_v1_dom_dtd_string(void *rawdtd, int which) {
+    xmlDtdPtr dtd = rawdtd;
+    switch (which) {
+        case 0: return (const char *)dtd->ExternalID;
+        case 1: return (const char *)dtd->SystemID;
+        default: return NULL;
+    }
+}
+
+/* DOMDocumentType::$internalSubset as php-src's dom_documenttype_internal_subset_read: the
+ * document's internal subset declarations, each dumped as xmlNodeDumpOutput writes it, or NULL
+ * when there is no internal subset. The caller frees the result. */
+char *elephc_libxml2_v1_dom_internal_subset(void *rawdtd) {
+    xmlDtdPtr dtd = rawdtd;
+    xmlDtdPtr subset = dtd->doc ? xmlGetIntSubset(dtd->doc) : NULL;
+    if (subset == NULL || subset->children == NULL) return NULL;
+    xmlBufferPtr buffer = xmlBufferCreate();
+    if (buffer == NULL) return NULL;
+    xmlOutputBufferPtr output = xmlOutputBufferCreateBuffer(buffer, NULL);
+    if (output == NULL) { xmlBufferFree(buffer); return NULL; }
+    for (xmlNodePtr cur = subset->children; cur != NULL; cur = cur->next) {
+        xmlNodeDumpOutput(output, NULL, cur, 0, 0, NULL);
+    }
+    xmlOutputBufferFlush(output);
+    char *result = (char *)xmlStrdup(xmlBufferContent(buffer));
+    xmlOutputBufferClose(output);
+    xmlBufferFree(buffer);
+    return result;
+}
+
 /* The document's xmlStandalone flag (1 standalone="yes", 0 "no", -1 absent, -2 implicit). */
 int elephc_libxml2_v1_dom_doc_standalone(void *rawdoc) { return ((xmlDocPtr)rawdoc)->standalone; }
 

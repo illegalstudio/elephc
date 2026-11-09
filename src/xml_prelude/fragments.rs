@@ -187,6 +187,7 @@ final class XMLParser {
     }
 
     public function __unserialize(array $data): void {
+        $_unused = $data;
         throw new Exception("Unserialization of 'XMLParser' is not allowed");
     }
 
@@ -1060,6 +1061,7 @@ class XMLWriter {
     }
 
     public function __unserialize(array $data): void {
+        $_unused = $data;
         $this->__elephc_handle = 0;
         $this->__elephc_stream = null;
         $this->__elephc_std_fd = 0;

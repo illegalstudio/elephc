@@ -67,9 +67,9 @@ pub(super) fn decl_class_xmlwriter() -> Stmt {
         .method(
             method("__unserialize")
                 .param("data", t_array())
-                .keep_unread_params()
                 .returns(TypeExpr::Void)
                 .body(vec![
+                    s_assign("_unused", e_var("data")),
                     s_prop_assign(e_this(), "__elephc_handle", e_int(0)),
                     s_prop_assign(e_this(), "__elephc_stream", e_null()),
                     s_prop_assign(e_this(), "__elephc_std_fd", e_int(0)),

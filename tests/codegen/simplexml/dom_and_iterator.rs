@@ -255,7 +255,7 @@ eval($source);
     assert_eq!(out.stdout, "string(4) \"html\"\nbool(true)\nbool(false)\nold:before|bool(true)\nbool(false)\nstring(4) \"html\"\nbool(true)\nbool(false)\n");
 }
 
-/// Separates parser trees, DOM construction, retained imports and eval reload ownership.
+/// Separates HTML-loaded trees, DOM childNodes list handles, retained imports and eval reload ownership.
 #[test]
 fn test_simplexml_dom_reload_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_dom_reload_owners_isolated_bundle") { return; }
@@ -266,8 +266,8 @@ if ($argc === 1) {
     $document = new DOMDocument(); echo $document->childNodes->length;
 } elseif ($argc === 2) {
     for ($i = 0; $i < 3; $i++) {
-        $tree = __elephc_dom_parse_html('<html><body><p>x</p></body></html>', 0);
-        echo count($tree['children']); unset($tree);
+        $tree = new DOMDocument(); $tree->loadHTML('<html><body><p>x</p></body></html>');
+        echo $tree->childNodes->length; unset($tree);
     }
 } elseif ($argc === 3) {
     $document = new DOMDocument();
@@ -292,19 +292,18 @@ if ($argc === 1) {
     echo $document->documentElement->nodeName;
 } elseif ($argc === 8) {
     $document = new DOMDocument(); $document->loadHTML('<html><body><p>x</p></body></html>');
-    $document->childNodes = new DOMNodeList([]); echo $document->childNodes->length;
+    $list = $document->childNodes; $document->loadHTML('<html><body><p>y</p></body></html>'); echo $list->length;
 } elseif ($argc === 9) {
     $source = $argc > 0 ? '$document = new DOMDocument(); $document->loadHTML("<html><body><p>x</p></body></html>"); echo $document->documentElement->nodeName;' : '';
     eval($source);
 } elseif ($argc === 10) {
-    $document = new DOMDocument(); $list = new DOMNodeList([$document]); echo $list->length;
+    $document = new DOMDocument(); $document->loadXML('<r/>'); $list = $document->childNodes; echo $list->length;
 } elseif ($argc === 11) {
-    $list = new DOMNodeList([]); $list->__construct([]); $list->__construct([]); echo $list->length;
+    $document = new DOMDocument(); $list = $document->childNodes; $list = $document->childNodes; echo $list->length;
 } elseif ($argc === 12) {
-    $document = new DOMDocument(); $document->childNodes = new DOMNodeList([]); echo $document->childNodes->length;
+    $document = new DOMDocument(); echo $document->childNodes->length;
 } elseif ($argc === 13) {
-    $document = new DOMDocument(); $document->childNodes = new DOMNodeList([$document]);
-    $document->childNodes = new DOMNodeList([]); echo $document->childNodes->length;
+    $document = new DOMDocument(); $a = $document->childNodes; $b = $document->childNodes; unset($a); echo $b->length;
 } elseif ($argc === 14) {
     $document = new DOMDocument(); $document->loadXML('<r xmlns:p="urn:p" p:id="8">text<c/></r>');
     $text = $document->documentElement->childNodes->item(0); echo $text->nodeName;
@@ -379,7 +378,7 @@ if ($argc === 1) {
     } catch (Error $error) { echo 'E'; }
 }
 "###, &argvs);
-    let expected = ["0", "111", "html", "old:before|html", "html|html", "html", "html", "0", "html", "1", "0", "0", "0", "#text", "1", "caught", "1:1:{\"p\":\"urn:p\"}", "01caught", "1E:D:TypeErrorEE", "10ET", "0", "1", "caught", "E", "E"];
+    let expected = ["0", "222", "html", "old:before|html", "html|html", "html", "html", "2", "html", "1", "0", "0", "0", "#text", "1", "caught", "1:1:{\"p\":\"urn:p\"}", "01caught", "1E:D:TypeErrorEE", "10ET", "0", "1", "caught", "E", "E"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
@@ -395,10 +394,6 @@ if ($argc === 1) {
         elephc::names::method_symbol("SimpleXMLElement", "key"),
         elephc::names::method_symbol("SimpleXMLElement", "__elephc_iterator_current"),
         elephc::names::method_symbol("DOMDocument", "loadHTML"),
-        elephc::names::method_symbol("DOMNode", "__propset_childNodes"),
-        elephc::names::join_php_symbol("_method_source_abi", &["DOMNode", "__propset_childNodes"]),
-        elephc::names::method_symbol("DOMNodeList", "__construct"),
-        elephc::names::join_php_symbol("_method_source_abi", &["DOMNodeList", "__construct"]),
     ];
     assert!(failures.is_empty(), "{}\nDOM replacement assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &symbols));
 }

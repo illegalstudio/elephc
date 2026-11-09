@@ -1043,13 +1043,15 @@ fn parse_property_hooks(
             ));
         }
 
-        // Optional set-hook parameter list: `set(Type $value)` (the type is accepted but the
-        // property type governs); the default parameter name is `$value`.
+        // Optional set-hook parameter list: `set(Type $value)`; the default parameter name is
+        // `$value`. A declared type may be WIDER than the property's (PHP checks a write
+        // against it, `set(mixed $value)` included); without one the property type governs.
         let mut set_param = "value".to_string();
+        let mut set_type: Option<TypeExpr> = None;
         if is_set && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
             *pos += 1;
             if looks_like_typed_param(tokens, *pos) {
-                let _ = parse_type_expr(tokens, pos, hook_span)?;
+                set_type = Some(parse_type_expr(tokens, pos, hook_span)?);
             }
             match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Variable(name)) => {
@@ -1150,7 +1152,7 @@ fn parse_property_hooks(
                     is_abstract: false,
                     is_final: false,
                     has_body: true,
-                    params: vec![(set_param, prop_type.cloned(), None, false)],
+                    params: vec![(set_param, set_type.or_else(|| prop_type.cloned()), None, false)],
                     param_attributes: vec![Vec::new()],
                     variadic: None,
                     variadic_by_ref: false,

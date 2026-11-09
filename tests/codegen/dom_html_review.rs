@@ -60,7 +60,7 @@ echo ':', $doc->saveXML($html);
     assert_eq!(out, "A:1:siblings:<html><body>A</body><div>B</div></html>");
 }
 
-/// Legacy libxml reopens an html child without duplicating body or moving the document instruction.
+/// libxml2 2.15 keeps a second html as a document sibling after the `<?...>` comment, without duplicating body.
 #[test]
 fn dom_html_ninth_review_closed_document_following_content() {
     if skip_without_xml_native("dom_html_ninth_review_closed_document_following_content") {
@@ -75,16 +75,17 @@ foreach ([0, LIBXML_NOBLANKS] as $extra) {
     $reopened = $html->childNodes->item(1);
     $instruction = $doc->childNodes->item(1);
     echo $doc->getElementsByTagName('html')->length, ':', $doc->getElementsByTagName('body')->length, ':';
-    echo $body->nodeValue, ':', $reopened->nodeName, ':', $reopened->childNodes->length, '|';
+    echo $body->nodeValue, ':', $reopened?->nodeName, ':', $reopened?->childNodes->length, '|';
     echo $html->nextSibling === $instruction && $instruction->previousSibling === $html ? 'linked' : 'bad';
     echo ':', $instruction->parentNode === $doc ? 'document' : 'bad';
     echo ':', $doc->saveXML();
 }
 "#);
-    assert_eq!(out, "2:1:A:html:3|linked:document:<html><body>A</body><html><div>B</div><!--inside--><div>C</div></html></html><?worker data?>".repeat(2));
+    let document = "2:1:A::|linked:document:<?xml version=\"1.0\" standalone=\"yes\"?>\n<html><body>A</body></html>\n<!--?worker data-->\n<html><div>B</div><!--inside--><div>C</div></html>\n";
+    assert_eq!(out, document.repeat(2));
 }
 
-/// Reopening a literal document tree keeps every temporary wrapper owner balanced.
+/// Building a document with a trailing processing instruction and a late sibling keeps every owner balanced.
 #[test]
 fn dom_html_ninth_review_reopened_tree_owners() {
     if skip_without_xml_native("dom_html_ninth_review_reopened_tree_owners") {
@@ -93,19 +94,22 @@ fn dom_html_ninth_review_reopened_tree_owners() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 function enableDom(DOMDocument $doc): void {}
 for ($i = 0; $i < 16; $i++) {
-    $text = __elephc_dom_new_node('text', '#text', 'A', [], []);
-    $body = __elephc_dom_new_node('element', 'body', '', [], [$text]);
-    $html = __elephc_dom_new_node('element', 'html', '', [], [$body]);
-    $instruction = __elephc_dom_new_node('pi', 'worker', 'data', [], []);
-    $later = __elephc_dom_new_node('element', 'div', '', [], [__elephc_dom_new_node('text', '#text', 'B', [], [])]);
-    $tree = __elephc_dom_document_from_roots([$html, $instruction, $later], 0);
-    echo count($tree['children']), ':', __elephc_dom_text_of($tree), ':';
-    echo $tree['children'][0]['children'][1]['name'], ':', $tree['children'][1]['name'], '|';
-    unset($tree);
+    $doc = new DOMDocument();
+    $text = $doc->createTextNode('A');
+    $body = $doc->createElement('body'); $body->appendChild($text);
+    $html = $doc->createElement('html'); $html->appendChild($body);
+    $doc->appendChild($html);
+    $instruction = $doc->createProcessingInstruction('worker', 'data');
+    $doc->appendChild($instruction);
+    $later = $doc->createElement('div'); $later->appendChild($doc->createTextNode('B'));
+    $html->appendChild($later);
+    echo $doc->childNodes->length, ':', $html->textContent, ':';
+    echo $html->childNodes->item(1)->nodeName, ':', $doc->childNodes->item(1)->nodeName, '|';
+    unset($doc);
 }
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "2:AB:html:worker|".repeat(16), "{}", out.stderr);
+    assert_eq!(out.stdout, "2:AB:div:worker|".repeat(16), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
@@ -178,7 +182,7 @@ foreach ([0, LIBXML_NOBLANKS] as $extra) {
     assert_eq!(out, "1:1:1:<html><body>x</body></html>|".repeat(4));
 }
 
-/// Leading and trailing document nodes preserve their order, parents and bidirectional links.
+/// Leading and trailing document nodes preserve order, parents and links; a trailing `<?...?>` is a comment.
 #[test]
 fn dom_html_eighth_review_explicit_document_siblings() {
     if skip_without_xml_native("dom_html_eighth_review_explicit_document_siblings") {
@@ -199,7 +203,8 @@ if ($pi instanceof DOMProcessingInstruction) {
 } else { echo ':bad'; }
 echo ':', $doc->saveXML($html);
 "#);
-    assert_eq!(out, "4:html:x|LTPD:I:Tail:data?:<html><head/><body>x</body></html>");
+    // libxml2 parses `<?Tail data?>` in HTML as a bogus comment, so the fourth node is a comment.
+    assert_eq!(out, "4:html:x|LTPD:bad:<html><head/><body>x</body></html>");
 }
 
 /// An explicit body remains the sole body while its trailing comment stays inside the html wrapper.
@@ -221,7 +226,7 @@ echo ':', $doc->saveXML($html);
     assert_eq!(out, "1:2:C:H:<html><body>x</body><!--tail--></html>");
 }
 
-/// Wrapper selection retires trailing-node partitions without tokenizer or cyclic DOM owners.
+/// Appending trailing comment and whitespace nodes to a built tree retires every owner without cycles.
 #[test]
 fn dom_html_eighth_review_trailing_tree_owners() {
     if skip_without_xml_native("dom_html_eighth_review_trailing_tree_owners") {
@@ -230,19 +235,19 @@ fn dom_html_eighth_review_trailing_tree_owners() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 function enableDom(DOMDocument $doc): void {}
 for ($i = 0; $i < 16; $i++) {
-    $text = __elephc_dom_new_node('text', '#text', 'x', [], []);
-    $body = __elephc_dom_new_node('element', 'body', '', [], [$text]);
-    $html = __elephc_dom_new_node('element', 'html', '', [], [$body]);
-    $tail = __elephc_dom_new_node('comment', '#comment', 'tail', [], []);
-    $padding = __elephc_dom_new_node('text', '#text', ' ', [], []);
-    $tree = __elephc_dom_document_from_roots([$html, $tail, $padding], 0);
-    echo count($tree['children']), ':', __elephc_dom_text_of($tree), ':';
-    echo $tree['children'][1]['value'], '|';
-    unset($tree);
+    $doc = new DOMDocument();
+    $body = $doc->createElement('body'); $body->appendChild($doc->createTextNode('x'));
+    $html = $doc->createElement('html'); $html->appendChild($body);
+    $doc->appendChild($html);
+    $html->appendChild($doc->createComment('tail'));
+    $html->appendChild($doc->createTextNode(' '));
+    echo $html->childNodes->length, ':', $html->textContent, ':';
+    echo $html->childNodes->item(1)->nodeValue, '|';
+    unset($doc);
 }
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "2:x:tail|".repeat(16), "{}", out.stderr);
+    assert_eq!(out.stdout, "3:x :tail|".repeat(16), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
@@ -284,7 +289,7 @@ echo $html->childNodes->length, ':', json_encode($html->nodeValue), ':', $doc->s
     assert_eq!(out, "1:\"Hi\":<html><body><div>Hi</div></body></html>|1:\"Hi\":<html><body><div>Hi</div></body></html>|2:\"x\":<html><head/><body>x</body></html>|2:\" A  Hi \":<html><head><title> A </title></head><body> <div>Hi</div> </body></html>|3:\" x \":<html> <body>x</body> </html>");
 }
 
-/// XML attributes use uppercase hexadecimal Unicode references while text remains UTF-8.
+/// XML serialization of HTML attributes keeps non-ASCII text as raw UTF-8, escaping only `&` and quotes.
 #[test]
 fn dom_html_seventh_review_unicode_attributes() {
     if skip_without_xml_native("dom_html_seventh_review_unicode_attributes") {
@@ -299,10 +304,10 @@ foreach (['é', 'a b', '€😀', '&é"\''] as $value) {
     echo $doc->saveXML($div), '|';
 }
 "#);
-    assert_eq!(out, "<div title=\"&#xE9;\">é</div>|<div title=\"a&#xA0;b\">a b</div>|<div title=\"&#x20AC;&#x1F600;\">€😀</div>|<div title=\"&amp;&#xE9;&quot;'\">&amp;é\"'</div>|");
+    assert_eq!(out, "<div title=\"é\">é</div>|<div title=\"a\u{a0}b\">a\u{a0}b</div>|<div title=\"€😀\">€😀</div>|<div title=\"&amp;é&quot;'\">&amp;é\"'</div>|"); // is kept raw, not as a numeric reference
 }
 
-/// Unicode references are inserted after existing XML escapes and cannot escape their own ampersand.
+/// Non-ASCII attribute text is serialized raw while CR/LF/TAB stay numeric references and `&amp;#xE9;` stays escaped.
 #[test]
 fn dom_html_seventh_review_unicode_attribute_controls() {
     if skip_without_xml_native("dom_html_seventh_review_unicode_attribute_controls") {
@@ -314,10 +319,10 @@ $doc->loadHTML("<?xml encoding=\"UTF-8\"><div title=\"é&#13;&#10;&#9;&amp;#xE9;
 $div = $doc->getElementsByTagName('div')->item(0);
 echo $doc->saveXML($div);
 "#);
-    assert_eq!(out, "<div title=\"&#xE9;&#13;&#10;&#9;&amp;#xE9;\">é</div>");
+    assert_eq!(out, "<div title=\"é&#13;&#10;&#9;&amp;#xE9;\">é</div>");
 }
 
-/// Repeated attribute serialization releases its string arguments and intermediate byte probes.
+/// Repeated loading and serializing of unicode and plain attributes releases all strings and nodes.
 #[test]
 fn dom_html_seventh_review_unicode_attribute_owners() {
     if skip_without_xml_native("dom_html_seventh_review_unicode_attribute_owners") {
@@ -325,11 +330,17 @@ fn dom_html_seventh_review_unicode_attribute_owners() {
     }
     let out = compile_and_run_with_heap_debug(r#"<?php
 function enableDom(DOMDocument $doc): void {}
-for ($i = 0; $i < 16; $i++) { echo __elephc_dom_escape_attr("é€😀"); }
-echo '|', __elephc_dom_escape_attr('plain'), '|', __elephc_dom_escape_attr('');
+for ($i = 0; $i < 16; $i++) {
+    $doc = new DOMDocument();
+    $doc->loadHTML('<?xml encoding="UTF-8"><div title="é€😀">x</div>', LIBXML_NOERROR | LIBXML_HTML_NODEFDTD);
+    echo $doc->saveXML($doc->getElementsByTagName('div')->item(0));
+}
+$doc = new DOMDocument();
+$doc->loadHTML('<div title="plain" alt="">x</div>');
+echo '|', $doc->saveXML($doc->getElementsByTagName('div')->item(0));
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, format!("{}|plain|", "&#xE9;&#x20AC;&#x1F600;".repeat(16)), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}|<div title=\"plain\" alt=\"\">x</div>", "<div title=\"é€😀\">x</div>".repeat(16)), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
@@ -409,9 +420,10 @@ fn dom_html_latest_review_countable_list_owners() {
     }
     let out = compile_and_run_with_heap_debug(r#"<?php
 function size(mixed $value): int { return count($value); }
-$items = new DOMNodeList([1, 2]);
+$doc = new DOMDocument(); $doc->loadHTML('<p>1</p><p>2</p>');
+$items = $doc->getElementsByTagName('p');
 for ($i = 0; $i < 16; $i++) { echo size($items); }
-foreach ($items as $item) { echo $item; }
+foreach ($items as $item) { echo $item->textContent; }
 unset($items);
 "#);
     assert!(out.success, "{}", out.stderr);
@@ -434,7 +446,8 @@ function walk(DOMNodeList $items): int {
     }
     return $count;
 }
-$items = new DOMNodeList([1, 2]);
+$doc = new DOMDocument(); $doc->loadHTML('<p>1</p><p>2</p>');
+$items = $doc->getElementsByTagName('p');
 for ($i = 0; $i < 16; $i++) { echo walk($items) === 4 ? 'Y' : 'bad'; }
 unset($items);
 "#);
@@ -449,9 +462,13 @@ fn dom_html_sixth_review_autoload_cli() {
     if skip_without_xml_native("dom_html_sixth_review_autoload_cli") {
         return;
     }
+    ensure_cli_bridge_staticlibs(&["elephc_xml"]);
     let dir = make_cli_test_dir("elephc_dom_autoload_sixth");
     let result: std::io::Result<(std::process::Output, Option<std::process::Output>)> = (|| {
         std::fs::create_dir_all(dir.join("src"))?;
+        // DOM is libxml2-backed, as in php: the project declares the managed package.
+        std::fs::write(dir.join("elephc.toml"), include_str!("../../examples/simplexml/elephc.toml"))?;
+        std::fs::write(dir.join("elephc.lock"), include_str!("../../examples/simplexml/elephc.lock"))?;
         std::fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#)?;
         std::fs::write(dir.join("src/Renderer.php"), r#"<?php
 namespace App;
@@ -465,7 +482,11 @@ class Renderer {
 }
 "#)?;
         std::fs::write(dir.join("main.php"), "<?php echo (new App\\Renderer())->render();")?;
-        let compiled = elephc_cli_command(&dir).arg("main.php").output()?;
+        let cache = managed_native_cache_root().expect("libxml2 managed native cache");
+        let mut command = elephc_cli_command(&dir);
+        configure_prebuilt_cli_bridges(&mut command);
+        let compiled = command.args(["--target", target().as_str(), "main.php"])
+            .env("ELEPHC_NATIVE_CACHE", cache).output()?;
         let output = if compiled.status.success() {
             Some(std::process::Command::new(dir.join("main")).output()?)
         } else { None };
@@ -539,7 +560,7 @@ class Renderer {
     assert_eq!(out, "Hello");
 }
 
-/// Leading comments and instructions remain document siblings, not Termwind body children.
+/// Leading comments and `<?...?>` (parsed by libxml2 as a comment) remain document siblings, not body children.
 #[test]
 fn dom_html_fifth_review_document_leading_nodes() {
     if skip_without_xml_native("dom_html_fifth_review_document_leading_nodes") {
@@ -570,7 +591,7 @@ echo $dom->childNodes->length, ':', $dom->getElementsByTagName('html')->length, 
 echo $dom->childNodes->item(0)->nodeName;
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "3|#comment:PO|worker:PO|html:PO|1:div|Ihtml:S|1:0:#comment|1:0:worker", "{}", out.stderr);
+    assert_eq!(out.stdout, "3|#comment:PO|#comment:PO|html:PO|1:div|badhtml:S|1:0:#comment|1:0:#comment", "{}", out.stderr);
     assert!(out.stderr.is_empty(), "{}", out.stderr);
 }
 
@@ -597,7 +618,7 @@ echo $div->childNodes->length, ':', $div->childNodes->item(1)->nodeName;
     assert!(out.stderr.is_empty(), "{}", out.stderr);
 }
 
-/// Legacy HTML parsing drops an unfinished comment tail without creating a comment node.
+/// libxml2 2.15 closes an unfinished comment at end of input, keeping the tail as comment text.
 #[test]
 fn dom_html_fifth_review_unterminated_comment() {
     if skip_without_xml_native("dom_html_fifth_review_unterminated_comment") {
@@ -613,11 +634,11 @@ $dom->loadHTML('<!--unfinished', $flags);
 echo $dom->childNodes->length, ':', $dom->getElementsByTagName('body')->length;
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "1:a|<div>a</div>|0:0", "{}", out.stderr);
+    assert_eq!(out.stdout, "2:a|<div>a<!--b</div>c--></div>|1:0", "{}", out.stderr);
     assert!(out.stderr.is_empty(), "{}", out.stderr);
 }
 
-/// Consecutive instructions preserve typed PI fields and links across every sibling kind.
+/// Consecutive `<?...>` constructs become comment nodes in HTML, so no DOMProcessingInstruction appears among the siblings.
 #[test]
 fn dom_html_fourth_review_processing_instruction_fields() {
     if skip_without_xml_native("dom_html_fourth_review_processing_instruction_fields") {
@@ -640,7 +661,7 @@ foreach ($div->childNodes as $child) {
 echo '|', $dom->saveXML($div);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "5:x|One:a&b:N:Two|BPTwo:?:One:span|BPThree::#comment:N|BP|<div><?One a&b?><?Two ??><span>x</span><!--c--><?Three?></div>", "{}", out.stderr);
+    assert_eq!(out.stdout, "5:x||<div><!--?One a&b--><!--?Two?--><span>x</span><!--c--><!--?Three--></div>", "{}", out.stderr);
     assert!(out.stderr.is_empty(), "{}", out.stderr);
 }
 
@@ -658,7 +679,7 @@ echo $pi->marker;
     assert_eq!(out, "user");
 }
 
-/// Closed HTML processing instructions retain their own value and sibling position, not parent text.
+/// A closed `<?php ... ?>` in HTML is a DOMComment node that keeps its own value and sibling position, not parent text.
 #[test]
 fn dom_html_fourth_review_processing_instructions() {
     if skip_without_xml_native("dom_html_fourth_review_processing_instructions") {
@@ -675,11 +696,11 @@ echo $pi->previousSibling->nodeValue, $pi->nextSibling->nodeValue, '|';
 echo $pi->parentNode === $div ? 'P' : 'bad', $pi->ownerDocument === $dom ? 'O' : 'bad';
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "3|ab|<div>a<?php echo 1; ??>b</div>|DOMProcessingInstruction:php:echo 1; ?|ab|PO", "{}", out.stderr);
+    assert_eq!(out.stdout, "3|ab|<div>a<!--?php echo 1; ?-->b</div>|DOMComment:#comment:?php echo 1; ?|ab|PO", "{}", out.stderr);
     assert!(out.stderr.is_empty(), "{}", out.stderr);
 }
 
-/// PI targets preserve case and legacy HTML recovery retains unterminated target text.
+/// HTML `<?target ...>` forms become comments that keep the target's case, including unterminated ones.
 #[test]
 fn dom_html_fourth_review_processing_instruction_recovery() {
     if skip_without_xml_native("dom_html_fourth_review_processing_instruction_recovery") {
@@ -694,7 +715,7 @@ foreach (['<div>a<?Target Data>b</div>', '<div>a<?foo>b</div>', '<div>a<?foo?>b<
 }
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "ab|3|<div>a<?Target Data?>b</div>;ab|3|<div>a<?foo?>b</div>;ab|3|<div>a<?foo ??>b</div>;aunclosed|1|<div>aunclosed</div>;a|1|<div>a</div>;a>b|1|<div>a&gt;b</div>;a1 bad>b|1|<div>a1 bad&gt;b</div>;", "{}", out.stderr);
+    assert_eq!(out.stdout, "ab|3|<div>a<!--?Target Data-->b</div>;ab|3|<div>a<!--?foo-->b</div>;ab|3|<div>a<!--?foo?-->b</div>;a|2|<div>a<!--?unclosed--></div>;a|2|<div>a<!--?foo bar--></div>;ab|3|<div>a<!--?-->b</div>;ab|3|<div>a<!--?1 bad-->b</div>;", "{}", out.stderr);
     assert!(out.stderr.is_empty(), "{}", out.stderr);
 }
 
@@ -736,18 +757,18 @@ echo $input->getAttribute('disabled'), ':', $input->getAttribute('checked'), '|'
     assert!(out.stderr.is_empty(), "{}", out.stderr);
 }
 
-/// Entity helper temporaries and the static named table release without constructing a DOM tree.
+/// Loading HTML with named, numeric and unknown entities (alone and in a loop) releases every temporary.
 #[test]
 fn dom_html_third_review_entity_decoder_heap_clean() {
     if skip_without_xml_native("dom_html_third_review_entity_decoder_heap_clean") {
         return;
     }
     for probe in [
-        "echo __elephc_dom_named_entity_codepoint('AElig');",
-        "echo __elephc_dom_entity_utf8(128512);",
-        "echo __elephc_dom_decode_entities('plain');",
-        "echo __elephc_dom_decode_entities('&AElig;');",
-        "echo __elephc_dom_decode_entities('&#65');",
+        "$d = new DOMDocument(); $d->loadHTML('<p>&AElig;</p>'); echo $d->documentElement->textContent;",
+        "$d = new DOMDocument(); $d->loadHTML('<p>&#128512;</p>'); echo $d->documentElement->textContent;",
+        "$d = new DOMDocument(); $d->loadHTML('<p>plain</p>'); echo $d->documentElement->textContent;",
+        "$d = new DOMDocument(); $d->loadHTML('<p>&AElig;</p>'); echo $d->documentElement->textContent;",
+        "$d = new DOMDocument(); $d->loadHTML('<p>&#65</p>', LIBXML_NOERROR); echo $d->documentElement->textContent;",
     ] {
         let source = format!("<?php function enableDomPrelude(DOMDocument $unused): void {{}} {probe}");
         let result = compile_and_run_with_heap_debug(&source);
@@ -757,7 +778,9 @@ fn dom_html_third_review_entity_decoder_heap_clean() {
     let out = compile_and_run_with_heap_debug(r###"<?php
 function enableDomPrelude(DOMDocument $unused): void {}
 for ($i = 0; $i < 3; $i++) {
-    echo __elephc_dom_decode_entities('&AElig;&#x1F600;&amp;lt; &unknown; &#65'), '|';
+    $doc = new DOMDocument();
+    $doc->loadHTML('<p>&AElig;&#x1F600;&amp;lt; &unknown; &#65</p>', LIBXML_NOERROR);
+    echo $doc->getElementsByTagName('p')->item(0)->textContent, '|';
 }
 "###);
     assert!(out.success, "{}", out.stderr);
@@ -804,7 +827,7 @@ echo $dom->nodeValue === null ? 'N' : 'bad', '|', $div->nodeValue, '|', $dom->sa
     assert_eq!(out.stdout, "a<b&amp;c|2|<div><script><![CDATA[a<b&amp;]]></script>c</div>|a<b&amp;c|2|<div><style><![CDATA[a<b&amp;]]></style>c</div>|N|a]]>bc|<div><script><![CDATA[a]]]]><![CDATA[>b]]></script>c</div>", "{}", out.stderr);
 }
 
-/// Invalid closing-name starts preserve the remaining text in one text node.
+/// Invalid closing-name starts (`</ div>`, `</1>`) become bogus comments; `</>` is dropped.
 #[test]
 fn dom_html_third_review_spaced_end_tag() {
     if skip_without_xml_native("dom_html_third_review_spaced_end_tag") {
@@ -819,10 +842,10 @@ foreach (['</ div>', '</1>', '</>'] as $end) {
 }
 "###);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "a div>b|1|<div>a div&gt;b</div>;a1>b|1|<div>a1&gt;b</div>;a>b|1|<div>a&gt;b</div>;", "{}", out.stderr);
+    assert_eq!(out.stdout, "ab|3|<div>a<!-- div-->b</div>;ab|3|<div>a<!--1-->b</div>;ab|1|<div>ab</div>;", "{}", out.stderr);
 }
 
-/// XML serialization escapes CR everywhere and LF/TAB inside attributes.
+/// libxml2's HTML parser normalizes CRLF to LF; XML serialization escapes LF/TAB inside attributes only.
 #[test]
 fn dom_html_third_review_carriage_returns() {
     if skip_without_xml_native("dom_html_third_review_carriage_returns") {
@@ -835,7 +858,7 @@ $div = $dom->getElementsByTagName('div')->item(0);
 echo json_encode($div->nodeValue), '|', json_encode($div->getAttribute('title')), '|', $dom->saveXML($div);
 "###);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "\"a\\r\\nb\\tc\"|\"a\\r\\nb\\tc\"|<div title=\"a&#13;&#10;b&#9;c\">a&#13;\nb\tc</div>", "{}", out.stderr);
+    assert_eq!(out.stdout, "\"a\\nb\\tc\"|\"a\\nb\\tc\"|<div title=\"a&#10;b&#9;c\">a\nb\tc</div>", "{}", out.stderr);
 }
 
 /// The document has no owner while its current element and text children retain the document.
@@ -860,7 +883,7 @@ echo $dom->ownerDocument === null ? 'N' : 'bad', '|', $span->ownerDocument === $
     assert_eq!(out.stdout, "N|N|OO|N|O", "{}", out.stderr);
 }
 
-/// Entity decoding is nonrecursive and preserves unknown or unterminated legacy names.
+/// Entity decoding is nonrecursive; libxml2 2.15 decodes `&not` prefixes, `&nbsp` and `&AMP;`, and maps invalid references to U+FFFD.
 #[test]
 fn dom_html_third_review_entity_decode_once() {
     if skip_without_xml_native("dom_html_third_review_entity_decode_once") {
@@ -873,10 +896,10 @@ $div = $dom->getElementsByTagName('div')->item(0);
 echo $div->nodeValue, '|', $dom->saveXML($div);
 "###);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "&lt; &notAnEntity; &nbsp &AMP; A A  |<div>&amp;lt; &amp;notAnEntity; &amp;nbsp &amp;AMP; A A  </div>", "{}", out.stderr);
+    assert_eq!(out.stdout, "&lt; \u{ac}AnEntity; \u{a0} & A A \u{fffd} \u{fffd}|<div>&amp;lt; \u{ac}AnEntity; \u{a0} &amp; A A \u{fffd} \u{fffd}</div>", "{}", out.stderr);
 }
 
-/// Every legacy HTML4 entity plus apos matches the independent PHP/libxml 2.9 oracle.
+/// Every legacy HTML4 entity plus apos matches the PHP/libxml 2.15 oracle (lang/rang are U+27E8/U+27E9 there).
 #[test]
 fn dom_html_third_review_all_named_entities() {
     if skip_without_xml_native("dom_html_third_review_all_named_entities") {
@@ -898,13 +921,13 @@ empty=8709 emsp=8195 ensp=8194 epsilon=949 equiv=8801 eta=951 eth=240 euml=235 e
 exist=8707 fnof=402 forall=8704 frac12=189 frac14=188 frac34=190 frasl=8260 gamma=947 ge=8805
 gt=62 hArr=8660 harr=8596 hearts=9829 hellip=8230 iacute=237 icirc=238 iexcl=161 igrave=236
 image=8465 infin=8734 int=8747 iota=953 iquest=191 isin=8712 iuml=239 kappa=954 lArr=8656
-lambda=955 lang=9001 laquo=171 larr=8592 lceil=8968 ldquo=8220 le=8804 lfloor=8970 lowast=8727
+lambda=955 lang=10216 laquo=171 larr=8592 lceil=8968 ldquo=8220 le=8804 lfloor=8970 lowast=8727
 loz=9674 lrm=8206 lsaquo=8249 lsquo=8216 lt=60 macr=175 mdash=8212 micro=181 middot=183
 minus=8722 mu=956 nabla=8711 nbsp=160 ndash=8211 ne=8800 ni=8715 not=172 notin=8713 nsub=8836
 ntilde=241 nu=957 oacute=243 ocirc=244 oelig=339 ograve=242 oline=8254 omega=969 omicron=959
 oplus=8853 or=8744 ordf=170 ordm=186 oslash=248 otilde=245 otimes=8855 ouml=246 para=182
 part=8706 permil=8240 perp=8869 phi=966 pi=960 piv=982 plusmn=177 pound=163 prime=8242
-prod=8719 prop=8733 psi=968 quot=34 rArr=8658 radic=8730 rang=9002 raquo=187 rarr=8594
+prod=8719 prop=8733 psi=968 quot=34 rArr=8658 radic=8730 rang=10217 raquo=187 rarr=8594
 rceil=8969 rdquo=8221 real=8476 reg=174 rfloor=8971 rho=961 rlm=8207 rsaquo=8250 rsquo=8217
 sbquo=8218 scaron=353 sdot=8901 sect=167 shy=173 sigma=963 sigmaf=962 sim=8764 spades=9824
 sub=8834 sube=8838 sum=8721 sup=8835 sup1=185 sup2=178 sup3=179 supe=8839 szlig=223 tau=964
@@ -944,7 +967,7 @@ echo json_encode($div->nodeValue), '|', $div->childNodes->length;
     assert_eq!(out, "a b|3|\"\\n  x\\n\"|3");
 }
 
-/// Legacy libxml declaration handling preserves unknown bang markup as one text run.
+/// libxml2 2.15 turns unknown `<!name>` declarations into comment nodes, splitting the surrounding text.
 #[test]
 fn dom_html_second_review_unknown_declaration_is_text() {
     if skip_without_xml_native("dom_html_second_review_unknown_declaration_is_text") {
@@ -956,7 +979,7 @@ $dom->loadHTML('<!DOCTYPE html><div>a<!not>b</div>');
 $div = $dom->getElementsByTagName('div')->item(0);
 echo $div->nodeValue, '|', $div->childNodes->length, '|', $dom->saveXML($div);
 "#);
-    assert_eq!(out, "a<!not>b|1|<div>a&lt;!not&gt;b</div>");
+    assert_eq!(out, "ab|3|<div>a<!--not-->b</div>");
 }
 
 /// XML escaping differs between text and double-quoted attribute values.
@@ -1173,7 +1196,12 @@ echo $dom->saveXML($body), '|', $div->nodeValue, '|', $body->childNodes->length;
 "#);
     assert!(out.success, "{}", out.stderr.lines().take(4).collect::<Vec<_>>().join("\n"));
     assert_eq!(out.stdout, "<body><div>AB<span>C</span></div>D<b>E</b></body>|ABC|3");
-    assert!(out.stderr.is_empty(), "{}", out.stderr.lines().take(4).collect::<Vec<_>>().join("\n"));
+    // php warns once per unmatched end tag (the message carries a run-specific path and line).
+    for tag in ["missing", "span"] {
+        let warning = format!("Warning: DOMDocument::loadHTML(): Unexpected end tag : {tag} in Entity, line: 1 in ");
+        assert!(out.stderr.contains(&warning), "{}", out.stderr);
+    }
+    assert_eq!(out.stderr.matches("Warning:").count(), 2, "{}", out.stderr);
 }
 
 /// Comments remain visible as nodes and in XML but not in ancestor descendant text.

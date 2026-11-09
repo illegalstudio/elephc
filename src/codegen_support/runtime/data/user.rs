@@ -3707,6 +3707,15 @@ fn source_instance_method_entry(
 
 /// Returns whether `class_info` wraps a hosted extension object: every such wrapper, and
 /// every subclass of one, implements the prelude's marker interface.
+/// Whether an internal prelude class inherits the hidden dump method
+/// (`crate::php_ext::prelude::DEBUG_INFO_METHOD`) from an internal declaration.
+fn has_internal_debug_hook(class_info: &ClassInfo, classes: &HashMap<String, ClassInfo>) -> bool {
+    class_info
+        .method_impl_classes
+        .get(&php_symbol_key(crate::php_ext::prelude::DEBUG_INFO_METHOD))
+        .is_some_and(|owner| classes.get(owner).is_some_and(|info| info.is_internal))
+}
+
 fn is_hosted_extension_class(class_info: &ClassInfo) -> bool {
     class_info.interfaces.iter().any(|interface| {
         interface.trim_start_matches('\\').eq_ignore_ascii_case(crate::php_ext::prelude::OBJECT_INTERFACE)
@@ -3739,7 +3748,10 @@ fn runtime_debug_info_entry(
     classes: &HashMap<String, ClassInfo>,
 ) -> Result<(String, bool), String> {
     let none = Ok(("0".to_string(), false));
-    let hosted = is_hosted_extension_class(class_info);
+    // A hosted extension wrapper, or an internal prelude class (the DOM nodes) that declares the
+    // hidden debug method: PHP's internal classes project their dump through an engine handler,
+    // never a user-callable `__debugInfo()`.
+    let hosted = is_hosted_extension_class(class_info) || has_internal_debug_hook(class_info, classes);
     // A hosted wrapper dumps through its protected engine-table method, not a user-callable
     // `__debugInfo()` (PHP's internal classes have none), unless a program subclass declares its
     // own `__debugInfo()`, which PHP then calls.
@@ -3758,7 +3770,9 @@ fn runtime_debug_info_entry(
     let Some(impl_class) = class_info.method_impl_classes.get(&key) else {
         return none;
     };
-    if classes.get(impl_class).map_or(true, |owner| owner.is_internal && !is_hosted_extension_class(owner)) {
+    if classes.get(impl_class).map_or(true, |owner| {
+        owner.is_internal && !is_hosted_extension_class(owner) && !has_internal_debug_hook(owner, classes)
+    }) {
         return none;
     }
     let Some(return_type) = class_info.methods.get(&key).map(|sig| sig.return_type.codegen_repr()) else {

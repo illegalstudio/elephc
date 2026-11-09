@@ -244,11 +244,80 @@ pub(super) fn lower_declared_mixed_prop_get(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
+    // Only the boxed path reaches here, with `__rt_mixed_unbox`'s tag still in place.
+    if mode.is_read() && !matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
+        emit_property_on_non_object_warning(ctx, inst, property);
+    }
     emit_boxed_null(ctx);
 
     ctx.emitter.label(&done_label);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
+}
+
+/// Runtime Mixed tags of non-object payloads, with the name `zend_zval_value_name()` gives.
+/// Tag 3 (bool) is handled apart: php names the value, `true` or `false`.
+const NON_OBJECT_TAG_VALUE_NAMES: [(u64, &str); 7] = [
+    (8, "null"),
+    (0, "int"),
+    (1, "string"),
+    (2, "float"),
+    (4, "array"),
+    (5, "array"),
+    (9, "resource"),
+];
+
+/// Emits php's `Attempt to read property "p" on <value>` for a non-object Mixed receiver.
+///
+/// Expects `__rt_mixed_unbox`'s result: the runtime tag in the first result register and the
+/// payload word in the second (`x0`/`x1`, `rax`/`rdi`), as `emit_mixed_object_payload_or_null`
+/// leaves them when it branches away from the object path.
+pub(super) fn emit_property_on_non_object_warning(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    property: &str,
+) {
+    let done = ctx.next_label("prop_non_object_warning_done");
+    let true_label = ctx.next_label("prop_non_object_true");
+    let false_label = ctx.next_label("prop_non_object_false");
+    let arms: Vec<(u64, &str, String)> = NON_OBJECT_TAG_VALUE_NAMES
+        .iter()
+        .map(|(tag, name)| (*tag, *name, ctx.next_label("prop_non_object_warning")))
+        .collect();
+    let arm64 = ctx.emitter.target.arch == Arch::AArch64;
+    let (tag, payload, beq, jmp) = if arm64 { ("x0", "x1", "b.eq", "b") } else { ("rax", "rdi", "je", "jmp") };
+    let imm = |value: u64| if arm64 { format!("#{value}") } else { format!("{value}") };
+    ctx.emitter.instruction(&format!("cmp {tag}, {}", imm(3)));                 // runtime tag 3 = bool payload
+    ctx.emitter.instruction(&format!("{} {}", if arm64 { "b.ne" } else { "jne" }, arms[0].2)); // other kinds go through the tag ladder
+    ctx.emitter.instruction(&format!("cmp {payload}, {}", imm(0)));             // php names a bool by its value
+    ctx.emitter.instruction(&format!("{beq} {false_label}"));                   // zero payload is false
+    ctx.emitter.instruction(&format!("{jmp} {true_label}"));                    // any other payload is true
+    // The ladder starts at the first arm's label, so its first compare re-tests the same tag.
+    let mut ladder = Vec::new();
+    for (index, (value, _, label)) in arms.iter().enumerate() {
+        if index == 0 {
+            ctx.emitter.label(label);
+        }
+        ladder.push((*value, ctx.next_label("prop_non_object_emit")));
+        let target = &ladder.last().expect("ladder arm").1;
+        ctx.emitter.instruction(&format!("cmp {tag}, {}", imm(*value)));       // identify the payload kind for php's wording
+        ctx.emitter.instruction(&format!("{beq} {target}"));                    // warn naming this payload kind
+    }
+    ctx.emitter.instruction(&format!("{jmp} {done}"));                          // unknown tags stay silent
+    for ((_, name, _), (_, target)) in arms.iter().zip(&ladder) {
+        ctx.emitter.label(target);
+        super::super::core_builtins::publish_diagnostic_site(ctx, inst);
+        emit_static_property_warning(ctx, &format!("Warning: Attempt to read property \"{property}\" on {name}\n"));
+        abi::emit_jump(ctx.emitter, &done);
+    }
+    ctx.emitter.label(&true_label);
+    super::super::core_builtins::publish_diagnostic_site(ctx, inst);
+    emit_static_property_warning(ctx, &format!("Warning: Attempt to read property \"{property}\" on true\n"));
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&false_label);
+    super::super::core_builtins::publish_diagnostic_site(ctx, inst);
+    emit_static_property_warning(ctx, &format!("Warning: Attempt to read property \"{property}\" on false\n"));
+    ctx.emitter.label(&done);
 }
 
 /// Reads a real dynamic entry first, then uses magic accessors only when that key is absent.
@@ -899,6 +968,7 @@ pub(super) fn lower_nullable_prop_get_with_warning(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
+    super::super::core_builtins::publish_diagnostic_site(ctx, inst);
     emit_property_on_null_warning(ctx, property);
     emit_boxed_null(ctx);
 

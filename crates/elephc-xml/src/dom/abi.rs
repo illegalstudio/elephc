@@ -123,10 +123,22 @@ pub unsafe extern "C" fn elephc_xml_dom_set_encoding(document: i64, encoding: *c
     })
 }
 
-/// The node's `nodeType`, or 0 for an unknown handle.
+/// The node's `nodeType`, or 0 for an unknown handle. libxml2's DTD node reports php's
+/// `XML_DOCUMENT_TYPE_NODE` (php-src `dom_node_node_type_read`).
 #[no_mangle]
 pub extern "C" fn elephc_xml_dom_type(handle: i64) -> i64 {
-    guard(|| entry(handle).map_or(0, |entry| i64::from(node_type(entry.node))))
+    guard(|| {
+        entry(handle).map_or(0, |entry| match node_type(entry.node) {
+            kind::DTD => i64::from(kind::DOCUMENT_TYPE),
+            other => i64::from(other),
+        })
+    })
+}
+
+/// `DOMDocument::$xmlStandalone`: 1 when the declaration says `standalone="yes"`.
+#[no_mangle]
+pub extern "C" fn elephc_xml_dom_standalone(handle: i64) -> i64 {
+    guard(|| entry(handle).map_or(0, |entry| i64::from(unsafe { ffi::doc_standalone(document_raw(&entry)) } > 0)))
 }
 
 /// A related node: 0 parent, 1 first child, 2 last child, 3 previous sibling, 4 next sibling,
@@ -147,6 +159,10 @@ pub extern "C" fn elephc_xml_dom_node(handle: i64, relation: i64) -> i64 {
                     _ => owner_document(entry.node),
                 },
                 6 => ffi::root(document_raw(&entry)),
+                7 => match node_type(entry.node) {
+                    kind::DOCUMENT | kind::HTML_DOCUMENT => ffi::internal_dtd(entry.node),
+                    _ => std::ptr::null_mut(),
+                },
                 _ => std::ptr::null_mut(),
             }
         };
@@ -184,6 +200,10 @@ pub extern "C" fn elephc_xml_dom_string(handle: i64, field: i64) -> *const c_cha
                 6 => optional_bytes(ffi::doc_string(document_raw(&entry), 0)),
                 7 => optional_bytes(ffi::doc_string(document_raw(&entry), 1)),
                 8 => optional_bytes(ffi::doc_string(document_raw(&entry), 2)),
+                // php-src `dom_node_base_uri_read`: `xmlNodeGetBase()`, null when there is none.
+                9 => owned_bytes(ffi::base(ffi::node_document(node), node)),
+                10 | 11 if node_type(node) == kind::DTD => optional_bytes(ffi::dtd_string(node, (field - 10) as i32)),
+                12 if node_type(node) == kind::DTD => owned_bytes(ffi::internal_subset(node)),
                 _ => None,
             }
         };
@@ -260,7 +280,11 @@ pub unsafe extern "C" fn elephc_xml_dom_set_attribute(handle: i64, name: *const 
         if node_type(entry.node) != kind::ELEMENT {
             return 0;
         }
-        handle_for(&entry.doc, set_attribute(&entry, &arg(name), &arg(value)))
+        let name = arg(name);
+        if !valid_name(&name) {
+            return -error::INVALID_CHARACTER;
+        }
+        handle_for(&entry.doc, set_attribute(&entry, &name, &arg(value)))
     })
 }
 
@@ -291,7 +315,11 @@ pub unsafe extern "C" fn elephc_xml_dom_create(document: i64, node_kind: i64, na
     guard(|| {
         let Some(document) = entry(document) else { return 0 };
         let Ok(node_kind) = i32::try_from(node_kind) else { return 0 };
-        match create(&document, node_kind, &arg(name), &arg(value)) {
+        let name = arg(name);
+        if matches!(node_kind, kind::ELEMENT | kind::ATTRIBUTE | kind::PI) && !valid_name(&name) {
+            return -error::INVALID_CHARACTER;
+        }
+        match create(&document, node_kind, &name, &arg(value)) {
             Some(node) => handle_for(&document.doc, node),
             None => 0,
         }

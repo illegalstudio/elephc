@@ -384,6 +384,8 @@ mod tests {
                 "DOMProcessingInstruction",
                 "DOMAttr",
                 "DOMElement",
+                "DOMDocumentType",
+                "DOMImplementation",
                 "DOMDocument",
                 "Dom\\XMLDocument",
             ]

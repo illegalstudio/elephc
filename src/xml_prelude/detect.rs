@@ -875,7 +875,7 @@ mod tests {
         assert!(!program_uses_xml(&crate::var_export_prelude::var_export_declarations()));
     }
 
-    /// A user loadXML method stays independent of libxml2, including alongside HTML-only DOM use.
+    /// A user loadXML method stays independent of libxml2; only real DOM use brings it in.
     #[test]
     fn ignores_unrelated_load_xml_receivers() {
         for source in [
@@ -920,7 +920,13 @@ mod tests {
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); while (($doc = new Config()) && $argc) { try { $doc = new DOMDocument(); break; } finally { $doc = new Config(); } } $doc->loadXML();",
             "class Config { function loadXML(): void {} } $doc = new Config(); while ($argc) { try { $doc = new DOMDocument(); continue; } finally { $doc = new Config(); } } $doc->loadXML();",
         ] {
-            assert!(!program_uses_xml(&parse(&format!("<?php {source}"))), "{source}");
+            // The legacy DOM classes are libxml2-backed (as in php), so a program naming the
+            // global `DOMDocument`/`DOMElement` needs the xml surface whatever its user
+            // `loadXML()` does; one without them must stay free of it.
+            let uses_global_dom = source.contains("new DOMDocument()") && !source.starts_with("namespace")
+                || source.contains("\\DOMDocument()")
+                || source.contains("extends DOMElement");
+            assert_eq!(program_uses_xml(&parse(&format!("<?php {source}"))), uses_global_dom, "{source}");
         }
     }
 
