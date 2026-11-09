@@ -99,7 +99,36 @@ pub(super) fn lower_property_get(
     expr: &Expr,
 ) -> LoweredValue {
     let object = lower_expr(ctx, object);
+    // The read half of a compound assignment through a receiver that may be no object at all:
+    // php's read-write fetch, which leaves a non-object to the write's `Attempt to assign
+    // property` error. `PropGet` spends its immediate on the name, so the literal-name
+    // `DynamicPropGet` (same backend ladders) carries the mode.
+    if op == Op::PropGet
+        && ctx.read_for_write_property_spans.contains(&expr.span)
+        && matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    {
+        let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
+        return lower_dynamic_property_fetch_from_value(ctx, object, &name, PropertyFetchMode::ReadForWrite, expr);
+    }
     lower_property_get_from_value(ctx, object, property, op, expr)
+}
+
+/// Returns the span of the property read a compound assignment's value starts with
+/// (`$o->p = $o->p . 'x'` as the parser desugars `$o->p .= 'x'`), when `value` is one.
+pub(crate) fn compound_assignment_self_read_span(
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+    span: Span,
+) -> Option<Span> {
+    if value.span.line != span.line || value.span.col != span.col {
+        return None;
+    }
+    let ExprKind::BinaryOp { left, .. } = &value.kind else { return None };
+    let ExprKind::PropertyAccess { object: read_object, property: read_property } = &left.kind else {
+        return None;
+    };
+    (read_property == property && read_object.as_ref() == object).then_some(left.span)
 }
 
 /// Lowers `$target = &$obj->prop`: binds the local `$target` to the reference cell
@@ -1290,7 +1319,7 @@ fn lower_dynamic_property_fetch_without_native(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
     result_type: PhpType, mode: PropertyFetchMode, expr: &Expr,
 ) -> LoweredValue {
-    if mode == PropertyFetchMode::Read {
+    if mode.is_read() {
         if let Some(value) = runtime_hooks::lower_dynamic(ctx, object, property, expr) { return value; }
     }
     lower_dynamic_property_fetch_without_runtime_hooks(ctx, object, property, result_type, mode, expr)

@@ -496,6 +496,10 @@ pub enum MixedNumericOp {
 pub enum PropertyFetchMode {
     /// An ordinary value read: refuse an inaccessible name, warn on an undefined one.
     Read,
+    /// The read half of a compound assignment (`$o->p .= 'x'`), php's read-write fetch: like
+    /// `Read`, except a non-object receiver stays silent because the write that follows raises
+    /// `Attempt to assign property "p" on null` instead of a read warning first.
+    ReadForWrite,
     /// An unset container fetch: quiet declared slots, direct `__get`, and missing dynamic null slots.
     QuietRead,
     /// A silent existence probe: an inaccessible or undefined name answers `null`.
@@ -514,6 +518,7 @@ impl PropertyFetchMode {
     pub const fn as_eir(self) -> &'static str {
         match self {
             Self::Read => "read",
+            Self::ReadForWrite => "read_for_write",
             Self::QuietRead => "quiet_read",
             Self::Probe => "probe",
             Self::Isset => "isset",
@@ -529,11 +534,17 @@ impl PropertyFetchMode {
 
     /// Selects a value getter and ordinary visibility checks instead of an isset guard.
     pub const fn uses_magic_get(self) -> bool {
-        matches!(self, Self::Read | Self::QuietRead)
+        matches!(self, Self::Read | Self::ReadForWrite | Self::QuietRead)
     }
 
     /// Returns whether missing and uninitialized slots use ordinary value-read diagnostics.
     pub const fn is_read(self) -> bool {
+        matches!(self, Self::Read | Self::ReadForWrite)
+    }
+
+    /// Returns whether a non-object receiver warns `Attempt to read property "p" on <value>`:
+    /// a plain read does, the read half of a compound assignment leaves it to the write.
+    pub const fn warns_on_non_object(self) -> bool {
         matches!(self, Self::Read)
     }
 }

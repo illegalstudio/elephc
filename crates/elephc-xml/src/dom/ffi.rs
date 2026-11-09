@@ -49,6 +49,12 @@ extern "C" {
     pub(crate) fn doc_string(doc: Node, which: c_int) -> *const c_char;
     #[link_name = "elephc_libxml2_v1_dom_doc_standalone"]
     pub(crate) fn doc_standalone(doc: Node) -> c_int;
+    #[link_name = "elephc_libxml2_v1_dom_ns_def"]
+    pub(crate) fn ns_def(node: Node) -> Node;
+    #[link_name = "elephc_libxml2_v1_dom_ns_next"]
+    pub(crate) fn ns_next(ns: Node) -> Node;
+    #[link_name = "elephc_libxml2_v1_dom_ns_field"]
+    pub(crate) fn ns_field(ns: Node, which: c_int) -> *const c_char;
     #[link_name = "elephc_libxml2_v1_dom_dtd_string"]
     pub(crate) fn dtd_string(dtd: Node, which: c_int) -> *const c_char;
     #[link_name = "elephc_libxml2_v1_dom_internal_subset"]
@@ -110,6 +116,12 @@ extern "C" {
     pub(crate) fn get_prop(node: Node, name: *const c_char) -> *mut c_char;
     #[link_name = "xmlHasProp"]
     pub(crate) fn has_prop(node: Node, name: *const c_char) -> Node;
+    #[link_name = "xmlNewNs"]
+    pub(crate) fn new_ns(node: Node, href: *const c_char, prefix: *const c_char) -> Node;
+    #[link_name = "xmlHasNsProp"]
+    pub(crate) fn has_ns_prop(node: Node, name: *const c_char, href: *const c_char) -> Node;
+    #[link_name = "xmlSearchNs"]
+    pub(crate) fn search_ns(doc: Node, node: Node, prefix: *const c_char) -> Node;
     #[link_name = "xmlGetIntSubset"]
     pub(crate) fn internal_dtd(doc: Node) -> Node;
     #[link_name = "xmlNodeSetBase"]

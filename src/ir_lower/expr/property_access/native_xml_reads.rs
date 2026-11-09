@@ -108,7 +108,7 @@ fn dynamic_with_result(
         elephc_builtin_contract::lookup_class("SimpleXMLElement").and_then(|class| class.operators)
             .and_then(|operators| operators.property_method(operation)).expect("XML selection adapter is catalogued")
     }
-        else if mode == PropertyFetchMode::Read { "__elephc_property_get" }
+        else if mode.is_read() { "__elephc_property_get" }
         else if mode == PropertyFetchMode::Isset { "__elephc_property_presence" }
         else { "__elephc_property_probe" };
     let result = dispatch(

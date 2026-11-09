@@ -245,7 +245,9 @@ pub(super) fn lower_declared_mixed_prop_get(
 
     ctx.emitter.label(&null_label);
     // Only the boxed path reaches here, with `__rt_mixed_unbox`'s tag still in place.
-    if mode.is_read() && !matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
+    if mode.warns_on_non_object()
+        && !matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_))
+    {
         emit_property_on_non_object_warning(ctx, inst, property);
     }
     emit_boxed_null(ctx);

@@ -5,7 +5,7 @@
 //! - The AST-to-EIR regression tests.
 //!
 //! Key details:
-//! - Complex sibling trees exercise boxed stack pop and interface traversal.
+//! - Complex sibling trees exercise the native libxml2 bridge and interface traversal.
 //! - Target cases are independently scheduled under the normal CI timeout.
 //! - Generic containers retain concrete DOM member types through the complete frontend.
 
@@ -85,21 +85,13 @@ echo $doc->saveXML();
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains(&crate::names::method_symbol("DOMNodeList", "getiterator")), "{target}: aggregate factory");
     assert!(assembly.contains(&crate::names::method_symbol("DOMNodeList", "count")), "{target}: Countable dispatch");
-    assert!(assembly.contains(&crate::names::method_symbol("__ElephcDOMNodeListIterator", "valid")), "{target}: independent iterator");
     assert!(assembly.contains(&crate::names::method_symbol("DOMProcessingInstruction", "__construct")), "{target}: PI construction");
-    assert!(assembly.contains("__rt_array_take_boxed") || assembly.contains("__rt_hash_pop_boxed"), "{target}: stack pop path");
-    assert!(module.functions.iter().any(|function| {
-        function.name == "__elephc_dom_escape_attr_non_ascii"
-    }), "{target}: Unicode attribute references use the ordinary target-aware PHP lowering path");
-    assert!(module.functions.iter().any(|function| {
-        function.name == "__elephc_dom_filter_html_children"
-    }), "{target}: implied-body boundaries use the shared target-aware lowering path");
-    assert!(module.functions.iter().any(|function| {
-        function.name == "__elephc_dom_is_head_element"
-    }), "{target}: late-body repair uses ordinary target-aware PHP lowering");
-    assert!(module.functions.iter().any(|function| {
-        function.name == "__elephc_dom_is_frame_element"
-    }), "{target}: frame exclusions use ordinary target-aware PHP lowering");
+    // The libxml2-backed engine: parsing, node identity and serialization go through the
+    // native bridge on every target, and wrappers are minted by the shared identity cache.
+    for symbol in ["elephc_xml_dom_load_html", "elephc_xml_dom_node", "elephc_xml_dom_save"] {
+        assert!(assembly.contains(symbol), "{target}: native DOM entry point {symbol}");
+    }
+    assert!(assembly.contains(&crate::names::static_method_symbol("__ElephcDOM", "wrap")), "{target}: identity cache");
     let generic = super::lower_source_at_for_target(r#"<?php
 namespace GenericDefaults;
 class Entity {}

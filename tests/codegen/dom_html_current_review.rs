@@ -35,7 +35,6 @@ echo $document->textContent;
 /// `setAttribute('xmlns', ...)` adds an `nsDef` (true), a second write finds it (false), and
 /// `getAttribute('xmlns'/'xmlns:p')` reads only `nsDef`. Expected output is the oracle's.
 #[test]
-#[ignore = "DOM port pending: xmlns namespace declarations in setAttribute/getAttribute (bead elephc-8q7.18)"]
 fn dom_html_default_namespace_declaration_survives_repeated_writes() {
     if skip_without_xml_native("dom_html_default_namespace_declaration_survives_repeated_writes") {
         return;

@@ -213,6 +213,7 @@ use descriptor_calls::*;
 use object_construction::*;
 use property_access::*;
 pub(crate) use property_access::lower_property_write_receiver;
+pub(crate) use property_access::compound_assignment_self_read_span;
 pub(crate) use property_access::defer_native_property_write_receiver;
 pub(crate) use property_access::lower_native_dimension_write_select;
 pub(crate) use property_access::lower_native_dimension_incdec_select_from_values;

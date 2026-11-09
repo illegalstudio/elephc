@@ -93,7 +93,11 @@ fn attributes_round_trip() {
     let doc = entry(document).unwrap();
     let root = Entry { doc: doc.doc.clone(), node: unsafe { ffi::root(doc.doc.raw) } };
     let before = attribute_at(root.node, 0);
-    assert_eq!(set_attribute(&root, b"a", b"2"), before);
+    assert!(matches!(set_attribute(&root, b"a", b"2"), SetAttribute::Attribute(node) if node == before));
+    // `xmlns` adds a namespace declaration once (php: true, then false), read back by name.
+    assert!(matches!(set_attribute(&root, b"xmlns", b"urn:q"), SetAttribute::Declared(true)));
+    assert!(matches!(set_attribute(&root, b"xmlns", b"urn:other"), SetAttribute::Declared(false)));
+    assert_eq!(get_attribute(root.node, b"xmlns"), Some(b"urn:q".to_vec()));
     assert_eq!(get_attribute(root.node, b"a"), Some(b"2".to_vec()));
     assert!(remove_attribute(&root, b"a"));
     assert_eq!(get_attribute(root.node, b"a"), None);

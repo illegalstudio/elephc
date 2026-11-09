@@ -19,6 +19,39 @@ pub(super) fn lower_assignment_expr(
     conditional_value_temp: Option<&str>,
     expr: &Expr,
 ) -> LoweredValue {
+    // The desugared read of `$o->p OP= v` (`$tmp = $o->p OP v` in the prelude) is php's
+    // read-write fetch (see `PropertyFetchMode::ReadForWrite`).
+    let self_reads: Vec<Span> = match &target.kind {
+        ExprKind::PropertyAccess { object, property } => prelude.iter()
+            .filter_map(|stmt| match &stmt.kind {
+                StmtKind::Assign { value, .. } => {
+                    super::property_access::compound_assignment_self_read_span(object, property, value, expr.span)
+                }
+                _ => None,
+            })
+            .filter(|read| ctx.read_for_write_property_spans.insert(*read))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let result = lower_assignment_expr_inner(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr,
+    );
+    for read in self_reads {
+        ctx.read_for_write_property_spans.remove(&read);
+    }
+    result
+}
+
+/// The body of [`lower_assignment_expr`], run with any compound self-read marked.
+fn lower_assignment_expr_inner(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    result_target: Option<&Expr>,
+    prelude: &[crate::parser::ast::Stmt],
+    conditional_value_temp: Option<&str>,
+    expr: &Expr,
+) -> LoweredValue {
     if let Some(result) = super::static_dimension_incdec::lower(
         ctx, target, value, result_target, prelude, conditional_value_temp, expr,
         |ctx, prelude| {

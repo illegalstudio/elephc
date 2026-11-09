@@ -81,9 +81,17 @@ callNormalizedCast($argc + 5);
             inst.op == Op::StrPersist && inst.immediate == Some(Immediate::Bool(true))
                 && trim.operands.contains(&inst.result.unwrap())
         }).expect("normalized cast owner borrowed by trim").result.unwrap();
+        // The trim view over an owning temporary is persisted, so the cast's owner retires
+        // right there and the persisted result is the operand the user call settles.
+        let persisted = function.instructions.iter().find(|inst| {
+            inst.op == Op::StrPersist && inst.operands == [trim.result.unwrap()]
+        }).expect("persisted trim result").result.unwrap();
         assert!(function.instructions.iter().any(|inst| {
-            inst.op == Op::ReleaseUnlessAliases && inst.operands == [copy, call.result.unwrap()]
-        }), "{target}: the user call must settle the normalized cast's owner");
+            inst.op == Op::Release && inst.operands == [copy]
+        }), "{target}: the normalized cast's owner must retire once the trim result is persisted");
+        assert!(function.instructions.iter().any(|inst| {
+            inst.op == Op::ReleaseUnlessAliases && inst.operands == [persisted, call.result.unwrap()]
+        }), "{target}: the user call must settle the persisted trim result");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

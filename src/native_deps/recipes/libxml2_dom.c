@@ -74,6 +74,17 @@ const char *elephc_libxml2_v1_dom_doc_string(void *rawdoc, int which) {
     }
 }
 
+/* An element's namespace declarations (nsDef), walked with dom_ns_next; NULL when none. */
+void *elephc_libxml2_v1_dom_ns_def(void *node) {
+    xmlNodePtr element = node;
+    return element->type == XML_ELEMENT_NODE ? element->nsDef : NULL;
+}
+void *elephc_libxml2_v1_dom_ns_next(void *ns) { return ((xmlNsPtr)ns)->next; }
+/* A namespace declaration's 0 prefix (NULL for the default namespace) or 1 href. */
+const char *elephc_libxml2_v1_dom_ns_field(void *ns, int which) {
+    return (const char *)(which == 0 ? ((xmlNsPtr)ns)->prefix : ((xmlNsPtr)ns)->href);
+}
+
 /* A DTD's external identifiers: 0 ExternalID (publicId), 1 SystemID (systemId). */
 const char *elephc_libxml2_v1_dom_dtd_string(void *rawdtd, int which) {
     xmlDtdPtr dtd = rawdtd;

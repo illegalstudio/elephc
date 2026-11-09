@@ -601,44 +601,108 @@ pub(crate) fn set_text(node: &Entry, value: &[u8], literal: bool) {
 
 /// `getAttribute()`: the attribute's value, or `None` when absent.
 pub(crate) fn get_attribute(element: Node, name: &[u8]) -> Option<Vec<u8>> {
-    let name = cstring(name);
-    unsafe {
-        if ffi::has_prop(element, name.as_ptr()).is_null() {
-            return None;
+    match attribute_or_nsdecl(element, name) {
+        AttributeLookup::Attribute(attribute) => {
+            Some(unsafe { owned_bytes(ffi::content(attribute)) }.unwrap_or_default())
         }
-        owned_bytes(ffi::get_prop(element, name.as_ptr()))
+        AttributeLookup::NamespaceDecl(ns) => Some(unsafe { optional_bytes(ffi::ns_field(ns, 1)) }.unwrap_or_default()),
+        AttributeLookup::Missing => None,
+    }
+}
+
+/// What a legacy attribute name designates on an element.
+pub(crate) enum AttributeLookup {
+    Attribute(Node),
+    /// An `xmlns` / `xmlns:p` declaration (an `xmlNs` from the element's `nsDef`).
+    NamespaceDecl(Node),
+    Missing,
+}
+
+/// php-src `dom_get_attribute_or_nsdecl` (legacy DOM): `xmlns` and `xmlns:p` name the
+/// element's own namespace declarations, `p:local` an attribute in the namespace `p` resolves
+/// to in scope, anything else an attribute without namespace.
+pub(crate) fn attribute_or_nsdecl(element: Node, name: &[u8]) -> AttributeLookup {
+    let declaration = |prefix: Option<&[u8]>| unsafe {
+        let mut ns = ffi::ns_def(element);
+        while !ns.is_null() {
+            if optional_bytes(ffi::ns_field(ns, 0)).as_deref() == prefix {
+                return AttributeLookup::NamespaceDecl(ns);
+            }
+            ns = ffi::ns_next(ns);
+        }
+        AttributeLookup::Missing
+    };
+    // xmlSplitQName3: a qualified name has a colon that is neither first nor last.
+    let split = name.iter().position(|byte| *byte == b':')
+        .filter(|colon| *colon > 0 && *colon + 1 < name.len());
+    unsafe {
+        if let Some(colon) = split {
+            let (prefix, local) = (&name[..colon], &name[colon + 1..]);
+            if prefix == b"xmlns" {
+                return declaration(Some(local));
+            }
+            let prefix = cstring(prefix);
+            let ns = ffi::search_ns(ffi::node_document(element), element, prefix.as_ptr());
+            if !ns.is_null() {
+                let local = cstring(local);
+                let attribute = ffi::has_ns_prop(element, local.as_ptr(), ffi::ns_field(ns, 1));
+                return if attribute.is_null() { AttributeLookup::Missing } else { AttributeLookup::Attribute(attribute) };
+            }
+        } else if name == b"xmlns" {
+            return declaration(None);
+        }
+        let name = cstring(name);
+        let attribute = ffi::has_ns_prop(element, name.as_ptr(), std::ptr::null());
+        if attribute.is_null() || node_type(attribute) != kind::ATTRIBUTE {
+            AttributeLookup::Missing
+        } else {
+            AttributeLookup::Attribute(attribute)
+        }
     }
 }
 
 /// `setAttribute()`: creates or replaces the attribute and returns its node.
-pub(crate) fn set_attribute(element: &Entry, name: &[u8], value: &[u8]) -> Node {
-    let name = cstring(name);
+pub(crate) fn set_attribute(element: &Entry, name: &[u8], value: &[u8]) -> SetAttribute {
+    let name_c = cstring(name);
     let value = cstring(value);
     unsafe {
-        // php-src `dom_element_set_attribute`: an existing attribute keeps its node (and any
-        // PHP object for it) but loses its children, then `xmlSetProp` stores the value as one
-        // LITERAL text node — `&` is not an entity reference here.
-        let existing = ffi::has_prop(element.node, name.as_ptr());
-        if !existing.is_null() && node_type(existing) == kind::ATTRIBUTE {
-            loop {
+        // php-src `DOMElement::setAttribute` (legacy): an existing attribute keeps its node (and
+        // any PHP object for it) but loses its children; an existing namespace declaration
+        // answers false. `dom_create_attribute` then adds a declaration for `xmlns` (true) or
+        // stores the value with `xmlSetProp` as one LITERAL text node (`&` stays literal).
+        match attribute_or_nsdecl(element.node, name) {
+            AttributeLookup::NamespaceDecl(_) => return SetAttribute::Declared(false),
+            AttributeLookup::Attribute(existing) => loop {
                 let child = ffi::child(existing);
                 if child.is_null() {
                     break;
                 }
                 unlink_retaining(&element.doc, child);
-            }
+            },
+            AttributeLookup::Missing => {}
         }
-        ffi::set_prop(element.node, name.as_ptr(), value.as_ptr())
+        if name == b"xmlns" {
+            let ns = ffi::new_ns(element.node, value.as_ptr(), std::ptr::null());
+            return SetAttribute::Declared(!ns.is_null());
+        }
+        SetAttribute::Attribute(ffi::set_prop(element.node, name_c.as_ptr(), value.as_ptr()))
     }
+}
+
+/// The result of `setAttribute()`: the attribute node, or php's boolean for a namespace
+/// declaration.
+pub(crate) enum SetAttribute {
+    Attribute(Node),
+    Declared(bool),
 }
 
 /// `removeAttribute()`: detaches the attribute node; false when it does not exist.
 pub(crate) fn remove_attribute(element: &Entry, name: &[u8]) -> bool {
-    let name = cstring(name);
-    let existing = unsafe { ffi::has_prop(element.node, name.as_ptr()) };
-    if existing.is_null() || node_type(existing) != kind::ATTRIBUTE {
+    // A namespace declaration is not removable yet (php-src unlinks it from nsDef and
+    // reconciles the namespaces still using it): bead elephc-8q7.18.
+    let AttributeLookup::Attribute(existing) = attribute_or_nsdecl(element.node, name) else {
         return false;
-    }
+    };
     unlink_retaining(&element.doc, existing);
     true
 }
@@ -674,8 +738,9 @@ pub(crate) fn child_at(parent: Node, index: usize) -> Node {
     std::ptr::null_mut()
 }
 
-/// Elements below `root` in document order whose qualified name matches (`*` matches all),
-/// as `getElementsByTagName()` sees them.
+/// Elements below `root` in document order whose LOCAL name matches (`*` matches all), as
+/// legacy `getElementsByTagName()` sees them (php-src `dom_match_qualified_name_for_tag_name_
+/// equality` compares `xmlNode->name`, so `p:c` matches `c` and never `p:c`).
 pub(crate) fn elements_by_tag_name(root: Node, name: &[u8]) -> Vec<Node> {
     let mut found = Vec::new();
     let mut stack = Vec::new();
@@ -684,7 +749,7 @@ pub(crate) fn elements_by_tag_name(root: Node, name: &[u8]) -> Vec<Node> {
     loop {
         while !child.is_null() {
             if node_type(child) == kind::ELEMENT {
-                if name == b"*" || node_name(child) == name {
+                if name == b"*" || unsafe { optional_bytes(ffi::name(child)) }.as_deref() == Some(name) {
                     found.push(child);
                 }
                 let first = unsafe { ffi::child(child) };

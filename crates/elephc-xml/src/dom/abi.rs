@@ -263,16 +263,16 @@ pub unsafe extern "C" fn elephc_xml_dom_attribute_node(handle: i64, name: *const
         if node_type(entry.node) != kind::ELEMENT {
             return 0;
         }
-        let name = cstring(arg(name));
-        let attribute = ffi::has_prop(entry.node, name.as_ptr());
-        if attribute.is_null() || node_type(attribute) != kind::ATTRIBUTE {
-            return 0;
+        match attribute_or_nsdecl(entry.node, &arg(name)) {
+            AttributeLookup::Attribute(attribute) => handle_for(&entry.doc, attribute),
+            // php returns a DOMNameSpaceNode for a declaration (bead elephc-8q7.18).
+            _ => 0,
         }
-        handle_for(&entry.doc, attribute)
     })
 }
 
-/// `setAttribute()`: the attribute node's handle.
+/// `setAttribute()`: the attribute node's handle, `SET_ATTRIBUTE_TRUE` / `_FALSE` for a
+/// namespace declaration, or `-5` (INVALID_CHARACTER_ERR) for an invalid name.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_dom_set_attribute(handle: i64, name: *const c_char, value: *const c_char) -> i64 {
     guard(|| {
@@ -284,9 +284,17 @@ pub unsafe extern "C" fn elephc_xml_dom_set_attribute(handle: i64, name: *const 
         if !valid_name(&name) {
             return -error::INVALID_CHARACTER;
         }
-        handle_for(&entry.doc, set_attribute(&entry, &name, &arg(value)))
+        match set_attribute(&entry, &name, &arg(value)) {
+            SetAttribute::Attribute(attribute) => handle_for(&entry.doc, attribute),
+            SetAttribute::Declared(true) => SET_ATTRIBUTE_TRUE,
+            SetAttribute::Declared(false) => SET_ATTRIBUTE_FALSE,
+        }
     })
 }
+
+/// `elephc_xml_dom_set_attribute` results for a namespace declaration (php returns a bool).
+const SET_ATTRIBUTE_TRUE: i64 = -200;
+const SET_ATTRIBUTE_FALSE: i64 = -201;
 
 /// `removeAttribute()`: 1 when an attribute was removed.
 #[no_mangle]

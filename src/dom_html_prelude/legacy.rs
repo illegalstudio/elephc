@@ -1664,7 +1664,24 @@ fn decl_class_domelement() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_return(e_static_call("__ElephcDOM", "created", vec![e_call("elephc_xml_dom_set_attribute", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_var("qualifiedName"), e_var("value")])])),
+                    s_assign("_result", e_call("elephc_xml_dom_set_attribute", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_var("qualifiedName"), e_var("value")])),
+                    s_if(
+                        e_binop(e_var("_result"), BinOp::StrictEq, e_neg(e_int(200))),
+                        vec![
+                            s_return(e_bool(true)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("_result"), BinOp::StrictEq, e_neg(e_int(201))),
+                        vec![
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_static_call("__ElephcDOM", "created", vec![e_var("_result")])),
                 ]),
         )
         .method(

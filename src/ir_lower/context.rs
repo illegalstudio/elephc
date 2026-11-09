@@ -386,6 +386,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.
     pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
+    /// Spans of the property reads that are the read half of a compound assignment being
+    /// lowered (`$o->p .= 'x'`): php's read-write fetch, `PropertyFetchMode::ReadForWrite`.
+    pub read_for_write_property_spans: HashSet<Span>,
     /// Authoritative checker result types for builtin calls in this source module.
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Source-body generator classification for closure literals.
@@ -679,6 +682,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             packed_classes,
             extern_classes,
             throw_access_sites,
+            read_for_write_property_spans: HashSet::new(),
             builtin_call_types,
             closure_generator_spans,
             array_push_property_plans,

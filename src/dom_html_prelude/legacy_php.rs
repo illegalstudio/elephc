@@ -736,7 +736,14 @@ class DOMElement extends DOMNode {
         if ($qualifiedName === "") {
             throw new ValueError("DOMElement::setAttribute(): Argument #1 (\$qualifiedName) must not be empty");
         }
-        return __ElephcDOM::created(elephc_xml_dom_set_attribute($this->__elephc_handle(), $qualifiedName, $value));
+        $_result = elephc_xml_dom_set_attribute($this->__elephc_handle(), $qualifiedName, $value);
+        if ($_result === -200) {
+            return true;
+        }
+        if ($_result === -201) {
+            return false;
+        }
+        return __ElephcDOM::created($_result);
     }
 
     public function removeAttribute(string $qualifiedName): bool {

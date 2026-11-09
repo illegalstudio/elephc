@@ -271,7 +271,7 @@ $targetXPathXml->registerXPathNamespace('q', 'urn:p');
 $targetXPathClone = clone $targetXPathXml;
 echo count($targetXPathClone->xpath('//p:c'));
 class TargetXmlSaveDocument extends DOMDocument {
-    public function saveXML(mixed $node = null, int $options = 0): string { return parent::saveXML($node, $options); }
+    public function saveXML(mixed $node = null, int $options = 0): string|false { return parent::saveXML($node, $options); }
 }
 $saveDocument = new TargetXmlSaveDocument();
 $saveDocument->loadHTML('<html><body>target</body></html>');
@@ -485,14 +485,13 @@ echo $doc->saveXML();
 "###;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());
-    let cache = module.functions.iter().find(|function| function.name == "__elephc_dom_remember_in")
-        .expect("DOM cache writes must use a DOMDocument-typed helper");
-    assert!(cache.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::PropGetForWrite),
-        "{target}: cache insertion must target the document's attached array property");
-    assert!(!cache.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::RuntimeCall
-        && matches!(instruction.immediate, Some(crate::ir::Immediate::Data(id))
-            if module.data.strings.get(id.as_raw() as usize).is_some_and(|name| name == "__elephc_dom_nodes"))),
-        "{target}: cache insertion must not use the stdClass-only mixed property fallback");
+    // The DOM identity cache: a node wrapper is remembered through a WeakReference whose own
+    // object handle goes back to the pool, so wrappers die like php-src's and ids stay php's.
+    let cache_assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    assert!(cache_assembly.contains(&crate::names::static_method_symbol("__ElephcDOM", "remember")),
+        "{target}: the DOM identity cache helper must be emitted");
+    assert!(cache_assembly.contains("__rt_object_handle_release"),
+        "{target}: the cache's weak reference must release its object handle");
     let arithmetic = module.functions.iter().find(|function| function.name == "xmlMixedArithmetic")
         .expect("mixed arithmetic fixture must remain reachable");
     for class in ["SimpleXMLElement", "BcMath\\Number"] {

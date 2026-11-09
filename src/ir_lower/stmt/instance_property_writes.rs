@@ -26,6 +26,23 @@ pub(super) fn lower_property_assign(
     value: &Expr,
     span: Span,
 ) {
+    // The desugared read of `$o->p OP= v` is php's read-write fetch (see
+    // `PropertyFetchMode::ReadForWrite`).
+    let self_read = crate::ir_lower::expr::compound_assignment_self_read_span(object, property, value, span)
+        .filter(|read| ctx.read_for_write_property_spans.insert(*read));
+    lower_property_assign_inner(ctx, object, property, value, span);
+    if let Some(read) = self_read {
+        ctx.read_for_write_property_spans.remove(&read);
+    }
+}
+
+fn lower_property_assign_inner(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+    span: Span,
+) {
     if crate::ir_lower::expr::lower_native_xml_property_update(ctx, object, property, value, span) {
         return;
     }
