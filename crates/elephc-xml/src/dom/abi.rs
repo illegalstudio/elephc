@@ -191,12 +191,12 @@ pub extern "C" fn elephc_xml_dom_string(handle: i64, field: i64) -> *const c_cha
     })
 }
 
-/// Writes `nodeValue` / `textContent`.
+/// Writes `nodeValue` (`literal` 0) or `textContent` (`literal` 1).
 #[no_mangle]
-pub unsafe extern "C" fn elephc_xml_dom_set_text(handle: i64, value: *const c_char) {
+pub unsafe extern "C" fn elephc_xml_dom_set_text(handle: i64, value: *const c_char, literal: i64) {
     guard(|| {
         if let Some(entry) = entry(handle) {
-            set_text(&entry, &arg(value));
+            set_text(&entry, &arg(value), literal != 0);
         }
     })
 }

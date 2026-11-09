@@ -531,26 +531,48 @@ pub(crate) fn clone_node(node: &Entry, deep: bool) -> Option<Node> {
     Some(copy)
 }
 
-/// Writes `nodeValue` / `textContent` (php-src `dom_node_node_value_write`): element and
-/// attribute children are replaced by one text node; text-like nodes get the new content.
-/// Old children are detached rather than freed, since PHP objects may still hold them.
-pub(crate) fn set_text(node: &Entry, value: &[u8]) {
-    let node_kind = node_type(node.node);
-    if matches!(node_kind, kind::ELEMENT | kind::ATTRIBUTE | kind::FRAGMENT) {
-        loop {
-            let child = unsafe { ffi::child(node.node) };
-            if child.is_null() {
-                break;
-            }
-            unlink_retaining(&node.doc, child);
+/// Detaches every child of `node`, keeping them owned by the document (PHP may hold them).
+fn detach_children(node: &Entry) {
+    loop {
+        let child = unsafe { ffi::child(node.node) };
+        if child.is_null() {
+            break;
         }
+        unlink_retaining(&node.doc, child);
     }
-    if matches!(
-        node_kind,
-        kind::ELEMENT | kind::ATTRIBUTE | kind::FRAGMENT | kind::TEXT | kind::COMMENT | kind::CDATA | kind::PI
-    ) {
-        let value = cstring(value);
-        unsafe { ffi::set_content(node.node, value.as_ptr()) };
+}
+
+/// Writes `nodeValue` (`literal` false, php-src `dom_node_node_value_write`: element and
+/// attribute children are dropped, then `xmlNodeSetContentLen` parses entity references) or
+/// `textContent` (`literal` true, `dom_node_text_content_write`: element, attribute and fragment
+/// children are replaced by one literal text node; other nodes take the content as is).
+/// Document-like nodes ignore both writes.
+pub(crate) fn set_text(node: &Entry, value: &[u8], literal: bool) {
+    let node_kind = node_type(node.node);
+    let value_c = cstring(value);
+    let Ok(length) = i32::try_from(value.len()) else { return };
+    unsafe {
+        if literal && matches!(node_kind, kind::ELEMENT | kind::ATTRIBUTE | kind::FRAGMENT) {
+            detach_children(node);
+            let text = ffi::new_text_len(ffi::node_document(node.node), value.as_ptr().cast(), length);
+            if !text.is_null() {
+                ffi::add_child(node.node, text);
+            }
+            return;
+        }
+        match node_kind {
+            kind::ELEMENT | kind::ATTRIBUTE => {
+                detach_children(node);
+                ffi::set_content_len(node.node, value.as_ptr().cast(), length);
+            }
+            kind::TEXT | kind::COMMENT | kind::CDATA | kind::PI if !literal => {
+                ffi::set_content_len(node.node, value.as_ptr().cast(), length);
+            }
+            kind::TEXT | kind::COMMENT | kind::CDATA | kind::PI => {
+                ffi::set_content(node.node, value_c.as_ptr());
+            }
+            _ => {}
+        }
     }
 }
 

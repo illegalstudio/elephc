@@ -29,7 +29,7 @@ extern "elephc_xml" {
     function elephc_xml_dom_type(int $node): int;
     function elephc_xml_dom_node(int $node, int $relation): int;
     function elephc_xml_dom_string(int $node, int $field): ?string;
-    function elephc_xml_dom_set_text(int $node, string $value): void;
+    function elephc_xml_dom_set_text(int $node, string $value, int $literal): void;
     function elephc_xml_dom_child(int $node, int $index): int;
     function elephc_xml_dom_child_count(int $node): int;
     function elephc_xml_dom_attribute(int $node, string $name): ?string;
@@ -52,7 +52,7 @@ final class __ElephcDOM {
     public static array $objects = [];
     public static bool $minting = false;
 
-    public static function wrap(int $handle): ?DOMNode {
+    public static function wrap(int $handle): mixed {
         if ($handle <= 0) {
             return null;
         }
@@ -118,11 +118,24 @@ final class __ElephcDOM {
             __ElephcDOM::fail(-$result);
         }
         $node = __ElephcDOM::wrap($result);
-        return $node === null ? false : $node;
+        return $node instanceof DOMNode ? $node : false;
     }
 
     public static function document(): int {
         return elephc_xml_dom_document_new("1.0", "");
+    }
+
+    public static function nodes(DOMNode $context, array $nodes): array {
+        $document = $context instanceof DOMDocument ? $context : $context->ownerDocument;
+        $converted = [];
+        foreach ($nodes as $node) {
+            if ($node instanceof DOMNode) {
+                $converted[] = $node;
+            } elseif ($document instanceof DOMDocument) {
+                $converted[] = $document->createTextNode((string) $node);
+            }
+        }
+        return $converted;
     }
 }
 
@@ -134,41 +147,41 @@ class DOMNode {
     }
     public ?string $nodeValue {
         get => elephc_xml_dom_string($this->__elephc_handle, 1);
-        set(?string $value) {
-            elephc_xml_dom_set_text($this->__elephc_handle, (string) $value);
+        set(mixed $value) {
+            elephc_xml_dom_set_text($this->__elephc_handle, (string) $value, 0);
         }
     }
     public int $nodeType {
         get => elephc_xml_dom_type($this->__elephc_handle);
     }
-    public ?DOMNode $parentNode {
+    public mixed $parentNode {
         get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 0));
     }
-    public ?DOMElement $parentElement {
+    public mixed $parentElement {
         get {
             $parent = __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 0));
             return $parent instanceof DOMElement ? $parent : null;
         }
     }
-    public DOMNodeList $childNodes {
-        get => new DOMNodeList($this->__elephc_handle, "");
+    public mixed $childNodes {
+        get => DOMNodeList::__elephc_list($this->__elephc_handle, "");
     }
-    public ?DOMNode $firstChild {
+    public mixed $firstChild {
         get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 1));
     }
-    public ?DOMNode $lastChild {
+    public mixed $lastChild {
         get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 2));
     }
-    public ?DOMNode $previousSibling {
+    public mixed $previousSibling {
         get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 3));
     }
-    public ?DOMNode $nextSibling {
+    public mixed $nextSibling {
         get => __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 4));
     }
-    public ?DOMNamedNodeMap $attributes {
-        get => elephc_xml_dom_type($this->__elephc_handle) === 1 ? new DOMNamedNodeMap($this->__elephc_handle) : null;
+    public mixed $attributes {
+        get => elephc_xml_dom_type($this->__elephc_handle) === 1 ? DOMNamedNodeMap::__elephc_map($this->__elephc_handle) : null;
     }
-    public ?DOMDocument $ownerDocument {
+    public mixed $ownerDocument {
         get {
             $owner = __ElephcDOM::wrap(elephc_xml_dom_node($this->__elephc_handle, 5));
             return $owner instanceof DOMDocument ? $owner : null;
@@ -185,8 +198,8 @@ class DOMNode {
     }
     public string $textContent {
         get => (string) elephc_xml_dom_string($this->__elephc_handle, 2);
-        set(string $value) {
-            elephc_xml_dom_set_text($this->__elephc_handle, $value);
+        set(mixed $value) {
+            elephc_xml_dom_set_text($this->__elephc_handle, (string) $value, 1);
         }
     }
 
@@ -237,16 +250,18 @@ class DOMNode {
 }
 
 class DOMNodeList implements IteratorAggregate, Countable {
-    private int $__elephc_root;
-    private string $__elephc_tag;
+    private int $__elephc_root = 0;
+    private string $__elephc_tag = "";
 
     public int $length {
         get => $this->__elephc_tag === "" ? elephc_xml_dom_child_count($this->__elephc_root) : elephc_xml_dom_tag_count($this->__elephc_root, $this->__elephc_tag);
     }
 
-    public function __construct(int $root, string $tag) {
-        $this->__elephc_root = $root;
-        $this->__elephc_tag = $tag;
+    public static function __elephc_list(int $root, string $tag): DOMNodeList {
+        $list = new DOMNodeList();
+        $list->__elephc_root = $root;
+        $list->__elephc_tag = $tag;
+        return $list;
     }
 
     public function item(int $index) {
@@ -274,7 +289,7 @@ class DOMNodeList implements IteratorAggregate, Countable {
 }
 
 class DOMNamedNodeMap implements IteratorAggregate, Countable {
-    private int $__elephc_element;
+    private int $__elephc_element = 0;
 
     public int $length {
         get {
@@ -286,16 +301,23 @@ class DOMNamedNodeMap implements IteratorAggregate, Countable {
         }
     }
 
-    public function __construct(int $element) {
-        $this->__elephc_element = $element;
+    public static function __elephc_map(int $element): DOMNamedNodeMap {
+        $map = new DOMNamedNodeMap();
+        $map->__elephc_element = $element;
+        return $map;
     }
 
     public function getNamedItem(string $qualifiedName): ?DOMNode {
-        return __ElephcDOM::wrap(elephc_xml_dom_attribute_node($this->__elephc_element, $qualifiedName));
+        $node = __ElephcDOM::wrap(elephc_xml_dom_attribute_node($this->__elephc_element, $qualifiedName));
+        return $node instanceof DOMNode ? $node : null;
     }
 
     public function item(int $index): ?DOMNode {
-        return $index < 0 ? null : __ElephcDOM::wrap(elephc_xml_dom_attribute_at($this->__elephc_element, $index));
+        if ($index < 0) {
+            return null;
+        }
+        $node = __ElephcDOM::wrap(elephc_xml_dom_attribute_at($this->__elephc_element, $index));
+        return $node instanceof DOMNode ? $node : null;
     }
 
     public function count(): int {
@@ -325,7 +347,7 @@ class DOMCharacterData extends DOMNode {
     public string $data {
         get => (string) elephc_xml_dom_string($this->__elephc_handle(), 1);
         set(string $value) {
-            elephc_xml_dom_set_text($this->__elephc_handle(), $value);
+            elephc_xml_dom_set_text($this->__elephc_handle(), $value, 0);
         }
     }
     public int $length {
@@ -398,7 +420,10 @@ class DOMAttr extends DOMNode {
         }
     }
     public ?DOMElement $ownerElement {
-        get => $this->parentElement;
+        get {
+            $parent = $this->parentElement;
+            return $parent instanceof DOMElement ? $parent : null;
+        }
     }
 
     public function __construct(string $name, string $value = "") {
@@ -442,7 +467,60 @@ class DOMElement extends DOMNode {
     }
 
     public function getElementsByTagName(string $qualifiedName): DOMNodeList {
-        return new DOMNodeList($this->__elephc_handle(), $qualifiedName);
+        return DOMNodeList::__elephc_list($this->__elephc_handle(), $qualifiedName);
+    }
+
+    public function append(...$nodes): void {
+        foreach (__ElephcDOM::nodes($this, $nodes) as $node) {
+            $this->appendChild($node);
+        }
+    }
+
+    public function prepend(...$nodes): void {
+        $current = $this->firstChild;
+        $first = $current instanceof DOMNode ? $current : null;
+        foreach (__ElephcDOM::nodes($this, $nodes) as $node) {
+            $this->insertBefore($node, $first);
+        }
+    }
+
+    public function replaceChildren(...$nodes): void {
+        while ($this->firstChild instanceof DOMNode) {
+            $this->removeChild($this->firstChild);
+        }
+        $this->append(...$nodes);
+    }
+
+    public function remove(): void {
+        $parent = $this->parentNode;
+        if ($parent instanceof DOMNode) {
+            $parent->removeChild($this);
+        }
+    }
+
+    public function before(...$nodes): void {
+        $parent = $this->parentNode;
+        if ($parent instanceof DOMNode) {
+            foreach (__ElephcDOM::nodes($this, $nodes) as $node) {
+                $parent->insertBefore($node, $this);
+            }
+        }
+    }
+
+    public function after(...$nodes): void {
+        $parent = $this->parentNode;
+        if ($parent instanceof DOMNode) {
+            $sibling = $this->nextSibling;
+            $next = $sibling instanceof DOMNode ? $sibling : null;
+            foreach (__ElephcDOM::nodes($this, $nodes) as $node) {
+                $parent->insertBefore($node, $next);
+            }
+        }
+    }
+
+    public function replaceWith(...$nodes): void {
+        $this->before(...$nodes);
+        $this->remove();
     }
 }
 
@@ -589,7 +667,21 @@ class DOMDocument extends DOMNode {
     }
 
     public function getElementsByTagName(string $qualifiedName): DOMNodeList {
-        return new DOMNodeList($this->__elephc_handle(), $qualifiedName);
+        return DOMNodeList::__elephc_list($this->__elephc_handle(), $qualifiedName);
+    }
+
+    public function append(...$nodes): void {
+        foreach (__ElephcDOM::nodes($this, $nodes) as $node) {
+            $this->appendChild($node);
+        }
+    }
+
+    public function prepend(...$nodes): void {
+        $current = $this->firstChild;
+        $first = $current instanceof DOMNode ? $current : null;
+        foreach (__ElephcDOM::nodes($this, $nodes) as $node) {
+            $this->insertBefore($node, $first);
+        }
     }
 }
 "##;

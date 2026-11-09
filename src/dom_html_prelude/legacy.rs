@@ -14,14 +14,7 @@
 //! - One helper per declaration: a single nested builder expression overflows the stack.
 
 use crate::parser::ast::{BinOp, CType, CastType, Program, Stmt, TypeExpr};
-use crate::synthetic_class::{
-    class, e_array, e_array_assoc, e_binop, e_bool, e_call, e_cast, e_const, e_index,
-    e_instance_of, e_int, e_method_call, e_neg, e_new, e_not, e_null, e_null_coalesce,
-    e_post_inc, e_prop, e_static_call, e_static_prop, e_str, e_ternary, e_this, e_this_prop,
-    e_var, extern_fn, internal_declarations, method, s_array_assign, s_array_push, s_assign,
-    s_expr, s_for, s_if, s_prop_assign, s_return, s_static_prop_array_assign,
-    s_static_prop_assign, s_throw, s_while, t_array, t_class, t_nullable, t_union,
-};
+use crate::synthetic_class::*;
 
 /// `elephc_xml_dom_document_new` — transcribed from the PHP form.
 fn decl_extern_elephc_xml_dom_document_new() -> Stmt {
@@ -118,6 +111,7 @@ fn decl_extern_elephc_xml_dom_set_text() -> Stmt {
     extern_fn("elephc_xml_dom_set_text", "elephc_xml")
         .param("node", CType::Int)
         .param("value", CType::Str)
+        .param("literal", CType::Int)
         .returns(CType::Void)
         .build()
 }
@@ -261,7 +255,7 @@ fn decl_class_elephcdom() -> Stmt {
             method("wrap")
                 .static_()
                 .param("handle", TypeExpr::Int)
-                .returns(t_nullable(t_class("DOMNode")))
+                .returns(t_mixed())
                 .body(vec![
                     s_if(
                         e_binop(e_var("handle"), BinOp::LtEq, e_int(0)),
@@ -402,7 +396,7 @@ fn decl_class_elephcdom() -> Stmt {
                         None,
                     ),
                     s_assign("node", e_static_call("__ElephcDOM", "wrap", vec![e_var("result")])),
-                    s_return(e_ternary(e_binop(e_var("node"), BinOp::StrictEq, e_null()), e_bool(false), e_var("node"))),
+                    s_return(e_ternary(e_instance_of(e_var("node"), "DOMNode"), e_var("node"), e_bool(false))),
                 ]),
         )
         .method(
@@ -411,6 +405,32 @@ fn decl_class_elephcdom() -> Stmt {
                 .returns(TypeExpr::Int)
                 .body(vec![
                     s_return(e_call("elephc_xml_dom_document_new", vec![e_str("1.0"), e_str("")])),
+                ]),
+        )
+        .method(
+            method("nodes")
+                .static_()
+                .param("context", t_class("DOMNode"))
+                .param("nodes", t_array())
+                .returns(t_array())
+                .body(vec![
+                    s_assign("document", e_ternary(e_instance_of(e_var("context"), "DOMDocument"), e_var("context"), e_prop(e_var("context"), "ownerDocument"))),
+                    s_assign("converted", e_array(vec![])),
+                    s_foreach(e_var("nodes"), None, "node", vec![
+                        s_if(
+                            e_instance_of(e_var("node"), "DOMNode"),
+                            vec![
+                                s_array_push("converted", e_var("node")),
+                            ],
+                            vec![
+                            (e_instance_of(e_var("document"), "DOMDocument"), vec![
+                                s_array_push("converted", e_method_call(e_var("document"), "createTextNode", vec![e_cast(CastType::String, e_var("node"))])),
+                            ]),
+                        ],
+                            None,
+                        ),
+                    ]),
+                    s_return(e_var("converted")),
                 ]),
         )
         .build()
@@ -426,23 +446,23 @@ fn decl_class_domnode() -> Stmt {
         .hooked(true, true, false)
         .prop("nodeType", TypeExpr::Int, None)
         .hooked(true, false, false)
-        .prop("parentNode", t_nullable(t_class("DOMNode")), None)
+        .prop("parentNode", t_mixed(), None)
         .hooked(true, false, false)
-        .prop("parentElement", t_nullable(t_class("DOMElement")), None)
+        .prop("parentElement", t_mixed(), None)
         .hooked(true, false, false)
-        .prop("childNodes", t_class("DOMNodeList"), None)
+        .prop("childNodes", t_mixed(), None)
         .hooked(true, false, false)
-        .prop("firstChild", t_nullable(t_class("DOMNode")), None)
+        .prop("firstChild", t_mixed(), None)
         .hooked(true, false, false)
-        .prop("lastChild", t_nullable(t_class("DOMNode")), None)
+        .prop("lastChild", t_mixed(), None)
         .hooked(true, false, false)
-        .prop("previousSibling", t_nullable(t_class("DOMNode")), None)
+        .prop("previousSibling", t_mixed(), None)
         .hooked(true, false, false)
-        .prop("nextSibling", t_nullable(t_class("DOMNode")), None)
+        .prop("nextSibling", t_mixed(), None)
         .hooked(true, false, false)
-        .prop("attributes", t_nullable(t_class("DOMNamedNodeMap")), None)
+        .prop("attributes", t_mixed(), None)
         .hooked(true, false, false)
-        .prop("ownerDocument", t_nullable(t_class("DOMDocument")), None)
+        .prop("ownerDocument", t_mixed(), None)
         .hooked(true, false, false)
         .prop("namespaceURI", t_nullable(TypeExpr::Str), None)
         .hooked(true, false, false)
@@ -471,7 +491,7 @@ fn decl_class_domnode() -> Stmt {
                 .param("value", t_nullable(TypeExpr::Str))
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_expr(e_call("elephc_xml_dom_set_text", vec![e_this_prop("__elephc_handle"), e_cast(CastType::String, e_var("value"))])),
+                    s_expr(e_call("elephc_xml_dom_set_text", vec![e_this_prop("__elephc_handle"), e_cast(CastType::String, e_var("value")), e_int(0)])),
                 ]),
         )
         .method(
@@ -483,14 +503,14 @@ fn decl_class_domnode() -> Stmt {
         )
         .method(
             method("__propget_parentNode")
-                .returns(t_nullable(t_class("DOMNode")))
+                .returns(t_mixed())
                 .body(vec![
                     s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_node", vec![e_this_prop("__elephc_handle"), e_int(0)])])),
                 ]),
         )
         .method(
             method("__propget_parentElement")
-                .returns(t_nullable(t_class("DOMElement")))
+                .returns(t_mixed())
                 .body(vec![
                     s_assign("parent", e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_node", vec![e_this_prop("__elephc_handle"), e_int(0)])])),
                     s_return(e_ternary(e_instance_of(e_var("parent"), "DOMElement"), e_var("parent"), e_null())),
@@ -498,49 +518,49 @@ fn decl_class_domnode() -> Stmt {
         )
         .method(
             method("__propget_childNodes")
-                .returns(t_class("DOMNodeList"))
+                .returns(t_mixed())
                 .body(vec![
-                    s_return(e_new("DOMNodeList", vec![e_this_prop("__elephc_handle"), e_str("")])),
+                    s_return(e_static_call("DOMNodeList", "__elephc_list", vec![e_this_prop("__elephc_handle"), e_str("")])),
                 ]),
         )
         .method(
             method("__propget_firstChild")
-                .returns(t_nullable(t_class("DOMNode")))
+                .returns(t_mixed())
                 .body(vec![
                     s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_node", vec![e_this_prop("__elephc_handle"), e_int(1)])])),
                 ]),
         )
         .method(
             method("__propget_lastChild")
-                .returns(t_nullable(t_class("DOMNode")))
+                .returns(t_mixed())
                 .body(vec![
                     s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_node", vec![e_this_prop("__elephc_handle"), e_int(2)])])),
                 ]),
         )
         .method(
             method("__propget_previousSibling")
-                .returns(t_nullable(t_class("DOMNode")))
+                .returns(t_mixed())
                 .body(vec![
                     s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_node", vec![e_this_prop("__elephc_handle"), e_int(3)])])),
                 ]),
         )
         .method(
             method("__propget_nextSibling")
-                .returns(t_nullable(t_class("DOMNode")))
+                .returns(t_mixed())
                 .body(vec![
                     s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_node", vec![e_this_prop("__elephc_handle"), e_int(4)])])),
                 ]),
         )
         .method(
             method("__propget_attributes")
-                .returns(t_nullable(t_class("DOMNamedNodeMap")))
+                .returns(t_mixed())
                 .body(vec![
-                    s_return(e_ternary(e_binop(e_call("elephc_xml_dom_type", vec![e_this_prop("__elephc_handle")]), BinOp::StrictEq, e_int(1)), e_new("DOMNamedNodeMap", vec![e_this_prop("__elephc_handle")]), e_null())),
+                    s_return(e_ternary(e_binop(e_call("elephc_xml_dom_type", vec![e_this_prop("__elephc_handle")]), BinOp::StrictEq, e_int(1)), e_static_call("DOMNamedNodeMap", "__elephc_map", vec![e_this_prop("__elephc_handle")]), e_null())),
                 ]),
         )
         .method(
             method("__propget_ownerDocument")
-                .returns(t_nullable(t_class("DOMDocument")))
+                .returns(t_mixed())
                 .body(vec![
                     s_assign("owner", e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_node", vec![e_this_prop("__elephc_handle"), e_int(5)])])),
                     s_return(e_ternary(e_instance_of(e_var("owner"), "DOMDocument"), e_var("owner"), e_null())),
@@ -579,7 +599,7 @@ fn decl_class_domnode() -> Stmt {
                 .param("value", TypeExpr::Str)
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_expr(e_call("elephc_xml_dom_set_text", vec![e_this_prop("__elephc_handle"), e_var("value")])),
+                    s_expr(e_call("elephc_xml_dom_set_text", vec![e_this_prop("__elephc_handle"), e_cast(CastType::String, e_var("value")), e_int(1)])),
                 ]),
         )
         .method(
@@ -674,8 +694,8 @@ fn decl_class_domnodelist() -> Stmt {
     class("DOMNodeList")
         .implements("IteratorAggregate")
         .implements("Countable")
-        .private_prop("__elephc_root", TypeExpr::Int, None)
-        .private_prop("__elephc_tag", TypeExpr::Str, None)
+        .private_prop("__elephc_root", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("__elephc_tag", TypeExpr::Str, Some(e_str("")))
         .prop("length", TypeExpr::Int, None)
         .hooked(true, false, false)
         .method(
@@ -686,12 +706,16 @@ fn decl_class_domnodelist() -> Stmt {
                 ]),
         )
         .method(
-            method("__construct")
+            method("__elephc_list")
+                .static_()
                 .param("root", TypeExpr::Int)
                 .param("tag", TypeExpr::Str)
+                .returns(t_class("DOMNodeList"))
                 .body(vec![
-                    s_prop_assign(e_this(), "__elephc_root", e_var("root")),
-                    s_prop_assign(e_this(), "__elephc_tag", e_var("tag")),
+                    s_assign("list", e_new("DOMNodeList", vec![])),
+                    s_prop_assign(e_var("list"), "__elephc_root", e_var("root")),
+                    s_prop_assign(e_var("list"), "__elephc_tag", e_var("tag")),
+                    s_return(e_var("list")),
                 ]),
         )
         .method(
@@ -744,7 +768,7 @@ fn decl_class_domnamednodemap() -> Stmt {
     class("DOMNamedNodeMap")
         .implements("IteratorAggregate")
         .implements("Countable")
-        .private_prop("__elephc_element", TypeExpr::Int, None)
+        .private_prop("__elephc_element", TypeExpr::Int, Some(e_int(0)))
         .prop("length", TypeExpr::Int, None)
         .hooked(true, false, false)
         .method(
@@ -759,10 +783,14 @@ fn decl_class_domnamednodemap() -> Stmt {
                 ]),
         )
         .method(
-            method("__construct")
+            method("__elephc_map")
+                .static_()
                 .param("element", TypeExpr::Int)
+                .returns(t_class("DOMNamedNodeMap"))
                 .body(vec![
-                    s_prop_assign(e_this(), "__elephc_element", e_var("element")),
+                    s_assign("map", e_new("DOMNamedNodeMap", vec![])),
+                    s_prop_assign(e_var("map"), "__elephc_element", e_var("element")),
+                    s_return(e_var("map")),
                 ]),
         )
         .method(
@@ -770,7 +798,8 @@ fn decl_class_domnamednodemap() -> Stmt {
                 .param("qualifiedName", TypeExpr::Str)
                 .returns(t_nullable(t_class("DOMNode")))
                 .body(vec![
-                    s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_attribute_node", vec![e_this_prop("__elephc_element"), e_var("qualifiedName")])])),
+                    s_assign("node", e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_attribute_node", vec![e_this_prop("__elephc_element"), e_var("qualifiedName")])])),
+                    s_return(e_ternary(e_instance_of(e_var("node"), "DOMNode"), e_var("node"), e_null())),
                 ]),
         )
         .method(
@@ -778,7 +807,16 @@ fn decl_class_domnamednodemap() -> Stmt {
                 .param("index", TypeExpr::Int)
                 .returns(t_nullable(t_class("DOMNode")))
                 .body(vec![
-                    s_return(e_ternary(e_binop(e_var("index"), BinOp::Lt, e_int(0)), e_null(), e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_attribute_at", vec![e_this_prop("__elephc_element"), e_var("index")])]))),
+                    s_if(
+                        e_binop(e_var("index"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("node", e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_attribute_at", vec![e_this_prop("__elephc_element"), e_var("index")])])),
+                    s_return(e_ternary(e_instance_of(e_var("node"), "DOMNode"), e_var("node"), e_null())),
                 ]),
         )
         .method(
@@ -844,7 +882,7 @@ fn decl_class_domcharacterdata() -> Stmt {
                 .param("value", TypeExpr::Str)
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_expr(e_call("elephc_xml_dom_set_text", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_var("value")])),
+                    s_expr(e_call("elephc_xml_dom_set_text", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_var("value"), e_int(0)])),
                 ]),
         )
         .method(
@@ -1031,7 +1069,8 @@ fn decl_class_domattr() -> Stmt {
             method("__propget_ownerElement")
                 .returns(t_nullable(t_class("DOMElement")))
                 .body(vec![
-                    s_return(e_this_prop("parentElement")),
+                    s_assign("parent", e_this_prop("parentElement")),
+                    s_return(e_ternary(e_instance_of(e_var("parent"), "DOMElement"), e_var("parent"), e_null())),
                 ]),
         )
         .method(
@@ -1128,7 +1167,102 @@ fn decl_class_domelement() -> Stmt {
                 .param("qualifiedName", TypeExpr::Str)
                 .returns(t_class("DOMNodeList"))
                 .body(vec![
-                    s_return(e_new("DOMNodeList", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_var("qualifiedName")])),
+                    s_return(e_static_call("DOMNodeList", "__elephc_list", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_var("qualifiedName")])),
+                ]),
+        )
+        .method(
+            method("append")
+                .variadic("nodes", None)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_foreach(e_static_call("__ElephcDOM", "nodes", vec![e_this(), e_var("nodes")]), None, "node", vec![
+                        s_expr(e_method_call(e_this(), "appendChild", vec![e_var("node")])),
+                    ]),
+                ]),
+        )
+        .method(
+            method("prepend")
+                .variadic("nodes", None)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("current", e_this_prop("firstChild")),
+                    s_assign("first", e_ternary(e_instance_of(e_var("current"), "DOMNode"), e_var("current"), e_null())),
+                    s_foreach(e_static_call("__ElephcDOM", "nodes", vec![e_this(), e_var("nodes")]), None, "node", vec![
+                        s_expr(e_method_call(e_this(), "insertBefore", vec![e_var("node"), e_var("first")])),
+                    ]),
+                ]),
+        )
+        .method(
+            method("replaceChildren")
+                .variadic("nodes", None)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_while(e_instance_of(e_this_prop("firstChild"), "DOMNode"), vec![
+                        s_expr(e_method_call(e_this(), "removeChild", vec![e_this_prop("firstChild")])),
+                    ]),
+                    s_expr(e_method_call(e_this(), "append", vec![e_spread(e_var("nodes"))])),
+                ]),
+        )
+        .method(
+            method("remove")
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("parent", e_this_prop("parentNode")),
+                    s_if(
+                        e_instance_of(e_var("parent"), "DOMNode"),
+                        vec![
+                            s_expr(e_method_call(e_var("parent"), "removeChild", vec![e_this()])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
+        )
+        .method(
+            method("before")
+                .variadic("nodes", None)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("parent", e_this_prop("parentNode")),
+                    s_if(
+                        e_instance_of(e_var("parent"), "DOMNode"),
+                        vec![
+                            s_foreach(e_static_call("__ElephcDOM", "nodes", vec![e_this(), e_var("nodes")]), None, "node", vec![
+                                s_expr(e_method_call(e_var("parent"), "insertBefore", vec![e_var("node"), e_this()])),
+                            ]),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
+        )
+        .method(
+            method("after")
+                .variadic("nodes", None)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("parent", e_this_prop("parentNode")),
+                    s_if(
+                        e_instance_of(e_var("parent"), "DOMNode"),
+                        vec![
+                            s_assign("sibling", e_this_prop("nextSibling")),
+                            s_assign("next", e_ternary(e_instance_of(e_var("sibling"), "DOMNode"), e_var("sibling"), e_null())),
+                            s_foreach(e_static_call("__ElephcDOM", "nodes", vec![e_this(), e_var("nodes")]), None, "node", vec![
+                                s_expr(e_method_call(e_var("parent"), "insertBefore", vec![e_var("node"), e_var("next")])),
+                            ]),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
+        )
+        .method(
+            method("replaceWith")
+                .variadic("nodes", None)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "before", vec![e_spread(e_var("nodes"))])),
+                    s_expr(e_method_call(e_this(), "remove", vec![])),
                 ]),
         )
         .build()
@@ -1434,7 +1568,29 @@ fn decl_class_domdocument() -> Stmt {
                 .param("qualifiedName", TypeExpr::Str)
                 .returns(t_class("DOMNodeList"))
                 .body(vec![
-                    s_return(e_new("DOMNodeList", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_var("qualifiedName")])),
+                    s_return(e_static_call("DOMNodeList", "__elephc_list", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_var("qualifiedName")])),
+                ]),
+        )
+        .method(
+            method("append")
+                .variadic("nodes", None)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_foreach(e_static_call("__ElephcDOM", "nodes", vec![e_this(), e_var("nodes")]), None, "node", vec![
+                        s_expr(e_method_call(e_this(), "appendChild", vec![e_var("node")])),
+                    ]),
+                ]),
+        )
+        .method(
+            method("prepend")
+                .variadic("nodes", None)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("current", e_this_prop("firstChild")),
+                    s_assign("first", e_ternary(e_instance_of(e_var("current"), "DOMNode"), e_var("current"), e_null())),
+                    s_foreach(e_static_call("__ElephcDOM", "nodes", vec![e_this(), e_var("nodes")]), None, "node", vec![
+                        s_expr(e_method_call(e_this(), "insertBefore", vec![e_var("node"), e_var("first")])),
+                    ]),
                 ]),
         )
         .build()

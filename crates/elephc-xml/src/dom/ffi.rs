@@ -96,6 +96,10 @@ extern "C" {
     pub(crate) fn content(node: Node) -> *mut c_char;
     #[link_name = "xmlNodeSetContent"]
     pub(crate) fn set_content(node: Node, content: *const c_char) -> c_int;
+    #[link_name = "xmlNodeSetContentLen"]
+    pub(crate) fn set_content_len(node: Node, content: *const c_char, len: c_int) -> c_int;
+    #[link_name = "xmlNewDocTextLen"]
+    pub(crate) fn new_text_len(doc: Node, content: *const c_char, len: c_int) -> Node;
     #[link_name = "xmlGetProp"]
     pub(crate) fn get_prop(node: Node, name: *const c_char) -> *mut c_char;
     #[link_name = "xmlHasProp"]
