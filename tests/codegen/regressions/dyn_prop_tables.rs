@@ -1007,28 +1007,30 @@ fn positional_dynamic_new_program(classes: usize) -> String {
 /// A plain positional `new $c($a)` constructs through the record table like the argument-container
 /// form: ten times the classes adds no instruction to the site or the shared dynamic-new code, on
 /// both targets. The positional form kept one compare-and-construct arm per class in a helper per
-/// arity, ~2.4 M instructions and 39 MB of the Symfony demo. `ELEPHC_NO_DYNAMIC_NEW_CONTAINER=1`
-/// keeps the positional form, which grows.
+/// arity, ~2.4 M instructions and 39 MB of the Symfony demo. The switch is opt-in
+/// (`ELEPHC_DYNAMIC_NEW_CONTAINER=1`) until bead elephc-4cs6's leak is fixed; without it the
+/// positional form grows, which shows the measure sees the ladder.
 #[test]
 fn test_positional_dynamic_new_does_not_grow_with_the_class_count() {
     let site = |asm: &str| {
         instructions_in_functions(asm, "_eir_shared_dyn_new_") + instructions_in_functions(asm, "_fn_build")
     };
     for target in ["macos-aarch64", "linux-x86_64"] {
-        let small = emit_asm_with_env("elephc_pdn_small", &positional_dynamic_new_program(10), target, &[]);
-        let large = emit_asm_with_env("elephc_pdn_large", &positional_dynamic_new_program(100), target, &[]);
+        let on = [("ELEPHC_DYNAMIC_NEW_CONTAINER", "1")];
+        let small = emit_asm_with_env("elephc_pdn_small", &positional_dynamic_new_program(10), target, &on);
+        let large = emit_asm_with_env("elephc_pdn_large", &positional_dynamic_new_program(100), target, &on);
         assert_eq!(site(&small), site(&large), "{target}: positional dynamic new grew with the class count");
         let old_small = emit_asm_with_env(
             "elephc_pdn_old_small",
             &positional_dynamic_new_program(10),
             target,
-            &[("ELEPHC_NO_DYNAMIC_NEW_CONTAINER", "1")],
+            &[],
         );
         let old_large = emit_asm_with_env(
             "elephc_pdn_old_large",
             &positional_dynamic_new_program(100),
             target,
-            &[("ELEPHC_NO_DYNAMIC_NEW_CONTAINER", "1")],
+            &[],
         );
         assert!(site(&old_large) > site(&old_small), "{target}: the measure does not see the ladder");
     }

@@ -767,8 +767,11 @@ pub(super) fn lower_new_dynamic_generic(
     // passed as a reference marker, which a by-reference parameter binds; any OTHER place a
     // by-reference parameter could bind (`$this->items`, `$a[0]`, `self::$x`) keeps the positional
     // form, which binds it. The site's argument count travels as `I64` for the arity check.
+    // OPT-IN (`ELEPHC_DYNAMIC_NEW_CONTAINER=1`): an explicit arm that builds a Throwable whose
+    // constructor reads its arguments leaks a string on this path (bead elephc-4cs6), which the
+    // positional form does not; on the Symfony demo the switch saves 25 MB and no build time.
     let positional_container = !spread_or_named
-        && std::env::var_os("ELEPHC_NO_DYNAMIC_NEW_CONTAINER").is_none()
+        && std::env::var_os("ELEPHC_DYNAMIC_NEW_CONTAINER").is_some()
         && !args.iter().any(|arg| {
             matches!(
                 arg.kind,
