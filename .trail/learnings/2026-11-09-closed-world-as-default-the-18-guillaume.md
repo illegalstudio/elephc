@@ -17,3 +17,8 @@ branch: feat/closed-world-symfony-build-speed
 - Tests that mix a CLI --emit-asm (closed world) with the in-process harness runtime (open world) link two different worlds; fix the world difference, not the test.
 - reg52.sh needs an absolute list path (it cd's to the repo root), or it silently runs the whole suite.
 - Still open: a literal include in a conditional position fatals in a closed world (bead elephc-lis4).
+
+## Watch out (Demo)
+- "Project code" for the interpreter rules excludes vendor AND every file under an opcache.preload script's directory (the preload closure: Symfony's dumped container does `require $this->containerDir.'/'.$file`). Missing that linked the interpreter into every default Symfony build; the early decision now prints `note: the interpreter is linked for ...`.
+- Checking by include guard does not work: the resolver hoists declarations out of guards and the container class arrives through its stub.
+- Verified 2026-11-09 (f1ae82a696 on the intl branch): console 25/25, web 249/249, 0 interpreter symbols, 3381 G instructions one-core console build.
