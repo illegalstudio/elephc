@@ -1214,7 +1214,7 @@ jobs:
     needs: [plan, build-archive-linux-x86_64]
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
@@ -1404,7 +1404,7 @@ jobs:
     needs: [plan, build-archive-linux-aarch64]
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       ELEPHC_CI_IMAGE: ${{ needs.plan.outputs.ci-image }}
     container:
