@@ -580,6 +580,9 @@ impl Checker {
                 let storage_entry = self.guarded_union_types.clone();
                 let mut flow = self.snapshot_conditional_flow(env);
                 self.exclude_conditional_binding_entry(&mut flow);
+                if else_body.is_some() {
+                    self.exclude_conditional_read_entry(&mut flow);
+                }
                 let mut errors = Vec::new();
 
                 // Flow-sensitive type narrowing across the if / elseif* / else chain.

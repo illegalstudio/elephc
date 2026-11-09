@@ -143,3 +143,55 @@ echo reset_zone($zone, function () {}), "\n";
     );
     assert_eq!(out, "string:Asia/Tokyo|object\n");
 }
+
+/// symfony/filesystem's `FileNotFoundException::__construct`: the guarded branch stores the
+/// variable on both arms of a nested `if`/`else`, so it leaves the outer `if` a string.
+#[test]
+fn test_nested_if_else_storing_on_both_arms_narrows_the_outer_join() {
+    let out = compile_and_run(
+        r#"<?php
+function takes(string $m): string { return $m; }
+function message(?string $message = null, ?string $path = null): string {
+    if (null === $message) {
+        if (null === $path) { $message = 'File could not be found.'; }
+        else { $message = \sprintf('File "%s" could not be found.', $path); }
+    }
+    return takes($message);
+}
+echo message(), "|", message(null, '/tmp/a'), "|", message('given'), "\n";
+"#,
+    );
+    assert_eq!(out, "File could not be found.|File \"/tmp/a\" could not be found.|given\n");
+}
+
+/// An `elseif` chain closed by `else`, nested deeper, and over an object union: every arm stores.
+#[test]
+fn test_exhaustive_nested_chains_narrow_the_outer_join() {
+    let out = compile_and_run(
+        r#"<?php
+function takes(string $m): string { return $m; }
+function label(?string $m = null, int $k = 0): string {
+    if (null === $m) {
+        if ($k === 1) { $m = 'one'; } elseif ($k === 2) { $m = 'two'; } else { $m = 'other'; }
+    }
+    return takes($m);
+}
+function deep(?string $m = null, int $a = 0, int $b = 0): string {
+    if (null === $m) {
+        if ($a) { if ($b) { $m = 'ab'; } else { $m = 'a'; } } else { $m = 'none'; }
+    }
+    return takes($m);
+}
+function zone(\DateTimeZone|string $tz, bool $named): \DateTimeZone {
+    if (\is_string($tz)) {
+        if ($named) { $tz = new \DateTimeZone($tz); } else { $tz = new \DateTimeZone('UTC'); }
+    }
+    return $tz;
+}
+echo label(), label(null, 1), label(null, 2), label('x'), "|", deep(), deep(null, 1), deep(null, 1, 1), "|",
+    zone('Asia/Tokyo', true)->getName(), zone('Asia/Tokyo', false)->getName(),
+    zone(new \DateTimeZone('Europe/Paris'), true)->getName(), "\n";
+"#,
+    );
+    assert_eq!(out, "otheronetwox|noneaab|Asia/TokyoUTCEurope/Paris\n");
+}
