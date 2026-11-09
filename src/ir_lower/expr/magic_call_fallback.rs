@@ -69,6 +69,32 @@ pub(super) fn lower_magic_call_fallback(
     let receiver = ctx.declare_hidden_temp(receiver_ty.clone());
     let object = super::nullable_method_calls::acquire_borrowed_for_hidden_temp(ctx, object, span);
     ctx.store_local(&receiver, object, receiver_ty, Some(span));
+    // Each argument is spelled in BOTH branches below, so it was lowered twice, and an argument
+    // that is itself a call on an unknown receiver doubled again inside: a chain of n such calls
+    // lowered its innermost argument 2^n times. Arguments are now evaluated once, in order, into
+    // hidden temporaries the branches share -- unless one of them is a place a by-reference
+    // parameter could bind, which must reach the call as itself. Only `is_object` and
+    // `method_exists`, which have no effects, move after the arguments.
+    let hoisted: Vec<Expr>;
+    let args: &[Expr] = if args_can_be_evaluated_once(args) {
+        hoisted = args
+            .iter()
+            .map(|arg| {
+                let value = lower_expr(ctx, arg);
+                let ty = ctx.builder.value_php_type(value.value).clone();
+                let temp = ctx.declare_hidden_temp(ty.clone());
+                let value =
+                    super::nullable_method_calls::acquire_borrowed_for_hidden_temp(ctx, value, arg.span);
+                ctx.store_local(&temp, value, ty, Some(arg.span));
+                Expr::new(ExprKind::Variable(temp), arg.span)
+            })
+            .collect();
+        #[cfg(test)]
+        MAGIC_CALL_HOISTED_ARGS.with(|count| count.set(count.get() + hoisted.len()));
+        &hoisted
+    } else {
+        args
+    };
     let receiver_var = || Expr::new(ExprKind::Variable(receiver.clone()), span);
     let call_named = |name: &str, call_args: Vec<Expr>| {
         Expr::new(
@@ -125,6 +151,41 @@ pub(super) fn lower_magic_call_fallback(
         span,
     );
     Some(lower_expr(ctx, &rewritten))
+}
+
+/// Whether the arguments may be evaluated once into temporaries both branches share: some
+/// argument does work worth sharing, and none is a place a by-reference parameter could bind.
+fn args_can_be_evaluated_once(args: &[Expr]) -> bool {
+    let is_place = |arg: &Expr| {
+        matches!(
+            arg.kind,
+            ExprKind::Variable(_)
+                | ExprKind::ArrayAccess { .. }
+                | ExprKind::PropertyAccess { .. }
+                | ExprKind::DynamicPropertyAccess { .. }
+                | ExprKind::NullsafePropertyAccess { .. }
+                | ExprKind::NullsafeDynamicPropertyAccess { .. }
+                | ExprKind::StaticPropertyAccess { .. }
+                | ExprKind::DynamicStaticPropertyAccess { .. }
+        )
+    };
+    let is_literal = |arg: &Expr| {
+        matches!(
+            arg.kind,
+            ExprKind::StringLiteral(_)
+                | ExprKind::IntLiteral(_)
+                | ExprKind::FloatLiteral(_)
+                | ExprKind::BoolLiteral(_)
+                | ExprKind::Null
+        )
+    };
+    !args.iter().any(is_place) && !args.iter().all(is_literal)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Arguments evaluated once for both branches; read by `ir_lower::tests::magic_call_fallback`.
+    pub(crate) static MAGIC_CALL_HOISTED_ARGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Returns whether the receiver is typed loosely enough that its class is not statically known.

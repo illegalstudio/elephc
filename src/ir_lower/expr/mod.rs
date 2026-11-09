@@ -121,7 +121,7 @@ mod enum_argument_guards;
 mod enum_method_args;
 mod enum_static_args;
 mod enum_ref_args;
-mod magic_call_fallback;
+pub(crate) mod magic_call_fallback;
 mod reflection_class_calls;
 mod reflection_method_calls;
 mod reflection_property_calls;

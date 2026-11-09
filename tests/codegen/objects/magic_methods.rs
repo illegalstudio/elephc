@@ -796,6 +796,40 @@ Error: Call to a member function foo() on null\n"
     );
 }
 
+/// Nested calls on an UNKNOWN receiver evaluate each argument once, in order, whichever of the
+/// plain method or `__call()` answers -- including a `void` call's null and a mixed argument list.
+///
+/// The `__call()` fallback spells the arguments in both of its branches; they are now evaluated
+/// once into shared temporaries, so a chain no longer lowers its innermost argument 2^n times.
+/// Expected output is real php 8.5 output.
+#[test]
+fn test_unknown_receiver_nested_calls_evaluate_arguments_once() {
+    let out = compile_and_run(
+        r#"<?php
+class M { public function __call($n, $a) { echo "[$n:", count($a), "]"; return implode("+", array_map(fn ($v) => gettype($v) . ":" . $v, $a)); } }
+class R { public function wrap($x) { echo "[wrap]"; return "R($x)"; } }
+function v(): void { echo "[v]"; }
+function s($t) { echo "[s$t]"; return $t; }
+function pick($i) { return $i % 2 ? new M : new R; }
+for ($i = 0; $i < 2; $i++) {
+    $o = pick($i);
+    echo $o->wrap($o->wrap($o->wrap(s("a")))), "\n";
+    echo $o->wrap(v()), "\n";
+    echo $o->wrap(s("x") . s("y"), 3), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "[sa][wrap][wrap][wrap]R(R(R(a)))\n\
+[v][wrap]R()\n\
+[sx][sy][wrap]R(xy)\n\
+[sa][wrap:1][wrap:1][wrap:1]string:string:string:a\n\
+[v][wrap:1]NULL:\n\
+[sx][sy][wrap:2]string:xy+integer:3\n"
+    );
+}
+
 /// A property read through an UNKNOWN receiver reaches `__get()` and keeps php's access rules.
 ///
 /// The class-id ladder behind `$untyped->name` listed only classes that declare the property, so a
