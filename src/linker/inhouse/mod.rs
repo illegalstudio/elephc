@@ -118,6 +118,8 @@ struct Layout<'a> {
     text_align: u64,
     data_align: u64,
     subsections_via_symbols: bool,
+    /// Final size of each section, so the second pass allocates it once.
+    sizes: [u64; 2],
 }
 
 /// Bytes a `.ascii` operand decodes to (`\n`, `\t`, `\\`, `\"`, `\NNN` octal), appended to `out`.
@@ -205,7 +207,14 @@ fn padding(offset: u64, log2: u64) -> u64 {
 
 /// First pass: places every line and records labels and symbol attributes.
 fn layout(text: &str) -> Result<Layout<'_>> {
-    let mut layout = Layout { text_align: 2, data_align: 0, ..Layout::default() };
+    // Sized up front, as `asm_split` does: a slice defines about one label per 400 bytes, and
+    // growing a map of hundreds of thousands of labels by doubling rehashes all of it.
+    let mut layout = Layout {
+        text_align: 2,
+        data_align: 0,
+        labels: HashMap::with_capacity_and_hasher(text.len() / 400, Default::default()),
+        ..Layout::default()
+    };
     let mut sect = Sect::Text;
     let mut offsets = [0u64; 2];
     let mut scratch = Vec::new();
@@ -263,6 +272,7 @@ fn layout(text: &str) -> Result<Layout<'_>> {
             },
         }
     }
+    layout.sizes = offsets;
     Ok(layout)
 }
 
@@ -349,7 +359,9 @@ fn is_symbol(text: &str) -> bool {
 /// Assembles one slice into a Mach-O arm64 object.
 pub(crate) fn assemble(text: &str) -> Result<Vec<u8>> {
     let layout = layout(text)?;
-    let mut sections: [Vec<u8>; 2] = [Vec::new(), Vec::new()];
+    // Allocated once at the size the first pass measured: growing a 150 MB text section by
+    // doubling copied it again on every step.
+    let mut sections: [Vec<u8>; 2] = layout.sizes.map(|size| Vec::with_capacity(size as usize));
     let mut relocs: Vec<PendingReloc<'_>> = Vec::new();
     let mut sect = Sect::Text;
     for (index, line) in lines(text).enumerate() {
@@ -471,11 +483,11 @@ pub(crate) fn assemble(text: &str) -> Result<Vec<u8>> {
             },
         }
     }
-    write_object(&layout, &sections, relocs)
+    write_object(&layout, sections, relocs)
 }
 
 /// Builds the Mach-O object from the placed sections, the labels and the relocations.
-fn write_object(layout: &Layout<'_>, sections: &[Vec<u8>; 2], relocs: Vec<PendingReloc<'_>>) -> Result<Vec<u8>> {
+fn write_object(layout: &Layout<'_>, sections: [Vec<u8>; 2], relocs: Vec<PendingReloc<'_>>) -> Result<Vec<u8>> {
     let mut object = Object::new(BinaryFormat::MachO, Architecture::Aarch64, Endianness::Little);
     // The listing already spells Mach-O names (`_main`); the writer must not prefix them again.
     object.set_mangling(object::write::Mangling::None);
@@ -485,11 +497,13 @@ fn write_object(layout: &Layout<'_>, sections: &[Vec<u8>; 2], relocs: Vec<Pendin
     if layout.subsections_via_symbols {
         object.set_subsections_via_symbols();
     }
+    // Handed over, not appended: `append_section_data` copied each section into the object.
+    let [text_bytes, data_bytes] = sections;
     let text = object.section_id(StandardSection::Text);
-    object.append_section_data(text, &sections[Sect::Text as usize], 1 << layout.text_align);
-    let data = (!sections[Sect::Data as usize].is_empty()).then(|| {
+    object.set_section_data(text, text_bytes, 1 << layout.text_align);
+    let data = (!data_bytes.is_empty()).then(|| {
         let data = object.section_id(StandardSection::Data);
-        object.append_section_data(data, &sections[Sect::Data as usize], 1 << layout.data_align);
+        object.set_section_data(data, data_bytes, 1 << layout.data_align);
         data
     });
     let section_of = |sect: Sect| match sect {
@@ -499,8 +513,16 @@ fn write_object(layout: &Layout<'_>, sections: &[Vec<u8>; 2], relocs: Vec<Pendin
 
     let referenced: HashSet<&str> = relocs.iter().map(|reloc| reloc.target).collect();
     let mut symbols: HashMap<&str, SymbolId> = HashMap::default();
-    // Defined labels, in a stable order: by section, then offset, then name.
-    let mut defined: Vec<(&&str, &Place)> = layout.labels.iter().collect();
+    // Defined labels, in a stable order: by section, then offset, then name. An unreferenced,
+    // unexported `L` label never reaches the symbol table (below), and it is most of them, so it
+    // is left out before the sort rather than after it.
+    let mut defined: Vec<(&&str, &Place)> = layout
+        .labels
+        .iter()
+        .filter(|(name, _)| {
+            !name.starts_with('L') || layout.exported.contains_key(**name) || referenced.contains(**name)
+        })
+        .collect();
     defined.sort_by(|(left_name, left), (right_name, right)| {
         (left.sect as u8, left.offset, **left_name).cmp(&(right.sect as u8, right.offset, **right_name))
     });
