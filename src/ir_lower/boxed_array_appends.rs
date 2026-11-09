@@ -90,8 +90,8 @@ fn normalize_function(function: &mut Function) {
 
 /// Keeps native element layouts when another consumer observes a concrete array view.
 /// Boxed append converts every element to Mixed, which cannot feed a typed sort or builtin.
-fn observed_native_array_layouts(function: &Function) -> std::collections::HashSet<LocalSlotId> {
-    let observed: std::collections::HashSet<_> = function.instructions.iter()
+fn observed_native_array_layouts(function: &Function) -> crate::fast_hash::FastSet<LocalSlotId> {
+    let observed: crate::fast_hash::FastSet<_> = function.instructions.iter()
         .filter(|inst| !matches!(inst.op, Op::ArrayPush | Op::Release))
         .flat_map(|inst| inst.operands.iter().copied()).collect();
     function.instructions.iter().filter_map(|load| {

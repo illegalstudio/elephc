@@ -19,11 +19,11 @@ pub(super) fn compute_program_callable_effects(
     Rc<HashMap<String, Effect>>,
     Rc<HashMap<String, Effect>>,
 ) {
-    let mut function_bodies = HashMap::new();
+    let mut function_bodies = HashMap::default();
     collect_program_function_bodies(program, &mut function_bodies);
-    let mut static_method_bodies = HashMap::new();
+    let mut static_method_bodies = HashMap::default();
     collect_program_static_method_bodies(program, &mut static_method_bodies);
-    let mut instance_method_bodies = HashMap::new();
+    let mut instance_method_bodies = HashMap::default();
     collect_program_instance_method_bodies(program, &mut instance_method_bodies);
     let instance_dispatch_metadata = Rc::new(collect_instance_dispatch_metadata(program));
 

@@ -11,7 +11,7 @@
 //!   runtime `phar://` paths or focused internal bridge helpers.
 //! - Persisted metadata disables class hydration while retaining scalar and array values.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{
     BinOp, CastType, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, TypeExpr,

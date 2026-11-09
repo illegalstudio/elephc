@@ -36,7 +36,7 @@
 //!   cross-block redirection unsound (the same restriction `branch_simplify`
 //!   uses).
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{
     BlockId, DataPool, Function, Immediate, InstId, IrType, Op, Ownership, ValueId,
@@ -117,8 +117,8 @@ impl IrPass for Cse {
         let dominance = compute_dominance(function);
 
         // Scoped value table over the dominator tree, plus the rewrites to apply.
-        let mut table: HashMap<Key, ValueId> = HashMap::new();
-        let mut rauw: HashMap<ValueId, ValueId> = HashMap::new();
+        let mut table: HashMap<Key, ValueId> = HashMap::default();
+        let mut rauw: HashMap<ValueId, ValueId> = HashMap::default();
         let mut redundant: Vec<InstId> = Vec::new();
 
         // Iterative dominator-tree DFS. `Leave` events run after a node's whole

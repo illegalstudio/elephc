@@ -13,7 +13,7 @@
 //!   instructions, converts folded concats to `ConstStr`, and redirects uses via
 //!   `replace_all_uses`. Nested cases converge across driver sweeps.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{DataPool, Function, Immediate, InstId, Op, Ownership, ValueId};
 

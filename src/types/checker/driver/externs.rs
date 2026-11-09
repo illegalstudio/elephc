@@ -8,7 +8,7 @@
 //! Key details:
 //! - Phase order controls diagnostics, available declarations, required libraries, and function-local environments.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Program, StmtKind, TypeExpr};
@@ -242,7 +242,7 @@ impl Checker {
         let mut extern_fields = Vec::new();
         let mut offset = 0usize;
         let mut struct_align = 1usize;
-        let mut seen_fields = std::collections::HashSet::new();
+        let mut seen_fields = crate::fast_hash::FastSet::default();
         let mut class_has_errors = false;
         for f in fields {
             if let Err(error) = self.validate_extern_field_decl(name, f, span) {
@@ -316,7 +316,7 @@ impl Checker {
         let mut packed_fields = Vec::new();
         let mut offset = 0usize;
         let mut class_align = 1usize;
-        let mut seen_fields = std::collections::HashSet::new();
+        let mut seen_fields = crate::fast_hash::FastSet::default();
         let mut class_has_errors = false;
         for field in fields {
             if !seen_fields.insert(field.name.clone()) {

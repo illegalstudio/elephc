@@ -8,7 +8,7 @@
 //! Key details:
 //! - Merge and validation rules must report conflicts early because downstream class metadata is treated as canonical.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -128,14 +128,14 @@ pub(super) fn merge_methods(
 ) -> Result<Vec<ClassMethod>, CompileError> {
     validate_direct_method_duplicates(local, span, owner_label)?;
 
-    let mut local_keys = HashSet::new();
+    let mut local_keys = HashSet::default();
     for method in local {
         local_keys.insert((php_symbol_key(&method.name), method.is_static));
     }
 
     let mut merged: Vec<ClassMethod> = Vec::new();
-    let mut seen_imported: std::collections::HashMap<(String, bool), usize> =
-        std::collections::HashMap::new();
+    let mut seen_imported: crate::fast_hash::FastMap<(String, bool), usize> =
+        crate::fast_hash::FastMap::default();
     for imported_method in imported {
         let key = (php_symbol_key(&imported_method.name), imported_method.is_static);
         if local_keys.contains(&key) {
@@ -270,7 +270,7 @@ pub(super) fn merge_constants(
     // traits add (`zend_do_bind_traits` runs after the class body is compiled), so
     // `getConstants()` on `class C { use T; const Z = 1; }` starts with `Z`. A constant the
     // class-like redeclares keeps the class's position; the trait's copy is only validated.
-    let mut local_names = HashSet::new();
+    let mut local_names = HashSet::default();
     for constant in local {
         if !local_names.insert(constant.name.as_str()) {
             return Err(CompileError::new(

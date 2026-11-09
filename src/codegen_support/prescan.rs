@@ -8,7 +8,7 @@
 //! Key details:
 //! - The scan must not evaluate PHP side effects; it only recognizes declarations and literal `define()` calls.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use elephc_builtin_contract::{lookup_constant, ConstValue};
 
@@ -45,7 +45,7 @@ pub(crate) fn collect_constants(
     target: Target,
 ) -> HashMap<String, (ExprKind, PhpType)> {
     let target_platform = target.platform;
-    let mut constants = HashMap::new();
+    let mut constants = HashMap::default();
     for constant in registered_constants() {
         // A name php does not define on this target gets no value: `defined()` then answers
         // false, and a read throws `Undefined constant` (see `constant_defined_on_target`).

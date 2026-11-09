@@ -43,7 +43,7 @@ impl Registry {
     /// so the runtime stub doesn't see closure bodies containing
     /// non-foldable `require_once` statements.
     pub fn build(project_root: &Path, program: Program) -> (Self, Program) {
-        Self::build_excluding(project_root, program, &std::collections::HashSet::new())
+        Self::build_excluding(project_root, program, &crate::fast_hash::FastSet::default())
     }
 
     /// Like [`Self::build`], but leaves the vendor packages named in `excluded` out of the
@@ -51,7 +51,7 @@ impl Registry {
     pub fn build_excluding(
         project_root: &Path,
         program: Program,
-        excluded: &std::collections::HashSet<String>,
+        excluded: &crate::fast_hash::FastSet<String>,
     ) -> (Self, Program) {
         let psr4 = AutoloadIndex::from_project_root_excluding(project_root, excluded);
         // The index's own diagnostics come first: a classmap file it could not read hides every

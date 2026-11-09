@@ -10,7 +10,7 @@
 //! - SplFileObject iterates a file through the existing `file()` line-array builtin.
 //! - Recursive wrappers keep typed recursive-inner storage for child traversal.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{
     BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, TypeExpr, Visibility,

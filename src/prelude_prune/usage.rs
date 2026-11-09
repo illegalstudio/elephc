@@ -42,7 +42,7 @@
 //! Adding a prelude to `crate::prelude_prune` means checking this list against how that prelude's
 //! declarations can be reached — including by a compiler pass that SYNTHESISES a call to one.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{

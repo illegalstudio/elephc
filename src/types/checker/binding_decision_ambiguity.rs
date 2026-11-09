@@ -28,7 +28,7 @@
 //!   legitimately re-decided names ONE node and passes, while a key retired by collision names
 //!   two or more and is rejected here, exactly as a live one would be.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::parser::ast::{
@@ -105,10 +105,10 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
             )
             .copied()
             .collect(),
-        assigns: HashMap::new(),
-        unset_args: HashMap::new(),
+        assigns: HashMap::default(),
+        unset_args: HashMap::default(),
         current_declaration: None,
-        site_declarations: HashMap::new(),
+        site_declarations: HashMap::default(),
     };
     count_block(program, &mut tally);
     // Counted BY ROLE, matching how lowering consults each map: `lower_assign` reads the retype

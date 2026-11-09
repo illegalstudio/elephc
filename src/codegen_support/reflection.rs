@@ -10,7 +10,8 @@
 //!   table so `ReflectionAttribute::newInstance()` and metadata materializers
 //!   agree without runtime registration state.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::Function;
 use crate::names::{php_symbol_key, Name};

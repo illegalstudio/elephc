@@ -9,7 +9,7 @@
 //! Key details:
 //! - Fields are consumed by optimizer, codegen, and linker setup; keep additions explicit and phase-owned.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::codegen::platform::Target;
 use crate::errors::{CompileError, CompileWarning};
@@ -135,7 +135,7 @@ pub struct CheckResult {
     /// The generic METHOD instantiations this round asked for.
     pub requested_method_instantiations: Vec<((String, String), crate::generics::Bindings)>,
     /// (enclosing body scope, call site) -> the instantiated method name that site selected.
-    pub generic_method_sites: std::collections::HashMap<
+    pub generic_method_sites: crate::fast_hash::FastMap<
         (String, crate::span::Span),
         std::collections::BTreeSet<String>,
     >,
@@ -265,7 +265,7 @@ pub struct CheckResult {
     /// See `Checker::user_filters_reachable`: EIR metadata keeps the raw filter ABI only then.
     pub user_filters_reachable: bool,
     /// See `Checker::user_filter_registered`.
-    pub user_filter_registered: Option<std::collections::HashSet<String>>,
+    pub user_filter_registered: Option<crate::fast_hash::FastSet<String>>,
 }
 
 impl CheckResult {

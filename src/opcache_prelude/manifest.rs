@@ -116,7 +116,7 @@ pub fn collect_manifest(
     autoloaded_files: &[PathBuf],
 ) -> Vec<ScriptEntry> {
     let mut manifest: Vec<ScriptEntry> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<String> = HashSet::default();
 
     push_manifest_entry(&mut manifest, &mut seen, Path::new(main_file));
     for file in included_files {

@@ -9,7 +9,7 @@
 //! - Runtime-backed methods stay bodyless so codegen intrinsics own their behavior.
 //! - Small serialization/debug helpers are synthetic PHP-like method bodies.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{
     BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, TypeExpr, Visibility,

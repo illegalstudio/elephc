@@ -8,7 +8,7 @@
 //! Key details:
 //! - Declaration metadata must align with name resolution, inheritance flattening, and runtime/codegen expectations.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -68,16 +68,16 @@ pub(crate) fn build_interface_info_recursive(
         )
     })?;
 
-    let mut methods = HashMap::new();
-    let mut late_static_method_returns = HashMap::new();
-    let mut method_declaring_interfaces: HashMap<String, String> = HashMap::new();
+    let mut methods = HashMap::default();
+    let mut late_static_method_returns = HashMap::default();
+    let mut method_declaring_interfaces: HashMap<String, String> = HashMap::default();
     let mut method_order = Vec::new();
-    let mut method_slots = HashMap::new();
-    let mut static_methods = HashMap::new();
-    let mut late_static_static_method_returns = HashMap::new();
-    let mut static_method_declaring_interfaces: HashMap<String, String> = HashMap::new();
+    let mut method_slots = HashMap::default();
+    let mut static_methods = HashMap::default();
+    let mut late_static_static_method_returns = HashMap::default();
+    let mut static_method_declaring_interfaces: HashMap<String, String> = HashMap::default();
     let mut static_method_order = Vec::new();
-    let mut properties = HashMap::new();
+    let mut properties = HashMap::default();
     let mut property_order = Vec::new();
 
     for parent_name in &interface.extends {
@@ -254,7 +254,7 @@ pub(crate) fn build_interface_info_recursive(
         }
     }
 
-    let mut direct_property_names = HashSet::new();
+    let mut direct_property_names = HashSet::default();
     for property in &interface.properties {
         if !direct_property_names.insert(property.name.clone()) {
             return Err(CompileError::new(
@@ -283,7 +283,7 @@ pub(crate) fn build_interface_info_recursive(
         }
     }
 
-    let mut direct_method_keys = HashSet::new();
+    let mut direct_method_keys = HashSet::default();
     for method in &interface.methods {
         let method_key = php_symbol_key(&method.name);
         if !direct_method_keys.insert(method_key.clone()) {
@@ -450,10 +450,10 @@ pub(crate) fn build_interface_info_recursive(
         }
     }
 
-    let mut iface_constants: HashMap<String, crate::parser::ast::Expr> = HashMap::new();
-    let mut constant_types = HashMap::new();
-    let mut constant_declaring_interfaces = HashMap::new();
-    let mut final_constants = HashSet::new();
+    let mut iface_constants: HashMap<String, crate::parser::ast::Expr> = HashMap::default();
+    let mut constant_types = HashMap::default();
+    let mut constant_declaring_interfaces = HashMap::default();
+    let mut final_constants = HashSet::default();
     for parent_name in &interface.extends {
         if let Some(parent_info) = checker.interfaces.get(parent_name) {
             for (k, v) in &parent_info.constants {

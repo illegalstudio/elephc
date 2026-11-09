@@ -7,7 +7,7 @@
 //! Key details:
 //! - Hand-built methods retain throwing property reads and raw buffer acquire/release pairs.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{
@@ -242,7 +242,7 @@ fn buffer_property_loop_guard_remaps_nonempty_edge_arguments() {
             def: ValueDef::BlockParam { block: header, index: 0 },
         });
         function.blocks[header.as_raw() as usize].params.push(index);
-        replace_all_uses(&mut function, &HashMap::from([(old_index, index)]));
+        replace_all_uses(&mut function, &HashMap::from_iter([(old_index, index)]));
         let result = ValueId::from_raw(function.values.len() as u32);
         function.values.push(Value {
             ir_type: IrType::I64, php_type: PhpType::Int, ownership: Ownership::NonHeap,

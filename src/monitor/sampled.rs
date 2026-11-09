@@ -72,7 +72,7 @@ pub(crate) fn build_call_graph(display: &[(Vec<(String, Kind)>, u64)]) -> crate:
             .filter(|(_, k)| matches!(k, Kind::Php | Kind::PhpInlined))
             .filter_map(|(n, _)| index.get(n).copied())
             .collect();
-        let mut seen_pairs = HashSet::new();
+        let mut seen_pairs = HashSet::default();
         for pair in php.windows(2) {
             let (from, to) = (pair[0], pair[1]);
             if from == to {

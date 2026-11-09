@@ -8,7 +8,7 @@
 //! - Hand-built EIR prevents AST folding from hiding allocation decisions.
 //! - Every supported target must avoid constant spill slots under pressure.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::codegen::platform::{Arch, Target};
 use crate::codegen::value_placement;
@@ -51,7 +51,7 @@ fn rematerialize_immediate_encoding_boundaries() {
 /// Covers every legal AArch64 logical mask and rejects unrelated 64-bit patterns.
 #[test]
 fn rematerialize_all_aarch64_logical_immediates() {
-    let mut legal = HashSet::new();
+    let mut legal = HashSet::default();
     for width in [2, 4, 8, 16, 32, 64] {
         for ones in 1..width {
             let element = (1u64 << ones) - 1;

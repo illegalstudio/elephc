@@ -8,7 +8,7 @@
 //! - The requested EIR optimization setting is applied before printing.
 //! - Exported code receives the output kind's call-graph safety validation, as in final emission.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use super::*;
 

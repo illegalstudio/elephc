@@ -7,7 +7,7 @@
 //! Key details:
 //! - Trait and enum metadata must reflect flattened declarations without losing source signatures.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Program, Stmt, StmtKind};
@@ -19,7 +19,7 @@ use crate::types::{
 
 /// Collects source-declared trait names recursively, including namespace blocks.
 pub(super) fn collect_declared_trait_names(program: &Program) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     collect_declared_trait_names_into(program, &mut names);
     names
 }
@@ -43,7 +43,7 @@ fn collect_declared_trait_names_into(program: &Program, names: &mut HashSet<Stri
 pub(super) fn collect_declared_trait_methods(
     program: &Program,
 ) -> HashMap<String, HashMap<String, FunctionSig>> {
-    let mut methods = HashMap::new();
+    let mut methods = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {
@@ -75,7 +75,7 @@ pub(super) fn collect_declared_trait_methods(
 
 /// Collects source-declared trait constant names recursively, including namespace blocks.
 pub(super) fn collect_declared_trait_constants(program: &Program) -> HashMap<String, HashSet<String>> {
-    let mut constants = HashMap::new();
+    let mut constants = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {

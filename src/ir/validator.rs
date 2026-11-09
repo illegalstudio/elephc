@@ -11,7 +11,7 @@
 
 mod string_append;
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::block::{BlockId, SwitchCase, Terminator};
 use crate::ir::effects::Effects;
@@ -257,7 +257,7 @@ fn check_descriptor_from_buffer_resolve(
 
 /// Validates instruction IDs are placed once and point into the instruction table.
 fn validate_instruction_placement(function: &Function) -> Result<(), ValidationError> {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     for block in &function.blocks {
         for inst_id in &block.instructions {
             if function.instruction(*inst_id).is_none() {
@@ -2059,9 +2059,9 @@ impl Dominators {
     /// shape it replaced, on the same function, for every (block, candidate) pair.
     #[cfg(test)]
     fn to_block_id_map(&self, function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
-        let mut map = HashMap::with_capacity(function.blocks.len());
+        let mut map = HashMap::with_capacity_and_hasher(function.blocks.len(), Default::default());
         for (block_index, block) in function.blocks.iter().enumerate() {
-            let mut set = HashSet::new();
+            let mut set = HashSet::default();
             for (candidate_index, candidate) in function.blocks.iter().enumerate() {
                 if block_bit_is_set(&self.bitsets[block_index], candidate_index) {
                     set.insert(candidate.id);
@@ -2133,7 +2133,7 @@ fn reachable_from_entry(
     function: &Function,
     predecessors: &HashMap<BlockId, Vec<BlockId>>,
 ) -> HashSet<BlockId> {
-    let mut reachable: HashSet<BlockId> = HashSet::from([function.entry]);
+    let mut reachable: HashSet<BlockId> = HashSet::from_iter([function.entry]);
     let mut changed = true;
     while changed {
         changed = false;
@@ -2163,7 +2163,7 @@ fn reachable_from_entry(
 /// `try`/`catch` inside a loop the back-edge then strips the entry block out of the loop header's
 /// dominators, yielding spurious `UseNotDominated` errors for values defined in the entry block.
 fn compute_predecessors(function: &Function) -> HashMap<BlockId, Vec<BlockId>> {
-    let mut predecessors: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+    let mut predecessors: HashMap<BlockId, Vec<BlockId>> = HashMap::default();
     for block in &function.blocks {
         if let Some(term) = &block.terminator {
             for successor in successors(term) {
@@ -2287,7 +2287,7 @@ mod dominator_bitset_tests {
         let reachable = reachable_from_entry(function, &predecessors);
         let all: HashSet<_> = function.blocks.iter().map(|block| block.id).collect();
         let mut sets = vec![all; function.blocks.len()];
-        sets[function.entry.as_raw() as usize] = HashSet::from([function.entry]);
+        sets[function.entry.as_raw() as usize] = HashSet::from_iter([function.entry]);
         loop {
             let mut changed = false;
             for block in &function.blocks {

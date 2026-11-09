@@ -10,7 +10,7 @@
 //! - The source must be used only by the clone and its adjacent release.
 //! - No integer-sink specialization runs after this ownership-only rewrite.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{DataPool, Function, Immediate, IrHeapKind, IrType, MixedNumericOp, Op, Ownership, ValueDef};
 
@@ -39,11 +39,11 @@ impl IrPass for FreshMixedTransfer {
     /// Replaces the copied owner only when the original cannot escape or survive.
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
         let uses = count_value_uses(function);
-        let mut replacements = HashMap::new();
+        let mut replacements = HashMap::default();
         let mut removed = Vec::new();
 
         for block in &function.blocks {
-            let mut preceding = HashSet::new();
+            let mut preceding = HashSet::default();
             for (position, &clone_id) in block.instructions.iter().enumerate() {
                 preceding.insert(clone_id);
                 let clone = &function.instructions[clone_id.as_raw() as usize];

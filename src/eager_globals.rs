@@ -12,11 +12,11 @@
 //!   caller would touch far more code than the fact is worth.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 thread_local! {
     /// `php_symbol_key`s of global functions declared by eager autoload files.
-    static EAGER_GLOBAL_FUNCTIONS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static EAGER_GLOBAL_FUNCTIONS: RefCell<HashSet<String>> = RefCell::new(HashSet::default());
 }
 
 /// Replaces the recorded set. Called once, after the eager `files` entries are loaded and before
@@ -49,17 +49,17 @@ mod tests {
 
     #[test]
     fn a_qualified_name_never_takes_the_global_fallback() {
-        set(HashSet::from(["trigger_deprecation".to_string()]));
+        set(HashSet::from_iter(["trigger_deprecation".to_string()]));
         assert!(declares("trigger_deprecation"));
         assert!(declares("\\trigger_deprecation"));
         assert!(!declares("Symfony\\Component\\trigger_deprecation"));
-        set(HashSet::new());
+        set(HashSet::default());
     }
 
     #[test]
     fn lookup_is_case_insensitive_as_php_function_names_are() {
-        set(HashSet::from(["trigger_deprecation".to_string()]));
+        set(HashSet::from_iter(["trigger_deprecation".to_string()]));
         assert!(declares("Trigger_Deprecation"));
-        set(HashSet::new());
+        set(HashSet::default());
     }
 }

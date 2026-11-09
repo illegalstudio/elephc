@@ -591,7 +591,7 @@ fn visible_class_method_names(
     } else {
         Vec::new()
     };
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     names.retain(|name| seen.insert(php_symbol_key(name)));
     names
 }
@@ -756,7 +756,7 @@ fn visible_class_default_entries(
             .collect();
     };
     let mut entries = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     for (index, (property, _)) in info.properties.iter().enumerate() {
         if info.visible_property_index(property) != Some(index)
             || info.property_is_virtual(property)

@@ -9,7 +9,7 @@
 //! - An immediate buffer access rejects the null read's handle zero before execution can resume.
 //! - Borrowed inliner bindings can be forwarded only across a unique dominating store.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{BlockId, Effects, Function, Immediate, InstId, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
@@ -91,7 +91,7 @@ pub(super) fn forward_borrowed_bindings(function: &mut Function) -> bool {
     }).map(|local| (local.id, BorrowedBinding::default())).collect();
     if bindings.is_empty() { return false; }
     collect_borrowed_bindings(function, &mut bindings);
-    let mut replacements = HashMap::new();
+    let mut replacements = HashMap::default();
     let mut removed = Vec::new();
     for local in &function.locals {
         let Some(binding) = bindings.get(&local.id) else { continue; };

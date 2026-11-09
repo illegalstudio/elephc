@@ -821,8 +821,8 @@ mod mangle_tests {
             "_N_", "A\\b", "a\\b", "aéb", "a_é", "é", "x_init", "init", "prop", "local", "1",
             "12", "价格", "a价", "_x5f_", "\\_",
         ];
-        let mut seen: std::collections::HashMap<String, (&str, &str)> =
-            std::collections::HashMap::new();
+        let mut seen: crate::fast_hash::FastMap<String, (&str, &str)> =
+            crate::fast_hash::FastMap::default();
         for left in names {
             for right in names {
                 let symbol = join_php_symbol("_k", &[left, right]);
@@ -838,8 +838,8 @@ mod mangle_tests {
     #[test]
     fn joiner_is_injective_over_adversarial_name_triples() {
         let names = ["a", "b", "a_b", "_", "_u_", "aéb", "a\\b", "1", "12"];
-        let mut seen: std::collections::HashMap<String, (&str, &str, &str)> =
-            std::collections::HashMap::new();
+        let mut seen: crate::fast_hash::FastMap<String, (&str, &str, &str)> =
+            crate::fast_hash::FastMap::default();
         for first in names {
             for second in names {
                 for third in names {

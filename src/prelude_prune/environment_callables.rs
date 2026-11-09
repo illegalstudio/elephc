@@ -9,7 +9,7 @@
 //! - This only excludes opaque callable facts, never direct environment or eval observers.
 //! - Reflection, introspection and dynamic construction disable the exclusion proof.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::StaticReceiver;
@@ -120,10 +120,10 @@ pub(super) fn declaration_roots(usage: &Usage) -> Option<DeclarationRoots> {
     }
     let symbols = usage.functions.iter().chain(&usage.callable_wildcard_methods).chain(&usage.literals)
         .map(|name| symbol_leaf(name).to_owned()).collect();
-    let mut methods = HashSet::new();
+    let mut methods = HashSet::default();
     for (class, method) in &usage.callable_static_methods {
         let mut pending = vec![symbol_leaf(class).to_owned()];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(class) = pending.pop() {
             if !seen.insert(class.clone()) { continue; }
             methods.insert((class.clone(), symbol_leaf(method).to_owned()));
@@ -133,7 +133,7 @@ pub(super) fn declaration_roots(usage: &Usage) -> Option<DeclarationRoots> {
         }
     }
     methods.extend(interface_entries(usage));
-    let mut inherited_classes = HashSet::new();
+    let mut inherited_classes = HashSet::default();
     let mut pending: Vec<_> = usage.callable_inherited_classes.iter()
         .map(|class| symbol_leaf(class).to_owned()).collect();
     while let Some(class) = pending.pop() {
@@ -164,7 +164,7 @@ fn callback_constructors(usage: &Usage) -> HashMap<String, ConstructorCallbacks>
         .map(|name| symbol_leaf(name).to_owned()).collect();
     let mut constructors: HashMap<String, ConstructorCallbacks> = [
         ("fiber", 0), ("callbackfilteriterator", 1), ("recursivecallbackfilteriterator", 1),
-    ].into_iter().map(|(name, index)| (name.to_owned(), ConstructorCallbacks::Slots(HashSet::from([index])))).collect();
+    ].into_iter().map(|(name, index)| (name.to_owned(), ConstructorCallbacks::Slots(HashSet::from_iter([index])))).collect();
     loop {
         let before = constructors.clone();
         for (alias, targets) in &usage.callable_class_edges {
@@ -182,14 +182,14 @@ fn callback_constructors(usage: &Usage) -> HashMap<String, ConstructorCallbacks>
 
 /// Roots source interface obligations on their implementing classes, including aliases and parents.
 fn interface_entries(usage: &Usage) -> HashSet<(String, String)> {
-    let mut contracts: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut contracts: HashMap<String, HashSet<String>> = HashMap::default();
     for (name, methods) in &usage.callable_interface_methods {
         contracts.entry(symbol_leaf(name).to_owned()).or_default().extend(methods.iter().cloned());
     }
-    let mut entries = HashSet::new();
+    let mut entries = HashSet::default();
     for (class, interfaces) in &usage.callable_implementations {
         let mut pending: Vec<_> = interfaces.iter().map(|name| symbol_leaf(name).to_owned()).collect();
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(interface) = pending.pop() {
             if !seen.insert(interface.clone()) { continue; }
             if let Some(methods) = contracts.get(&interface) {

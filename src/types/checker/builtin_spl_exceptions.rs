@@ -9,7 +9,7 @@
 //! Key details:
 //! - These classes inherit behavior from `Exception`; only their nominal hierarchy is inserted here.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::types::traits::FlattenedClass;
@@ -67,7 +67,7 @@ pub(crate) fn hierarchy_for_gate() -> &'static [(&'static str, &'static str)] {
 pub(crate) fn inject_builtin_spl_exceptions(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
-    wanted: &std::collections::HashSet<String>,
+    wanted: &crate::fast_hash::FastSet<String>,
 ) -> Result<(), CompileError> {
     for (name, _) in SPL_EXCEPTION_HIERARCHY {
         if *name == "RuntimeException" && class_map.contains_key(*name) {

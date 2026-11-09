@@ -146,7 +146,7 @@ fn generate_runtime_profile(heap_size: usize, target: Target, features: RuntimeF
     if library_boundary && !phpext {
         output = crate::codegen_support::visibility::append_hidden_directives(
             &output,
-            &std::collections::HashSet::new(),
+            &crate::fast_hash::FastSet::default(),
             target.platform,
         );
     }
@@ -164,7 +164,7 @@ mod tests {
 
     /// The labels the runtime defines more than once, in definition order.
     fn duplicate_labels(asm: &str) -> Vec<String> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = crate::fast_hash::FastSet::default();
         let mut duplicates = Vec::new();
         for line in asm.lines() {
             let Some(label) = line.trim().strip_suffix(':') else {

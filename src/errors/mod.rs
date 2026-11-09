@@ -152,7 +152,7 @@ impl CompileError {
     /// fallback (the entry file) still applies.
     pub fn resolve_declaration_files(
         mut self,
-        paths: &std::collections::HashMap<String, String>,
+        paths: &crate::fast_hash::FastMap<String, String>,
     ) -> Self {
         if self.file.is_none() {
             if let Some(path) = self
@@ -178,7 +178,7 @@ impl CompileError {
 /// stripped and lowercased, because PHP matches class and function names case-insensitively.
 /// A pass that recorded `App\Kernel` must still find the entry written as `app\kernel`.
 fn lookup_declaration_path(
-    paths: &std::collections::HashMap<String, String>,
+    paths: &crate::fast_hash::FastMap<String, String>,
     name: &str,
 ) -> Option<String> {
     let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));

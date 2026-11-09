@@ -10,7 +10,9 @@
 //! - Method lists are ASCII-lowercased because PHP method names are case-insensitive.
 //! - Object method lists include inherited private methods; class-string lists hide them.
 
-use std::collections::{hash_map::Entry, BTreeSet, HashMap, HashSet};
+use std::collections::{hash_map::Entry, BTreeSet};
+use crate::fast_hash::FastMap as HashMap;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::Module;
 use crate::names::php_symbol_key;
@@ -106,7 +108,7 @@ fn member_rows(module: &Module) -> Vec<MemberRow> {
 fn canonical_class_index(module: &Module) -> HashMap<String, &ClassInfo> {
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by(|(left, _), (right, _)| left.as_bytes().cmp(right.as_bytes()));
-    let mut index = HashMap::with_capacity(classes.len());
+    let mut index = HashMap::with_capacity_and_hasher(classes.len(), Default::default());
     for (raw_name, class_info) in classes {
         let key = php_symbol_key(raw_name.trim_start_matches('\\'));
         match index.entry(key) {
@@ -144,7 +146,7 @@ fn object_method_candidates(
     class_index: &HashMap<String, &ClassInfo>,
 ) -> BTreeSet<String> {
     let mut names = class_method_candidates(class_info);
-    let mut visited = HashSet::new();
+    let mut visited = HashSet::default();
     let mut parent_name = class_info.parent.as_deref();
     while let Some(candidate) = parent_name {
         let key = php_symbol_key(candidate.trim_start_matches('\\'));
@@ -230,7 +232,7 @@ fn parent_chain_declares_method(
     class_info: &ClassInfo,
     method_key: &str,
 ) -> bool {
-    let mut visited = HashSet::new();
+    let mut visited = HashSet::default();
     let mut parent_name = class_info.parent.as_deref();
     while let Some(candidate) = parent_name {
         let key = php_symbol_key(candidate.trim_start_matches('\\'));
@@ -368,7 +370,7 @@ fn is_internal_synthetic_class_name(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
     use crate::types::{ClassInfo, FunctionSig, PhpType};
 
@@ -413,73 +415,73 @@ mod tests {
             clone_override_property_storage: false,
             scope_dynamic_property_storage: false,
             is_internal: false,
-            constants: HashMap::new(),
+            constants: HashMap::default(),
             constant_order: Vec::new(),
-            constant_deprecations: HashMap::new(),
-            constant_types: HashMap::new(),
-            constant_visibilities: HashMap::new(),
-            final_constants: HashSet::new(),
+            constant_deprecations: HashMap::default(),
+            constant_types: HashMap::default(),
+            constant_visibilities: HashMap::default(),
+            final_constants: HashSet::default(),
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
-            method_attribute_names: HashMap::new(),
-            method_attribute_args: HashMap::new(),
-            property_attribute_names: HashMap::new(),
-            property_attribute_args: HashMap::new(),
-            constant_attribute_names: HashMap::new(),
-            constant_attribute_args: HashMap::new(),
+            method_attribute_names: HashMap::default(),
+            method_attribute_args: HashMap::default(),
+            property_attribute_names: HashMap::default(),
+            property_attribute_args: HashMap::default(),
+            constant_attribute_names: HashMap::default(),
+            constant_attribute_args: HashMap::default(),
             used_traits: Vec::new(),
             trait_aliases: Vec::new(),
             properties: Vec::new(),
-            property_offsets: HashMap::new(),
-            property_declaring_classes: HashMap::new(),
+            property_offsets: HashMap::default(),
+            property_declaring_classes: HashMap::default(),
             defaults: Vec::new(),
             deferred_property_default_error: None,
-            property_visibilities: HashMap::new(),
-            property_set_visibilities: HashMap::new(),
-            declared_properties: HashSet::new(),
+            property_visibilities: HashMap::default(),
+            property_set_visibilities: HashMap::default(),
+            declared_properties: HashSet::default(),
             property_declared_slots: Vec::new(),
-            final_properties: HashSet::new(),
-            readonly_properties: HashSet::new(),
-            lazily_unset_properties: HashSet::new(),
-            backed_hooked_properties: HashSet::new(),
-            reference_properties: HashSet::new(),
-            owned_reference_properties: HashSet::new(),
-            promoted_properties: HashSet::new(),
+            final_properties: HashSet::default(),
+            readonly_properties: HashSet::default(),
+            lazily_unset_properties: HashSet::default(),
+            backed_hooked_properties: HashSet::default(),
+            reference_properties: HashSet::default(),
+            owned_reference_properties: HashSet::default(),
+            promoted_properties: HashSet::default(),
             property_reference_slots: Vec::new(),
             property_slot_declaring_classes: Vec::new(),
             property_owned_reference_slots: Vec::new(),
-            abstract_properties: HashSet::new(),
-            abstract_property_hooks: HashMap::new(),
-            property_hooks: HashMap::new(),
+            abstract_properties: HashSet::default(),
+            abstract_property_hooks: HashMap::default(),
+            property_hooks: HashMap::default(),
             reflection_properties: Vec::new(),
             reflection_methods: Vec::new(),
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
-            static_property_declaring_classes: HashMap::new(),
-            static_property_visibilities: HashMap::new(),
-            declared_static_properties: HashSet::new(),
-            final_static_properties: HashSet::new(),
+            static_property_declaring_classes: HashMap::default(),
+            static_property_visibilities: HashMap::default(),
+            declared_static_properties: HashSet::default(),
+            final_static_properties: HashSet::default(),
             method_decls: Vec::new(),
             methods,
             static_methods: crate::fast_hash::FastMap::default(),
-            late_static_method_returns: HashMap::new(),
-            late_static_static_method_returns: HashMap::new(),
-            callable_method_return_sigs: HashMap::new(),
-            callable_array_method_return_sigs: HashMap::new(),
+            late_static_method_returns: HashMap::default(),
+            late_static_static_method_returns: HashMap::default(),
+            callable_method_return_sigs: HashMap::default(),
+            callable_array_method_return_sigs: HashMap::default(),
             method_visibilities: crate::fast_hash::FastMap::default(),
-            final_methods: HashSet::new(),
+            final_methods: HashSet::default(),
             method_declaring_classes: crate::fast_hash::FastMap::default(),
             method_impl_classes: crate::fast_hash::FastMap::default(),
-            abstract_methods: HashSet::new(),
+            abstract_methods: HashSet::default(),
             vtable_methods: Vec::new(),
-            vtable_slots: HashMap::new(),
+            vtable_slots: HashMap::default(),
             static_method_visibilities: crate::fast_hash::FastMap::default(),
-            final_static_methods: HashSet::new(),
+            final_static_methods: HashSet::default(),
             static_method_declaring_classes: crate::fast_hash::FastMap::default(),
             static_method_impl_classes: crate::fast_hash::FastMap::default(),
-            abstract_static_methods: HashSet::new(),
+            abstract_static_methods: HashSet::default(),
             static_vtable_methods: Vec::new(),
-            static_vtable_slots: HashMap::new(),
+            static_vtable_slots: HashMap::default(),
             declared_interfaces: Vec::new(),
             interfaces: Vec::new(),
             constructor_param_to_prop: Vec::new(),
@@ -493,7 +495,7 @@ mod tests {
         let mid = class_info(Some("Missing"), &["before_missing"]);
         let cycle_a = class_info(Some("CycleB"), &[]);
         let cycle_b = class_info(Some("CycleA"), &[]);
-        let class_index = HashMap::from([
+        let class_index = HashMap::from_iter([
             ("child".to_string(), &child),
             ("mid".to_string(), &mid),
             ("cyclea".to_string(), &cycle_a),

@@ -122,7 +122,7 @@ pub(super) fn lower_builtin_callable_body(
                 .clone()
                 .map(|signature| (function.name.clone(), signature))
         })
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<crate::fast_hash::FastMap<_, _>>();
     let closures = lower_body_into_function(
         module.shared_source_catalog(),
         module.runtime_bound_functions.clone(),

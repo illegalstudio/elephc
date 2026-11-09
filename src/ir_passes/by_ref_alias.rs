@@ -29,7 +29,7 @@
 //!   whole condition into the preheader, and the loop ran exactly once — the shape PHP's
 //!   own `curl_multi_exec()` loop is written in.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{
     Function, Immediate, LocalSlotId, Op, RuntimeCallTarget, RuntimeFnId, ValueId,
@@ -39,7 +39,7 @@ use crate::ir::{
 /// take its address, i.e. every slot a callee may be able to write through a
 /// by-reference alias.
 pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId> {
-    let mut load_result_slot: HashMap<ValueId, LocalSlotId> = HashMap::new();
+    let mut load_result_slot: HashMap<ValueId, LocalSlotId> = HashMap::default();
     for inst in &function.instructions {
         if inst.op != Op::LoadLocal {
             continue;
@@ -51,7 +51,7 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
             load_result_slot.insert(result, slot);
         }
     }
-    let mut escaping = HashSet::new();
+    let mut escaping = HashSet::default();
     if load_result_slot.is_empty() {
         return escaping;
     }

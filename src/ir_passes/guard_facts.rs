@@ -8,14 +8,14 @@
 //! - Only unique incoming guard edges contribute facts, so joins and loop re-entry fail closed.
 //! - Facts concern immutable SSA values, never mutable PHP storage or fresh heap reads.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{Function, Terminator};
 
 /// Reuses conditions whose selected single-predecessor successor dominates the later branch.
 pub(super) fn fold(function: &mut Function) -> bool {
-    let mut seen = HashSet::new();
-    let mut repeated = HashSet::new();
+    let mut seen = HashSet::default();
+    let mut repeated = HashSet::default();
     for block in &function.blocks {
         if let Some(Terminator::CondBr { cond, .. }) = block.terminator {
             if !seen.insert(cond) { repeated.insert(cond); }
@@ -24,7 +24,7 @@ pub(super) fn fold(function: &mut Function) -> bool {
     if repeated.is_empty() { return false; }
     let predecessors = super::cfg::predecessors(function);
     let dominance = super::dominance::compute_dominance(function);
-    let mut conditions: HashMap<_, Vec<_>> = HashMap::new();
+    let mut conditions: HashMap<_, Vec<_>> = HashMap::default();
     for block in &function.blocks {
         let Some(Terminator::CondBr { cond, then_target, else_target, .. }) = block.terminator else { continue; };
         if !repeated.contains(&cond) { continue; }

@@ -8,7 +8,7 @@
 //! - Every supported target emits discard and caught-replacement callbacks for `Emit::Phpext`.
 //! - Ordinary native libraries keep the backend-neutral notification as a no-op.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::codegen::{Emit, Instrumentation, WebIsolation};
 use crate::ir::{Immediate, Op, RuntimeCallTarget};
@@ -44,7 +44,7 @@ function discard_pending(array $value): int {
                 false,
                 false,
                 kind,
-                &HashMap::new(),
+                &HashMap::default(),
                 true,
                 false,
                 WebIsolation::Worker,
@@ -126,7 +126,7 @@ function catch_replacement(array $value): void {
                 false,
                 false,
                 kind,
-                &HashMap::new(),
+                &HashMap::default(),
                 true,
                 false,
                 WebIsolation::Worker,
@@ -198,7 +198,7 @@ function chain_pending(array $value): void {
                 false,
                 false,
                 kind,
-                &HashMap::new(),
+                &HashMap::default(),
                 true,
                 false,
                 WebIsolation::Worker,

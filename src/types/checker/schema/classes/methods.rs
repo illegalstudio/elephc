@@ -477,7 +477,7 @@ fn interface_declares_method(
     method_key: &str,
     is_static: bool,
 ) -> bool {
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = crate::fast_hash::FastSet::default();
     let mut queue: Vec<String> = class.implements.clone();
     queue.extend(state.interfaces.iter().cloned());
     while let Some(name) = queue.pop() {

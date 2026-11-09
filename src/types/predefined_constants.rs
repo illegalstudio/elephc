@@ -127,7 +127,7 @@ mod tests {
 /// Recognizes an executable-path constant alias without folding the runtime-owned path.
 pub(crate) fn is_executable_path_alias(
     value: &ExprKind,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
 ) -> bool {
     let ExprKind::ConstRef(name) = value else { return false };
     let mut name = name.as_str();
@@ -141,13 +141,13 @@ pub(crate) fn is_executable_path_alias(
 
 thread_local! {
     /// `CheckResult::undefined_constant_reads` for the program being lowered.
-    static UNDEFINED_CONSTANT_READS: std::cell::RefCell<std::collections::HashSet<String>> =
-        std::cell::RefCell::new(std::collections::HashSet::new());
+    static UNDEFINED_CONSTANT_READS: std::cell::RefCell<crate::fast_hash::FastSet<String>> =
+        std::cell::RefCell::new(crate::fast_hash::FastSet::default());
 }
 
 /// Restores the enclosing compilation's undefined-constant set on drop.
 pub(crate) struct UndefinedConstantReadsGuard {
-    previous: std::collections::HashSet<String>,
+    previous: crate::fast_hash::FastSet<String>,
 }
 
 impl Drop for UndefinedConstantReadsGuard {
@@ -160,7 +160,7 @@ impl Drop for UndefinedConstantReadsGuard {
 /// Publishes, for one compilation, the constant names the checked program reads but never
 /// defines. Thread-local because tests compile programs in parallel threads.
 pub(crate) fn set_undefined_constant_reads(
-    names: std::collections::HashSet<String>,
+    names: crate::fast_hash::FastSet<String>,
 ) -> UndefinedConstantReadsGuard {
     let previous =
         UNDEFINED_CONSTANT_READS.with(|set| std::mem::replace(&mut *set.borrow_mut(), names));

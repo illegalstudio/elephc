@@ -13,7 +13,8 @@
 //! - The rendering is deterministic (count descending, then kind, then template) so a test can
 //!   assert it exactly.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap};
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::{Program, Stmt, StmtKind};
 
@@ -24,7 +25,7 @@ use crate::parser::ast::{Program, Stmt, StmtKind};
 /// instantiated templates or spread across many, which is the input the dedup work needs.
 pub fn report(program: &Program) -> String {
     let mut groups: BTreeMap<(u8, String), Vec<String>> = BTreeMap::new();
-    let mut private_variants = HashSet::new();
+    let mut private_variants = HashSet::default();
     collect_private_variants(program, &mut private_variants);
     collect(program, &mut groups, &private_variants);
     render(&groups)

@@ -8,7 +8,7 @@
 //! Key details:
 //! - Member discovery must not lose declarations reachable from default expressions or method bodies.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;

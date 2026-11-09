@@ -16,7 +16,7 @@
 //! - The statement/expression matches are exhaustive with NO wildcard arm, so a new
 //!   AST node kind is a compile error here rather than a silently-missed reference.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{

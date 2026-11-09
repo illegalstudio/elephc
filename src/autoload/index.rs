@@ -9,7 +9,9 @@
 //! - Produces FQN-to-path mappings and eager source entries for compile-time inclusion.
 //! - Production and development mapping sections are merged because compiled binaries have one source graph.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{VecDeque};
+use crate::fast_hash::FastMap as HashMap;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileWarning;
@@ -54,7 +56,7 @@ impl AutoloadIndex {
     /// Builds the index from the nearest supported root manifest and nested dependency manifests.
     /// Returns an empty index when no supported manifest exists at or above the entry directory.
     pub fn from_project_root(project_root: &Path) -> Self {
-        Self::from_project_root_excluding(project_root, &HashSet::new())
+        Self::from_project_root_excluding(project_root, &HashSet::default())
     }
 
     /// Like [`Self::from_project_root`], but skips every nested dependency manifest whose
@@ -63,7 +65,7 @@ impl AutoloadIndex {
     pub fn from_project_root_excluding(project_root: &Path, excluded: &HashSet<String>) -> Self {
         let Some(project_root) = nearest_autoload_manifest_root(project_root) else {
             return Self {
-                fqn_to_path: HashMap::new(),
+                fqn_to_path: HashMap::default(),
                 files_to_include: Vec::new(),
                 warnings: Vec::new(),
             };
@@ -278,7 +280,7 @@ fn autoload_manifest_paths(dir: &Path) -> Vec<PathBuf> {
 /// Recursively discovers structurally recognized manifests below the project root.
 fn nested_autoload_manifest_paths(root: &Path) -> Vec<PathBuf> {
     let mut pending = VecDeque::from([root.to_path_buf()]);
-    let mut visited = HashSet::new();
+    let mut visited = HashSet::default();
     let mut manifests = Vec::new();
     while let Some(dir) = pending.pop_front() {
         let canonical = crate::source::canonical(&dir).unwrap_or_else(|_| dir.clone());

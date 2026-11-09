@@ -22,14 +22,14 @@
 //!   folding has already removed the branches a target decides, so the common
 //!   `PHP_VERSION_ID`-style pair is gone before this pass sees it.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, Stmt, StmtKind};
 
 /// Hoists every conditionally declared class-like whose name the program declares only once.
 pub fn hoist_unique_conditional_class_likes(program: Program) -> Program {
-    let mut counts = HashMap::new();
+    let mut counts = HashMap::default();
     count_class_likes(&program, &mut counts);
     let mut hoister = Hoister { counts, hoisted: Vec::new() };
     let program = hoister.rewrite_stmts(program, false);

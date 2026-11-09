@@ -37,7 +37,7 @@ unset($text);
     assert_eq!(result.local_ref_detach_sites.len(), 1);
     let (span, names) = result.local_ref_detach_sites.iter().next().unwrap();
     assert!(span.identifies_a_node());
-    assert_eq!(names, &HashSet::from(["text".to_string()]));
+    assert_eq!(names, &HashSet::from_iter(["text".to_string()]));
     assert!(result.local_binding_decision_spans().contains(span));
     assert!(!result.local_bind_kill_sites.values().any(|names| names.contains("text")));
     expect_no_error(

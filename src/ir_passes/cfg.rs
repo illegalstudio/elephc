@@ -12,7 +12,7 @@
 //! - Reverse postorder visits a definition before its dominated uses on
 //!   reducible CFGs, which is the order the linear-scan numbering relies on.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{BlockId, Function, Op, Terminator, ValueId};
 
@@ -93,7 +93,7 @@ pub(super) fn predecessors(func: &Function) -> Vec<Vec<BlockId>> {
 /// Uses an explicit work stack rather than recursion so deeply nested functions
 /// cannot overflow. Blocks unreachable from the entry are omitted.
 pub(super) fn reverse_postorder(func: &Function) -> Vec<BlockId> {
-    let mut visited: HashSet<BlockId> = HashSet::new();
+    let mut visited: HashSet<BlockId> = HashSet::default();
     let mut postorder: Vec<BlockId> = Vec::new();
     let mut stack: Vec<(BlockId, bool)> = vec![(func.entry, false)];
 

@@ -13,7 +13,7 @@
 //!   it is the smallest region a conversion can be hoisted to without corrupting an operand that was
 //!   already emitted (see `lower_stmt_at_type_fixpoint`).
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{LocalKind, LocalSlotId, Op};
 use crate::ir_lower::context::LoweringContext;

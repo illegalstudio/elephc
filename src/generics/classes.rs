@@ -17,7 +17,7 @@
 //!   checker answers them with `type_accepts`, exactly as it does for generic functions.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::generics::splice::substitute_in_body;
@@ -79,7 +79,7 @@ pub struct Templates {
     /// names `Box<T>`, and instantiating that would emit a class whose property is typed `T`.
     /// Recorded so the walk can leave those mentions alone until the checker binds `T` and the
     /// instantiated body comes back through here.
-    generic_functions: std::collections::HashSet<String>,
+    generic_functions: crate::fast_hash::FastSet<String>,
     /// Template names found inside a CONDITIONAL, collected for the diagnostic alone.
     ///
     /// A declaration inside `if (…) { … }` is not part of the compiled program — an ordinary
@@ -91,7 +91,7 @@ pub struct Templates {
     /// What was worth fixing is the answer. `'Box' is written with type arguments but declares
     /// no type parameters` was FALSE — the declaration is right there and declares one — so the
     /// name is remembered here and the mention is told where its template actually is.
-    conditional: std::collections::HashSet<String>,
+    conditional: crate::fast_hash::FastSet<String>,
 }
 
 /// One generic class's constructor signature, for inferring type arguments at `new`.
@@ -186,10 +186,10 @@ impl Templates {
 
 /// Lifts every generic class and interface declaration out of `program`.
 pub fn collect(program: &Program) -> Templates {
-    let mut by_name = HashMap::new();
-    let mut generic_functions = std::collections::HashSet::new();
+    let mut by_name = HashMap::default();
+    let mut generic_functions = crate::fast_hash::FastSet::default();
     collect_templates_into(program, &mut by_name, &mut generic_functions);
-    let mut conditional = std::collections::HashSet::new();
+    let mut conditional = crate::fast_hash::FastSet::default();
     collect_conditional_template_names(program, &mut conditional);
     conditional.retain(|name| !by_name.contains_key(name));
     Templates {
@@ -206,7 +206,7 @@ pub fn collect(program: &Program) -> Templates {
 /// name is kept — nothing here is instantiated, so nothing else about the declaration matters.
 fn collect_conditional_template_names(
     stmts: &[Stmt],
-    out: &mut std::collections::HashSet<String>,
+    out: &mut crate::fast_hash::FastSet<String>,
 ) {
     for stmt in stmts {
         match &stmt.kind {
@@ -373,9 +373,9 @@ fn static_method_signatures(declaration: &Stmt) -> Vec<StaticMethodSignature> {
 /// without a second walker that could disagree with the first about where a type can appear.
 struct Instantiate<'a> {
     templates: &'a HashMap<String, Template>,
-    generic_functions: &'a std::collections::HashSet<String>,
+    generic_functions: &'a crate::fast_hash::FastSet<String>,
     /// Template names declared inside a conditional, for the diagnostic that names them.
-    conditional: &'a std::collections::HashSet<String>,
+    conditional: &'a crate::fast_hash::FastSet<String>,
     /// Every class, interface and trait name the program itself declares, by template key.
     ///
     /// A mention `Iterator<int, string>` of a class the program does NOT declare names a builtin
@@ -383,7 +383,7 @@ struct Instantiate<'a> {
     /// PHPStan vocabulary — Symfony writes `@param \Iterator<TKey, TValue>` throughout — and are
     /// forgotten rather than refused. A declared non-generic class (`Plain<int>`) is still an
     /// error.
-    declared: &'a std::collections::HashSet<String>,
+    declared: &'a crate::fast_hash::FastSet<String>,
     /// (enclosing function, `new` site) -> the class the checker inferred for it.
     new_names: &'a HashMap<(String, Span), String>,
     /// `RefCell` because `Pass::transform_type` takes `&self`: the walk rebuilds the tree and
@@ -791,7 +791,7 @@ pub fn instantiate(
     // What the CHECKER worked out about `new Box(5)`, which this pass could not: the classes it
     // asked for, spliced here, and the constructions themselves, renamed by the walk below.
     let (program, new_names) = adopt_inferred_constructions(program, templates, inferred)?;
-    let declared: std::collections::HashSet<String> = {
+    let declared: crate::fast_hash::FastSet<String> = {
         let mut names = Vec::new();
         collect_declared_names(&program, &mut names);
         names.iter().map(|name| template_key(name)).collect()
@@ -906,9 +906,9 @@ fn adopt_inferred_constructions(
     inferred: &InferredConstructions,
 ) -> Result<(Program, HashMap<(String, Span), String>), CompileError> {
     if inferred.requested.is_empty() && inferred.sites.is_empty() {
-        return Ok((program, HashMap::new()));
+        return Ok((program, HashMap::default()));
     }
-    let mut names = HashMap::with_capacity(inferred.sites.len());
+    let mut names = HashMap::with_capacity_and_hasher(inferred.sites.len(), Default::default());
     for (site, resolved) in &inferred.sites {
         let (_, span) = site;
         if resolved.len() > 1 {
@@ -940,7 +940,7 @@ fn adopt_inferred_constructions(
 fn collect_templates_into(
     stmts: &[Stmt],
     templates: &mut HashMap<String, Template>,
-    generic_functions: &mut std::collections::HashSet<String>,
+    generic_functions: &mut crate::fast_hash::FastSet<String>,
 ) {
     for stmt in stmts {
         match &stmt.kind {

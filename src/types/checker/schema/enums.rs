@@ -8,7 +8,7 @@
 //! Key details:
 //! - Declaration metadata must align with name resolution, inheritance flattening, and runtime/codegen expectations.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -214,7 +214,7 @@ pub(crate) fn build_enum_info(
 
     validate_enum_interfaces(name, implements, resolved_backing.is_some(), span, checker)?;
 
-    let mut seen_case_names = HashSet::new();
+    let mut seen_case_names = HashSet::default();
     for interface in implements {
         let key = php_symbol_key(interface.as_str());
         if matches!(key.as_str(), "unitenum" | "backedenum") {
@@ -226,8 +226,8 @@ pub(crate) fn build_enum_info(
             return Err(CompileError::new(span, "Pure enum cannot implement BackedEnum"));
         }
     }
-    let mut seen_int_values = HashSet::new();
-    let mut seen_string_values = HashSet::new();
+    let mut seen_int_values = HashSet::default();
+    let mut seen_string_values = HashSet::default();
     let mut enum_cases = Vec::new();
     for case in cases {
         if !seen_case_names.insert(case.name.clone()) {
@@ -378,15 +378,15 @@ pub(crate) fn insert_enum_metadata(
     next_class_id: &mut u64,
 ) -> Result<(), CompileError> {
     let mut properties = Vec::new();
-    let mut property_offsets = HashMap::new();
-    let mut property_declaring_classes = HashMap::new();
+    let mut property_offsets = HashMap::default();
+    let mut property_declaring_classes = HashMap::default();
     let mut defaults = Vec::new();
-    let mut property_visibilities = HashMap::new();
-    let mut declared_properties = HashSet::new();
+    let mut property_visibilities = HashMap::default();
+    let mut declared_properties = HashSet::default();
     let mut property_declared_slots = Vec::new();
-    let final_properties = HashSet::new();
-    let mut readonly_properties = HashSet::new();
-    let reference_properties = HashSet::new();
+    let final_properties = HashSet::default();
+    let mut readonly_properties = HashSet::default();
+    let reference_properties = HashSet::default();
     let mut property_reference_slots = Vec::new();
     if let Some(backing_ty) = &backing_type {
         push_enum_readonly_property(
@@ -422,11 +422,11 @@ pub(crate) fn insert_enum_metadata(
     );
 
     let mut static_methods = crate::fast_hash::FastMap::default();
-    let mut late_static_static_method_returns = HashMap::new();
+    let mut late_static_static_method_returns = HashMap::default();
     let mut static_method_visibilities = crate::fast_hash::FastMap::default();
     let mut static_method_declaring_classes = crate::fast_hash::FastMap::default();
     let mut static_method_impl_classes = crate::fast_hash::FastMap::default();
-    let mut abstract_static_methods = HashSet::new();
+    let mut abstract_static_methods = HashSet::default();
     static_methods.insert(
         "cases".to_string(),
         FunctionSig {
@@ -486,16 +486,16 @@ pub(crate) fn insert_enum_metadata(
     // User-declared enum methods. Enum cases are singleton objects, so instance methods dispatch
     // on the case like a class. Lexical hints resolve to the enum while return `static` is retained.
     let mut methods = crate::fast_hash::FastMap::default();
-    let mut late_static_method_returns = HashMap::new();
+    let mut late_static_method_returns = HashMap::default();
     let mut method_decls = Vec::new();
     let mut method_visibilities = crate::fast_hash::FastMap::default();
     let mut method_declaring_classes = crate::fast_hash::FastMap::default();
     let mut method_impl_classes = crate::fast_hash::FastMap::default();
-    let mut abstract_methods = HashSet::new();
-    let mut final_methods = HashSet::new();
-    let mut final_static_methods = HashSet::new();
-    let mut method_attribute_names = HashMap::new();
-    let mut method_attribute_args = HashMap::new();
+    let mut abstract_methods = HashSet::default();
+    let mut final_methods = HashSet::default();
+    let mut final_static_methods = HashSet::default();
+    let mut method_attribute_names = HashMap::default();
+    let mut method_attribute_args = HashMap::default();
     for method in user_methods {
         // An imported abstract factory is validated against the synthesized implementation
         // after enum metadata is complete; it must never replace that implementation.
@@ -563,16 +563,16 @@ pub(crate) fn insert_enum_metadata(
 
     // Bind lexical receivers in both direct and imported constants before their values
     // are read outside enum scope, using the same normalization as ordinary classes.
-    let mut constants = HashMap::new();
+    let mut constants = HashMap::default();
     let constant_order = user_constants
         .iter()
         .map(|constant| constant.name.clone())
         .collect();
-    let mut constant_types = HashMap::new();
-    let mut constant_visibilities = HashMap::new();
-    let mut final_constants = HashSet::new();
-    let mut constant_attribute_names = HashMap::new();
-    let mut constant_attribute_args = HashMap::new();
+    let mut constant_types = HashMap::default();
+    let mut constant_visibilities = HashMap::default();
+    let mut final_constants = HashSet::default();
+    let mut constant_attribute_names = HashMap::default();
+    let mut constant_attribute_args = HashMap::default();
     for constant in user_constants {
         constants.insert(
             constant.name.clone(),
@@ -657,8 +657,8 @@ pub(crate) fn insert_enum_metadata(
             attribute_args: Vec::new(),
             method_attribute_names,
             method_attribute_args,
-            property_attribute_names: HashMap::new(),
-            property_attribute_args: HashMap::new(),
+            property_attribute_names: HashMap::default(),
+            property_attribute_args: HashMap::default(),
             constant_attribute_names,
             constant_attribute_args,
             used_traits: used_traits.to_vec(),
@@ -669,51 +669,51 @@ pub(crate) fn insert_enum_metadata(
             defaults,
             deferred_property_default_error: None,
             property_visibilities,
-            property_set_visibilities: HashMap::new(),
+            property_set_visibilities: HashMap::default(),
             declared_properties,
             property_declared_slots,
             final_properties,
             readonly_properties,
-            lazily_unset_properties: HashSet::new(),
-            backed_hooked_properties: HashSet::new(),
+            lazily_unset_properties: HashSet::default(),
+            backed_hooked_properties: HashSet::default(),
             reference_properties,
-            owned_reference_properties: HashSet::new(),
-            promoted_properties: HashSet::new(),
+            owned_reference_properties: HashSet::default(),
+            promoted_properties: HashSet::default(),
             property_reference_slots,
             property_slot_declaring_classes,
             property_owned_reference_slots: Vec::new(),
-            abstract_properties: HashSet::new(),
-            abstract_property_hooks: HashMap::new(),
+            abstract_properties: HashSet::default(),
+            abstract_property_hooks: HashMap::default(),
             reflection_properties,
             reflection_methods,
-            property_hooks: HashMap::new(),
+            property_hooks: HashMap::default(),
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
-            static_property_declaring_classes: HashMap::new(),
-            static_property_visibilities: HashMap::new(),
-            declared_static_properties: HashSet::new(),
-            final_static_properties: HashSet::new(),
+            static_property_declaring_classes: HashMap::default(),
+            static_property_visibilities: HashMap::default(),
+            declared_static_properties: HashSet::default(),
+            final_static_properties: HashSet::default(),
             method_decls,
             methods,
             static_methods,
             late_static_method_returns,
             late_static_static_method_returns,
-            callable_method_return_sigs: HashMap::new(),
-            callable_array_method_return_sigs: HashMap::new(),
+            callable_method_return_sigs: HashMap::default(),
+            callable_array_method_return_sigs: HashMap::default(),
             method_visibilities,
             final_methods,
             method_declaring_classes,
             method_impl_classes,
             abstract_methods,
             vtable_methods: Vec::new(),
-            vtable_slots: HashMap::new(),
+            vtable_slots: HashMap::default(),
             static_method_visibilities,
             final_static_methods,
             static_method_declaring_classes,
             static_method_impl_classes,
             abstract_static_methods,
             static_vtable_methods: Vec::new(),
-            static_vtable_slots: HashMap::new(),
+            static_vtable_slots: HashMap::default(),
             declared_interfaces,
             interfaces,
             constructor_param_to_prop: Vec::new(),

@@ -143,7 +143,7 @@ pub(crate) fn run_live(
     let mut lost_channel = false;
     let mut failed = false;
     let mut target_finished = false;
-    let mut previous: HashMap<String, f64> = HashMap::new();
+    let mut previous: HashMap<String, f64> = HashMap::default();
     let mut windows = 0u32;
     let graph_title = if cmd.target.is_empty() {
         "elephc profile".to_string()
@@ -767,7 +767,7 @@ pub(crate) fn live_frame(
     ));
     let mut by_weight: Vec<_> = stats.totals.iter().collect();
     by_weight.sort_by_key(|(_, weight)| std::cmp::Reverse(**weight));
-    let mut next_previous = HashMap::new();
+    let mut next_previous = HashMap::default();
     for (function, total) in by_weight {
         let pct = 100.0 * *total as f64 / stats.grand as f64;
         let cumulative_pct = cumulative_stats

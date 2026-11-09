@@ -8,7 +8,7 @@
 //! Key details:
 //! - Flattening must preserve visibility, overrides, readonly/final constraints, and interface obligations.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;

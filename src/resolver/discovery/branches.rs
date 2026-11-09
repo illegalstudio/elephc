@@ -8,7 +8,7 @@
 //! Key details:
 //! - Constant branch truthiness is used only when it can be determined statically and conservatively.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;

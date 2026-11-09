@@ -9,7 +9,7 @@
 //! - Untyped method receivers are unioned; named static receivers follow source class edges.
 //! - Escapes, implicit entries and non-positional arguments prevent certification.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr};
@@ -102,7 +102,7 @@ impl ParameterInputs {
     ) -> ParameterProof {
         let literals: HashSet<_> = literals.iter().map(|name| leaf(name).to_owned()).collect();
         let mut proof = ParameterProof::default();
-        let mut rejected: HashMap<String, HashSet<usize>> = HashMap::new();
+        let mut rejected: HashMap<String, HashSet<usize>> = HashMap::default();
         for declaration in &self.declarations {
             let method = declaration.name.contains("::");
             let target = call_key(&declaration.name, method);
@@ -136,7 +136,7 @@ impl ParameterInputs {
 /// Follows conservative alias/inheritance edges before excluding a statically different receiver.
 fn can_reach_class(receiver: &str, target: &str, edges: &HashMap<String, HashSet<String>>) -> bool {
     let mut pending = vec![receiver];
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some(class) = pending.pop() {
         if class == target { return true; }
         if !seen.insert(class) { continue; }

@@ -90,7 +90,7 @@ pub struct Function {
     /// sweeps `HiddenTemp` too, so the exclusion was a no-op and the host released a reference
     /// it did not own. A read-only `array` parameter called in a loop therefore died with
     /// `heap debug detected bad refcount` under `-O`, while `-O0` was clean.
-    pub no_epilogue_cleanup_slots: std::collections::HashSet<LocalSlotId>,
+    pub no_epilogue_cleanup_slots: crate::fast_hash::FastSet<LocalSlotId>,
     /// PHP lexical class scope of instructions the inliner spliced in from a method body.
     ///
     /// Property name resolution, visibility checks and the callable invocation scope all read
@@ -101,14 +101,14 @@ pub struct Function {
     /// `lexical_class` through `FunctionContext::lexical_class`. Instruction ids are stable
     /// (passes neutralize or relocate instructions rather than renumbering them), and passes
     /// that copy a body into another function carry the entries along.
-    pub inlined_scopes: std::collections::HashMap<InstId, String>,
+    pub inlined_scopes: crate::fast_hash::FastMap<InstId, String>,
     /// By-value parameter slots whose address this body hands to a by-reference parameter.
     ///
     /// The callee can overwrite the slot through that reference and releases what it replaces,
     /// but a by-value parameter holds a +0 borrow of the caller's argument. The frame must
     /// therefore own its parameter (retain it in the prologue) exactly as it would for a slot an
     /// ordinary `StoreLocal` overwrites; no EIR store names the slot, so the lowering records it.
-    pub by_ref_argument_param_slots: std::collections::HashSet<LocalSlotId>,
+    pub by_ref_argument_param_slots: crate::fast_hash::FastSet<LocalSlotId>,
     /// Where a closure literal sits, for php's `{closure:SCOPE:LINE}` name and its reflected
     /// line range. `None` for every non-closure body and for synthesized closures.
     pub closure_origin: Option<ClosureOrigin>,
@@ -182,9 +182,9 @@ impl Function {
             generator_source: None,
             flags: FunctionFlags::default(),
             display_name: None,
-            no_epilogue_cleanup_slots: std::collections::HashSet::new(),
-            inlined_scopes: std::collections::HashMap::new(),
-            by_ref_argument_param_slots: std::collections::HashSet::new(),
+            no_epilogue_cleanup_slots: crate::fast_hash::FastSet::default(),
+            inlined_scopes: crate::fast_hash::FastMap::default(),
+            by_ref_argument_param_slots: crate::fast_hash::FastSet::default(),
             closure_origin: None,
         }
     }

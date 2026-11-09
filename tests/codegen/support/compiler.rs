@@ -91,7 +91,7 @@ fn compile_source_to_asm_with_options_and_regex(
     compile_source_to_asm_with_defines_repr_regex_and_php_version(
         source,
         dir,
-        &HashSet::new(),
+        &HashSet::default(),
         heap_size,
         gc_stats,
         counters,
@@ -238,7 +238,7 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
     let (user_asm, _runtime_asm, _link_requirements) = try_compile_source_to_asm_with_defines_repr(
         source,
         &dir,
-        &HashSet::new(),
+        &HashSet::default(),
         8_388_608,
         false,
         false,
@@ -503,7 +503,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // Mirrors `pipeline::compile`: the array_merge and backend-gap prelude groups are
     // rooted whenever they were injected, because the lowering names their bodies
     // without leaving a declaration-level call edge for reachability to follow.
-    let mut forced_groups = HashSet::new();
+    let mut forced_groups = HashSet::default();
     if prelude_inventory.groups.contains_key("array_merge") {
         forced_groups.insert("array_merge".to_string());
     }
@@ -594,7 +594,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     elephc::codegen::set_linked_extensions(test_linked_extensions(
         &check_result.required_libraries,
     ));
-    let exported_functions = HashMap::new();
+    let exported_functions = HashMap::default();
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
@@ -1104,7 +1104,7 @@ pub(crate) fn compile_and_run_with_heap_debug_tagged(source: &str) -> ProgramOut
     let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_defines_repr(
         source,
         &dir,
-        &HashSet::new(),
+        &HashSet::default(),
         8_388_608,
         false,
         true,
@@ -1324,7 +1324,7 @@ pub(crate) fn compile_and_run_with_php_version(
         compile_source_to_asm_with_defines_repr_and_php_version(
             source,
             &dir,
-            &HashSet::new(),
+            &HashSet::default(),
             8_388_608,
             false,
             false,
@@ -1367,7 +1367,7 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
     let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_defines_repr(
         source,
         &dir,
-        &HashSet::new(),
+        &HashSet::default(),
         8_388_608,
         false,
         false,

@@ -9,7 +9,7 @@
 //! - Unknown consumers and module-dependent stores retain their boxed inputs.
 //! - Legacy scalar null sentinels must not alias an ordinary boxed integer payload.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{Function, Immediate, Instruction, IrType, Op, Terminator, ValueId};
 use crate::types::PhpType;
@@ -23,7 +23,7 @@ pub(super) fn integer_range_can_narrow(lo: i64, hi: i64) -> bool {
 
 /// Collects values with any use that cannot consume the requested scalar representation.
 pub(super) fn blocked_results(function: &Function, scalar: IrType) -> HashSet<ValueId> {
-    let mut blocked = HashSet::new();
+    let mut blocked = HashSet::default();
     for block in &function.blocks {
         if let Some(term) = &block.terminator {
             if matches!(term, Terminator::Return { .. })

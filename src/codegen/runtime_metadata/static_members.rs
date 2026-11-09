@@ -44,7 +44,7 @@ fn owning_static_properties(module: &Module, keep: impl Fn(&str) -> bool) -> Vec
 
 /// Returns class names encoded in static property load/store immediates.
 pub(in crate::codegen) fn referenced_static_property_class_names(module: &Module) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for function in module
         .functions
         .iter()
@@ -129,7 +129,7 @@ pub(in crate::codegen) fn redeclared_late_static_property_classes(
     function: &Function,
     label: &str,
 ) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     let Some(base_class) = current_function_class(function) else {
         return names;
     };
@@ -161,7 +161,7 @@ pub(in crate::codegen) fn redeclared_late_static_property_classes(
 
 /// Returns class names encoded in static-method call immediates.
 pub(in crate::codegen) fn referenced_static_method_class_names(module: &Module) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for function in module
         .functions
         .iter()

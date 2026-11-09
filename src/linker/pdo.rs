@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn selected_cargo_features_are_unique() {
         let features = cargo_features();
-        let unique = features.iter().copied().collect::<std::collections::HashSet<_>>();
+        let unique = features.iter().copied().collect::<crate::fast_hash::FastSet<_>>();
         assert_eq!(features.len(), unique.len());
     }
 }

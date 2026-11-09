@@ -8,7 +8,7 @@
 //! Key details:
 //! - Builtin names are checked with PHP case-insensitive collision rules before insertion.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;

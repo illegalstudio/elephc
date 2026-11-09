@@ -22,7 +22,7 @@
 //! - `ELEPHC_NO_ARM_GROUPS=1` keeps one exact arm per pair, for size and behaviour comparisons.
 
 use super::*;
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 /// One arm of a grouped ladder.
 pub(super) struct ArmGroup {
@@ -67,7 +67,7 @@ pub(super) fn group_arms(
     }
     let graph = ClassGraph::new(ctx);
     let mut property_order: Vec<&str> = Vec::new();
-    let mut by_property: HashMap<&str, Vec<(u64, usize)>> = HashMap::new();
+    let mut by_property: HashMap<&str, Vec<(u64, usize)>> = HashMap::default();
     for (index, (class_id, property, _)) in entries.iter().enumerate() {
         let list = by_property.entry(*property).or_insert_with(|| {
             property_order.push(*property);
@@ -119,8 +119,8 @@ struct ClassGraph {
 impl ClassGraph {
     /// Builds the graph from the module's class table.
     fn new(ctx: &FunctionContext<'_>) -> Self {
-        let mut parents = HashMap::new();
-        let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut parents = HashMap::default();
+        let mut children: HashMap<u64, Vec<u64>> = HashMap::default();
         for info in ctx.module.class_infos.values() {
             let Some(parent_name) = info.parent.as_deref() else {
                 continue;

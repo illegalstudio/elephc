@@ -184,7 +184,7 @@ pub(super) fn eval_native_interface_constant_expr<'a>(
     interface_name: &str,
     constant_name: &str,
 ) -> Option<(&'a str, &'a Expr)> {
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = crate::fast_hash::FastSet::default();
     let mut queue = vec![interface_name.to_string()];
     while let Some(name) = queue.pop() {
         let Some((resolved_name, interface_info)) =

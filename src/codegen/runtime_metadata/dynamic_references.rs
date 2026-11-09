@@ -11,7 +11,7 @@ use super::*;
 
 /// Returns class-name data entries attached to runtime object metadata opcodes.
 pub(in crate::codegen) fn referenced_class_data_names(module: &Module) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for function in module
         .functions
         .iter()
@@ -42,7 +42,7 @@ pub(in crate::codegen) fn referenced_class_data_names(module: &Module) -> HashSe
 
 /// Returns class metadata needed by dynamic object factories.
 pub(in crate::codegen) fn referenced_dynamic_object_new_class_names(module: &Module) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for function in module
         .functions
         .iter()
@@ -246,7 +246,7 @@ pub(in crate::codegen) fn dynamic_object_new_metadata_names<'a>(
 
 /// Returns static class names that can feed `get_class()`/`get_parent_class()` lookups.
 pub(in crate::codegen) fn referenced_class_name_lookup_builtin_names(module: &Module) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for function in module
         .functions
         .iter()
@@ -287,7 +287,7 @@ pub(in crate::codegen) fn is_class_name_lookup_builtin(inst: &crate::ir::Instruc
 
 /// Returns class names passed as literals to stream wrapper/filter registration builtins.
 pub(in crate::codegen) fn referenced_stream_registration_class_names(module: &Module) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for function in module
         .functions
         .iter()
@@ -364,7 +364,7 @@ pub(in crate::codegen) fn const_string_value<'a>(
 
 /// Returns class-like receiver names encoded in scoped constant immediates.
 pub(in crate::codegen) fn referenced_scoped_constant_class_names(module: &Module) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for function in module
         .functions
         .iter()

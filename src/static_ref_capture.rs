@@ -19,7 +19,7 @@
 //! - The hidden name is unique per function or per `Class::method`, so two functions keep two
 //!   statics, as php does.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::visit::{walk_nodes, Node};
 use crate::parser::ast::{ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind};
@@ -159,7 +159,7 @@ fn rewrite_static_stmt(stmt: &mut Stmt, owner: &str, captured: &HashSet<String>)
 
 /// Every variable some closure of `body` (at any depth) captures by reference.
 fn names_captured_by_reference(body: &[Stmt]) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     walk_nodes(body, &mut |node| {
         if let Node::Expr(Expr {
             kind: ExprKind::Closure { capture_refs, .. },

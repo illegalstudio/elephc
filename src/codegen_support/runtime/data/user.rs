@@ -8,7 +8,7 @@
 //! Key details:
 //! - User data is program-specific and must match class ids, static property slots, and generated call sites.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
@@ -117,7 +117,7 @@ pub(crate) fn emit_runtime_data_user(
         ));
     }
 
-    let mut static_property_symbols = HashSet::new();
+    let mut static_property_symbols = HashSet::default();
     for (class_name, class_info) in classes {
         if allowed_class_names.is_some_and(|allowed| !allowed.contains(class_name)) {
             continue;
@@ -1931,7 +1931,7 @@ fn dedup_class_string_data(asm: String) -> String {
     // line. The naive loop is quadratic in the module's symbol count, and a program that pulls
     // the full builtin prelude (every `eval`-using program ships it) interns THOUSANDS of class
     // blobs across tens of thousands of lines — minutes of compile time for one program.
-    let alias_map: std::collections::HashMap<&str, &str> =
+    let alias_map: crate::fast_hash::FastMap<&str, &str> =
         alias.iter().map(|(dropped, survivor)| (*dropped, *survivor)).collect();
     let mut out = String::with_capacity(asm.len());
     let mut index = 0;
@@ -1962,7 +1962,7 @@ fn dedup_class_string_data(asm: String) -> String {
 /// A token is a maximal run of symbol bytes (ASCII alphanumerics and underscore), the same
 /// boundary rule the dedup has always applied; a token that merely CONTAINS an alias key never
 /// matches it. The caller keeps this off `.ascii` payload lines.
-fn rewrite_symbols_via_map(line: &str, alias_map: &std::collections::HashMap<&str, &str>) -> String {
+fn rewrite_symbols_via_map(line: &str, alias_map: &crate::fast_hash::FastMap<&str, &str>) -> String {
     let is_symbol_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     let bytes = line.as_bytes();
     let mut out = String::with_capacity(line.len());
@@ -2479,7 +2479,7 @@ fn eval_reflection_constructor_owner<'a>(
     class_name: &'a str,
 ) -> Option<(&'a str, &'a ClassInfo)> {
     let mut current = Some(class_name);
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     while let Some(name) = current {
         if !seen.insert(name) {
             return None;
@@ -4913,7 +4913,7 @@ fn serprop_type_name(prop_ty: &PhpType) -> String {
                 }
             }
             // Deduplicate by rendered name, keeping the first occurrence.
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = crate::fast_hash::FastSet::default();
             ranked.retain(|(_, name)| seen.insert(name.clone()));
             // PHP canonicalizes union member order regardless of declaration order.
             ranked.sort_by_key(|(rank, _)| *rank);
@@ -5263,7 +5263,7 @@ mod boxed_result_mask_tests {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
@@ -5356,9 +5356,9 @@ mod tests {
         let classes = crate::fast_hash::FastMap::from_iter([("StaticMetadata".to_string(), info)]);
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let asm = emit_runtime_data_user(
-                &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
-                &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
-                &HashMap::new(), &classes, &HashMap::new(), &HashSet::new(), None, true, None,
+                &HashSet::default(), &HashMap::default(), &HashMap::default(), &HashSet::default(),
+                &HashMap::default(), &[], &[], &HashMap::default(), &HashMap::default(),
+                &HashMap::default(), &classes, &HashMap::default(), &HashSet::default(), None, true, None,
                 Target::parse(name).expect("supported target"),
             )
             .unwrap();
@@ -5398,9 +5398,9 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).expect("supported target");
             let asm = emit_runtime_data_user(
-                &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
-                &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
-                &HashMap::new(), &classes, &HashMap::new(), &HashSet::new(), None, true, None, target,
+                &HashSet::default(), &HashMap::default(), &HashMap::default(), &HashSet::default(),
+                &HashMap::default(), &[], &[], &HashMap::default(), &HashMap::default(),
+                &HashMap::default(), &classes, &HashMap::default(), &HashSet::default(), None, true, None, target,
             )
             .unwrap();
             let properties = asm.split("_eval_reflection_properties:\n").nth(1).unwrap();
@@ -5421,11 +5421,11 @@ mod tests {
     fn property_initializer_table_uses_emitted_symbols_on_all_targets() {
         let classes = crate::fast_hash::FastMap::from_iter([("TypedOnly".to_string(), empty_class_info(1, "run"))]);
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            for emitted in [HashSet::new(), HashSet::from([1])] {
+            for emitted in [HashSet::default(), HashSet::from_iter([1])] {
                 let asm = emit_runtime_data_user(
-                    &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
-                    &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
-                    &HashMap::new(), &classes, &HashMap::new(), &emitted, None, false, None, Target::parse(name).unwrap(),
+                    &HashSet::default(), &HashMap::default(), &HashMap::default(), &HashSet::default(),
+                    &HashMap::default(), &[], &[], &HashMap::default(), &HashMap::default(),
+                    &HashMap::default(), &classes, &HashMap::default(), &emitted, None, false, None, Target::parse(name).unwrap(),
                 )
                 .unwrap();
                 let expected = if emitted.is_empty() { ".quad 0" } else { ".quad _class_propinit_1" };
@@ -5440,7 +5440,7 @@ mod tests {
         let mut method_impl_classes = crate::fast_hash::FastMap::default();
         method_impl_classes.insert(method_name.to_string(), "Exception".to_string());
 
-        let mut vtable_slots = HashMap::new();
+        let mut vtable_slots = HashMap::default();
         vtable_slots.insert(method_name.to_string(), 0);
 
         ClassInfo {
@@ -5456,73 +5456,73 @@ mod tests {
             eval_property_storage: false,
             clone_override_property_storage: false,
             scope_dynamic_property_storage: false,
-            constants: HashMap::new(),
+            constants: HashMap::default(),
             constant_order: Vec::new(),
-    constant_deprecations: HashMap::new(),
-    constant_types: HashMap::new(),
-    constant_visibilities: HashMap::new(),
-    final_constants: HashSet::new(),
+    constant_deprecations: HashMap::default(),
+    constant_types: HashMap::default(),
+    constant_visibilities: HashMap::default(),
+    final_constants: HashSet::default(),
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
-            method_attribute_names: HashMap::new(),
-            method_attribute_args: HashMap::new(),
-            property_attribute_names: HashMap::new(),
-            property_attribute_args: HashMap::new(),
-            constant_attribute_names: HashMap::new(),
-            constant_attribute_args: HashMap::new(),
+            method_attribute_names: HashMap::default(),
+            method_attribute_args: HashMap::default(),
+            property_attribute_names: HashMap::default(),
+            property_attribute_args: HashMap::default(),
+            constant_attribute_names: HashMap::default(),
+            constant_attribute_args: HashMap::default(),
             used_traits: Vec::new(),
             trait_aliases: Vec::new(),
             properties: Vec::new(),
-            property_offsets: HashMap::new(),
-            property_declaring_classes: HashMap::new(),
+            property_offsets: HashMap::default(),
+            property_declaring_classes: HashMap::default(),
             defaults: Vec::new(),
             deferred_property_default_error: None,
-            property_visibilities: HashMap::new(),
-            property_set_visibilities: HashMap::new(),
-            declared_properties: HashSet::new(),
+            property_visibilities: HashMap::default(),
+            property_set_visibilities: HashMap::default(),
+            declared_properties: HashSet::default(),
             property_declared_slots: Vec::new(),
-            final_properties: HashSet::new(),
-            readonly_properties: HashSet::new(),
-            lazily_unset_properties: HashSet::new(),
-            backed_hooked_properties: HashSet::new(),
-            reference_properties: HashSet::new(),
-            owned_reference_properties: HashSet::new(),
-            promoted_properties: HashSet::new(),
+            final_properties: HashSet::default(),
+            readonly_properties: HashSet::default(),
+            lazily_unset_properties: HashSet::default(),
+            backed_hooked_properties: HashSet::default(),
+            reference_properties: HashSet::default(),
+            owned_reference_properties: HashSet::default(),
+            promoted_properties: HashSet::default(),
             property_reference_slots: Vec::new(),
             property_slot_declaring_classes: Vec::new(),
             property_owned_reference_slots: Vec::new(),
-            abstract_properties: HashSet::new(),
-            abstract_property_hooks: HashMap::new(),
+            abstract_properties: HashSet::default(),
+            abstract_property_hooks: HashMap::default(),
             reflection_properties: Vec::new(),
             reflection_methods: Vec::new(),
-            property_hooks: HashMap::new(),
+            property_hooks: HashMap::default(),
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
-            static_property_declaring_classes: HashMap::new(),
-            static_property_visibilities: HashMap::new(),
-            declared_static_properties: HashSet::new(),
-            final_static_properties: HashSet::new(),
+            static_property_declaring_classes: HashMap::default(),
+            static_property_visibilities: HashMap::default(),
+            declared_static_properties: HashSet::default(),
+            final_static_properties: HashSet::default(),
             method_decls: Vec::new(),
             methods: crate::fast_hash::FastMap::default(),
             static_methods: crate::fast_hash::FastMap::default(),
-            late_static_method_returns: HashMap::new(),
-            late_static_static_method_returns: HashMap::new(),
-            callable_method_return_sigs: HashMap::new(),
-            callable_array_method_return_sigs: HashMap::new(),
+            late_static_method_returns: HashMap::default(),
+            late_static_static_method_returns: HashMap::default(),
+            callable_method_return_sigs: HashMap::default(),
+            callable_array_method_return_sigs: HashMap::default(),
             method_visibilities: crate::fast_hash::FastMap::default(),
-            final_methods: HashSet::new(),
+            final_methods: HashSet::default(),
             method_declaring_classes: crate::fast_hash::FastMap::default(),
             method_impl_classes,
-            abstract_methods: HashSet::new(),
+            abstract_methods: HashSet::default(),
             vtable_methods: vec![method_name.to_string()],
             vtable_slots,
             static_method_visibilities: crate::fast_hash::FastMap::default(),
-            final_static_methods: HashSet::new(),
+            final_static_methods: HashSet::default(),
             static_method_declaring_classes: crate::fast_hash::FastMap::default(),
             static_method_impl_classes: crate::fast_hash::FastMap::default(),
-            abstract_static_methods: HashSet::new(),
+            abstract_static_methods: HashSet::default(),
             static_vtable_methods: Vec::new(),
-            static_vtable_slots: HashMap::new(),
+            static_vtable_slots: HashMap::default(),
             declared_interfaces: Vec::new(),
             interfaces: Vec::new(),
             constructor_param_to_prop: Vec::new(),
@@ -5542,23 +5542,23 @@ mod tests {
             empty_class_info(1, "run"),
         );
 
-        let mut allowed_class_names = HashSet::new();
+        let mut allowed_class_names = HashSet::default();
         allowed_class_names.insert("UserVisible".to_string());
 
         let asm = emit_runtime_data_user(
-            &HashSet::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
+            &HashSet::default(),
+            &HashMap::default(),
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashMap::default(),
             &[],
             &[],
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
+            &HashMap::default(),
+            &HashMap::default(),
+            &HashMap::default(),
             &classes,
-            &HashMap::new(),
-            &HashSet::new(),
+            &HashMap::default(),
+            &HashSet::default(),
             Some(&allowed_class_names),
             false,
             None,
@@ -5587,19 +5587,19 @@ mod tests {
         classes.insert("Cat".to_string(), empty_class_info(3, "label"));
 
         let asm = emit_runtime_data_user(
-            &HashSet::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
+            &HashSet::default(),
+            &HashMap::default(),
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashMap::default(),
             &[],
             &[],
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
+            &HashMap::default(),
+            &HashMap::default(),
+            &HashMap::default(),
             &classes,
-            &HashMap::new(),
-            &HashSet::new(),
+            &HashMap::default(),
+            &HashSet::default(),
             None,
             false,
             None,
@@ -5629,19 +5629,19 @@ mod tests {
         classes.insert("CallableOwner".to_string(), class_info);
 
         let asm = emit_runtime_data_user(
-            &HashSet::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
+            &HashSet::default(),
+            &HashMap::default(),
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashMap::default(),
             &[],
             &[],
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
+            &HashMap::default(),
+            &HashMap::default(),
+            &HashMap::default(),
             &classes,
-            &HashMap::new(),
-            &HashSet::new(),
+            &HashMap::default(),
+            &HashSet::default(),
             None,
             false,
             None,
@@ -5658,7 +5658,7 @@ mod tests {
         let class_name = "ReflectionSourceTarget".to_string();
         let class_info = empty_class_info(1, "run");
         let sorted_classes = [(&class_name, &class_info)];
-        let source_files = HashMap::from([(
+        let source_files = HashMap::from_iter([(
             "reflectionsourcetarget".to_string(),
             "/project/src/ReflectionSourceTarget.php".to_string(),
         )]);
@@ -5668,7 +5668,7 @@ mod tests {
             &mut asm,
             &sorted_classes,
             &[],
-            &HashMap::new(),
+            &HashMap::default(),
             &source_files,
         );
 
@@ -5707,19 +5707,19 @@ mod tests {
         ]);
 
         let asm = emit_runtime_data_user(
-            &HashSet::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
+            &HashSet::default(),
+            &HashMap::default(),
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashMap::default(),
             &[],
             &[],
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
+            &HashMap::default(),
+            &HashMap::default(),
+            &HashMap::default(),
             &classes,
-            &HashMap::new(),
-            &HashSet::new(),
+            &HashMap::default(),
+            &HashSet::default(),
             None,
             false,
             None,
@@ -5811,7 +5811,7 @@ _class_vd_pkey_1_0:
     /// A rewrite touches only the exact symbol token, never a longer symbol that contains it.
     #[test]
     fn replace_symbol_respects_boundaries() {
-        let mut map = std::collections::HashMap::new();
+        let mut map = crate::fast_hash::FastMap::default();
         map.insert("_a_1_0", "SURVIVOR");
         assert_eq!(
             rewrite_symbols_via_map("_a_1_0 _a_1_00", &map),

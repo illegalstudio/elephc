@@ -9,7 +9,7 @@
 //! - Recording happens only when a prelude is actually injected.
 //! - Names are canonicalized with PHP case-insensitive keys and namespace context.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::names::{canonical_name_for_decl, php_symbol_key};
 use crate::parser::ast::{Stmt, StmtKind};

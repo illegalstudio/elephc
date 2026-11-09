@@ -193,13 +193,13 @@ pub(crate) struct LiteralAssocEntry {
 /// reports the normal unsupported-default diagnostic.
 pub(crate) fn resolve_literal_default_global_constants(
     expr: &ExprKind,
-    global_constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    global_constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
 ) -> ExprKind {
     /// Recursively resolves constant references inside one literal expression.
     fn resolve(
         expr: &ExprKind,
-        global_constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-        visiting: &mut std::collections::HashSet<String>,
+        global_constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+        visiting: &mut crate::fast_hash::FastSet<String>,
     ) -> ExprKind {
         match expr {
             ExprKind::ConstRef(name) => {
@@ -260,8 +260,8 @@ pub(crate) fn resolve_literal_default_global_constants(
     fn resolve_name(
         name: &str,
         original: &ExprKind,
-        global_constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-        visiting: &mut std::collections::HashSet<String>,
+        global_constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+        visiting: &mut crate::fast_hash::FastSet<String>,
     ) -> ExprKind {
         let key = name.trim_start_matches('\\');
         let Some((resolved, _)) = global_constants
@@ -278,7 +278,7 @@ pub(crate) fn resolve_literal_default_global_constants(
         result
     }
 
-    resolve(expr, global_constants, &mut std::collections::HashSet::new())
+    resolve(expr, global_constants, &mut crate::fast_hash::FastSet::default())
 }
 
 /// Converts a supported default expression into a direct storage value.
@@ -1488,7 +1488,7 @@ fn fold_array_union_literal(expr: &ExprKind) -> Option<ExprKind> {
     };
     let left = literal_array_entries(&left.kind)?;
     let right = literal_array_entries(&right.kind)?;
-    let mut seen: std::collections::HashSet<LiteralArrayKey> =
+    let mut seen: crate::fast_hash::FastSet<LiteralArrayKey> =
         left.iter().map(|(key, _)| key.clone()).collect();
     let mut entries = Vec::with_capacity(left.len() + right.len());
     entries.extend(left);

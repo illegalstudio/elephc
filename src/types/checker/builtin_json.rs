@@ -8,7 +8,7 @@
 //! Key details:
 //! - The interface must be registered before user classes are flattened so `implements JsonSerializable` validates like PHP.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;

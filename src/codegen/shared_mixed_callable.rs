@@ -45,9 +45,9 @@ pub(crate) struct MixedCallableSharing {
     /// The module-wide helper per strictness profile; `None` until decided.
     global: [Option<bool>; 2],
     /// Class names (no leading backslash) whose scope reaches a non-public method.
-    sensitive: std::collections::HashSet<String>,
+    sensitive: crate::fast_hash::FastSet<String>,
     /// `(strict, class id)` of every scope-specific helper that was emitted.
-    scoped: std::collections::HashSet<(bool, u64)>,
+    scoped: crate::fast_hash::FastSet<(bool, u64)>,
 }
 
 /// Returns the lexical scope of one instruction, honoring spliced method bodies.
@@ -73,8 +73,8 @@ fn class_lineage<'a>(module: &'a Module, name: &'a str) -> impl Iterator<Item = 
 /// declare one, their ancestors (a parent reaches a protected method its descendant declares) and
 /// their descendants (a class that made an inherited method public still reaches its siblings'
 /// protected copy, through the prototype they share).
-fn scope_sensitive_classes(module: &Module) -> std::collections::HashSet<String> {
-    let mut declaring = std::collections::HashSet::new();
+fn scope_sensitive_classes(module: &Module) -> crate::fast_hash::FastSet<String> {
+    let mut declaring = crate::fast_hash::FastSet::default();
     for (name, info) in &module.class_infos {
         let non_public = info
             .method_visibilities
@@ -85,7 +85,7 @@ fn scope_sensitive_classes(module: &Module) -> std::collections::HashSet<String>
             declaring.insert(name.trim_start_matches('\\'));
         }
     }
-    let mut sensitive = std::collections::HashSet::new();
+    let mut sensitive = crate::fast_hash::FastSet::default();
     for name in module.class_infos.keys() {
         if class_lineage(module, name).any(|class| declaring.contains(class)) {
             sensitive.insert(name.trim_start_matches('\\').to_string());
@@ -183,9 +183,9 @@ pub(super) fn emit_shared_mixed_callable_helpers(
 /// class is the module-wide helper's bucket.
 fn mixed_callable_site_counts(
     module: &Module,
-    sensitive: &std::collections::HashSet<String>,
-) -> std::collections::HashMap<(bool, Option<String>), usize> {
-    let mut counts = std::collections::HashMap::new();
+    sensitive: &crate::fast_hash::FastSet<String>,
+) -> crate::fast_hash::FastMap<(bool, Option<String>), usize> {
+    let mut counts = crate::fast_hash::FastMap::default();
     for function in module_functions(module).filter(|function| !function_has_eval_context(function))
     {
         let reachability = CallableReachabilityAnalysis::new(module, function);

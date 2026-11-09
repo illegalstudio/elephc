@@ -12,7 +12,7 @@
 //! before, and disagreeing about `$this` is what made the second read of a property fail where
 //! the first had succeeded.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::fast_hash::FastMap;
 use crate::types::schema::{ClassInfo, InterfaceInfo};

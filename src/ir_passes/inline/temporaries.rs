@@ -8,7 +8,7 @@
 //! - A slot's complete lifetime must be within one block and one balanced owner-stack scope.
 //! - Stores preceding publication and clears following unpublication must be adjacent.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op};
 

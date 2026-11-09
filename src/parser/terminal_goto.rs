@@ -11,7 +11,7 @@
 //!   (a cloned tail). Jumps into loops or across function scopes remain errors, as in PHP.
 //! - Parser-only markers use NUL-prefixed strings, which cannot collide with PHP source strings.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
@@ -69,7 +69,7 @@ pub(super) fn parse_label(
 pub(super) fn desugar_scope(statements: &mut Vec<Stmt>) -> Result<(), CompileError> {
     desugar_restart_loops(statements);
     desugar_forward_segments(statements);
-    let mut labels = HashMap::new();
+    let mut labels = HashMap::default();
     collect_labels(statements, &[], &mut labels)?;
     rewrite_gotos(statements, &labels)
 }
@@ -170,7 +170,7 @@ fn desugar_forward_segments(statements: &mut Vec<Stmt>) {
     for statement in statements.iter_mut() {
         for_each_nested_body(statement, &mut desugar_forward_segments);
     }
-    let mut targets: HashMap<String, usize> = HashMap::new();
+    let mut targets: HashMap<String, usize> = HashMap::default();
     let mut cut_points: Vec<usize> = Vec::new();
     for (index, statement) in statements.iter().enumerate() {
         let Some(name) = marker_name(statement, LABEL_MARKER_PREFIX) else {

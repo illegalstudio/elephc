@@ -8,7 +8,7 @@
 //! Key details:
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, Visibility};
@@ -134,7 +134,7 @@ impl ClassBuildState {
 
     /// The class's own methods in declaration order, then what it inherits and does not redeclare.
     fn reflection_methods(&self, class: &FlattenedClass) -> Vec<String> {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         class
             .methods
             .iter()
@@ -147,7 +147,7 @@ impl ClassBuildState {
 
     /// The class's own declarations in source order, then what it inherits and does not redeclare.
     fn reflection_properties(&self, class: &FlattenedClass) -> Vec<String> {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         class
             .properties
             .iter()
@@ -276,10 +276,10 @@ impl ClassBuildState {
             property_declared_slots: self.property_declared_slots,
             final_properties: self.final_properties,
             readonly_properties: self.readonly_properties,
-            lazily_unset_properties: HashSet::new(),
+            lazily_unset_properties: HashSet::default(),
             backed_hooked_properties: self.backed_hooked_properties,
             reference_properties: self.reference_properties,
-            owned_reference_properties: HashSet::new(),
+            owned_reference_properties: HashSet::default(),
             promoted_properties: self.promoted_properties,
             property_reference_slots: self.property_reference_slots,
             property_slot_declaring_classes: self.property_slot_declaring_classes,
@@ -300,8 +300,8 @@ impl ClassBuildState {
             static_methods: self.static_sigs,
             late_static_method_returns: self.late_static_method_returns,
             late_static_static_method_returns: self.late_static_static_method_returns,
-            callable_method_return_sigs: HashMap::new(),
-            callable_array_method_return_sigs: HashMap::new(),
+            callable_method_return_sigs: HashMap::default(),
+            callable_array_method_return_sigs: HashMap::default(),
             method_visibilities: self.method_visibilities,
             final_methods: self.final_methods,
             method_declaring_classes: self.method_declaring_classes,

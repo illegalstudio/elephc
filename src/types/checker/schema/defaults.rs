@@ -125,7 +125,7 @@ fn validate_direct_class_name_defaults(program: &Program, errors: &mut Vec<Compi
 /// Rewrites relative receivers in stored method defaults to their declaration scope.
 /// Defaults are lowered at call sites, whose active class can differ from the declaring class.
 fn normalize_method_default_receivers(checker: &mut Checker) {
-    let class_parents: std::collections::HashMap<String, Option<String>> = checker
+    let class_parents: crate::fast_hash::FastMap<String, Option<String>> = checker
         .classes
         .iter()
         .map(|(name, info)| (name.clone(), info.parent.clone()))

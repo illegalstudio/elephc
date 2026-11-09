@@ -18,7 +18,7 @@
 //! - A merged arm is rolled back and replaced by one jump to the canonical arm. Its class still
 //!   keeps its own entry in the dispatch, which jumps to the arm's label as before.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -52,7 +52,7 @@ fn is_symbol_byte(byte: u8) -> bool {
 
 /// The arm text with every label it defines replaced by `@<n>`, numbered by first definition.
 pub(in crate::codegen) fn normalized_arm_text(text: &str) -> String {
-    let mut defined: HashMap<&str, usize> = HashMap::new();
+    let mut defined: HashMap<&str, usize> = HashMap::default();
     for line in text.lines() {
         if let Some(name) = line.strip_suffix(':') {
             if !name.is_empty() && name.bytes().all(is_symbol_byte) {

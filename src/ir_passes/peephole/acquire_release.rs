@@ -19,7 +19,7 @@
 //!   because something between the two ops may release the value's other owner
 //!   (issue #580).
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{Function, InstId, Op, ValueId};
 
@@ -64,7 +64,7 @@ pub(super) fn collect(function: &Function, rewrites: &mut Rewrites) {
 /// A value released more than once keeps the first mapping; the single-use guard
 /// in `collect` means only single-release values are ever cancelled anyway.
 fn release_targets(function: &Function) -> HashMap<ValueId, InstId> {
-    let mut targets = HashMap::new();
+    let mut targets = HashMap::default();
     for (index, inst) in function.instructions.iter().enumerate() {
         if inst.op != Op::Release {
             continue;

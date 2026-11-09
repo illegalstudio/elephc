@@ -9,7 +9,7 @@
 //! - Wrapper ABI order must match both interface slots and concrete method codegen signatures.
 //! - One wrapper performs both adaptations when a route needs both.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::codegen_support::emit::Emitter;
 use crate::names::{interface_method_wrapper_symbol, method_symbol};

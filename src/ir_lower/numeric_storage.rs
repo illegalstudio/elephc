@@ -10,7 +10,7 @@
 //! - A counter whose checked seed (`$j = $i + 1`) was proven integer replays with that seed
 //!   recorded as `int` (`LoweringContext::int_seed_bindings`), like an ordinary `$j = 0` seed.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{BlockId, Function, Immediate, InstId, IrType, LocalKind, LocalSlotId,
     MixedNumericOp, Op, RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId};
@@ -27,7 +27,7 @@ fn loop_carried(ctx: &LoweringContext<'_, '_>) -> HashMap<String, HashSet<usize>
         Op::TryPushHandler | Op::CatchBind | Op::FinallyEnter));
     // Only a checked operation can carry a float around a backedge, and most bodies have none.
     if !function.instructions.iter().any(|inst| is_numeric_carrier(inst.op)) {
-        return HashMap::new();
+        return HashMap::default();
     }
     let cyclic_blocks = if exceptional {
         function.blocks.iter().map(|block| block.id).collect()
@@ -37,7 +37,7 @@ fn loop_carried(ctx: &LoweringContext<'_, '_>) -> HashMap<String, HashSet<usize>
             .map(|index| function.blocks[index].id)
             .collect::<HashSet<_>>()
     };
-    let mut local_writers: HashMap<LocalSlotId, Vec<ValueId>> = HashMap::new();
+    let mut local_writers: HashMap<LocalSlotId, Vec<ValueId>> = HashMap::default();
     for inst in &function.instructions {
         if inst.op == Op::StoreLocal {
             if let (Some(Immediate::LocalSlot(slot)), Some(&source)) = (&inst.immediate, inst.operands.first()) {
@@ -45,7 +45,7 @@ fn loop_carried(ctx: &LoweringContext<'_, '_>) -> HashMap<String, HashSet<usize>
             }
         }
     }
-    let mut writers = HashSet::new();
+    let mut writers = HashSet::default();
     for block in &function.blocks {
         if !cyclic_blocks.contains(&block.id) { continue; }
         for &id in &block.instructions {
@@ -57,8 +57,8 @@ fn loop_carried(ctx: &LoweringContext<'_, '_>) -> HashMap<String, HashSet<usize>
             }
         }
     }
-    if writers.is_empty() { return HashMap::new(); }
-    let mut narrow = HashSet::new();
+    if writers.is_empty() { return HashMap::default(); }
+    let mut narrow = HashSet::default();
     for block in &function.blocks {
         let loads: Vec<_> = block.instructions.iter().filter_map(|id| {
             let inst = &function.instructions[id.as_raw() as usize];
@@ -73,7 +73,7 @@ fn loop_carried(ctx: &LoweringContext<'_, '_>) -> HashMap<String, HashSet<usize>
         }
         narrow.extend(loads);
     }
-    let mut bindings: HashMap<String, HashSet<usize>> = HashMap::new();
+    let mut bindings: HashMap<String, HashSet<usize>> = HashMap::default();
     for local in &function.locals {
         if !narrow.contains(&local.id) || local.kind != LocalKind::PhpLocal
             || local.php_type.codegen_repr() != PhpType::Mixed
@@ -89,7 +89,7 @@ fn loop_carried(ctx: &LoweringContext<'_, '_>) -> HashMap<String, HashSet<usize>
 /// Follows assignment ownership wrappers to arithmetic that can promote to a PHP float.
 fn numeric_writer(function: &Function, writers: &HashMap<LocalSlotId, Vec<ValueId>>, value: ValueId) -> bool {
     let mut pending = vec![value];
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some(value) = pending.pop() {
         if !seen.insert(value) { continue; }
         let Some(ValueDef::Instruction { inst, .. }) = function.value(value).map(|value| value.def) else {
@@ -262,7 +262,7 @@ pub(crate) fn lower_body(
         return;
     }
     let mut final_force = if suppress { scalar_force } else { force };
-    let mut int_seeds: HashMap<String, HashSet<usize>> = HashMap::new();
+    let mut int_seeds: HashMap<String, HashSet<usize>> = HashMap::default();
     ctx.restore(checkpoint.clone());
     replay(ctx, body, &sites, suppress, &final_force, &int_seeds);
     // Every trial sees all not-yet-proven recurrences widened. A promoted float bound

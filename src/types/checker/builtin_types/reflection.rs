@@ -10,7 +10,7 @@
 //! - Property and method bodies are dummies, private-slot accessors, or small
 //!   fallbacks; runtime population is handled by codegen-only reflection constructors.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;

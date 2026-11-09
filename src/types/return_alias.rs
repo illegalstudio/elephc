@@ -16,7 +16,8 @@
 //!   `Str` slot. Every other cast COPIES, including one over a local that merely holds a
 //!   `string` parameter's value -- locals are boxed Mixed (issue #700).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
@@ -133,11 +134,11 @@ impl<'a> AliasState<'a> {
     ) -> Self {
         Self {
             callees: CalleeRef::default(),
-            locals: HashMap::new(),
+            locals: HashMap::default(),
             string_parameters,
             string_parameter_indices,
             str_slot_locals: string_parameters.iter().cloned().collect(),
-            string_valued_locals: HashSet::new(),
+            string_valued_locals: HashSet::default(),
             boxes_returned_strings: false,
         }
     }
@@ -273,7 +274,7 @@ impl ReturnAliasSummaries {
 pub(crate) fn collect_return_alias_summaries(program: &Program) -> ReturnAliasSummaries {
     let mut conservative = ReturnAliasSummaries::default();
     collect_declaration_summaries(program, &mut conservative, None);
-    let mut externs = HashSet::new();
+    let mut externs = HashSet::default();
     collect_extern_names(program, &mut externs);
     let mut summaries = ReturnAliasSummaries {
         functions: conservative.functions.keys().map(|name| (name.clone(), ReturnArgAlias::None)).collect(),

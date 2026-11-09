@@ -12,7 +12,7 @@
 //! - Lookup is case-insensitive to match PHP's builtin name semantics.
 //! - Duplicate builtin names panic at registry initialization time (link-time guard).
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::sync::OnceLock;
 
 use crate::builtins::convert::{default_spec_to_expr, type_spec_to_php};
@@ -65,7 +65,7 @@ static RUNTIME_BUILTIN_REGISTRY: OnceLock<HashMap<RuntimeBuiltinId, &'static str
 /// Panics immediately if two specs register the same name (case-insensitive comparison),
 /// so duplicate registrations are caught at program startup.
 fn build_registry() -> HashMap<String, BuiltinDef> {
-    let mut map: HashMap<String, BuiltinDef> = HashMap::new();
+    let mut map: HashMap<String, BuiltinDef> = HashMap::default();
     for spec in inventory::iter::<BuiltinSpec> {
         let key = spec.name.to_ascii_lowercase();
         if map.contains_key(&key) {
@@ -194,7 +194,7 @@ pub fn eval_runtime_builtin_ids() -> impl Iterator<Item = RuntimeBuiltinId> {
 /// Builds the typed runtime-to-AOT join from shared contract identities.
 fn runtime_builtin_registry() -> &'static HashMap<RuntimeBuiltinId, &'static str> {
     RUNTIME_BUILTIN_REGISTRY.get_or_init(|| {
-        let mut by_runtime_id = HashMap::with_capacity(RuntimeBuiltinId::ALL.len());
+        let mut by_runtime_id = HashMap::with_capacity_and_hasher(RuntimeBuiltinId::ALL.len(), Default::default());
         for def in registry().values() {
             let Some(runtime_id) = def.spec.runtime_builtin_id() else {
                 continue;

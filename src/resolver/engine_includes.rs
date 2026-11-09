@@ -8,7 +8,7 @@
 //! Key details:
 //! - Include paths are folded in the caller's constant state and file base directory.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -106,7 +106,7 @@ pub(super) fn resolve_include_stmt(
     let saved_namespace = state.namespace.clone();
     let saved_imports = state.const_imports.clone();
     state.namespace = None;
-    state.const_imports = HashMap::new();
+    state.const_imports = HashMap::default();
     let resolved_stmts = resolve_stmts(
         included_stmts,
         included_dir,

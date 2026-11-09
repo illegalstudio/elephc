@@ -8,7 +8,7 @@
 //! - Generated locals are filtered by the same capture predicate as ordinary expressions.
 //! - Array writes read their receiver and therefore capture it even without an explicit read node.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use crate::parser::ast::{Stmt, StmtKind};
 use super::prefix_complex::{collect_arrow_expr_captures, push_arrow_capture};
 

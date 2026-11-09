@@ -30,7 +30,7 @@ use crate::types::{
     checker::infer_expr_type_syntactic, merge_array_key_types, normalized_array_key_type,
     ExternFunctionSig, FunctionSig, PhpType, ReturnArgAlias, ThrowAccessKind,
 };
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 mod constants;
 mod array_merge_values;

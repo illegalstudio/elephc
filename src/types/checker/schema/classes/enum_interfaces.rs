@@ -9,7 +9,7 @@
 //! - Parameter contravariance and by-reference returns remain PHP contracts.
 //! - Builtin enum factory metadata is checked separately from source-declared contracts.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::types::traits::FlattenedClass;
@@ -26,7 +26,7 @@ pub(crate) fn expand_enum_interfaces(
     let implicit = state.interfaces.clone();
     // Direct names are already registered, but marking them seen would skip their parents.
     state.interfaces.clear();
-    interfaces::collect_interfaces(&mut state, enum_unit, &HashMap::new(), checker)?;
+    interfaces::collect_interfaces(&mut state, enum_unit, &HashMap::default(), checker)?;
     for name in implicit {
         if !state.interfaces.contains(&name) { state.interfaces.push(name); }
     }
@@ -53,9 +53,9 @@ pub(crate) fn validate_enum_interface_contracts(
     state.static_method_impl_classes = info.static_method_impl_classes.clone();
     state.late_static_method_returns = info.late_static_method_returns.clone();
     state.late_static_static_method_returns = info.late_static_static_method_returns.clone();
-    let class_map = HashMap::new();
+    let class_map = HashMap::default();
     let mut next_fn_id = 0;
-    let mut building = HashSet::new();
+    let mut building = HashSet::default();
     interfaces::validate_interface_contracts(
         &mut state, enum_unit, &class_map, checker, &mut next_fn_id, &mut building,
     )?;

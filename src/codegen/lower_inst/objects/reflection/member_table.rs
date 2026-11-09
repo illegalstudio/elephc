@@ -16,7 +16,7 @@
 //!   the row as a code address, [`reflection_table::member::EXTRAS`], emitted only for the
 //!   members that need it.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use super::class_table::{array_node, encode_constant, encode_default, node, pool};
 use super::*;
@@ -516,7 +516,7 @@ pub(super) fn collect_function_members(
     // A function of an included file is compiled under a generated symbol. Its row answers to the
     // public name, which only the dispatch groups record: `new ReflectionFunction($name)` found
     // nothing for `twig_get_form_parent()`, and `debug:twig` stopped there.
-    let public_names: std::collections::HashMap<String, String> =
+    let public_names: crate::fast_hash::FastMap<String, String> =
         crate::ir::function_variants::collect_dispatch_groups(module)
             .into_iter()
             .flat_map(|group| {

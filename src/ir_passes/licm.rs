@@ -43,7 +43,7 @@
 //!   dominance/loop reasoning over that graph cannot justify hoisting (the same
 //!   restriction CSE and branch simplification use).
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{BlockId, DataPool, Function, Immediate, InstId, Op, Ownership, ValueDef, ValueId};
 
@@ -121,7 +121,7 @@ fn find_hoistable(
         let dominates_latches = loop_ref.latches.iter().all(|&latch| dominance.dominates(block, latch));
         (block, dominates_latches)
     }).collect();
-    let mut hoistable: HashSet<InstId> = HashSet::new();
+    let mut hoistable: HashSet<InstId> = HashSet::default();
     let mut ordered = Vec::new();
     loop {
         let mut added = false;
@@ -142,7 +142,7 @@ fn find_hoistable(
                 if is_rematerializable_dependency(inst) && !dominates_latches {
                     continue;
                 }
-                let mut materializations = HashSet::new();
+                let mut materializations = HashSet::default();
                 let ready = inst.operands.iter().all(|&op| {
                     operand_available(
                         function,
@@ -269,7 +269,7 @@ fn move_instruction(
 /// Builds the map from each value to the block that currently defines it (block
 /// parameters and instruction results).
 fn build_def_block(function: &Function) -> HashMap<ValueId, BlockId> {
-    let mut map: HashMap<ValueId, BlockId> = HashMap::new();
+    let mut map: HashMap<ValueId, BlockId> = HashMap::default();
     for block in &function.blocks {
         for &param in &block.params {
             map.insert(param, block.id);

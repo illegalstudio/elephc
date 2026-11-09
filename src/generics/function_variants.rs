@@ -8,7 +8,7 @@
 //! - Each concrete public function gets its own dispatcher and activation marks.
 //! - Marks stay at their original runtime positions, including inside deferred includes.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::generics::{instantiated_name, Bindings};
 use crate::magic_constants::walker::{walk_program, Pass};
@@ -24,7 +24,7 @@ pub(super) fn specialize(program: Program, check_result: &mut CheckResult) -> Pr
         }
         _ => None,
     }).collect();
-    let mut groups = HashMap::new();
+    let mut groups = HashMap::default();
     for stmt in &program {
         let StmtKind::FunctionVariantGroup { name, variants } = &stmt.kind else { continue };
         if !variants.iter().any(|variant| templates.contains(variant.as_str())) { continue; }

@@ -17,7 +17,7 @@
 //!   `defining_instruction`) live here so the identity-arith and peephole passes
 //!   share one dominance-safe RAUW + neutralization model.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{Function, Instruction, Op, Terminator, ValueDef, ValueId};
 
@@ -45,7 +45,7 @@ pub(crate) fn replace_all_uses(function: &mut Function, map: &HashMap<ValueId, V
 /// chasing chains like `a -> b -> x` down to `x`. SSA forward-definition ordering
 /// makes cycles impossible; the length guard is a defensive backstop.
 pub(crate) fn resolve_chains(raw: &HashMap<ValueId, ValueId>) -> HashMap<ValueId, ValueId> {
-    let mut resolved = HashMap::with_capacity(raw.len());
+    let mut resolved = HashMap::with_capacity_and_hasher(raw.len(), Default::default());
     for (&key, &start) in raw {
         let mut target = start;
         let mut steps = 0;

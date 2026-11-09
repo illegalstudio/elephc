@@ -9,7 +9,7 @@
 //! - Only direct stable slot loads used by a method receiver and its root store qualify.
 //! - Eval, reference aliases, rebinding and non-object storage retain their original guards.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{DataPool, Function, Immediate, LocalKind, Module, Op, ValueDef, ValueId};
 use crate::ir::parameter_roots::borrowed_parameter_roots;
@@ -50,9 +50,9 @@ impl IrPass for BorrowedReceiverRoots {
         if !self.enabled { return false; }
         let mut roots = borrowed_parameter_roots(function);
         roots.extend(super::receiver_local_roots::owned_local_roots(function));
-        let mut removed_slots = HashSet::new();
+        let mut removed_slots = HashSet::default();
         let mut acquires = Vec::new();
-        let mut replacements = HashMap::new();
+        let mut replacements = HashMap::default();
         for store in &function.instructions {
             let Some(Immediate::LocalSlot(slot)) = store.immediate else { continue; };
             if store.op != Op::StoreLocal || !roots.contains(&slot) { continue; }

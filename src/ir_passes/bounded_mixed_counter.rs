@@ -12,7 +12,7 @@
 //!   an update, and a comparison against a checked `+`/`-` bound (`$i < $end - 1`) stays a PHP
 //!   comparison whose one-sided overflow IntegerRange reasons about.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use super::driver::IrPass;
 use super::rewrite::{defining_instruction, neutralize_to_nop, replace_all_uses, resolve_chains};
@@ -37,7 +37,7 @@ pub struct BoundedMixedCounter {
 impl BoundedMixedCounter {
     /// Captures physical Mixed by-value argument positions before function passes run.
     pub(super) fn new(module: &Module) -> Self {
-        let mut mixed_parameters = HashMap::new();
+        let mut mixed_parameters = HashMap::default();
         // Match FunctionContext::function_by_name: PHP canonical names, free functions
         // before closures, and the first match even when that target is ineligible.
         // Other function tables and variant-dispatch fallbacks stay outside this proof.
@@ -199,7 +199,7 @@ impl CounterProof {
         data: &DataPool,
         readonly_calls: Option<&HashMap<InstId, HashSet<usize>>>,
     ) -> Option<Self> {
-        Self::for_slots(function, &HashSet::from([slot]), pass, data, readonly_calls)
+        Self::for_slots(function, &HashSet::from_iter([slot]), pass, data, readonly_calls)
     }
 
     /// Checks mutually observed counters together; every seed and update must remain integer.
@@ -211,15 +211,15 @@ impl CounterProof {
         readonly_calls: Option<&HashMap<InstId, HashSet<usize>>>,
     ) -> Option<Self> {
         let mut proof = Self {
-            scalar_values: HashSet::new(),
-            updates: HashSet::new(),
-            comparisons: HashSet::new(),
-            seeds: HashSet::new(),
-            seeded_slots: HashSet::new(),
-            releases: HashSet::new(),
+            scalar_values: HashSet::default(),
+            updates: HashSet::default(),
+            comparisons: HashSet::default(),
+            seeds: HashSet::default(),
+            seeded_slots: HashSet::default(),
+            releases: HashSet::default(),
             copy_readonly_calls: readonly_calls.is_some(),
         };
-        let mut uses: HashMap<ValueId, Vec<InstId>> = HashMap::new();
+        let mut uses: HashMap<ValueId, Vec<InstId>> = HashMap::default();
         let mut stores = Vec::new();
         let mut pending = Vec::new();
         for block in &function.blocks {
@@ -331,7 +331,7 @@ impl CounterProof {
                 return None;
             }
         }
-        let mut bound_comparisons = HashSet::new();
+        let mut bound_comparisons = HashSet::default();
         for &id in &proof.comparisons {
             let operands = &function.instruction(id)?.operands;
             if operands
@@ -393,7 +393,7 @@ impl CounterProof {
         slots: &HashSet<LocalSlotId>,
     ) -> bool {
         let mut wrappers = Vec::new();
-        let mut wrapper_insts = HashSet::new();
+        let mut wrapper_insts = HashSet::default();
         let mut value = stored;
         let (producer_id, producer) = loop {
             let Some(id) = defining_id(function, value) else {
@@ -476,7 +476,7 @@ impl CounterProof {
 
     /// Rewrites the private trial while keeping original instruction identifiers stable.
     fn scalarize(&self, function: &mut Function, slot: LocalSlotId) {
-        self.scalarize_slots(function, &HashSet::from([slot]));
+        self.scalarize_slots(function, &HashSet::from_iter([slot]));
     }
 
     /// Rewrites a jointly proved trial once, preserving each original update identifier.
@@ -532,7 +532,7 @@ impl CounterProof {
         // Transparent owners now hold scalar bits. Redirect their uses through the
         // shared rewrite helpers, without running unrelated folds or mutating the data pool
         // of a rejected trial function.
-        let mut copies = HashMap::new();
+        let mut copies = HashMap::default();
         let mut folded = Vec::new();
         for (index, inst) in function.instructions.iter().enumerate() {
             let id = InstId::from_raw(index as u32);

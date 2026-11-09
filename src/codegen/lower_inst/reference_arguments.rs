@@ -798,7 +798,7 @@ pub(super) fn constructor_ref_cell_lifetime(
     class_name: &str,
 ) -> RefArgCellLifetime {
     let mut current = Some(class_name);
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     while let Some(name) = current {
         if !seen.insert(name) { return RefArgCellLifetime::MayOutliveCall; }
         let Some(info) = ctx.module.class_infos.get(name) else {

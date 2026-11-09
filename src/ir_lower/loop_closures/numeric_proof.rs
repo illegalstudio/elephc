@@ -14,7 +14,7 @@ use crate::ir::{Function, Immediate, IrType, MixedNumericOp, Op, Terminator};
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 use crate::types::PhpType;
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use super::super::context::{LoweringContext, StaticCallableBinding};
 
@@ -45,17 +45,17 @@ pub(super) fn prove(
     body: &[Stmt],
 ) -> Option<NumericProof> {
     let (function, capture_domains) = numeric_target(ctx, binding)?;
-    let mut state: HashMap<String, Domain> = HashMap::new();
+    let mut state: HashMap<String, Domain> = HashMap::default();
     for _ in 0..64 {
         let mut after = state.clone();
-        let mut spans = HashSet::new();
+        let mut spans = HashSet::default();
         if !transfer(
             ctx, closure_local, function, &capture_domains, condition, update, body, &mut after,
             &mut spans,
         ) {
             return None;
         }
-        let mut next = HashMap::new();
+        let mut next = HashMap::default();
         for (name, domain) in &after {
             next.insert(name.clone(), join(seed(ctx, name), *domain));
         }
@@ -387,7 +387,7 @@ fn closure_result(
     {
         return None;
     }
-    let mut slots: HashMap<u32, Domain> = HashMap::new();
+    let mut slots: HashMap<u32, Domain> = HashMap::default();
     let mut domains = arg_domains.iter().chain(capture_domains.iter());
     for param in &function.params {
         let domain = if param.name == crate::func_args::HIDDEN_ARGS_PARAM {
@@ -398,7 +398,7 @@ fn closure_result(
         let slot = function.locals.iter().find(|local| local.name.as_deref() == Some(param.name.as_str()))?;
         slots.insert(slot.id.as_raw(), domain);
     }
-    let mut values: HashMap<u32, Domain> = HashMap::new();
+    let mut values: HashMap<u32, Domain> = HashMap::default();
     for inst in &function.instructions {
         let domain = match inst.op {
             Op::ConstI64 => Domain::Int,

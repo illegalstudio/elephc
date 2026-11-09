@@ -212,7 +212,7 @@ pub(super) fn interface_method_return_type_for_ir(
     interface_name: &str,
     method_key: &str,
 ) -> Option<PhpType> {
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = crate::fast_hash::FastSet::default();
     let mut queue = vec![interface_name.trim_start_matches('\\').to_string()];
     while let Some(name) = queue.pop() {
         if !visited.insert(name.clone()) {

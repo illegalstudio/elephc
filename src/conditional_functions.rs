@@ -19,7 +19,8 @@
 //!   where it is: the checker refuses `Cannot redeclare built-in function` for a variant group, and
 //!   such a guard (`if (!function_exists('strlen'))`) is dead in a build that has the builtin.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap};
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::codegen_support::platform::Target;
 use crate::names::php_symbol_key;
@@ -33,7 +34,7 @@ use crate::source::SourceMode;
 /// `FunctionVariantMark` left at each declaration's original position so the binding happens when
 /// that statement executes, exactly as in PHP.
 pub fn bind_conditional_declarations(program: Program, target: Target) -> Program {
-    let mut bound = HashSet::new();
+    let mut bound = HashSet::default();
     collect_unconditional_bindings(&program, false, &mut bound);
 
     let mut rewriter = Rewriter {
@@ -74,7 +75,7 @@ pub fn bind_conditional_declarations(program: Program, target: Target) -> Progra
 /// Only a name with exactly ONE variant is hoisted: with several, which include branch ran decides
 /// the live one and that decision cannot be made without running the callback.
 pub fn hoist_autoload_callback_function_marks(mut program: Program) -> Program {
-    fn count_variants(stmts: &[Stmt], counts: &mut std::collections::HashMap<String, usize>) {
+    fn count_variants(stmts: &[Stmt], counts: &mut crate::fast_hash::FastMap<String, usize>) {
         for stmt in stmts {
             match &stmt.kind {
                 StmtKind::FunctionVariantGroup { name, variants } => {
@@ -125,9 +126,9 @@ pub fn hoist_autoload_callback_function_marks(mut program: Program) -> Program {
     if found.is_empty() {
         return program;
     }
-    let mut counts = std::collections::HashMap::new();
+    let mut counts = crate::fast_hash::FastMap::default();
     count_variants(&program, &mut counts);
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut prefix: Vec<Stmt> = Vec::new();
     for (name, variant, span) in found {
         let key = php_symbol_key(&name);

@@ -14,7 +14,7 @@
 //! - Shorter variadic implementations use EIR and shared argument planning, not assembly packing.
 //! - Equally variadic typed-to-Mixed promotion uses EIR unpacking rather than raw-word forwarding.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::codegen_support::emit::Emitter;
 use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
@@ -711,7 +711,7 @@ pub(crate) fn source_method_entry_symbol(
 /// Emits one deduplicated source adapter for every collector-bearing implementation in scope.
 pub(crate) fn emit_source_method_adapters(
     emitter: &mut Emitter,
-    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    classes: &std::collections::HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     emitted_class_names: Option<&HashSet<String>>,
 ) -> Result<(), String> {
     let mut specs = Vec::new();

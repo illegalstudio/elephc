@@ -703,7 +703,7 @@ impl Checker {
         &mut self,
         ref_param_names: Vec<String>,
         param_names: Vec<String>,
-        pre_bound_own_storage: std::collections::HashMap<String, crate::types::PhpType>,
+        pre_bound_own_storage: crate::fast_hash::FastMap<String, crate::types::PhpType>,
         body: &[crate::parser::ast::Stmt],
         f: F,
     ) -> Result<T, CompileError>
@@ -713,7 +713,7 @@ impl Checker {
         // A by-reference parameter that carries no type declaration holds a `mixed` cell: its
         // bound type is `Mixed` (see `build_method_sig`/`build_function_sig`), which is what the
         // pre-bound own-storage map records for it.
-        let untyped_ref_params: std::collections::HashSet<String> = ref_param_names
+        let untyped_ref_params: crate::fast_hash::FastSet<String> = ref_param_names
             .iter()
             .filter(|name| {
                 matches!(

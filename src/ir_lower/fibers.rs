@@ -13,7 +13,7 @@
 //! - Variadic callbacks deliberately return no start-call signature so the
 //!   raw start arguments reach the Fiber wrapper and can be packed there.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir_lower::context::{LoweringContext, StaticCallableBinding};
 use crate::names::php_symbol_key;
@@ -22,7 +22,7 @@ use crate::types::{FunctionSig, PhpType};
 
 /// Collects functions whose body directly returns `new Fiber(<known callback>)`.
 pub(crate) fn collect_fiber_return_sigs(program: &Program) -> HashMap<String, FunctionSig> {
-    let mut sigs = HashMap::new();
+    let mut sigs = HashMap::default();
     collect_fiber_return_sigs_from_stmts(program, &mut sigs);
     sigs
 }

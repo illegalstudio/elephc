@@ -8,7 +8,7 @@
 //! Key details:
 //! - Output merging preserves deterministic discovery order while collecting branch-specific variant metadata.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
@@ -30,9 +30,9 @@ pub(in crate::resolver) struct IncludeDiscovery {
     /// `ResolveState::declared_class_files`. Discovery reaches files the resolution pass never
     /// expands (an `include_once` in a method body stays a run-time include), so this is the only
     /// record of where their declarations came from.
-    pub(in crate::resolver) class_files: std::collections::HashMap<String, String>,
+    pub(in crate::resolver) class_files: crate::fast_hash::FastMap<String, String>,
     /// The same record for functions.
-    pub(in crate::resolver) function_files: std::collections::HashMap<String, String>,
+    pub(in crate::resolver) function_files: crate::fast_hash::FastMap<String, String>,
 }
 
 /// A key identifying a specific function variant within a concrete file path.
@@ -175,11 +175,11 @@ impl DiscoveryOutput {
     /// deduplicated by canonical path while preserving their repeatability flags.
     pub(super) fn merge_alternatives(alternatives: Vec<DiscoveryOutput>, group_id: String) -> DiscoveryOutput {
         let mut order: Vec<PathBuf> = Vec::new();
-        let mut merged: HashMap<PathBuf, (DiscoveryEntry, usize)> = HashMap::new();
+        let mut merged: HashMap<PathBuf, (DiscoveryEntry, usize)> = HashMap::default();
 
         for (branch_idx, alternative) in alternatives.into_iter().enumerate() {
             let mut branch_order: Vec<PathBuf> = Vec::new();
-            let mut branch: HashMap<PathBuf, (DiscoveryEntry, usize)> = HashMap::new();
+            let mut branch: HashMap<PathBuf, (DiscoveryEntry, usize)> = HashMap::default();
 
             for mut entry in alternative.entries {
                 if entry.exclusive_group.is_none() {
@@ -239,7 +239,7 @@ impl DiscoveryOutput {
         let (groups, function_variants) =
             function_variants::rewrite_include_loaded_function_variants(&mut self.entries);
         let mut declarations = groups;
-        let mut anonymous_classes = HashSet::new();
+        let mut anonymous_classes = HashSet::default();
         declarations.extend(self.entries
             .into_iter()
             .map(|entry| {
@@ -271,7 +271,7 @@ impl DiscoveryOutput {
         function_variants: &FunctionVariantRegistry,
     ) -> Result<(), CompileError> {
         for entry in &mut self.entries {
-            let mut declaration_declared_once = HashSet::new();
+            let mut declaration_declared_once = HashSet::default();
             let mut declaration_include_chain = entry.include_chain.clone();
             let mut declaration_state = entry.declaration_state.clone();
             let resolved_declarations = resolve_stmts(

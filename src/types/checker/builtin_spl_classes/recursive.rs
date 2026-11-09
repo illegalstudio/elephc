@@ -9,7 +9,7 @@
 //! - Recursive callback children preserve callback and environment state.
 //! - Internal narrowing hooks let synthetic bodies express RecursiveIterator returns.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{ClassMethod, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;

@@ -246,7 +246,7 @@ impl Checker {
         // The storage this frame already holds on entry: the parameters, with the types this
         // call site specialized them to. The superglobals `local_env` also carries are not the
         // frame's own storage and are excluded from marking outright, so they are left out.
-        let pre_bound_own_storage: std::collections::HashMap<String, PhpType> =
+        let pre_bound_own_storage: crate::fast_hash::FastMap<String, PhpType> =
             param_types.iter().cloned().collect();
         let body_check_result = self.with_local_storage_context(
             ref_param_names,

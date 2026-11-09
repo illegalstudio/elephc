@@ -22,7 +22,7 @@
 //!   pass seeds the method as a root so an unreferenced-looking initializer is never pruned.
 //! - The initializer is built as AST, never parsed from PHP text.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
@@ -42,7 +42,7 @@ pub(crate) fn static_init_method_name(property: &str) -> String {
 
 /// Rewrites every qualifying static default in `program`.
 pub fn apply(mut program: Program) -> Program {
-    let mut declared: HashSet<String> = HashSet::new();
+    let mut declared: HashSet<String> = HashSet::default();
     visit::walk_stmts(&program, &mut |stmt| match &stmt.kind {
         StmtKind::ClassDecl { name, .. }
         | StmtKind::EnumDecl { name, .. }

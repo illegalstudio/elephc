@@ -9,7 +9,7 @@
 //! - Structured control flow creates EIR blocks; complex PHP runtime behavior
 //!   uses high-level opcodes with conservative effects.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{
     BlockId, CmpPredicate, Immediate, IrType, LocalKind, LocalSlotId, Op, Ownership, SwitchCase,

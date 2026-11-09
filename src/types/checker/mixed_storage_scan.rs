@@ -26,7 +26,8 @@
 //!   "have we crossed an eval yet" flag cannot see an eval BELOW the `unset` it has to veto),
 //!   and because it runs in BOTH modes — the collect above is not gated on `--strict-locals`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileWarning;
 use crate::names::Name;

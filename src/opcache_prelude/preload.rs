@@ -58,8 +58,8 @@ pub fn collect_preload_symbols(program: &[Stmt]) -> PreloadSymbols {
 /// The body of [`collect_preload_symbols`], run on the stack `with_compiler_stack` sized.
 fn collect_preload_symbols_on_compiler_stack(program: &[Stmt]) -> PreloadSymbols {
     let mut symbols = PreloadSymbols::default();
-    let mut seen_functions: HashSet<String> = HashSet::new();
-    let mut seen_classes: HashSet<String> = HashSet::new();
+    let mut seen_functions: HashSet<String> = HashSet::default();
+    let mut seen_classes: HashSet<String> = HashSet::default();
     let variants = collect_variant_public_names(program);
     collect_symbols_in(
         program,
@@ -86,7 +86,7 @@ fn collect_preload_symbols_on_compiler_stack(program: &[Stmt]) -> PreloadSymbols
 /// spelling is SANITIZED (every byte outside `[A-Za-z0-9_]` becomes `_`), so a PHP function name
 /// carrying a high byte, which PHP identifiers allow, could not be recovered from it.
 fn collect_variant_public_names(program: &[Stmt]) -> HashMap<String, String> {
-    let mut map = HashMap::new();
+    let mut map = HashMap::default();
     collect_variant_public_names_in(program, &mut map);
     map
 }

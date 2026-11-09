@@ -9,7 +9,7 @@
 //! - Rebinding uses existing EIR parallel branch moves, preserving argument evaluation order.
 //! - Local loads lose any earlier immutability proof before the new loops are optimized.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{BlockId, Builder, Function, Immediate, InstId, IrType, LocalSlotId, Op, Ownership, Terminator, ValueDef, ValueId};
 use crate::types::PhpType;
@@ -114,7 +114,7 @@ pub(super) fn lower_component(
     sources: &[Function],
     sites: &[Vec<TailSite>],
 ) {
-    let mut maps = HashMap::new();
+    let mut maps = HashMap::default();
     maps.insert(host_index, identity_map(host));
     for &index in component {
         if index != host_index { maps.insert(index, clone_body(host, &sources[index])); }

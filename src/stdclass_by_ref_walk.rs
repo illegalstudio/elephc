@@ -17,7 +17,7 @@
 //!   site; the reference binding carries the statement's.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
@@ -25,7 +25,7 @@ use crate::span::Span;
 
 thread_local! {
     /// The by-reference stdClass walks the checker rewrote, for the current lowering invocation.
-    static SITES: RefCell<HashSet<Span>> = RefCell::new(HashSet::new());
+    static SITES: RefCell<HashSet<Span>> = RefCell::new(HashSet::default());
 }
 
 /// Restores the enclosing lowering invocation's sites on drop.

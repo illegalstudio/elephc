@@ -10,7 +10,7 @@
 //! - Reflection probes intentionally bypass visibility, matching PHP Reflection.
 //! - Values are limited to the same scalar and enum-case constant forms emitted by static Reflection metadata.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -391,7 +391,7 @@ fn collect_reflected_trait_constant_slots(
 /// cases and constants as declared. Each class's own names come from `constant_order`.
 fn class_constant_names(module: &Module, class_name: &str) -> Vec<String> {
     let mut names = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     if let Some(enum_info) = module.enum_infos.get(class_name) {
         let ordered = resolve_class(module, class_name).is_some_and(|(_, info)| {
             enum_info.cases.iter().all(|case| info.constant_order.contains(&case.name))
@@ -432,7 +432,7 @@ fn class_constant_names(module: &Module, class_name: &str) -> Vec<String> {
 /// missing from the recorded order still appears, deterministically.
 fn declared_then_remaining(
     order: &[String],
-    constants: &std::collections::HashMap<String, crate::parser::ast::Expr>,
+    constants: &crate::fast_hash::FastMap<String, crate::parser::ast::Expr>,
 ) -> Vec<String> {
     let mut remaining = constants
         .keys()
@@ -461,7 +461,7 @@ fn is_private_inherited_class_constant(
 fn class_chain<'a>(module: &'a Module, class_name: &'a str) -> Vec<(&'a str, &'a ClassInfo)> {
     let mut result = Vec::new();
     let mut current = Some(class_name);
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some(name) = current {
         let Some((resolved_name, info)) = resolve_class(module, name) else {
             break;
@@ -478,7 +478,7 @@ fn class_chain<'a>(module: &'a Module, class_name: &'a str) -> Vec<(&'a str, &'a
 /// Returns interface constant names in PHP's order: the interface's own, then its parents'.
 fn interface_constant_names(module: &Module, interface_name: &str) -> Vec<String> {
     let mut names = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     collect_interface_constant_names(module, interface_name, &mut names, &mut seen);
     names
 }

@@ -9,7 +9,7 @@
 //! - The helper class is compiler-internal and intentionally absent from `spl_classes()`.
 //! - The helper preserves sparse/removed entries by asking the owner for active slots.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{BinOp, ClassMethod, ClassProperty, Expr, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;

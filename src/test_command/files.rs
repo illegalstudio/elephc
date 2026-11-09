@@ -24,7 +24,7 @@ pub(super) fn collect_test_files(path: &Path) -> Result<Vec<PathBuf>, String> {
         return Ok(vec![absolute(path)?]);
     }
     let mut files = Vec::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = crate::fast_hash::FastSet::default();
     walk(path, &mut files, &mut visited)?;
     files.sort();
     files.dedup();
@@ -36,7 +36,7 @@ pub(super) fn collect_test_files(path: &Path) -> Result<Vec<PathBuf>, String> {
 fn walk(
     dir: &Path,
     files: &mut Vec<PathBuf>,
-    visited: &mut std::collections::HashSet<PathBuf>,
+    visited: &mut crate::fast_hash::FastSet<PathBuf>,
 ) -> Result<(), String> {
     let canonical = absolute(dir)?;
     if !visited.insert(canonical) {

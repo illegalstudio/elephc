@@ -9,7 +9,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::{HashMap, HashSet};
+use elephc::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 pub(crate) use std::fs;
 pub(crate) use std::path::Path;
 pub(crate) use std::process::Command;

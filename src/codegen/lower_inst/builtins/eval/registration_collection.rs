@@ -19,7 +19,7 @@ pub(super) fn eval_native_function_registrations(
     ctx: &FunctionContext<'_>,
 ) -> Vec<EvalNativeFunctionRegistration> {
     let groups = crate::ir::function_variants::collect_dispatch_groups(ctx.module);
-    let variant_names: std::collections::HashSet<String> = groups
+    let variant_names: crate::fast_hash::FastSet<String> = groups
         .iter()
         .flat_map(|group| group.variants.iter().map(|name| php_symbol_key(name)))
         .collect();
@@ -425,7 +425,7 @@ pub(super) fn eval_native_member_attribute_registrations(
 pub(super) fn dedupe_eval_native_member_attribute_registrations(
     registrations: Vec<EvalNativeMemberAttributeRegistration>,
 ) -> Vec<EvalNativeMemberAttributeRegistration> {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     let mut unique = Vec::with_capacity(registrations.len());
     for registration in registrations {
         let key = (

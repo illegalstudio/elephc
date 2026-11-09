@@ -10,7 +10,7 @@
 use crate::parser::ast::{Program, StmtKind};
 use crate::types::{ClassInfo, InterfaceInfo};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 thread_local! {
     static DECLARED_CLASS_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -74,7 +74,7 @@ fn collect_declared_class_names(
     collect_program_declared_names(
         program,
         classes,
-        &mut HashSet::new(),
+        &mut HashSet::default(),
         &mut user_names,
         |stmt| match &stmt.kind {
             StmtKind::ClassDecl { name, .. } | StmtKind::EnumDecl { name, .. } => {
@@ -97,7 +97,7 @@ fn collect_declared_interface_names(
     collect_program_declared_names(
         program,
         interfaces,
-        &mut HashSet::new(),
+        &mut HashSet::default(),
         &mut user_names,
         |stmt| match &stmt.kind {
             StmtKind::InterfaceDecl { name, .. } => Some(name.as_str()),

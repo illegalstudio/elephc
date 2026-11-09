@@ -77,7 +77,7 @@ pub(crate) use type_compat::SUBCLASS_QUERIES;
 /// yield_validation
 pub(crate) mod yield_validation;
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::codegen::platform::Target;
 use crate::errors::CompileError;
@@ -269,7 +269,7 @@ pub(crate) struct Checker {
     ///
     /// Rebuilt each fixpoint round, because a template rides along when its class is
     /// instantiated: `Box<int>` gets `map<U>` from `Box<T>`.
-    pub method_templates: std::collections::HashMap<
+    pub method_templates: crate::fast_hash::FastMap<
         (String, String),
         crate::generics::methods::MethodTemplate,
     >,
@@ -277,7 +277,7 @@ pub(crate) struct Checker {
     pub requested_method_instantiations:
         Vec<((String, String), crate::generics::Bindings)>,
     /// (enclosing body scope, call site) -> the instantiated method name that site selected.
-    pub generic_method_sites: std::collections::HashMap<
+    pub generic_method_sites: crate::fast_hash::FastMap<
         (String, crate::span::Span),
         std::collections::BTreeSet<String>,
     >,
@@ -604,7 +604,7 @@ pub(crate) struct Checker {
     /// the closed world cannot resolve is admitted and left to fault at run time the way PHP does
     /// — see `infer_lenient_subtype_method_call`. Keyed by scope so one body's uncertainty never
     /// admits another's typo.
-    pub method_exists_guards: std::collections::HashSet<(String, String, String)>,
+    pub method_exists_guards: crate::fast_hash::FastSet<(String, String, String)>,
     /// Explicit local type declarations keyed by function-like scope and variable name.
     /// Ordinary PHP locals may change type after any assignment; only this extension syntax
     /// keeps a declaration contract across later writes.
@@ -1388,7 +1388,7 @@ impl Checker {
         self.local_conditional_depth = 0;
         self.local_parameter_names = param_names.iter().cloned().collect();
         self.local_binding_depth = param_names.into_iter().map(|name| (name, 0)).collect();
-        self.typed_local_names = HashMap::new();
+        self.typed_local_names = HashMap::default();
         // Cleared rather than inherited: a caller that runs `eval` says nothing about the body
         // about to be checked. `run_mixed_storage_scan` fills it in for real, and BOTH callers of
         // this method run that scan immediately afterwards — `with_local_storage_context` and
@@ -2100,7 +2100,7 @@ fn attach_class_doc_comments(program: &Program, classes: &mut crate::fast_hash::
 /// The first occurrence is preserved so diagnostic order stays stable; duplicates are keyed by
 /// source span and message, matching the user-visible warning identity.
 fn dedupe_warnings(warnings: &mut Vec<crate::errors::CompileWarning>) {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     warnings.retain(|warning| {
         seen.insert((
             warning.span.line,
@@ -2232,7 +2232,7 @@ mod throw_access_site_tests {
     use super::record_throw_access_site;
     use crate::span::Span;
     use crate::types::{ThrowAccessInfo, ThrowAccessKind};
-    use std::collections::HashMap;
+    use crate::fast_hash::FastMap as HashMap;
 
     /// Builds a readonly write violation for throw-site identity regression tests.
     fn readonly_violation(span: Span) -> ThrowAccessInfo {
@@ -2249,7 +2249,7 @@ mod throw_access_site_tests {
     /// A violation the checker CAN locate is recorded, keyed by where it happened.
     #[test]
     fn a_located_violation_is_recorded() {
-        let mut sites = HashMap::new();
+        let mut sites = HashMap::default();
         let span = Span::new(7, 3);
         record_throw_access_site(&mut sites, String::new(), span, readonly_violation(span));
         assert_eq!(sites.len(), 1);
@@ -2264,7 +2264,7 @@ mod throw_access_site_tests {
     #[cfg(not(debug_assertions))]
     #[test]
     fn an_unlocatable_violation_never_becomes_a_key() {
-        let mut sites = HashMap::new();
+        let mut sites = HashMap::default();
         record_throw_access_site(
             &mut sites,
             String::new(),

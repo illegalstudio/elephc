@@ -8,7 +8,7 @@
 //! Key details:
 //! - Rules here define accepted programs, so PHP covariance, inheritance, and extension-specific constraints must stay explicit.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -301,7 +301,7 @@ impl Checker {
             return true;
         }
         let mut stack = vec![interface_name.to_string()];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(current_name) = stack.pop() {
             if !seen.insert(current_name.clone()) {
                 continue;
@@ -522,7 +522,7 @@ impl Checker {
             return Some(PhpType::Object(left.to_string()));
         }
 
-        let mut left_ancestors = HashSet::new();
+        let mut left_ancestors = HashSet::default();
         let mut current = Some(left.to_string());
         while let Some(class_name) = current {
             left_ancestors.insert(class_name.clone());
@@ -557,8 +557,8 @@ impl Checker {
             .as_ref()
             .is_none_or(|(built_for, _)| *built_for != class_count)
         {
-            let mut index: std::collections::HashMap<(String, String), Vec<String>> =
-                std::collections::HashMap::new();
+            let mut index: crate::fast_hash::FastMap<(String, String), Vec<String>> =
+                crate::fast_hash::FastMap::default();
             for (name, info) in &self.classes {
                 for (property, owner) in &info.property_declaring_classes {
                     index

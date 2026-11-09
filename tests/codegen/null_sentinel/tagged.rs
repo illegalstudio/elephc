@@ -234,7 +234,7 @@ fn test_tagged_plain_int_emits_no_sentinel_check() {
     let (user_asm, _runtime_asm, _libs) = compile_source_to_asm_with_defines_repr(
         "<?php $x = 5; echo $x; var_dump($x);",
         &dir,
-        &std::collections::HashSet::new(),
+        &elephc::fast_hash::FastSet::default(),
         8_388_608,
         false,
         false,
@@ -263,7 +263,7 @@ fn test_sentinel_plain_int_still_emits_sentinel_check() {
     let (user_asm, _runtime_asm, _libs) = compile_source_to_asm_with_defines_repr(
         "<?php $x = 5; echo $x; var_dump($x);",
         &dir,
-        &std::collections::HashSet::new(),
+        &elephc::fast_hash::FastSet::default(),
         8_388_608,
         false,
         false,
@@ -545,7 +545,7 @@ fn compile_and_run_tagged_with_heap_debug(source: &str) -> crate::support::Progr
     let (user_asm, runtime_asm, requirements) = compile_source_to_asm_with_defines_repr(
         source,
         &dir,
-        &std::collections::HashSet::new(),
+        &elephc::fast_hash::FastSet::default(),
         8_388_608,
         false,
         true,

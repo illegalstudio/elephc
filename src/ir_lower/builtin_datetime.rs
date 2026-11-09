@@ -20,7 +20,7 @@
 //!   set (`DateTimeInterface`, and `Iterator` for `DatePeriod`).
 
 use super::program::instruction_uses_eval;
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{Function, Immediate, Module, Op};
 use crate::ir_lower::function;
@@ -124,7 +124,7 @@ fn walk_to_builtin_datetime(module: &Module, class_name: &str) -> bool {
     #[cfg(test)]
     DATETIME_CHAIN_WALKS.with(|count| count.set(count.get() + 1));
     let mut current = Some(class_name.trim_start_matches('\\'));
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some(candidate) = current {
         let key = crate::names::php_symbol_key(candidate);
         if !seen.insert(key) {
@@ -170,8 +170,8 @@ fn class_info_by_php_name<'a>(
 pub(crate) fn lower_referenced_builtin_datetime_methods(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, crate::types::FunctionSig>,
 ) {
     lower_eval_date_alias_methods_if_needed(module, check_result, constants, fiber_return_sigs);
     loop {
@@ -206,8 +206,8 @@ pub(crate) fn lower_referenced_builtin_datetime_methods(
 fn lower_eval_date_alias_methods_if_needed(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, crate::types::FunctionSig>,
 ) {
     if !module_uses_eval(module) {
         return;
@@ -442,7 +442,7 @@ fn function_uses_eval(module: &Module, function: &Function) -> bool {
 /// full interface vtable required to allocate the object.
 fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)> {
     let mut methods = Vec::new();
-    let mut dynamic_receiver_methods = HashSet::new();
+    let mut dynamic_receiver_methods = HashSet::default();
     // A user class deriving from a date/time class inherits its STATIC methods, which a
     // `parent::createFromFormat()` inside an override, or the static callable tables listing the
     // subclass's inherited methods, reach by the builtin's symbol -- no `DateTime::...` call names
@@ -629,7 +629,7 @@ fn push_constructor_and_interface_methods(
             methods.push((hook_impl, hook.to_string()));
         }
     }
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut stack = class_info
         .interfaces
         .iter()
@@ -670,8 +670,8 @@ fn lower_builtin_datetime_method(
     method_key: &str,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, crate::types::FunctionSig>,
 ) {
     let Some(class_info) = check_result.classes.get(class_name) else {
         return;

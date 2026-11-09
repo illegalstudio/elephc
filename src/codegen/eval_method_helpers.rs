@@ -321,7 +321,7 @@ fn collect_class_method_slots(
     module: &Module,
     class_name: &str,
     class_info: &ClassInfo,
-    emitted_methods: &std::collections::HashSet<(String, String, bool)>,
+    emitted_methods: &crate::fast_hash::FastSet<(String, String, bool)>,
     slots: &mut Vec<EvalMethodSlot>,
 ) {
     collect_hidden_private_ancestor_method_slots(
@@ -387,7 +387,7 @@ fn collect_hidden_private_ancestor_method_slots(
     module: &Module,
     class_name: &str,
     class_info: &ClassInfo,
-    emitted_methods: &std::collections::HashSet<(String, String, bool)>,
+    emitted_methods: &crate::fast_hash::FastSet<(String, String, bool)>,
     slots: &mut Vec<EvalMethodSlot>,
 ) {
     for (ancestor_name, ancestor_info) in class_ancestry(module, class_name) {
@@ -462,7 +462,7 @@ fn collect_class_static_method_slots(
     module: &Module,
     class_name: &str,
     class_info: &ClassInfo,
-    emitted_methods: &std::collections::HashSet<(String, String, bool)>,
+    emitted_methods: &crate::fast_hash::FastSet<(String, String, bool)>,
     slots: &mut Vec<EvalStaticMethodSlot>,
 ) {
     let mut methods = class_info.static_methods.iter().collect::<Vec<_>>();

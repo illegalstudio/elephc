@@ -268,7 +268,7 @@ fn with_implicit_eval_return(mut program: Program) -> Program {
     // protects statements the CHECKER already filed a local-binding decision against, and an
     // eval fragment is planned straight from its parse — no checker has run over it yet, so
     // there is no decision for DCE's tail-sinking clone to duplicate.
-    crate::optimize::eliminate_dead_code(program, std::collections::HashSet::new())
+    crate::optimize::eliminate_dead_code(program, crate::fast_hash::FastSet::default())
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@ use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Function, Immediate, Module, Op, ValueDef};
 use crate::names::{method_symbol, php_symbol_key, static_method_symbol};
 use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 pub(super) use callables::*;
 pub(super) use classes::*;

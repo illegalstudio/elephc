@@ -8,7 +8,7 @@
 //! - Source classes stay explicitly final until host subclass dispatch is supported.
 //! - Physical method signatures include the receiver or late-static class ID.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::{errors::CompileError, exports::ExportedFunction, parser::ast::{Program, StmtKind, TypeExpr, Visibility},
     span::Span, types::{ClassInfo, FunctionSig, PhpType}, codegen_support::platform::Target};
@@ -51,7 +51,7 @@ pub fn collect(program: &Program, classes: &crate::fast_hash::FastMap<String, Cl
     let names = program.iter().filter(|stmt| crate::exports::has_export_attribute(stmt))
         .filter_map(|stmt| match &stmt.kind { StmtKind::ClassDecl { name, .. } => Some(name.clone()), _ => None })
         .collect::<HashSet<_>>();
-    let constant_context = if names.is_empty() { HashMap::new() } else { super::constants::context(program, target) };
+    let constant_context = if names.is_empty() { HashMap::default() } else { super::constants::context(program, target) };
     if !names.is_empty() {
         for stmt in program {
             if let StmtKind::FunctionDecl { name, .. } = &stmt.kind {
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn phpext_class_metadata_rejects_foreign_object_types() {
         let error = validate_object_types("Pippo::read", &PhpType::Object("Unexported".into()),
-            &HashSet::from(["Pippo".into()]), Span::dummy()).unwrap_err();
+            &HashSet::from_iter(["Pippo".into()]), Span::dummy()).unwrap_err();
         assert!(error.message.contains("not an exported class"));
     }
 

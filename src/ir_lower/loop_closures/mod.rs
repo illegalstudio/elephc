@@ -21,7 +21,7 @@ use crate::ir::{Effects, Immediate, IrType, Op, Terminator};
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 use crate::types::{FunctionSig, PhpType};
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use super::context::{LoweringContext, StaticCallableBinding};
 

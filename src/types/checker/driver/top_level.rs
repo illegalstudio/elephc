@@ -55,7 +55,7 @@ impl Checker {
         // pre-bound storage OF ITS OWN either: `$argc`, `$argv`, the superglobals and the extern C
         // globals all live in program storage, and `name_is_seeded_program_storage` keeps the
         // marking off them outright.
-        self.run_mixed_storage_scan(program, &std::collections::HashMap::new());
+        self.run_mixed_storage_scan(program, &crate::fast_hash::FastMap::default());
         let mut all_errors = Vec::with_capacity(program.len());
         // `(statement index, name, span)` for every null probe this pass tolerated, so the
         // deferred diagnostic lands on the statement that contains the probe.
@@ -99,8 +99,8 @@ impl Checker {
         global_env: &mut TypeEnv,
         all_errors: &mut [Vec<CompileError>],
     ) {
-        let mut reported: std::collections::HashSet<(String, u32, u32)> =
-            std::collections::HashSet::new();
+        let mut reported: crate::fast_hash::FastSet<(String, u32, u32)> =
+            crate::fast_hash::FastSet::default();
         for (index, name, span) in probe_roots {
             match global_env.get(&name) {
                 // Never assigned at top level: seed the `null` binding lowering needs. The same

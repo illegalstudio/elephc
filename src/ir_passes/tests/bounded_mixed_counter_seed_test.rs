@@ -11,7 +11,7 @@
 //! - A bound comparison must stay `php_rel_cmp`; a seed must be proven unchecked like an update,
 //!   and a seed reading another counter is only provable together with that counter.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{
     validate_function, Builder, CmpPredicate, DataPool, Function, FunctionParam, Immediate,
@@ -256,7 +256,7 @@ fn prove(function: &Function) -> Proven {
     let proven = crate::ir_passes::prove_integer_slots(
         function,
         &mut DataPool::default(),
-        &std::collections::HashMap::new(),
+        &crate::fast_hash::FastMap::default(),
     );
     Proven { slots: proven.slots, seeded: proven.seeded }
 }

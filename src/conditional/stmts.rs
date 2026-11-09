@@ -8,7 +8,7 @@
 //! Key details:
 //! - Branch removal must happen structurally so later passes never see statements from inactive code.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::{CatchClause, Stmt, StmtKind};
 
@@ -78,7 +78,7 @@ mod tests {
             span,
         );
 
-        let mut defines = HashSet::new();
+        let mut defines = HashSet::default();
         defines.insert("FEATURE".to_string());
         let result = apply_stmts(vec![for_stmt], &defines);
 

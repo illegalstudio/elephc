@@ -9,7 +9,7 @@
 //! - AppendIterator keeps iterator, key, and active-state arrays in parallel.
 //! - The public array-iterator view delegates to internal storage facade methods.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{BinOp, ClassMethod, ClassProperty, Expr, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;

@@ -19,7 +19,7 @@
 //!   `L < (X - c)` comparisons with an integer `L` and `1 <= c <= 1024`, where the cast-mode
 //!   overflow result PHP_INT_MIN compares exactly like PHP's promoted -2^63.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{
     BlockId, DataPool, Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind,
@@ -87,7 +87,7 @@ fn sink_proven_producers(function: &mut Function) -> bool {
             result,
             &uses,
             &terminator_uses,
-            &mut HashSet::new(),
+            &mut HashSet::default(),
             &mut rewrite,
         ) || !rewrite.saw_integer_sink
         {
@@ -116,7 +116,7 @@ struct SinkRewrite {
 
 /// Builds the instruction-use adjacency list for every SSA value.
 fn instruction_uses(function: &Function) -> HashMap<ValueId, Vec<InstId>> {
-    let mut uses: HashMap<ValueId, Vec<InstId>> = HashMap::new();
+    let mut uses: HashMap<ValueId, Vec<InstId>> = HashMap::default();
     for (raw, inst) in function.instructions.iter().enumerate() {
         let inst_id = InstId::from_raw(raw as u32);
         for operand in &inst.operands {
@@ -478,7 +478,7 @@ fn retirement_ends_binding(function: &Function, retirement: InstId, slot: LocalS
         .as_ref()
         .map(super::cfg::successors)
         .unwrap_or_default();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some(next) = pending.pop() {
         if !seen.insert(next) {
             continue;

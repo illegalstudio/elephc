@@ -9,7 +9,7 @@
 //! - Runtime helper bodies remain outside EIR; modules reference runtime
 //!   features and metadata needed to select/link helpers.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
@@ -143,12 +143,12 @@ pub struct Module {
     /// starts clear and is raised by the first probe that allows autoloading.
     pub deferred_class_loads: std::collections::BTreeSet<String>,
     /// Public function names whose implementation is selected during execution.
-    pub(crate) runtime_bound_functions: std::sync::Arc<std::collections::HashSet<String>>,
+    pub(crate) runtime_bound_functions: std::sync::Arc<crate::fast_hash::FastSet<String>>,
     /// Lowercase bare names of functions and methods whose by-reference parameter a closure
     /// binds by reference, so an omitted argument's cell must outlive the call
     /// (`RefArgCellLifetime::MayOutliveCall`). Matched by name alone: over-matching only costs a
     /// heap cell where a stack one would have done.
-    pub(crate) ref_param_escaping_callees: std::collections::HashSet<String>,
+    pub(crate) ref_param_escaping_callees: crate::fast_hash::FastSet<String>,
     /// Names some `define()` call creates: `defined()` reads their `_define_seen` flag, and
     /// `__rt_web_reset` clears it so each request starts with them undefined, as php does.
     pub(crate) runtime_define_names: std::collections::BTreeSet<String>,
@@ -407,7 +407,7 @@ impl Module {
             runtime_callable_invokers: Vec::new(),
             data: DataPool::default(),
             extern_decls: Vec::new(),
-            callable_param_sigs: HashMap::new(),
+            callable_param_sigs: HashMap::default(),
             class_table: ClassTable::default(),
             enum_table: EnumTable::default(),
             interface_table: InterfaceTable::default(),
@@ -415,31 +415,31 @@ impl Module {
             declared_class_names: Vec::new(),
             declared_interface_names: Vec::new(),
             declared_trait_names: Vec::new(),
-            declared_trait_source_lines: HashMap::new(),
-            declared_function_source_lines: HashMap::new(),
-            declared_class_source_files: HashMap::new(),
-            declared_function_source_files: HashMap::new(),
-            declared_trait_uses: HashMap::new(),
-            declared_trait_method_names: HashMap::new(),
-            imported_trait_method_names: HashMap::new(),
-            declared_trait_methods: HashMap::new(),
-            declared_trait_property_names: HashMap::new(),
-            declared_trait_properties: HashMap::new(),
-            declared_trait_constant_names: HashMap::new(),
-            declared_trait_constants: HashMap::new(),
-            declared_trait_constant_types: HashMap::new(),
-            declared_trait_constant_visibilities: HashMap::new(),
-            declared_trait_final_constants: HashMap::new(),
-            global_constants: HashMap::new(),
+            declared_trait_source_lines: HashMap::default(),
+            declared_function_source_lines: HashMap::default(),
+            declared_class_source_files: HashMap::default(),
+            declared_function_source_files: HashMap::default(),
+            declared_trait_uses: HashMap::default(),
+            declared_trait_method_names: HashMap::default(),
+            imported_trait_method_names: HashMap::default(),
+            declared_trait_methods: HashMap::default(),
+            declared_trait_property_names: HashMap::default(),
+            declared_trait_properties: HashMap::default(),
+            declared_trait_constant_names: HashMap::default(),
+            declared_trait_constants: HashMap::default(),
+            declared_trait_constant_types: HashMap::default(),
+            declared_trait_constant_visibilities: HashMap::default(),
+            declared_trait_final_constants: HashMap::default(),
+            global_constants: HashMap::default(),
             class_infos: crate::fast_hash::FastMap::default(),
             user_defined_constants: Vec::new(),
             source_files: std::collections::BTreeMap::new(),
-            interface_infos: HashMap::new(),
-            enum_infos: HashMap::new(),
-            extern_class_infos: HashMap::new(),
-            packed_class_infos: HashMap::new(),
+            interface_infos: HashMap::default(),
+            enum_infos: HashMap::default(),
+            extern_class_infos: HashMap::default(),
+            packed_class_infos: HashMap::default(),
             packed_layouts: PackedLayoutTable::default(),
-            extern_globals: HashMap::new(),
+            extern_globals: HashMap::default(),
             required_runtime_features: RuntimeFeatures::none(),
             web: false,
             web_application: false,

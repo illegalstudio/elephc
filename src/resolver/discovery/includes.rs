@@ -8,7 +8,7 @@
 //! Key details:
 //! - Include discovery uses the caller's constants and base path but records declarations by included file.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
@@ -110,13 +110,13 @@ pub(super) fn discover_include(
     let included_dir = resolved.parent().unwrap_or(base_dir);
     let mut declaration_state = state.clone();
     declaration_state.namespace = None;
-    declaration_state.const_imports = HashMap::new();
+    declaration_state.const_imports = HashMap::default();
     include_chain.push(canonical.clone());
 
     let saved_namespace = state.namespace.clone();
     let saved_imports = state.const_imports.clone();
     state.namespace = None;
-    state.const_imports = HashMap::new();
+    state.const_imports = HashMap::default();
     let mut nested_output = DiscoveryOutput::default();
     discover_stmts(
         &included_stmts,
@@ -131,7 +131,7 @@ pub(super) fn discover_include(
 
     let entry_declaration_state = declaration_state.clone();
     let entry_include_chain = include_chain.clone();
-    let mut declaration_declared_once = HashSet::new();
+    let mut declaration_declared_once = HashSet::default();
     let mut declaration_include_chain = entry_include_chain.clone();
     let mut declaration_state_for_resolution = declaration_state.clone();
     let declaration_function_variants = FunctionVariantRegistry::default();

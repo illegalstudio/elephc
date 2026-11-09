@@ -9,7 +9,7 @@
 //! - Literal `class_exists(..., true)` shapes are treated as compile-time autoload demands.
 //! - Dynamic autoload flags are not guessed because the checker rejects them in AOT mode.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::parser::ast::{
     AttributeGroup, CallableTarget, CatchClause, ClassConst, ClassMethod, ClassProperty, Expr,
@@ -58,9 +58,9 @@ impl ReferenceSet {
     /// Creates an empty reference set that takes over the class-string assignment facts.
     fn owning(dynamic_class_defaults: HashMap<DynamicClassTarget, HashSet<String>>) -> Self {
         Self {
-            names: HashSet::new(),
-            non_probe: HashSet::new(),
-            probe_noload: HashSet::new(),
+            names: HashSet::default(),
+            non_probe: HashSet::default(),
+            probe_noload: HashSet::default(),
             dynamic_class_defaults,
         }
     }
@@ -103,7 +103,7 @@ impl ReferenceSet {
 /// A name reached by anything else -- `new`, `extends`, a type, a static call, a catch -- is NOT
 /// returned: the program depends on it, so php would have loaded it too.
 pub(super) fn probe_only_class_names(program: &Program) -> HashSet<String> {
-    let mut refs = ReferenceSet::new(&HashMap::new());
+    let mut refs = ReferenceSet::new(&HashMap::default());
     for stmt in program {
         collect_refs_stmt(stmt, &mut refs);
     }
@@ -123,7 +123,7 @@ pub(super) fn probe_only_class_names(program: &Program) -> HashSet<String> {
 
 /// Collect all declared fully-qualified class-like names from the program.
 pub(super) fn collect_declared_fqns(program: &Program) -> HashSet<String> {
-    let mut out = HashSet::new();
+    let mut out = HashSet::default();
     for stmt in program {
         collect_declared_in_stmt(stmt, &mut out);
     }
@@ -419,7 +419,7 @@ pub(super) fn stmt_references_executably(stmt: &Stmt, fqn: &str) -> bool {
     let Some(stripped) = without_bodies(stmt) else {
         return false;
     };
-    let mut refs = ReferenceSet::new(&HashMap::new());
+    let mut refs = ReferenceSet::new(&HashMap::default());
     collect_refs_stmt(&stripped, &mut refs);
     let key = crate::names::php_symbol_key(fqn);
     refs.names
@@ -499,7 +499,7 @@ fn collect_file_scope_dependencies_in_stmt(stmt: &Stmt, out: &mut Vec<String>) {
             }
         }
         _ => {
-            let mut refs = ReferenceSet::new(&HashMap::new());
+            let mut refs = ReferenceSet::new(&HashMap::default());
             collect_refs_stmt(stmt, &mut refs);
             let mut names: Vec<String> = refs.names.into_iter().collect();
             names.sort();
@@ -515,13 +515,13 @@ pub(super) fn collect_reference_points(program: &Program) -> Vec<(usize, String)
     // supplies a class-string option consumed by the parent. Seed the flow facts from the whole
     // program so discovery does not depend on declaration order; the ordered pass below still
     // applies definite top-level overwrites at their observable reference points.
-    let mut seed = ReferenceSet::new(&HashMap::new());
+    let mut seed = ReferenceSet::new(&HashMap::default());
     for stmt in program {
         collect_refs_stmt(stmt, &mut seed);
     }
     let mut dynamic_class_defaults = seed.dynamic_class_defaults;
     for (stmt_idx, stmt) in program.iter().enumerate() {
-        let mut refs = HashSet::new();
+        let mut refs = HashSet::default();
         collect_refs_with_definite_flow(stmt, &mut dynamic_class_defaults, &mut refs);
         let mut refs: Vec<String> = refs.into_iter().collect();
         refs.sort();
@@ -605,7 +605,7 @@ fn update_dynamic_class_target_default(
     if update_dynamic_class_array_defaults(&target, value, defaults) {
         return;
     }
-    let mut candidates = HashSet::new();
+    let mut candidates = HashSet::default();
     collect_possible_class_strings(value, defaults, &mut candidates);
     let preserves_previous = matches!(
         &value.kind,
@@ -1635,7 +1635,7 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
 /// the sink collects a literal: a probe for the existence functions, a use for `new`.
 fn collect_class_string_parameter_flows(methods: &[ClassMethod], out: &mut ReferenceSet) {
     use crate::parser::ast::visit::{walk_nodes, Node};
-    let mut sinks: HashMap<String, Vec<(usize, bool)>> = HashMap::new();
+    let mut sinks: HashMap<String, Vec<(usize, bool)>> = HashMap::default();
     for method in methods {
         for (index, (param, ..)) in method.params.iter().enumerate() {
             if let Some(probe_only) = parameter_class_string_sink(&method.body, param) {

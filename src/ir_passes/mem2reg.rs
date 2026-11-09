@@ -10,7 +10,7 @@
 //! - Exceptional control flow and implicit eval scope access retain memory slots.
 //! - Slot facts and SSA use replacements are batched to bound work on large functions.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{
     BlockId, DataPool, Function, Immediate, InstId, IrType, LocalKind, LocalSlotId, Op,
@@ -60,7 +60,7 @@ impl IrPass for Mem2Reg {
         let dominance = compute_dominance(function);
         let facts = slot_facts(function, &slots);
         let mut changed = false;
-        let mut replacements = HashMap::new();
+        let mut replacements = HashMap::default();
         for slot in slots {
             let slot_facts = &facts[&slot];
             let live_in = live_in(function, slot_facts, &order);
@@ -124,9 +124,9 @@ fn eligible_slots(function: &Function) -> Vec<LocalSlotId> {
         .map(|local| local.id)
         .collect();
 
-    let mut loads = HashSet::new();
-    let mut stores = HashSet::new();
-    let mut loaded_values = HashMap::new();
+    let mut loads = HashSet::default();
+    let mut stores = HashSet::default();
+    let mut loaded_values = HashMap::default();
     for inst in &function.instructions {
         match inst.immediate.as_ref() {
             Some(Immediate::LocalSlot(slot)) if eligible.contains(slot) => {

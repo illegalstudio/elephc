@@ -1101,7 +1101,7 @@ Total number in stack (recursive counted multiple, when >=5):
             (0x1000u64, 10u64),
             (0xdeadu64, 99u64), // unresolvable
         ];
-        let mut resolved = HashMap::new();
+        let mut resolved = HashMap::default();
         resolved.insert(0x1000u64, 7u32);
         resolved.insert(0x1008u64, 12u32);
         let (hits, total) = attribute_lines(&leaves, &resolved);
@@ -1363,7 +1363,7 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
         for (stack, weight) in &display {
             *cumulative.entry(stack.clone()).or_default() += weight;
         }
-        let mut previous = HashMap::new();
+        let mut previous = HashMap::default();
         // First window: no prior data, so no arrow yet.
         let first = live_frame(
             &display,
@@ -1739,7 +1739,7 @@ elephc-instr: Other\\firstOf<int> calls=50 incl_ns=10 excl_ns=9\n");
             start: 32,
             end: 34,
         }];
-        let mut lines = HashMap::new();
+        let mut lines = HashMap::default();
         lines.insert(0x100000010u64, 33u32);
         // Inline the core of inject_inlined_frames without atos: rewrite manually.
         for (stack, _) in samples.iter_mut() {

@@ -21,7 +21,7 @@
 //!   once. `resolve` matches such a site by its span and the scope below the trait instead, and
 //!   answers only when every using class agrees, since one AST node can carry one name.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::span::Span;
 
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn trait_body_sites_resolve_through_the_using_classes() {
         let span = Span::new(4, 20);
-        let mut names = HashMap::new();
+        let mut names = HashMap::default();
         names.insert(("C::make".to_string(), span), "Box<int>".to_string());
         names.insert(("D::make".to_string(), span), "Box<int>".to_string());
         let mut scope = SiteScope::default();

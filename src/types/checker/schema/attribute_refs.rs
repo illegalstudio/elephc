@@ -16,7 +16,7 @@
 //!   unsupported `ScopedConstantGet`, so the whole attribute's args are marked
 //!   `None` here instead, matching pre-feature behavior.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::types::{AttrArgEntry, AttrArgValue};
 
@@ -175,7 +175,7 @@ fn scoped_const_materializable(checker: &Checker, type_name: &str, member: &str)
         return true;
     }
     class_constant_reachable(checker, normalized, member)
-        || interface_constant_reachable(checker, normalized, member, &mut HashSet::new())
+        || interface_constant_reachable(checker, normalized, member, &mut HashSet::default())
 }
 
 /// Walks a class's own constants, its parent chain, and the interfaces it
@@ -195,7 +195,7 @@ fn class_constant_reachable(checker: &Checker, class_name: &str, member: &str) -
             return true;
         }
         for interface_name in &class_info.interfaces {
-            if interface_constant_reachable(checker, interface_name, member, &mut HashSet::new()) {
+            if interface_constant_reachable(checker, interface_name, member, &mut HashSet::default()) {
                 return true;
             }
         }

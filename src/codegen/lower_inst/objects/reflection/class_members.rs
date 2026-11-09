@@ -13,7 +13,7 @@ use super::*;
 /// compiler-generated metadata that predates an explicit order vector.
 fn ordered_class_constant_names(info: &crate::types::ClassInfo) -> Vec<&String> {
     let mut names = Vec::with_capacity(info.constants.len());
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     for name in &info.constant_order {
         if info.constants.contains_key(name) && seen.insert(name.as_str()) {
             names.push(name);
@@ -32,7 +32,7 @@ fn ordered_class_constant_names(info: &crate::types::ClassInfo) -> Vec<&String> 
 /// Returns PHP case-insensitive method names visible to `ReflectionClass::hasMethod()`.
 pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_name: &str) -> Vec<String> {
     let mut names = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     // The reflected class's own list comes first and in php's order: `getMethods()` walks these
     // names. The ancestor walk below only adds names `hasMethod()` also answers for.
     if let Some((_, info)) = resolve_reflection_class(ctx, class_name) {
@@ -95,7 +95,7 @@ pub(super) fn reflection_class_property_names(
     info: &crate::types::ClassInfo,
 ) -> Vec<String> {
     let mut names = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     if is_reflection_enum(ctx, class_name) {
         push_unique_property_name("name", &mut names, &mut seen);
     }
@@ -115,7 +115,7 @@ pub(super) fn reflection_class_property_names(
 /// The positions are indexed once, so ordering stays linear in the number of constants rather
 /// than scanning the whole name list for every member.
 fn sort_by_name_order<T>(members: &mut [T], order: &[String], name: impl Fn(&T) -> &String) {
-    let positions: std::collections::HashMap<&str, usize> = order
+    let positions: crate::fast_hash::FastMap<&str, usize> = order
         .iter()
         .enumerate()
         .map(|(position, name)| (name.as_str(), position))
@@ -130,7 +130,7 @@ pub(super) fn reflection_class_constant_names(
     _info: &crate::types::ClassInfo,
 ) -> Vec<String> {
     let mut names = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     if let Some(enum_info) = ctx.module.enum_infos.get(class_name) {
         // A user enum records its cases in `constant_order`, interleaved with its constants in
         // declaration order; only an enum without that record lists its cases first.
@@ -157,7 +157,7 @@ fn push_class_constant_names_in_php_order(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     names: &mut Vec<String>,
-    seen: &mut std::collections::HashSet<String>,
+    seen: &mut crate::fast_hash::FastSet<String>,
     depth: usize,
 ) {
     if depth > ctx.module.class_infos.len() {
@@ -205,7 +205,7 @@ pub(super) fn reflection_class_constant_members(
     _info: &crate::types::ClassInfo,
 ) -> Result<Vec<ReflectionConstantMember>> {
     let mut members = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     if let Some(enum_info) = ctx.module.enum_infos.get(class_name) {
         for case in &enum_info.cases {
             push_unique_constant_member(
@@ -328,7 +328,7 @@ pub(super) fn reflection_interface_constant_members(
     interface_name: &str,
 ) -> Result<Vec<ReflectionConstantMember>> {
     let mut members = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     collect_interface_constant_members(ctx, interface_name, &mut members, &mut seen)?;
     Ok(members)
 }
@@ -338,7 +338,7 @@ pub(super) fn collect_interface_constant_members(
     ctx: &FunctionContext<'_>,
     interface_name: &str,
     members: &mut Vec<ReflectionConstantMember>,
-    seen: &mut std::collections::HashSet<String>,
+    seen: &mut crate::fast_hash::FastSet<String>,
 ) -> Result<()> {
     let Some(interface_info) = ctx.module.interface_infos.get(interface_name) else {
         return Ok(());
@@ -362,7 +362,7 @@ pub(super) fn reflection_trait_constant_members(
     trait_name: &str,
 ) -> Result<Vec<ReflectionConstantMember>> {
     let mut members = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     if let Some(constants) = ctx.module.declared_trait_constants.get(trait_name) {
         for (constant_name, value_expr) in constants {
             if seen.contains(constant_name) {
@@ -385,7 +385,7 @@ pub(super) fn reflection_class_constant_reflection_members(
     _info: &crate::types::ClassInfo,
 ) -> Result<Vec<ReflectionListedMember>> {
     let mut members = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     if let Some(enum_info) = ctx.module.enum_infos.get(class_name) {
         for case in &enum_info.cases {
             push_unique_constant_reflection_member(
@@ -533,7 +533,7 @@ pub(super) fn reflection_interface_constant_reflection_members(
     interface_name: &str,
 ) -> Result<Vec<ReflectionListedMember>> {
     let mut members = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     collect_interface_constant_reflection_members(ctx, interface_name, &mut members, &mut seen)?;
     Ok(members)
 }
@@ -543,7 +543,7 @@ pub(super) fn collect_interface_constant_reflection_members(
     ctx: &FunctionContext<'_>,
     interface_name: &str,
     members: &mut Vec<ReflectionListedMember>,
-    seen: &mut std::collections::HashSet<String>,
+    seen: &mut crate::fast_hash::FastSet<String>,
 ) -> Result<()> {
     let Some(interface_info) = ctx.module.interface_infos.get(interface_name) else {
         return Ok(());
@@ -584,7 +584,7 @@ pub(super) fn reflection_trait_constant_reflection_members(
     trait_name: &str,
 ) -> Result<Vec<ReflectionListedMember>> {
     let mut members = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     let Some(constants) = ctx.module.declared_trait_constants.get(trait_name) else {
         return Ok(members);
     };
@@ -632,7 +632,7 @@ pub(super) fn push_unique_constant_reflection_member(
     is_final: bool,
     is_enum_case: bool,
     members: &mut Vec<ReflectionListedMember>,
-    seen: &mut std::collections::HashSet<String>,
+    seen: &mut crate::fast_hash::FastSet<String>,
 ) {
     if !seen.insert(name.to_string()) {
         return;
@@ -663,7 +663,7 @@ pub(super) fn push_unique_constant_reflection_member(
 pub(super) fn push_unique_listed_constant_member(
     member: ReflectionListedMember,
     members: &mut Vec<ReflectionListedMember>,
-    seen: &mut std::collections::HashSet<String>,
+    seen: &mut crate::fast_hash::FastSet<String>,
 ) {
     if seen.insert(member.name.clone()) {
         members.push(member);

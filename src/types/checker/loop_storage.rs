@@ -16,7 +16,7 @@
 //! - An `(array)` cast inside a literal uses the same `ArrayCast` classification as the checker,
 //!   so a loop-carried array of those casts does not collapse to `array<int>`.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{
@@ -87,13 +87,13 @@ pub fn loop_carried_storage_types<'a>(
     if let Some(update) = update {
         collect_array_write_stmt(update, &mut writes, false);
     }
-    let mut foreach_keys = HashSet::new();
+    let mut foreach_keys = HashSet::default();
     collect_foreach_key_names(body, &mut foreach_keys);
-    let mut foreach_values = HashSet::new();
+    let mut foreach_values = HashSet::default();
     collect_foreach_value_names(body, &mut foreach_values);
 
     let mut fixed = entry.clone();
-    let mut whole_representation_sources = HashSet::new();
+    let mut whole_representation_sources = HashSet::default();
     loop {
         let previous = fixed.clone();
         apply_assignment_evidence(
@@ -121,7 +121,7 @@ pub fn loop_carried_storage_types<'a>(
         }
     }
 
-    let mut iterated_sources = HashSet::new();
+    let mut iterated_sources = HashSet::default();
     collect_foreach_sources(body, &mut iterated_sources);
     collect_element_read_sources(body, &mut iterated_sources);
     if let Some(update) = update {
@@ -1537,9 +1537,9 @@ fn collect_foreach_sources<'a>(statements: &'a [Stmt], out: &mut HashSet<&'a str
 /// does not depend on the element representation, so an accumulator measured inside its own loop
 /// keeps its precise element type.
 fn collect_element_read_sources<'a>(statements: &'a [Stmt], out: &mut HashSet<&'a str>) {
-    use std::collections::HashMap;
-    let mut reads: HashMap<&'a str, usize> = HashMap::new();
-    let mut length_only: HashMap<&'a str, usize> = HashMap::new();
+    use crate::fast_hash::FastMap as HashMap;
+    let mut reads: HashMap<&'a str, usize> = HashMap::default();
+    let mut length_only: HashMap<&'a str, usize> = HashMap::default();
     crate::parser::ast::visit::walk_nodes(statements, &mut |node| {
         let crate::parser::ast::visit::Node::Expr(expr) = node else {
             return;

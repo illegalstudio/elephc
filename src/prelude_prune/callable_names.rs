@@ -8,7 +8,7 @@
 //! - Facts are unions across scopes and paths. Any opaque binding or escape wins.
 //! - Unknown targets can invoke a variable-table observer after later constant propagation.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::{CallableTarget, Expr, ExprKind};
 

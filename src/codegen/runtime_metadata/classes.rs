@@ -59,7 +59,7 @@ pub(in crate::codegen) fn runtime_referenced_class_names(module: &Module) -> Has
 
 /// Walks the module for [`runtime_referenced_class_names`].
 fn scan_runtime_referenced_class_names(module: &Module) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     if module.functions.iter().any(|function| function.signature.as_ref().is_some_and(|signature|
         signature.param_attributes.iter().flatten().flat_map(|group| &group.attributes)
             .any(|attribute| attribute.name.as_canonical().eq_ignore_ascii_case("SensitiveParameter")))) {
@@ -390,7 +390,7 @@ pub(in crate::codegen) fn runtime_referenced_interfaces(
     module: &Module,
     class_names: &HashSet<String>,
 ) -> HashMap<String, InterfaceInfo> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     if module.required_runtime_features.eval_bridge {
         names.extend(module.interface_infos.keys().cloned());
     }
@@ -478,7 +478,7 @@ fn class_metadata_supported_for_dynamic_instanceof_with_methods(
     module: &Module,
     emitted_methods: &HashSet<(String, String, bool)>,
 ) -> bool {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut current = Some(class_name);
     while let Some(name) = current {
         if !seen.insert(name.to_string()) {
@@ -578,7 +578,7 @@ pub(in crate::codegen) fn interface_metadata_supported_for_dynamic_instanceof(
     interface_name: &str,
     interfaces: &HashMap<String, InterfaceInfo>,
 ) -> bool {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut stack = vec![interface_name];
     while let Some(name) = stack.pop() {
         if !seen.insert(name.to_string()) {

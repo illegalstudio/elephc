@@ -13,7 +13,7 @@
 //! - The fused opcode retains the ordered operation list so codegen can switch to PHP float
 //!   semantics at the first overflowing operation and evaluate the remaining suffix exactly.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{
     BlockId, CheckedNumericChainImmediate, DataPool, Function, Immediate, InstId, IrType,
@@ -131,7 +131,7 @@ fn collect_chain(
             ChainRewrite {
                 operands: vec![lhs, rhs],
                 operations: vec![checked_operation(definition.op)?],
-                neutralize: HashSet::new(),
+                neutralize: HashSet::default(),
             }
         }
         Op::MixedNumericBinop => {
@@ -252,7 +252,7 @@ fn value_is_i64(function: &Function, value: ValueId) -> bool {
 
 /// Builds an instruction-use adjacency list for all SSA operands.
 fn instruction_uses(function: &Function) -> HashMap<ValueId, Vec<InstId>> {
-    let mut uses: HashMap<ValueId, Vec<InstId>> = HashMap::new();
+    let mut uses: HashMap<ValueId, Vec<InstId>> = HashMap::default();
     for (raw, instruction) in function.instructions.iter().enumerate() {
         let inst = InstId::from_raw(raw as u32);
         for operand in &instruction.operands {

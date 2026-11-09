@@ -29,7 +29,7 @@ mod registry;
 mod rule;
 mod walk;
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 
 pub use dev_packages::phpunit_closure;
@@ -124,7 +124,7 @@ pub fn run_collecting_included(
     base_dir: &Path,
     registry: &Registry,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
-    run_collecting_included_with_defines(program, base_dir, registry, &HashSet::new())
+    run_collecting_included_with_defines(program, base_dir, registry, &HashSet::default())
 }
 
 /// Runs autoload expansion while applying conditional symbols to every physical file loaded.
@@ -165,8 +165,8 @@ fn run_collecting_included_on_compiler_stack(
     if registry.is_empty() {
         return Ok((program, Vec::new(), DeclarationSourceFiles::default()));
     }
-    let mut included: HashSet<PathBuf> = HashSet::new();
-    let mut nested_includes: HashSet<PathBuf> = HashSet::new();
+    let mut included: HashSet<PathBuf> = HashSet::default();
+    let mut nested_includes: HashSet<PathBuf> = HashSet::default();
     let mut declaration_sources = DeclarationSourceFiles::default();
     let mut deferred: Vec<PathBuf> = Vec::new();
     // -- prefix always-included files first --
@@ -179,7 +179,7 @@ fn run_collecting_included_on_compiler_stack(
     // changes in place and this read from `prefix`, Symfony's console died on
     // `symfony\component\varexporter\deepclone_to_array()`, a function declared by a declined
     // eager file that the RUNTIME goes on to declare perfectly well.
-    let mut eager_globals: HashSet<String> = HashSet::new();
+    let mut eager_globals: HashSet<String> = HashSet::default();
     // An eager file an earlier round of this build handed back — the backend could not lower one
     // of its functions — is declined whole here, exactly as a half-taken one is below.
     let handed_back: HashSet<PathBuf> = deferral::inherited_deferred_files()
@@ -466,7 +466,7 @@ fn eager_global_function_keys(stmts: &[Stmt]) -> HashSet<String> {
             }
         }
     }
-    let mut out = HashSet::new();
+    let mut out = HashSet::default();
     walk(stmts, &mut out);
     out
 }
@@ -557,7 +557,7 @@ pub fn project_root(entry_dir: &Path) -> Option<PathBuf> {
 /// See [`walk::probe_only_class_names`]: these are the classes a closed-world build carries
 /// solely so `class_exists()` can answer, and which `class_exists($name, false)` must therefore
 /// still report as NOT LOADED.
-pub fn probe_only_class_names(program: &Program) -> std::collections::HashSet<String> {
+pub fn probe_only_class_names(program: &Program) -> crate::fast_hash::FastSet<String> {
     walk::probe_only_class_names(program)
 }
 
@@ -583,14 +583,14 @@ pub fn record_compile_time_inclusions(
         .iter()
         .map(|path| crate::source::canonical(&path).unwrap_or_else(|_| path.clone()))
         .collect();
-    let probe_only: std::collections::HashSet<String> = probe_only_class_names(program)
+    let probe_only: crate::fast_hash::FastSet<String> = probe_only_class_names(program)
         .into_iter()
         .map(|name| name.to_ascii_lowercase())
         .collect();
     if probe_only.is_empty() {
         return;
     }
-    let autoloaded: std::collections::HashSet<std::path::PathBuf> =
+    let autoloaded: crate::fast_hash::FastSet<std::path::PathBuf> =
         module.preincluded_sources.iter().cloned().collect();
     module.deferred_class_loads = module
         .declared_class_source_files
@@ -1042,7 +1042,7 @@ fn load_autoloaded_bundle(
     declared.extend(collect_declared_fqns(&loaded));
     let mut bundle: Program = Vec::new();
     if depth < AUTOLOAD_BUNDLE_MAX_DEPTH {
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut seen: HashSet<String> = HashSet::default();
         for dependency in walk::collect_file_scope_dependencies(&loaded) {
             if declared.contains(&dependency) || !seen.insert(dependency.clone()) {
                 continue;
@@ -1571,13 +1571,13 @@ fn fold_file_scope_existence_conditions(
     let has_return_type = |class: &str, method: &str, probe: TypeProbe| {
         autoloaded_method_has_return_type(class, method, probe, registry, base_dir, defines, 0)
     };
-    let mut folded = HashSet::new();
+    let mut folded = HashSet::default();
     let mut probes = ProbeResults::default();
     let body = fold_reflection_require_ternaries(
         body,
         &decide,
         &has_return_type,
-        &mut HashMap::new(),
+        &mut HashMap::default(),
         &mut probes,
         &mut folded,
     );
@@ -1729,7 +1729,7 @@ fn drop_unread_probe_results(body: Program, assigned: &HashSet<String>) -> Progr
     if assigned.is_empty() {
         return body;
     }
-    let mut read = HashSet::new();
+    let mut read = HashSet::default();
     crate::parser::ast::visit::walk_nodes(&body, &mut |node| {
         if let crate::parser::ast::visit::Node::Expr(expr) = node {
             if let ExprKind::Variable(name) = &expr.kind {
@@ -2529,7 +2529,7 @@ pub fn activate_entry_interface_declarations(program: Program, entry_path: &Path
     // Symfony\\...\\KernelInterface` on a front controller that `require_once`s a vendor interface
     // file -- and one added for a file the program never enters makes `interface_exists()` answer
     // true for an interface PHP never declared.
-    let mut activated: HashSet<String> = HashSet::new();
+    let mut activated: HashSet<String> = HashSet::default();
     collect_activated_class_like_names(&program, &mut activated);
     activate_interface_declarations(program, entry_path, &|name| {
         !activated.contains(&crate::names::php_symbol_key(name))

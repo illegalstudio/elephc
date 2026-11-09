@@ -171,11 +171,11 @@ pub(super) fn normalize_class_method_signatures_for_eir(
     module: &mut Module,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     user_filters_reachable: bool,
-    user_filter_registered: Option<&std::collections::HashSet<String>>,
+    user_filter_registered: Option<&crate::fast_hash::FastSet<String>>,
 ) {
     // A stream filter is a registered class or a `php_user_filter` descendant (see
     // `types::is_user_filter_class`), not any class with a method named `filter`.
-    let filter_classes: std::collections::HashSet<String> = if user_filters_reachable {
+    let filter_classes: crate::fast_hash::FastSet<String> = if user_filters_reachable {
         module
             .class_infos
             .keys()

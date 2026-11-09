@@ -27,8 +27,8 @@ fn layered_diamond_visits_each_interface_once() {
     let program = crate::parser::parse(&tokens).unwrap();
     let checked = crate::types::check(&program).unwrap();
     let mut names = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
+    let mut visited = crate::fast_hash::FastSet::default();
     collect_reflection_interface_method_names(
         &checked.interfaces, "Leaf", &mut names, &mut seen, &mut visited,
     );

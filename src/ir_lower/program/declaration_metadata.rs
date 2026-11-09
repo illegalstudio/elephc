@@ -13,8 +13,8 @@ use super::*;
 pub(super) fn lower_property_init_thunks(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, crate::types::FunctionSig>,
 ) {
     let mut classes = check_result.classes.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
@@ -65,7 +65,7 @@ pub(super) fn collect_declared_class_names(
     collect_program_declared_names(
         program,
         classes,
-        &mut HashSet::new(),
+        &mut HashSet::default(),
         &mut user_names,
         |stmt| match &stmt.kind {
             StmtKind::ClassDecl { name, .. } | StmtKind::EnumDecl { name, .. } => {
@@ -86,7 +86,7 @@ pub(super) fn collect_declared_interface_names(
     collect_program_declared_names(
         program,
         interfaces,
-        &mut HashSet::new(),
+        &mut HashSet::default(),
         &mut user_names,
         |stmt| match &stmt.kind {
             StmtKind::InterfaceDecl { name, .. } => Some(name.as_str()),
@@ -113,7 +113,7 @@ pub(super) fn collect_declared_trait_names(program: &Program) -> Vec<String> {
 
 /// Collects source line metadata for user-declared traits, keyed by trait name.
 pub(super) fn collect_declared_trait_source_lines(program: &Program) -> HashMap<String, u32> {
-    let mut lines = HashMap::new();
+    let mut lines = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl { name, .. } => {
@@ -132,7 +132,7 @@ pub(super) fn collect_declared_trait_source_lines(program: &Program) -> HashMap<
 pub(super) fn collect_declared_function_source_lines(
     program: &Program,
 ) -> HashMap<String, (u32, u32)> {
-    let mut lines = HashMap::new();
+    let mut lines = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::FunctionDecl { name, .. } => {
@@ -149,7 +149,7 @@ pub(super) fn collect_declared_function_source_lines(
 
 /// Collects direct trait-to-trait use declarations keyed by declaring trait name.
 pub(super) fn collect_declared_trait_uses(program: &Program) -> HashMap<String, Vec<String>> {
-    let mut uses = HashMap::new();
+    let mut uses = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {
@@ -179,7 +179,7 @@ pub(super) fn collect_declared_trait_uses(program: &Program) -> HashMap<String, 
 /// from `ReflectionMethod::getName()` exactly as it was written, and every consumer of this list
 /// re-keys with `php_symbol_key` before it looks anything up.
 pub(super) fn collect_declared_trait_method_names(program: &Program) -> HashMap<String, Vec<String>> {
-    let mut methods = HashMap::new();
+    let mut methods = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {
@@ -208,7 +208,7 @@ pub(super) fn collect_declared_trait_method_names(program: &Program) -> HashMap<
 pub(super) fn collect_declared_trait_methods(
     program: &Program,
 ) -> HashMap<String, HashMap<String, TraitMethodInfo>> {
-    let mut methods = HashMap::new();
+    let mut methods = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {
@@ -256,7 +256,7 @@ pub(super) fn collect_declared_trait_methods(
 pub(super) fn collect_declared_trait_properties(
     program: &Program,
 ) -> HashMap<String, Vec<crate::parser::ast::ClassProperty>> {
-    let mut properties = HashMap::new();
+    let mut properties = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {
@@ -280,7 +280,7 @@ pub(super) fn collect_declared_trait_properties(
 
 /// Collects direct PHP constant names declared by each trait in source order.
 pub(super) fn collect_declared_trait_constant_names(program: &Program) -> HashMap<String, Vec<String>> {
-    let mut constants = HashMap::new();
+    let mut constants = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {
@@ -307,7 +307,7 @@ pub(super) fn collect_declared_trait_constant_names(program: &Program) -> HashMa
 
 /// Collects direct PHP constant expressions declared by each trait.
 pub(super) fn collect_declared_trait_constants(program: &Program) -> HashMap<String, HashMap<String, Expr>> {
-    let mut constants = HashMap::new();
+    let mut constants = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {
@@ -336,7 +336,7 @@ pub(super) fn collect_declared_trait_constants(program: &Program) -> HashMap<Str
 pub(super) fn collect_declared_trait_constant_types(
     program: &Program,
 ) -> HashMap<String, HashMap<String, crate::parser::ast::TypeExpr>> {
-    let mut types = HashMap::new();
+    let mut types = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {
@@ -370,7 +370,7 @@ pub(super) fn collect_declared_trait_constant_types(
 pub(super) fn collect_declared_trait_constant_visibilities(
     program: &Program,
 ) -> HashMap<String, HashMap<String, Visibility>> {
-    let mut constants = HashMap::new();
+    let mut constants = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {
@@ -397,7 +397,7 @@ pub(super) fn collect_declared_trait_constant_visibilities(
 
 /// Collects direct PHP final constant names declared by each trait.
 pub(super) fn collect_declared_trait_final_constants(program: &Program) -> HashMap<String, HashSet<String>> {
-    let mut constants = HashMap::new();
+    let mut constants = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {
@@ -490,7 +490,7 @@ pub(super) fn value_or_void_ir_type(php_type: &PhpType) -> IrType {
 pub(super) fn collect_imported_trait_method_names(
     program: &Program, classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> HashMap<String, HashSet<String>> {
-    let mut imported = HashMap::new();
+    let mut imported = HashMap::default();
     for statement in program {
         match &statement.kind {
             StmtKind::ClassDecl { name, methods, .. } | StmtKind::EnumDecl { name, methods, .. } => {

@@ -35,7 +35,7 @@
 //!   typing, and merge typing and the closure stamp read that view
 //!   (`caller_visible_checker_return_type`).
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{FunctionSig, PhpType};
@@ -66,7 +66,7 @@ pub fn dynamic_untyped_param_names(
     signature: &FunctionSig,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
 ) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for (index, (name, php_type)) in signature.params.iter().enumerate() {
         let declared = signature
             .declared_params

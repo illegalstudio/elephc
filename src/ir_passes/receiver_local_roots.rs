@@ -8,7 +8,7 @@
 //! - A single owning entry store must dominate every read, with no alias or later slot mutation.
 //! - Exception handlers and special local storage fail closed.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, Ownership, ValueDef};
 use crate::types::PhpType;
@@ -17,7 +17,7 @@ use crate::types::PhpType;
 pub(super) fn owned_local_roots(function: &Function) -> HashSet<LocalSlotId> {
     if function.flags.is_main || super::cfg::has_exception_handlers(function)
         || !super::cfg::predecessors(function)[function.entry.as_raw() as usize].is_empty()
-    { return HashSet::new(); }
+    { return HashSet::default(); }
     let escaping = super::by_ref_alias::address_escaping_slots(function);
     let mut owners: HashSet<_> = function.locals.iter().filter(|local| {
         local.kind == LocalKind::PhpLocal
@@ -25,11 +25,11 @@ pub(super) fn owned_local_roots(function: &Function) -> HashSet<LocalSlotId> {
             && matches!(&local.php_type, PhpType::Object(name) if !name.is_empty())
             && !escaping.contains(&local.id)
     }).map(|local| local.id).collect();
-    if owners.is_empty() { return HashSet::new(); }
-    let mut stores: HashMap<LocalSlotId, Vec<_>> = HashMap::new();
-    let mut loads: HashMap<LocalSlotId, Vec<_>> = HashMap::new();
-    let mut root_stores: HashMap<LocalSlotId, Vec<_>> = HashMap::new();
-    let mut invalid_roots = HashSet::new();
+    if owners.is_empty() { return HashSet::default(); }
+    let mut stores: HashMap<LocalSlotId, Vec<_>> = HashMap::default();
+    let mut loads: HashMap<LocalSlotId, Vec<_>> = HashMap::default();
+    let mut root_stores: HashMap<LocalSlotId, Vec<_>> = HashMap::default();
+    let mut invalid_roots = HashSet::default();
     for block in &function.blocks {
         for (index, &id) in block.instructions.iter().enumerate() {
             let inst = &function.instructions[id.as_raw() as usize];

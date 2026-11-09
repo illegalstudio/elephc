@@ -632,7 +632,7 @@ fn shares_a_cached_property_record_before_loop_resolution() {
     let ValueDef::Instruction { inst: property_inst, .. } = built.function.values[property.as_raw() as usize].def
         else { unreachable!("property read defines the handle"); };
     crate::ir_passes::rewrite::replace_all_uses(
-        &mut built.function, &std::collections::HashMap::from([(property, built.first_property)]),
+        &mut built.function, &crate::fast_hash::FastMap::from_iter([(property, built.first_property)]),
     );
     crate::ir_passes::rewrite::neutralize_to_nop(&mut built.function.instructions[property_inst.as_raw() as usize]);
     let (changed, function) = run(built.function);

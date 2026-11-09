@@ -20,7 +20,7 @@
 //!   preempted — but it needs one for SIZE: every `.globl` in a Mach-O image is an export, hence
 //!   a `-dead_strip` root, so without marking, dead stripping a dylib collects nothing.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 /// Scans `asm` for `.globl`/`.comm` symbol declarations and returns the same
 /// assembly with a trailing block of visibility directives covering every
@@ -93,7 +93,7 @@ fn hidden_symbols(
     exported: &HashSet<String>,
     additional_internal: &[&str],
 ) -> Vec<String> {
-    let mut seen = HashSet::<String>::new();
+    let mut seen = HashSet::<String>::default();
     let mut hidden = Vec::<String>::new();
     for symbol in additional_internal {
         if !symbol.is_empty() && !exported.contains(*symbol) && seen.insert((*symbol).to_string()) {
@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn deduplicates_and_preserves_declaration_order() {
         let asm = ".globl _b\n_b:\n.globl _a\n_a:\n.globl _b\n";
-        let out = append_hidden_directives(asm, &HashSet::new(), Platform::Linux);
+        let out = append_hidden_directives(asm, &HashSet::default(), Platform::Linux);
         let b = out.find(".hidden _b").expect("hidden _b present");
         let a = out.find(".hidden _a").expect("hidden _a present");
         assert!(b < a, "first-declared symbol must be hidden first");
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn leaves_asm_without_globals_untouched() {
         let asm = "    mov x0, #0\n    ret\n";
-        assert_eq!(append_hidden_directives(asm, &HashSet::new(), Platform::Linux), asm);
+        assert_eq!(append_hidden_directives(asm, &HashSet::default(), Platform::Linux), asm);
     }
 
     /// Uses Mach-O private extern visibility while preserving public symbols.

@@ -162,7 +162,7 @@ pub fn check_with_options(
 /// keep the filter contract's raw-argument ABI for such a class only.
 pub(crate) fn is_user_filter_class(
     classes: &crate::fast_hash::FastMap<String, ClassInfo>,
-    registered: Option<&std::collections::HashSet<String>>,
+    registered: Option<&crate::fast_hash::FastSet<String>>,
     class_name: &str,
 ) -> bool {
     let Some(registered) = registered else {

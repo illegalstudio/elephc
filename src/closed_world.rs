@@ -211,7 +211,7 @@ pub fn include_table(module: &crate::ir::Module) -> Vec<crate::ir::ClosedInclude
     let Some(catalog) = module.source_catalog() else {
         return Vec::new();
     };
-    let units: std::collections::HashMap<&std::path::Path, &str> = module
+    let units: crate::fast_hash::FastMap<&std::path::Path, &str> = module
         .include_units
         .iter()
         .filter(|unit| {

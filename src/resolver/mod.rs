@@ -11,7 +11,7 @@
 //!   resolver statically loaded, which `crate::opcache_prelude` bakes into the OPcache script
 //!   manifest.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 
 mod contains;
@@ -158,7 +158,7 @@ pub fn resolve_collecting_includes(
     program: Program,
     base_dir: &Path,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
-    resolve_collecting_includes_with_defines(program, base_dir, &HashSet::new())
+    resolve_collecting_includes_with_defines(program, base_dir, &HashSet::default())
 }
 
 /// Which physical file declares each class-like and function pulled in through includes.
@@ -246,7 +246,7 @@ fn resolve_collecting_includes_with_defines_and_sources_inner(
     }
 
     let discovery = discover_include_declarations(&program, base_dir, defines)?;
-    let mut declared_once: HashSet<PathBuf> = HashSet::new();
+    let mut declared_once: HashSet<PathBuf> = HashSet::default();
     let mut include_chain: Vec<PathBuf> = Vec::new();
     let mut state = ResolveState::with_conditional_defines(defines);
     let resolved = resolve_stmts(

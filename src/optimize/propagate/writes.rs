@@ -57,7 +57,7 @@ pub(crate) fn safe_foreach_env(
 /// Returns `env` minus the names in `inv` (`All` empties it).
 fn filter_written(env: &ConstantEnv, inv: Invalidation) -> ConstantEnv {
     match inv {
-        Invalidation::All => HashMap::new(),
+        Invalidation::All => HashMap::default(),
         Invalidation::Names(written) => env
             .iter()
             .filter(|(name, _)| !written.contains(*name))

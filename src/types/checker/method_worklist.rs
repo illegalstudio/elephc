@@ -16,7 +16,7 @@
 //!   field outside its methods and properties.
 //! - `ELEPHC_CHECK_VERIFY=1` repeats a full pass after convergence and reports a difference.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 
@@ -183,7 +183,7 @@ fn moved_names(before: &ClassTable, after: &ClassTable) -> Option<HashSet<String
     if before.len() != after.len() {
         return None;
     }
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for (class_name, after_class) in after {
         let before_class = before.get(class_name)?;
         if before_class == after_class {
@@ -250,12 +250,12 @@ mod tests {
             tokens: tokens("uses getname"),
         });
         assert!(worklist.kept_result(unit, "own").is_none(), "a first pass walks everything");
-        worklist.moved = Some(HashSet::from([token_hash("other")]));
+        worklist.moved = Some(HashSet::from_iter([token_hash("other")]));
         assert!(worklist.kept_result(unit, "own").is_some());
         assert!(worklist.kept_any());
-        worklist.moved = Some(HashSet::from([token_hash("getname")]));
+        worklist.moved = Some(HashSet::from_iter([token_hash("getname")]));
         assert!(worklist.kept_result(unit, "own").is_none());
-        worklist.moved = Some(HashSet::from([token_hash("own")]));
+        worklist.moved = Some(HashSet::from_iter([token_hash("own")]));
         assert!(worklist.kept_result(unit, "own").is_none());
     }
 
@@ -297,7 +297,7 @@ mod tests {
             seed_params: Vec::new(),
             tokens: tokens("ExprCall"),
         });
-        let mut moved = HashSet::from([token_hash("other")]);
+        let mut moved = HashSet::from_iter([token_hash("other")]);
         moved.extend(DYNAMIC_NODES.iter().map(|node| token_hash(node)));
         worklist.moved = Some(moved);
         assert!(worklist.kept_result(unit, "own").is_none());

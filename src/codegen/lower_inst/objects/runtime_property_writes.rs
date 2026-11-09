@@ -507,11 +507,11 @@ fn table_addressable_classes_outside(
     explicit: &[MixedPropertyWriteCandidate],
     routed: &[u64],
 ) -> Vec<u64> {
-    let routed = routed.iter().copied().collect::<std::collections::HashSet<_>>();
+    let routed = routed.iter().copied().collect::<crate::fast_hash::FastSet<_>>();
     let explicit = explicit
         .iter()
         .map(|candidate| candidate.class_id)
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<crate::fast_hash::FastSet<_>>();
     let mut ids = ctx
         .module
         .class_infos

@@ -22,7 +22,7 @@
 //!   `.erased` extension), each file under the hash of its bytes, so the next build of the same
 //!   program erases up front instead of paying the failed round again.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -48,7 +48,7 @@ const MAX_ERASURE_ROUNDS: u32 = 8;
 /// thread-local: the autoload pass parses files on worker threads.
 fn adopted() -> &'static Mutex<HashSet<PathBuf>> {
     static ADOPTED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
-    ADOPTED.get_or_init(|| Mutex::new(HashSet::new()))
+    ADOPTED.get_or_init(|| Mutex::new(HashSet::default()))
 }
 
 /// The entry program, which keys the memo; set once per compile before any file is parsed.
@@ -324,12 +324,12 @@ mod tests {
             error
         };
         let missing = refusal("Unknown class referenced during inheritance flattening: A\\B");
-        assert!(implicated_files(&missing, &HashMap::new()).is_empty());
+        assert!(implicated_files(&missing, &HashMap::default()).is_empty());
         let generic = refusal("Method 'Box<int>::get' return type expects int, got string");
-        assert_eq!(implicated_files(&generic, &HashMap::new()), vec![path.clone()]);
+        assert_eq!(implicated_files(&generic, &HashMap::default()), vec![path.clone()]);
         let mut both = missing;
         both.related.push(generic);
-        assert!(implicated_files(&both, &HashMap::new()).is_empty());
+        assert!(implicated_files(&both, &HashMap::default()).is_empty());
         adopted().lock().unwrap().remove(&path);
         std::fs::remove_file(&path).unwrap();
     }

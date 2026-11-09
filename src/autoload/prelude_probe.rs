@@ -20,7 +20,7 @@
 //! - A probe failure is not reported here: the real pass hits the same error and reports it.
 //! - The web environment group retains process entries when an autoloaded file observes them.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::Path;
 
 use crate::parser::ast::{Program, Stmt};
@@ -58,7 +58,7 @@ pub fn autoloaded_prelude_groups(
     defines: &HashSet<String>,
 ) -> HashSet<&'static str> {
     if registry.is_empty() {
-        return HashSet::new();
+        return HashSet::default();
     }
     // What this walk parses is kept for the real walk, spans and anonymous class names included,
     // so its source identities stay taken: the two walks must never hand one out twice.
@@ -67,7 +67,7 @@ pub fn autoloaded_prelude_groups(
             super::run_collecting_included_with_defines(resolved, base_dir, registry, defines).ok()
         })
     });
-    let groups = closure.map_or_else(HashSet::new, |(closure, _)| {
+    let groups = closure.map_or_else(HashSet::default, |(closure, _)| {
         PROBED_GROUPS
             .iter()
             .filter(|(_, detect)| detect(&closure))

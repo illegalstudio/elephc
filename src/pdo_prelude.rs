@@ -85,7 +85,7 @@ fn program_uses_pdo_on_compiler_stack(program: &[Stmt]) -> bool {
 /// does not declare. Extern blocks parse into flat top-level `ExternFunctionDecl`
 /// statements, so a top-level name scan is sufficient.
 pub fn inject_bridge_externs(program: Program) -> Program {
-    use std::collections::HashSet;
+    use crate::fast_hash::FastSet as HashSet;
     let existing: HashSet<String> = program
         .iter()
         .filter_map(|stmt| match &stmt.kind {

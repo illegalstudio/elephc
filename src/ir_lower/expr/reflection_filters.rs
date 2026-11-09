@@ -156,7 +156,7 @@ pub(super) fn reflection_class_method_names_for_filter(
 /// `ClassInfo::reflection_methods` carries php's order; a method only the signature maps know
 /// (an interface contract an abstract class leaves open) follows it, sorted so the list is stable.
 pub(crate) fn reflection_class_method_order(class_info: &crate::types::ClassInfo) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     let mut names = Vec::new();
     for name in &class_info.reflection_methods {
         let key = php_symbol_key(name);

@@ -12,7 +12,7 @@
 use crate::names::php_symbol_key;
 use crate::parser::ast::Stmt;
 use crate::prelude_prune::usage::Usage;
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 /// The throwables that must be registered no matter what the program says.
 ///
@@ -280,7 +280,7 @@ pub(crate) fn program_may_register_user_filter(program: &[Stmt]) -> bool {
 pub(crate) fn user_filter_registered_classes(program: &[Stmt]) -> Option<HashSet<String>> {
     use crate::parser::ast::visit::{walk_nodes, Node};
     use crate::parser::ast::{ExprKind, StaticReceiver};
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     let mut dynamic = false;
     walk_nodes(program, &mut |node| {
         let Node::Expr(expr) = node else {

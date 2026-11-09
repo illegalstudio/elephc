@@ -249,7 +249,7 @@ pub(crate) fn write_speedscope(
     out_path: &str,
 ) -> Result<(), String> {
     let mut frames: Vec<serde_json::Value> = Vec::new();
-    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut index: HashMap<String, usize> = HashMap::default();
     let mut frame_index = |name: &str, frames: &mut Vec<serde_json::Value>| -> usize {
         if let Some(&i) = index.get(name) {
             return i;

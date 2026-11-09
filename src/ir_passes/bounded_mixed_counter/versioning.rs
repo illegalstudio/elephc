@@ -187,7 +187,7 @@ fn analyze(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Bounde
 
 /// Preserves consumer representations and PHP semantics when committing a scalar counter.
 fn committed_proof(function: &Function, slot: LocalSlotId, pass: &BoundedMixedCounter, data: &DataPool) -> Option<CounterProof> {
-    let proof = CounterProof::for_slots(function, &HashSet::from([slot]), pass, data, Some(&HashMap::new()))?;
+    let proof = CounterProof::for_slots(function, &HashSet::from_iter([slot]), pass, data, Some(&HashMap::default()))?;
     // Storage trials can use the broader value-only inventory because ordinary AST lowering
     // rebuilds their conversions. A committed copy keeps the old opcode, so fixed-box consumers
     // and coercing stores must retain the original generic loop instead.

@@ -69,7 +69,7 @@ fn generate_project_asm(
         program,
         &sources.autoloaded_files,
     );
-    let exported_functions = HashMap::new();
+    let exported_functions = HashMap::default();
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
     let generated_user_asm = elephc::codegen::generate_user_asm_from_ir_with_options_and_features(
         &ir_module,
@@ -458,7 +458,7 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
-    let define_set = HashSet::new();
+    let define_set = HashSet::default();
     let ast = elephc::conditional::apply(ast, &define_set);
     let (autoload_registry, ast) = elephc::autoload::Registry::build(&dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
@@ -558,7 +558,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let tokens = elephc::lexer::tokenize(&source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
-    let define_set = HashSet::new();
+    let define_set = HashSet::default();
     let ast = elephc::conditional::apply(ast, &define_set);
     let (resolved, included_files, included_sources) = elephc::resolver::resolve_collecting_includes_with_defines_and_sources(
         ast, base_dir, &define_set,
@@ -987,7 +987,7 @@ fn compile_and_run_with_stdin_mode(source: &str, stdin_data: &str, seekable: boo
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let (resolved, included_files, included_sources) = elephc::resolver::resolve_collecting_includes_with_defines_and_sources(
-        ast, &dir, &HashSet::new(),
+        ast, &dir, &HashSet::default(),
     ).expect("resolve failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::default();
     let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);

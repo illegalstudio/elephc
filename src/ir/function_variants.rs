@@ -14,7 +14,7 @@
 //! - Resolution for {group, variant} indexes into the collected dispatch groups
 //!   (order determined by discovery over data.strings + functions).
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::Module;
 use crate::names::php_symbol_key;
@@ -89,7 +89,7 @@ fn scan_dispatch_groups(module: &Module) -> Vec<FunctionVariantLabel> {
         .iter()
         .map(|function| normalized_function_key(&function.name))
         .collect::<HashSet<_>>();
-    let mut seen_groups = HashSet::new();
+    let mut seen_groups = HashSet::default();
     let mut groups = Vec::new();
     for value in &module.data.strings {
         let Some(mut label) = parse_variant_label(value) else {

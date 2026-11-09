@@ -9,7 +9,7 @@
 //! - Flags control need-any/need-all validity and numeric/associative output keys.
 //! - Iterator/info arrays stay parallel and are rebuilt when detaching.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;

@@ -394,17 +394,17 @@ mod tests {
     /// table is not padded with entries that would produce noise.
     #[test]
     fn constants_present_in_the_table_really_vary() {
-        let distinct_strings: std::collections::HashSet<_> =
+        let distinct_strings: crate::fast_hash::FastSet<_> =
             PhpVersion::MAINTAINED
                 .iter()
                 .map(|p| p.version_string())
                 .collect();
-        let distinct_ids: std::collections::HashSet<_> =
+        let distinct_ids: crate::fast_hash::FastSet<_> =
             PhpVersion::MAINTAINED
                 .iter()
                 .map(|p| p.version_id())
                 .collect();
-        let distinct_minors: std::collections::HashSet<_> =
+        let distinct_minors: crate::fast_hash::FastSet<_> =
             PhpVersion::MAINTAINED.iter().map(|p| p.minor()).collect();
         assert_eq!(distinct_strings.len(), PhpVersion::MAINTAINED.len());
         assert_eq!(distinct_ids.len(), PhpVersion::MAINTAINED.len());
@@ -461,7 +461,7 @@ mod tests {
     /// Every table entry names a distinct symbol, so a dependence is never reported twice.
     #[test]
     fn table_has_no_duplicate_symbols() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = crate::fast_hash::FastSet::default();
         for watched in WATCHED {
             assert!(
                 seen.insert(watched.symbol),

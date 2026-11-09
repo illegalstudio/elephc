@@ -75,8 +75,8 @@ fn scan_class_methods_in_parallel(
 
 impl DeclarationIndex {
     /// Returns statically resolved class-alias targets declared anywhere in source callables.
-    pub(super) fn class_alias_targets(&self) -> std::collections::HashSet<String> {
-        let mut targets = std::collections::HashSet::new();
+    pub(super) fn class_alias_targets(&self) -> crate::fast_hash::FastSet<String> {
+        let mut targets = crate::fast_hash::FastSet::default();
         for usage in self.functions.values() {
             targets.extend(usage.class_alias_targets.iter().cloned());
         }

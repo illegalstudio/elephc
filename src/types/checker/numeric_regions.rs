@@ -8,7 +8,7 @@
 //! - A region starts at a plain assignment or a for initializer and never nests.
 //! - Unknown scope access and reference-bearing constructs conservatively veto splitting.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 
@@ -24,9 +24,9 @@ struct Facts {
 /// Finds starts only for names whose every occurrence belongs to an initialized region.
 pub(super) fn find(body: &[Stmt], incoming: &HashMap<String, crate::types::PhpType>) -> (HashMap<Span, HashSet<String>>, HashMap<String, HashSet<String>>) {
     let mut facts = Facts::default();
-    statements(body, &HashSet::new(), &mut facts);
-    let mut result: HashMap<Span, HashSet<String>> = HashMap::new();
-    if facts.veto { return (result, HashMap::new()); }
+    statements(body, &HashSet::default(), &mut facts);
+    let mut result: HashMap<Span, HashSet<String>> = HashMap::default();
+    if facts.veto { return (result, HashMap::default()); }
     let mut pending: Vec<_> = facts.untrusted.iter().cloned().collect();
     while let Some(name) = pending.pop() {
         for dependent in facts.dependents.get(&name).into_iter().flatten() {

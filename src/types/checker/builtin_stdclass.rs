@@ -9,7 +9,7 @@
 //! - `stdClass` has no declared properties; property reads and writes are typed as `mixed` and handled by runtime hash helpers.
 //! - `__PHP_Incomplete_Class` is an internal nominal type produced by deserialization and is not constructible by user code.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;

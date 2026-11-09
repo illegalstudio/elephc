@@ -43,7 +43,7 @@ impl Checker {
         php_ret: &PhpType,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = crate::fast_hash::FastSet::default();
         let mut int_regs = 0usize;
         let mut float_regs = 0usize;
 

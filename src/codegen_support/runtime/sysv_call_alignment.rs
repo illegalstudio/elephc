@@ -32,7 +32,7 @@
 //!   silently corrupting a callee, so the same class of bug cannot lie dormant there. Both
 //!   aarch64 targets passed the curl fixture this audit was written for.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::codegen_support::platform::Target;
 use crate::codegen_support::runtime_features::RuntimeFeatures;
@@ -412,7 +412,7 @@ fn is_register(operand: &str) -> bool {
 /// arrangement as "the walk lost track". A conflict WITHIN a single walk still means exactly
 /// that, and is reported.
 fn analyze(function: &Function) -> Analysis {
-    let mut labels: HashMap<&str, usize> = HashMap::new();
+    let mut labels: HashMap<&str, usize> = HashMap::default();
     for (index, (_, text)) in function.body.iter().enumerate() {
         if let Some(name) = label_of(text) {
             labels.insert(name, index);
@@ -429,13 +429,13 @@ fn analyze(function: &Function) -> Analysis {
         return Analysis { unanalyzable: None, misaligned: Vec::new() };
     }
 
-    let mut visited: HashMap<usize, i64> = HashMap::new();
+    let mut visited: HashMap<usize, i64> = HashMap::default();
     let mut misaligned: Vec<(usize, String, i64)> = Vec::new();
     let mut entry = labels.get(function.name.as_str()).copied();
 
     loop {
         let Some(start) = entry else { break };
-        let mut seen: HashMap<usize, i64> = HashMap::new();
+        let mut seen: HashMap<usize, i64> = HashMap::default();
         if let Some(reason) = walk(&function.body, &labels, start, &mut seen, &mut misaligned) {
             return Analysis { unanalyzable: Some(reason), misaligned: Vec::new() };
         }
@@ -554,8 +554,8 @@ fn runtime_asm(features: RuntimeFeatures) -> String {
 /// Audits both feature profiles and returns, per helper name, whether it was seen at all,
 /// whether it violated, and whether it was unanalyzable.
 fn audit() -> (HashMap<String, Vec<(usize, String, i64)>>, HashMap<String, String>, Vec<String>) {
-    let mut violations: HashMap<String, Vec<(usize, String, i64)>> = HashMap::new();
-    let mut unanalyzable: HashMap<String, String> = HashMap::new();
+    let mut violations: HashMap<String, Vec<(usize, String, i64)>> = HashMap::default();
+    let mut unanalyzable: HashMap<String, String> = HashMap::default();
     let mut seen: Vec<String> = Vec::new();
     for features in [RuntimeFeatures::none(), RuntimeFeatures::all()] {
         let asm = runtime_asm(features);

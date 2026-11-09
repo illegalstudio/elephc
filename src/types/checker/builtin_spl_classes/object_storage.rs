@@ -9,7 +9,7 @@
 //! - Object identity uses strict comparison against stored object handles.
 //! - The parallel arrays are ordinary object properties, so object deep-free finalizes each instance.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{BinOp, ClassMethod, ClassProperty, Expr, Stmt, TypeExpr, Visibility};
 use crate::types::traits::FlattenedClass;

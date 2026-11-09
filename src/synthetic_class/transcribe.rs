@@ -51,7 +51,7 @@ pub fn transcribe(program: &Program) -> String {
 pub fn transcribe_split(program: &Program, aggregator: &str) -> String {
     let mut helpers = String::new();
     let mut calls = String::new();
-    let mut used: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut used: crate::fast_hash::FastMap<String, usize> = crate::fast_hash::FastMap::default();
 
     // A prelude's top level is not necessarily all declarations: the web prelude's bootstrap
     // (superglobal population, session auto-start) is executable, and it must keep its POSITION

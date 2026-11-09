@@ -8,7 +8,7 @@
 //! Key details:
 //! - String keys become named arguments, numeric keys remain positional, and duplicate static keys follow PHP last-wins behavior.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
@@ -228,7 +228,7 @@ fn expand_static_assoc_spread(
     spread_span: Span,
 ) -> Option<Vec<(Expr, ExpandedArgOrigin)>> {
     let mut positional_args = Vec::new();
-    let mut positional_keys = HashSet::new();
+    let mut positional_keys = HashSet::default();
     let mut named_args: Vec<(String, Expr)> = Vec::new();
     for (key, value) in pairs {
         match static_assoc_spread_key(key)? {

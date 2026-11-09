@@ -176,7 +176,7 @@ fn emit_object_binary_plan(
             Some(Immediate::Data(name)), result_type, effects, Some(expr.span))
     };
     unpin_in_flight_owners(ctx, pins, expr.span);
-    let mut retired = HashSet::new();
+    let mut retired = HashSet::default();
     for argument in [left_arg, right_arg, lhs, rhs].into_iter().chain(extra) {
         if !consume && (argument.value == lhs.value || argument.value == rhs.value) { continue; }
         if retired.insert(argument.value) {

@@ -18,7 +18,7 @@
 //! - A new compilation-wide thread-local belongs here as well, or a parallel phase reads its
 //!   default.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 /// The compilation-wide thread-local facts of the compiling thread; see the module docs.
 pub(crate) struct CompileThreadContext {

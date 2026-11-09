@@ -9,7 +9,7 @@
 //! Key details:
 //! - Target dependencies are tracked so PHP evaluation order is preserved during lowering.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::stmt::{
@@ -588,7 +588,7 @@ impl AssignmentExpressionLowerer {
 /// depends on. Used to detect when stabilization is required to preserve
 /// evaluation order (e.g., `$arr[$i] = $arr[$j]` where RHS reads `$arr`).
 pub(super) fn assignment_value_may_mutate_target_dependency(target: &Expr, value: &Expr) -> bool {
-    let mut dependencies = HashSet::new();
+    let mut dependencies = HashSet::default();
     collect_assignment_target_dependencies(target, &mut dependencies);
     !dependencies.is_empty() && expr_may_write_dependency(value, &dependencies)
 }
@@ -1009,7 +1009,7 @@ fn instanceof_target_may_write_dependency(
 /// dependency set. Collects all dependencies from the expression and checks
 /// for overlap with the provided set.
 fn expr_contains_dependency(expr: &Expr, dependencies: &HashSet<String>) -> bool {
-    let mut found = HashSet::new();
+    let mut found = HashSet::default();
     collect_assignment_target_dependencies(expr, &mut found);
     found.iter().any(|name| dependencies.contains(name))
 }

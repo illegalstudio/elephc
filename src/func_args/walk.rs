@@ -30,7 +30,7 @@
 //!   A surviving dynamic `include`/`require` is deliberately not a trigger: it lowers to a
 //!   runtime stub that cannot execute PHP source, so it can reach no new frame.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::names::{Name, NameKind};
@@ -81,7 +81,7 @@ impl Rewriter {
             capture_all_frames,
             rewrite_introspection,
             saw_backtrace: false,
-            capture_opt_outs: HashMap::new(),
+            capture_opt_outs: HashMap::default(),
             next_scope_opts_out_of_capture: false,
         }
     }

@@ -913,13 +913,13 @@ thread_local! {
     /// The operations the checker typed as a `Number` overload (`CheckResult::bcmath_operator_sites`),
     /// published for one program-lowering invocation. The lowering asks this instead of re-deriving
     /// the operand types, so the two cannot disagree about which `+` is a call.
-    static OPERATOR_SITES: std::cell::RefCell<std::collections::HashSet<crate::span::Span>> =
-        std::cell::RefCell::new(std::collections::HashSet::new());
+    static OPERATOR_SITES: std::cell::RefCell<crate::fast_hash::FastSet<crate::span::Span>> =
+        std::cell::RefCell::new(crate::fast_hash::FastSet::default());
 }
 
 /// Restores the enclosing lowering invocation's operator sites on drop.
 pub(crate) struct OperatorSitesGuard {
-    previous: std::collections::HashSet<crate::span::Span>,
+    previous: crate::fast_hash::FastSet<crate::span::Span>,
 }
 
 impl Drop for OperatorSitesGuard {
@@ -931,7 +931,7 @@ impl Drop for OperatorSitesGuard {
 
 /// Publishes the checker's `Number` operator sites for one program-lowering invocation.
 pub(crate) fn set_operator_sites(
-    sites: std::collections::HashSet<crate::span::Span>,
+    sites: crate::fast_hash::FastSet<crate::span::Span>,
 ) -> OperatorSitesGuard {
     let previous = OPERATOR_SITES.with(|set| std::mem::replace(&mut *set.borrow_mut(), sites));
     OperatorSitesGuard { previous }

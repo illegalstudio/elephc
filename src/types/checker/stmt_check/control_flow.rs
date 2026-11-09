@@ -17,7 +17,7 @@
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, property_hook_get_method};
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::parser::ast::{
     BinOp, CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, Visibility,
@@ -69,8 +69,8 @@ fn stabilize_loop_storage(
         return;
     }
     let snapshot = env.clone();
-    let mut call_types: std::collections::HashMap<crate::span::Span, PhpType> =
-        std::collections::HashMap::new();
+    let mut call_types: crate::fast_hash::FastMap<crate::span::Span, PhpType> =
+        crate::fast_hash::FastMap::default();
     let contracts = crate::types::checker::loop_carried_storage_types(
         body,
         update,
@@ -176,7 +176,7 @@ pub(super) fn widen_by_ref_foreach_source_storage(
         else {
             return Ok(());
         };
-        let mut reachable_declarations = HashSet::from([declaring_class]);
+        let mut reachable_declarations = HashSet::from_iter([declaring_class]);
         if matches!(receiver, StaticReceiver::Static) {
             for (class_name, info) in &checker.classes {
                 if class_name != &access_class
@@ -550,7 +550,7 @@ fn joined_callable_array_targets(
     versions: &[HashMap<String, u64>],
 ) -> (HashMap<String, CallableTarget>, HashMap<String, u64>) {
     let Some(first) = exits.first() else {
-        return (HashMap::new(), HashMap::new());
+        return (HashMap::default(), HashMap::default());
     };
     let targets = first
         .iter()

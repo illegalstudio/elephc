@@ -11,7 +11,7 @@
 //!   system libraries, and libdl needs.
 //! - An unresolved, empty, non-file, or symlinked bridge fails before command rendering.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
@@ -530,9 +530,9 @@ where
     F: FnMut(&BridgeStaticlib) -> Result<PathBuf, LinkError>,
 {
     let plan = plan.without_redundant_embedded_bridges();
-    let mut located: HashMap<&'static str, PathBuf> = HashMap::new();
+    let mut located: HashMap<&'static str, PathBuf> = HashMap::default();
     let mut bridge_paths = Vec::new();
-    let mut seen_paths = HashSet::new();
+    let mut seen_paths = HashSet::default();
     let mut metadata = BridgeLinkMetadata::new(platform);
     let mut ordered = Vec::with_capacity(plan.items().len());
 
@@ -631,9 +631,9 @@ impl BridgeLinkMetadata {
             platform,
             needs_libdl: false,
             frameworks: Vec::new(),
-            seen_frameworks: HashSet::new(),
+            seen_frameworks: HashSet::default(),
             apple_libraries: Vec::new(),
-            seen_apple_libraries: HashSet::new(),
+            seen_apple_libraries: HashSet::default(),
         }
     }
 
@@ -1251,7 +1251,7 @@ impl BridgeStaticlib {
     fn claim_rebuild_attempt(&self) -> bool {
         static ATTEMPTED: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
         ATTEMPTED
-            .get_or_init(|| Mutex::new(HashSet::new()))
+            .get_or_init(|| Mutex::new(HashSet::default()))
             .lock()
             .is_ok_and(|mut attempted| attempted.insert(self.crate_name))
     }
@@ -1274,7 +1274,7 @@ impl BridgeStaticlib {
             return false;
         };
         let mut pending = vec![workspace.join("crates").join(self.crate_name)];
-        let mut visited: HashSet<PathBuf> = HashSet::new();
+        let mut visited: HashSet<PathBuf> = HashSet::default();
         while let Some(crate_dir) = pending.pop() {
             let identity = std::fs::canonicalize(&crate_dir).unwrap_or_else(|_| crate_dir.clone());
             if !visited.insert(identity) {

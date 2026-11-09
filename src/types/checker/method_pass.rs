@@ -30,7 +30,7 @@ impl Checker {
     /// parameters and the matching physical parameters as `Mixed`, including inherited copies,
     /// before direct calls can specialize a concrete method's signature.
     pub(super) fn box_untyped_interface_method_params(&mut self) {
-        let mut boxed = std::collections::HashSet::new();
+        let mut boxed = crate::fast_hash::FastSet::default();
         for class_info in self.classes.values() {
             for interface_name in &class_info.interfaces {
                 let Some(interface_info) = self.interfaces.get(interface_name) else {
@@ -101,7 +101,7 @@ impl Checker {
     /// passed a string to `instance(DateTimeInterface $date)` -- a refusal that sent Carbon to
     /// the interpreter.
     fn keep_instanceof_tested_params_gradual(&mut self) {
-        let mut tested = std::collections::HashSet::new();
+        let mut tested = crate::fast_hash::FastSet::default();
         for (class_name, class_info) in &self.classes {
             for method in &class_info.method_decls {
                 for (index, (name, type_expr, _, _)) in method.params.iter().enumerate() {
@@ -369,7 +369,7 @@ impl Checker {
                     // The storage this frame already holds on entry: the parameters. `$this`,
                     // the superglobals and the seeded globals `method_env` also carries are not
                     // this frame's own storage, and none of them is markable anyway.
-                    let pre_bound_own_storage: std::collections::HashMap<String, PhpType> =
+                    let pre_bound_own_storage: crate::fast_hash::FastMap<String, PhpType> =
                         method_param_names
                             .iter()
                             .filter_map(|name| {
@@ -760,7 +760,7 @@ impl Checker {
             pending.extend(info.interfaces.iter().map(|i| i.trim_start_matches('\\').to_string()));
             current = info.parent.clone();
         }
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = crate::fast_hash::FastSet::default();
         let mut all = Vec::new();
         while let Some(interface) = pending.pop() {
             if !seen.insert(interface.clone()) {

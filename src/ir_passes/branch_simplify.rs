@@ -23,7 +23,7 @@
 //!   each incoming edge preserves parallel argument assignment; escaping definitions
 //!   keep their block. Loop merging rewrites parameters before relocating definitions.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{BlockId, DataPool, Function, Immediate, Op, Terminator, ValueId};
 
@@ -143,7 +143,7 @@ fn fold_constant_terminators(function: &mut Function) -> bool {
 /// must remain available to their dominated users. Cycles are left unchanged.
 fn thread_empty_forwarding_blocks(function: &mut Function) -> bool {
     let uses = count_value_uses(function);
-    let mut forwards = HashMap::new();
+    let mut forwards = HashMap::default();
     for block in &function.blocks {
         if block.id == function.entry { continue; }
         let Some(Terminator::Br { target, args }) = &block.terminator else { continue; };
@@ -161,7 +161,7 @@ fn thread_empty_forwarding_blocks(function: &mut Function) -> bool {
         let Some(term) = &mut block.terminator else { continue; };
         for (target, args) in successor_edges(term) {
             let (mut next, mut values) = (*target, args.clone());
-            let mut seen = HashSet::new();
+            let mut seen = HashSet::default();
             while let Some((params, destination, outgoing)) = forwards.get(&next) {
                 if !seen.insert(next) {
                     next = *target;
@@ -229,7 +229,7 @@ fn block_is_neutralized(function: &Function, index: usize) -> bool {
 /// filtered out before this runs, so terminator successors are the complete
 /// edge set here.
 fn reachable_blocks(function: &Function) -> HashSet<BlockId> {
-    let mut reachable: HashSet<BlockId> = HashSet::new();
+    let mut reachable: HashSet<BlockId> = HashSet::default();
     let mut stack = vec![function.entry];
     while let Some(block_id) = stack.pop() {
         if !reachable.insert(block_id) {

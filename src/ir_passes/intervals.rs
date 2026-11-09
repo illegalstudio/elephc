@@ -12,7 +12,7 @@
 //!   Poletto-Sarkar): a value is conservatively considered live across any hole
 //!   between its definition and its last use.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{BlockId, Function, InstId, IrType, ValueDef, ValueId};
 use crate::ir_passes::cfg::reverse_postorder;
@@ -63,9 +63,9 @@ struct LinearNumbering {
 /// definitions precede their dominated uses on the linear axis.
 fn number_positions(func: &Function) -> LinearNumbering {
     let order = reverse_postorder(func);
-    let mut block_start = HashMap::new();
-    let mut block_end = HashMap::new();
-    let mut inst_pos = HashMap::new();
+    let mut block_start = HashMap::default();
+    let mut block_end = HashMap::default();
+    let mut inst_pos = HashMap::default();
     let mut pos = 0u32;
 
     for &block_id in &order {
@@ -97,8 +97,8 @@ fn number_positions(func: &Function) -> LinearNumbering {
 pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInterval> {
     let numbering = number_positions(func);
 
-    let mut starts: HashMap<ValueId, u32> = HashMap::new();
-    let mut ends: HashMap<ValueId, u32> = HashMap::new();
+    let mut starts: HashMap<ValueId, u32> = HashMap::default();
+    let mut ends: HashMap<ValueId, u32> = HashMap::default();
 
     // Seed each value with its definition position. Values defined in blocks
     // unreachable from entry have no position and are skipped entirely.
@@ -114,7 +114,7 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
         }
     }
 
-    let mut weights: HashMap<ValueId, u32> = HashMap::new();
+    let mut weights: HashMap<ValueId, u32> = HashMap::default();
     let mut clobbers: Vec<u32> = Vec::new();
 
     let extend = |value: ValueId, position: u32, ends: &mut HashMap<ValueId, u32>| {
@@ -210,8 +210,8 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
 /// alive longer. The flow through locals is iterated to a fixed point.
 fn callable_captures(func: &Function) -> HashMap<ValueId, Vec<ValueId>> {
     use crate::ir::{Immediate, LocalSlotId, Op};
-    let mut captures: HashMap<ValueId, Vec<ValueId>> = HashMap::new();
-    let mut slot_captures: HashMap<LocalSlotId, Vec<ValueId>> = HashMap::new();
+    let mut captures: HashMap<ValueId, Vec<ValueId>> = HashMap::default();
+    let mut slot_captures: HashMap<LocalSlotId, Vec<ValueId>> = HashMap::default();
     let merge = |into: &mut Vec<ValueId>, from: &[ValueId]| {
         let before = into.len();
         for value in from {

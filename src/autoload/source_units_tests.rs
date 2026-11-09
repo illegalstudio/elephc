@@ -27,7 +27,7 @@ fn source_units_preserve_autoload_root_and_nested_input() {
     std::fs::write(&root, root_text).unwrap();
     std::fs::write(&nested, nested_text).unwrap();
 
-    let (_, _, sources) = load_autoloaded_file(&root, &fixture.0, &HashSet::new()).unwrap();
+    let (_, _, sources) = load_autoloaded_file(&root, &fixture.0, &HashSet::default()).unwrap();
     assert_eq!(sources.source_units.len(), 2);
     assert_eq!(&*sources.source_units[&root.canonicalize().unwrap()].source, root_text);
     assert_eq!(&*sources.source_units[&nested.canonicalize().unwrap()].source, nested_text);

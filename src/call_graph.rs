@@ -228,7 +228,7 @@ pub(crate) fn render_trace_html(spans: &[TraceSpan], title: &str) -> String {
     }
     let mut body = String::new();
     for (trace_id, members) in &by_trace {
-        let present: std::collections::HashSet<&str> =
+        let present: crate::fast_hash::FastSet<&str> =
             members.iter().map(|s| s.span_id.as_str()).collect();
         let scale = members.iter().map(|s| s.total_ns).max().unwrap_or(1).max(1);
         // Placed layout needs every member dated: one undated span would sit at the

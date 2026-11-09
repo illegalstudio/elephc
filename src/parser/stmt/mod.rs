@@ -64,7 +64,7 @@ pub(in crate::parser) use simple::try_parse_value_include;
 /// survives namespace resolution; with the span it is unique across the files one build parses.
 /// A mutex rather than a thread-local: included files can be parsed on worker threads.
 static CLASSLIKE_DOC_COMMENTS: std::sync::Mutex<
-    Option<std::collections::HashMap<(crate::span::Span, String), String>>,
+    Option<crate::fast_hash::FastMap<(crate::span::Span, String), String>>,
 > = std::sync::Mutex::new(None);
 
 /// Records the doc comment written before one interface, trait or enum declaration.

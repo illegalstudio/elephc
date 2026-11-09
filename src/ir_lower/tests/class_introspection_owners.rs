@@ -14,7 +14,7 @@
 
 use crate::codegen::platform::Target;
 use crate::ir::{Function, Immediate, LocalSlotId, Op, PhpTypePredicate, Terminator};
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::path::Path;
 
 /// The five first-class targets boxed class introspection must lower identically for.
@@ -81,7 +81,7 @@ fn type_predicates(function: &Function, predicate: PhpTypePredicate) -> usize {
 
 /// Checks owner-stack agreement at joins and LIFO retirement on every reachable normal path.
 fn assert_published_owners_are_retired(function: &Function, target: &str) {
-    let mut arrivals = HashMap::new();
+    let mut arrivals = HashMap::default();
     let mut pending = vec![(function.entry, Vec::<LocalSlotId>::new())];
     while let Some((id, mut owners)) = pending.pop() {
         if let Some(previous) = arrivals.get(&id) {

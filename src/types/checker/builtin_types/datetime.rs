@@ -11,7 +11,7 @@
 //! - Synthetic methods remain ordinary PHP AST lowered by the normal pipeline.
 //! - Timezone bridge-dependent methods stay gated during declaration injection.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::names::Name;
 use crate::parser::ast::{

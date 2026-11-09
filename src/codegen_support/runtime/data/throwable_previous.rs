@@ -8,7 +8,7 @@
 //! - Offset low bits encode boxed storage and a property-reference indirection.
 //! - Physical slot order selects the inherited field before any private shadow.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::types::{ClassInfo, PhpType};
 
@@ -58,7 +58,7 @@ mod tests {
         class.properties[1].1 = PhpType::Object("Throwable".into());
         assert_eq!(previous_slot_descriptor(&class), 26);
         let mut out = String::new();
-        emit_previous_slots(&mut out, Some(2), &HashMap::from([(2, &class)]));
+        emit_previous_slots(&mut out, Some(2), &HashMap::from_iter([(2, &class)]));
         assert!(out.ends_with("_class_previous_slots:\n    .quad 0\n    .quad 0\n    .quad 26\n"));
         class.properties.clear();
         assert_eq!(previous_slot_descriptor(&class), 0);

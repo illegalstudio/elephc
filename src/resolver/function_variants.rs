@@ -8,7 +8,8 @@
 //! Key details:
 //! - Variant symbol names are stable and deterministic so runtime activation checks can link correctly.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::PathBuf;
 
 use crate::names::{canonical_name_for_decl, php_symbol_key};
@@ -60,7 +61,7 @@ pub(super) fn rewrite_include_loaded_function_variants(
             .push(occurrence);
     }
 
-    let mut rewrites: HashMap<(usize, usize), FunctionVariantRewrite> = HashMap::new();
+    let mut rewrites: HashMap<(usize, usize), FunctionVariantRewrite> = HashMap::default();
     let mut registry = FunctionVariantRegistry::default();
     let mut groups = Vec::new();
 
@@ -227,7 +228,7 @@ fn is_supported_include_loaded_function_group(occurrences: &[FunctionOccurrence]
     else {
         return false;
     };
-    let mut seen_branches = HashSet::new();
+    let mut seen_branches = HashSet::default();
     for occurrence in occurrences {
         if occurrence.exclusive_group.as_deref() != Some(group_id) {
             return false;

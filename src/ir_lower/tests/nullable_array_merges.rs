@@ -126,7 +126,7 @@ run_case();
             .expect("fixture must lower run_case");
         let block = function.blocks.iter().find(|block| block.name == "nullable.index.null")
             .expect("fixture must retain the null receiver arm");
-        let mut stored = std::collections::HashMap::new();
+        let mut stored = crate::fast_hash::FastMap::default();
         let mut live: Vec<(crate::ir::LocalSlotId, crate::ir::ValueId)> = Vec::new();
         let mut pushes = 0;
         for inst in block.instructions.iter().filter_map(|id| function.instruction(*id)) {

@@ -332,7 +332,7 @@ pub(super) fn merge_callable_alias_paths(
     mut paths: Vec<HashMap<String, Effect>>,
 ) -> HashMap<String, Effect> {
     let Some(first) = paths.pop() else {
-        return HashMap::new();
+        return HashMap::default();
     };
     first
         .into_iter()

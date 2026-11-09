@@ -16,7 +16,7 @@ mod narrowing;
 pub(super) use assignments::expr_is_string_offset_target;
 pub(super) use control_flow::widen_property_for_element_reference;
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
@@ -281,7 +281,7 @@ impl Checker {
         F: FnOnce(&mut Self, &mut TypeEnv) -> Result<(), CompileError>,
     {
         let mut boxed_ref_aliased = self.boxed_ref_aliased_locals.clone();
-        self.conditional_boxed_ref_invalidations.push(HashSet::new());
+        self.conditional_boxed_ref_invalidations.push(HashSet::default());
         self.local_conditional_depth += 1;
         let result = f(self, env);
         self.local_conditional_depth -= 1;

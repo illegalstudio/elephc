@@ -12,7 +12,7 @@
 
 use crate::ir::{Function, Immediate, IrHeapKind, IrType, Op, Terminator, ValueId};
 use crate::types::{FunctionSig, PhpType};
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 /// Returns exact public arity, admitting only the compiler's surplus-argument collector.
 pub(super) fn visible_arity(signature: &FunctionSig) -> Option<usize> {
@@ -37,7 +37,7 @@ pub(super) fn prologue_values(
 ) -> Option<HashSet<ValueId>> {
     let arity = visible_arity(signature)?;
     if signature.variadic.is_none() {
-        return Some(HashSet::new());
+        return Some(HashSet::default());
     }
     let name = crate::func_args::HIDDEN_ARGS_PARAM;
     let array = PhpType::Array(Box::new(PhpType::Mixed));
@@ -56,7 +56,7 @@ pub(super) fn prologue_values(
     {
         return None;
     }
-    let mut values = HashSet::new();
+    let mut values = HashSet::default();
     let mut loaded = false;
     let mut stored = false;
     for inst in &function.instructions {

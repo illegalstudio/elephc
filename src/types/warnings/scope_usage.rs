@@ -8,7 +8,7 @@
 //! Key details:
 //! - Warning analysis should preserve source spans and avoid rejecting programs that type checking accepted.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileWarning;
 use crate::parser::ast::{ClassMethod, Expr, Stmt, StmtKind};

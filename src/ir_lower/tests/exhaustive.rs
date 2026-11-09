@@ -9,7 +9,7 @@
 //!   PHP source syntax still exercise their explicit lowering branches.
 //! - Success means lowering returned a validated module and printable EIR.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::codegen::platform::Target;
 use crate::ir::print_module;
@@ -68,7 +68,7 @@ fn name(value: &str) -> Name {
 
 /// Constructs a minimal checker result with function/class/extern metadata used by tests.
 fn dummy_check_result() -> CheckResult {
-    let mut functions = HashMap::new();
+    let mut functions = HashMap::default();
     functions.insert(
         "f".to_string(),
         FunctionSig {
@@ -90,7 +90,7 @@ fn dummy_check_result() -> CheckResult {
     let mut classes = crate::fast_hash::FastMap::default();
     classes.insert("C".to_string(), class_info("C"));
 
-    let mut extern_functions = HashMap::new();
+    let mut extern_functions = HashMap::default();
     extern_functions.insert(
         "ef".to_string(),
         ExternFunctionSig {
@@ -103,7 +103,7 @@ fn dummy_check_result() -> CheckResult {
         },
     );
 
-    let mut extern_classes = HashMap::new();
+    let mut extern_classes = HashMap::default();
     extern_classes.insert(
         "EC".to_string(),
         ExternClassInfo {
@@ -113,10 +113,10 @@ fn dummy_check_result() -> CheckResult {
         },
     );
 
-    let mut enums = HashMap::new();
+    let mut enums = HashMap::default();
     enums.insert("E".to_string(), EnumInfo { backing_type: None, cases: Vec::new() });
 
-    let mut packed_classes = HashMap::new();
+    let mut packed_classes = HashMap::default();
     packed_classes.insert(
         "P".to_string(),
         PackedClassInfo { fields: Vec::new(), total_size: 0, align: 1 },
@@ -126,38 +126,38 @@ fn dummy_check_result() -> CheckResult {
         requested_instantiations: Vec::new(),
         requested_class_instantiations: Vec::new(),
         requested_method_instantiations: Vec::new(),
-        generic_method_sites: std::collections::HashMap::new(),
+        generic_method_sites: crate::fast_hash::FastMap::default(),
         generic_new_sites: Default::default(),
-        generic_call_sites: HashMap::new(),
+        generic_call_sites: HashMap::default(),
         global_env: Default::default(),
         functions,
-        function_attribute_names: HashMap::new(),
-        function_attribute_args: HashMap::new(),
-        callable_param_sigs: HashMap::new(),
+        function_attribute_names: HashMap::default(),
+        function_attribute_args: HashMap::default(),
+        callable_param_sigs: HashMap::default(),
         return_alias_summaries: Default::default(),
-        callable_return_sigs: HashMap::new(),
-        callable_array_return_sigs: HashMap::new(),
-        interfaces: HashMap::new(),
+        callable_return_sigs: HashMap::default(),
+        callable_array_return_sigs: HashMap::default(),
+        interfaces: HashMap::default(),
         classes,
         enums,
         packed_classes,
         extern_functions,
         extern_classes,
-        extern_globals: HashMap::new(),
+        extern_globals: HashMap::default(),
         required_libraries: Vec::new(),
         warnings: Vec::new(),
-        throw_access_sites: HashMap::new(),
-        builtin_call_types: HashMap::new(),
+        throw_access_sites: HashMap::default(),
+        builtin_call_types: HashMap::default(),
         closure_generator_spans: Default::default(),
-        array_push_property_plans: HashMap::new(),
-        member_receiver_types: HashMap::new(),
-        flow_typed_property_accesses: HashMap::new(),
-        boxed_reference_promotion_sites: HashMap::new(),
+        array_push_property_plans: HashMap::default(),
+        member_receiver_types: HashMap::default(),
+        flow_typed_property_accesses: HashMap::default(),
+        boxed_reference_promotion_sites: HashMap::default(),
         buffer_read_sites: Default::default(),
-        first_class_builtin_call_types: HashMap::new(),
-        loop_storage_types: HashMap::new(),
+        first_class_builtin_call_types: HashMap::default(),
+        loop_storage_types: HashMap::default(),
         string_incdec_locals: Default::default(),
-        by_ref_local_storage_types: HashMap::new(),
+        by_ref_local_storage_types: HashMap::default(),
         ref_param_escaping_callees: Default::default(),
         property_bound_promotion_sites: Default::default(),
         by_ref_call_result_sites: Default::default(),
@@ -165,7 +165,7 @@ fn dummy_check_result() -> CheckResult {
         stdclass_by_ref_walk_sites: Default::default(),
         runtime_define_names: Default::default(),
         undefined_constant_reads: Default::default(),
-        dynamic_ref_local_types: HashMap::new(),
+        dynamic_ref_local_types: HashMap::default(),
         local_bind_kill_sites: Default::default(),
         local_ref_detach_sites: Default::default(),
         local_retype_sites: Default::default(),
@@ -208,29 +208,29 @@ fn class_info(_class_name: &str) -> ClassInfo {
         eval_property_storage: false,
         clone_override_property_storage: false,
         scope_dynamic_property_storage: false,
-        constants: HashMap::new(),
+        constants: HashMap::default(),
         constant_order: Vec::new(),
-        constant_deprecations: HashMap::new(),
-        constant_types: HashMap::new(),
+        constant_deprecations: HashMap::default(),
+        constant_types: HashMap::default(),
         constant_visibilities: Default::default(),
         final_constants: Default::default(),
         attribute_names: Vec::new(),
         attribute_args: Vec::new(),
-        method_attribute_names: HashMap::new(),
-        method_attribute_args: HashMap::new(),
-        property_attribute_names: HashMap::new(),
-        property_attribute_args: HashMap::new(),
-        constant_attribute_names: HashMap::new(),
-        constant_attribute_args: HashMap::new(),
+        method_attribute_names: HashMap::default(),
+        method_attribute_args: HashMap::default(),
+        property_attribute_names: HashMap::default(),
+        property_attribute_args: HashMap::default(),
+        constant_attribute_names: HashMap::default(),
+        constant_attribute_args: HashMap::default(),
         used_traits: Vec::new(),
         trait_aliases: Vec::new(),
         properties: Vec::new(),
-        property_offsets: HashMap::new(),
-        property_declaring_classes: HashMap::new(),
+        property_offsets: HashMap::default(),
+        property_declaring_classes: HashMap::default(),
         defaults: Vec::new(),
         deferred_property_default_error: None,
-        property_visibilities: HashMap::new(),
-        property_set_visibilities: HashMap::new(),
+        property_visibilities: HashMap::default(),
+        property_set_visibilities: HashMap::default(),
         declared_properties: Default::default(),
         property_declared_slots: Vec::new(),
         final_properties: Default::default(),
@@ -244,10 +244,10 @@ fn class_info(_class_name: &str) -> ClassInfo {
         property_slot_declaring_classes: Vec::new(),
         property_owned_reference_slots: Vec::new(),
         abstract_properties: Default::default(),
-        abstract_property_hooks: HashMap::new(),
+        abstract_property_hooks: HashMap::default(),
         reflection_properties: Vec::new(),
         reflection_methods: Vec::new(),
-        property_hooks: HashMap::new(),
+        property_hooks: HashMap::default(),
         // `sp` backs the static-property statements below. The checker only lets an element
         // reference (`C::$sp[0] = &C::$sp[1]`) reach lowering for an array static property, so
         // the fixture declares one instead of leaving it to the untyped `Mixed` fallback.
@@ -256,8 +256,8 @@ fn class_info(_class_name: &str) -> ClassInfo {
             PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
         )],
         static_defaults: Vec::new(),
-        static_property_declaring_classes: HashMap::new(),
-        static_property_visibilities: HashMap::new(),
+        static_property_declaring_classes: HashMap::default(),
+        static_property_visibilities: HashMap::default(),
         declared_static_properties: Default::default(),
         final_static_properties: Default::default(),
         method_decls: Vec::new(),
@@ -265,22 +265,22 @@ fn class_info(_class_name: &str) -> ClassInfo {
         static_methods,
         late_static_method_returns: Default::default(),
         late_static_static_method_returns: Default::default(),
-        callable_method_return_sigs: HashMap::new(),
-        callable_array_method_return_sigs: HashMap::new(),
+        callable_method_return_sigs: HashMap::default(),
+        callable_array_method_return_sigs: HashMap::default(),
         method_visibilities: crate::fast_hash::FastMap::default(),
         final_methods: Default::default(),
         method_declaring_classes: crate::fast_hash::FastMap::default(),
         method_impl_classes: crate::fast_hash::FastMap::default(),
         abstract_methods: Default::default(),
         vtable_methods: Vec::new(),
-        vtable_slots: HashMap::new(),
+        vtable_slots: HashMap::default(),
         static_method_visibilities: crate::fast_hash::FastMap::default(),
         final_static_methods: Default::default(),
         static_method_declaring_classes: crate::fast_hash::FastMap::default(),
         static_method_impl_classes: crate::fast_hash::FastMap::default(),
         abstract_static_methods: Default::default(),
         static_vtable_methods: Vec::new(),
-        static_vtable_slots: HashMap::new(),
+        static_vtable_slots: HashMap::default(),
         declared_interfaces: Vec::new(),
         interfaces: Vec::new(),
         constructor_param_to_prop: Vec::new(),

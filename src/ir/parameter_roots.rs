@@ -8,7 +8,7 @@
 //! - Instruction effects remain conservative for intra-function ordering and validation.
 //! - Only unchanged, concrete, by-value parameters keep the extra root non-destructing.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
@@ -21,8 +21,8 @@ pub(crate) fn borrowed_parameter_roots(function: &Function) -> HashSet<LocalSlot
             && !matches!(local.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
             .then_some(local.id)
     }).collect::<HashSet<_>>();
-    let mut stores = HashMap::new();
-    let mut invalid = HashSet::new();
+    let mut stores = HashMap::default();
+    let mut invalid = HashSet::default();
     for instruction in &function.instructions {
         match &instruction.immediate {
             Some(Immediate::LocalSlot(slot)) => {

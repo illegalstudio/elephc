@@ -186,7 +186,7 @@ fn storages_may_be_the_same(
     if left_op != Op::LoadRefCell || right_op != Op::LoadRefCell {
         return false;
     }
-    let mut reachable = HashSet::from([left_slot]);
+    let mut reachable = HashSet::from_iter([left_slot]);
     // One pass per edge is enough to close the relation: each pass adds at least one slot, or
     // nothing is left to add.
     for _ in 0..ctx.builder.function().instructions.len() {

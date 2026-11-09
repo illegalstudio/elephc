@@ -9,7 +9,7 @@
 //! - Managed archives retain catalog order and never become named-library fallbacks.
 //! - Named inputs are deduplicated at first occurrence without losing their origin.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::PathBuf;
 
 use crate::codegen::LinkRequirement;
@@ -48,7 +48,7 @@ pub(crate) struct LinkPlanningInputs<'a> {
 /// Builds the exact ordered final-link plan from all typed compiler inputs.
 pub(crate) fn build(inputs: LinkPlanningInputs<'_>) -> LinkPlan {
     let mut plan = LinkPlan::new();
-    let mut named = HashSet::new();
+    let mut named = HashSet::default();
 
     for library in inputs.user_libraries {
         if bridge_is_embedded(&inputs, library) {

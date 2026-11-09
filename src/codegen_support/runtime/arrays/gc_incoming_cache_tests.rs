@@ -23,7 +23,7 @@ fn gc_incoming_cache_all_targets_define_unique_edge_helpers() {
             emit_gc_note_child_ref(&mut emitter);
             emit_gc_eval_object_children(&mut emitter);
             let assembly = emitter.output();
-            let mut labels = std::collections::HashSet::new();
+            let mut labels = crate::fast_hash::FastSet::default();
             for label in assembly.lines().filter_map(|line| line.trim().strip_suffix(':')) {
                 if label.chars().all(|ch| ch.is_ascii_digit()) { continue; }
                 assert!(labels.insert(label), "{name}, pic={pic}: duplicate label {label}");

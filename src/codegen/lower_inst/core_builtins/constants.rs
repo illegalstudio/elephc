@@ -8,7 +8,7 @@
 //! - Flat and categorized results share recursive scalar/array constant materialization.
 //! - Hash entries own boxed Mixed cells whose payload types match the constant declarations.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};

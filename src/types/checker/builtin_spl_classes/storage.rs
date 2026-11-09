@@ -9,7 +9,7 @@
 //! - ArrayIterator and ArrayObject store parallel key/value arrays to preserve PHP keys.
 //! - RecursiveArrayIterator exposes internal narrowing hooks for recursive traversal codegen.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{BinOp, CastType, ClassMethod, ClassProperty, Expr, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;

@@ -19,7 +19,7 @@
 //!   storage format: the value still reads as `int` or `float`, and `packed_type_layout` gives
 //!   every packed field type its natural size and alignment.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{CType, TypeExpr};
 
@@ -331,7 +331,7 @@ mod tests {
     /// embedded packed class contributes its padded size with its own alignment.
     #[test]
     fn packed_type_layout_uses_natural_sizes_and_alignments() {
-        let mut classes = HashMap::new();
+        let mut classes = HashMap::default();
         classes.insert(
             "Rgb".to_string(),
             PackedClassInfo {

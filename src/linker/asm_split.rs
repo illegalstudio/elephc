@@ -2150,7 +2150,7 @@ mod tests {
             .filter_map(|line| line.strip_suffix(':'))
             .filter(|name| name.starts_with('L'))
             .collect();
-        let unique: std::collections::HashSet<&str> = defined.iter().copied().collect();
+        let unique: crate::fast_hash::FastSet<&str> = defined.iter().copied().collect();
         assert_eq!(defined.len(), unique.len(), "{all}");
         for line in all.lines() {
             for token in line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {

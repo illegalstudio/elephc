@@ -15,7 +15,7 @@
 //!   each contravariant slot is the whole of the check, and the reason it cannot be a simple
 //!   "does this type mention T" test.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{

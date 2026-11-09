@@ -14,8 +14,8 @@ pub(super) fn lower_class_like_methods(
     statements: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, crate::types::FunctionSig>,
 ) {
     #[cfg(debug_assertions)]
     debug_assert_checker_methods_have_ast_sources(statements, check_result);
@@ -33,8 +33,8 @@ fn lower_class_like_methods_inner(
     statements: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, crate::types::FunctionSig>,
 ) {
     for stmt in statements {
         match &stmt.kind {
@@ -208,8 +208,8 @@ fn debug_assert_checker_methods_have_ast_sources(
     statements: &[Stmt],
     check_result: &CheckResult,
 ) {
-    let mut classes = std::collections::HashSet::new();
-    let mut methods = std::collections::HashSet::new();
+    let mut classes = crate::fast_hash::FastSet::default();
+    let mut methods = crate::fast_hash::FastSet::default();
     collect_ast_method_sources(statements, &mut classes, &mut methods);
     for (class_name, class_info) in &check_result.classes {
         if !classes.contains(&php_symbol_key(class_name)) {
@@ -230,8 +230,8 @@ fn debug_assert_checker_methods_have_ast_sources(
 #[cfg(debug_assertions)]
 fn collect_ast_method_sources(
     statements: &[Stmt],
-    classes: &mut std::collections::HashSet<String>,
-    methods: &mut std::collections::HashSet<(crate::span::Span, bool)>,
+    classes: &mut crate::fast_hash::FastSet<String>,
+    methods: &mut crate::fast_hash::FastSet<(crate::span::Span, bool)>,
 ) {
     for statement in statements {
         match &statement.kind {
@@ -332,8 +332,8 @@ pub(super) fn lower_methods_for_class_like(
     methods: &[ClassMethod],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, crate::types::FunctionSig>,
 ) {
     for method in methods {
         if !method.has_body {

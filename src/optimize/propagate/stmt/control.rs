@@ -317,7 +317,7 @@ pub(super) fn propagate_try_stmt(
             }
         })
         .collect();
-    let finally_body = finally_body.map(|body| propagate_block(body, HashMap::new()).0);
+    let finally_body = finally_body.map(|body| propagate_block(body, HashMap::default()).0);
     let next_env = merge_try_constant_env_paths(&try_body, &catches, finally_body.as_deref(), &env);
     (
         Stmt::new(

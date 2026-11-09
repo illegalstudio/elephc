@@ -50,7 +50,7 @@ fn validate_reflection_subclass_constructor_forwarding(
         .ok_or_else(|| reflection_constructor_forwarding_error(class_name, owner_class))?;
     let constructor_key = php_symbol_key("__construct");
     let mut impl_class = constructor.impl_class.clone();
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = crate::fast_hash::FastSet::default();
     loop {
         if impl_class.eq_ignore_ascii_case(owner_class) {
             return Ok(());

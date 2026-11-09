@@ -16,7 +16,7 @@
 //!   ordinary lowered EIR, which the existing per-surface scans already see.
 //! - Names are `php_symbol_key`-folded, like every reachability index.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use super::*;
 use crate::optimize::reachability::usage;

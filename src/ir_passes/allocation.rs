@@ -12,7 +12,7 @@
 //! - Unassigned scalar constants have bit-exact recipes instead of stack slots.
 //!   Other unassigned values retain their frame slots.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::ValueId;
 use super::rematerialize::ScalarConstant;
@@ -55,7 +55,7 @@ impl Allocation {
         Self {
             registers,
             callee_saved,
-            constants: HashMap::new(),
+            constants: HashMap::default(),
         }
     }
 

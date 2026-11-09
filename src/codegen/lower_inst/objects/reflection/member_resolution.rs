@@ -83,7 +83,7 @@ pub(super) fn reflection_parent_method_prototype_member(
     is_static: bool,
 ) -> Result<Option<ReflectionListedMember>> {
     let mut current = reflection_parent_class_name(ctx, info);
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     while let Some(parent_name) = current {
         if !seen.insert(php_symbol_key(&parent_name)) {
             break;

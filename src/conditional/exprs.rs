@@ -8,7 +8,7 @@
 //! Key details:
 //! - Expression shape and spans are preserved except where nested conditional statement lists are pruned.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::{CallableTarget, Expr, ExprKind};
 

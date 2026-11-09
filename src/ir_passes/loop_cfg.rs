@@ -9,7 +9,7 @@
 //! - Headers survive so cleanup cannot undo LICM or change loop entry semantics.
 //! - Retired parameters keep stable value IDs through unused Nop definitions.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use crate::ir::{BlockId, Function, InstId, Instruction, Op, Terminator, ValueDef};
 use super::cfg::{predecessors, successor_edges};
 use super::rewrite::replace_all_uses;

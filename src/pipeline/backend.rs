@@ -7,7 +7,7 @@
 //! Key details:
 //! - Assembly-only output returns before runtime-object preparation, native resolution, assembly, and linking.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use super::*;
 

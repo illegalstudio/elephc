@@ -347,7 +347,7 @@ fn bounded_mixed_counter_uses_canonical_first_callee_metadata() {
 /// Joint storage trials prove every mutually observed recurrence before accepting either slot.
 #[test]
 fn bounded_mixed_counter_storage_joint_checks_every_update() {
-    use std::collections::HashMap;
+    use crate::fast_hash::FastMap as HashMap;
     use crate::ir::LocalSlotId;
     for (seed, accepted) in [(0, true), (i64::MAX, false)] {
         let mut function = counter(CmpPredicate::Slt, 1, 0, false);
@@ -379,7 +379,7 @@ fn bounded_mixed_counter_storage_joint_checks_every_update() {
         }
         assert!(validate_function(&function).is_ok());
         let original = crate::ir::print_function(&function);
-        let slots = crate::ir_passes::prove_integer_slots(&function, &mut DataPool::default(), &HashMap::new()).slots;
+        let slots = crate::ir_passes::prove_integer_slots(&function, &mut DataPool::default(), &HashMap::default()).slots;
         assert_eq!(slots.contains(&first), accepted);
         assert_eq!(slots.contains(&second), accepted);
         assert_eq!(crate::ir::print_function(&function), original, "analysis must not commit its trial");
@@ -421,7 +421,7 @@ fn bounded_mixed_counter_storage_ignores_unrelated_reference_slots() {
         PhpType::Mixed, LocalKind::RefCell);
     validate_function(&function).unwrap();
     let slots = crate::ir_passes::prove_integer_slots(&function, &mut DataPool::default(),
-        &std::collections::HashMap::new()).slots;
+        &crate::fast_hash::FastMap::default()).slots;
     assert!(slots.contains(&crate::ir::LocalSlotId::from_raw(1)));
     assert!(!slots.contains(&unrelated));
 }

@@ -8,7 +8,7 @@
 //! Key details:
 //! - The `Generator` class implements the builtin `Iterator` interface injected by the SPL interface module.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::names::Name;

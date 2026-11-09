@@ -9,7 +9,7 @@
 //! - Only method bodies reachable from the initial candidates enter the graph, keeping unused
 //!   prelude methods out of the per-candidate reachability walks.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{Function, Module};
 use crate::names::php_symbol_key;
@@ -27,7 +27,7 @@ pub(super) fn compute_recursive_callees(
     let roots = nodes.len();
     // Same rule as `build_name_to_index`: the entry (`main`) is no call target, and the first body
     // carrying a name wins, so a user `function main()` is never shadowed by the entry.
-    let mut by_name: HashMap<String, usize> = HashMap::new();
+    let mut by_name: HashMap<String, usize> = HashMap::default();
     for (index, body) in nodes.iter().enumerate() {
         if body.flags.is_main {
             continue;
@@ -67,7 +67,7 @@ pub(super) fn compute_recursive_callees(
         }
         index += 1;
     }
-    let mut recursive = HashSet::new();
+    let mut recursive = HashSet::default();
     for start in 0..roots {
         let mut visited = vec![false; nodes.len()];
         let mut stack = adjacency[start].clone();

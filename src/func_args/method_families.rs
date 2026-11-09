@@ -14,7 +14,9 @@
 //!   `capture_all_opt_outs` names those families so whole-program frame capture can leave every
 //!   member on its source signature (the frames just carry no captured arguments).
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{VecDeque};
+use crate::fast_hash::FastMap as HashMap;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Program, Stmt, StmtKind, TypeExpr, Visibility};
@@ -57,7 +59,7 @@ fn spread_capabilities(
     owners: &[OwnerInfo],
     capabilities_of: impl Fn(&OwnerInfo) -> &Vec<MethodCapability>,
 ) -> HashMap<String, HashSet<MethodCapability>> {
-    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+    let mut adjacency: HashMap<String, Vec<String>> = HashMap::default();
     for owner in owners {
         adjacency.entry(owner.name.clone()).or_default();
         for related in &owner.related {
@@ -74,18 +76,18 @@ fn spread_capabilities(
 
     // One walk per component, not per (owner, capability): a whole component gets every capability
     // any member brought, and Symfony's largest components hold thousands of classes.
-    let mut owners_by_name: HashMap<&str, Vec<&OwnerInfo>> = HashMap::new();
+    let mut owners_by_name: HashMap<&str, Vec<&OwnerInfo>> = HashMap::default();
     for owner in owners {
         owners_by_name.entry(owner.name.as_str()).or_default().push(owner);
     }
-    let mut required: HashMap<String, HashSet<MethodCapability>> = HashMap::new();
-    let mut visited: HashSet<&str> = HashSet::new();
+    let mut required: HashMap<String, HashSet<MethodCapability>> = HashMap::default();
+    let mut visited: HashSet<&str> = HashSet::default();
     for owner in owners {
         if capabilities_of(owner).is_empty() || visited.contains(owner.name.as_str()) {
             continue;
         }
         let mut members: Vec<&str> = Vec::new();
-        let mut capabilities: HashSet<MethodCapability> = HashSet::new();
+        let mut capabilities: HashSet<MethodCapability> = HashSet::default();
         let mut queue = VecDeque::from([owner.name.as_str()]);
         while let Some(name) = queue.pop_front() {
             if !visited.insert(name) {

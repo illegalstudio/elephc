@@ -9,7 +9,7 @@
 //! - Array children are wrapped as RecursiveArrayIterator; RecursiveIterator values are passed through.
 //! - The internal narrowing helper is shared with recursive decorator modules.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{BinOp, ClassMethod, Expr, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;

@@ -13,8 +13,8 @@ use super::*;
 pub(super) fn lower_literal_eval_aot_functions(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, crate::types::FunctionSig>,
 ) {
     let candidates = collect_literal_eval_aot_function_candidates(module);
     let mut lowered_names = all_lowered_functions(module)
@@ -78,7 +78,7 @@ pub(super) fn collect_literal_eval_aot_function_candidates(
     module: &Module,
 ) -> Vec<(String, EvalAotFunctionCandidate)> {
     let mut candidates = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     for function in all_lowered_functions(module) {
         for inst in &function.instructions {
             let Some(fragment) = eval_literal_fragment_from_inst(module, inst) else {

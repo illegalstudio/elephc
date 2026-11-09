@@ -18,7 +18,7 @@
 //! - Fold-to-operand chains within one sweep are resolved transitively so a
 //!   neutralized (dead) result is never used as a replacement target.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{Function, Immediate, InstId, Instruction, IrType, Op, ValueId};
 

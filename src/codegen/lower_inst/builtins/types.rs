@@ -1748,7 +1748,7 @@ fn static_relation_holds(
     // through a parent: `is_subclass_of(Child::class, Base::class)` for `interface Child extends
     // Base`. Interfaces have no `class_infos` entry, so the two walks above never saw them.
     let mut pending = vec![object_class.to_string()];
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     while let Some(current) = pending.pop() {
         let current_key = php_symbol_key(current.trim_start_matches('\\'));
         if !seen.insert(current_key.clone()) {

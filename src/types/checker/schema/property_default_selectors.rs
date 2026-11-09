@@ -9,7 +9,7 @@
 //! - Resolution is bounded, lexical and target-neutral, and never evaluates a constructor.
 //! - Parent initialization failures propagate even when a private property has no child slot.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{Expr, ExprKind, Program, StaticReceiver, StmtKind};
 use crate::types::deferred_defaults::{contains_deferred_error, prune_literal_branches, unconditional_error_message};
@@ -18,7 +18,7 @@ use super::super::Checker;
 
 /// Resolves selectors against complete schemas and republishes class-initialization errors.
 pub(super) fn normalize(checker: &mut Checker, program: &Program) {
-    let mut globals = HashMap::new();
+    let mut globals = HashMap::default();
     collect_globals(program, &mut globals);
     let mut updates = Vec::new();
     for (name, class) in &checker.classes {

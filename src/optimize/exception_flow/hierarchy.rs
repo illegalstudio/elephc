@@ -14,7 +14,7 @@
 use super::php_symbol_key;
 use crate::parser::ast::{AttributeGroup, ClassProperty, Stmt, StmtKind, TypeExpr};
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 #[cfg(test)]
 mod tests {
@@ -23,7 +23,7 @@ mod tests {
     /// AST-only consumers know the standard SPL parent tree without checker injection.
     #[test]
     fn ast_only_hierarchy_contains_spl_throwables() {
-        let hierarchy = ExceptionHierarchy::from_program(&[], HashSet::new());
+        let hierarchy = ExceptionHierarchy::from_program(&[], HashSet::default());
         for name in ["LogicException", "BadFunctionCallException", "BadMethodCallException", "DomainException", "InvalidArgumentException", "LengthException", "OutOfRangeException", "RuntimeException", "OutOfBoundsException", "OverflowException", "RangeException", "UnderflowException", "UnexpectedValueException"] {
             assert!(hierarchy.is_subtype(name, "Exception"), "{name}");
             assert!(hierarchy.is_subtype(name, "Throwable"), "{name}");
@@ -39,7 +39,7 @@ mod tests {
     fn ast_only_hierarchy_preserves_declared_runtime_exception_parent() {
         let tokens = crate::lexer::tokenize("<?php class RuntimeException extends Error {}").unwrap();
         let program = crate::parser::parse(&tokens).unwrap();
-        let hierarchy = ExceptionHierarchy::from_program(&program, HashSet::new());
+        let hierarchy = ExceptionHierarchy::from_program(&program, HashSet::default());
         assert!(hierarchy.is_subtype("RuntimeException", "Error"));
         assert!(!hierarchy.is_subtype("RuntimeException", "Exception"));
     }
@@ -217,7 +217,7 @@ impl ExceptionHierarchy {
     fn class_reaches_root(&self, candidate_key: &str, base: &str) -> bool {
         let base_key = php_symbol_key(base);
         let mut current = Some(candidate_key.to_string());
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(class_key) = current {
             if !seen.insert(class_key.clone()) {
                 return false;
@@ -236,7 +236,7 @@ impl ExceptionHierarchy {
     /// Walks class implementations, parent classes, and interface parents for a target interface.
     fn type_reaches_interface(&self, candidate_key: &str, base_key: &str) -> bool {
         let mut pending = vec![candidate_key.to_string()];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(current) = pending.pop() {
             if !seen.insert(current.clone()) {
                 continue;
@@ -289,7 +289,7 @@ impl ExceptionHierarchy {
     /// or a trait that may supply the method, invalidates both equally.
     pub(super) fn method_lookup_is_closed(&self, class_name: &str) -> bool {
         let mut current = Some(php_symbol_key(class_name));
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(class_key) = current {
             if !seen.insert(class_key.clone()) {
                 return false;
@@ -345,7 +345,7 @@ impl ExceptionHierarchy {
                 .contains(&php_symbol_key(class_name));
         }
         let mut current = Some(php_symbol_key(class_name));
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(class_key) = current {
             if !seen.insert(class_key.clone()) {
                 return false;

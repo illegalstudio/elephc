@@ -7,7 +7,7 @@
 //! Key details:
 //! - Source mode and compiler defines remain fixed across tokenization, parsing, and finalization.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use super::*;
 
@@ -104,7 +104,7 @@ mod tests {
         let canonical = path.canonicalize().unwrap();
         let mut timings = CompileTimings::new(false);
         let (parsed, unit) = read_and_parse(
-            path.to_str().unwrap(), SourceMode::Php, &HashSet::new(), &mut timings, None,
+            path.to_str().unwrap(), SourceMode::Php, &HashSet::default(), &mut timings, None,
         );
         std::fs::remove_file(&path).unwrap();
         assert_eq!(unit.canonical_path, canonical);

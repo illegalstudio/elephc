@@ -290,7 +290,7 @@ pub(crate) fn stitch_report(slices: &[Slice]) -> String {
             });
         out.push_str(&format!("\ntrace {trace_id}\n"));
         // Children of each span, then walk from the roots.
-        let mut children: HashMap<&str, Vec<&Slice>> = HashMap::new();
+        let mut children: HashMap<&str, Vec<&Slice>> = HashMap::default();
         let mut roots: Vec<&Slice> = Vec::new();
         for slice in &members {
             let trace = slice.graph.trace.as_ref().expect("filtered above");

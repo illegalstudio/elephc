@@ -8,7 +8,7 @@
 //! Key details:
 //! - Closure bodies and parameter defaults must preserve their own spans and PHP evaluation context.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
@@ -360,7 +360,7 @@ fn infer_arrow_captures(
     params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
     variadic: Option<&String>,
 ) -> Vec<String> {
-    let mut bound = HashSet::new();
+    let mut bound = HashSet::default();
     for (name, _, _, _) in params {
         bound.insert(name.clone());
     }
@@ -369,7 +369,7 @@ fn infer_arrow_captures(
     }
 
     let mut captures = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     collect_arrow_expr_captures(body_expr, &mut bound, &mut seen, &mut captures);
     // Superglobals (and `$GLOBALS`) are visible in every scope, so an arrow function reads them
     // directly instead of capturing a by-value copy of the enclosing scope's binding. Capturing

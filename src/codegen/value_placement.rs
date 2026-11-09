@@ -8,7 +8,7 @@
 //! - Scalar constants with recipes or registers need no backing slots.
 //! - Other non-void values retain slots, including runtime ownership markers.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{Function, Immediate, IrType, Op, Ownership, ValueDef, ValueId};
 use crate::types::PhpType;
@@ -75,8 +75,8 @@ fn publishes_runtime_ownership_status(func: &Function, value: ValueId) -> bool {
 
 /// Allocates backing slots, omitting constants handled by the allocation recipe table.
 pub fn allocate(func: &Function, allocation: &Allocation) -> ValuePlacement {
-    let mut slot_of = HashMap::new();
-    let mut runtime_return_ownership_slot_of = HashMap::new();
+    let mut slot_of = HashMap::default();
+    let mut runtime_return_ownership_slot_of = HashMap::default();
     let mut offset = 0usize;
     for (index, value) in func.values.iter().enumerate() {
         let value_id = ValueId::from_raw(index as u32);
@@ -146,7 +146,7 @@ pub fn allocate_with(
     }
     let liveness = crate::ir_passes::compute_liveness(func);
     let intervals = crate::ir_passes::build_intervals(func, &liveness);
-    let mut by_value: HashMap<ValueId, (u32, u32, u32)> = HashMap::with_capacity(intervals.len());
+    let mut by_value: HashMap<ValueId, (u32, u32, u32)> = HashMap::with_capacity_and_hasher(intervals.len(), Default::default());
     for interval in &intervals {
         by_value.insert(interval.value, (interval.start, interval.end, interval.weight));
     }
@@ -232,8 +232,8 @@ pub fn allocate_with(
         offset_of_slot[slot] = offset;
     }
 
-    let mut slot_of = HashMap::new();
-    let mut runtime_return_ownership_slot_of = HashMap::new();
+    let mut slot_of = HashMap::default();
+    let mut runtime_return_ownership_slot_of = HashMap::default();
     for (index, request) in requests.iter().enumerate() {
         let slot_offset = offset_of_slot[slot_of_request[index]];
         match request.key {
@@ -266,8 +266,8 @@ fn allocate_skipping_registers(
     func: &Function,
     allocation: &crate::ir_passes::Allocation,
 ) -> ValuePlacement {
-    let mut slot_of = HashMap::new();
-    let mut runtime_return_ownership_slot_of = HashMap::new();
+    let mut slot_of = HashMap::default();
+    let mut runtime_return_ownership_slot_of = HashMap::default();
     let mut offset = 0usize;
     for (index, value) in func.values.iter().enumerate() {
         let value_id = ValueId::from_raw(index as u32);
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn register_allocated_values_get_no_slot() {
         let (function, values) = chain_function(3);
-        let mut registers = std::collections::HashMap::new();
+        let mut registers = crate::fast_hash::FastMap::default();
         registers.insert(values[1], "x20");
         let allocation = crate::ir_passes::Allocation::from_assignments_for_tests(registers);
         let placement = allocate_with(&function, &allocation, false);

@@ -37,7 +37,7 @@
 //!   nested trait uses, `insteadof` exclusions, `as` aliases (an alias is a second method
 //!   name) and `as` visibility changes, with a class's own methods overriding trait ones.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -133,7 +133,7 @@ pub fn discover(
     filter: Option<&str>,
 ) -> Result<Vec<DiscoveredTest>, CompileError> {
     let mut raw_classes = Vec::new();
-    let mut traits = HashMap::new();
+    let mut traits = HashMap::default();
     collect_declarations(program, &mut raw_classes, &mut traits);
     let classes: Vec<ClassInfo> = raw_classes
         .iter()
@@ -227,10 +227,10 @@ fn inherited_tests(
     classes: &[ClassInfo],
     by_key: &HashMap<String, usize>,
 ) -> Vec<MethodInfo> {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut tests = Vec::new();
     let mut current = Some(class);
-    let mut visited = HashSet::new();
+    let mut visited = HashSet::default();
     while let Some(info) = current {
         if !visited.insert(php_symbol_key(&info.name)) {
             break;
@@ -258,7 +258,7 @@ fn descends_from_root(
     by_key: &HashMap<String, usize>,
     root: &str,
 ) -> bool {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut current = class.parent.as_deref().map(php_symbol_key);
     while let Some(parent) = current {
         if parent == root {
@@ -342,7 +342,7 @@ fn merged_methods(
     trait_uses: &[TraitUse],
     traits: &HashMap<String, RawTrait>,
 ) -> Vec<ClassMethod> {
-    merged_methods_guarded(own, trait_uses, traits, &mut HashSet::new())
+    merged_methods_guarded(own, trait_uses, traits, &mut HashSet::default())
 }
 
 /// [`merged_methods`] with the set of traits already on the expansion path, so a cycle stops.

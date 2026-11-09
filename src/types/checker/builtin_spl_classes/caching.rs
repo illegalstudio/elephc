@@ -9,7 +9,7 @@
 //! - Cache capture advances the inner iterator once and stores the current key/value snapshot.
 //! - FULL_CACHE gates ArrayAccess and getCache/count behavior like PHP SPL.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{BinOp, CastType, ClassConst, ClassMethod, ClassProperty, Expr, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;

@@ -313,7 +313,7 @@ pub(super) fn reflection_interface_method_member(
 /// Builds ReflectionMethod array entries for methods declared by a trait.
 pub(super) fn reflection_trait_method_members(
     ctx: &FunctionContext<'_>,
-    methods: &std::collections::HashMap<String, TraitMethodInfo>,
+    methods: &crate::fast_hash::FastMap<String, TraitMethodInfo>,
     trait_name: &str,
     method_names: &[String],
 ) -> Result<Vec<ReflectionListedMember>> {
@@ -330,7 +330,7 @@ pub(super) fn reflection_trait_method_members(
 /// Builds one ReflectionMethod array entry from retained trait metadata.
 pub(super) fn reflection_trait_method_member(
     ctx: &FunctionContext<'_>,
-    methods: &std::collections::HashMap<String, TraitMethodInfo>,
+    methods: &crate::fast_hash::FastMap<String, TraitMethodInfo>,
     trait_name: &str,
     method_name: &str,
 ) -> Result<Option<ReflectionListedMember>> {

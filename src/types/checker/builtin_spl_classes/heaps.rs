@@ -9,7 +9,7 @@
 //! - Heap extraction scans for the best element via `compare()` so user subclasses can override ordering.
 //! - Storage lives in per-instance arrays, allowing normal object deep-free to finalize handles.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{BinOp, ClassConst, ClassMethod, ClassProperty, Expr, Stmt, TypeExpr, Visibility};
 use crate::types::traits::FlattenedClass;

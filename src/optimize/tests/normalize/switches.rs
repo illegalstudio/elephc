@@ -318,7 +318,7 @@ fn test_normalize_control_flow_keeps_a_single_case_switch_carrying_a_binding_dec
 
     let guarded = crate::optimize::normalize_control_flow(
         single_case_fallthrough_switch(decision_span),
-        HashSet::from([decision_span]),
+        HashSet::from_iter([decision_span]),
     );
 
     assert_eq!(guarded.len(), 1);
@@ -348,7 +348,7 @@ fn test_normalize_control_flow_still_rewrites_when_the_decision_names_another_no
 
     let pruned = crate::optimize::normalize_control_flow(
         single_case_fallthrough_switch(decision_span),
-        HashSet::from([Span::new(99, 1)]),
+        HashSet::from_iter([Span::new(99, 1)]),
     );
 
     assert_eq!(pruned.len(), 1);

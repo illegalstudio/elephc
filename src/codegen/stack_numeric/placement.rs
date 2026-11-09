@@ -17,7 +17,7 @@ use std::collections::BinaryHeap;
 pub(super) fn storage_groups(proof: &Proof<'_>, cells: &[ValueId]) -> Vec<Vec<ValueId>> {
     let selected: HashSet<_> = cells.iter().copied().collect();
     let mut groups: Vec<Vec<ValueId>> = Vec::new();
-    let mut assigned = HashSet::new();
+    let mut assigned = HashSet::default();
     for block in &proof.function.blocks {
         let mut pool: BinaryHeap<Reverse<(usize, usize)>> = BinaryHeap::new();
         for (position, &id) in block.instructions.iter().enumerate() {
@@ -48,7 +48,7 @@ pub(super) fn storage_groups(proof: &Proof<'_>, cells: &[ValueId]) -> Vec<Vec<Va
 /// Finds the last scalar read through all pointer copies, refusing every local store.
 fn transient_end(proof: &Proof<'_>, value: ValueId, block: crate::ir::BlockId, start: usize) -> Option<usize> {
     let mut pending = vec![value];
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut end = start;
     while let Some(value) = pending.pop() {
         if !seen.insert(value) { continue; }

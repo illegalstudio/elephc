@@ -13,7 +13,9 @@
 //! - PCNTL operations are refused because a hosted library must not mutate or
 //!   replace the embedding process or its signal dispositions.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{VecDeque};
+use crate::fast_hash::FastMap as HashMap;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::codegen::callable_reachability::CallableReachabilityAnalysis;
 use crate::errors::CompileError;
@@ -91,7 +93,7 @@ fn validate_call_graph(
     for export in exports.values() {
         let root = php_symbol_key(&export.name);
         let mut queue = VecDeque::from([(root.clone(), vec![export.name.clone()])]);
-        let mut visited = HashSet::new();
+        let mut visited = HashSet::default();
         while let Some((function_key, path)) = queue.pop_front() {
             if !visited.insert(function_key.clone()) {
                 continue;

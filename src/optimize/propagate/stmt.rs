@@ -37,8 +37,8 @@ thread_local! {
     /// propagated. Their value can change through the alias (another local, an object
     /// property, or a by-reference call result) without a visible local write, so they
     /// must never carry a propagated fact. Conservative across the whole program.
-    static REFERENCE_VOLATILE: std::cell::RefCell<std::collections::HashSet<String>> =
-        std::cell::RefCell::new(std::collections::HashSet::new());
+    static REFERENCE_VOLATILE: std::cell::RefCell<crate::fast_hash::FastSet<String>> =
+        std::cell::RefCell::new(crate::fast_hash::FastSet::default());
 }
 
 /// Clears the reference-volatile set before a fresh constant-propagation run.
@@ -142,7 +142,7 @@ fn propagate_write_key_and_value(index: Expr, value: Expr, env: &ConstantEnv) ->
     // Folding a bare variable consults exactly one entry, so carry that one through the
     // invalidation instead of cloning the whole environment: this runs on every element
     // write in the program and `ConstantEnv` is a map over every live local.
-    let mut after: ConstantEnv = HashMap::new();
+    let mut after: ConstantEnv = HashMap::default();
     if let Some(fact) = env.get(name.as_str()) {
         after.insert(name.clone(), fact.clone());
     }
@@ -201,13 +201,13 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         }
         StmtKind::IncludeOnceMark { source_path } => (
             Stmt::new(StmtKind::IncludeOnceMark { source_path }, span),
-            HashMap::new(),
+            HashMap::default(),
         ),
         StmtKind::IncludeOnceGuard { source_path, required, body } => {
-            let (body, _) = propagate_block(body, HashMap::new());
+            let (body, _) = propagate_block(body, HashMap::default());
             (
                 Stmt::new(StmtKind::IncludeOnceGuard { source_path, required, body }, span),
-                HashMap::new(),
+                HashMap::default(),
             )
         }
         StmtKind::Echo(expr) => {
@@ -231,7 +231,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             }
             (
                 Stmt::new(StmtKind::RefAssign { target, source }, span),
-                HashMap::new(),
+                HashMap::default(),
             )
         }
         StmtKind::TypedAssign {
@@ -351,11 +351,11 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
                 },
                 span,
             ),
-            HashMap::new(),
+            HashMap::default(),
         ),
         StmtKind::Throw(expr) => {
             let expr = propagate_expr(expr, &env);
-            (Stmt::new(StmtKind::Throw(expr), span), HashMap::new())
+            (Stmt::new(StmtKind::Throw(expr), span), HashMap::default())
         }
         StmtKind::Try {
             try_body,
@@ -374,7 +374,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         }
         StmtKind::NamespaceDecl { name } => (Stmt::new(StmtKind::NamespaceDecl { name }, span), env),
         StmtKind::NamespaceBlock { name, body } => {
-            let (body, _) = propagate_block(body, HashMap::new());
+            let (body, _) = propagate_block(body, HashMap::default());
             (
                 Stmt::new(StmtKind::NamespaceBlock { name, body }, span),
                 env,
@@ -407,7 +407,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
                     body: with_function_scope_mode(by_ref_return, || {
                         crate::optimize::generator_bodies::rewrite_preserving_yield(
                             body,
-                            |body| propagate_block(body, HashMap::new()).0,
+                            |body| propagate_block(body, HashMap::default()).0,
                         )
                     }),
                 },
@@ -599,7 +599,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
                     },
                     span,
                 ),
-                HashMap::new(),
+                HashMap::default(),
             )
         }
         StmtKind::StaticPropertyAssign {
@@ -795,7 +795,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         ),
         StmtKind::FunctionVariantMark { name, variant } => (
             Stmt::new(StmtKind::FunctionVariantMark { name, variant }, span),
-            HashMap::new(),
+            HashMap::default(),
         ),
     }
 }

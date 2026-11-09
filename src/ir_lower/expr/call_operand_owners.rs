@@ -125,7 +125,7 @@ pub(super) fn retire_scoped_ref_receiver_aliases(
     }
     register_owned_call_operand(ctx, final_owner.slot, final_owner.span);
 
-    let alias_slots: std::collections::HashSet<_> =
+    let alias_slots: crate::fast_hash::FastSet<_> =
         alias_owners.iter().map(|owner| owner.slot).collect();
     ctx.call_argument_evaluation_scopes
         .last_mut()

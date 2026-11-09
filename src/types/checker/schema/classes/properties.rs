@@ -8,7 +8,7 @@
 //! Key details:
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::parser::ast::{ClassProperty, Expr, ExprKind, StaticReceiver, Visibility};
@@ -904,7 +904,7 @@ fn declared_class_is_a(
     let canonical = |name: &str| crate::names::php_symbol_key(name.trim_start_matches('\\'));
     let ancestor = canonical(ancestor_name);
     let mut current = canonical(class_name);
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while seen.insert(current.clone()) {
         if current == ancestor {
             return true;

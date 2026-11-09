@@ -28,7 +28,7 @@
 //! - Each demotion is reported as a `note:` beside the deferral warnings, so a build log lists
 //!   what was compiled as a fault the way it lists what was not compiled at all.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 
 use elephc_builtin_contract::ClassKind;
@@ -493,7 +493,7 @@ fn ancestors(class_parents: &[(String, Vec<String>)], key: &str) -> Vec<String> 
         .iter()
         .map(|(class, parents)| (php_symbol_key(class.trim_start_matches('\\')), parents))
         .collect();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<String> = HashSet::default();
     let mut out = Vec::new();
     let mut pending = vec![key.to_string()];
     while let Some(class) = pending.pop() {
@@ -519,7 +519,7 @@ fn open_classes(world: &World<'_>) -> HashSet<String> {
         .iter()
         .map(|(class, parents)| (php_symbol_key(class.trim_start_matches('\\')), parents))
         .collect();
-    let mut open = HashSet::new();
+    let mut open = HashSet::default();
     let mut pending: Vec<String> = world
         .class_parents
         .iter()
@@ -552,7 +552,7 @@ struct DeclaredClassLikes {
 
 impl DeclaredClassLikes {
     fn collect(program: &Program) -> Self {
-        let mut from_source = HashMap::new();
+        let mut from_source = HashMap::default();
         fn walk(stmts: &[Stmt], out: &mut HashMap<String, bool>) {
             for stmt in stmts {
                 match &stmt.kind {
@@ -1115,9 +1115,9 @@ mod tests {
         );
         let span = span_of(&ast, &|expr| matches!(expr.kind, ExprKind::MethodCall { .. }));
         let class_files: HashMap<String, String> =
-            [("c".to_string(), "/tmp/C.php".to_string())].into();
-        let deferrable: HashSet<PathBuf> = [PathBuf::from("/tmp/C.php")].into();
-        let deferred = HashSet::new();
+            [("c".to_string(), "/tmp/C.php".to_string())].into_iter().collect();
+        let deferrable: HashSet<PathBuf> = [PathBuf::from("/tmp/C.php")].into_iter().collect();
+        let deferred = HashSet::default();
         let parents: Vec<(String, Vec<String>)> = Vec::new();
         let lookup = |_: &str| false;
         let error = CompileError::new(span, "Undefined method: W::walk")
@@ -1126,7 +1126,7 @@ mod tests {
                 method: "walk".into(),
             })
             .within_declaration("C");
-        let mut attempted = HashSet::new();
+        let mut attempted = HashSet::default();
         let demotions = demote(
             &mut ast,
             &error,
@@ -1160,10 +1160,10 @@ mod tests {
             ("c".to_string(), "/tmp/C.php".to_string()),
             ("sub".to_string(), "/tmp/Sub.php".to_string()),
         ]
-        .into();
+        .into_iter().collect();
         let deferrable: HashSet<PathBuf> =
-            [PathBuf::from("/tmp/C.php"), PathBuf::from("/tmp/Sub.php")].into();
-        let deferred: HashSet<PathBuf> = [PathBuf::from("/tmp/Sub.php")].into();
+            [PathBuf::from("/tmp/C.php"), PathBuf::from("/tmp/Sub.php")].into_iter().collect();
+        let deferred: HashSet<PathBuf> = [PathBuf::from("/tmp/Sub.php")].into_iter().collect();
         let parents = vec![("Sub".to_string(), vec!["W".to_string()])];
         let lookup = |_: &str| false;
         let error = CompileError::new(span, "Undefined method: W::walk")
@@ -1176,7 +1176,7 @@ mod tests {
             &mut ast,
             &error,
             &world(&class_files, &deferrable, &deferred, &parents, &lookup),
-            &mut HashSet::new(),
+            &mut HashSet::default(),
         );
         assert!(demotions.is_empty());
     }
@@ -1190,9 +1190,9 @@ mod tests {
         );
         let span = span_of(&ast, &|expr| matches!(expr.kind, ExprKind::MethodCall { .. }));
         let class_files: HashMap<String, String> =
-            [("point".to_string(), "/tmp/Point.php".to_string())].into();
-        let deferrable: HashSet<PathBuf> = [PathBuf::from("/tmp/Point.php")].into();
-        let deferred = HashSet::new();
+            [("point".to_string(), "/tmp/Point.php".to_string())].into_iter().collect();
+        let deferrable: HashSet<PathBuf> = [PathBuf::from("/tmp/Point.php")].into_iter().collect();
+        let deferred = HashSet::default();
         let parents = vec![("Point".to_string(), vec!["\\DateTimeImmutable".to_string()])];
         let lookup = |_: &str| false;
         let error = CompileError::new(span, "Undefined method: Point::__unserialize")
@@ -1205,7 +1205,7 @@ mod tests {
             &mut ast,
             &error,
             &world(&class_files, &deferrable, &deferred, &parents, &lookup),
-            &mut HashSet::new(),
+            &mut HashSet::default(),
         );
         assert!(demotions.is_empty(), "{demotions:?}");
     }
@@ -1218,9 +1218,9 @@ mod tests {
     fn a_builtin_interface_ancestor_only_blocks_constant_faults() {
         let source = "<?php class Node implements \\JsonSerializable { function jsonSerialize(): mixed { return 1; } } class C { function d(Node $n) { return $n->parts; } function e() { return Node::K; } }";
         let class_files: HashMap<String, String> =
-            [("c".to_string(), "/tmp/C.php".to_string())].into();
-        let deferrable: HashSet<PathBuf> = [PathBuf::from("/tmp/C.php")].into();
-        let deferred = HashSet::new();
+            [("c".to_string(), "/tmp/C.php".to_string())].into_iter().collect();
+        let deferrable: HashSet<PathBuf> = [PathBuf::from("/tmp/C.php")].into_iter().collect();
+        let deferred = HashSet::default();
         let parents = vec![("Node".to_string(), vec!["\\JsonSerializable".to_string()])];
         let lookup = |_: &str| false;
         let mut ast = program(source);
@@ -1241,7 +1241,7 @@ mod tests {
             &mut ast,
             &error,
             &world(&class_files, &deferrable, &deferred, &parents, &lookup),
-            &mut HashSet::new(),
+            &mut HashSet::default(),
         );
         assert_eq!(demotions.len(), 1, "{demotions:?}");
         assert!(demotions[0].outcome.contains("`->parts`"));
@@ -1256,9 +1256,9 @@ mod tests {
             "<?php class X {} class C { function a() { return X::m(); } function b() { return strlen(X::K); } function c() { return static::m(); } function d() { return new Nope(); } }",
         );
         let class_files: HashMap<String, String> =
-            [("c".to_string(), "/tmp/C.php".to_string())].into();
-        let deferrable: HashSet<PathBuf> = [PathBuf::from("/tmp/C.php")].into();
-        let deferred = HashSet::new();
+            [("c".to_string(), "/tmp/C.php".to_string())].into_iter().collect();
+        let deferrable: HashSet<PathBuf> = [PathBuf::from("/tmp/C.php")].into_iter().collect();
+        let deferred = HashSet::default();
         let parents: Vec<(String, Vec<String>)> = Vec::new();
         let lookup = |name: &str| name == "Nope";
         let method_span = span_of(&ast, &|expr| {
@@ -1295,7 +1295,7 @@ mod tests {
             &mut ast,
             &error,
             &world(&class_files, &deferrable, &deferred, &parents, &lookup),
-            &mut HashSet::new(),
+            &mut HashSet::default(),
         );
         assert_eq!(demotions.len(), 2, "{demotions:?}");
         assert!(demotions[0].outcome.contains("Call to undefined method X::m()"));

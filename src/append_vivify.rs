@@ -23,7 +23,7 @@
 //! - A name that is never written this way is not returned, so a scope with no such local pays
 //!   one AST walk and nothing else.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::checker::loop_storage::visit_child_expressions;
@@ -39,7 +39,7 @@ pub(crate) fn vivified_array_locals<'a>(
     let mut scan = Scan {
         bound: params.into_iter().map(str::to_string).collect(),
         vivified: Vec::new(),
-        non_integer_keyed: HashSet::new(),
+        non_integer_keyed: HashSet::default(),
     };
     scan.bound.insert("this".to_string());
     scan.block(body);
@@ -66,9 +66,9 @@ pub(crate) fn vivified_array_locals<'a>(
 /// function, class or closure body: each is lowered as its own body and asks this for itself.
 pub(crate) fn locals_written_with_non_integer_keys(body: &[Stmt]) -> HashSet<String> {
     let mut scan = Scan {
-        bound: HashSet::new(),
+        bound: HashSet::default(),
         vivified: Vec::new(),
-        non_integer_keyed: HashSet::new(),
+        non_integer_keyed: HashSet::default(),
     };
     scan.block(body);
     scan.non_integer_keyed

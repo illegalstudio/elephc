@@ -33,7 +33,7 @@ fn static_receiver_declares_method(
     // from that ancestor's own code reaches it on a subclass receiver (Symfony's
     // `CompiledUrlMatcherTrait::match()` calls its private `doMatch()` on a
     // `RedirectableCompiledUrlMatcher` once `$this` is narrowed), so the ancestors count too.
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     loop {
         if class_info.methods.contains_key(&method_key)
             || class_info.static_methods.contains_key(&method_key)
@@ -791,7 +791,7 @@ pub(super) fn class_is_same_or_subclass(
 ) -> bool {
     let ancestor = ancestor.trim_start_matches('\\');
     let mut current = class_name.trim_start_matches('\\');
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = crate::fast_hash::FastSet::default();
     while visited.insert(current) {
         if current == ancestor {
             return true;

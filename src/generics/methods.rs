@@ -17,7 +17,8 @@
 //!   the slot from one and indexes the other — the failure `reachability/reconcile.rs` documents.
 //!   Static dispatch avoids the question: the call site names the exact method.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet};
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{ClassMethod, Program, Stmt, StmtKind, TypeExpr, TypeParam};
@@ -60,7 +61,7 @@ pub fn template_key(class: &str, method: &str) -> (String, String) {
 /// is instantiated: `Box<int>` gets `map<U>` from `Box<T>`, and only then can a call on a
 /// `Box<int>` find it.
 pub fn collect(program: &Program) -> HashMap<(String, String), MethodTemplate> {
-    let mut templates = HashMap::new();
+    let mut templates = HashMap::default();
     collect_into(program, &mut templates);
     templates
 }
@@ -147,7 +148,7 @@ pub fn instantiate(
     if requested.is_empty() {
         return Ok((program, 0));
     }
-    let mut names: HashMap<(String, Span), String> = HashMap::new();
+    let mut names: HashMap<(String, Span), String> = HashMap::default();
     for (site, selected) in &requested.sites {
         if selected.len() > 1 {
             // A PHPDoc template is tolerant: when its all-`mixed` instantiation is among the

@@ -25,7 +25,7 @@ new AdaptedDate();
         .class_methods
         .iter()
         .map(|function| function.name.as_str())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<crate::fast_hash::FastSet<_>>();
 
     assert!(lowered.contains("AdaptedDate::format"));
     for inherited in [

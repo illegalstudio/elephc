@@ -37,7 +37,7 @@
 //! - `StmtKind::PackedClassDecl` is not one of those blind spots at all: a packed class declares
 //!   typed FIELDS only, with no method bodies and no expressions, so there is nothing in it to walk.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 
@@ -47,7 +47,7 @@ use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 /// assignment prelude and an enum method count like any named function — see the module preamble
 /// for why the expression descent is part of the contract.
 pub(crate) fn collect_global_var_names(statements: &[Stmt]) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     collect_in_body(statements, &mut names);
     if declared_bodies_run_dynamic_php(statements) {
         // A function or method that runs `eval()` or a runtime `include` executes PHP text this

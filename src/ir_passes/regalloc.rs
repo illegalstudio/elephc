@@ -25,7 +25,7 @@
 //! - Scalar constants use reconstruction recipes unless their register-only
 //!   uses repay materialization, save/restore, and live-range costs.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::codegen::platform::{Arch, Target};
 use crate::ir::{Function, IrType, Ownership, ValueDef, ValueId};
@@ -179,7 +179,7 @@ fn candidate_pools(iv: &LiveInterval) -> &'static [PoolKind] {
 fn scan(eligible: &[LiveInterval], target: Target) -> Allocation {
     let mut free = FreePools::new(target);
     let mut active: Vec<ActiveInterval> = Vec::new();
-    let mut assignments: HashMap<ValueId, &'static str> = HashMap::new();
+    let mut assignments: HashMap<ValueId, &'static str> = HashMap::default();
     let mut used: Vec<&'static str> = Vec::new();
 
     for iv in eligible {

@@ -300,7 +300,7 @@ $static_text = Identity::copy("nine");
             source,
             Path::new("generic-methods.php"),
             elephc::source::SourceMode::Php,
-            &HashSet::new(),
+            &HashSet::default(),
         )
         .expect("PHPDoc must pass the physical-file audit");
         let ast = elephc::name_resolver::resolve(ast).expect("resolves names");

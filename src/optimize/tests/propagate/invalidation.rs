@@ -64,7 +64,7 @@ fn test_array_warning_invalidation_respects_scope() {
 fn test_buffer_read_proof_preserves_only_intrinsic_read_facts() {
     let expr = array_access(Expr::var("buffer"), Expr::int_lit(0));
     crate::optimize::binding_decisions::with_buffer_read_sites(
-        HashSet::from([expr.span]),
+        HashSet::from_iter([expr.span]),
         || {
             assert_eq!(expr_invalidation(&expr), names(&[]));
             let effect = crate::optimize::effects::expr_effect(&expr);

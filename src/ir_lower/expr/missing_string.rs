@@ -18,7 +18,7 @@
 //! - A call or ternary stored into a local carries the sentinel when one of its arguments or
 //!   branches does. A call that has not been stored may also return a sentinel its callee built.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{Immediate, LocalSlotId, Op, ValueId};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
@@ -30,8 +30,8 @@ pub(super) fn string_value_may_carry_missing_entry(
     ctx: &LoweringContext<'_, '_>,
     value: LoweredValue,
 ) -> bool {
-    let mut values = HashSet::new();
-    let mut slots = HashSet::new();
+    let mut values = HashSet::default();
+    let mut slots = HashSet::default();
     value_may_carry_missing_string(ctx, value.value, &mut values, &mut slots, false)
 }
 
@@ -172,9 +172,9 @@ pub(crate) fn loop_region_missing_string_names(
     condition: Option<&Expr>,
     update: Option<&Stmt>,
 ) -> HashSet<String> {
-    let mut carried = HashSet::new();
+    let mut carried = HashSet::default();
     loop {
-        let mut found = HashSet::new();
+        let mut found = HashSet::default();
         collect_stmts(body, &carried, ctx, &mut found);
         if let Some(condition) = condition {
             collect_expr(condition, &carried, ctx, &mut found);
@@ -196,8 +196,8 @@ fn emitted_local_may_carry(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
     let Some(slot) = ctx.local_slots.get(name).copied() else {
         return false;
     };
-    let mut values = HashSet::new();
-    let mut slots = HashSet::new();
+    let mut values = HashSet::default();
+    let mut slots = HashSet::default();
     if !slots.insert(slot) {
         return false;
     }

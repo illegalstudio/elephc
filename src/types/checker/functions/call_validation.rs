@@ -8,7 +8,7 @@
 //! Key details:
 //! - Diagnostics should map shared planner errors back to source spans without duplicating call semantics.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
@@ -1647,7 +1647,7 @@ impl Checker {
         let variadic_is_callable = self
             .variadic_argument_element_type(sig, spread_span, callee_desc)?
             .is_some_and(|ty| ty.codegen_repr() == PhpType::Callable);
-        let mut checked_spreads = HashSet::new();
+        let mut checked_spreads = HashSet::default();
 
         if !plan.regular_args.is_empty() {
             for (param_idx, planned) in plan.regular_args.iter().enumerate() {

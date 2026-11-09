@@ -8,7 +8,7 @@
 //! Key details:
 //! - Nested declarations and closures are resolved in isolated contexts to avoid leaking local traversal state.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;

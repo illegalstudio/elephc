@@ -14,7 +14,7 @@
 //!   live in their own binary.
 //! - The phase-level budget itself is described in `docs/internals/the-parser.md`.
 
-use std::collections::HashSet;
+use elephc::fast_hash::FastSet as HashSet;
 
 /// The stack an embedder's worker thread plausibly has. Well under what depth 1024 needs.
 const EMBEDDER_STACK_BYTES: usize = 256 * 1024;
@@ -155,7 +155,7 @@ fn autoload_reference_scan_survives_the_nesting_limit_on_a_small_embedder_stack(
         let (registry, _) = elephc::autoload::Registry::build(std::path::Path::new("."), registration);
         assert!(!registry.is_empty());
         let (program, included) = elephc::autoload::run_collecting_included_with_defines(
-            parse_deeply_nested(), std::path::Path::new("."), &registry, &HashSet::new(),
+            parse_deeply_nested(), std::path::Path::new("."), &registry, &HashSet::default(),
         ).unwrap();
         assert!(included.is_empty());
         summarize(program)
@@ -168,7 +168,7 @@ fn autoload_reference_scan_survives_the_nesting_limit_on_a_small_embedder_stack(
 fn type_checking_survives_the_nesting_limit_on_a_small_embedder_stack() {
     let report = on_a_small_embedder_stack(|| {
         let ast = parse_deeply_nested();
-        let ast = elephc::conditional::apply(ast, &HashSet::new());
+        let ast = elephc::conditional::apply(ast, &HashSet::default());
         let ast = elephc::name_resolver::resolve(ast).expect("name resolve");
         let ast = elephc::optimize::fold_constants(ast);
         match elephc::types::check(&ast) {
@@ -188,7 +188,7 @@ fn type_checking_survives_the_nesting_limit_on_a_small_embedder_stack() {
 fn constant_propagation_survives_the_nesting_limit_on_a_small_embedder_stack() {
     let report = on_a_small_embedder_stack(|| {
         let ast = parse_deeply_nested();
-        let ast = elephc::conditional::apply(ast, &HashSet::new());
+        let ast = elephc::conditional::apply(ast, &HashSet::default());
         let ast = elephc::name_resolver::resolve(ast).expect("name resolve");
         let ast = elephc::optimize::fold_constants(ast);
         let check = elephc::types::check(&ast).expect("type check");
@@ -228,7 +228,7 @@ fn include_resolution_survives_the_nesting_limit_on_a_small_embedder_stack() {
 fn dead_code_elimination_survives_the_nesting_limit_on_a_small_embedder_stack() {
     let report = on_a_small_embedder_stack(|| {
         let ast = parse_deeply_nested();
-        let ast = elephc::conditional::apply(ast, &HashSet::new());
+        let ast = elephc::conditional::apply(ast, &HashSet::default());
         let ast = elephc::name_resolver::resolve(ast).expect("name resolve");
         let ast = elephc::optimize::fold_constants(ast);
         let check = elephc::types::check(&ast).expect("type check");
@@ -250,7 +250,7 @@ fn dead_code_elimination_survives_the_nesting_limit_on_a_small_embedder_stack() 
 fn eir_lowering_survives_the_nesting_limit_on_a_small_embedder_stack() {
     let report = on_a_small_embedder_stack(|| {
         let ast = parse_deeply_nested();
-        let ast = elephc::conditional::apply(ast, &HashSet::new());
+        let ast = elephc::conditional::apply(ast, &HashSet::default());
         let ast = elephc::name_resolver::resolve(ast).expect("name resolve");
         let ast = elephc::optimize::fold_constants(ast);
         let check = elephc::types::check(&ast).expect("type check");
@@ -324,7 +324,7 @@ fn include_discovery_and_resolution_survive_the_nesting_limit_on_a_small_embedde
 fn post_typecheck_optimizer_survives_the_nesting_limit_on_a_small_embedder_stack() {
     let report = on_a_small_embedder_stack(|| {
         let ast = parse_deeply_nested();
-        let ast = elephc::conditional::apply(ast, &HashSet::new());
+        let ast = elephc::conditional::apply(ast, &HashSet::default());
         let ast = elephc::name_resolver::resolve(ast).expect("name resolve");
         let ast = elephc::optimize::fold_constants(ast);
         let check = elephc::types::check(&ast).expect("type check");

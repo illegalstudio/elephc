@@ -11,7 +11,7 @@
 //!   pass after this one handles it without knowing generics exist.
 //! - Concrete declarations precede executable statements so top-level exits cannot prune them.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::generics::{instantiated_name, Bindings};
 use crate::parser::ast::{Program, Stmt, StmtKind};
@@ -32,7 +32,7 @@ pub fn splice_instantiations(
     if requested.is_empty() {
         return (program, 0);
     }
-    let mut templates: HashMap<String, Stmt> = HashMap::new();
+    let mut templates: HashMap<String, Stmt> = HashMap::default();
     for stmt in &program {
         if let StmtKind::FunctionDecl {
             name, type_params, ..
@@ -268,7 +268,7 @@ mod tests {
         assert_eq!(function_names(&program), vec!["identity<int>", "identity"]);
         assert_eq!(param_type(&program, "identity<int>"), Some(TypeExpr::Int));
         let pruned = crate::optimize::prune_constant_control_flow(
-            strip_templates(program), HashSet::new(),
+            strip_templates(program), HashSet::default(),
         );
         assert_eq!(function_names(&pruned), vec!["identity<int>"]);
     }

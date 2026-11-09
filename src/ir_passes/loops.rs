@@ -30,7 +30,7 @@
 //!   smallest such `B`. Reducible CFGs (what the lowerer emits) yield properly
 //!   nested or disjoint loops.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{BlockId, Function};
 
@@ -183,7 +183,7 @@ fn natural_loop_body(
     preds: &[Vec<BlockId>],
     dominance: &DominanceInfo,
 ) -> Vec<BlockId> {
-    let mut body: HashSet<BlockId> = HashSet::new();
+    let mut body: HashSet<BlockId> = HashSet::default();
     body.insert(header);
     let mut stack: Vec<BlockId> = Vec::new();
     for &latch in latches {

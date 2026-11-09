@@ -16,7 +16,7 @@
 //! - Namespaced PHP names receive deterministic C-safe public symbols while
 //!   unnamespaced C identifiers preserve their existing ABI spelling.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Program, Stmt, StmtKind};
@@ -74,7 +74,7 @@ fn collect_mode(
     functions: &HashMap<String, FunctionSig>,
     php: bool,
 ) -> Result<HashMap<String, ExportedFunction>, CompileError> {
-    let mut exports = HashMap::new();
+    let mut exports = HashMap::default();
     let include_variants = program.iter().filter_map(|stmt| {
         let StmtKind::FunctionVariantGroup { name, variants } = &stmt.kind else {
             return None;

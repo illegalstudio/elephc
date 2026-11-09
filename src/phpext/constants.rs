@@ -8,7 +8,7 @@
 //! - Values use the compiler's constant resolver and folding semantics.
 //! - Persistent scalar storage is allocated and retired by Zend, never the native heap.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::{errors::CompileError, parser::ast::{Expr, ExprKind, Program, StmtKind, TypeExpr},
     span::Span, types::PhpType, codegen_support::platform::Target};
@@ -30,7 +30,7 @@ pub fn collect(program: &Program, names: &[String], target: Target) -> Result<Ve
         _ => None,
     }).collect::<HashMap<_, _>>();
     let constants = context(program, target);
-    let mut selected = HashSet::new();
+    let mut selected = HashSet::default();
     let mut exports = Vec::new();
     for name in names {
         let name = name.strip_prefix('\\').unwrap_or(name);
@@ -120,7 +120,7 @@ pub fn validate_native_widening(
 
 /// Keeps supported constant trees identical in native schemas and persistent Zend metadata.
 fn native_value(value: &Expr, class: &str, ty: &PhpType, constants: &HashMap<String, (ExprKind, PhpType)>) -> Option<ExprKind> {
-    let mut resolved = resolve(bind_scope(value.clone(), class), constants, &mut HashSet::new(), 0).ok()?;
+    let mut resolved = resolve(bind_scope(value.clone(), class), constants, &mut HashSet::default(), 0).ok()?;
     super::constant_values::from_expression(&resolved, 0).ok()?;
     if ty.coerces_integer_to_float() {
         if let ExprKind::IntLiteral(integer) = resolved.kind { resolved.kind = ExprKind::FloatLiteral(integer as f64); }
@@ -216,7 +216,7 @@ fn bind_scope(mut expr: Expr, class: &str) -> Expr {
 
 /// Resolves metadata values through shared compiler constant folding.
 pub(super) fn evaluate(source: &Expr, constants: &HashMap<String, (ExprKind, PhpType)>) -> Result<ConstantValue, CompileError> {
-    let expression = resolve(source.clone(), constants, &mut HashSet::new(), 0)?;
+    let expression = resolve(source.clone(), constants, &mut HashSet::default(), 0)?;
     super::constant_values::from_expression(&expression, 0)
 }
 

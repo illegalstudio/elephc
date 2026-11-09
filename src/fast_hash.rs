@@ -3,7 +3,10 @@
 //! non-cryptographic hasher instead of std's SipHash.
 //!
 //! Called from:
-//! - `crate::optimize::reachability` and the other phases a sampled profile puts SipHash on top of.
+//! - Every module of the compiler crate: since 2026-11-09 each `src/` file imports these as
+//!   `HashMap`/`HashSet` instead of std's. A sampled Symfony demo console build still spent 8.6%
+//!   of its busy samples in SipHash after the hot phases had moved here one by one. Only
+//!   hasher-generic signatures (`HashMap<K, V, S>`) still name std's type.
 //!
 //! Key details:
 //! - Same API as `std::collections::HashMap`/`HashSet` except that there is no `new()`:

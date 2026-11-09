@@ -209,7 +209,7 @@ mod tests {
             &asm[begin..end]
         }
 
-        let allowed: std::collections::HashSet<&str> = super::slots::CURL_ABI_SLOTS
+        let allowed: crate::fast_hash::FastSet<&str> = super::slots::CURL_ABI_SLOTS
             .iter()
             .map(|(_, slot)| *slot)
             .collect();

@@ -20,7 +20,8 @@
 //!   virtual `name (inlined)` frame. Best-effort: it needs the `.php` source and
 //!   the dSYM, and silently degrades to plain frames without them.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -853,7 +854,7 @@ pub(crate) fn attribute_lines(
     leaves: &[(u64, u64)],
     resolved: &HashMap<u64, u32>,
 ) -> (HashMap<u32, u64>, u64) {
-    let mut hits: HashMap<u32, u64> = HashMap::new();
+    let mut hits: HashMap<u32, u64> = HashMap::default();
     let mut total = 0;
     for (address, weight) in leaves {
         if let Some(line) = resolved.get(address) {

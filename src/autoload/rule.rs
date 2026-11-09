@@ -10,7 +10,7 @@
 //! - `spl_autoload_*` builtin names are matched case-insensitively before name resolution runs.
 //! - Static extraction preserves runtime registration and callback execution.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileWarning;
 use crate::names::{canonical_name_for_decl, php_symbol_key};
@@ -60,7 +60,7 @@ pub fn collect_register_calls(
     let local_functions = collect_declared_function_keys(&program);
 
     // -- Pass 1: index top-level functions whose bodies look like autoload rules.
-    let mut function_rules: HashMap<String, FunctionSource> = HashMap::new();
+    let mut function_rules: HashMap<String, FunctionSource> = HashMap::default();
     for stmt in &program {
         if let StmtKind::FunctionDecl {
             name,
@@ -81,7 +81,7 @@ pub fn collect_register_calls(
 
     // -- Pass 2: walk in source order, threading variable bindings.
     let mut chain: Vec<AutoloadRule> = Vec::new();
-    let mut current_var_bindings: HashMap<String, VarBinding> = HashMap::new();
+    let mut current_var_bindings: HashMap<String, VarBinding> = HashMap::default();
 
     let mut current_namespace: Option<String> = None;
     for stmt in &program {
@@ -253,7 +253,7 @@ fn is_builtin_autoload_call(
 /// Collects the canonical PHP symbol keys of all top-level function
 /// declarations in the program, including those inside namespace blocks.
 fn collect_declared_function_keys(program: &[Stmt]) -> HashSet<String> {
-    let mut out = HashSet::new();
+    let mut out = HashSet::default();
     collect_declared_function_keys_in(program, None, &mut out);
     out
 }

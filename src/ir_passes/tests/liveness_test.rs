@@ -200,7 +200,7 @@ fn hoisted_values_survive_reversed_loop_layout_and_parameter_kills() {
     crate::ir::validate_function(&function).unwrap();
 
     let liveness = compute_liveness(&function);
-    let mut live: std::collections::HashSet<_> = invariants.into_iter().collect();
+    let mut live: crate::fast_hash::FastSet<_> = invariants.into_iter().collect();
     live.insert(condition);
     assert!(liveness.live_in_of(entry).is_empty());
     assert_eq!(liveness.live_out_of(entry), &live);
@@ -248,13 +248,13 @@ fn branching_cycles_and_unreachable_uses_keep_complete_live_sets() {
     crate::ir::validate_function(&function).unwrap();
 
     let liveness = compute_liveness(&function);
-    let cycle = std::collections::HashSet::from([x, cond]);
+    let cycle = crate::fast_hash::FastSet::from_iter([x, cond]);
     assert_eq!(liveness.live_in_of(left), &cycle);
     assert_eq!(liveness.live_in_of(join), &cycle);
     assert_eq!(liveness.live_out_of(right), &cycle);
-    assert_eq!(liveness.live_in_of(right), &std::collections::HashSet::from([x, y, cond]));
-    assert_eq!(liveness.live_out_of(entry), &std::collections::HashSet::from([x, y, cond]));
+    assert_eq!(liveness.live_in_of(right), &crate::fast_hash::FastSet::from_iter([x, y, cond]));
+    assert_eq!(liveness.live_out_of(entry), &crate::fast_hash::FastSet::from_iter([x, y, cond]));
     assert!(liveness.live_in_of(entry).is_empty());
-    assert_eq!(liveness.live_in_of(dead), &std::collections::HashSet::from([y]));
+    assert_eq!(liveness.live_in_of(dead), &crate::fast_hash::FastSet::from_iter([y]));
     assert!(liveness.live_out_of(dead).is_empty());
 }

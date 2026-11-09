@@ -10,7 +10,7 @@
 //! - Instance dispatch unions every concrete implementation reachable from the receiver type.
 //! - Dynamic eval dispatch retains full bridge effects; other unresolved targets keep defaults.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{
     Effects, Function, Immediate, Module, Op, Terminator, ValueDef, ValueId,
@@ -190,7 +190,7 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
     let mut effects = Effects::PURE;
     let borrowed_roots = if context.has_dynamic_class_barrier {
         // Dynamic scope operations may write a parameter by name instead of a visible slot op.
-        std::collections::HashSet::new()
+        crate::fast_hash::FastSet::default()
     } else {
         crate::ir::parameter_roots::borrowed_parameter_roots(function)
     };
@@ -794,8 +794,8 @@ mod tests {
         assert!(classes.contains_key("D"), "fixture class must be checked");
         let (function, receiver) = function_with_receiver(PhpType::Object("D".to_string()));
         let data = crate::ir::DataPool::default();
-        let summaries = HashMap::new();
-        let parameters = HashMap::new();
+        let summaries = HashMap::default();
+        let parameters = HashMap::default();
         let index = ClassIndex::new(&classes);
         let context = RefinementContext {
             data: &data,
@@ -845,8 +845,8 @@ mod tests {
                 builder.terminate(Terminator::Return { value: None });
             }
             crate::ir::validate_function(&function).unwrap();
-            let classes = crate::fast_hash::FastMap::default(); let summaries = HashMap::new();
-            let parameters = HashMap::new();
+            let classes = crate::fast_hash::FastMap::default(); let summaries = HashMap::default();
+            let parameters = HashMap::default();
             let index = ClassIndex::new(&classes);
             let context = RefinementContext { data: &data, classes: &classes, index: &index,
                 summaries: &summaries, parameters: &parameters, has_dynamic_class_barrier: false };

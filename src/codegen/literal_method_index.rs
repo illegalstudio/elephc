@@ -8,7 +8,7 @@
 //! - The module is immutable during emission; empty lookups are cached too.
 //! - Entries retain declaring-class diagnostics and source/physical argument counts.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::rc::Rc;
 
 use crate::ir::Module;

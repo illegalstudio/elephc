@@ -19,7 +19,7 @@
 //!   PHP's coercive parameter binding.
 
 use std::cell::Cell;
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::Path;
 
 use crate::errors::CompileError;

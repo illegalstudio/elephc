@@ -381,7 +381,7 @@ pub(crate) fn declarations() -> Program {
 ///
 /// Derived from the declarations themselves rather than listed a second time, so a helper
 /// added above cannot fall out of the shadowing filter by being forgotten here.
-fn declared_function_names() -> std::collections::HashSet<String> {
+fn declared_function_names() -> crate::fast_hash::FastSet<String> {
     declarations()
         .iter()
         .filter_map(|stmt| match &stmt.kind {
@@ -432,9 +432,9 @@ pub(crate) fn without_shadowing_declarations(program: Program) -> Program {
 /// one. Passing the set that was actually injected is what keeps the two sides one decision.
 fn without_shadowing_names(
     program: Program,
-    owned: &std::collections::HashSet<String>,
+    owned: &crate::fast_hash::FastSet<String>,
 ) -> Program {
-    fn filter(body: Vec<Stmt>, owned: &std::collections::HashSet<String>) -> Vec<Stmt> {
+    fn filter(body: Vec<Stmt>, owned: &crate::fast_hash::FastSet<String>) -> Vec<Stmt> {
         body.into_iter()
             .filter(|stmt| match &stmt.kind {
                 StmtKind::FunctionDecl { name, .. } => {
@@ -563,7 +563,7 @@ pub fn inject_if_used(
     // The shadowing filter is keyed on what was ACTUALLY injected, not on the full surface: a
     // program that keeps its own `register_shutdown_function()` polyfill must keep it when the
     // prelude declined to declare one.
-    let owned: std::collections::HashSet<String> = declarations
+    let owned: crate::fast_hash::FastSet<String> = declarations
         .iter()
         .filter_map(|stmt| match &stmt.kind {
             StmtKind::FunctionDecl { name, .. } => Some(crate::names::php_symbol_key(name)),

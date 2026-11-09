@@ -9,7 +9,9 @@
 //! - Address references and cross-function local labels retain their defining atom.
 //! - Initialized data and the C adapter are conservative reachability roots.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{VecDeque};
+use crate::fast_hash::FastMap as HashMap;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::codegen_support::platform::Target;
 
@@ -35,7 +37,7 @@ pub(super) fn runtime(user: &str, runtime: &str, target: Target) -> Result<Strin
         if line.trim().starts_with(".comm ") { commons.push(line); }
         else { fixed.push_str(line); fixed.push('\n'); }
     }
-    let mut owners = HashMap::new();
+    let mut owners = HashMap::default();
     for (index, atom) in atoms.iter().enumerate() {
         for line in atom.lines() {
             let line = line.trim();
@@ -48,7 +50,7 @@ pub(super) fn runtime(user: &str, runtime: &str, target: Target) -> Result<Strin
         }
     }
     let adapter = concat!(include_str!("registration.c"), include_str!("activation.c"), include_str!("transport.c"));
-    let mut referenced = HashSet::new();
+    let mut referenced = HashSet::default();
     let mut queue = VecDeque::new();
     for root in [user, prefix.as_str(), fixed.as_str(), adapter] {
         for symbol in symbols(root) {
@@ -59,7 +61,7 @@ pub(super) fn runtime(user: &str, runtime: &str, target: Target) -> Result<Strin
             }) { queue.push_back(owner); }
         }
     }
-    let mut live = HashSet::new();
+    let mut live = HashSet::default();
     while let Some(index) = queue.pop_front() {
         if !live.insert(index) { continue; }
         for symbol in symbols(&atoms[index]) {
@@ -86,7 +88,7 @@ pub(super) fn runtime(user: &str, runtime: &str, target: Target) -> Result<Strin
         }
     }
     Ok(crate::codegen_support::visibility::append_hidden_directives(
-        &out, &HashSet::new(), target.platform,
+        &out, &HashSet::default(), target.platform,
     ))
 }
 

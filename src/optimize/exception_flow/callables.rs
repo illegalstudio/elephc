@@ -12,7 +12,7 @@
 use crate::names::php_symbol_key;
 use crate::optimize::effect_analysis::method_effect_key;
 use crate::parser::ast::{Stmt, StmtKind, TypeExpr};
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 /// Lexical class context needed to resolve self/parent/static throw and call forms.
 #[derive(Clone, Debug)]

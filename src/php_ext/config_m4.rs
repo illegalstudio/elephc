@@ -30,7 +30,8 @@
 //! - Anything the evaluator does not model is ignored rather than guessed, and
 //!   recorded in [`ExtensionConfig::notes`] so a failed build can be explained.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::path::{Path, PathBuf};
 
 /// A required or optional dependency on another PHP extension.
@@ -238,7 +239,7 @@ impl<'a> Interpreter<'a> {
     /// compiler names and empty flags).
     fn new(env: &'a Environment) -> Self {
         let ext_dir = env.extension_dir.display().to_string();
-        let mut vars = HashMap::new();
+        let mut vars = HashMap::default();
         for name in ["ext_srcdir", "ext_builddir", "abs_srcdir", "abs_builddir", "srcdir", "builddir"] {
             vars.insert(name.to_string(), ext_dir.clone());
         }
@@ -251,7 +252,7 @@ impl<'a> Interpreter<'a> {
         vars.insert("GCC".to_string(), "yes".to_string());
         vars.insert("CFLAGS".to_string(), String::new());
         vars.insert("LIBS".to_string(), String::new());
-        Self { env, vars, config: ExtensionConfig::default(), functions: HashMap::new() }
+        Self { env, vars, config: ExtensionConfig::default(), functions: HashMap::default() }
     }
 
     /// Whether a program calling `function` links with the libraries added so far, plus the

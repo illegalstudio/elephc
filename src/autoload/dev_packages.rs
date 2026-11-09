@@ -22,7 +22,8 @@
 //!   tree) without passing through `phpunit/phpunit` stays in the index, so a project that
 //!   uses `myclabs/deep-copy` itself still autoloads it.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{VecDeque};
+use crate::fast_hash::FastSet as HashSet;
 use std::path::Path;
 
 /// The package the compiler stands in for.
@@ -33,7 +34,7 @@ const PHPUNIT: &str = "phpunit/phpunit";
 /// project (its `composer.json` `require` / `require-dev`) or an installed package outside
 /// PHPUnit's tree reaches without going through `phpunit/phpunit`.
 pub fn phpunit_closure(project_root: &Path) -> HashSet<String> {
-    let only_phpunit = HashSet::from([PHPUNIT.to_string()]);
+    let only_phpunit = HashSet::from_iter([PHPUNIT.to_string()]);
     let installed = project_root.join("vendor/composer/installed.json");
     let Ok(content) = std::fs::read_to_string(&installed) else {
         return only_phpunit;
@@ -80,7 +81,7 @@ fn closure(
     requires: &dyn Fn(&str) -> Vec<String>,
     stop: Option<&str>,
 ) -> HashSet<String> {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut queue: VecDeque<String> = roots
         .into_iter()
         .filter(|name| Some(name.as_str()) != stop)
@@ -203,7 +204,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("elephc_dev_packages_none_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        assert_eq!(phpunit_closure(&root), HashSet::from([PHPUNIT.to_string()]));
+        assert_eq!(phpunit_closure(&root), HashSet::from_iter([PHPUNIT.to_string()]));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

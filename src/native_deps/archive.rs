@@ -11,7 +11,7 @@
 //!   xz is first inflated into a sibling temporary of the destination through a size-capped
 //!   writer, so an inflating stream stops at the bound instead of filling the disk.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::fs::{self, FileTimes, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -190,7 +190,7 @@ fn extract_tar<R: Read>(reader: R, archive_path: &Path, compressed_size: u64, de
     let mut archive = tar::Archive::new(reader);
     let mut root: Option<std::ffi::OsString> = None;
     // Every extracted path, and whether it is a regular file.
-    let mut seen = HashMap::new();
+    let mut seen = HashMap::default();
     let mut entry_count = 0_u64;
     let mut expanded = 0_u64;
 

@@ -21,7 +21,7 @@ use crate::ir::{
     IterStartMetadata, LocalKind, LocalSlotId, Op, Ownership, Terminator,
 };
 use crate::types::PhpType;
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::path::Path;
 
 /// The five first-class targets this owner contract must agree on.
@@ -168,7 +168,7 @@ fn assert_single_owner_lifetime(function: &Function, target: &str) {
         }),
         "{target}: owner must be published before IterStart"
     );
-    let mut arrivals = HashMap::new();
+    let mut arrivals = HashMap::default();
     let mut pending = vec![(function.entry, false)];
     while let Some((id, mut live)) = pending.pop() {
         if let Some(&previous) = arrivals.get(&id) {

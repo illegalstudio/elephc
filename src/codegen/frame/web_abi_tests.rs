@@ -31,7 +31,7 @@ fn web_handler_preserves_complete_host_abi_before_request_reset() {
             module.add_function(main);
             let asm = generate_user_asm_from_ir_with_options(
                 &module, false, false, Instrumentation::Off, false, false, false,
-                Emit::Executable, &HashMap::new(), regalloc, true, WebIsolation::Pool, None,
+                Emit::Executable, &HashMap::default(), regalloc, true, WebIsolation::Pool, None,
             ).unwrap();
             let asm = asm.into_string();
             let handler = asm.split_once("_elephc_web_handler:\n").unwrap().1;

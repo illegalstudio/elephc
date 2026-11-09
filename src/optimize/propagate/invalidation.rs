@@ -43,7 +43,7 @@ pub(crate) enum Invalidation {
 impl Invalidation {
     /// The empty invalidation: no local can be written.
     pub(crate) fn none() -> Self {
-        Invalidation::Names(HashSet::new())
+        Invalidation::Names(HashSet::default())
     }
 
     /// Unions another invalidation into this one; `All` absorbs everything.
@@ -232,7 +232,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name)
         | ExprKind::PostDecrement(name) => {
-            Invalidation::Names(HashSet::from([name.clone()]))
+            Invalidation::Names(HashSet::from_iter([name.clone()]))
         }
         ExprKind::FunctionCall { name, args } if name == "unset" => {
             args.iter().fold(Invalidation::none(), |acc, arg| {
@@ -486,7 +486,7 @@ fn top_level_globals_guard(effect: Effect) -> Invalidation {
 /// mutate heap state), `All` for unrecognized shapes.
 fn unset_target_invalidation(arg: &Expr) -> Invalidation {
     match &arg.kind {
-        ExprKind::Variable(name) => Invalidation::Names(HashSet::from([name.clone()])),
+        ExprKind::Variable(name) => Invalidation::Names(HashSet::from_iter([name.clone()])),
         ExprKind::ArrayAccess { array, index } => {
             let mut inv = expr_invalidation(index);
             match lvalue_root(arg) {
@@ -513,7 +513,7 @@ fn unset_target_invalidation(arg: &Expr) -> Invalidation {
 /// target shapes are unknowable.
 fn assignment_target_invalidation(target: &Expr) -> Invalidation {
     match &target.kind {
-        ExprKind::Variable(name) => Invalidation::Names(HashSet::from([name.clone()])),
+        ExprKind::Variable(name) => Invalidation::Names(HashSet::from_iter([name.clone()])),
         ExprKind::ArrayAccess { array, index } => {
             let mut inv = expr_invalidation(index);
             match lvalue_root(target) {

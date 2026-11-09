@@ -70,7 +70,7 @@ pub struct ScopeDynamicMutationTargets {
     /// The `(scope, property)` pairs whose mixed-receiver sites are already recorded, with the
     /// `classes.len()` they were recorded at: the recorded classes depend on nothing else, and
     /// every such write scanned the whole class table again.
-    mixed_receiver_pairs: (usize, std::collections::HashSet<(Option<String>, String)>),
+    mixed_receiver_pairs: (usize, crate::fast_hash::FastSet<(Option<String>, String)>),
 }
 
 impl ScopeDynamicMutationTargets {

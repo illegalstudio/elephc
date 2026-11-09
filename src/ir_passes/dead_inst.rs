@@ -13,7 +13,7 @@
 //!   then each block is walked backward so dead chains collapse within one pass
 //!   run; cross-block cascades converge through the fixed-point driver.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{DataPool, Function, InstId, Instruction, Op, ValueId};
 

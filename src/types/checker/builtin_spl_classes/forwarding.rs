@@ -9,7 +9,7 @@
 //! - Decorators store an `inner` iterator and synthesize PHP-like forwarding methods.
 //! - Limited visibility keeps the forwarding helpers local to SPL metadata construction.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{BinOp, ClassMethod, ClassProperty, Expr, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;

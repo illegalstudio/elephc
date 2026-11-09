@@ -9,7 +9,7 @@
 //! - Cold terminal throws are cloned with initial SSA operands and the original owner slots.
 //! - Only read-only loops qualify; zero-trip exits and instructions' lexical scopes are preserved.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{BasicBlock, BlockId, Function, Immediate, InstId, Op, Terminator, ValueDef, ValueId};
 use crate::types::PhpType;
@@ -55,9 +55,9 @@ pub(super) fn hoist(function: &mut Function, loop_ref: &NaturalLoop) -> bool {
     let Some((guarded, mut replacements)) = guard_entry(function, loop_ref, preheader, body) else { return false; };
     let tail = function.blocks[guarded.as_raw() as usize].terminator.take().unwrap();
     let mut current = guarded;
-    let mut cached = HashMap::new();
-    let mut receiver_loads = HashMap::new();
-    let mut invariants = HashMap::new();
+    let mut cached = HashMap::default();
+    let mut receiver_loads = HashMap::default();
+    let mut invariants = HashMap::default();
     for part in prefix {
         for id in part.instructions {
             let inst = &function.instructions[id.as_raw() as usize];
@@ -135,7 +135,7 @@ fn collect_prefix(function: &Function, loop_ref: &NaturalLoop, body: BlockId, pr
     available.extend(function.blocks[loop_ref.header.as_raw() as usize].instructions.iter()
         .filter_map(|id| function.instructions[id.as_raw() as usize].result));
     let mut prefix = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut block = body;
     let mut count = 0;
     loop {
@@ -218,7 +218,7 @@ fn header_values_escape(function: &Function, loop_ref: &NaturalLoop, exit: Block
     let values: HashSet<_> = header.params.iter().copied().chain(header.instructions.iter()
         .filter_map(|id| function.instructions[id.as_raw() as usize].result)).collect();
     let mut work = vec![exit];
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some(block) = work.pop() {
         if loop_ref.contains(block) || !seen.insert(block) { continue; }
         let basic = &function.blocks[block.as_raw() as usize];

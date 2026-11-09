@@ -24,7 +24,7 @@
 //! - Declarations stay where they are, and so does an `if` whose branches only declare (a guarded
 //!   polyfill function); a file with a nested declaration among its effects is not taken.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind};
@@ -332,7 +332,7 @@ fn walk_declarations(stmts: &[Stmt], namespace: &mut String, visit: &mut dyn FnM
 
 /// The class-likes with an initializer, by case-folded FQN, to that initializer's FQN.
 fn initializers(program: &Program) -> HashMap<String, String> {
-    let mut functions = HashSet::new();
+    let mut functions = HashSet::default();
     let mut classes = Vec::new();
     walk_declarations(program, &mut String::new(), &mut |stmt, namespace| match &stmt.kind {
         StmtKind::FunctionDecl { name, .. }
@@ -346,7 +346,7 @@ fn initializers(program: &Program) -> HashMap<String, String> {
         | StmtKind::EnumDecl { name, .. } => classes.push(qualified(namespace, name)),
         _ => {}
     });
-    let mut out = HashMap::new();
+    let mut out = HashMap::default();
     if functions.is_empty() {
         return out;
     }
@@ -363,7 +363,7 @@ fn initializers(program: &Program) -> HashMap<String, String> {
 /// namespace is qualified by it (`use` imports are not consulted: a parent named through one keeps
 /// its spelling, and its chain is then simply not followed).
 fn parents(program: &Program) -> HashMap<String, String> {
-    let mut out = HashMap::new();
+    let mut out = HashMap::default();
     walk_declarations(program, &mut String::new(), &mut |stmt, namespace| {
         if let StmtKind::ClassDecl { name, extends: Some(parent), .. } = &stmt.kind {
             let parent = if parent.is_fully_qualified() {
@@ -402,7 +402,7 @@ pub(crate) fn call_lazy_initializers(program: &mut Program) {
         names.reverse();
         names
     };
-    let mut rewritten: HashSet<Span> = HashSet::new();
+    let mut rewritten: HashSet<Span> = HashSet::default();
     crate::parser::ast::visit::walk_nodes_mut(program, &mut |node| {
         let crate::parser::ast::visit::NodeMut::Expr(expr) = node else {
             return;

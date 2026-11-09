@@ -9,7 +9,7 @@
 //! - Numeric allocation does not collect cycles or run PHP; numeric release has no children.
 //! - These facts only specialize buffer preservation, never the general EIR effect contract.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalSlotId, Op};
 use crate::types::PhpType;
@@ -19,7 +19,7 @@ use crate::ir_passes::numeric_domain::{self, NumericInputs};
 /// Collects reviewed numeric operations, sharing complete origin proofs across all queries.
 pub(super) fn preserving_instructions(function: &Function) -> HashSet<InstId> {
     let mut numeric = NumericInputs::new(function);
-    let mut slots: HashSet<LocalSlotId> = HashSet::new();
+    let mut slots: HashSet<LocalSlotId> = HashSet::default();
     for inst in &function.instructions {
         if inst.op != Op::LoadLocal || inst.result_type != IrType::Heap(IrHeapKind::Mixed) {
             continue;

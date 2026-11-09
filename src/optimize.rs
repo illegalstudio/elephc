@@ -17,7 +17,7 @@ use crate::span::Span;
 use crate::codegen_support::platform::Target;
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::rc::Rc;
 
 mod binding_decisions;
@@ -252,7 +252,7 @@ pub(in crate::optimize) fn fold_condition_expr(expr: Expr) -> Expr {
 
 /// Collects unconditional user functions that can shadow a builtin during `function_exists()`.
 fn collect_top_level_user_functions(program: &[Stmt]) -> HashSet<String> {
-    let mut functions = HashSet::new();
+    let mut functions = HashSet::default();
     collect_top_level_user_functions_from_block(program, &mut functions);
     functions
 }
@@ -499,7 +499,7 @@ impl PostTypecheckOptimizer {
             with_callable_effect_analysis(&self.callable_effects, || {
                 with_by_ref_signatures(self.by_ref_signatures.clone(), || {
                     binding_decisions::with_buffer_read_sites(buffer_read_sites, || {
-                        propagate_block(program, HashMap::new()).0
+                        propagate_block(program, HashMap::default()).0
                     })
                 })
             })

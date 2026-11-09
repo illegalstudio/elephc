@@ -12,12 +12,12 @@
 use super::*;
 use crate::codegen::lower_inst::local_slot_for_loaded_value;
 use crate::ir::LocalSlotId;
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 /// Stages one proven managed reference using its live local storage rather than its loaded value.
 pub(super) fn stage_reference(ctx: &mut FunctionContext<'_>, value: ValueId, pointer: usize) -> Result<()> {
     let slot = local_slot_for_loaded_value(ctx, value)?;
-    if !managed_local(ctx, slot, &mut HashSet::new()) {
+    if !managed_local(ctx, slot, &mut HashSet::default()) {
         return Err(CodegenIrError::unsupported(
             "mbstring output requires a managed Mixed local reference; this lvalue form is not yet supported"));
     }
@@ -37,7 +37,7 @@ pub(super) fn stage_reference(ctx: &mut FunctionContext<'_>, value: ValueId, poi
 /// Stages an existing concrete or Mixed reference cell without changing its PHP storage type.
 pub(super) fn stage_live_reference(ctx: &mut FunctionContext<'_>, value: ValueId, pointer: usize) -> Result<()> {
     let slot = local_slot_for_loaded_value(ctx, value)?;
-    if !live_local(ctx, slot, &mut HashSet::new()) {
+    if !live_local(ctx, slot, &mut HashSet::default()) {
         return Err(CodegenIrError::unsupported("mb_convert_variables requires a live PHP reference place"));
     }
     ctx.materialize_local_storage_address(slot, abi::int_result_reg(ctx.emitter))?;

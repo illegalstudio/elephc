@@ -11,7 +11,7 @@ use super::program_usage::{collect_required_class_names, collect_required_class_
 use super::{dynamic_new, reflection};
 use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::types::ClassInfo;
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 /// Returns the class names a program's emitted metadata can reach. Starts from required
 /// classes, adds the throwable hierarchy a runtime helper can materialize, reflection

@@ -13,7 +13,7 @@ use super::*;
 pub(crate) fn collect_function_global_names(
     statements: &[Stmt],
 ) -> HashMap<String, Option<HashSet<String>>> {
-    let mut names = HashMap::new();
+    let mut names = HashMap::default();
     collect_function_global_names_into(statements, &mut names);
     names
 }
@@ -202,8 +202,8 @@ pub(super) fn lower_function_declarations(
     statements: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, crate::types::FunctionSig>,
 ) {
     for stmt in statements {
         match &stmt.kind {

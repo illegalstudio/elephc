@@ -14,7 +14,7 @@
 //! - Conditional reads, faulting prefixes and header values used after the loop fail closed.
 //! - Property instructions are relocated with their original ids, spans and lexical metadata.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{
     BasicBlock, BlockId, Effects, Function, Immediate, InstId, Instruction, LocalSlotId,
@@ -72,7 +72,7 @@ fn hoist_one(function: &mut Function, loop_ref: &NaturalLoop, predecessors: &[Ve
             // Foreign header reads need their checked access on this same entry as well.
             // Body reads below already have the complete initial header substitution map.
             if !reads_the_method_receiver(function, &function.instructions[read.as_raw() as usize]) { return false; }
-            move_read(function, header, read, preheader, HashMap::new());
+            move_read(function, header, read, preheader, HashMap::default());
             return true;
         }
         return false;

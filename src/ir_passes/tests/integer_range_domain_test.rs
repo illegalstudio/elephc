@@ -44,9 +44,9 @@ fn shared_unknown_expression_is_memoized() {
         result = value;
         builder.terminate(Terminator::Return { value: Some(value) });
     }
-    let mut memo = HashMap::new();
+    let mut memo = HashMap::default();
     assert_eq!(static_value_range(
-        &function, result, &HashMap::new(), &mut memo,
+        &function, result, &HashMap::default(), &mut memo,
     ), None);
     assert_eq!(memo.len(), 17, "unknown subexpressions must be memoized too");
 }
@@ -72,9 +72,9 @@ fn deep_expression_uses_bounded_call_stack() {
         result = value;
         builder.terminate(Terminator::Return { value: Some(value) });
     }
-    let mut memo = HashMap::new();
+    let mut memo = HashMap::default();
     assert_eq!(static_value_range(
-        &function, result, &HashMap::new(), &mut memo,
+        &function, result, &HashMap::default(), &mut memo,
     ), Some(IntRange::point(20_001)));
     assert_eq!(memo.len(), 20_001);
 }
@@ -103,7 +103,7 @@ fn unconstrained_scalars_and_literals_keep_entry_states_sparse() {
         builder.terminate(Terminator::Return { value: None });
     }
     validate_function(&function).unwrap();
-    let states = analyze_block_entries(&function, &HashMap::new()).unwrap();
+    let states = analyze_block_entries(&function, &HashMap::default()).unwrap();
     let state = states[next.as_raw() as usize].as_ref().unwrap();
     assert!(state.is_empty(), "redundant facts inflated the state: {}", state.len());
     assert_eq!(range_for_value(&function, state, unknown), Some(IntRange::full()));
@@ -131,7 +131,7 @@ fn implicit_literal_arguments_preserve_checked_arithmetic_proofs() {
         builder.terminate(Terminator::Return { value: Some(result) });
     }
     validate_function(&function).unwrap();
-    let states = analyze_block_entries(&function, &HashMap::new()).unwrap();
+    let states = analyze_block_entries(&function, &HashMap::default()).unwrap();
     let state = states[next.as_raw() as usize].as_ref().unwrap();
     assert_eq!(state.len(), 1);
     assert_eq!(state.get(&parameter), Some(&IntRange::point(7)));
@@ -167,11 +167,11 @@ fn boxed_full_domain_facts_are_not_discarded() {
         builder.terminate(Terminator::Return { value: None });
     }
     validate_function(&function).unwrap();
-    let states = analyze_block_entries(&function, &HashMap::new()).unwrap();
+    let states = analyze_block_entries(&function, &HashMap::default()).unwrap();
     let state = states[next.as_raw() as usize].as_ref().unwrap();
     assert_eq!(state.len(), 1);
     assert_eq!(state.get(&boxed), Some(&IntRange::full()));
-    assert_eq!(range_for_value(&function, &RangeState::new(), boxed), None);
+    assert_eq!(range_for_value(&function, &RangeState::default(), boxed), None);
 }
 
 /// Iterative dominance intervals agree with the original queries on deep and unreachable blocks.

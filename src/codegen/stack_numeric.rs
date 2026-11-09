@@ -16,7 +16,7 @@ use crate::ir::{
 };
 use crate::types::PhpType;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 #[cfg(test)]
 mod tests;
@@ -56,10 +56,10 @@ pub(super) fn plan(function: &Function) -> NumericFrame {
     {
         return NumericFrame::default();
     }
-    let mut uses: HashMap<ValueId, Vec<InstId>> = HashMap::new();
-    let mut terminator_uses = HashSet::new();
-    let mut locations = HashMap::new();
-    let mut accesses: HashMap<LocalSlotId, Vec<InstId>> = HashMap::new();
+    let mut uses: HashMap<ValueId, Vec<InstId>> = HashMap::default();
+    let mut terminator_uses = HashSet::default();
+    let mut locations = HashMap::default();
+    let mut accesses: HashMap<LocalSlotId, Vec<InstId>> = HashMap::default();
     for block in &function.blocks {
         for (index, &id) in block.instructions.iter().enumerate() {
             let inst = &function.instructions[id.as_raw() as usize];
@@ -92,8 +92,8 @@ pub(super) fn plan(function: &Function) -> NumericFrame {
         terminator_uses,
         locations,
         accesses,
-        slots: HashMap::new(),
-        invalidations: RefCell::new(HashMap::new()),
+        slots: HashMap::default(),
+        invalidations: RefCell::new(HashMap::default()),
     };
     let cells: Vec<_> = function
         .instructions
@@ -153,8 +153,8 @@ impl Proof<'_> {
         {
             return false;
         }
-        let mut stores = HashSet::new();
-        if !self.value_uses(value, id, &mut HashSet::new(), &mut stores) || stores.len() > 1 {
+        let mut stores = HashSet::default();
+        if !self.value_uses(value, id, &mut HashSet::default(), &mut stores) || stores.len() > 1 {
             return false;
         }
         stores.into_iter().all(|slot| self.slot(slot))
@@ -321,10 +321,10 @@ impl Proof<'_> {
                     })
                 }
                 _ if producer_op(inst) => {
-                    let mut stores = HashSet::new();
+                    let mut stores = HashSet::default();
                     return (!tagged_producer(inst) || self.numeric_inputs(&inst.operands))
-                        && self.value_uses(value, id, &mut HashSet::new(), &mut stores)
-                        && stores == HashSet::from([slot]);
+                        && self.value_uses(value, id, &mut HashSet::default(), &mut stores)
+                        && stores == HashSet::from_iter([slot]);
                 }
                 _ => return false,
             }
@@ -372,7 +372,7 @@ impl Proof<'_> {
 
     /// Indexes slot retirement/stores and every producer that can back the slot on any path.
     fn slot_invalidations(&self, slot: LocalSlotId) -> HashMap<crate::ir::BlockId, Vec<usize>> {
-        let mut invalidating = HashSet::new();
+        let mut invalidating = HashSet::default();
         for &id in self.accesses.get(&slot).into_iter().flatten() {
             let inst = &self.function.instructions[id.as_raw() as usize];
             if !matches!(inst.op, Op::StoreLocal | Op::ReleaseLocalSlot) { continue; }
@@ -388,7 +388,7 @@ impl Proof<'_> {
                 source = input;
             }
         }
-        let mut writes: HashMap<_, Vec<_>> = HashMap::new();
+        let mut writes: HashMap<_, Vec<_>> = HashMap::default();
         for id in invalidating {
             if let Some(&(block, position)) = self.locations.get(&id) {
                 writes.entry(block).or_default().push(position);

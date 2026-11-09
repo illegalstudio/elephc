@@ -100,7 +100,7 @@ pub(super) fn activation_chain_is_observable(module: &Module) -> bool {
 
 /// Rejects implicit address-taking consumers, resolving ordinary calls against their signatures.
 fn calls_are_value_only(function: &Function, module: &Module) -> bool {
-    let local_reads: std::collections::HashSet<_> = function.instructions.iter()
+    let local_reads: crate::fast_hash::FastSet<_> = function.instructions.iter()
         .filter(|inst| inst.op == Op::LoadLocal).filter_map(|inst| inst.result).collect();
     function.instructions.iter().all(|inst| {
         if inst.op == Op::Call {

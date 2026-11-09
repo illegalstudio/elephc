@@ -12,7 +12,7 @@
 //! - Item order is preserved because static archive order affects symbol resolution.
 //! - Embedded Rust bridge dependencies replace duplicate standalone archive inputs.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::PathBuf;
 
 const EMBEDDED_BRIDGE_RELATIONSHIPS: &[(&str, &[&str])] = &[(

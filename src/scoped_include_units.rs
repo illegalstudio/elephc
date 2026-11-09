@@ -25,7 +25,8 @@
 //!   include, so a wrong guess costs a lookup, never a behaviour.
 //! - Everything is built as AST; the template bodies are the files' own parsed statements.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
@@ -77,7 +78,7 @@ pub fn rewrite_scoped_include_sites(
     known: &[crate::ir::IncludeUnit],
 ) -> Result<Program, CompileError> {
     let known: HashSet<PathBuf> = known.iter().map(|unit| unit.canonical_path.clone()).collect();
-    let mut state = State { defines, known, lookups: HashMap::new(), functions: Vec::new() };
+    let mut state = State { defines, known, lookups: HashMap::default(), functions: Vec::new() };
     rewrite_in_declarations(program, &mut state);
     if state.functions.is_empty() {
         return Ok(Vec::new());

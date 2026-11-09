@@ -20,7 +20,7 @@
 
 use crate::codegen::platform::Target;
 use crate::ir::{BasicBlock, Function, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId, Op, Terminator};
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::path::Path;
 
 /// The five first-class targets descriptor unpacking must agree on.
@@ -232,7 +232,7 @@ fn named_and_spread_descriptor_container_stays_single_on_every_target() {
 
 /// Checks LIFO cleanup along CFG edges, including agreement across loop backedges.
 fn assert_unpack_owners(function: &Function, target: &str) {
-    let mut arrivals = HashMap::new();
+    let mut arrivals = HashMap::default();
     let mut pending = vec![(function.entry, Vec::<LocalSlotId>::new())];
     while let Some((id, mut owners)) = pending.pop() {
         if let Some(previous) = arrivals.get(&id) {

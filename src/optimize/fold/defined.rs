@@ -34,7 +34,7 @@ impl KnownClassConstants {
         self.constant_exists_inner(
             &php_symbol_key(class_name.trim_start_matches('\\')),
             constant_name,
-            &mut HashSet::new(),
+            &mut HashSet::default(),
         )
     }
 

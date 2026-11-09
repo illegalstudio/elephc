@@ -8,7 +8,8 @@
 //! - Native programs lower Reflection classes to a fixed point from EIR types and calls.
 //! - Eval-owned Reflection values are executed by Magician and do not root unrelated AOT bodies.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{Function, Immediate, IrType, Module, Op};
 use crate::parser::ast::ExprKind;

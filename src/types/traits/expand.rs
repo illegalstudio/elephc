@@ -8,7 +8,7 @@
 //! Key details:
 //! - Merge and validation rules must report conflicts early because downstream class metadata is treated as canonical.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -142,7 +142,7 @@ pub(super) fn resolve_trait_uses(
     for trait_use in trait_uses {
         let mut imported_properties = Vec::new();
         let mut imported_constants = Vec::new();
-        let mut candidates: HashMap<String, Vec<ImportedMethod>> = HashMap::new();
+        let mut candidates: HashMap<String, Vec<ImportedMethod>> = HashMap::default();
         let mut method_order = Vec::new();
         let listed_trait_names: HashSet<String> = trait_use
             .trait_names
@@ -196,8 +196,8 @@ pub(super) fn resolve_trait_uses(
             )?;
         }
 
-        let mut suppressed: HashMap<String, HashSet<String>> = HashMap::new();
-        let mut visibility_overrides: HashMap<(String, String), Visibility> = HashMap::new();
+        let mut suppressed: HashMap<String, HashSet<String>> = HashMap::default();
+        let mut visibility_overrides: HashMap<(String, String), Visibility> = HashMap::default();
         let mut alias_methods: Vec<ImportedMethod> = Vec::new();
 
         for adaptation in &trait_use.adaptations {

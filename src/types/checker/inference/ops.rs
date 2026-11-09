@@ -644,7 +644,7 @@ impl Checker {
         // pre-bound, and silenced a FRESH closure local whose name merely collided with one.
         // Parameters are added too, so the map means "the frame's own pre-bound storage"; the
         // marking excludes them anyway.
-        let pre_bound_own_storage: std::collections::HashMap<String, PhpType> = captures
+        let pre_bound_own_storage: crate::fast_hash::FastMap<String, PhpType> = captures
             .iter()
             .chain(params.iter().map(|(name, _, _, _)| name))
             .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))

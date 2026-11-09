@@ -9,13 +9,13 @@
 //! - Linear declarations and explicit declaration initializers retain scalar integer sinks.
 //! - Nested function-like bodies establish their own contracts and are not scanned here.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::{Stmt, StmtKind};
 
 /// Collects names whose declaration may be skipped, repeated or bypassed by an exception.
 pub(super) fn conditional_declarations(body: &[Stmt]) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     let mut pending: Vec<_> = body.iter().map(|stmt| (stmt, false)).collect();
     while let Some((stmt, conditional)) = pending.pop() {
         match &stmt.kind {

@@ -291,7 +291,7 @@ impl Checker {
         interface_name: &str,
         const_name: &str,
     ) -> Option<(crate::parser::ast::Expr, Option<crate::parser::ast::TypeExpr>)> {
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = crate::fast_hash::FastSet::default();
         let mut queue: Vec<String> = vec![interface_name.to_string()];
         while let Some(name) = queue.pop() {
             if !visited.insert(name.clone()) {

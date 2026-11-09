@@ -13,7 +13,7 @@ use crate::ir::{BlockId, Function, Immediate, InstId, LocalKind, LocalSlotId, Op
 
 /// Follows ownership forwarding and definitely initialized, single-source temporary loads.
 pub(super) fn transparent_callback_source(function: &Function, mut value: ValueId) -> Result<ValueId> {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     while seen.insert(value) {
         let metadata = function.value(value)
             .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;

@@ -15,7 +15,9 @@
 //! - Every arithmetic proof uses `i128`; unknown or unsupported shapes keep PHP's checked
 //!   overflow-to-float path unchanged.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{VecDeque};
+use crate::fast_hash::FastMap as HashMap;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{
     validate_function, BlockId, CmpPredicate, DataPool, Function, Immediate, InstId, IrType,
@@ -130,7 +132,7 @@ fn analyze_block_entries(
     let availability = ValueAvailability::new(function, &dominance);
     let loop_headers: HashSet<BlockId> = loops.loops().iter().map(|lp| lp.header).collect();
     let mut states = vec![None; function.blocks.len()];
-    let mut entry = RangeState::new();
+    let mut entry = RangeState::default();
     for &param in &function.block(function.entry)?.params {
         if value_is_i64(function, param) {
             set_range(function, &mut entry, param,
@@ -140,8 +142,8 @@ fn analyze_block_entries(
     states[function.entry.as_raw() as usize] = Some(entry);
 
     let mut work = VecDeque::from([function.entry]);
-    let mut queued: HashSet<BlockId> = HashSet::from([function.entry]);
-    let mut expansions: HashMap<(BlockId, ValueId), u8> = HashMap::new();
+    let mut queued: HashSet<BlockId> = HashSet::from_iter([function.entry]);
+    let mut expansions: HashMap<(BlockId, ValueId), u8> = HashMap::default();
     let mut steps = 0usize;
 
     while let Some(block_id) = work.pop_front() {
@@ -797,13 +799,13 @@ fn swap_predicate(predicate: CmpPredicate) -> Option<CmpPredicate> {
 fn discover_induction_ranges(function: &Function) -> HashMap<ValueId, IntRange> {
     let dominance = compute_dominance(function);
     let loops = compute_loops(function, &dominance);
-    let mut summaries = HashMap::new();
+    let mut summaries = HashMap::default();
     for lp in loops.loops() {
         let Some((condition, continue_when_true)) = loop_condition(function, lp) else {
             continue;
         };
         let inductions = super::induction::basic_inductions(function, lp, |value| {
-            static_value_range(function, value, &summaries, &mut HashMap::new())?.exact()
+            static_value_range(function, value, &summaries, &mut HashMap::default())?.exact()
         });
         for induction in inductions {
             let (param, init, step) = (induction.parameter, induction.initial, induction.step);
@@ -818,7 +820,7 @@ fn discover_induction_ranges(function: &Function) -> HashMap<ValueId, IntRange> 
             if value_def_block(function, bound).is_some_and(|block| lp.contains(block)) {
                 continue;
             }
-            let mut memo = HashMap::new();
+            let mut memo = HashMap::default();
             let Some(init_range) = static_value_range(
                 function,
                 init,
@@ -950,7 +952,7 @@ fn static_value_range(
     memo: &mut HashMap<ValueId, Option<IntRange>>,
 ) -> Option<IntRange> {
     let mut work = vec![(value, false)];
-    let mut visiting = HashSet::new();
+    let mut visiting = HashSet::default();
     while let Some((current, ready)) = work.pop() {
         if let Some(range) = summaries.get(&current) {
             memo.insert(current, Some(*range));

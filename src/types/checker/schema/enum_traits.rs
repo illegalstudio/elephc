@@ -8,7 +8,7 @@
 //! - Local methods win trait composition but must not erase abstract requirements.
 //! - Nested trait requirements bind relative types to the consuming enum.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -33,10 +33,10 @@ pub(crate) fn validate_enum_trait_requirements(
     if enum_unit.used_traits.is_empty() {
         return Ok(());
     }
-    let mut traits = HashMap::new();
+    let mut traits = HashMap::default();
     collect_trait_members(program, &mut traits);
     if let Some(uses) = enum_trait_uses(program, &enum_unit.name) {
-        for required in adapted_requirements(uses, &traits, &mut HashSet::new()) {
+        for required in adapted_requirements(uses, &traits, &mut HashSet::default()) {
             if let Some(actual) = enum_unit.methods.iter().find(|method| {
                 !method.is_abstract && method.is_static == required.is_static
                     && php_symbol_key(&method.name) == php_symbol_key(&required.name)

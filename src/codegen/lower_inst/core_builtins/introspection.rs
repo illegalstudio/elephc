@@ -8,7 +8,7 @@
 //! - Internal and user function lists are derived independently and de-duplicated.
 //! - Included-file order comes from the compile-time resolver and autoload manifest.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use elephc_builtin_contract::{aot_support, contracts, BackendSupport, BuiltinKind};
 

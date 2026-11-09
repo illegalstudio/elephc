@@ -9,7 +9,7 @@
 //! - State arrays track active iterators, per-frame traversal state, and frame depths.
 //! - Traversal mode controls self-first, child-first, and leaves-only behavior.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{BinOp, ClassConst, ClassMethod, ClassProperty, ExprKind, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;

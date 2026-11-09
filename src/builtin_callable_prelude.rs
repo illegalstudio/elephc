@@ -56,8 +56,8 @@ pub fn inject_if_used(
     // could receive: a probe's argument (`function_exists('clamp')` asks whether the name exists)
     // and an array key (`$frame['file']`, `array_key_exists('file', $frame)` name an element; the
     // key goes nowhere).
-    let mut occurrences: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    let mut inert: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut occurrences: crate::fast_hash::FastMap<&str, usize> = crate::fast_hash::FastMap::default();
+    let mut inert: crate::fast_hash::FastMap<&str, usize> = crate::fast_hash::FastMap::default();
     walk_nodes(&program, &mut |node| {
         let inert_position = match node {
             Node::Expr(Expr { kind: ExprKind::StringLiteral(value), .. }) => {

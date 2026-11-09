@@ -12,7 +12,7 @@ use super::*;
 
 /// Retains possible property initialization errors through the AST-only compatibility API.
 pub(super) fn imported_default_errors(program: &[Stmt]) -> HashSet<String> {
-    let mut errors = HashSet::new();
+    let mut errors = HashSet::default();
     let mut parents = Vec::new();
     collect(program, &mut errors, &mut parents);
     loop {

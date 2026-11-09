@@ -8,7 +8,7 @@
 //! Key details:
 //! - Merge and validation rules must report conflicts early because downstream class metadata is treated as canonical.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -24,7 +24,7 @@ pub(super) fn validate_direct_members(
     span: Span,
     owner_name: &str,
 ) -> Result<(), CompileError> {
-    let mut seen_props = HashSet::new();
+    let mut seen_props = HashSet::default();
     for property in properties {
         if !seen_props.insert(property.name.clone()) {
             return Err(CompileError::new(
@@ -45,7 +45,7 @@ pub(super) fn validate_direct_method_duplicates(
     span: Span,
     owner_name: &str,
 ) -> Result<(), CompileError> {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     for method in methods {
         let key = (php_symbol_key(&method.name), method.is_static);
         if !seen.insert(key) {

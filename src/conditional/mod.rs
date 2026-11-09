@@ -11,7 +11,7 @@
 mod exprs;
 mod stmts;
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::Program;
 

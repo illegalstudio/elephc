@@ -32,7 +32,7 @@ mod generator_identity;
 /// `CheckResult::local_binding_decision_spans()` explicitly, which is what stops a production
 /// caller from quietly losing the tail-sinking guard.
 fn eliminate_dead_code(program: Program) -> Program {
-    super::eliminate_dead_code(program, HashSet::new())
+    super::eliminate_dead_code(program, HashSet::default())
 }
 
 /// Prunes constant control flow over a hand-built AST that no checker ever saw.
@@ -42,7 +42,7 @@ fn eliminate_dead_code(program: Program) -> Program {
 /// rewrite could clone, so the empty set is the honest argument. The fixtures that DO exercise the
 /// rewrite's veto call `crate::optimize::normalize_control_flow` directly with a real span set.
 fn prune_constant_control_flow(program: Program) -> Program {
-    super::prune_constant_control_flow(program, HashSet::new())
+    super::prune_constant_control_flow(program, HashSet::default())
 }
 
 /// Normalizes control flow over a hand-built AST that no checker ever saw.
@@ -50,7 +50,7 @@ fn prune_constant_control_flow(program: Program) -> Program {
 /// Shadows [`super::normalize_control_flow`] for the test tree only, for the reason spelled out on
 /// `prune_constant_control_flow` above.
 fn normalize_control_flow(program: Program) -> Program {
-    super::normalize_control_flow(program, HashSet::new())
+    super::normalize_control_flow(program, HashSet::default())
 }
 
 /// Runs constant propagation over a hand-built AST that no checker ever saw.
@@ -64,5 +64,5 @@ fn normalize_control_flow(program: Program) -> Program {
 /// The volatility fixtures that need a non-empty set call `PostTypecheckOptimizer::propagate`
 /// directly instead of going through this.
 fn propagate_constants(program: Program) -> Program {
-    super::propagate_constants(program, HashSet::new(), HashSet::new())
+    super::propagate_constants(program, HashSet::default(), HashSet::default())
 }

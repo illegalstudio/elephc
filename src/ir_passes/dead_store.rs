@@ -22,7 +22,7 @@
 //! - Dynamic eval observes the PHP frame without explicit slot operands, so its
 //!   functions keep all scalar stores.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{
     DataPool, Function, Immediate, InstId, LocalKind, LocalSlotId, Op, Ownership, Value,
@@ -74,7 +74,7 @@ impl IrPass for DeadStore {
 /// pass does not model.
 fn eligible_slots(function: &Function, data: &DataPool) -> HashSet<LocalSlotId> {
     if super::local_scope::has_dynamic_eval(function) {
-        return HashSet::new();
+        return HashSet::default();
     }
     let mut eligible: HashSet<LocalSlotId> = function
         .locals
@@ -234,7 +234,7 @@ fn compute_slot_live_in(
     let mut live_in: HashMap<crate::ir::BlockId, HashSet<LocalSlotId>> = function
         .blocks
         .iter()
-        .map(|block| (block.id, HashSet::new()))
+        .map(|block| (block.id, HashSet::default()))
         .collect();
 
     let handled = function_has_handler(function);
@@ -278,7 +278,7 @@ fn block_live_out(
     eligible: &HashSet<LocalSlotId>,
     handled: bool,
 ) -> HashSet<LocalSlotId> {
-    let mut live = HashSet::new();
+    let mut live = HashSet::default();
     if let Some(term) = block.terminator.as_ref() {
         if handled && matches!(term, crate::ir::Terminator::Throw { .. }) {
             live.extend(eligible.iter().copied());

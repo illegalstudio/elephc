@@ -337,7 +337,7 @@ fn test_macos_dead_strip_no_cross_atom_internal_refs() {
 
     let mut current_atom: &str = "<root>";
     let mut prev_alt_entry: Option<&str> = None;
-    let mut owner: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    let mut owner: crate::fast_hash::FastMap<&str, &str> = crate::fast_hash::FastMap::default();
     let mut refs: Vec<(&str, &str)> = Vec::new();
 
     for raw in asm.lines() {

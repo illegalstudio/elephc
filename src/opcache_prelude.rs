@@ -82,7 +82,7 @@
 //!   compile-time script manifest). See `preload_verdict` for the verified reference matrix and
 //!   `render_preload_statistics_stmt` for the verified key shape.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 

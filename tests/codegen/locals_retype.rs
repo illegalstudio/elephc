@@ -2330,7 +2330,7 @@ fn test_the_single_case_switch_rewrite_vetoes_itself_on_a_marked_default() {
         let spans = if with_decisions {
             check_result.local_binding_decision_spans()
         } else {
-            std::collections::HashSet::new()
+            elephc::fast_hash::FastSet::default()
         };
         let ast =
             elephc::optimize::propagate_constants(ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());

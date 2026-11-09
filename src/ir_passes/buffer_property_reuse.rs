@@ -40,7 +40,7 @@
 //! - Only handles read from a property are rewritten. Local buffer handles in straight-line code
 //!   keep their per-access form.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{
     BlockId, Effects, Function, Immediate, InstId, Instruction, IrType, LocalKind, LocalSlotId,
@@ -83,7 +83,7 @@ impl Facts {
     /// Computes the dominance, predecessor, position and slot facts of one function.
     fn of(function: &Function) -> Self {
         let dominance = compute_dominance(function);
-        let mut positions = HashMap::new();
+        let mut positions = HashMap::default();
         for block in &function.blocks {
             if !dominance.is_reachable(block.id) {
                 continue;
@@ -178,7 +178,7 @@ fn merge_property_reads(function: &mut Function, facts: &Facts) -> bool {
         is_buffer_property_read(function, inst) || is_inlined_scalar_property_read(function, inst)
     });
     let mut kept: Vec<InstId> = Vec::new();
-    let mut replacements = HashMap::new();
+    let mut replacements = HashMap::default();
     let mut redundant = Vec::new();
     for later in reads {
         let earlier = kept
@@ -254,7 +254,7 @@ fn share_record_addresses(
             && property_root(function, inst.operands[0]).is_some()
     });
     let mut kept: Vec<InstId> = Vec::new();
-    let mut replacements = HashMap::new();
+    let mut replacements = HashMap::default();
     let mut redundant = Vec::new();
     for later in records {
         let earlier = kept
@@ -396,7 +396,7 @@ fn share_descriptors(
 /// read, together with those releases.
 fn drop_release_only_acquires(function: &mut Function, handles: &[ValueId]) {
     let uses = function.value_use_counts();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     for &handle in handles {
         if !seen.insert(handle) {
             continue;
@@ -604,7 +604,7 @@ fn blocks_reached_avoiding(
     seeds: Vec<BlockId>,
     next: impl Fn(BlockId) -> Vec<BlockId>,
 ) -> HashSet<BlockId> {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut work = seeds;
     while let Some(block) = work.pop() {
         if block == avoid || !seen.insert(block) {

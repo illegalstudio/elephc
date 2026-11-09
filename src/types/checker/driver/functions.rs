@@ -8,7 +8,7 @@
 //! Key details:
 //! - Phase order controls diagnostics, available declarations, required libraries, and function-local environments.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -32,7 +32,7 @@ impl Checker {
         program: &Program,
         errors: &mut Vec<CompileError>,
     ) {
-        let mut seen_functions = HashSet::new();
+        let mut seen_functions = HashSet::default();
         for stmt in program {
             if let StmtKind::FunctionVariantGroup { name, variants } = &stmt.kind {
                 if !seen_functions.insert(php_symbol_key(name)) {
@@ -651,7 +651,7 @@ impl Checker {
         let declaration_spans: HashSet<_> = self.function_variant_groups.values()
             .flatten().filter_map(|variant| self.fn_decls.get(variant))
             .map(|decl| decl.span).collect();
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         errors.retain(|error| {
             (!messages.contains(&error.message) && !declaration_spans.contains(&error.span))
                 || seen.insert((error.span, error.file.clone(), error.message.clone()))

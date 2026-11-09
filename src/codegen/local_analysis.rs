@@ -14,7 +14,8 @@
 //! - `CatchBind` produces an owned SSA value; its following storage opcode determines
 //!   which local lifecycle, if any, participates in cleanup (issue #448).
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{VecDeque};
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{
     BlockId, Function, Immediate, InstId, LocalSlotId, Op, Terminator, ValueDef, ValueId,
@@ -36,8 +37,8 @@ impl LocalSlotAnalysis {
     /// Computes all local-slot facts with one instruction scan plus CFG propagation.
     pub(super) fn new(function: &Function) -> Self {
         let initially_ref_cell_slots = initially_ref_cell_slots(function);
-        let mut stored_slots = HashSet::new();
-        let mut loaded_slots = HashSet::new();
+        let mut stored_slots = HashSet::default();
+        let mut loaded_slots = HashSet::default();
         let mut ever_ref_cell_slots = initially_ref_cell_slots.clone();
         for inst in &function.instructions {
             // `StoreRefCell` can become a raw owning store after a path-local `unset()` changes
@@ -196,13 +197,13 @@ fn analyze_release_local_slot_states(
     ever_ref_cell_slots: &HashSet<LocalSlotId>,
 ) -> (HashSet<InstId>, HashSet<(InstId, LocalSlotId)>) {
     if function.blocks.is_empty() {
-        return (HashSet::new(), HashSet::new());
+        return (HashSet::default(), HashSet::default());
     }
     let mut block_inputs = vec![None::<HashSet<LocalSlotId>>; function.blocks.len()];
     let mut block_outputs = vec![None::<HashSet<LocalSlotId>>; function.blocks.len()];
     let entry_index = function.entry.as_raw() as usize;
     if entry_index >= function.blocks.len() {
-        return (HashSet::new(), HashSet::new());
+        return (HashSet::default(), HashSet::default());
     }
     block_inputs[entry_index] = Some(initially_ref_cell_slots.clone());
     let mut worklist = VecDeque::from([function.entry]);
@@ -251,8 +252,8 @@ fn analyze_release_local_slot_states(
         }
     }
 
-    let mut releases = HashSet::new();
-    let mut ref_cell_slots_before_inst = HashSet::new();
+    let mut releases = HashSet::default();
+    let mut ref_cell_slots_before_inst = HashSet::default();
     for block in &function.blocks {
         let Some(mut state) = block_inputs[block.id.as_raw() as usize].clone() else {
             continue;

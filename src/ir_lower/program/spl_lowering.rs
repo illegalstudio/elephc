@@ -15,8 +15,8 @@ pub(super) fn lower_builtin_spl_method(
     method_key: &str,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, crate::types::FunctionSig>,
 ) {
     if class_method_already_lowered(module, class_name, method_key, false)
         || !is_supported_builtin_spl_method(class_name, method_key)

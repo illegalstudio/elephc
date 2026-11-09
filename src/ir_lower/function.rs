@@ -68,8 +68,8 @@ pub(crate) fn lower_main(
     program: &Program,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
 ) {
     let web = module.web;
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
@@ -182,7 +182,7 @@ fn web_gated_global_env(global_env: &TypeEnv, web: bool) -> TypeEnv {
 /// top-level `$x` from staying frame-local while a function reads the global. Only the STORAGE
 /// decision reads the widened set; the checker's `unset`-kill veto still reads `crate::global_decls`
 /// alone, because an alias read never forces a binding to end.
-fn collect_global_var_names(statements: &[Stmt]) -> std::collections::HashSet<String> {
+fn collect_global_var_names(statements: &[Stmt]) -> crate::fast_hash::FastSet<String> {
     let mut names = crate::global_decls::collect_global_var_names(statements);
     let mut usage = crate::ast_usage::Usage::default();
     for stmt in statements {
@@ -202,8 +202,8 @@ pub(crate) fn lower_user_function(
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
 ) {
     let web = module.web;
     let fallback = signature_from_ast(params, return_type);
@@ -294,7 +294,7 @@ pub(crate) fn lower_user_function(
         &eir_signature.params,
         None,
         false,
-        std::collections::HashSet::new(),
+        crate::fast_hash::FastSet::default(),
         None,
         module.source_path.clone(),
         None,
@@ -314,8 +314,8 @@ pub(crate) fn lower_class_method(
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
 ) {
     let web = module.web;
     let fallback = signature_from_ast(params, return_type);
@@ -430,7 +430,7 @@ pub(crate) fn lower_class_method(
         &body_params,
         None,
         false,
-        std::collections::HashSet::new(),
+        crate::fast_hash::FastSet::default(),
         None,
         module.source_path.clone(),
         None,
@@ -454,18 +454,18 @@ pub(crate) fn lower_class_method(
 /// at 2:1, an eval string's own `$b = 9;` sat at 2:1 of that string, and the mixed pre-declare gave
 /// the fragment's unrelated local boxed storage nothing had asked for.
 fn eval_aot_decision_maps() -> (
-    std::collections::HashMap<Span, std::collections::HashSet<String>>,
-    std::collections::HashMap<Span, std::collections::HashSet<String>>,
-    std::collections::HashMap<Span, std::collections::HashSet<String>>,
-    std::collections::HashMap<Span, std::collections::HashSet<String>>,
-    std::collections::HashMap<(String, Span), std::collections::HashSet<String>>,
+    crate::fast_hash::FastMap<Span, crate::fast_hash::FastSet<String>>,
+    crate::fast_hash::FastMap<Span, crate::fast_hash::FastSet<String>>,
+    crate::fast_hash::FastMap<Span, crate::fast_hash::FastSet<String>>,
+    crate::fast_hash::FastMap<Span, crate::fast_hash::FastSet<String>>,
+    crate::fast_hash::FastMap<(String, Span), crate::fast_hash::FastSet<String>>,
 ) {
     (
-        std::collections::HashMap::new(),
-        std::collections::HashMap::new(),
-        std::collections::HashMap::new(),
-        std::collections::HashMap::new(),
-        std::collections::HashMap::new(),
+        crate::fast_hash::FastMap::default(),
+        crate::fast_hash::FastMap::default(),
+        crate::fast_hash::FastMap::default(),
+        crate::fast_hash::FastMap::default(),
+        crate::fast_hash::FastMap::default(),
     )
 }
 
@@ -475,8 +475,8 @@ pub(crate) fn lower_eval_aot_function(
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
 ) {
     let return_type = PhpType::Mixed;
     let signature = FunctionSig {
@@ -574,8 +574,8 @@ pub(crate) fn lower_eval_aot_scope_function(
     scope_flush_writes: &std::collections::BTreeSet<String>,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
 ) {
     let return_type = PhpType::Mixed;
     let use_read_params =
@@ -732,8 +732,8 @@ pub(crate) fn lower_property_init_thunk(
     class_info: &ClassInfo,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
 ) {
     if !super::property_initializers::needs_initializer(class_info) {
         return;
@@ -760,8 +760,8 @@ pub(crate) fn lower_private_property_init_thunk(
     class_info: &ClassInfo,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
 ) {
     let body = property_init_body(class_info, |index| {
         class_info.property_slot_in_private_init_thunk(index, class_name)
@@ -786,8 +786,8 @@ fn lower_property_default_thunk(
     class_name: &str,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
 ) {
     let web = module.web;
     let this_type = PhpType::Object(class_name.to_string());
@@ -872,7 +872,7 @@ fn lower_property_default_thunk(
         &params,
         None,
         false,
-        std::collections::HashSet::new(),
+        crate::fast_hash::FastSet::default(),
         None,
         module.source_path.clone(),
         None,
@@ -994,8 +994,8 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     provided_args: usize,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
 ) {
     let function_name = dynamic_constructor_thunk_name(class_info.class_id, provided_args);
     if module
@@ -1246,7 +1246,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &params,
         None,
         false,
-        std::collections::HashSet::new(),
+        crate::fast_hash::FastSet::default(),
         None,
         module.source_path.clone(),
         None,
@@ -1280,9 +1280,9 @@ pub(crate) fn lower_clone_override_function(
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+    functions: &crate::fast_hash::FastMap<String, FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
 ) -> FunctionSig {
     let sig = FunctionSig {
         params: params.to_vec(),
@@ -1376,7 +1376,7 @@ pub(crate) fn lower_clone_override_function(
         params,
         None,
         false,
-        std::collections::HashSet::new(),
+        crate::fast_hash::FastSet::default(),
         None,
         module.source_path.clone(),
         None,
@@ -1445,8 +1445,8 @@ pub(crate) fn eval_native_default_helper_name(
 pub(crate) fn lower_eval_native_default_helpers(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
-    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
 ) {
     let uses_eval = super::program::all_lowered_functions(module).any(|function| {
         function.locals.iter().any(|local| {
@@ -1578,7 +1578,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &[],
             None,
             false,
-            std::collections::HashSet::new(),
+            crate::fast_hash::FastSet::default(),
             None,
             module.source_path.clone(),
             None,
@@ -1896,70 +1896,70 @@ fn lower_closure_function_with_signature(
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
 fn lower_body_into_function(
     source_catalog: Option<std::sync::Arc<crate::ir::SourceCatalog>>,
-    runtime_bound_functions: std::sync::Arc<std::collections::HashSet<String>>,
+    runtime_bound_functions: std::sync::Arc<crate::fast_hash::FastSet<String>>,
     function: &mut Function,
     property_initializers: Option<&ClassInfo>,
     data: &mut crate::ir::DataPool,
     body: &[Stmt],
     env: TypeEnv,
     top_level_env: TypeEnv,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    extern_functions: &std::collections::HashMap<String, crate::types::ExternFunctionSig>,
-    extern_globals: &std::collections::HashMap<String, PhpType>,
-    callable_param_sigs: &std::collections::HashMap<(String, String), FunctionSig>,
+    functions: &crate::fast_hash::FastMap<String, FunctionSig>,
+    extern_functions: &crate::fast_hash::FastMap<String, crate::types::ExternFunctionSig>,
+    extern_globals: &crate::fast_hash::FastMap<String, PhpType>,
+    callable_param_sigs: &crate::fast_hash::FastMap<(String, String), FunctionSig>,
     return_alias_summaries: &crate::types::ReturnAliasSummaries,
-    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+    fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
     classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
-    enums: &std::collections::HashMap<String, crate::types::EnumInfo>,
-    interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
+    enums: &crate::fast_hash::FastMap<String, crate::types::EnumInfo>,
+    interfaces: &crate::fast_hash::FastMap<String, crate::types::InterfaceInfo>,
     declared_trait_names: &[String],
-    declared_trait_methods: &std::collections::HashMap<
+    declared_trait_methods: &crate::fast_hash::FastMap<
         String,
-        std::collections::HashMap<String, crate::ir::TraitMethodInfo>,
+        crate::fast_hash::FastMap<String, crate::ir::TraitMethodInfo>,
     >,
-    declared_trait_properties: &std::collections::HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
-    packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
-    extern_classes: &std::collections::HashMap<String, crate::types::ExternClassInfo>,
-    throw_access_sites: &std::collections::HashMap<(String, Span), crate::types::ThrowAccessInfo>,
-    builtin_call_types: &std::collections::HashMap<(String, Span), PhpType>,
-    closure_generator_spans: &std::collections::HashSet<Span>,
-    array_push_property_plans: &std::collections::HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
-    member_receiver_types: &std::collections::HashMap<(String, Span), Option<PhpType>>,
-    flow_typed_property_accesses: &std::collections::HashMap<(String, Span), PhpType>,
-    boxed_reference_promotion_sites: &std::collections::HashMap<
+    declared_trait_properties: &crate::fast_hash::FastMap<String, Vec<crate::parser::ast::ClassProperty>>,
+    packed_classes: &crate::fast_hash::FastMap<String, PackedClassInfo>,
+    extern_classes: &crate::fast_hash::FastMap<String, crate::types::ExternClassInfo>,
+    throw_access_sites: &crate::fast_hash::FastMap<(String, Span), crate::types::ThrowAccessInfo>,
+    builtin_call_types: &crate::fast_hash::FastMap<(String, Span), PhpType>,
+    closure_generator_spans: &crate::fast_hash::FastSet<Span>,
+    array_push_property_plans: &crate::fast_hash::FastMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
+    member_receiver_types: &crate::fast_hash::FastMap<(String, Span), Option<PhpType>>,
+    flow_typed_property_accesses: &crate::fast_hash::FastMap<(String, Span), PhpType>,
+    boxed_reference_promotion_sites: &crate::fast_hash::FastMap<
         (String, Span),
-        std::collections::HashSet<String>,
+        crate::fast_hash::FastSet<String>,
     >,
-    first_class_builtin_call_types: &std::collections::HashMap<Span, PhpType>,
-    generic_call_sites: &std::collections::HashMap<(String, Span), String>,
+    first_class_builtin_call_types: &crate::fast_hash::FastMap<Span, PhpType>,
+    generic_call_sites: &crate::fast_hash::FastMap<(String, Span), String>,
     loop_storage_types: &crate::types::LoopStorageTypes,
-    string_incdec_locals: &std::collections::HashSet<(String, String)>,
-    by_ref_local_storage_types: &std::collections::HashMap<(String, String), PhpType>,
-    dynamic_ref_local_types: &std::collections::HashMap<(String, String), PhpType>,
-    bind_kill_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
-    ref_detach_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
-    retype_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
-    mixed_storage_store_sites: &std::collections::HashMap<
+    string_incdec_locals: &crate::fast_hash::FastSet<(String, String)>,
+    by_ref_local_storage_types: &crate::fast_hash::FastMap<(String, String), PhpType>,
+    dynamic_ref_local_types: &crate::fast_hash::FastMap<(String, String), PhpType>,
+    bind_kill_sites: &crate::fast_hash::FastMap<Span, crate::fast_hash::FastSet<String>>,
+    ref_detach_sites: &crate::fast_hash::FastMap<Span, crate::fast_hash::FastSet<String>>,
+    retype_sites: &crate::fast_hash::FastMap<Span, crate::fast_hash::FastSet<String>>,
+    mixed_storage_store_sites: &crate::fast_hash::FastMap<
         Span,
-        std::collections::HashSet<String>,
+        crate::fast_hash::FastSet<String>,
     >,
     loop_storage_scope: String,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
     current_class: Option<String>,
     return_php_type: PhpType,
     return_type_is_declared: bool,
     params: &[(String, PhpType)],
     recursive_closure_binding: Option<RecursiveClosureBinding>,
     in_main: bool,
-    all_global_var_names: std::collections::HashSet<String>,
+    all_global_var_names: crate::fast_hash::FastSet<String>,
     function_global_names: Option<
-        std::collections::HashMap<String, Option<std::collections::HashSet<String>>>,
+        crate::fast_hash::FastMap<String, Option<crate::fast_hash::FastSet<String>>>,
     >,
     source_path: Option<String>,
     eval_scope_reads: Option<(
         String,
-        std::collections::HashSet<String>,
-        std::collections::HashSet<String>,
+        crate::fast_hash::FastSet<String>,
+        crate::fast_hash::FastSet<String>,
         std::collections::BTreeSet<String>,
     )>,
     web: bool,
@@ -2488,7 +2488,7 @@ fn function_params(signature: &FunctionSig) -> Vec<FunctionParam> {
 pub(crate) fn eir_signature_with_php_param_contracts(
     owner_name: &str,
     signature: &FunctionSig,
-    callable_param_sigs: &std::collections::HashMap<(String, String), FunctionSig>,
+    callable_param_sigs: &crate::fast_hash::FastMap<(String, String), FunctionSig>,
 ) -> FunctionSig {
     let mut eir_signature = signature.clone();
     let mut has_dynamic_untyped_param = false;
@@ -2563,7 +2563,7 @@ fn preserve_untyped_eir_param_contract(
     param_index: usize,
     param_name: &str,
     php_type: &PhpType,
-    callable_param_sigs: &std::collections::HashMap<(String, String), FunctionSig>,
+    callable_param_sigs: &crate::fast_hash::FastMap<(String, String), FunctionSig>,
 ) -> bool {
     magic_method_param_keeps_eir_contract(owner_name, param_index, php_type)
         || matches!(php_type.codegen_repr(), PhpType::Callable)

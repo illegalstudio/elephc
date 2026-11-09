@@ -12,7 +12,7 @@
 //!   parameters are replaced with their dominating preheader inputs.
 //! - Exception handlers and suspended generators retain their original CFGs.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use crate::ir::{CmpPredicate, DataPool, Function, Immediate, Op, Ownership, PassOrigin, ValueDef, ValueId};
 use super::cfg::has_exception_handlers;
 use super::driver::IrPass;
@@ -43,7 +43,7 @@ impl IrPass for LoopOptimize {
             changed |= fold_invariant_parameters(function, lp);
             let inductions = basic_inductions(function, lp, |value| integer_literal(function, value));
             let mut canonical: Vec<&BasicInduction> = Vec::new();
-            let mut replacements = HashMap::new();
+            let mut replacements = HashMap::default();
             for induction in &inductions {
                 if let Some(previous) = canonical.iter().find(|previous| {
                     previous.step == induction.step
@@ -164,7 +164,7 @@ fn fold_invariant_parameters(function: &mut Function, lp: &super::loops::Natural
     let Some(initial) = lp.preheader.and_then(|pre| branch_args_to(function, pre, lp.header)) else {
         return false;
     };
-    let mut replacements = HashMap::new();
+    let mut replacements = HashMap::default();
     let mut removed = Vec::new();
     for (index, &parameter) in function.blocks[lp.header.as_raw() as usize].params.iter().enumerate() {
         let Some(&initial) = initial.get(index) else { continue; };

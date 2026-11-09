@@ -249,7 +249,7 @@ fn test_function_variant_group_unions_variant_signatures() {
 /// the slot address (and for PHP validity).
 #[test]
 fn test_propagate_args_masks_by_ref_positions() {
-    let mut env = ConstantEnv::new();
+    let mut env = ConstantEnv::default();
     env.insert("x".to_string(), PropagatedValue::Scalar(ScalarValue::Int(5)));
     env.insert("y".to_string(), PropagatedValue::Scalar(ScalarValue::Int(7)));
     let sig = vec![("a".to_string(), true), ("b".to_string(), false)];
@@ -267,7 +267,7 @@ fn test_propagate_args_masks_by_ref_positions() {
 /// Named arguments match by parameter name, not position.
 #[test]
 fn test_propagate_args_masks_named_by_ref_arguments() {
-    let mut env = ConstantEnv::new();
+    let mut env = ConstantEnv::default();
     env.insert("x".to_string(), PropagatedValue::Scalar(ScalarValue::Int(5)));
     env.insert("y".to_string(), PropagatedValue::Scalar(ScalarValue::Int(7)));
     let sig = vec![("a".to_string(), true), ("b".to_string(), false)];

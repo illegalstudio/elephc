@@ -10,7 +10,7 @@
 //! - Precise initializer types are strict apart from PHP's allowed int-to-float widening.
 //! - Conservative `Mixed` inference is accepted when an expression cannot be narrowed statically.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{ClassConst, Program, StmtKind, TypeExpr};

@@ -14,7 +14,8 @@
 mod string_append;
 
 use std::cell::Cell;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{
     BlockId, Builder, DataId, DataPool, Effects, Function, Immediate, IrType, LocalKind,
@@ -200,7 +201,7 @@ impl<'m> ConstantScope<'m> {
     fn new(base: &'m HashMap<String, (ExprKind, PhpType)>) -> Self {
         Self {
             base,
-            added: HashMap::new(),
+            added: HashMap::default(),
         }
     }
 
@@ -296,9 +297,9 @@ pub(crate) struct LoweringSnapshot {
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
     eval_scope_flush_names: BTreeSet<String>,
-    numeric_closure_sites: std::collections::HashSet<Span>,
-    numeric_tracked_locals: std::collections::HashSet<String>,
-    final_mixed_locals: std::collections::HashMap<String, std::collections::HashSet<usize>>,
+    numeric_closure_sites: crate::fast_hash::FastSet<Span>,
+    numeric_tracked_locals: crate::fast_hash::FastSet<String>,
+    final_mixed_locals: crate::fast_hash::FastMap<String, crate::fast_hash::FastSet<usize>>,
     integer_local_declarations: HashSet<String>,
     conditional_local_declarations: HashSet<String>,
     numeric_proof_sealed: bool,
@@ -356,7 +357,7 @@ thread_local! {
     static PROGRAM_LOADS_CODE_AT_RUN_TIME: Cell<bool> = const { Cell::new(false) };
     /// `CheckResult::ref_param_escaping_callees` for the program being lowered.
     static REF_PARAM_ESCAPING_CALLEES: std::cell::RefCell<HashSet<String>> =
-        std::cell::RefCell::new(HashSet::new());
+        std::cell::RefCell::new(HashSet::default());
 }
 
 /// Restores the enclosing lowering invocation's escaping-callee set on drop.
@@ -384,7 +385,7 @@ pub(crate) fn set_ref_param_escaping_callees(
 thread_local! {
     /// `CheckResult::runtime_define_names` for the program being lowered.
     static RUNTIME_DEFINE_NAMES: std::cell::RefCell<HashSet<String>> =
-        std::cell::RefCell::new(HashSet::new());
+        std::cell::RefCell::new(HashSet::default());
 }
 
 /// Restores the enclosing lowering invocation's define-name set on drop.
@@ -413,7 +414,7 @@ pub(crate) fn is_runtime_define_name(name: &str) -> bool {
 thread_local! {
     /// `CheckResult::property_bound_promotion_sites` for the program being lowered.
     static PROPERTY_BOUND_PROMOTION_SITES: std::cell::RefCell<HashSet<(String, Span)>> =
-        std::cell::RefCell::new(HashSet::new());
+        std::cell::RefCell::new(HashSet::default());
 }
 
 /// Restores the enclosing lowering invocation's property-bound promotion sites on drop.
@@ -442,7 +443,7 @@ pub(crate) fn set_property_bound_promotion_sites(
 thread_local! {
     /// `CheckResult::by_ref_call_result_sites` for the program being lowered.
     static BY_REF_CALL_RESULT_SITES: std::cell::RefCell<HashSet<Span>> =
-        std::cell::RefCell::new(HashSet::new());
+        std::cell::RefCell::new(HashSet::default());
 }
 
 /// Restores the enclosing lowering invocation's by-reference call-result sites on drop.
@@ -529,7 +530,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub builder: Builder<'f>,
     pub data: &'m mut DataPool,
     pub source_catalog: Option<std::sync::Arc<crate::ir::SourceCatalog>>,
-    pub runtime_bound_functions: std::sync::Arc<std::collections::HashSet<String>>,
+    pub runtime_bound_functions: std::sync::Arc<crate::fast_hash::FastSet<String>>,
     /// True when the body being lowered calls `eval()` anywhere, before or after the current
     /// point. Body-scoped, unlike `eval_barrier_active`, which only turns on once an eval was
     /// lowered: an `unset` ABOVE the eval must already leave the slot in the shape the fragment
@@ -920,12 +921,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             source_catalog: None,
             runtime_bound_functions: Default::default(),
             data,
-            local_slots: HashMap::new(),
-            local_kinds: HashMap::new(),
+            local_slots: HashMap::default(),
+            local_kinds: HashMap::default(),
             local_types: env,
             include_frame_slots: 0,
-            initialized_slots: HashSet::new(),
-            scratch_backed_slots: HashSet::new(),
+            initialized_slots: HashSet::default(),
+            scratch_backed_slots: HashSet::default(),
             functions,
             extern_functions,
             extern_globals,
@@ -960,9 +961,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             mixed_storage_store_sites,
             loop_storage_scope,
             closure_signature_scope: None,
-            offset_dispatch_bypass: HashSet::new(),
-            late_static_ladder_fallbacks: HashSet::new(),
-            closure_bind_splits: HashSet::new(),
+            offset_dispatch_bypass: HashSet::default(),
+            late_static_ladder_fallbacks: HashSet::default(),
+            closure_bind_splits: HashSet::default(),
             direct_method_call_class: None,
             constants: ConstantScope::new(constants),
             top_level_env,
@@ -974,24 +975,24 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             try_loop_depths: Vec::new(),
             taken_finally_exceptions: Vec::new(),
             exit_cleaned_loops: Vec::new(),
-            static_callable_locals: HashMap::new(),
-            static_callable_local_epochs: HashMap::new(),
-            function_global_names: HashMap::new(),
-            reflection_class_locals: HashMap::new(),
-            reflection_function_locals: HashMap::new(),
-            reflection_property_locals: HashMap::new(),
-            reflection_method_locals: HashMap::new(),
-            reflection_arg_array_locals: HashMap::new(),
-            fiber_start_sigs: HashMap::new(),
-            ref_bound_locals: HashSet::new(),
-            interior_ref_locals: HashMap::new(),
-            capture_bound_locals: HashSet::new(),
+            static_callable_locals: HashMap::default(),
+            static_callable_local_epochs: HashMap::default(),
+            function_global_names: HashMap::default(),
+            reflection_class_locals: HashMap::default(),
+            reflection_function_locals: HashMap::default(),
+            reflection_property_locals: HashMap::default(),
+            reflection_method_locals: HashMap::default(),
+            reflection_arg_array_locals: HashMap::default(),
+            fiber_start_sigs: HashMap::default(),
+            ref_bound_locals: HashSet::default(),
+            interior_ref_locals: HashMap::default(),
+            capture_bound_locals: HashSet::default(),
             pending_ref_bridges: Vec::new(),
-            borrowed_element_ref_locals: HashSet::new(),
-            ref_cell_owner_locals: HashMap::new(),
-            foreach_int_key_locals: HashSet::new(),
-            storage_widened_locals: HashSet::new(),
-            array_conversions: HashMap::new(),
+            borrowed_element_ref_locals: HashSet::default(),
+            ref_cell_owner_locals: HashMap::default(),
+            foreach_int_key_locals: HashSet::default(),
+            storage_widened_locals: HashSet::default(),
+            array_conversions: HashMap::default(),
             speculating: false,
             autoload_hook_active: false,
             php_strict_types: false,
@@ -1001,14 +1002,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             by_ref_return: false,
             in_main,
             all_global_var_names,
-            runtime_global_bindings: HashSet::new(),
-            reference_bound_statics: HashSet::new(),
-            reassigned_statics: HashSet::new(),
+            runtime_global_bindings: HashSet::default(),
+            reference_bound_statics: HashSet::default(),
+            reassigned_statics: HashSet::default(),
             web,
             owner_name,
             closures: Vec::new(),
-            non_integer_keyed_locals: HashSet::new(),
-            ref_capture_written_locals: HashSet::new(),
+            non_integer_keyed_locals: HashSet::default(),
+            ref_capture_written_locals: HashSet::default(),
             bound_closure_this_class: None,
             bound_closure_this_gradual: false,
             pending_static_callable_result: None,
@@ -1017,16 +1018,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             expression_depth: 0,
             reference_call_context: None,
             call_argument_evaluation_scopes: Vec::new(),
-            borrowed_string_call_operands: HashSet::new(),
-            borrowed_call_results: HashSet::new(),
+            borrowed_string_call_operands: HashSet::default(),
+            borrowed_call_results: HashSet::default(),
             string_offset_receivers: Vec::new(),
-            owned_string_offset_sites: HashSet::new(),
+            owned_string_offset_sites: HashSet::default(),
             borrowed_string_calls_enabled: true,
-            owned_string_cast_locals: HashSet::new(),
-            provisional_borrowed_string_casts: HashSet::new(),
+            owned_string_cast_locals: HashSet::default(),
+            provisional_borrowed_string_casts: HashSet::default(),
             this_storage_stays_concrete: false,
-            append_update_cell_aliases: HashSet::new(),
-            argument_guards: HashMap::new(),
+            append_update_cell_aliases: HashSet::default(),
+            argument_guards: HashMap::default(),
             argument_guard_scopes: Vec::new(),
             write_operand_is_borrowed: false,
             direct_by_ref_unpack: false,
@@ -1035,21 +1036,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             eval_executed: false,
             consuming_string_append_enabled: true,
             eval_scope_read_param: None,
-            eval_scope_read_names: HashSet::new(),
-            eval_scope_write_names: HashSet::new(),
+            eval_scope_read_names: HashSet::default(),
+            eval_scope_write_names: HashSet::default(),
             eval_scope_flush_names: BTreeSet::new(),
-            numeric_closure_sites: HashSet::new(),
-            numeric_tracked_locals: HashSet::new(),
-            final_mixed_locals: HashMap::new(),
-            integer_local_declarations: HashSet::new(),
-            conditional_local_declarations: HashSet::new(),
+            numeric_closure_sites: HashSet::default(),
+            numeric_tracked_locals: HashSet::default(),
+            final_mixed_locals: HashMap::default(),
+            integer_local_declarations: HashSet::default(),
+            conditional_local_declarations: HashSet::default(),
             numeric_proof_sealed: false,
-            loop_scalar_entry_boxed: HashSet::new(),
-            int_seed_bindings: HashMap::new(),
+            loop_scalar_entry_boxed: HashSet::default(),
+            int_seed_bindings: HashMap::default(),
             pointer_reference_bindings: Vec::new(),
             call_description: None,
             source_path,
-            closure_display_names: HashMap::new(),
+            closure_display_names: HashMap::default(),
         }
     }
 
@@ -1462,7 +1463,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         interface_name: &str,
         const_name: &str,
     ) -> Option<crate::parser::ast::Expr> {
-        let mut visited = HashSet::new();
+        let mut visited = HashSet::default();
         let mut queue = vec![interface_name.to_string()];
         while let Some(name) = queue.pop() {
             if !visited.insert(name.clone()) {
@@ -1882,7 +1883,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// newer slot (a retype, an `unset` kill, a storage-only numeric re-bind), so the order key is
     /// the first slot that ever carried the name rather than the one it holds now.
     pub(crate) fn visible_local_names(&self) -> Vec<String> {
-        let mut first_slots: HashMap<&str, u32> = HashMap::new();
+        let mut first_slots: HashMap<&str, u32> = HashMap::default();
         for local in &self.builder.function().locals {
             if let Some(name) = local.name.as_deref() {
                 first_slots.entry(name).or_insert(local.id.as_raw());

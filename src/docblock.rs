@@ -32,7 +32,7 @@ mod bindings;
 pub mod erasure;
 mod members;
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{Program, Stmt, StmtKind, TypeExpr, TypeParam, Variance};
 

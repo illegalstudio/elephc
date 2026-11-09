@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn synthetic_surface_declares_every_function() {
         let program = declarations();
-        let mut names = std::collections::HashSet::new();
+        let mut names = crate::fast_hash::FastSet::default();
         for statement in &program {
             if let StmtKind::FunctionDecl { name, .. } = &statement.kind {
                 names.insert(name.as_str());

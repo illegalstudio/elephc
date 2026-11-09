@@ -8,7 +8,8 @@
 //! - No runtime cache object can omit producer state isolation or output routing.
 //! - All transient adapter/object files belong to one private staging directory.
 
-use std::{collections::HashMap, path::{Path, PathBuf}, process::Command};
+use std::{path::{Path, PathBuf}, process::Command};
+use crate::fast_hash::FastMap as HashMap;
 use crate::{codegen_support::{self, platform::Target, RuntimeFeatures}, exports::ExportedFunction};
 
 /// Emits the combined user/runtime assembly with a bounded, request-owned state region.

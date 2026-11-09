@@ -24,7 +24,7 @@ pub(crate) fn propagate_params(
             (
                 name,
                 type_expr,
-                default.map(|expr| propagate_expr(expr, &HashMap::new())),
+                default.map(|expr| propagate_expr(expr, &HashMap::default())),
                 is_ref,
             )
         })
@@ -51,7 +51,7 @@ pub(super) fn propagate_property(property: ClassProperty) -> ClassProperty {
         is_promoted: property.is_promoted,
         default: property
             .default
-            .map(|expr| propagate_expr(expr, &HashMap::new())),
+            .map(|expr| propagate_expr(expr, &HashMap::default())),
         span: property.span,
         attributes: property.attributes,
     }
@@ -69,7 +69,7 @@ pub(super) fn propagate_method(method: ClassMethod) -> ClassMethod {
         params: propagate_params(method.params),
         body: with_function_scope_mode(method.by_ref_return, || {
             crate::optimize::generator_bodies::rewrite_preserving_yield(method.body, |body| {
-                propagate_block(body, HashMap::new()).0
+                propagate_block(body, HashMap::default()).0
             })
         }),
         ..method
@@ -85,7 +85,7 @@ pub(super) fn propagate_enum_case(case: EnumCaseDecl) -> EnumCaseDecl {
         name: case.name,
         value: case
             .value
-            .map(|expr| propagate_expr(expr, &HashMap::new())),
+            .map(|expr| propagate_expr(expr, &HashMap::default())),
         span: case.span,
         attributes: case.attributes,
     }

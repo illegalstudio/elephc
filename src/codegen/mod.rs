@@ -118,7 +118,7 @@ pub use crate::codegen_support::{
     set_opcache_manifest_len,
 };
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::error::Error;
 use std::fmt;
 
@@ -398,7 +398,7 @@ pub fn generate_user_asm_from_ir(
     gc_stats: bool,
     heap_debug: bool,
 ) -> Result<String> {
-    let exported_functions: HashMap<String, ExportedFunction> = HashMap::new();
+    let exported_functions: HashMap<String, ExportedFunction> = HashMap::default();
     generate_user_asm_from_ir_with_options(
         module,
         gc_stats,
@@ -645,8 +645,8 @@ fn finalize_user_asm(
     )?;
     // The module-level helpers above resolve callables too, so they can ask for a shared body.
     lower_inst::emit_pending_property_guard_helpers(module, &mut emitter, &mut data, &mut shared)?;
-    let empty_globals = HashSet::<String>::new();
-    let empty_static_vars = HashMap::<(String, String), PhpType>::new();
+    let empty_globals = HashSet::<String>::default();
+    let empty_static_vars = HashMap::<(String, String), PhpType>::default();
     let user_functions = runtime_user_function_sigs(module);
     let function_variant_groups = runtime_function_variant_groups(module);
     let mut allowed_class_names = runtime_referenced_class_names(module);

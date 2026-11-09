@@ -13,7 +13,7 @@
 //! - The proof must reject every possible counter mutation. Rejecting a safe loop costs hash
 //!   storage; accepting an unsafe loop invents entries in gaps that PHP leaves absent.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 
@@ -66,7 +66,7 @@ pub(super) fn packed_for_counter(
     if !body_preserves_counter(body, &name, 0) {
         return None;
     }
-    let mut rebound_locals = HashSet::new();
+    let mut rebound_locals = HashSet::default();
     collect_rebound_locals(body, &mut rebound_locals);
     if let Some(condition) = condition {
         // The condition runs before every write, so a local it rebinds — the ARRAY, typically —

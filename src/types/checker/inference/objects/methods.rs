@@ -8,7 +8,7 @@
 //! Key details:
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::{CompileError, RuntimeFault};
 use crate::names::php_symbol_key;
@@ -1560,7 +1560,7 @@ impl Checker {
             .as_ref()
             .is_none_or(|(built_for, _)| *built_for != class_count)
         {
-            let mut children: HashMap<String, Vec<String>> = HashMap::new();
+            let mut children: HashMap<String, Vec<String>> = HashMap::default();
             for (name, info) in &self.classes {
                 if let Some(parent) = &info.parent {
                     children.entry(parent.clone()).or_default().push(name.clone());
@@ -1574,7 +1574,7 @@ impl Checker {
             .expect("children index built above")
             .1;
         let mut found = Vec::new();
-        let mut visited: HashSet<&str> = HashSet::new();
+        let mut visited: HashSet<&str> = HashSet::default();
         let mut stack: Vec<&str> = vec![ancestor];
         while let Some(name) = stack.pop() {
             if !visited.insert(name) {

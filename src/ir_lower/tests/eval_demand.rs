@@ -9,7 +9,7 @@
 //! - Every fixture here needs the magician bridge (a class declaration or a `throw` inside the
 //!   fragment keeps the EIR AOT planner out), so the demand, not the planner, decides the surface.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use super::lower_source;
 use crate::ir_lower::program::{eval_demand, EvalDemand};

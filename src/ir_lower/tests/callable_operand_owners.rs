@@ -18,7 +18,7 @@
 //! - Every supported target lowers these paths to the same owner structure.
 
 use crate::ir::{Function, Immediate, LocalKind, Op, Terminator};
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::path::Path;
 
 use crate::codegen::platform::Target;
@@ -119,7 +119,7 @@ fn lower_function(source: &str, target: &str, name: &str) -> (crate::ir::Module,
 /// invalid-key and normal-exit cleanup blocks, so replaying the flat instruction table would
 /// incorrectly treat both mutually exclusive pops as one execution path.
 fn assert_owner_records_are_lifo(function: &Function, target: &str) {
-    let mut arrivals = HashMap::new();
+    let mut arrivals = HashMap::default();
     let mut pending = vec![(function.entry, Vec::<crate::ir::LocalSlotId>::new())];
     while let Some((block_id, mut active)) = pending.pop() {
         if let Some(previous) = arrivals.get(&block_id) {

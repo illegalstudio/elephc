@@ -12,7 +12,7 @@ use elephc::parser::parse;
 use elephc::parser::parse_with_recovery;
 use elephc::types;
 use elephc::types::PhpType;
-use std::collections::HashSet;
+use elephc::fast_hash::FastSet as HashSet;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};

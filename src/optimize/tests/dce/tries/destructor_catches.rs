@@ -187,14 +187,14 @@ echo run();"
     let program = crate::parser::parse(&tokens).expect("fixture must parse");
     let optimizer = PostTypecheckOptimizer::new(&program);
 
-    let program = optimizer.prune(program, HashSet::new());
+    let program = optimizer.prune(program, HashSet::default());
     assert!(has_catch(&program), "pruning hoisted a throwing rebind out of its try: {program:?}");
-    let program = optimizer.normalize(program, HashSet::new());
+    let program = optimizer.normalize(program, HashSet::default());
     assert!(
         has_catch(&program),
         "normalization hoisted a throwing rebind out of its try: {program:?}",
     );
-    let program = optimizer.eliminate_dead_code(program, HashSet::new());
+    let program = optimizer.eliminate_dead_code(program, HashSet::default());
     assert!(
         has_catch(&program),
         "DCE pruned the same-frame destructor catch: {program:?}",
@@ -219,9 +219,9 @@ echo run();
     .expect("fixture must tokenize");
     let program = crate::parser::parse(&tokens).expect("fixture must parse");
     let optimizer = PostTypecheckOptimizer::new(&program);
-    let program = optimizer.prune(program, HashSet::new());
-    let program = optimizer.normalize(program, HashSet::new());
-    let program = optimizer.eliminate_dead_code(program, HashSet::new());
+    let program = optimizer.prune(program, HashSet::default());
+    let program = optimizer.normalize(program, HashSet::default());
+    let program = optimizer.eliminate_dead_code(program, HashSet::default());
 
     assert!(
         !has_catch(&program),

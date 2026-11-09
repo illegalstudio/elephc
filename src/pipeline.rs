@@ -9,7 +9,8 @@
 //! - Pass ordering is observable: magic constants and conditionals run before resolver/name resolution and type checking.
 //! - Check/EIR/assembly-only paths return before read-only native artifact resolution.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -399,7 +400,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     crate::progress::phase("autoload-prelude-probe");
     let phase_started = Instant::now();
     let autoloaded_preludes = if entry.is_repl_host() {
-        HashSet::new()
+        HashSet::default()
     } else {
         autoload::prelude_probe::autoloaded_prelude_groups(
             &ast,
@@ -879,8 +880,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let phase_started = Instant::now();
     let mut preload_compiled_whole: Vec<std::path::PathBuf> = Vec::new();
     let mut preload_include_units: Vec<crate::ir::IncludeUnit> = Vec::new();
-    let mut preload_class_files: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
+    let mut preload_class_files: crate::fast_hash::FastMap<String, String> =
+        crate::fast_hash::FastMap::default();
     let preload_cache_enabled = crate::opcache::state::opcache_cache_enabled_with_overrides(
         php_version.version_id(),
         web,
@@ -999,7 +1000,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             .map(|name| crate::names::php_symbol_key(name.trim_start_matches('\\')))
             .collect()
     } else {
-        HashSet::new()
+        HashSet::default()
     };
     // Which eager Composer `files` entry declared each function, for handing one back to the
     // runtime when the backend cannot lower a body it declares (`BackendDeferral`).
@@ -1452,19 +1453,19 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             .filter(|path| !fixed.contains(path))
             .collect()
     };
-    let mut deferred_class_files: HashSet<PathBuf> = HashSet::new();
+    let mut deferred_class_files: HashSet<PathBuf> = HashSet::default();
     // Closed world only: refused files whose classes the program names only through existence
     // probes (`X::class`, `class_exists()`). php loads such a file only when something uses one of
     // its classes, so leaving it out keeps php's behaviour everywhere else; a run-time use raises
     // php's include Error. They are reported as notes and do not refuse the build.
-    let mut probe_only_deferred: HashSet<PathBuf> = HashSet::new();
+    let mut probe_only_deferred: HashSet<PathBuf> = HashSet::default();
     // Closed world only: files php itself refuses to load (`Declaration of X::m() must be
     // compatible with ...`, psysh's Hoa `FileLink::create()`) and the files whose classes extend
     // one of theirs. php fatals the moment one is loaded, so none of them is ever run; like the
     // probe-only files they are notes, not reasons to refuse the build.
-    let mut php_load_fatal: HashSet<PathBuf> = HashSet::new();
+    let mut php_load_fatal: HashSet<PathBuf> = HashSet::default();
     // Why each file was handed back, for the deferral memo this build leaves for the next one.
-    let mut deferral_reasons: HashMap<PathBuf, String> = HashMap::new();
+    let mut deferral_reasons: HashMap<PathBuf, String> = HashMap::default();
     // A re-run the backend asked for (`autoload::deferral::BackendDeferral`) starts with the files
     // an earlier round already handed back; they were reported when they were first handed back.
     for path in crate::autoload::deferral::inherited_deferred_files() {
@@ -1597,7 +1598,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     }
     // Each `(span, message)` `runtime_faults` already rewrote: an error that comes back for one
     // of them is not helped by rewriting, and the file is deferred like any other.
-    let mut demotion_attempts: HashSet<(Span, String)> = HashSet::new();
+    let mut demotion_attempts: HashSet<(Span, String)> = HashSet::default();
     let mut runtime_fault_helpers_injected = false;
     let mut check_result = loop {
         // A class whose parent nothing provides is refused by the checker's inheritance
@@ -2393,7 +2394,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // Every class-like counts: Symfony's list names interfaces and traits too
     // (`ContainerInterface`, `CompiledUrlMatcherTrait`), and a closed-world binary refuses the
     // autoloader's include of a file the table cannot answer for.
-    let compiled_class_keys: std::collections::HashSet<String> = ir_module
+    let compiled_class_keys: crate::fast_hash::FastSet<String> = ir_module
         .class_infos
         .keys()
         .chain(ir_module.interface_infos.keys())
@@ -2633,7 +2634,7 @@ fn preloaded_declarations(
     ini_overrides: &[(String, String)],
     cache_enabled: bool,
     base_dir: &Path,
-    defines: &std::collections::HashSet<String>,
+    defines: &crate::fast_hash::FastSet<String>,
     autoload: &autoload::Registry,
 ) -> Result<Option<crate::opcache_preload_sources::PreloadedDeclarations>, errors::CompileError> {
     // php does not preload when the accelerator is off, and does not even look at the path: a
@@ -2869,8 +2870,8 @@ fn report_by_ref_place_deferrals(files: Vec<PathBuf>) {
 fn declaration_source_file_paths(
     autoloaded: &autoload::DeclarationSourceFiles,
     entry: &crate::resolver::IncludedDeclarationSources,
-) -> std::collections::HashMap<String, String> {
-    let mut paths = std::collections::HashMap::new();
+) -> crate::fast_hash::FastMap<String, String> {
+    let mut paths = crate::fast_hash::FastMap::default();
     let halves = [
         (&entry.class_likes, &entry.functions),
         (&autoloaded.class_likes, &autoloaded.functions),
@@ -2988,7 +2989,7 @@ fn extends_a_php_load_fatal_class(
         .map(|(name, _)| name)
         .collect();
     let mut stack: Vec<String> = declared_here.iter().flat_map(|class| parents_of(class)).collect();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some(class) = stack.pop() {
         if !seen.insert(crate::names::php_symbol_key(class.trim_start_matches('\\'))) {
             continue;

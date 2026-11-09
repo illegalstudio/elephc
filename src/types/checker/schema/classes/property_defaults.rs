@@ -13,15 +13,15 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, ClassProperty, Program, StmtKind};
 use crate::types::traits::FlattenedClass;
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 /// Retains source-member origins that flattening deliberately removes from its public schema.
 pub(crate) fn collect_trait_default_origins(
     program: &Program,
     classes: &[FlattenedClass],
 ) -> (HashMap<String, HashSet<String>>, HashSet<String>) {
-    let mut properties = HashMap::new();
-    let mut constructors = HashSet::new();
+    let mut properties = HashMap::default();
+    let mut constructors = HashSet::default();
     for statement in program {
         match &statement.kind {
             StmtKind::ClassDecl { name, properties: direct, methods, .. } => {

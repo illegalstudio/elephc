@@ -38,7 +38,7 @@ use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind, TypeExpr,
 };
 use crate::types::PhpType;
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use super::hierarchy::type_expr_is_non_destructible;
 

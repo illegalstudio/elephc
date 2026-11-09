@@ -133,7 +133,7 @@ pub(crate) fn instrument_recommendations(graph: &crate::call_graph::CallGraph) -
     }
     // High fan-out edges: a callee invoked many times from one caller. With exact
     // query counts we can tell a definite N+1 from a mere hot helper.
-    let io_by_name: std::collections::HashMap<&str, u64> = graph
+    let io_by_name: crate::fast_hash::FastMap<&str, u64> = graph
         .nodes
         .iter()
         .map(|n| (n.name.as_str(), n.io_exclusive))
@@ -184,7 +184,7 @@ pub(crate) fn evaluate_asserts(
 ) -> Vec<crate::call_graph::AssertOutcome> {
     use crate::call_graph::{AssertOutcome, AssertStatus};
     let root_ns = graph.nodes.iter().map(|n| n.inclusive).max().unwrap_or(1).max(1);
-    let mut by_name: HashMap<&str, &crate::call_graph::GraphNode> = HashMap::new();
+    let mut by_name: HashMap<&str, &crate::call_graph::GraphNode> = HashMap::default();
     for node in &graph.nodes {
         by_name.insert(node.name.as_str(), node);
     }
@@ -271,7 +271,7 @@ pub(crate) fn trim_number(value: f64) -> String {
 /// edge weights the callee's inclusive ns under that caller.
 pub(crate) fn parse_instrument_dump(text: &str) -> crate::call_graph::CallGraph {
     use crate::call_graph::{CallGraph, GraphEdge, GraphNode};
-    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut index: HashMap<String, usize> = HashMap::default();
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut raw_edges: Vec<(String, String, u64, u64)> = Vec::new();
     let mut queries: Vec<(String, u64)> = Vec::new();
@@ -412,7 +412,7 @@ pub(crate) fn attach_exact_source(graph: &mut crate::call_graph::CallGraph, targ
         return;
     };
     let root_ns = graph.nodes.iter().map(|n| n.inclusive).max().unwrap_or(1).max(1);
-    let mut measured: HashMap<std::borrow::Cow<'_, str>, (u128, u128, u64)> = HashMap::new();
+    let mut measured: HashMap<std::borrow::Cow<'_, str>, (u128, u128, u64)> = HashMap::default();
     for node in &graph.nodes {
         let Some(name) = generic_template_profile_name(&node.name) else { continue; };
         let totals = measured.entry(name).or_insert((0, 0, 0));
@@ -468,11 +468,11 @@ pub(crate) fn instrument_delta_table(
     let base_root = base.nodes.iter().map(|n| n.inclusive).max().unwrap_or(1).max(1);
     let cur_root = cur.nodes.iter().map(|n| n.inclusive).max().unwrap_or(1).max(1);
     let pct = |incl: u64, root: u64| 100.0 * incl as f64 / root as f64;
-    let mut base_by: HashMap<&str, &crate::call_graph::GraphNode> = HashMap::new();
+    let mut base_by: HashMap<&str, &crate::call_graph::GraphNode> = HashMap::default();
     for n in &base.nodes {
         base_by.insert(n.name.as_str(), n);
     }
-    let mut cur_by: HashMap<&str, &crate::call_graph::GraphNode> = HashMap::new();
+    let mut cur_by: HashMap<&str, &crate::call_graph::GraphNode> = HashMap::default();
     for n in &cur.nodes {
         cur_by.insert(n.name.as_str(), n);
     }

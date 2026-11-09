@@ -11,7 +11,7 @@
 //! - Calls, parameters with unknown tags, references and nonnumeric values fail closed.
 //! - Immutable slot access facts and definitive rejections are shared across queries.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use crate::ir::{BlockId, Function, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId, Op, ValueId};
 use crate::types::PhpType;
 use crate::ir::MixedNumericOp;
@@ -77,8 +77,8 @@ impl<'a> NumericInputs<'a> {
         PROOF_BUILDS.with(|builds| builds.set(builds.get() + 1));
         let enabled = !function.instructions.iter().any(|inst| matches!(inst.op,
             Op::TryPushHandler | Op::CatchBind | Op::FinallyEnter));
-        Self { function, enabled, proven: HashSet::new(), rejected: HashSet::new(),
-            working: HashMap::new(), locals: NumericLocals::default() }
+        Self { function, enabled, proven: HashSet::default(), rejected: HashSet::default(),
+            working: HashMap::default(), locals: NumericLocals::default() }
     }
 
     /// Publishes only complete successes and definitive failures, never provisional facts.
@@ -91,7 +91,7 @@ impl<'a> NumericInputs<'a> {
         self.working.clear();
         self.locals.working.clear();
         if !self.enabled { return false; }
-        let mut slots = HashSet::new();
+        let mut slots = HashSet::default();
         let safe = values.iter().all(|&value| numeric(
             self.function, value, &mut slots, &mut self.locals, &self.proven, &self.rejected, &mut self.working,
         ));
@@ -351,10 +351,10 @@ mod tests {
         let mut proof = NumericInputs::new(&function);
         assert!(proof.prove(&[one]));
         assert!(!proof.prove(&[loaded]));
-        assert_eq!(proof.proven, HashSet::from([one]));
+        assert_eq!(proof.proven, HashSet::from_iter([one]));
         assert!(proof.working.is_empty());
         assert!(!proof.prove(&[first_load]));
-        assert_eq!(proof.proven, HashSet::from([one]));
+        assert_eq!(proof.proven, HashSet::from_iter([one]));
 
         let (valid, loaded, nonnumeric, _) = shared_cycle();
         let mut proof = NumericInputs::new(&valid);

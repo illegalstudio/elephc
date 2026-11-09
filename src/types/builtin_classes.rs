@@ -17,7 +17,7 @@
 //!   its contract (name, kind, module, route) to the shared catalog. The checker-side join test
 //!   in this module proves the catalog and the checker's injections agree in both directions.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::sync::OnceLock;
 
 use elephc_builtin_contract::{
@@ -69,7 +69,7 @@ pub(crate) fn class_names_in_module(module: PhpModule) -> &'static [&'static str
     static BY_MODULE: OnceLock<HashMap<PhpModule, Vec<&'static str>>> = OnceLock::new();
     BY_MODULE
         .get_or_init(|| {
-            let mut by_module: HashMap<PhpModule, Vec<&'static str>> = HashMap::new();
+            let mut by_module: HashMap<PhpModule, Vec<&'static str>> = HashMap::default();
             for class in classes().iter().filter(|class| !class.internal) {
                 by_module.entry(class.module).or_default().push(class.name);
             }

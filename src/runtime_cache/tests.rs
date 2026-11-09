@@ -82,7 +82,7 @@ use super::*;
             "one variant per RuntimeFeatures field",
         );
 
-        let mut keys = std::collections::HashSet::from([baseline]);
+        let mut keys = crate::fast_hash::FastSet::from_iter([baseline]);
         let mut claimed_bits = 0_u64;
         for (name, features) in variants {
             let bits = features.cache_key_bits();

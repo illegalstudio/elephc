@@ -9,7 +9,7 @@
 //! - The lists mirror public builtin classes, not private compiler helper classes.
 //! - Name comparison uses PHP's case-insensitive symbol keying.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;

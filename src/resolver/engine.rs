@@ -8,7 +8,7 @@
 //! Key details:
 //! - Resolver runs before namespace name canonicalization, so it preserves PHP namespace syntax context.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
@@ -372,14 +372,14 @@ pub(super) fn resolve_stmts(
             }
             StmtKind::NamespaceDecl { name } => {
                 state.namespace = Some(namespace_string(name));
-                state.const_imports = HashMap::new();
+                state.const_imports = HashMap::default();
                 result.push(stmt);
             }
             StmtKind::NamespaceBlock { name, body } => {
                 let saved_namespace = state.namespace.clone();
                 let saved_imports = state.const_imports.clone();
                 state.namespace = Some(namespace_string(name));
-                state.const_imports = HashMap::new();
+                state.const_imports = HashMap::default();
                 let body_resolved = resolve_stmts(
                     body.clone(),
                     base_dir,

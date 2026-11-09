@@ -69,14 +69,14 @@ fn integer_cast(inst: &crate::ir::Instruction) -> bool {
 /// Grows a graph through every slot load and every arithmetic observer to its cast sinks.
 fn gather(function: &Function, first: InstId, uses: &HashMap<ValueId, Vec<InstId>>, terms: &HashSet<ValueId>, region: &mut Region) -> bool {
     let mut pending = vec![first];
-    let mut examined = HashSet::new();
+    let mut examined = HashSet::default();
     while let Some(id) = pending.pop() {
         if region.instructions.len() > 256 || region.slots.len() > 16 { return false; }
         if !examined.insert(id) { continue; }
         let Some(inst) = function.instruction(id) else { return false; };
         if integer_cast(inst) {
             let Some(&root) = inst.operands.first() else { return false; };
-            let Some(rewrite) = expression(function, root, region, &mut HashSet::new()) else { return false; };
+            let Some(rewrite) = expression(function, root, region, &mut HashSet::default()) else { return false; };
             if rewrite.operations.is_empty() { return false; }
             region.sinks.insert(id, rewrite);
         } else {
@@ -159,14 +159,14 @@ fn expression(function: &Function, value: ValueId, region: &mut Region, visiting
         Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => {
             let &[lhs, rhs] = inst.operands.as_slice() else { return None; };
             if !integer_value(function, lhs) || !integer_value(function, rhs) { return None; }
-            ChainRewrite { operands: vec![lhs, rhs], operations: vec![checked_operation(inst.op)?], neutralize: HashSet::new() }
+            ChainRewrite { operands: vec![lhs, rhs], operations: vec![checked_operation(inst.op)?], neutralize: HashSet::default() }
         }
         Op::MixedNumericBinop => {
             let &[lhs, rhs] = inst.operands.as_slice() else { return None; };
             let Some(Immediate::MixedNumericOp(op @ (MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul))) = inst.immediate else { return None; };
             if !integer_value(function, rhs) { return None; }
             if integer_value(function, lhs) {
-                ChainRewrite { operands: vec![lhs, rhs], operations: vec![op], neutralize: HashSet::new() }
+                ChainRewrite { operands: vec![lhs, rhs], operations: vec![op], neutralize: HashSet::default() }
             } else {
                 let mut rewrite = expression(function, lhs, region, visiting)?;
                 rewrite.operands.push(rhs); rewrite.operations.push(op); rewrite
@@ -198,8 +198,8 @@ fn reaching_reads(function: &Function, writer: InstId, slot: LocalSlotId) -> Opt
     let start = instruction_block(function, writer)?;
     let position = function.blocks[start.as_raw() as usize].instructions.iter().position(|id| *id == writer)?;
     let mut pending = vec![(start, position + 1)];
-    let mut seen = HashSet::new();
-    let mut loads = HashSet::new();
+    let mut seen = HashSet::default();
+    let mut loads = HashSet::default();
     while let Some((block, position)) = pending.pop() {
         if !seen.insert((block, position)) { continue; }
         let block = function.block(block)?;
@@ -229,7 +229,7 @@ fn unique_reaching_writer(
     let Some(position) = function.blocks[start.as_raw() as usize].instructions.iter().position(|id| *id == load)
     else { return false; };
     let mut pending = vec![(start, position)];
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some((block, position)) = pending.pop() {
         if !seen.insert((block, position)) { continue; }
         let block = &function.blocks[block.as_raw() as usize];

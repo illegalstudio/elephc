@@ -8,7 +8,7 @@
 //! Key details:
 //! - Ordering is semantic: schemas and builtin metadata must exist before bodies and call sites are validated.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::codegen::platform::Target;
 use crate::errors::CompileError;
@@ -173,8 +173,8 @@ pub(super) fn check_types_impl(
     let declared_traits = collect_declared_trait_names(program);
     let declared_trait_methods = collect_declared_trait_methods(program);
     let declared_trait_constants = collect_declared_trait_constants(program);
-    let mut seen_classes = HashSet::new();
-    let mut class_map = HashMap::new();
+    let mut seen_classes = HashSet::default();
+    let mut class_map = HashMap::default();
     for class in &flattened_classes {
         let key = php_symbol_key(&class.name);
         if !seen_classes.insert(key) {
@@ -186,7 +186,7 @@ pub(super) fn check_types_impl(
         }
         class_map.insert(class.name.clone(), class.clone());
     }
-    let mut interface_map: HashMap<String, InterfaceDeclInfo> = HashMap::new();
+    let mut interface_map: HashMap<String, InterfaceDeclInfo> = HashMap::default();
     checker.declared_classes = class_map.keys().cloned().collect();
     for stmt in program {
         if let StmtKind::InterfaceDecl {
@@ -364,7 +364,7 @@ pub(super) fn check_types_impl(
     checker.prescan_extern_decls(program, &mut errors);
 
     let mut next_interface_id = 0u64;
-    let mut building_interfaces = HashSet::new();
+    let mut building_interfaces = HashSet::default();
     // Sorted: `interface_map` is a HashMap, whose iteration order is randomized per
     // process. Interface ids are handed out in this order and are baked into the
     // generated assembly, so an unsorted walk makes two compilations of the SAME
@@ -389,7 +389,7 @@ pub(super) fn check_types_impl(
     }
 
     let mut next_class_id = 0u64;
-    let mut building = HashSet::new();
+    let mut building = HashSet::default();
     // Sorted for the same reason as `interface_names` above: class ids are assigned in
     // this walk order and end up as immediates and `.quad` values in the emitted
     // assembly, so a HashMap-ordered walk is a reproducibility hole. They also reach the
@@ -464,7 +464,7 @@ pub(super) fn check_types_impl(
     let mut enum_units: Vec<_> = flattened_enums.values()
         .filter(|unit| checker.enums.contains_key(&unit.name)).collect();
     enum_units.sort_by(|left, right| left.name.cmp(&right.name));
-    let mut expanded = HashSet::new();
+    let mut expanded = HashSet::default();
     for enum_unit in &enum_units {
         match expand_enum_interfaces(&mut checker, enum_unit) {
             Ok(()) => { expanded.insert(enum_unit.name.clone()); }
@@ -850,7 +850,7 @@ foreach ('text' as $value) { echo $value; }
     /// `Pcntl\QosClass`.
     #[test]
     fn builtin_enum_pointer_targets_match_the_injected_enums() {
-        use std::collections::HashSet;
+        use crate::fast_hash::FastSet as HashSet;
 
         use crate::codegen_support::platform::{AppleVariant, Arch, Platform, Target};
         use crate::types::checker::builtin_enums::{inject_builtin_enums, is_builtin_enum_name};

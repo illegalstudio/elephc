@@ -10,7 +10,7 @@
 //! - Only register-requiring uses contribute cost. Loop frequency is estimated
 //!   conservatively, and long live ranges pay a register-pressure surcharge.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::codegen::platform::Target;
 use crate::codegen_support::abi::immediate::{
@@ -113,7 +113,7 @@ pub(crate) fn price_intervals(
     if !intervals.iter().any(|iv| costs.contains_key(&iv.value)) { return; }
     let loops = compute_loops(func, &compute_dominance(func));
     let frequency = |block| 8u32.pow(loops.loop_depth(block).min(3));
-    let mut uses: HashMap<ValueId, u32> = HashMap::new();
+    let mut uses: HashMap<ValueId, u32> = HashMap::default();
     for block in &func.blocks {
         let weight = frequency(block.id);
         for id in &block.instructions {

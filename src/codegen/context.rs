@@ -14,7 +14,7 @@
 //!   fragment — is what keeps two similarly named functions from colliding. Both halves are
 //!   fixed before emission starts, which is what lets bodies be emitted independently.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::codegen::data_section::DataSection;
@@ -309,7 +309,7 @@ impl<'a> FunctionContext<'a> {
             label_counter,
             helper_scope: None,
             current_inst: None,
-            current_inst_promoted_ref_cells: HashSet::new(),
+            current_inst_promoted_ref_cells: HashSet::default(),
             try_handler_offsets: layout.try_handler_offsets,
             exception_guard_offsets: layout.exception_guard_offsets,
             frame_size: layout.frame_size,
@@ -1623,7 +1623,7 @@ impl<'a> FunctionContext<'a> {
             #[cfg(test)]
             LOCAL_STORE_SCANNED_INSTRUCTIONS
                 .with(|count| count.set(count.get() + self.function.instructions.len() as u64));
-            let mut index: HashMap<LocalSlotId, Vec<Option<ValueId>>> = HashMap::new();
+            let mut index: HashMap<LocalSlotId, Vec<Option<ValueId>>> = HashMap::default();
             for inst in &self.function.instructions {
                 if inst.op != Op::StoreLocal {
                     continue;

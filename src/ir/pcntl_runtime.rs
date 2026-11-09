@@ -349,7 +349,7 @@ mod tests {
         let names = operations
             .iter()
             .map(|operation| operation.as_eir())
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<crate::fast_hash::FastSet<_>>();
         assert_eq!(names.len(), operations.len());
     }
 }

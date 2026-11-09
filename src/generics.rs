@@ -60,7 +60,7 @@ pub struct GenericContext {
     /// `map<U>` once `Box<T>` has been instantiated — collecting once at the start would miss
     /// every method on an inferred class.
     pub method_templates:
-        std::collections::HashMap<(String, String), methods::MethodTemplate>,
+        crate::fast_hash::FastMap<(String, String), methods::MethodTemplate>,
 }
 
 /// The upper bound on monomorphization rounds.
@@ -693,8 +693,8 @@ pub fn instantiated_type(name: &str) -> Option<TypeExpr> {
 thread_local! {
     /// Per-thread memo for [`instantiated_type`], keyed by the instantiated name.
     static DECODED_INSTANTIATIONS: std::cell::RefCell<
-        std::collections::HashMap<String, Option<TypeExpr>>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
+        crate::fast_hash::FastMap<String, Option<TypeExpr>>,
+    > = std::cell::RefCell::new(crate::fast_hash::FastMap::default());
 }
 
 /// Decodes one instantiated name from scratch, without consulting the memo.

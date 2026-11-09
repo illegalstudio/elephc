@@ -8,7 +8,7 @@
 //! - The accepted graph contains no calls, references, globals, diagnostics or observable cleanup.
 //! - Numeric expressions retain checked overflow and a boxed Mixed return ABI.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use crate::ir::{Builder, Function, Immediate, IrHeapKind, IrType, LocalKind, MixedNumericOp,
     Op, Ownership, Terminator, ValueId};
 use crate::types::PhpType;
@@ -52,12 +52,12 @@ impl Template {
         }
         let mut nodes: Vec<_> = (0..function.params.len()).map(Node::Parameter).collect();
         let mut spans = vec![None; nodes.len()];
-        let mut locals = HashMap::new();
+        let mut locals = HashMap::default();
         for (index, param) in function.params.iter().enumerate() {
             let local = function.locals.iter().find(|local| local.name.as_ref() == Some(&param.name))?;
             locals.insert(local.id, index);
         }
-        let mut values: HashMap<ValueId, usize> = HashMap::new();
+        let mut values: HashMap<ValueId, usize> = HashMap::default();
         let mut reset = false;
         for &id in &function.blocks[0].instructions {
             let inst = function.instruction(id)?;

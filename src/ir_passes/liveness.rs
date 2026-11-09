@@ -12,7 +12,9 @@
 //! - A predecessor worklist propagates only newly live values. Each value crosses
 //!   each edge at most once, including large sets of hoisted loop materializations.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{VecDeque};
+use crate::fast_hash::FastMap as HashMap;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{BasicBlock, BlockId, Function, Op, Terminator, ValueId};
 
@@ -61,7 +63,7 @@ pub fn compute_liveness(func: &Function) -> LivenessInfo {
     let facts: Vec<BlockFacts> = func.blocks.iter().map(|block| block_facts(func, block)).collect();
     let predecessors = super::cfg::predecessors(func);
     let mut live_in: Vec<HashSet<ValueId>> = facts.iter().map(|f| f.upward_uses.clone()).collect();
-    let mut live_out = vec![HashSet::new(); func.blocks.len()];
+    let mut live_out = vec![HashSet::default(); func.blocks.len()];
     let mut pending: Vec<Vec<ValueId>> = live_in.iter().map(|values| values.iter().copied().collect()).collect();
     let mut queued: Vec<bool> = pending.iter().map(|values| !values.is_empty()).collect();
     let mut worklist: VecDeque<usize> = (0..func.blocks.len()).rev().filter(|&index| queued[index]).collect();
@@ -97,7 +99,7 @@ pub fn compute_liveness(func: &Function) -> LivenessInfo {
 /// its definitions, its upward-exposed uses, and its successors.
 fn block_facts(func: &Function, block: &BasicBlock) -> BlockFacts {
     let mut defs: HashSet<ValueId> = block.params.iter().copied().collect();
-    let mut uses: HashSet<ValueId> = HashSet::new();
+    let mut uses: HashSet<ValueId> = HashSet::default();
 
     for inst_id in &block.instructions {
         let inst = func

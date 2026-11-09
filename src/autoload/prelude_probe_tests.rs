@@ -72,7 +72,7 @@ fn include_temporary_id(program: &[crate::parser::ast::Stmt]) -> Option<usize> {
 #[test]
 fn probe_hands_its_files_to_the_real_walk_without_recycling_identities() {
     let project = ProbeProject::new();
-    let defines = std::collections::HashSet::new();
+    let defines = crate::fast_hash::FastSet::default();
     let seed = crate::resolver::resolve_collecting_includes_continuing(
         parse("<?php $seed = require 'src/value.php';"), &project.0, &defines,
     ).unwrap().0;
@@ -113,7 +113,7 @@ fn probe_hands_its_files_to_the_real_walk_without_recycling_identities() {
 #[test]
 fn probe_detects_tokenizer_in_autoloaded_classes() {
     let project = ProbeProject::new();
-    let defines = std::collections::HashSet::new();
+    let defines = crate::fast_hash::FastSet::default();
     for body in [
         r"return \PhpToken::tokenize($source);",
         r"return \token_get_all($source);",
@@ -132,7 +132,7 @@ fn probe_detects_tokenizer_in_autoloaded_classes() {
 #[test]
 fn probe_detects_gmp_in_autoloaded_classes() {
     let project = ProbeProject::new();
-    let defines = std::collections::HashSet::new();
+    let defines = crate::fast_hash::FastSet::default();
     for (body, group) in [
         (r"return \gmp_strval(\gmp_init($source, 16));", "gmp"),
     ] {
@@ -149,7 +149,7 @@ fn probe_detects_gmp_in_autoloaded_classes() {
 #[test]
 fn probe_detects_fileinfo_in_autoloaded_classes() {
     let project = ProbeProject::new();
-    let defines = std::collections::HashSet::new();
+    let defines = crate::fast_hash::FastSet::default();
     for body in [
         r"return new \finfo();",
         r"return \finfo_open();",
@@ -168,7 +168,7 @@ fn probe_detects_fileinfo_in_autoloaded_classes() {
 #[test]
 fn probe_detects_web_environment_observers_in_autoloaded_classes() {
     let project = ProbeProject::new();
-    let defines = std::collections::HashSet::new();
+    let defines = crate::fast_hash::FastSet::default();
     for (body, observes) in [
         (r"return $_ENV['PATH'];", true),
         (r"return get_defined_vars();", true),

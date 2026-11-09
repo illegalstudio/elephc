@@ -8,7 +8,7 @@
 //! Key details:
 //! - Expression discovery must stay in lockstep with resolver expression walking to avoid hidden declarations.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;

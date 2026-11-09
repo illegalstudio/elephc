@@ -19,7 +19,7 @@
 //! - Dynamic eval can read or rewrite later-declared locals through the frame, so
 //!   those functions cannot mark scalar loads immutable.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::ir::{
     DataPool, Effects, Function, Immediate, InstId, Instruction, IrType, LocalKind, LocalSlotId, Op,
@@ -146,7 +146,7 @@ fn immutable_numeric_slots(
     candidates: &HashSet<LocalSlotId>,
 ) -> HashSet<LocalSlotId> {
     if super::local_scope::has_dynamic_eval(function) {
-        return HashSet::new();
+        return HashSet::default();
     }
     let mut eligible = candidates.clone();
 
@@ -184,7 +184,7 @@ fn immutable_numeric_slots(
         }
     }
 
-    let mut immutable = HashSet::new();
+    let mut immutable = HashSet::default();
     let mut single_store = Vec::new();
     for slot in eligible {
         let slot_loads = &loads[slot.as_raw() as usize];

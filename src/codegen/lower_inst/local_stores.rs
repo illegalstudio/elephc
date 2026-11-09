@@ -610,7 +610,7 @@ fn mixed_local_slot_is_statically_destructor_free(
         let Some(value) = *value else {
             return Ok(false);
         };
-        if !mixed_value_is_statically_destructor_free(ctx, value, &mut std::collections::HashSet::new())? {
+        if !mixed_value_is_statically_destructor_free(ctx, value, &mut crate::fast_hash::FastSet::default())? {
             return Ok(false);
         }
     }
@@ -621,7 +621,7 @@ fn mixed_local_slot_is_statically_destructor_free(
 fn mixed_value_is_statically_destructor_free(
     ctx: &FunctionContext<'_>,
     value: ValueId,
-    visited: &mut std::collections::HashSet<ValueId>,
+    visited: &mut crate::fast_hash::FastSet<ValueId>,
 ) -> Result<bool> {
     if !visited.insert(value) {
         return Ok(false);

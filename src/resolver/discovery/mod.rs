@@ -15,7 +15,7 @@ mod members;
 mod output;
 mod stmts;
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::Path;
 
 use crate::errors::CompileError;
@@ -48,7 +48,7 @@ pub(super) fn discover_include_declarations(
     defines: &HashSet<String>,
 ) -> Result<IncludeDiscovery, CompileError> {
     let mut output = DiscoveryOutput::default();
-    let mut loaded_paths = HashSet::new();
+    let mut loaded_paths = HashSet::default();
     let mut include_chain = Vec::new();
     let mut state = ResolveState::with_conditional_defines(defines);
 

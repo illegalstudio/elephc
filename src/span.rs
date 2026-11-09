@@ -53,7 +53,7 @@ static INTERNED_SPAN_ENDS: std::sync::OnceLock<std::sync::RwLock<InternedSpanEnd
 #[derive(Default)]
 struct InternedSpanEnds {
     pairs: Vec<(u32, u32)>,
-    indices: std::collections::HashMap<(u32, u32), u32>,
+    indices: crate::fast_hash::FastMap<(u32, u32), u32>,
 }
 
 /// Returns the process-wide table of wide span ends.

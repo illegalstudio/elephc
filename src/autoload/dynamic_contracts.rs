@@ -12,20 +12,20 @@
 //! - The partial evaluator is deliberately conservative: unsupported expressions produce no
 //!   candidate instead of guessing or importing optional declarations from the autoload index.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::parser::ast::{BinOp, ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind};
 
 /// Returns class names computed by guarded dynamic factories reachable from direct construction.
 pub(super) fn candidates(program: &Program) -> Vec<String> {
     let classes = ClassIndex::from_program(program);
-    let mut roots = HashSet::new();
+    let mut roots = HashSet::default();
     collect_constructed_classes(program, &mut roots);
 
-    let mut candidates = HashSet::new();
+    let mut candidates = HashSet::default();
     for root in roots {
         for method in guarded_factory_targets(&classes, &root) {
-            if let Some(Value::String(name)) = evaluate_method(&classes, &root, &method, &mut HashSet::new()) {
+            if let Some(Value::String(name)) = evaluate_method(&classes, &root, &method, &mut HashSet::default()) {
                 if !name.is_empty() {
                     candidates.insert(name);
                 }
@@ -50,10 +50,10 @@ const MAX_CONCATENATED_SPELLINGS: usize = 16;
 /// resolves are loaded, so a string that names no class costs nothing.
 fn concatenated_class_string_candidates(program: &Program) -> HashSet<String> {
     use crate::parser::ast::visit::{walk_nodes, Node};
-    let mut candidates = HashSet::new();
+    let mut candidates = HashSet::default();
     // The operands of a visited concatenation: only the whole one spells a name, its prefix
     // `'Acme\\Rule\\' . $branch` inside `... . 'Rule'` does not.
-    let mut inner: HashSet<*const Expr> = HashSet::new();
+    let mut inner: HashSet<*const Expr> = HashSet::default();
     walk_nodes(program, &mut |node| {
         let Node::Expr(expr) = node else { return };
         let ExprKind::BinaryOp { left, op: BinOp::Concat, right } = &expr.kind else {
@@ -117,10 +117,10 @@ fn literal_spellings(expr: &Expr) -> Option<Vec<String>> {
 /// inherits it, with `static::class` bound to that class; a value that is not a class name the
 /// autoload index can resolve costs nothing, since only resolvable names are ever loaded.
 fn late_static_class_string_candidates(classes: &ClassIndex<'_>) -> HashSet<String> {
-    let mut candidates = HashSet::new();
+    let mut candidates = HashSet::default();
     for class in classes.classes.values().filter(|class| !class.is_abstract) {
         let mut current = Some(class.name.clone());
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(owner_name) = current {
             let key = crate::names::php_symbol_key(&owner_name);
             if !seen.insert(key.clone()) {
@@ -134,8 +134,8 @@ fn late_static_class_string_candidates(classes: &ClassIndex<'_>) -> HashSet<Stri
                 // sees the first value in the second. A local is "derived" once its value came
                 // from `static::class` or from another derived local; only derived values are
                 // candidates, so ordinary string locals never widen the world.
-                let mut locals: HashMap<String, Value> = HashMap::new();
-                let mut derived: HashSet<String> = HashSet::new();
+                let mut locals: HashMap<String, Value> = HashMap::default();
+                let mut derived: HashSet<String> = HashSet::default();
                 crate::parser::ast::visit::walk_stmts(&method.body, &mut |stmt| {
                     // A returned class string counts too: symfony/validator's
                     // `Constraint::validatedBy()` is `return static::class.'Validator';`, and the
@@ -148,7 +148,7 @@ fn late_static_class_string_candidates(classes: &ClassIndex<'_>) -> HashSet<Stri
                                 &owner.name,
                                 value,
                                 &mut locals,
-                                &mut HashSet::new(),
+                                &mut HashSet::default(),
                             ) {
                                 if candidate.contains('\\') && !candidate.contains(char::is_whitespace) {
                                     candidates.insert(candidate.trim_start_matches('\\').to_string());
@@ -168,7 +168,7 @@ fn late_static_class_string_candidates(classes: &ClassIndex<'_>) -> HashSet<Stri
                         &owner.name,
                         value,
                         &mut locals,
-                        &mut HashSet::new(),
+                        &mut HashSet::default(),
                     );
                     match result {
                         Some(result) => {
@@ -242,9 +242,9 @@ fn mentions_static_class(expr: &Expr) -> bool {
 /// The compiler cannot execute the selector, but every literal candidate is bounded by the already
 /// constructed class and can enter ordinary autoload resolution before lowering the dynamic call.
 fn property_mapped_dynamic_new_candidates(classes: &ClassIndex<'_>, root: &str) -> HashSet<String> {
-    let mut candidates = HashSet::new();
+    let mut candidates = HashSet::default();
     let mut current = root.to_string();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     loop {
         let key = crate::names::php_symbol_key(&current);
         if !seen.insert(key.clone()) {
@@ -481,7 +481,7 @@ struct ClassIndex<'a> {
 impl<'a> ClassIndex<'a> {
     /// Builds a class lookup table from the declarations that have already entered the program.
     fn from_program(program: &'a Program) -> Self {
-        let mut classes = HashMap::new();
+        let mut classes = HashMap::default();
         collect_class_declarations(program, &mut classes);
         Self { classes }
     }
@@ -490,7 +490,7 @@ impl<'a> ClassIndex<'a> {
     fn method(&self, class_name: &str, method_name: &str) -> Option<(&ClassInfo<'a>, &'a ClassMethod)> {
         let mut current = class_name.to_string();
         let method_key = crate::names::php_symbol_key(method_name);
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         loop {
             let key = crate::names::php_symbol_key(&current);
             if !seen.insert(key.clone()) {
@@ -798,9 +798,9 @@ fn collect_constructed_classes_from_expr(expr: &Expr, out: &mut HashSet<String>)
 
 /// Returns no-argument methods supplying class strings to guarded dynamic factories on `root`.
 fn guarded_factory_targets(classes: &ClassIndex<'_>, root: &str) -> Vec<String> {
-    let mut targets = HashSet::new();
+    let mut targets = HashSet::default();
     let mut current = root.to_string();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     loop {
         let key = crate::names::php_symbol_key(&current);
         if !seen.insert(key.clone()) {
@@ -934,7 +934,7 @@ fn evaluate_method(
     if !active.insert(key.clone()) {
         return None;
     }
-    let result = evaluate_statements(classes, root, &owner.name, &method.body, &mut HashMap::new(), active);
+    let result = evaluate_statements(classes, root, &owner.name, &method.body, &mut HashMap::default(), active);
     active.remove(&key);
     result
 }

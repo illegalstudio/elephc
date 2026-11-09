@@ -39,7 +39,7 @@ pub(super) fn resolve_path(path: &str, base_dir: &Path) -> PathBuf {
 pub(super) fn parse_file(
     path: &Path,
     include_span: Span,
-    defines: &std::collections::HashSet<String>,
+    defines: &crate::fast_hash::FastSet<String>,
 ) -> Result<Vec<Stmt>, CompileError> {
     parse_file_with_source(path, include_span, defines).map(|(program, _)| program)
 }
@@ -48,7 +48,7 @@ pub(super) fn parse_file(
 pub(super) fn parse_file_with_source(
     path: &Path,
     include_span: Span,
-    defines: &std::collections::HashSet<String>,
+    defines: &crate::fast_hash::FastSet<String>,
 ) -> Result<(Vec<Stmt>, super::source_units::SourceUnit), CompileError> {
     let source = crate::source::read_physical_source(path).map_err(|e| {
         CompileError::new(
@@ -106,7 +106,7 @@ mod tests {
         source.extend_from_slice(b" {}");
         std::fs::write(&path, source).expect("write non-UTF-8 PHP fixture");
 
-        let parsed = parse_file(&path, Span::dummy(), &std::collections::HashSet::new());
+        let parsed = parse_file(&path, Span::dummy(), &crate::fast_hash::FastSet::default());
         let _ = std::fs::remove_file(&path);
         assert!(parsed.is_ok(), "non-UTF-8 PHP identifier should parse: {parsed:?}");
     }

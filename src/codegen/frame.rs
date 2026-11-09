@@ -17,7 +17,7 @@
 //!   wrappers and native hosts that keep state in it across PHP calls get it back intact.
 //! - Web handlers preserve every host callee-saved register before request reset can run.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
@@ -121,7 +121,7 @@ pub(super) fn layout_for_function(
         regalloc_linear && crate::ir_passes::live_intervals_are_sound(function),
     );
     let local_analysis = LocalSlotAnalysis::new(function);
-    let mut local_offsets = HashMap::new();
+    let mut local_offsets = HashMap::default();
     // Slots nearest the frame pointer are the ones AArch64 reaches with one instruction (`stur` /
     // `ldur` take -256..255); every slot past that costs a separate `sub` to form its address. The
     // statement-reset base is read at EVERY statement and the PHP locals are touched by most
@@ -154,7 +154,7 @@ pub(super) fn layout_for_function(
         offset += bytes;
         local_offsets.insert(local.id, offset);
     }
-    let mut numeric_cell_offsets = HashMap::new();
+    let mut numeric_cell_offsets = HashMap::default();
     let numeric = super::stack_numeric::plan(function);
     for group in numeric.cell_groups {
         offset += 24;
@@ -162,19 +162,19 @@ pub(super) fn layout_for_function(
             numeric_cell_offsets.insert(value, offset);
         }
     }
-    let mut ref_cell_state_offsets = HashMap::new();
+    let mut ref_cell_state_offsets = HashMap::default();
     let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
     ref_cell_slots.sort_by_key(|slot| slot.as_raw());
     for slot in ref_cell_slots {
         offset += 8;
         ref_cell_state_offsets.insert(slot, offset);
     }
-    let mut try_handler_offsets = HashMap::new();
+    let mut try_handler_offsets = HashMap::default();
     for token in try_handler_tokens(function) {
         offset += TRY_HANDLER_SLOT_SIZE;
         try_handler_offsets.insert(token, offset);
     }
-    let mut exception_guard_offsets = HashMap::new();
+    let mut exception_guard_offsets = HashMap::default();
     for inst in &function.instructions {
         if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionGuardOwned))) {
             let token = inst.result.expect("owned-value guard produces its stack token");
@@ -1596,7 +1596,7 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
         .params
         .iter()
         .map(|param| param.name.as_str())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<crate::fast_hash::FastSet<_>>();
     let mut locals = ctx
         .function
         .locals
@@ -2357,7 +2357,7 @@ pub(super) fn return_cleanup_skip_slot(
 ) -> Option<LocalSlotId> {
     let result_ty = ctx.function.value(value)?.php_type.codegen_repr();
     let return_ty = ctx.function.return_php_type.codegen_repr();
-    let mut visited = HashSet::new();
+    let mut visited = HashSet::default();
     let slot = return_cleanup_skip_slot_inner(
         ctx.function,
         value,
@@ -2385,7 +2385,7 @@ pub(in crate::codegen) fn return_transfers_local_string_owner(
     };
     let return_ty = function.return_php_type.codegen_repr();
     let Some(slot) = return_cleanup_skip_slot_inner(
-        function, value, &result_ty, &return_ty, &mut HashSet::new(),
+        function, value, &result_ty, &return_ty, &mut HashSet::default(),
     ) else {
         return false;
     };

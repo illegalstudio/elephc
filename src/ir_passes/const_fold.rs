@@ -30,7 +30,7 @@
 //!   counts, and the trapping/division and `NaN`-sensitive float-division paths
 //!   are left untouched (consistent with `identity_arith`).
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{
     CmpPredicate, DataPool, Function, Immediate, InstId, Instruction, IrType, Op, Ownership,
@@ -111,7 +111,7 @@ impl IrPass for ConstFold {
         // Phase 1 (read-only): scan instructions in definition order, tracking the
         // constant carried by each value and recording instructions to fold. The
         // accumulating map lets chained folds collapse in a single sweep.
-        let mut consts: HashMap<ValueId, Const> = HashMap::new();
+        let mut consts: HashMap<ValueId, Const> = HashMap::default();
         let mut folds: Vec<(InstId, Const, TypeNarrowing)> = Vec::new();
         for (index, inst) in function.instructions.iter().enumerate() {
             let Some(result) = inst.result else {

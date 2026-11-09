@@ -13,7 +13,7 @@
 //! - Executable and library PHP frames publish local cleanup activations so a throw
 //!   releases abandoned frame owners before control reaches the surviving catch.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::time::Instant;
 use std::fmt::Write as _;
 
@@ -261,7 +261,7 @@ pub(super) fn emit_module(
     // Shared helpers already emitted, by key. The serial pass shares it with the workers: a
     // helper a worker produced must not be produced again here, or the assembler sees the same
     // symbol defined twice.
-    let mut seen_helpers: HashSet<String> = HashSet::new();
+    let mut seen_helpers: HashSet<String> = HashSet::default();
     // The module-wide helpers emitted above the body loop (the shared Mixed string ladder, the
     // shared callable dispatch, the count guard) can already hold a keyed helper. Seed the set
     // from what is in the buffer, or a worker emits a second copy of it.
@@ -664,7 +664,7 @@ struct ModuleBody<'a> {
 /// Lists every body `emit_module` lowers, in the order a serial build emits them.
 fn module_bodies<'a>(
     module: &'a Module,
-    aliases: &'a std::collections::HashMap<String, String>,
+    aliases: &'a crate::fast_hash::FastMap<String, String>,
 ) -> Vec<ModuleBody<'a>> {
     let body = |kind, function: &'a Function| ModuleBody {
         kind,
@@ -1023,7 +1023,7 @@ impl BackendInventory {
 
     /// Groups identical causes and sorts them by descending frequency.
     fn causes(&self) -> Vec<(&str, usize)> {
-        let mut counts: HashMap<&str, usize> = HashMap::new();
+        let mut counts: HashMap<&str, usize> = HashMap::default();
         for failure in &self.failures {
             *counts.entry(failure.cause.as_str()).or_insert(0) += 1;
         }
@@ -2620,7 +2620,7 @@ pub(crate) struct BodyShareGroup {
 pub(crate) fn foldable_body_groups(module: &Module, regalloc_linear: bool) -> Vec<BodyShareGroup> {
     // (slot, candidate bodies, is_method)
     let mut rows: Vec<(String, Vec<&Function>, bool)> = Vec::new();
-    let mut row_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut row_of: crate::fast_hash::FastMap<String, usize> = crate::fast_hash::FastMap::default();
     let emitted_body = |function: &Function| {
         // A STATIC LOCAL's storage symbol is derived from the function's own name, and a global
         // alias names a global by symbol: both are state whose identity the shape erasure would
@@ -2681,8 +2681,8 @@ pub(crate) fn foldable_body_groups(module: &Module, regalloc_linear: bool) -> Ve
             // Bucket by the normalized text in one pass; a linear scan against every bucket
             // would compare full bodies O(k²) per slot, which grows with the instantiation
             // count the feature monomorphizes.
-            let mut buckets: std::collections::HashMap<String, Vec<&Function>> =
-                std::collections::HashMap::new();
+            let mut buckets: crate::fast_hash::FastMap<String, Vec<&Function>> =
+                crate::fast_hash::FastMap::default();
             let mut order: Vec<(String, &Function)> = Vec::new();
             for function in candidates {
                 let Some(text) =
@@ -2762,7 +2762,7 @@ pub fn generic_body_sharing_oracle(module: &Module, regalloc_linear: bool) -> St
 pub(crate) fn generic_body_aliases(
     module: &Module,
     regalloc_linear: bool,
-) -> std::collections::HashMap<String, String> {
+) -> crate::fast_hash::FastMap<String, String> {
     foldable_body_groups(module, regalloc_linear)
         .into_iter()
         .flat_map(|group| {
@@ -3040,7 +3040,7 @@ mod normalization_tests {
         let text = format!(
             "    mov x0, x1\n; {open}alpha \r\n; {open}beta {open}gamma\nret\n; {open} delta"
         );
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         collect_helper_keys(&text, &mut seen);
         let mut keys: Vec<_> = seen.into_iter().collect();
         keys.sort();
@@ -3192,7 +3192,7 @@ mod backend_inventory_tests {
 #[cfg(test)]
 mod duplicate_helper_tests {
     use super::drop_duplicate_helpers;
-    use std::collections::HashSet;
+    use crate::fast_hash::FastSet as HashSet;
 
     /// A stub already emitted elsewhere goes, and the body written behind it stays: the emitter
     /// counts that body as written, so the next stub of the same content jumps to it.

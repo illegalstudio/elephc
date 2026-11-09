@@ -9,7 +9,7 @@
 //! - Public builtin names are checked for redeclaration before synthetic classes are inserted.
 //! - Signature/storage refinements run after class flattening through `patch_builtin_spl_storage_signatures`.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::types::traits::FlattenedClass;

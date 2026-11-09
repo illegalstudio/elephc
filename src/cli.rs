@@ -9,7 +9,7 @@
 //! - Only an exact `args[1]` of `native`, `repl`, `monitor`, or `test` selects a subcommand.
 //! - Exits immediately on invalid CLI state so later stages receive normalized options.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::PathBuf;
 use std::process;
 
@@ -401,7 +401,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut extra_link_libs: Vec<String> = Vec::new();
     let mut extra_link_paths: Vec<String> = Vec::new();
     let mut extra_frameworks: Vec<String> = Vec::new();
-    let mut defines: HashSet<String> = HashSet::new();
+    let mut defines: HashSet<String> = HashSet::default();
     let mut strict_php = false;
     let mut strict_locals = false;
     let mut lint = false;
@@ -412,7 +412,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut web_application = false;
     let mut web_lifecycle_explicit = false;
     let mut quiet = false;
-    let mut with_crates: HashSet<String> = HashSet::new();
+    let mut with_crates: HashSet<String> = HashSet::default();
     let mut ini_overrides: Vec<(String, String)> = Vec::new();
     let mut null_repr = match std::env::var("ELEPHC_NULL_REPR").as_deref() {
         Ok("tagged") => crate::codegen::NullRepr::Tagged,

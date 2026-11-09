@@ -9,7 +9,7 @@
 //! Key details:
 //! - Dummy AST members carry type contracts only; runtime behavior is implemented elsewhere.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -89,7 +89,7 @@ pub(crate) const RESERVED_FOR_INTERNAL_USE: [&str; 1] = ["FiberError"];
 pub(crate) fn inject_builtin_throwables(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
-    wanted: &std::collections::HashSet<String>,
+    wanted: &crate::fast_hash::FastSet<String>,
 ) -> Result<(), CompileError> {
     for builtin_name in [
         "Throwable",

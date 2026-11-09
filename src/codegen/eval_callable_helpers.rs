@@ -19,7 +19,7 @@ use crate::codegen::abi;
 use crate::codegen::callable_descriptor::{
     self, CallableDescriptorInvocation, CallableDescriptorShape,
 };
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::codegen::callable_dispatch::{
     self, RuntimeCallableCase, RuntimeCallableSelector, RuntimeStaticMethodCallableCase,
@@ -132,7 +132,7 @@ impl EvalCallableEmitState {
         Self {
             next_id: 0,
             argument_normalizer_needed: false,
-            invoker_bodies: HashMap::new(),
+            invoker_bodies: HashMap::default(),
             runtime_callable_invokers: Vec::new(),
         }
     }

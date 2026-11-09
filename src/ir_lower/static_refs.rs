@@ -16,7 +16,7 @@
 //!   method, a dynamic call) may take the argument by reference, so it counts; a nested closure's
 //!   own variable of the same name counts too. Both only cost the cell, never correctness.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::parser::ast::visit::{walk_nodes, Node};
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
@@ -27,7 +27,7 @@ pub(crate) fn reference_bound_statics(
     body: &[Stmt],
     functions: &HashMap<String, FunctionSig>,
 ) -> HashSet<String> {
-    let mut statics = HashSet::new();
+    let mut statics = HashSet::default();
     walk_nodes(body, &mut |node| {
         if let Node::Stmt(stmt) = node {
             if let StmtKind::StaticVar { name, .. } = &stmt.kind {
@@ -38,7 +38,7 @@ pub(crate) fn reference_bound_statics(
     if statics.is_empty() {
         return statics;
     }
-    let mut used = HashSet::new();
+    let mut used = HashSet::default();
     walk_nodes(body, &mut |node| match node {
         Node::Stmt(stmt) => match &stmt.kind {
             StmtKind::RefAssign { target, source } => {
@@ -87,8 +87,8 @@ pub(crate) fn reference_bound_statics(
 /// store, after the raw-element initializer was bound (symfony/http-client's
 /// `static $lastProgress = [0, 0]; ... $lastProgress = $progress ?: $lastProgress;`).
 pub(crate) fn reassigned_statics(body: &[Stmt]) -> HashSet<String> {
-    let mut statics = HashSet::new();
-    let mut assigned = HashSet::new();
+    let mut statics = HashSet::default();
+    let mut assigned = HashSet::default();
     walk_nodes(body, &mut |node| {
         if let Node::Stmt(stmt) = node {
             match &stmt.kind {

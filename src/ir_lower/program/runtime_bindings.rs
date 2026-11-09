@@ -2,7 +2,7 @@
 //!
 //! Used by program lowering before individual function bodies are lowered.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Stmt, StmtKind};
@@ -21,7 +21,7 @@ pub(super) fn collect_runtime_bound_functions(program: &[Stmt]) -> HashSet<Strin
             }
         }
     }
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     collect(program, &mut names);
     names
 }

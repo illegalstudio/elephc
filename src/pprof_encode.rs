@@ -14,7 +14,7 @@
 //! - Wire format is protobuf: varint keys `(field << 3) | wire_type`, wire type 0
 //!   for ints, 2 for length-delimited (strings and nested messages).
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::io::Write as _;
 
 /// Appends a varint-encoded unsigned integer.
@@ -61,7 +61,7 @@ fn value_type(type_index: u64, unit_index: u64) -> Vec<u8> {
 pub(crate) fn encode_folded_profile(stacks: &[(Vec<String>, u64)]) -> Vec<u8> {
     // String table: index 0 must be the empty string.
     let mut strings: Vec<String> = vec![String::new()];
-    let mut string_index: HashMap<String, u64> = HashMap::new();
+    let mut string_index: HashMap<String, u64> = HashMap::default();
     let mut intern = |text: &str, strings: &mut Vec<String>| -> u64 {
         if text.is_empty() {
             return 0;
@@ -79,7 +79,7 @@ pub(crate) fn encode_folded_profile(stacks: &[(Vec<String>, u64)]) -> Vec<u8> {
     let count_index = intern("count", &mut strings);
 
     // One synthetic function + location per unique frame name; ids are 1-based.
-    let mut location_for_name: HashMap<String, u64> = HashMap::new();
+    let mut location_for_name: HashMap<String, u64> = HashMap::default();
     let mut functions: Vec<u64> = Vec::new(); // name string index per function id
     let mut body = Vec::new();
 

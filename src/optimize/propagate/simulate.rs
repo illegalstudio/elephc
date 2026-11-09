@@ -22,7 +22,7 @@ use super::*;
 /// - Returns: A merged environment where each variable must have the same value in all input paths
 pub(crate) fn merge_constant_env_paths(mut paths: Vec<ConstantEnv>) -> ConstantEnv {
     let Some(first) = paths.pop() else {
-        return HashMap::new();
+        return HashMap::default();
     };
 
     first
@@ -334,7 +334,7 @@ pub(crate) fn merge_try_constant_env_paths(
                     .collect(),
             )
         }
-        Some(_) => HashMap::new(),
+        Some(_) => HashMap::default(),
         None => merge_constant_env_paths(fallthrough_paths),
     }
 }

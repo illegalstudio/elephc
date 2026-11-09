@@ -16,7 +16,8 @@
 //! - An error is deferrable only when the checker named the declaration it was raised in
 //!   (`CompileError::declaration`) and that declaration maps to such a file.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
@@ -239,7 +240,7 @@ pub fn propagate_by_ref_place_constructions(
     deferrable: &HashSet<PathBuf>,
     deferred: &mut HashSet<PathBuf>,
 ) -> Vec<PathBuf> {
-    let mut constructors = HashMap::new();
+    let mut constructors = HashMap::default();
     let mut callers = Vec::new();
     collect_by_ref_constructors(program, &mut constructors, &mut callers);
     let file_of = |name: &str| class_file(class_files, name).map(|path| canonical(Path::new(path)));
@@ -354,7 +355,7 @@ pub fn unknown_parent_refusals(program: &Program) -> Option<CompileError> {
         .iter()
         .map(|name| php_symbol_key(name.trim_start_matches('\\')))
         .collect();
-    let mut aliases = HashSet::new();
+    let mut aliases = HashSet::default();
     let mut opaque_alias = false;
     crate::parser::ast::visit::walk_nodes(program, &mut |node| {
         let crate::parser::ast::visit::Node::Expr(expr) = node else { return };
@@ -419,7 +420,7 @@ fn collect_extends(program: &Program) -> HashMap<String, String> {
             }
         }
     }
-    let mut out = HashMap::new();
+    let mut out = HashMap::default();
     walk(program, &mut out);
     out
 }
@@ -582,11 +583,11 @@ impl BackendDeferral {
             .iter()
             .map(|(name, info)| (info.class_id, name.as_str()))
             .collect();
-        let mut body_files = HashMap::new();
-        let mut owners = HashMap::new();
+        let mut body_files = HashMap::default();
+        let mut owners = HashMap::default();
         // One `realpath` per distinct class file: it was asked per method body and again per
         // class, a file-system walk each (most of the backend's `getattrlist` time on Symfony).
-        let mut canonical_files: HashMap<String, PathBuf> = HashMap::new();
+        let mut canonical_files: HashMap<String, PathBuf> = HashMap::default();
         let mut canonical_file = |path: &str| -> PathBuf {
             canonical_files
                 .entry(path.to_string())
@@ -800,11 +801,11 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("mkdir");
         let class_file = dir.join("Broken.php");
         std::fs::write(&class_file, "<?php").expect("write");
-        let class_files = HashMap::from([(
+        let class_files = HashMap::from_iter([(
             php_symbol_key("App\\Broken"),
             class_file.display().to_string(),
         )]);
-        let deferrable = HashSet::from([canonical(&class_file)]);
+        let deferrable = HashSet::from_iter([canonical(&class_file)]);
 
         let mut primary = CompileError::new(crate::span::Span::dummy(), "first");
         primary.declaration = Some("App\\Broken".to_string());
@@ -825,11 +826,11 @@ mod tests {
     #[test]
     fn removal_drops_only_the_deferred_classes() {
         let deferred_path = PathBuf::from("/nonexistent/Deferred.php");
-        let class_files = HashMap::from([(
+        let class_files = HashMap::from_iter([(
             php_symbol_key("Deferred"),
             deferred_path.display().to_string(),
         )]);
-        let deferred = HashSet::from([deferred_path]);
+        let deferred = HashSet::from_iter([deferred_path]);
         let kept = remove_deferred_declarations(
             program("<?php class Deferred {} class Kept {} echo 1;"),
             &class_files,

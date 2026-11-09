@@ -8,7 +8,7 @@
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::codegen::lower_inst::current_method_class;
 use crate::ir::Terminator;
@@ -688,10 +688,10 @@ fn reflection_object_uses_only_source_metadata(
     let Some(result) = inst.result else {
         return false;
     };
-    let mut object_aliases = HashSet::from([result]);
+    let mut object_aliases = HashSet::from_iter([result]);
     collect_transparent_aliases(ctx, &mut object_aliases);
 
-    let mut slots = HashSet::new();
+    let mut slots = HashSet::default();
     let mut saw_direct_source_metadata = false;
     for instruction in &ctx.function.instructions {
         if !instruction

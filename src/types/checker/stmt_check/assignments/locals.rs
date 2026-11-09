@@ -691,7 +691,7 @@ fn check_ref_assign_dynamic_property(
                     || checker.is_subclass_of(candidate, &normalized_class)
             })
             .cloned()
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<crate::fast_hash::FastSet<_>>();
         super::super::control_flow::widen_properties_for_receiver_reference(
             checker,
             Some(&receivers),
@@ -1492,7 +1492,7 @@ fn merge_local_assignment_type(
         checker, value, ty, env);
     if !numeric_region_value {
         let mut pending = vec![name.to_owned()];
-        let mut rejected = std::collections::HashSet::new();
+        let mut rejected = crate::fast_hash::FastSet::default();
         while let Some(name) = pending.pop() {
             if !rejected.insert(name.clone()) { continue; }
             pending.extend(checker.numeric_region_dependents.get(&name).into_iter().flatten().cloned());

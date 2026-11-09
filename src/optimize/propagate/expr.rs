@@ -61,7 +61,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             &reduced_env
         }
         Invalidation::All => {
-            reduced_env = HashMap::new();
+            reduced_env = HashMap::default();
             &reduced_env
         }
     };
@@ -104,7 +104,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(propagate_expr(*inner, env))),
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(propagate_expr(*inner, env))),
         ExprKind::Clone(inner) => {
-            let empty_env = HashMap::new();
+            let empty_env = HashMap::default();
             ExprKind::Clone(Box::new(propagate_expr(*inner, &empty_env)))
         }
         ExprKind::ErrorSuppress(inner) => {
@@ -499,7 +499,7 @@ pub(crate) fn propagate_args(
     env: Option<&ConstantEnv>,
     by_ref: Option<&[(String, bool)]>,
 ) -> Vec<Expr> {
-    let empty_env = HashMap::new();
+    let empty_env = HashMap::default();
     let env = env.unwrap_or(&empty_env);
     // Positional arguments cannot legally follow a spread, but if one does the
     // positional cursor no longer matches the signature — treat everything

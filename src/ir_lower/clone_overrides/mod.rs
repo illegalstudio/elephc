@@ -33,7 +33,8 @@ mod arms;
 mod body;
 mod scoped_setters;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{CloneOverrideApplicator, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::parser::ast::ExprKind;

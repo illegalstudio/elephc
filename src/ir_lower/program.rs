@@ -9,7 +9,8 @@
 //!   statements themselves are no-ops inside `main`.
 //! - The module is validated before it is returned to CLI/test callers.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::Path;
 
 use crate::codegen::platform::Target;

@@ -8,7 +8,7 @@
 //! Key details:
 //! - Constant lookup happens before name resolution, so namespace strings come from raw AST names.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::PathBuf;
 
 use crate::names::{Name, NameKind};

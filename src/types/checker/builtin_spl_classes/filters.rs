@@ -9,7 +9,7 @@
 //! - CallbackFilterIterator stores callable state and exposes an internal callback trampoline method.
 //! - Filter movement skips rejected inner elements after rewind and next.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{BinOp, CastType, ClassMethod, ClassProperty, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;

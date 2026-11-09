@@ -8,7 +8,7 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir_lower::context::StaticCallableBinding;
 use crate::types::TypeEnv;
@@ -155,7 +155,7 @@ fn lower_if_chain(
         };
     merge_reachable |= else_reachable;
     if !else_reachable {
-        ctx.restore_borrowed_element_ref_locals(HashSet::new());
+        ctx.restore_borrowed_element_ref_locals(HashSet::default());
     }
     if then_reachable {
         ctx.merge_borrowed_element_ref_locals(&then_borrowed_refs);
@@ -212,7 +212,7 @@ fn finish_if_type_join(
             ctx.restore_local_types(arm.types.clone());
             ctx.restore_static_callable_locals(arm.static_callables.clone());
         } else {
-            ctx.restore_static_callable_locals(HashMap::new());
+            ctx.restore_static_callable_locals(HashMap::default());
         }
         for arm in &arms {
             ctx.builder.position_at_end(arm.tail);
@@ -262,7 +262,7 @@ fn join_arm_static_callables(
     arms: &[IfArmExit],
 ) -> HashMap<String, StaticCallableBinding> {
     let Some(first) = arms.first() else {
-        return HashMap::new();
+        return HashMap::default();
     };
     first
         .static_callables
@@ -678,7 +678,7 @@ pub(super) fn apply_loop_storage_contracts(
     span: Option<Span>,
 ) -> HashSet<String> {
     // Locals the contract boxes although they entered the loop as a plain scalar or string.
-    let mut scalar_entry_boxed = HashSet::new();
+    let mut scalar_entry_boxed = HashSet::default();
     // Name order, not the map's: each local converts independently, but the conversions are
     // emitted in this order, and a per-process hash seed made the same source lower to
     // differently ordered code on every run.

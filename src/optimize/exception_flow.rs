@@ -16,7 +16,7 @@
 use super::*;
 use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::rc::Rc;
 
 mod callables;
@@ -58,7 +58,7 @@ thread_local! {
     /// Exception-flow analysis installed while post-typecheck DCE walks the AST.
     static ACTIVE_EXCEPTION_FLOW: RefCell<Option<Rc<ExceptionFlowAnalysis>>> = const { RefCell::new(None) };
     /// Exact/constrained throwable domains bound to catch variables in the current DCE region.
-    static ACTIVE_CAUGHT_THROW_BINDINGS: RefCell<HashMap<String, ThrownTypes>> = RefCell::new(HashMap::new());
+    static ACTIVE_CAUGHT_THROW_BINDINGS: RefCell<HashMap<String, ThrownTypes>> = RefCell::new(HashMap::default());
 }
 
 /// Fixed-point exception summaries and hierarchy shared by post-typecheck DCE.
@@ -409,10 +409,10 @@ impl ExceptionFlowAnalysis {
             &HashMap<String, InterfaceInfo>,
         )>,
     ) -> Self {
-        let mut function_bodies = HashMap::new();
-        let mut static_method_bodies = HashMap::new();
-        let mut instance_method_bodies = HashMap::new();
-        let mut class_contexts = HashMap::new();
+        let mut function_bodies = HashMap::default();
+        let mut static_method_bodies = HashMap::default();
+        let mut instance_method_bodies = HashMap::default();
+        let mut class_contexts = HashMap::default();
         collect_exception_bodies(
             program,
             &mut function_bodies,
@@ -504,7 +504,7 @@ impl ExceptionFlowAnalysis {
         // Seeded from the same checker metadata the return maps use, and keyed identically, so a
         // callable's declaration alone puts it in the set — the boundary is inserted later, by
         // `ir_lower`, from exactly this declaration.
-        let mut nominal_boundary_callables: HashSet<String> = HashSet::new();
+        let mut nominal_boundary_callables: HashSet<String> = HashSet::default();
         // The AST pass runs unconditionally: the compiler binary supplies checker metadata, but
         // every hand-built pipeline in the test tree calls the free functions, which pass `None`.
         // Seeding only from the metadata left those paths pruning the handler, so the CLI was
@@ -534,9 +534,9 @@ impl ExceptionFlowAnalysis {
         let function_bodies = attach_class_contexts(function_bodies, &class_contexts);
         let static_method_bodies = attach_class_contexts(static_method_bodies, &class_contexts);
         let instance_method_bodies = attach_class_contexts(instance_method_bodies, &class_contexts);
-        let mut static_method_unresolved_defaults = HashMap::new();
-        let mut instance_method_unresolved_defaults = HashMap::new();
-        let mut function_unresolved_defaults = HashSet::new();
+        let mut static_method_unresolved_defaults = HashMap::default();
+        let mut instance_method_unresolved_defaults = HashMap::default();
+        let mut function_unresolved_defaults = HashSet::default();
         if type_metadata.is_none() {
             method_defaults::collect_unresolved_functions(program, &mut function_unresolved_defaults);
             method_defaults::collect_unresolved(program,
@@ -576,7 +576,7 @@ impl ExceptionFlowAnalysis {
             instance_method_returns,
             nominal_boundary_callables,
             destructor_throws: ThrownTypes::default(),
-            scalar_frame_callables: HashSet::new(),
+            scalar_frame_callables: HashSet::default(),
         };
         // Purely syntactic, so it is computed once rather than per round.
         destruction::collect_scalar_frame_callables(program, &mut analysis.scalar_frame_callables);
@@ -632,7 +632,7 @@ impl ExceptionFlowAnalysis {
             .iter()
             .map(|(name, body)| {
                 let mut thrown = self
-                    .block_throws(body.body, &HashMap::new(), body.class_context)
+                    .block_throws(body.body, &HashMap::default(), body.class_context)
                     .combined(self.scope_cleanup_throws(name));
                 // The declaration's own nominal boundary, which no statement in the body spells.
                 if self.nominal_boundary_callables.contains(name) {
@@ -1319,7 +1319,7 @@ impl ExceptionFlowAnalysis {
         values: &HashMap<String, T>,
     ) -> Option<T> {
         let mut current = Some(class_name.to_string());
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(class_name) = current {
             let class_key = php_symbol_key(&class_name);
             if !seen.insert(class_key.clone()) {

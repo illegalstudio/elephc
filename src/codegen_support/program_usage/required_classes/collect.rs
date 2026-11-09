@@ -8,7 +8,7 @@
 //! Key details:
 //! - Missing a recursive AST case can omit class tables and break later object dispatch.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::{
     ClassMethod, Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
@@ -30,7 +30,7 @@ use crate::parser::ast::{
 /// # Returns
 /// - `HashSet<String>` of class names referenced anywhere in the program
 pub(in crate::codegen_support) fn collect_required_class_names(program: &Program) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     collect_required_class_names_in_body(program, &mut names);
     names
 }

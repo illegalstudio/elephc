@@ -9,7 +9,7 @@
 //! - Each accepted root has one store/push/pop/clear sequence, balanced on every normal exit.
 //! - Arbitrary Mixed values remain excluded because releasing them can run user code.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueId};
 use crate::types::PhpType;
 use super::super::rewrite::defining_instruction;

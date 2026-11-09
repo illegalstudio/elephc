@@ -32,17 +32,17 @@
 //!   effects, never effects from evaluating a receiver or index or from a bounds failure.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::span::Span;
 
 thread_local! {
     /// Spans carrying a checker local-binding decision, for the duration of one optimizer run.
-    static ACTIVE_BINDING_DECISION_SPANS: RefCell<HashSet<Span>> = RefCell::new(HashSet::new());
+    static ACTIVE_BINDING_DECISION_SPANS: RefCell<HashSet<Span>> = RefCell::new(HashSet::default());
     /// Local names the checker compiled as boxed `mixed` storage, for one optimizer run.
-    static ACTIVE_MIXED_STORAGE_LOCALS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static ACTIVE_MIXED_STORAGE_LOCALS: RefCell<HashSet<String>> = RefCell::new(HashSet::default());
     /// Indexed reads the checker proved cannot dispatch PHP warning handlers.
-    static ACTIVE_BUFFER_READ_SITES: RefCell<HashSet<Span>> = RefCell::new(HashSet::new());
+    static ACTIVE_BUFFER_READ_SITES: RefCell<HashSet<Span>> = RefCell::new(HashSet::default());
 }
 
 /// Installs checker-proven buffer reads for one constant-propagation run.

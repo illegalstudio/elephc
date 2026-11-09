@@ -33,8 +33,8 @@ pub(super) fn values_escape(function: &Function, lp: &NaturalLoop) -> bool {
 /// Copies blocks with fresh IDs and connects their exits through representation boundaries.
 pub(super) fn copy_loop(function: &mut Function, plan: &Plan, slot: LocalSlotId, bound: ValueId) -> BlockId {
     let source = &plan.scalarized;
-    let mut blocks = HashMap::new();
-    let mut values = HashMap::from([(plan.bound_placeholder, bound)]);
+    let mut blocks = HashMap::default();
+    let mut values = HashMap::from_iter([(plan.bound_placeholder, bound)]);
     let mut instructions = Vec::new();
     for &old in &plan.blocks {
         let original = &source.blocks[old.as_raw() as usize];
@@ -72,7 +72,7 @@ pub(super) fn copy_loop(function: &mut Function, plan: &Plan, slot: LocalSlotId,
             if let Some(replacement) = values.get(operand) { *operand = *replacement; }
         }
     }
-    let mut exits = HashMap::new();
+    let mut exits = HashMap::default();
     for &old in &plan.blocks {
         let original = source.blocks[old.as_raw() as usize].terminator.clone().unwrap();
         let mut term = crate::ir_passes::inline::remap_terminator(original, &blocks, &values);

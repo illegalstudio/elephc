@@ -86,9 +86,9 @@ mod tests {
             let tokens = crate::lexer::tokenize(&text).unwrap();
             let parsed = crate::parser::parse(&tokens).unwrap();
             let (program, _, sources) = super::super::resolve_collecting_includes_with_defines_and_sources(
-                parsed, &fixture.0, &std::collections::HashSet::new(),
+                parsed, &fixture.0, &crate::fast_hash::FastSet::default(),
             ).unwrap();
-            let program = crate::conditional::apply(program, &std::collections::HashSet::new());
+            let program = crate::conditional::apply(program, &crate::fast_hash::FastSet::default());
             let program = crate::magic_constants::substitute_file_and_scope_constants(program, &fixture.0.join("main.php"));
             let program = crate::name_resolver::resolve(program).unwrap();
             let program = crate::autoload::collect_aliases(program).unwrap();
@@ -122,7 +122,7 @@ mod tests {
         let tokens = crate::lexer::tokenize("<?php function choose($caller) { if ($caller) { include 'module.php'; } }").unwrap();
         let program = crate::parser::parse(&tokens).unwrap();
         let (_, _, sources) = super::super::resolve_collecting_includes_with_defines_and_sources(
-            program, &fixture.0, &std::collections::HashSet::new(),
+            program, &fixture.0, &crate::fast_hash::FastSet::default(),
         ).unwrap();
         assert_eq!(sources.source_units.len(), 1);
         let captured = &sources.source_units[&path.canonicalize().unwrap()];

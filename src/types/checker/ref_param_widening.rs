@@ -20,7 +20,7 @@
 //! - Missing a widening costs the pre-existing `cannot reassign` error, never a wrong
 //!   representation, so every rule here fails towards saying nothing.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr};
@@ -160,8 +160,8 @@ impl Checker {
         classes: &[FlattenedClass],
         widened: &mut Vec<(String, String)>,
     ) -> (
-        std::collections::HashSet<(String, String)>,
-        std::collections::HashSet<(String, String)>,
+        crate::fast_hash::FastSet<(String, String)>,
+        crate::fast_hash::FastSet<(String, String)>,
     ) {
         let mut bodies: Vec<RefBody<'_>> = Vec::new();
         // By-reference parameters whose DECLARED type is already a boxed cell -- `?array &`,
@@ -170,8 +170,8 @@ impl Checker {
         // raw pointer it reads as a box: `ContainerBuilder::createService(array &$inlineServices)`
         // recursing into `doGet(?array &$inlineServices)` read the array header's first word as
         // the type tag -- "Value must be of type array, int given" on every `lint:container`.
-        let mut boxed_by_declaration: std::collections::HashSet<(String, String)> =
-            std::collections::HashSet::new();
+        let mut boxed_by_declaration: crate::fast_hash::FastSet<(String, String)> =
+            crate::fast_hash::FastSet::default();
         let mut note_boxed = |scope: &str, param: &str, type_expr: Option<&TypeExpr>| {
             let Some(type_expr) = type_expr else {
                 return;
@@ -265,8 +265,8 @@ impl Checker {
         };
         // The bodies a call can name, so a call site is compared with those alone and not with
         // every body of the program.
-        let mut functions_by_scope: HashMap<&str, Vec<&RefBody<'_>>> = HashMap::new();
-        let mut methods_by_name: HashMap<String, Vec<&RefBody<'_>>> = HashMap::new();
+        let mut functions_by_scope: HashMap<&str, Vec<&RefBody<'_>>> = HashMap::default();
+        let mut methods_by_name: HashMap<String, Vec<&RefBody<'_>>> = HashMap::default();
         for body in &bodies {
             match body.class.as_deref() {
                 None => functions_by_scope.entry(body.scope.as_str()).or_default().push(body),
@@ -345,8 +345,8 @@ impl Checker {
             forwards
         };
         // Grows `set` to a fixpoint: every by-reference parameter forwarded into a member joins.
-        let grow = |set: &mut std::collections::HashSet<(String, String)>,
-                    extra_targets: &std::collections::HashSet<(String, String)>|
+        let grow = |set: &mut crate::fast_hash::FastSet<(String, String)>,
+                    extra_targets: &crate::fast_hash::FastSet<(String, String)>|
          -> Vec<(String, String)> {
             let mut grown = Vec::new();
             loop {
@@ -387,10 +387,10 @@ impl Checker {
         // `ContainerBuilder::doGet($id)` omits `$inlineServices`, forwards it through
         // `createService` into `doResolveServices`, whose `RewindableGenerator` closure captures
         // it and runs long after `doGet` returned -- reading freed stack as the container.
-        let mut captured: std::collections::HashSet<(String, String)> =
-            std::collections::HashSet::new();
-        let mut property_bound: std::collections::HashSet<(String, String)> =
-            std::collections::HashSet::new();
+        let mut captured: crate::fast_hash::FastSet<(String, String)> =
+            crate::fast_hash::FastSet::default();
+        let mut property_bound: crate::fast_hash::FastSet<(String, String)> =
+            crate::fast_hash::FastSet::default();
         for body in &bodies {
             for (param, by_ref) in &body.params {
                 if !by_ref {
@@ -415,7 +415,7 @@ impl Checker {
             }
         }
 
-        let mut widened_set: std::collections::HashSet<(String, String)> =
+        let mut widened_set: crate::fast_hash::FastSet<(String, String)> =
             widened.iter().cloned().collect();
         for entry in &captured {
             if widened_set.insert(entry.clone()) {
@@ -425,8 +425,8 @@ impl Checker {
         widened.extend(grow(&mut widened_set, &boxed_by_declaration));
 
         let mut escaping = captured;
-        grow(&mut escaping, &std::collections::HashSet::new());
-        grow(&mut property_bound, &std::collections::HashSet::new());
+        grow(&mut escaping, &crate::fast_hash::FastSet::default());
+        grow(&mut property_bound, &crate::fast_hash::FastSet::default());
         (escaping, property_bound)
     }
 
@@ -521,7 +521,7 @@ impl Checker {
             .iter()
             .map(|(name, _)| element_write_bucket(name))
             .collect();
-        let mut stores: HashMap<&str, Vec<&Expr>> = HashMap::new();
+        let mut stores: HashMap<&str, Vec<&Expr>> = HashMap::default();
         for (name, _) in &by_ref_declared {
             stores.insert(name, Vec::new());
         }

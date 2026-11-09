@@ -2346,7 +2346,7 @@ mod surface_audit_tests {
 ///    per-declaration scan it reads is private to the reachability module.
 #[cfg(test)]
 mod reachability_tests {
-    use std::collections::HashSet;
+    use crate::fast_hash::FastSet as HashSet;
 
     use crate::optimize::reachability::{PreludeInventory, PruneOptions};
     use crate::parser::ast::{Program, Stmt, StmtKind};
@@ -2371,9 +2371,9 @@ mod reachability_tests {
         let forced: HashSet<String> = if forced_group {
             ["curl".to_string()].into_iter().collect()
         } else {
-            HashSet::new()
+            HashSet::default()
         };
-        let exported = HashSet::new();
+        let exported = HashSet::default();
         crate::optimize::prune_unreachable_declarations(
             program,
             &mut check,

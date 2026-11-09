@@ -8,7 +8,7 @@
 //! - Safe integer ranges do not imply equivalent coercion or identity rules.
 //! - Jointly proven scalar operands are checked after closing the complete counter graph.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use crate::ir::{Function, Instruction, Op, ValueId};
 use crate::types::PhpType;
 

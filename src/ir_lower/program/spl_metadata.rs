@@ -40,7 +40,7 @@ pub(super) fn push_builtin_spl_interface_metadata_methods(
     let Some(class_info) = module.class_infos.get(class_name) else {
         return;
     };
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut stack = class_info
         .interfaces
         .iter()

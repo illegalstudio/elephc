@@ -1663,8 +1663,8 @@ fn emit_magic_call_forwarder(ctx: &mut FunctionContext<'_>, done_label: &str) ->
 fn declared_method_names(
     ctx: &FunctionContext<'_>,
     class_info: &crate::types::ClassInfo,
-) -> std::collections::HashMap<String, String> {
-    let mut names = std::collections::HashMap::new();
+) -> crate::fast_hash::FastMap<String, String> {
+    let mut names = crate::fast_hash::FastMap::default();
     let mut owner = Some(class_info);
     while let Some(info) = owner {
         for decl in &info.method_decls {
@@ -1705,7 +1705,7 @@ fn runtime_inaccessible_instance_method_cases(
     ctx: &mut FunctionContext<'_>,
 ) -> Vec<InstanceLookupCase> {
     let mut rows = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by(|left, right| left.0.cmp(right.0));
     for (class_name, class_info) in classes {
@@ -2030,7 +2030,7 @@ fn emit_runtime_object_static_lookup_table(
     method_len_offset: usize,
     miss_label: &str,
 ) -> Result<()> {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     let mut cases = Vec::with_capacity(object_static_cases.len());
     for case in object_static_cases {
         let Some(class_id) = ctx
@@ -2256,7 +2256,7 @@ fn runtime_string_descriptor_cases_at_arity(
     let builtin_names = builtin_cases
         .iter()
         .filter_map(|case| case.php_name.as_deref().map(php_symbol_key))
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<crate::fast_hash::FastSet<_>>();
     cases.extend(builtin_cases);
     cases.extend(
         runtime_user_function_descriptor_cases(ctx, source_arg_ty, candidate_names, strict_php)
@@ -2298,9 +2298,9 @@ fn runtime_string_descriptor_cases_at_arity(
 /// so with an eval bridge present only those names keep a compiled case; any other name still
 /// runs, through the interpreter's builtin table on the table miss
 /// (`lower_runtime_string_callable_eval_fallback`). Without the bridge nothing is narrowed.
-fn literal_builtin_gate(ctx: &FunctionContext<'_>) -> Option<std::sync::Arc<std::collections::HashSet<String>>> {
+fn literal_builtin_gate(ctx: &FunctionContext<'_>) -> Option<std::sync::Arc<crate::fast_hash::FastSet<String>>> {
     use std::sync::{Arc, Mutex};
-    static CACHE: Mutex<Option<(usize, usize, Arc<std::collections::HashSet<String>>)>> = Mutex::new(None);
+    static CACHE: Mutex<Option<(usize, usize, Arc<crate::fast_hash::FastSet<String>>)>> = Mutex::new(None);
     if !runtime_string_callable_has_eval_fallback(ctx) {
         return None;
     }
@@ -2312,7 +2312,7 @@ fn literal_builtin_gate(ctx: &FunctionContext<'_>) -> Option<std::sync::Arc<std:
             return Some(set.clone());
         }
     }
-    let set: std::collections::HashSet<String> = strings
+    let set: crate::fast_hash::FastSet<String> = strings
         .iter()
         .filter(|s| {
             !s.is_empty()
@@ -2584,7 +2584,7 @@ fn runtime_user_function_descriptor_cases(
     functions.sort_by(|left, right| left.name.cmp(&right.name));
     // A wrapper answers for the builtin it calls (`builtin_callable_prelude`), unless a compiled
     // function already goes by that name: a prelude implements `error_log` itself.
-    let declared: std::collections::HashSet<String> =
+    let declared: crate::fast_hash::FastSet<String> =
         functions.iter().map(|function| php_symbol_key(&function.name)).collect();
     let mut entries: Vec<(&crate::ir::Function, String)> = functions
         .into_iter()
@@ -3653,10 +3653,10 @@ fn scope_private_method_overrides(
     arity: Option<usize>,
 ) -> (
     Vec<RuntimeArrayInstanceMethodTarget>,
-    std::collections::HashSet<(String, String)>,
+    crate::fast_hash::FastSet<(String, String)>,
 ) {
     let mut targets = Vec::new();
-    let mut shadowed = std::collections::HashSet::new();
+    let mut shadowed = crate::fast_hash::FastSet::default();
     let Some(scope) = ctx.function.lexical_class.as_deref() else {
         return (targets, shadowed);
     };

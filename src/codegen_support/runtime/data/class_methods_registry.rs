@@ -17,7 +17,7 @@
 //! - The calling scope is only known at run time for the filter, never for the rows, so one
 //!   row list per class serves every call site.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::Module;
 use crate::names::php_symbol_key;
@@ -54,8 +54,8 @@ pub(crate) fn emit_class_methods_registry_data(module: &Module) -> String {
     let slot_count = by_id.last().map_or(0, |(class_id, _, _)| class_id + 1);
 
     let mut out = String::new();
-    let mut name_labels: HashMap<String, String> = HashMap::new();
-    let mut tables: HashMap<u64, Vec<MethodRow>> = HashMap::new();
+    let mut name_labels: HashMap<String, String> = HashMap::default();
+    let mut tables: HashMap<u64, Vec<MethodRow>> = HashMap::default();
     for (class_id, class_name, _) in &by_id {
         tables.insert(*class_id, method_table(module, &class_ids, class_name));
     }
@@ -115,7 +115,7 @@ fn method_table(
     class_name: &str,
 ) -> Vec<MethodRow> {
     let mut chain = Vec::new();
-    let mut seen_classes = HashSet::new();
+    let mut seen_classes = HashSet::default();
     let mut current = Some(class_name.to_string());
     while let Some(name) = current {
         if !seen_classes.insert(php_symbol_key(&name)) {
@@ -129,7 +129,7 @@ fn method_table(
         current = info.parent.clone();
     }
     let mut rows = Vec::new();
-    let mut claimed = HashSet::new();
+    let mut claimed = HashSet::default();
     for (level_name, info) in chain {
         for name in own_method_names(level_name, info) {
             let key = php_symbol_key(&name);
@@ -174,7 +174,7 @@ fn own_method_names(class_name: &str, info: &ClassInfo) -> Vec<String> {
     // A reviewed internal class (GMP) hides its compiler adapters from PHP, as reflection does.
     let contract = elephc_builtin_contract::lookup_class(class_name.trim_start_matches('\\'));
     let visible = |key: &str| contract.is_none_or(|class| class.method_is_php_visible(key));
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut names = Vec::new();
     for name in &info.reflection_methods {
         let key = php_symbol_key(name);

@@ -9,7 +9,7 @@
 //! - Only a deliberate subset of PHP is foldable; unsupported constructs return `Unfoldable`.
 //! - Filesystem predicates read the real compile-time filesystem, matching AOT autoload needs.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -84,7 +84,7 @@ impl Interpreter {
     /// Create a new interpreter with an empty variable map.
     fn new() -> Self {
         Interpreter {
-            vars: HashMap::new(),
+            vars: HashMap::default(),
         }
     }
 

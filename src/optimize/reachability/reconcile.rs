@@ -10,7 +10,7 @@
 //! - Vtable survivor order is stable and slots are compacted from zero.
 //! - Shared virtual methods retain identical slots along every live inheritance lineage.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::names::php_symbol_key;
 use crate::types::{CheckResult, ClassInfo};
@@ -134,7 +134,7 @@ fn retain_class_metadata(
     // Grouped ONCE: `prune_class_methods` used to scan every reachable method for each class,
     // 4 528 classes times hundreds of thousands of pairs, twice -- 10 s of the Symfony demo's
     // prune phase, which prunes nothing there.
-    let mut slots_by_class: HashMap<&str, ReachableSlots<'_>> = HashMap::new();
+    let mut slots_by_class: HashMap<&str, ReachableSlots<'_>> = HashMap::default();
     for (class, method, is_static) in &reachability.methods {
         let slots = slots_by_class.entry(class.as_str()).or_default();
         if *is_static {
@@ -192,7 +192,7 @@ fn retain_class_metadata(
 fn assert_instantiation_vtable_slots_aligned(classes: &crate::fast_hash::FastMap<String, ClassInfo>) {
     // `Box<int>` and `Box<string>` share the template `box`; an ordinary class has no `<` and
     // is never grouped with anything.
-    let mut by_template: HashMap<&str, Vec<(&String, &ClassInfo)>> = HashMap::new();
+    let mut by_template: HashMap<&str, Vec<(&String, &ClassInfo)>> = HashMap::default();
     for (name, info) in classes {
         let Some(template) = name.split_once('<').map(|(head, _)| head) else {
             continue;

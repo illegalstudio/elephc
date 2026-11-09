@@ -9,7 +9,7 @@
 //! - Integer interval proofs keep casts and factory buffer operations free of overflow coercions.
 //! - Factories use only their integer value parameters, fresh integer buffers and bounded loops.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use crate::types::{PhpType, TypeEnv};
@@ -255,7 +255,7 @@ mod tests {
             let tokens = crate::lexer::tokenize(source).unwrap();
             let program = crate::parser::parse(&tokens).unwrap();
             let StmtKind::FunctionDecl { body, .. } = &program[0].kind else { panic!("expected function"); };
-            let mut locals = HashMap::from([("n".to_string(), LocalValue::Integer((1, 3)))]);
+            let mut locals = HashMap::from_iter([("n".to_string(), LocalValue::Integer((1, 3)))]);
             assert!(local_buffer_block(body, &mut locals).is_none(), "{source}");
         }
     }

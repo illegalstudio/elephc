@@ -9,7 +9,7 @@
 //! - Deduplication is best-effort and falls back to the original bridge archive.
 //! - Only whole-archived bridge inputs participate; managed native archives are untouched.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -62,9 +62,9 @@ pub(super) fn prepare(plan: &LinkPlan) -> PreparedArchives {
             scratch: None,
         };
     };
-    let mut provider_names = HashSet::new();
-    let mut provider_symbols = HashSet::new();
-    let mut replacements = HashMap::new();
+    let mut provider_names = HashSet::default();
+    let mut provider_symbols = HashSet::default();
+    let mut replacements = HashMap::default();
 
     for (index, archive) in whole_archives.iter().enumerate() {
         if index == 0 {
@@ -205,7 +205,7 @@ fn dedup_macos_archive(
         .iter()
         .map(|(name, symbols)| (name.as_str(), symbols))
         .collect();
-    let mut strip = HashSet::new();
+    let mut strip = HashSet::default();
     for name in &names {
         let duplicate_name = provider_names.contains(name);
         let duplicate_symbols = readable

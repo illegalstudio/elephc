@@ -338,7 +338,7 @@ pub(crate) fn get_runtime_obj() -> &'static Path {
 /// process-per-test model needs for the cache to pay off at all.
 pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
     let hash = runtime_asm_hash(runtime_asm);
-    let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(elephc::fast_hash::FastMap::default()));
     // A test that panics while assembling one runtime variant must not take every later test
     // down with it: the map only ever holds finished objects, so it is safe to keep using.
     let mut cache = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1277,7 +1277,7 @@ fn test_link_plan(
     use elephc::link_plan::{LinkItem, LinkOrigin, LinkPlan};
 
     let mut plan = LinkPlan::new();
-    let mut named = std::collections::HashSet::new();
+    let mut named = elephc::fast_hash::FastSet::default();
     let mut xml_pushed = false;
     for library in &requirements.checker_libraries {
         if library == "System" || !named.insert(library.clone()) {

@@ -10,7 +10,7 @@
 //! - Schema data is the canonical contract for inheritance, calls, property access, and method validation.
 
 use crate::parser::ast::BinOp;
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::parser::ast::{
     AttributeGroup, ClassMethod, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility,
@@ -551,7 +551,7 @@ pub fn constructor_owner<'a>(
     class_name: &str,
 ) -> Option<(&'a str, &'a ClassInfo)> {
     let mut current = Some(class_name);
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some(name) = current {
         if !seen.insert(name) {
             return None;
@@ -619,7 +619,7 @@ pub enum PropertyNameResolution {
 ///    the receiver's own class is an access error, because step 1 already took the one scope that
 ///    may reach it.
 pub fn resolve_property_name(
-    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    classes: &std::collections::HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     class_name: &str,
     property: &str,
     scope: Option<&str>,
@@ -679,7 +679,7 @@ pub fn resolve_property_name(
 /// must be a builtin ancestor, so ordinary subclasses and unrelated builtin receivers remain
 /// governed by PHP visibility.
 fn builtin_scope_owns_inherited_storage(
-    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    classes: &std::collections::HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     class_name: &str,
     declaring: &str,
     scope: Option<&str>,
@@ -714,7 +714,7 @@ fn builtin_scope_owns_inherited_storage(
 /// (`crate::codegen::lower_inst::objects::property_name_is_scope_dynamic`), and which names the
 /// checker must not validate against the ancestor's declared type.
 pub fn property_name_shadows_ancestor_private_slot(
-    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    classes: &std::collections::HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     class_name: &str,
     property: &str,
     scope: Option<&str>,
@@ -731,7 +731,7 @@ pub fn property_name_shadows_ancestor_private_slot(
 
 /// Returns the scope-selected private slot for a name, when the scope owns one the receiver has.
 fn resolve_scope_private_property_name(
-    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    classes: &std::collections::HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     class_name: &str,
     property: &str,
     scope: Option<&str>,
@@ -774,7 +774,7 @@ pub fn class_declares_private_property(
 
 /// Returns whether `child` reaches `ancestor` through the declared parent chain.
 pub fn class_inherits_from(
-    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    classes: &std::collections::HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     child: &str,
     ancestor: &str,
 ) -> bool {
@@ -796,7 +796,7 @@ pub fn class_inherits_from(
 /// Returns php-src's `zend_check_protected` verdict: the scope is the class, an ancestor OR a
 /// descendant of it.
 pub fn scope_shares_class_hierarchy(
-    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    classes: &std::collections::HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
     scope: Option<&str>,
     declaring: &str,
 ) -> bool {

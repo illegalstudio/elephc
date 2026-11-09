@@ -8,7 +8,7 @@
 //! Key details:
 //! - Discovery follows PHP statement order so constants and namespace context affect later include paths.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
@@ -102,13 +102,13 @@ fn discover_stmt(
         }
         StmtKind::NamespaceDecl { name } => {
             state.namespace = Some(namespace_string(name));
-            state.const_imports = HashMap::new();
+            state.const_imports = HashMap::default();
         }
         StmtKind::NamespaceBlock { name, body } => {
             let saved_namespace = state.namespace.clone();
             let saved_imports = state.const_imports.clone();
             state.namespace = Some(namespace_string(name));
-            state.const_imports = HashMap::new();
+            state.const_imports = HashMap::default();
             discover_stmts(body, base_dir, loaded_paths, include_chain, state, output)?;
             state.namespace = saved_namespace;
             state.const_imports = saved_imports;

@@ -9,7 +9,7 @@
 //! - Only the `require`/`include` operations the file performs are kept; everything else is dropped.
 //! - The resolver follows each one, so the whole preloaded world arrives as ordinary declarations.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
@@ -84,7 +84,7 @@ pub fn preload_declarations(
     // `App_Kernel*Container.preload.php` lists them as `$classes[] = '…';` after its requires --
     // join the first pass like the requires do. Only requires reach `resolved`, so a scan of it
     // alone never saw them, and a script made of nothing but that list returned here empty.
-    requires.extend(named_class_requires(&[&parsed], autoload, &HashSet::new()));
+    requires.extend(named_class_requires(&[&parsed], autoload, &HashSet::default()));
     if requires.is_empty() {
         return Ok(PreloadedDeclarations::default());
     }
@@ -248,7 +248,7 @@ fn preload_directory_closure(
     // once from this closure, once from the stub's include -- and failed the build with
     // "Duplicate class declaration" over a stale container php never loads twice. The unit's
     // include already takes the file's declarations into the program.
-    let mut unit_included: HashSet<PathBuf> = HashSet::new();
+    let mut unit_included: HashSet<PathBuf> = HashSet::default();
     for path in files {
         let Ok(canonical) = crate::source::canonical(&path) else {
             continue;
@@ -607,7 +607,7 @@ pub(crate) fn parse_physical_file(path: &Path, defines: &HashSet<String>) -> Opt
 
 /// The statement-level half of [`unit_file_is_eligible`].
 fn unit_body_is_eligible(body: &[Stmt]) -> bool {
-    let mut locals = HashSet::new();
+    let mut locals = HashSet::default();
     let mut returned = false;
     for stmt in body {
         // The parser hoists an anonymous class behind the statements of its file: it declares
@@ -893,7 +893,7 @@ fn named_class_requires(
     for program in programs {
         collect_string_literals(program, &mut names);
     }
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut requires = Vec::new();
     for name in names {
         let trimmed = name.trim_start_matches('\\');
@@ -1104,7 +1104,7 @@ fn guard_needs_no_dropped_statement(condition: &Expr) -> bool {
 /// Used by the caller to drop a preloaded declaration the entry program makes for itself: both
 /// halves reach `vendor/autoload.php`, and php declares each class once.
 pub fn declared_names(program: &[Stmt]) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     collect_declared_names(program, &mut names);
     names
 }
@@ -1209,7 +1209,7 @@ pub fn without_redeclarations(preloaded: Program, declared: &HashSet<String>) ->
 /// already holds (the renamed body), so filtering them against `seen` would unbind the function,
 /// and a kept guard is its own branch decision.
 pub fn first_declaration_of_each_name(program: Program) -> Program {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     program
         .into_iter()
         .filter(|stmt| match &stmt.kind {

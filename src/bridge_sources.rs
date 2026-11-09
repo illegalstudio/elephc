@@ -10,7 +10,7 @@
 //! - Optional dependencies conservatively participate, while Cargo decides what to rebuild.
 //! - Build output is ignored, and canonical directory identities bound dependency cycles.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -21,7 +21,7 @@ pub fn local_inputs_newer_than(workspace: &Path, crate_name: &str, built_at: Sys
     }
     let workspace_manifest = read_manifest(&workspace.join("Cargo.toml"));
     let mut pending = vec![workspace.join("crates").join(crate_name)];
-    let mut visited = HashSet::new();
+    let mut visited = HashSet::default();
     while let Some(directory) = pending.pop() {
         let Ok(directory) = std::fs::canonicalize(directory) else { continue; };
         if !visited.insert(directory.clone()) { continue; }

@@ -8,12 +8,12 @@
 //! - Only compiler-reserved assignment names are alpha-renamed in debug renderings.
 //! - Repeated names retain their identity, so mismatched alias relationships still fail.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 /// Canonicalizes generated assignment names by first occurrence, preserving all other text.
 pub(crate) fn assignment_names(rendered: &str) -> String {
     let prefix = "__elephc_assign_expr_";
-    let mut names = HashMap::new();
+    let mut names = HashMap::default();
     let mut cleaned = String::with_capacity(rendered.len());
     let mut rest = rendered;
     while let Some(at) = rest.find(prefix) {

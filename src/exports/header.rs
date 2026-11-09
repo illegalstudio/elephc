@@ -9,7 +9,7 @@
 //! - Every string return uses status plus caller-owned output parameters.
 //! - Export ordering and include-guard normalization are deterministic.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::fmt::Write as _;
 
 use crate::types::PhpType;

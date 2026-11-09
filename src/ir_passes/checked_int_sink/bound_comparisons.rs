@@ -15,7 +15,7 @@
 //!   strict `<` (or `>` with the bound on the left) is rewritten: `<=` would disagree for an `L`
 //!   within 512 of PHP_INT_MIN, where `(double)L` is also -2^63.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{
     CmpPredicate, Function, Immediate, InstId, Instruction, IrType, Op, Ownership, ValueDef,

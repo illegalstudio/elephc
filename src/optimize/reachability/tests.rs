@@ -7,7 +7,7 @@
 //! Key details:
 //! - Fixtures parse directly and use the real type checker for metadata reconciliation coverage.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
@@ -29,7 +29,7 @@ echo call_user_func([$class, $method], "value");
 "#));
     let mut check = crate::types::check(&program).expect("folded fixture must type check");
     let inventory = PreludeInventory::new();
-    let roots = HashSet::new();
+    let roots = HashSet::default();
     let program = prune_unreachable_declarations(
         program,
         &mut check,
@@ -86,7 +86,7 @@ fn prune(source: &str) -> (Program, crate::types::CheckResult) {
     let program = parse(source);
     let mut check = crate::types::check(&program).expect("fixture must type check");
     let inventory = PreludeInventory::new();
-    let roots = HashSet::new();
+    let roots = HashSet::default();
     let program = prune_unreachable_declarations(
         program,
         &mut check,
@@ -105,7 +105,7 @@ fn prune_resolved(source: &str) -> (Program, crate::types::CheckResult) {
     let program = crate::name_resolver::resolve(parse(source)).expect("fixture must resolve");
     let mut check = crate::types::check(&program).expect("fixture must type check");
     let inventory = PreludeInventory::new();
-    let roots = HashSet::new();
+    let roots = HashSet::default();
     let program = prune_unreachable_declarations(
         program,
         &mut check,
@@ -1433,7 +1433,7 @@ fn prune_ignores_internal_prelude_closure_dispatch_hazard() {
     let mut inventory = PreludeInventory::new();
     inventory.record_program("test", &program);
     inventory.record_internal_callable_method("test", "T", "dispatch", false);
-    let roots = HashSet::new();
+    let roots = HashSet::default();
     let program = prune_unreachable_declarations(
         program,
         &mut check,
@@ -1469,7 +1469,7 @@ fn prune_array_iteration_only_prelude_does_not_root_iterator_protocol() {
             inventory.record_array_iteration_only("test");
         }
         let forced: HashSet<String> = ["test".to_string()].into_iter().collect();
-        let roots = HashSet::new();
+        let roots = HashSet::default();
         prune_unreachable_declarations(
             program,
             &mut check,

@@ -53,7 +53,7 @@
 //!   the record address of repeated `$this->slots[$i]` accesses in straight-line code, under the
 //!   same function and module guards.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{
     BlockId, CmpPredicate, Effects, Function, Immediate, InstId, Instruction, IrType, LocalSlotId,
@@ -317,16 +317,16 @@ fn proven_in_bounds_indices(
     escaping: &HashSet<LocalSlotId>,
 ) -> HashMap<ValueId, InBoundsProof> {
     let Some((condition, continue_when_true)) = super::integer_range::loop_condition(function, loop_ref) else {
-        return HashMap::new();
+        return HashMap::default();
     };
     let Some(guarded_entry) = loop_continue_target(function, loop_ref) else {
-        return HashMap::new();
+        return HashMap::default();
     };
     let inductions = super::induction::basic_inductions(function, loop_ref, |value| {
         exact_i64_constant(function, value)
     });
     let incoming = incoming_arguments(function);
-    let mut proofs = HashMap::new();
+    let mut proofs = HashMap::default();
     for induction in inductions {
         if induction.step != 1 || exact_i64_constant(function, induction.initial) != Some(0) {
             continue;
@@ -489,7 +489,7 @@ fn slots_named_in_function(function: &Function) -> HashSet<LocalSlotId> {
 pub(super) fn slots_named_as_storage<'a>(
     instructions: impl Iterator<Item = &'a Instruction>,
 ) -> HashSet<LocalSlotId> {
-    let mut written = HashSet::new();
+    let mut written = HashSet::default();
     for inst in instructions {
         match &inst.immediate {
             Some(Immediate::LocalSlot(slot)) if inst.op != Op::LoadLocal => {
@@ -686,14 +686,14 @@ fn neutralize_unused_loads(function: &mut Function, loads: &[ValueId]) {
 /// Replaces each packed record address that a dominating access with the same descriptor and
 /// index already computed.
 fn share_record_addresses(function: &mut Function, rewritten: &[InstId], dominance: &DominanceInfo) {
-    let mut positions: HashMap<InstId, (BlockId, usize)> = HashMap::new();
+    let mut positions: HashMap<InstId, (BlockId, usize)> = HashMap::default();
     for block in &function.blocks {
         for (index, &inst_id) in block.instructions.iter().enumerate() {
             positions.insert(inst_id, (block.id, index));
         }
     }
     let incoming = incoming_arguments(function);
-    let mut groups: HashMap<(ValueId, ValueId), Vec<InstId>> = HashMap::new();
+    let mut groups: HashMap<(ValueId, ValueId), Vec<InstId>> = HashMap::default();
     for &inst_id in rewritten {
         let inst = &function.instructions[inst_id.as_raw() as usize];
         if inst.op != Op::BufferGetResolved
@@ -713,7 +713,7 @@ fn share_record_addresses(function: &mut Function, rewritten: &[InstId], dominan
             dominance.strictly_dominates(earlier_block, later_block)
         }
     };
-    let mut replacements = HashMap::new();
+    let mut replacements = HashMap::default();
     let mut redundant = Vec::new();
     for accesses in groups.values() {
         for &later in accesses {
@@ -741,7 +741,7 @@ fn share_record_addresses(function: &mut Function, rewritten: &[InstId], dominan
 
 /// Collects, for every block parameter, the arguments each incoming edge passes to it.
 pub(super) fn incoming_arguments(function: &Function) -> HashMap<(BlockId, usize), Vec<ValueId>> {
-    let mut incoming: HashMap<(BlockId, usize), Vec<ValueId>> = HashMap::new();
+    let mut incoming: HashMap<(BlockId, usize), Vec<ValueId>> = HashMap::default();
     for block in &function.blocks {
         let Some(terminator) = block.terminator.as_ref() else {
             continue;

@@ -23,7 +23,7 @@
 //!   them on the whole program, at the end of every autoload run. The alias interface is
 //!   always active, like the alias class: it exists before the call too.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 
 use crate::names::{php_symbol_key, Name, NameKind};
@@ -154,7 +154,7 @@ fn declared_interface_keys(program: &Program) -> HashSet<String> {
             }
         }
     }
-    let mut out = HashSet::new();
+    let mut out = HashSet::default();
     walk(program, &mut out);
     out
 }
@@ -346,7 +346,7 @@ fn collect_aliases_in_stmt(
         StmtKind::NamespaceBlock { name, body } => {
             let block_scope = AliasScope {
                 namespace: Some(namespace_text(&name)),
-                class_imports: HashMap::new(),
+                class_imports: HashMap::default(),
             };
             StmtKind::NamespaceBlock {
                 name,

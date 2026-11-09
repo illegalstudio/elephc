@@ -88,8 +88,8 @@ pub(super) fn reflection_interface_method_names(
         return Vec::new();
     };
     let mut names = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
+    let mut visited = crate::fast_hash::FastSet::default();
     collect_reflection_interface_method_names(
         &ctx.module.interface_infos, interface_name, &mut names, &mut seen, &mut visited,
     );
@@ -98,11 +98,11 @@ pub(super) fn reflection_interface_method_names(
 
 /// Visits each interface once, preserving depth-first declaration order across shared ancestors.
 fn collect_reflection_interface_method_names(
-    interfaces: &std::collections::HashMap<String, InterfaceInfo>,
+    interfaces: &crate::fast_hash::FastMap<String, InterfaceInfo>,
     interface_name: &str,
     names: &mut Vec<String>,
-    seen: &mut std::collections::HashSet<String>,
-    visited: &mut std::collections::HashSet<String>,
+    seen: &mut crate::fast_hash::FastSet<String>,
+    visited: &mut crate::fast_hash::FastSet<String>,
 ) {
     if !visited.insert(php_symbol_key(interface_name.trim_start_matches('\\'))) {
         return;
@@ -134,7 +134,7 @@ pub(super) fn reflection_interface_property_names(
         return Vec::new();
     };
     let mut names = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     for property in info.properties.keys() {
         push_unique_property_name(property, &mut names, &mut seen);
     }
@@ -153,7 +153,7 @@ pub(super) fn reflection_interface_constant_names(
         return Vec::new();
     };
     let mut names = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     for constant in declared_then_remaining(&info.constant_order, info.constants.keys()) {
         push_unique_constant_name(constant, &mut names, &mut seen);
     }
@@ -191,7 +191,7 @@ pub(super) fn reflection_trait_constant_names(ctx: &FunctionContext<'_>, trait_n
 pub(super) fn push_unique_method_names<'a>(
     method_names: impl Iterator<Item = &'a String>,
     names: &mut Vec<String>,
-    seen: &mut std::collections::HashSet<String>,
+    seen: &mut crate::fast_hash::FastSet<String>,
 ) {
     for method_name in method_names {
         let key = php_symbol_key(method_name);
@@ -205,7 +205,7 @@ pub(super) fn push_unique_method_names<'a>(
 pub(super) fn push_unique_property_name(
     property_name: &str,
     names: &mut Vec<String>,
-    seen: &mut std::collections::HashSet<String>,
+    seen: &mut crate::fast_hash::FastSet<String>,
 ) {
     if seen.insert(property_name.to_string()) {
         names.push(property_name.to_string());
@@ -216,7 +216,7 @@ pub(super) fn push_unique_property_name(
 pub(super) fn push_unique_constant_name(
     constant_name: &str,
     names: &mut Vec<String>,
-    seen: &mut std::collections::HashSet<String>,
+    seen: &mut crate::fast_hash::FastSet<String>,
 ) {
     if seen.insert(constant_name.to_string()) {
         names.push(constant_name.to_string());
@@ -228,7 +228,7 @@ pub(super) fn push_unique_constant_member(
     constant_name: &str,
     value: ReflectionConstantValue,
     members: &mut Vec<ReflectionConstantMember>,
-    seen: &mut std::collections::HashSet<String>,
+    seen: &mut crate::fast_hash::FastSet<String>,
 ) {
     if seen.insert(constant_name.to_string()) {
         members.push(ReflectionConstantMember {
@@ -646,7 +646,7 @@ pub(super) fn reflection_interface_constant_expr(
     interface_name: &str,
     constant_name: &str,
 ) -> Option<Expr> {
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = crate::fast_hash::FastSet::default();
     let mut queue = vec![interface_name.to_string()];
     while let Some(name) = queue.pop() {
         if !visited.insert(name.clone()) {

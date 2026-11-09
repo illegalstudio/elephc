@@ -505,7 +505,7 @@ dispatchCallableArgument(consumeCallableArgument(...), new CallableArgumentObjec
             false,
             false,
             crate::codegen::Emit::Executable,
-            &std::collections::HashMap::new(),
+            &crate::fast_hash::FastMap::default(),
             true,
             false,
             crate::codegen::WebIsolation::Worker,

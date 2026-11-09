@@ -13,7 +13,7 @@
 //!   folds the two shapes Composer emits (`$vendorDir . '/pkg/file.php'` and
 //!   `__DIR__ . '/..' . '/pkg/file.php'`) into absolute paths.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::parser::ast::{BinOp, Expr, ExprKind, MagicConstant, StmtKind};
@@ -70,7 +70,7 @@ fn read_generated_eager_files(manifest: &Path) -> Vec<PathBuf> {
     let manifest_dir = manifest.parent().unwrap_or(Path::new("."));
     // Composer binds `$vendorDir` and `$baseDir` before the return, and every entry is written
     // relative to one of them. Tracking the two assignments is what makes the values foldable.
-    let mut bindings: HashMap<String, String> = HashMap::new();
+    let mut bindings: HashMap<String, String> = HashMap::default();
     let mut files = Vec::new();
     for stmt in &program {
         match &stmt.kind {

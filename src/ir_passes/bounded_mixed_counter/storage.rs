@@ -73,7 +73,7 @@ pub(crate) fn prove_integer_slots(
         ) else { continue; };
         if trials == 16 { break; }
         trials += 1;
-        let slots = HashSet::from([slot]);
+        let slots = HashSet::from_iter([slot]);
         if trial_safe(function, &slots, &proof, data) {
             result.record(&slots, &proof, &incrementing);
         }
@@ -120,7 +120,7 @@ fn seed_dependencies(
     slot: LocalSlotId,
     candidates: &[LocalSlotId],
 ) -> HashSet<LocalSlotId> {
-    let mut dependencies = HashSet::new();
+    let mut dependencies = HashSet::default();
     for inst in &function.instructions {
         if inst.op != Op::StoreLocal || inst.immediate != Some(Immediate::LocalSlot(slot)) {
             continue;
@@ -200,7 +200,7 @@ fn trial_safe(function: &Function, slots: &HashSet<LocalSlotId>, proof: &Counter
 fn fold_trivial_parameters(function: &mut Function) -> bool {
     use crate::ir::BlockId;
     let dominance = super::super::compute_dominance(function);
-    let mut incoming: HashMap<BlockId, Vec<Vec<ValueId>>> = HashMap::new();
+    let mut incoming: HashMap<BlockId, Vec<Vec<ValueId>>> = HashMap::default();
     for block in &function.blocks {
         if let Some(mut term) = block.terminator.clone() {
             for (target, args) in super::super::cfg::successor_edges(&mut term) {
@@ -208,7 +208,7 @@ fn fold_trivial_parameters(function: &mut Function) -> bool {
             }
         }
     }
-    let mut replacements = HashMap::new();
+    let mut replacements = HashMap::default();
     let mut removed = Vec::new();
     for block in &function.blocks {
         if block.id == function.entry || !dominance.is_reachable(block.id) { continue; }

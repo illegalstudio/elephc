@@ -8,7 +8,7 @@
 //! - Tests run the same frontend/optimizer ordering used by `--emit-ir` and
 //!   assert that `lower_program` returns validated printable modules.
 
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::codegen::platform::Target;
@@ -161,7 +161,7 @@ fn try_lower_source_at_for_target(
     let parsed =
         crate::parser::parse_with_mode(&tokens, source_mode).expect("parse failed");
     let main_file_path = PathBuf::from(main_file_path);
-    let defines = HashSet::new();
+    let defines = HashSet::default();
     let parsed = crate::source::finalize_physical_program(
         parsed,
         source,
@@ -241,7 +241,7 @@ fn try_lower_source_at_for_target(
     // spliced in (`compat-preludes` phase): the lowering routes `array_merge`, `array_walk`,
     // `min`/`max`, `filter_var` and friends to these helpers, so a fixture lowered without them
     // takes the bare native path and no longer matches what a real build emits.
-    let mut forced_groups = HashSet::from([FIXTURE_DECLARATIONS_GROUP.to_string()]);
+    let mut forced_groups = HashSet::from_iter([FIXTURE_DECLARATIONS_GROUP.to_string()]);
     let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_gradual_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
@@ -288,7 +288,7 @@ fn try_lower_source_at_for_target(
     );
     let ast =
         crate::optimize::eliminate_dead_code(ast, check_result.local_binding_decision_spans());
-    let empty_roots = HashSet::new();
+    let empty_roots = HashSet::default();
     let fixture_roots = forced_groups;
     let ast = crate::optimize::prune_unreachable_declarations(
         ast,

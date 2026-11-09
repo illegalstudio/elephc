@@ -19,7 +19,7 @@
 //!   instruction by its first bytes before parsing it.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::codegen::platform::{Arch, Target};
 

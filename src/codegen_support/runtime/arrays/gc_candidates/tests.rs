@@ -66,7 +66,7 @@ fn candidate_gc_subgraphs_assemble_on_all_supported_targets() {
                 &mut emitter, if target.arch == Arch::AArch64 { "x0" } else { "rax" });
             let labels = emitter.take_internal_labels();
             let assembly = localize_internal_labels(&emitter.output(), &labels);
-            let mut definitions = std::collections::HashSet::new();
+            let mut definitions = crate::fast_hash::FastSet::default();
             for label in assembly.lines().filter_map(|line| line.trim().strip_suffix(':')) {
                 if label.chars().all(|ch| ch.is_ascii_digit()) { continue; }
                 assert!(definitions.insert(label), "{name}, PIC={pic}: duplicate {label}");

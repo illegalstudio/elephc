@@ -233,7 +233,7 @@ fn collect_class_constructor_slot(
     module: &Module,
     class_name: &str,
     class_info: &ClassInfo,
-    emitted_methods: &std::collections::HashSet<(String, String, bool)>,
+    emitted_methods: &crate::fast_hash::FastSet<(String, String, bool)>,
     slots: &mut Vec<EvalConstructorSlot>,
 ) {
     let method_key = php_symbol_key("__construct");

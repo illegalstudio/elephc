@@ -19,7 +19,7 @@
 //! - Each worker emits the routines it needs between `HELPER_MARKER`s and the merge keeps one.
 //! - AArch64 only, for now, and off unless `ELEPHC_OUTLINE_OPS` is set.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::hash::{Hash, Hasher};
 
 use crate::codegen_support::emit::Emitter;
@@ -60,7 +60,7 @@ fn tokens(line: &str) -> impl Iterator<Item = &str> {
 
 /// Decides whether the text of one instruction can leave its body.
 fn shape_of(text: &str) -> Option<Shape> {
-    let mut defined = HashSet::new();
+    let mut defined = HashSet::default();
     for line in text.lines().map(str::trim) {
         if let Some(name) = line.strip_suffix(':') {
             defined.insert(name);

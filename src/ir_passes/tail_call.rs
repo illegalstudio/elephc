@@ -9,7 +9,7 @@
 //! - Mutual components retain every public ABI entry, cloning each body once per entry.
 //! - The transformation runs once; subsequent scalar passes optimize the resulting loops.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::{BlockId, Function, Immediate, InstId, Module, Op, Terminator};
 use crate::names::php_symbol_key;
@@ -71,7 +71,7 @@ pub(super) fn eliminate_tail_recursion(module: &mut Module) -> bool {
 /// file's trailing `main();` looked like the entry tail-calling itself, became a loop, and the
 /// program printed nothing.
 fn call_targets_by_name(module: &Module) -> HashMap<String, usize> {
-    let mut names = HashMap::new();
+    let mut names = HashMap::default();
     for (index, function) in module.functions.iter().enumerate() {
         if function.flags.is_main {
             continue;
@@ -118,12 +118,12 @@ fn result_is_returned(
     start: BlockId,
     call: InstId,
     value: Option<crate::ir::ValueId>,
-    roots: &std::collections::HashSet<crate::ir::LocalSlotId>,
+    roots: &crate::fast_hash::FastSet<crate::ir::LocalSlotId>,
 ) -> Option<Vec<InstId>> {
     let mut block_id = start;
-    let mut values: std::collections::HashSet<_> = value.into_iter().collect();
-    let mut slots = std::collections::HashSet::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut values: crate::fast_hash::FastSet<_> = value.into_iter().collect();
+    let mut slots = crate::fast_hash::FastSet::default();
+    let mut visited = crate::fast_hash::FastSet::default();
     let mut erase = Vec::new();
     while visited.insert(block_id) {
         let block = &function.blocks[block_id.as_raw() as usize];

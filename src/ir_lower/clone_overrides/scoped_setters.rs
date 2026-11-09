@@ -18,7 +18,7 @@
 //! - The body is one ordinary assignment, so typed weak coercion, set hooks and ownership all
 //!   come from the same lowering a hand-written `$this->p = $v` uses.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::ir::Module;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};

@@ -8,7 +8,7 @@
 //! Key details:
 //! - Trait composition must preserve PHP conflict, aliasing, visibility, and abstract-method requirements.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -86,9 +86,9 @@ pub fn flatten_classes(
     HashMap<String, FlattenedClass>,
     Vec<CompileError>,
 ) {
-    let mut trait_map = HashMap::new();
-    let mut trait_keys = HashSet::new();
-    let mut class_like_keys = HashSet::new();
+    let mut trait_map = HashMap::default();
+    let mut trait_keys = HashSet::default();
+    let mut class_like_keys = HashSet::default();
     let mut errors = Vec::new();
 
     for stmt in program {
@@ -140,10 +140,10 @@ pub fn flatten_classes(
     }
 
     let inherited_implementations = index_declared_implementations(program);
-    let mut cache = HashMap::new();
+    let mut cache = HashMap::default();
     let mut stack = Vec::new();
     let mut flattened = Vec::new();
-    let mut flattened_enums = HashMap::new();
+    let mut flattened_enums = HashMap::default();
     for stmt in program {
         match &stmt.kind {
             StmtKind::ClassDecl {
@@ -457,7 +457,7 @@ type DeclaredImplementations = HashMap<String, (Option<String>, HashSet<String>)
 
 /// Indexes, for every class declaration, its parent and its directly declared implementations.
 fn index_declared_implementations(program: &Program) -> DeclaredImplementations {
-    let mut index = HashMap::new();
+    let mut index = HashMap::default();
     for stmt in program {
         if let StmtKind::ClassDecl { name, extends, methods, .. } = &stmt.kind {
             index.insert(
@@ -499,7 +499,7 @@ fn drop_abstract_methods_implemented_by_ancestor(
             }
             let key = php_symbol_key(&method.name);
             let mut cursor = parent.map(php_symbol_key);
-            let mut seen = HashSet::new();
+            let mut seen = HashSet::default();
             while let Some(class_key) = cursor {
                 if !seen.insert(class_key.clone()) {
                     break;

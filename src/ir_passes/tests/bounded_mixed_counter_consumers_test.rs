@@ -7,7 +7,7 @@
 //! Key details:
 //! - A proven integer range alone cannot authorize a different PHP comparison rule.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use crate::ir::{validate_function, Builder, CmpPredicate, DataPool, IrHeapKind, IrType,
     LocalKind, LocalSlotId, Op, Ownership};
 use crate::types::PhpType;
@@ -41,7 +41,7 @@ fn bounded_mixed_counter_storage_preserves_comparison_partners() {
                 b.terminate(body_term);
             }
             assert!(validate_function(&function).is_ok(), "{:?}", validate_function(&function));
-            let proven = crate::ir_passes::prove_integer_slots(&function, &mut DataPool::default(), &HashMap::new());
+            let proven = crate::ir_passes::prove_integer_slots(&function, &mut DataPool::default(), &HashMap::default());
             assert_eq!(proven.slots.contains(&LocalSlotId::from_raw(1)), accepted, "{op:?} with {php:?}");
         }
     }

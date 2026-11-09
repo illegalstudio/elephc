@@ -10,7 +10,7 @@
 //! - Attribute groups are skipped with token-balanced brackets.
 //! - Property declarators also get their declaration's block because their spans start at `$`.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::lexer::{tokenize, tokenize_with_mode, SpannedToken, Token};
 use crate::source::SourceMode;
@@ -20,7 +20,7 @@ use super::{parse_block, DocBlock};
 /// Collects annotated declaration positions, including property declarator positions.
 pub(super) fn collect(source: &str) -> HashMap<(u32, u32), DocBlock> {
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
-    let mut blocks = HashMap::new();
+    let mut blocks = HashMap::default();
     let Ok(tokens) = tokenize(source).or_else(|_| tokenize_with_mode(source, SourceMode::Lfc)) else {
         return blocks;
     };

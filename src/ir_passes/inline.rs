@@ -62,7 +62,7 @@
 //!   neutralized and parked in an unreachable block to keep value-def records
 //!   consistent. IR stays validator-clean (the driver re-validates in debug).
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{
     collect_dispatch_groups, BasicBlock, BlockId, CoreBuiltinOp, DataId, DataPool, Effects, Function,
@@ -252,7 +252,7 @@ fn callee_is_inline_safe(callee: &Function, receiver: bool) -> bool {
             return false;
         }
     }
-    let scoped_temps = if receiver { temporaries::scoped_temps(callee) } else { HashSet::new() };
+    let scoped_temps = if receiver { temporaries::scoped_temps(callee) } else { HashSet::default() };
     if !temporaries::owner_scopes_are_balanced(callee) { return false; }
     let receiver_slot = receiver.then(|| LocalSlotId::from_raw(0));
     for local in &callee.locals {
@@ -421,7 +421,7 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>, receiver: 
 /// `direct_return_local_slot` so the inliner can identify slots the callee epilogue
 /// would have excluded from cleanup (their ownership is moved into the return value).
 fn trace_returned_slot(callee: &Function, value: ValueId) -> Option<LocalSlotId> {
-    let mut visited = HashSet::new();
+    let mut visited = HashSet::default();
     trace_returned_slot_inner(callee, value, &mut visited)
 }
 
@@ -482,7 +482,7 @@ fn direct_return_cleanup_is_inline_safe(callee: &Function) -> bool {
 /// transferred to the caller via the continuation parameter), matching the callee
 /// epilogue's directly-returned-slot exclusion.
 fn callee_directly_returned_slots(callee: &Function) -> HashSet<LocalSlotId> {
-    let mut slots = HashSet::new();
+    let mut slots = HashSet::default();
     for block in &callee.blocks {
         if let Some(Terminator::Return { value: Some(value) }) = &block.terminator {
             if let Some(slot) = trace_returned_slot(callee, *value) {
@@ -678,7 +678,7 @@ fn site_is_inlinable(callee: &Function, has_result: bool, result_ownership: Owne
 /// target, so it is skipped; the first function carrying a name wins, as in codegen's direct-call
 /// resolution (`Module::function_or_closure_by_key`).
 fn build_name_to_index(module: &Module) -> HashMap<String, usize> {
-    let mut m = HashMap::new();
+    let mut m = HashMap::default();
     for (i, f) in module.functions.iter().enumerate() {
         if f.flags.is_main {
             continue;
@@ -854,10 +854,10 @@ fn transplant_callee_body(
     callee: &Function,
     method: bool,
 ) -> (HashMap<BlockId, BlockId>, HashMap<ValueId, ValueId>, HashMap<InstId, InstId>, HashMap<LocalSlotId, LocalSlotId>, BlockId) {
-    let mut block_map: HashMap<BlockId, BlockId> = HashMap::new();
-    let mut value_map: HashMap<ValueId, ValueId> = HashMap::new();
-    let mut inst_map: HashMap<InstId, InstId> = HashMap::new();
-    let mut local_map: HashMap<LocalSlotId, LocalSlotId> = HashMap::new();
+    let mut block_map: HashMap<BlockId, BlockId> = HashMap::default();
+    let mut value_map: HashMap<ValueId, ValueId> = HashMap::default();
+    let mut inst_map: HashMap<InstId, InstId> = HashMap::default();
+    let mut local_map: HashMap<LocalSlotId, LocalSlotId> = HashMap::default();
 
     // Parameter slots and directly-returned slots are excluded from the callee's normal
     // epilogue cleanup (borrowed argument / ownership moved into the return value). The
@@ -1224,7 +1224,7 @@ fn apply_inline_at_site(
 
     // Rewrite uses of the original call result to the cont param (if any).
     if let (Some(cr), Some(cp)) = (orig_result_vid, cont_result_param) {
-        let mut m = HashMap::new();
+        let mut m = HashMap::default();
         m.insert(cr, cp);
         crate::ir_passes::rewrite::replace_all_uses(host, &m);
     }
@@ -1562,7 +1562,7 @@ fn callee_has_by_value_container_param(callee: &Function) -> bool {
 mod tests {
     use super::remap_immediate_local;
     use crate::ir::{Immediate, IterStartMetadata, LocalSlotId};
-    use std::collections::HashMap;
+    use crate::fast_hash::FastMap as HashMap;
 
     /// Transplanting a callee remaps the optional IterStart owner onto the host slot.
     #[test]
@@ -1573,7 +1573,7 @@ mod tests {
             Some(LocalSlotId::from_raw(3)),
             None,
         ));
-        let mut local_map = HashMap::new();
+        let mut local_map = HashMap::default();
         local_map.insert(LocalSlotId::from_raw(3), LocalSlotId::from_raw(11));
         remap_immediate_local(&mut immediate, &local_map);
         assert_eq!(
@@ -1596,7 +1596,7 @@ mod tests {
             None,
             Some(LocalSlotId::from_raw(5)),
         ));
-        let mut local_map = HashMap::new();
+        let mut local_map = HashMap::default();
         local_map.insert(LocalSlotId::from_raw(5), LocalSlotId::from_raw(21));
         remap_immediate_local(&mut immediate, &local_map);
         assert_eq!(
@@ -1619,7 +1619,7 @@ mod tests {
             Some(LocalSlotId::from_raw(3)),
             Some(LocalSlotId::from_raw(5)),
         ));
-        let mut local_map = HashMap::new();
+        let mut local_map = HashMap::default();
         local_map.insert(LocalSlotId::from_raw(3), LocalSlotId::from_raw(11));
         local_map.insert(LocalSlotId::from_raw(5), LocalSlotId::from_raw(21));
         remap_immediate_local(&mut immediate, &local_map);
@@ -1643,7 +1643,7 @@ mod tests {
             Some(LocalSlotId::from_raw(3)),
             Some(LocalSlotId::from_raw(5)),
         ));
-        let mut local_map = HashMap::new();
+        let mut local_map = HashMap::default();
         local_map.insert(LocalSlotId::from_raw(5), LocalSlotId::from_raw(21));
         remap_immediate_local(&mut immediate, &local_map);
         assert_eq!(
@@ -1666,7 +1666,7 @@ mod tests {
             None,
             None,
         ));
-        let mut local_map = HashMap::new();
+        let mut local_map = HashMap::default();
         local_map.insert(LocalSlotId::from_raw(0), LocalSlotId::from_raw(4));
         remap_immediate_local(&mut immediate, &local_map);
         assert_eq!(

@@ -9,7 +9,7 @@
 //! - The runtime seeds `php_user_filter::$params` before calling `onCreate()`,
 //!   and object GC owns the boxed Mixed value after it is stored in the slot.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};

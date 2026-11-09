@@ -27,7 +27,7 @@
 //! - The receiver null check the real call performs is reproduced at the splice by the caller
 //!   (`super::apply_inline_at_site`); this module only reports when it can be skipped.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{
     Function, Immediate, Instruction, IrHeapKind, IrType, LocalSlotId, Module, Op, ValueDef,
@@ -57,12 +57,12 @@ impl MethodTargets {
     pub(super) fn new(module: &Module) -> Self {
         let mut table = MethodTargets {
             bodies: Vec::new(),
-            targets: HashMap::new(),
+            targets: HashMap::default(),
         };
         if module.calls_php_backtrace() {
             return table;
         }
-        let mut body_by_implementation: HashMap<(String, String), usize> = HashMap::new();
+        let mut body_by_implementation: HashMap<(String, String), usize> = HashMap::default();
         for (index, function) in module.class_methods.iter().enumerate() {
             if !body_is_candidate(module, function) {
                 continue;
@@ -75,7 +75,7 @@ impl MethodTargets {
         if body_by_implementation.is_empty() {
             return table;
         }
-        let mut snapshot_of_body: HashMap<usize, usize> = HashMap::new();
+        let mut snapshot_of_body: HashMap<usize, usize> = HashMap::default();
         for (class_name, class_info) in &module.class_infos {
             if class_info.is_internal
                 || module.interface_infos.contains_key(class_name)

@@ -125,7 +125,7 @@ fn fixture(target: Target) -> String {
     if target.platform == Platform::Linux { emitter.raw(".section .note.GNU-stack,\"\",@progbits"); }
     crate::codegen_support::visibility::append_hidden_directives(
         &emitter.output(),
-        &std::collections::HashSet::new(),
+        &crate::fast_hash::FastSet::default(),
         target.platform,
     )
 }

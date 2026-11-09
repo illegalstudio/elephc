@@ -19,7 +19,7 @@ pub(crate) fn function_shares(display: &[(Vec<(String, Kind)>, u64)]) -> (BTreeM
     let mut grand = 0u64;
     for (stack, weight) in display {
         grand += weight;
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         for (name, kind) in stack {
             if !matches!(kind, Kind::Php | Kind::PhpInlined) {
                 continue;
@@ -66,7 +66,7 @@ pub(crate) fn baseline_shares(path: &str) -> Result<(BTreeMap<String, f64>, u64)
     for (stack, weight) in samples.iter().zip(weights) {
         let weight = weight.as_u64().unwrap_or(0);
         grand += weight;
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         for index in stack.as_array().into_iter().flatten() {
             let Some(name) = index.as_u64().and_then(|i| names.get(i as usize)) else {
                 continue;
@@ -294,7 +294,7 @@ pub(crate) fn resolve_lines(
 ) -> HashMap<u64, u32> {
     let dsym = binary.with_extension("dSYM");
     if !dsym.exists() || addresses.is_empty() {
-        return HashMap::new();
+        return HashMap::default();
     }
     let mut command = process::Command::new("/usr/bin/atos");
     command
@@ -306,10 +306,10 @@ pub(crate) fn resolve_lines(
         command.arg(format!("{address:#x}"));
     }
     let Ok(output) = command.output() else {
-        return HashMap::new();
+        return HashMap::default();
     };
     let text = String::from_utf8_lossy(&output.stdout);
-    let mut lines = HashMap::new();
+    let mut lines = HashMap::default();
     for (address, resolved) in addresses.iter().zip(text.lines()) {
         // Shape: `main (in bench) (bench.php:33)`; helpers have no line suffix.
         if let Some((_, tail)) = resolved.rsplit_once(':') {
@@ -406,7 +406,7 @@ pub(crate) fn table_stats(display: &[(Vec<(String, Kind)>, u64)]) -> TableStats 
             .filter(|(_, kind)| matches!(kind, Kind::Php | Kind::PhpInlined))
             .map(|(name, _)| name)
             .collect();
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         for frame in &php_frames {
             if seen.insert(*frame) {
                 *stats.totals.entry((*frame).clone()).or_default() += weight;

@@ -22,7 +22,7 @@
 
 mod bodies;
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 
 use crate::names::Name;
 use crate::parser::ast::{

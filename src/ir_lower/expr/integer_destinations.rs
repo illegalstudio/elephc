@@ -40,7 +40,7 @@ fn checked_integer_tree(ctx: &LoweringContext<'_, '_>, root: ValueId) -> bool {
         return false;
     }
     let mut pending = vec![root];
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some(value) = pending.pop() {
         if !seen.insert(value) { continue; }
         if ctx.builder.value_type(value) == IrType::I64

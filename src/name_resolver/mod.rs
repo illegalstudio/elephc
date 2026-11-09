@@ -18,7 +18,7 @@ mod declarations;
 mod statements;
 mod symbols;
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name, NameKind};

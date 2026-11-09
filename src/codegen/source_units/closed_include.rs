@@ -65,8 +65,8 @@ const RECORD: usize = 32;
 /// `interface_exists()` false after a successful autoload.
 pub(super) fn declaration_activation_cells(
     module: &Module,
-) -> std::collections::HashMap<std::path::PathBuf, Vec<String>> {
-    let mut cells: std::collections::HashMap<std::path::PathBuf, Vec<String>> = Default::default();
+) -> crate::fast_hash::FastMap<std::path::PathBuf, Vec<String>> {
+    let mut cells: crate::fast_hash::FastMap<std::path::PathBuf, Vec<String>> = Default::default();
     for (path, cell) in super::bridge::preincluded_interface_activation_cells(module) {
         cells.entry(path).or_default().push(cell);
     }
@@ -197,12 +197,12 @@ pub(super) fn emit_closed_include(module: &Module, emitter: &mut Emitter, data: 
 /// same filesystem assumption the canonical table makes; the lexical normalization is just the
 /// cheap filter that avoids a filesystem call per literal.
 fn spelled_aliases(literals: &[String], includes: &[crate::ir::ClosedInclude]) -> Vec<(usize, String)> {
-    let by_path: std::collections::HashMap<&std::path::Path, usize> = includes
+    let by_path: crate::fast_hash::FastMap<&std::path::Path, usize> = includes
         .iter()
         .enumerate()
         .map(|(index, include)| (include.canonical_path.as_path(), index))
         .collect();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::fast_hash::FastSet::default();
     let mut aliases = Vec::new();
     for literal in literals {
         if !literal.starts_with('/') || !(literal.contains("/../") || literal.contains("/./") || literal.contains("//")) {

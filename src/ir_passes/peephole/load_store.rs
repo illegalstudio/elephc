@@ -24,7 +24,7 @@
 //!   local and avoids extending scalar live ranges across calls or runtime
 //!   helpers while backend call-clobber handling remains conservative.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Op, Ownership, ValueId};
 
@@ -37,7 +37,7 @@ pub(super) fn collect(function: &Function, rewrites: &mut Rewrites) {
     for block in &function.blocks {
         // The value currently resident in each tracked scalar slot, reset per
         // block (no cross-block value flow is assumed here).
-        let mut resident: HashMap<LocalSlotId, ValueId> = HashMap::new();
+        let mut resident: HashMap<LocalSlotId, ValueId> = HashMap::default();
         for &inst_id in &block.instructions {
             let Some(inst) = function.instruction(inst_id) else {
                 continue;
@@ -96,7 +96,7 @@ pub(super) fn collect(function: &Function, rewrites: &mut Rewrites) {
 /// op that is not a pure by-value consumer (a call may pass it by reference), or
 /// when it is named by a ref-cell promote/alias/release or invoker-ref op.
 fn escaping_slots(function: &Function) -> HashSet<LocalSlotId> {
-    let mut escaping = HashSet::new();
+    let mut escaping = HashSet::default();
     for inst in &function.instructions {
         if matches!(
             inst.op,
