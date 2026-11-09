@@ -273,6 +273,28 @@ relative-to = "target"
 path = "debug/libelephc_magician_curl.a"
 relative-to = "target"
 
+# The Intl `badargs` fixture enumerates every extension function through
+# `get_extension_funcs("intl")`; the literal-foreach unroller lowers the whole 187-function
+# surface into one program. It passed at ~150s on a loaded Linux shard and crossed the
+# 180s budget in a later run, so reserve the all-targets budget for it.
+[[profile.default.overrides]]
+filter = 'test(=codegen::intl_php_src::cases::test_php_src_intl_badargs)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::intl_php_src::cases::test_php_src_intl_badargs)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+# This unit test lowers and eval-checks a computed-property update for every supported
+# target; it measured 52s locally and crossed the 180s guard twice on loaded shards.
+[[profile.default.overrides]]
+filter = 'test(=ir_lower::tests::computed_property_update_owners::computed_property_update_storage_on_every_target)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(=ir_lower::tests::computed_property_update_owners::computed_property_update_storage_on_every_target)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
 # Native fingerprints include the worker environment. Preserve the verified source
 # as well as built outputs so a relocated shard can materialize its exact key offline.
 [[profile.ci.archive.include]]

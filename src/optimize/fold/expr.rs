@@ -789,33 +789,55 @@ fn fold_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
     }
 }
 
-/// Returns whether `html_entity_decode()`'s flags operand selects the default quote policy.
+
+/// Resolves the common `ENT_*` flag combinations to their integer mask.
 ///
-/// The literal spellings are `ENT_QUOTES` (3) and its combination with `ENT_SUBSTITUTE`
-/// (11); a constant reference still names `ENT_QUOTES` before constant folding runs.
-fn flags_select_default_quote_policy(flags: &Expr) -> bool {
-    // The checker runs before folding, so resolve the common `ENT_*` combinations here too.
-    // Only the default quote policy (3 or 11) is implemented by the runtime decoder.
-    fn value(expr: &Expr) -> Option<i64> {
-        match &expr.kind {
-            ExprKind::IntLiteral(flags) => Some(*flags),
-            ExprKind::ConstRef(name) => match name.as_str().trim_start_matches('\\') {
-                "ENT_QUOTES" => Some(3),
-                "ENT_SUBSTITUTE" => Some(8),
-                "ENT_HTML401" => Some(0),
-                "ENT_NOQUOTES" => Some(0),
-                "ENT_COMPAT" => Some(2),
-                _ => None,
-            },
-            ExprKind::BinaryOp {
-                left,
-                op: BinOp::BitOr,
-                right,
-            } => Some(value(left)? | value(right)?),
+/// A constant reference still names its flag before constant folding runs; resolving the
+/// supported names here lets the numeric-reference fold reason about quote policies.
+fn html_entity_flag_value(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(flags) => Some(*flags),
+        ExprKind::ConstRef(name) => match name.as_str().trim_start_matches('\\') {
+            "ENT_QUOTES" => Some(3),
+            "ENT_SUBSTITUTE" => Some(8),
+            "ENT_HTML401" => Some(0),
+            "ENT_NOQUOTES" => Some(0),
+            "ENT_COMPAT" => Some(2),
             _ => None,
-        }
+        },
+        ExprKind::BinaryOp {
+            left,
+            op: BinOp::BitOr,
+            right,
+        } => Some(html_entity_flag_value(left)? | html_entity_flag_value(right)?),
+        _ => None,
     }
-    matches!(value(flags), Some(3 | 11))
+}
+
+/// Which numeric quote references `html_entity_decode()` may decode at compile time.
+#[derive(Clone, Copy)]
+enum HtmlQuotePolicy {
+    /// `ENT_QUOTES` (3) or the default combination (11): decode both quotes.
+    All,
+    /// `ENT_COMPAT` (2): decode double quotes only.
+    DoubleOnly,
+    /// `ENT_NOQUOTES` (0): decode neither quote.
+    None,
+}
+
+/// Resolves the quote policy of a literal `html_entity_decode()` call.
+///
+/// The returned policy only authorizes folding when every numeric reference in the input is
+/// allowed by it; a quote reference outside the policy makes the fold return `None` and the
+/// checker refuses the unsupported flag value.
+fn html_quote_policy(flags: Option<&Expr>) -> Option<HtmlQuotePolicy> {
+    let Some(flags) = flags else { return Some(HtmlQuotePolicy::All); };
+    match html_entity_flag_value(flags)? {
+        3 | 11 => Some(HtmlQuotePolicy::All),
+        2 => Some(HtmlQuotePolicy::DoubleOnly),
+        0 => Some(HtmlQuotePolicy::None),
+        _ => None,
+    }
 }
 
 /// Decodes a literal `html_entity_decode()` argument that contains only numeric references.
@@ -827,15 +849,7 @@ fn fold_numeric_html_entities(args: &[Expr]) -> Option<String> {
     let ExprKind::StringLiteral(input) = &args.first()?.kind else {
         return None;
     };
-    if let Some(flags) = args.get(1) {
-        // Only the quote policies the runtime actually implements may fold. ENT_NOQUOTES
-        // (0) and ENT_COMPAT (2) must reach the checker's explicit refusal instead of being
-        // folded with the default policy. `ENT_QUOTES` is still a constant reference at this
-        // point and names the same policy as the literal 3.
-        if !flags_select_default_quote_policy(flags) {
-            return None;
-        }
-    }
+    let quote_policy = html_quote_policy(args.get(1))?;
     if let Some(encoding) = args.get(2) {
         let ExprKind::StringLiteral(encoding) = &encoding.kind else {
             return None;
@@ -878,6 +892,12 @@ fn fold_numeric_html_entities(args: &[Expr]) -> Option<String> {
         }
         if value == 0 || value > 0x10FFFF || (0xD800..=0xDFFF).contains(&value) {
             return None;
+        }
+        match quote_policy {
+            HtmlQuotePolicy::All => {}
+            HtmlQuotePolicy::DoubleOnly if value == 0x27 => return None,
+            HtmlQuotePolicy::None if value == 0x27 || value == 0x22 => return None,
+            _ => {}
         }
         output.push(char::from_u32(value)?);
         decoded_any = true;

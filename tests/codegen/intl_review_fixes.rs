@@ -152,11 +152,12 @@ var_dump(html_entity_decode("&quot;x&quot;", ENT_QUOTES));
 var_dump(html_entity_decode("&lt;a&gt;&amp;", ENT_QUOTES, "UTF-8"));
 var_dump(html_entity_decode("&#65;&#x42;", ENT_QUOTES));
 var_dump(html_entity_decode("&#67;", ENT_QUOTES | ENT_SUBSTITUTE));
+var_dump(bin2hex(html_entity_decode("&#x200D;", ENT_NOQUOTES, "UTF-8")));
 "#,
     );
     assert_eq!(
         out,
-        "string(3) \"\"x\"\"\nstring(3) \"\"x\"\"\nstring(4) \"<a>&\"\nstring(2) \"AB\"\nstring(1) \"C\"\n"
+        "string(3) \"\"x\"\"\nstring(3) \"\"x\"\"\nstring(4) \"<a>&\"\nstring(2) \"AB\"\nstring(1) \"C\"\nstring(6) \"e2808d\"\n"
     );
 }
 
