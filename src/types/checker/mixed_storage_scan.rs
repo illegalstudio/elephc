@@ -263,6 +263,11 @@ impl Checker {
             let Some((existing, site)) = rejection else {
                 continue;
             };
+            // A conditional null/typed join is a normal nullable value, not a strict-mode
+            // type error; box it silently instead of advising `--strict-locals` about a
+            // rejection that mode does not make yet.
+            let null_conditional =
+                matches!(existing, PhpType::Void) != matches!(site.ty, PhpType::Void);
             marks.push((
                 site.span,
                 name.clone(),
@@ -271,7 +276,7 @@ impl Checker {
                      mixed storage (compile with --strict-locals to make this an error)",
                     name, existing, site.ty
                 ),
-                warns,
+                warns && !null_conditional,
             ));
         }
         // `sort_by` rather than `sort_by_key`: a key closure would have to CLONE the name to own
@@ -478,6 +483,16 @@ impl Checker {
                 binding = Some((site.ty.clone(), site.depth));
                 continue;
             };
+            // A conditional null/typed assignment does not retype the binding the way a
+            // straight-line one does: the other arm keeps the pre-branch value, so the join
+            // is nullable (`null|string`), not the non-null side. Box the slot instead of
+            // letting `Void` absorb the typed side, which would type the merge as `null` and
+            // lower its load as a constant null.
+            if site.depth > binding_depth
+                && (matches!(existing, PhpType::Void) != matches!(site.ty, PhpType::Void))
+            {
+                return Some((existing, site));
+            }
             if let Some(merged) = self.merged_assignment_type(&existing, &site.ty) {
                 binding = Some((merged, binding_depth));
                 continue;
