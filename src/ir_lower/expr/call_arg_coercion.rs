@@ -745,15 +745,20 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     {
         return unbox_iterable_param_storage(ctx, value, Some(arg.span));
     }
+    let simple_xml_object = match &source_ty {
+        PhpType::Object(class_name) => crate::ir_lower::expr::class_extends_class(
+            ctx,
+            class_name.trim_start_matches('\\'),
+            "SimpleXMLElement",
+        ),
+        _ => false,
+    };
     if param_ty == PhpType::Str
-        && matches!(
-            source_ty,
-            PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
-        )
+        && (matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) || simple_xml_object)
     {
-        // Objects reach a string parameter through PHP's `__toString` conversion; the
-        // checker already accepts the call and the EIR cast owns the dispatch (and the
-        // catchable failure for an object without `__toString`).
+        // The native SimpleXML views reach a string parameter through their prelude
+        // `__toString`; userland Stringable objects stay on the backend's explicit
+        // refusal path, which the inet/explode diagnostics assert.
         return coerce_to_string(ctx, value, arg);
     }
     if bindable {
