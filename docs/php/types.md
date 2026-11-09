@@ -327,7 +327,7 @@ function zone(DateTimeZone|string $tz): DateTimeZone {
 }
 ```
 
-A single guarded `if` without `else` joins the branch's exit with the guard's complement, so `if (!$now instanceof DateTimeImmutable) { $now = new DateTimeImmutable(); }` leaves `$now` a `DateTimeImmutable`. By-reference parameters, reference-aliased or by-reference-captured locals, globals and statics keep their declared union, because code outside the function's flow may write them.
+A single guarded `if` without `else` joins the branch's exit with the guard's complement, so `if (!$now instanceof DateTimeImmutable) { $now = new DateTimeImmutable(); }` leaves `$now` a `DateTimeImmutable`. The branch may store through a nested `if`/`elseif`/`else`: when every arm that falls through stores a `string`, `if ($message === null) { if ($path === null) { $message = '…'; } else { $message = sprintf('…', $path); } }` leaves `$message` a `string`. A chain without a final `else`, or an arm that skips the store, keeps the wider type. By-reference parameters, reference-aliased or by-reference-captured locals, globals and statics keep their declared union, because code outside the function's flow may write them. Passing the variable to a by-reference parameter also ends the narrowing.
 
 Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
 

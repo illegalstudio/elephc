@@ -373,3 +373,35 @@ fn test_union_store_narrowing_keeps_storage_and_reference_contracts() {
         "return type expects DateTimeZone, got DateTimeZone|string",
     );
 }
+
+/// A nested chain narrows the outer join only when every arm that falls through stores a string.
+#[test]
+fn test_nested_store_narrowing_rejects_a_path_that_keeps_null() {
+    for body in [
+        "if (null === $path) { $m = 'x'; } else { }",
+        "if (null === $path) { $m = 'x'; }",
+        "if (null === $path) { $m = 'x'; } elseif ($path === '') { $m = 'y'; }",
+        "if (null === $path) { $m = 'x'; } else { $m = null; }",
+    ] {
+        let source = format!("<?php function takes(string $m): string {{ return $m; }}
+function f(?string $m, ?string $path): string {{ if (null === $m) {{ {body} }} return takes($m); }}");
+        let error = check_source(&source).expect_err(body);
+        assert!(error.contains("parameter $m expects string, got string|null"), "{body}: {error}");
+    }
+}
+
+/// The last arm's narrowed store must not stand for the whole `if`/`else` join.
+#[test]
+fn test_if_else_join_does_not_keep_the_last_arm_store() {
+    for (body, returns) in [
+        ("if ($flag) { $tz = new \\DateTimeZone('UTC'); } else { $tz = 'x'; } return $tz;", "string"),
+        ("if ($flag) { $tz = 'x'; } else { $tz = new \\DateTimeZone('UTC'); } return $tz;", "\\DateTimeZone"),
+        ("if ($flag) { $tz = 'x'; } elseif ($tz === 'y') { $tz = 'z'; } else { $tz = new \\DateTimeZone('UTC'); } return $tz;",
+            "\\DateTimeZone"),
+    ] {
+        let source = format!("<?php function z(\\DateTimeZone|string $tz, bool $flag): {returns} {{ {body} }}");
+        let error = check_source(&source).expect_err(body);
+        assert!(error.contains("return type expects") && error.contains("DateTimeZone")
+            && error.contains("got ") && error.contains('|'), "{body}: {error}");
+    }
+}
