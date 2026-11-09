@@ -351,12 +351,19 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // The entry program (with what it includes statically) evaluates a computed string or includes
     // a computed path: it needs the interpreter, decided before anything is compiled for a
     // closed world.
-    if closed_world_mode == crate::closed_world::Mode::Auto
-        && (crate::closed_world::project_computed_eval(&ast).is_some()
-            || crate::closed_world::project_computed_include(&ast).is_some())
-    {
-        closed_world = false;
-        crate::closed_world::set_enabled(false);
+    if closed_world_mode == crate::closed_world::Mode::Auto {
+        let early = crate::closed_world::project_computed_eval(&ast)
+            .map(|site| format!("eval() of a computed string at {site}"))
+            .or_else(|| {
+                crate::closed_world::project_computed_include(&ast)
+                    .map(|site| format!("include of a computed path at {site}"))
+            });
+        if let Some(reason) = early {
+            crate::progress::clear();
+            eprintln!("note: the interpreter is linked for the project's {reason}");
+            closed_world = false;
+            crate::closed_world::set_enabled(false);
+        }
     }
 
 

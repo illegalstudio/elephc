@@ -265,6 +265,22 @@ fn default_build_links_the_interpreter_for_the_projects_computed_include_only() 
     compile_ok(&dir, &[]);
     assert_eq!(text(&run(&dir).stdout), "42\n");
     assert!(!links_interpreter(&dir), "a dependency's computed include keeps the build closed");
+
+    // A path the compiler folds is no computed one, `dirname()` included: Symfony's
+    // `config/preload.php` requires `dirname(__DIR__).'/var/cache/prod/…preload.php'` under an
+    // `if`, and reading that call as computed linked the interpreter into every Symfony build.
+    fs::create_dir_all(dir.join("conf")).unwrap();
+    fs::write(dir.join("conf/data.php"), "<?php\nreturn 7;\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nfunction load() { return require dirname(__DIR__ . '/sub') . '/conf/data.php'; }\nif ($argc > 0) { echo load(), \"\\n\"; }\n",
+    )
+    .unwrap();
+    let output = compile(&dir, &[]);
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    assert!(!text(&output.stderr).contains("note: the interpreter"), "{}", text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+    assert!(!links_interpreter(&dir), "a folded dirname() path keeps the build closed");
 }
 
 const PRELOAD: &str = r#"<?php

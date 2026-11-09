@@ -58,6 +58,12 @@ impl Drop for SkipUnparseableIncludesGuard {
     }
 }
 
+/// Whether the compiler knows an include path without running the program: literals, magic
+/// constants, `.` and `dirname()` over those (`dirname(__DIR__).'/vendor/autoload_runtime.php'`).
+pub(crate) fn include_path_is_static(path: &crate::parser::ast::Expr) -> bool {
+    !include_path::is_runtime_dynamic_include_path(path)
+}
+
 /// Makes an included file the compiler cannot parse a warning instead of a build failure, for as
 /// long as the returned guard lives.
 ///

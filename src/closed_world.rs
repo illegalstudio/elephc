@@ -114,7 +114,7 @@ pub fn project_computed_include(program: &[crate::parser::ast::Stmt]) -> Option<
     use crate::parser::ast::{ExprKind, StmtKind};
     let mut found = None;
     let mut consider = |path: &crate::parser::ast::Expr, span: crate::span::Span| {
-        if found.is_some() || literal_path(path) {
+        if found.is_some() || crate::resolver::include_path_is_static(path) {
             return;
         }
         let source = span.source_path();
@@ -142,16 +142,6 @@ pub fn project_computed_include(program: &[crate::parser::ast::Stmt]) -> Option<
         }
     });
     found
-}
-
-/// Whether an include path is built only from string literals and `.`, so the compiler knew it.
-fn literal_path(expr: &crate::parser::ast::Expr) -> bool {
-    use crate::parser::ast::{BinOp, ExprKind};
-    match &expr.kind {
-        ExprKind::StringLiteral(_) => true,
-        ExprKind::BinaryOp { left, op: BinOp::Concat, right } => literal_path(left) && literal_path(right),
-        _ => false,
-    }
 }
 
 /// Re-runs this compiler with the interpreter linked, after saying why; returns only when the
