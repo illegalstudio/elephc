@@ -193,6 +193,38 @@ pub(crate) fn load_file(handle: i64, filename: &[u8], options: i64) -> bool {
     adopt_loaded(handle, raw)
 }
 
+/// Parses HTML bytes (`filename` `None`) or an HTML file into the document behind `handle`
+/// with libxml2's HTML parser, as `loadHTML()` / `loadHTMLFile()` do.
+pub(crate) fn load_html(handle: i64, data: &[u8], filename: Option<&[u8]>, options: i64) -> bool {
+    let Ok(length) = i32::try_from(data.len()) else { return false };
+    let Ok(options) = i32::try_from(options) else { return false };
+    crate::simplexml::diagnostics_reset();
+    crate::ffi::init_library();
+    let filename = filename.map(cstring);
+    let mut messages = std::ptr::null_mut();
+    let raw = unsafe {
+        ffi::parse_html(data.as_ptr().cast(), length,
+            filename.as_ref().map_or(std::ptr::null(), |name| name.as_ptr()), options, &mut messages)
+    };
+    unsafe { crate::simplexml::diagnostics_capture(messages) };
+    adopt_loaded(handle, raw)
+}
+
+/// Serializes the document (`node` `None`) or one node as HTML, as `saveHTML()` does.
+pub(crate) fn save_html(document: &Entry, node: Option<&Entry>, format: bool) -> Option<Vec<u8>> {
+    let mut length = 0;
+    let raw = unsafe {
+        ffi::save_html(document.doc.raw, node.map_or(std::ptr::null_mut(), |node| node.node),
+            i32::from(format), &mut length)
+    };
+    if raw.is_null() {
+        return None;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(raw.cast::<u8>(), length.max(0) as usize).to_vec() };
+    unsafe { ffi::string_free(raw.cast()) };
+    Some(bytes)
+}
+
 /// Swaps a parsed document behind the `DOMDocument` handle; the old one lives on through
 /// any node handle that still points into it.
 fn adopt_loaded(handle: i64, raw: Node) -> bool {

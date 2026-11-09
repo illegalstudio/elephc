@@ -69,6 +69,23 @@ fn insertion_errors_follow_php() {
     assert_eq!(insert(&root, &foreign, None), Err(error::WRONG_DOCUMENT));
 }
 
+/// HTML loads through libxml2's HTML parser with php's context options, and both
+/// serializers reproduce php's output (implied html/body, DOCTYPE, XML form with standalone).
+#[test]
+fn html_loads_and_saves_like_php() {
+    let document = new_document(b"1.0", b"");
+    assert!(load_html(document, b"<p>Hi<br>there</p>", None, 0));
+    let doc = entry(document).unwrap();
+    let html = String::from_utf8(save_html(&doc, None, false).unwrap()).unwrap();
+    assert_eq!(html, "<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.0 Transitional//EN\" \"http://www.w3.org/TR/REC-html40/loose.dtd\">\n<html><body><p>Hi<br>there</p></body></html>\n");
+    assert_eq!(save(document), "<?xml version=\"1.0\" standalone=\"yes\"?>\n<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.0 Transitional//EN\" \"http://www.w3.org/TR/REC-html40/loose.dtd\">\n<html><body><p>Hi<br/>there</p></body></html>\n");
+    let bare = new_document(b"1.0", b"");
+    // LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD
+    assert!(load_html(bare, b"<div><b>x</b></div>", None, 8192 | 4));
+    let html = String::from_utf8(save_html(&entry(bare).unwrap(), None, false).unwrap()).unwrap();
+    assert_eq!(html, "<div><b>x</b></div>\n");
+}
+
 /// Attributes keep their node when their value changes, and removal detaches them.
 #[test]
 fn attributes_round_trip() {

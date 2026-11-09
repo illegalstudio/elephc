@@ -1,6 +1,7 @@
 /* Legacy DOM support for the elephc_xml bridge: serialization exactly as php-src's default
  * libxml document handlers (ext/libxml/libxml.c) and the struct-field reads the Rust DOM
  * engine needs. Rust calls libxml2's public tree API directly for everything else. */
+#include <libxml/HTMLparser.h>
 #include <libxml/globals.h>
 #include <libxml/xmlsave.h>
 
@@ -75,6 +76,71 @@ const char *elephc_libxml2_v1_dom_doc_string(void *rawdoc, int which) {
 
 /* The document's xmlStandalone flag (1 standalone="yes", 0 "no", -1 absent, -2 implicit). */
 int elephc_libxml2_v1_dom_doc_standalone(void *rawdoc) { return ((xmlDocPtr)rawdoc)->standalone; }
+
+/* DOMDocument::loadHTML() / loadHTMLFile() as php-src's dom_load_html: an HTML parser
+ * context whose fields php_libxml_sanitize_parse_ctxt_options resets, the caller's options
+ * applied only when non-zero, and warnings captured in the DOM loader's diagnostic style.
+ * filename != NULL parses that file, otherwise `len` bytes of `data`. */
+void *elephc_libxml2_v1_dom_parse_html(const char *data, int len, const char *filename, int options,
+        char **diagnostics) {
+    *diagnostics = NULL;
+    htmlParserCtxtPtr context = filename ? htmlCreateFileParserCtxt(filename, NULL)
+        : htmlCreateMemoryParserCtxt(data, len);
+    if (!context) return NULL;
+    struct sx_diagnostics capture = { xmlBufferCreate(), options, 2, context };
+    xmlCtxtSetErrorHandler(context, sx_diagnostic_error, &capture);
+    sx_install_global_recorder();
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    context->loadsubset = 0;
+    context->validate = 0;
+    context->pedantic = 0;
+    context->replaceEntities = 0;
+    context->linenumbers = 0;
+    context->keepBlanks = 1;
+    context->options = 0;
+#pragma GCC diagnostic pop
+    if (options) htmlCtxtUseOptions(context, options);
+    htmlParseDocument(context);
+    xmlDocPtr doc = context->myDoc;
+    sx_diagnostic_finish(&capture, diagnostics);
+    htmlFreeParserCtxt(context);
+    return doc;
+}
+
+/* DOMDocument::saveHTML(): the whole document (node == NULL, htmlDocDumpMemoryFormat) or one
+ * node, a fragment's children one by one (htmlNodeDumpFormatOutput without an encoding).
+ * NULL when nothing was produced, as php returns false then. */
+char *elephc_libxml2_v1_dom_save_html(void *rawdoc, void *rawnode, int format, int *length) {
+    xmlDocPtr doc = rawdoc;
+    *length = 0;
+    if (!rawnode) {
+        xmlChar *memory = NULL;
+        int size = 0;
+        htmlDocDumpMemoryFormat(doc, &memory, &size, format);
+        if (!memory || !size) { if (memory) xmlFree(memory); return NULL; }
+        *length = size;
+        return (char *)memory;
+    }
+    xmlBufferPtr buffer = xmlBufferCreate();
+    if (!buffer) return NULL;
+    xmlOutputBufferPtr output = xmlOutputBufferCreateBuffer(buffer, NULL);
+    if (!output) { xmlBufferFree(buffer); return NULL; }
+    xmlNodePtr node = rawnode;
+    if (node->type == XML_DOCUMENT_FRAG_NODE) {
+        for (node = node->children; node; node = node->next) {
+            htmlNodeDumpFormatOutput(output, doc, node, NULL, format);
+            if (output->error) break;
+        }
+    } else {
+        htmlNodeDumpFormatOutput(output, doc, node, NULL, format);
+    }
+    int failed = output->error;
+    if (!failed) xmlOutputBufferFlush(output);
+    xmlOutputBufferClose(output);
+    if (failed) { xmlBufferFree(buffer); return NULL; }
+    return dom_take_buffer(buffer, length);
+}
 
 /* The node's last child (xmlNode.last). */
 void *elephc_libxml2_v1_dom_last(void *node) { return ((xmlNodePtr)node)->last; }

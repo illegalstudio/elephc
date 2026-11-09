@@ -85,6 +85,31 @@ pub extern "C" fn elephc_xml_dom_save(document: i64, node: i64, format: i64, no_
     })
 }
 
+/// `DOMDocument::loadHTML()` (`filename` NULL) / `loadHTMLFile()`: 1 when the document was
+/// replaced, 0 on failure.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_xml_dom_load_html(handle: i64, data: *const c_char, length: i64,
+        filename: *const c_char, options: i64) -> i64 {
+    guard(|| {
+        if length < 0 || (data.is_null() && filename.is_null()) {
+            return 0;
+        }
+        let bytes = if data.is_null() { &[][..] } else { std::slice::from_raw_parts(data.cast::<u8>(), length as usize) };
+        let filename = if filename.is_null() { None } else { Some(arg(filename)) };
+        i64::from(load_html(handle, bytes, filename.as_deref(), options))
+    })
+}
+
+/// `DOMDocument::saveHTML()`: the document (`node` 0) or one node; NULL when php returns false.
+#[no_mangle]
+pub extern "C" fn elephc_xml_dom_save_html(document: i64, node: i64, format: i64) -> *const c_char {
+    guard(|| {
+        let Some(document) = entry(document) else { return output(None) };
+        let node = if node == 0 { None } else { entry(node) };
+        output(save_html(&document, node.as_ref(), format != 0))
+    })
+}
+
 /// The node's `nodeType`, or 0 for an unknown handle.
 #[no_mangle]
 pub extern "C" fn elephc_xml_dom_type(handle: i64) -> i64 {

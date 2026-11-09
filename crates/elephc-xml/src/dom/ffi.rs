@@ -47,6 +47,11 @@ extern "C" {
     pub(crate) fn node_document(node: Node) -> Node;
     #[link_name = "elephc_libxml2_v1_dom_doc_string"]
     pub(crate) fn doc_string(doc: Node, which: c_int) -> *const c_char;
+    #[link_name = "elephc_libxml2_v1_dom_parse_html"]
+    pub(crate) fn parse_html(data: *const c_char, len: c_int, filename: *const c_char, options: c_int,
+        diagnostics: *mut *mut c_char) -> Node;
+    #[link_name = "elephc_libxml2_v1_dom_save_html"]
+    pub(crate) fn save_html(doc: Node, node: Node, format: c_int, length: *mut c_int) -> *mut c_char;
     #[link_name = "elephc_libxml2_v1_dom_last"]
     pub(crate) fn last(node: Node) -> Node;
     #[link_name = "elephc_libxml2_v1_dom_link_text_last"]
