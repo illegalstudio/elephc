@@ -813,6 +813,7 @@ pub enum RuntimeFnId {
     GetResourceId,
     GetResourceType,
     Gettype,
+    GetDebugType,
     IntvalBase,
     IsCallable,
     IsFinite,
@@ -1346,6 +1347,7 @@ impl RuntimeFnId {
             RuntimeFnId::GetResourceId |
             RuntimeFnId::GetResourceType |
             RuntimeFnId::Gettype |
+            RuntimeFnId::GetDebugType |
             RuntimeFnId::GraphemeStrrev |
             RuntimeFnId::HashAlgos |
             RuntimeFnId::HashEquals |
@@ -2197,6 +2199,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::MemoryGetUsage
                 | RuntimeFnId::MemoryResetPeakUsage
                 | RuntimeFnId::Gettype
+                | RuntimeFnId::GetDebugType
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
         )
@@ -2225,7 +2228,7 @@ impl RuntimeFnId {
                 )
             }),
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
-            | RuntimeFnId::Gettype | RuntimeFnId::InArray
+            | RuntimeFnId::Gettype | RuntimeFnId::GetDebugType | RuntimeFnId::InArray
             | RuntimeFnId::MemoryGetAllocations
             | RuntimeFnId::MemoryGetFrees
             | RuntimeFnId::MemoryGetPeakUsage
@@ -2810,6 +2813,7 @@ impl RuntimeFnId {
                 // Type names live in static data, never in the inspected value. A possible
                 // alias would suppress cleanup of boxed array/property read temporaries.
                 | RuntimeFnId::Gettype
+                | RuntimeFnId::GetDebugType
                 // Class names come from metadata, including Closure and incomplete-class
                 // literals, not the inspected object's storage or its boxed read cell.
                 | RuntimeFnId::GetClass
@@ -3501,6 +3505,7 @@ impl RuntimeFnId {
             RuntimeFnId::GetResourceId => "get_resource_id",
             RuntimeFnId::GetResourceType => "get_resource_type",
             RuntimeFnId::Gettype => "gettype",
+            RuntimeFnId::GetDebugType => "get_debug_type",
             RuntimeFnId::IntvalBase => "intval_base",
             RuntimeFnId::IsCallable => "is_callable",
             RuntimeFnId::IsFinite => "is_finite",

@@ -1010,7 +1010,7 @@ fn emit_no_arg_class_name_lookup(ctx: &mut FunctionContext<'_>, name: &str) {
 }
 
 /// Emits dynamic class-name lookup for an object pointer already loaded in the result register.
-fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+pub(in crate::codegen::lower_inst) fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     let empty_label = ctx.next_label("get_class_empty");
     let done_label = ctx.next_label("get_class_done");
     if ctx.module.required_runtime_features.eval_bridge {

@@ -108,6 +108,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Vsprintf,
     /// Dispatches `gettype(...)`.
     Gettype,
+    /// Dispatches `get_debug_type(...)`.
+    GetDebugType,
     /// Dispatches `intval(...)`.
     Intval,
     /// Dispatches `is_bool(...)`.
@@ -432,6 +434,10 @@ impl EvalValuesHook {
             #[cfg(feature = "curl")]
             Self::Curl => eval_curl_declared_values_result(name, evaluated_args, context, values),
             Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
+            Self::GetDebugType => match evaluated_args {
+                [value] => eval_get_debug_type_result(*value, context, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Hypot => two_args(evaluated_args, values, eval_hypot_result),
             Self::Intval => match evaluated_args {
                 [value] => eval_intval_result(*value, None, values),

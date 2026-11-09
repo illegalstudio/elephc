@@ -104,6 +104,32 @@ echo function_exists("StRlEn") ? "M" : "m";');
     assert_eq!(out, "SCM");
 }
 
+/// Verifies eval `get_debug_type()` matches PHP for scalars, eval classes/enums, closures,
+/// and open/closed resources.
+#[test]
+fn test_eval_get_debug_type_parity() {
+    let out = compile_and_run(
+        r#"<?php
+$code = $argc > 0 ? '
+class EvalDebugParityBag {}
+enum EvalDebugParityKind { case One; }
+$f = fopen("php://temp", "r+");
+echo get_debug_type(1), "|", get_debug_type(1.5), "|", get_debug_type("s"), "|";
+echo get_debug_type(true), "|", get_debug_type(null), "|", get_debug_type([1]), "|";
+echo get_debug_type(new EvalDebugParityBag()), "|", get_debug_type(EvalDebugParityKind::One), "|";
+echo get_debug_type(function () {}), "|", get_debug_type($f), "|";
+fclose($f);
+echo get_debug_type($f), "|", call_user_func("get_debug_type", 42);
+' : '';
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int|float|string|bool|null|array|EvalDebugParityBag|EvalDebugParityKind|Closure|resource (stream)|resource (closed)|int"
+    );
+}
+
 /// Verifies eval `function_exists()` sees every compiler builtin available on the host target.
 #[test]
 fn test_eval_function_exists_covers_static_builtin_catalog() {

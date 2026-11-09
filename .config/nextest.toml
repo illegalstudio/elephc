@@ -39,6 +39,16 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 filter = 'binary(codegen_tests) and test(bcmath) and test(eval)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
+# The eval builtin parity probes compile opaque-eval catalog hosts, including the
+# get_debug_type cross-check; one host measured 97s on a debug macOS machine.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::eval_builtin_parity)'
+slow-timeout = { period = "60s", terminate-after = 4 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::eval_builtin_parity)'
+slow-timeout = { period = "60s", terminate-after = 4 }
+
 # The declared-array-property eval heap probes compile opaque-eval catalog hosts; the keyed
 # write fixture measured 94s on a debug macOS host and 1005s under emulated Linux x86_64.
 # Native CI shards are faster, but the heap-debug catalog compile needs the GMP-eval budget.

@@ -10,6 +10,8 @@
 //!   parameter shapes used by that file.
 //! - The portable backend maps level-triggered readiness onto `stream_select()`; edge
 //!   triggering, hang-up precision, and descriptors above 63 are documented limitations.
+//! - The closed-handle fixture now runs unchanged, including PHP's `get_debug_type()`
+//!   `"resource (closed)"` diagnostic.
 //! - Tests compare stdout only. Warnings and fatal diagnostics are not part of these fixtures.
 
 use elephc::php_version::PhpVersion;
@@ -438,8 +440,7 @@ try { $context->__construct(); } catch (Throwable $e) { echo $e::class, ': ', $e
     );
 }
 
-/// php-src `poll_stream_add_error_duplicate.phpt` and `poll_stream_handle_closed_stream.phpt`
-/// (without the upstream `get_debug_type()` diagnostic).
+/// php-src `poll_stream_add_error_duplicate.phpt` and `poll_stream_handle_closed_stream.phpt`.
 #[test]
 fn test_io_poll_duplicate_and_closed_handle_php86() {
     let out = run86(
@@ -458,6 +459,7 @@ $late = new StreamPollHandle($w);
 fclose($r);
 fclose($w);
 var_dump($handle->isValid());
+var_dump(get_debug_type($handle->getStream()));
 try { $watcher->modifyEvents([Io\Poll\Event::Write]); }
 catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
 try { $context->add($late, [Io\Poll\Event::Read]); }
@@ -469,7 +471,7 @@ var_dump($watcher->isActive());
     );
     assert_eq!(
         out,
-        "Io\\Poll\\HandleAlreadyWatchedException: Handle already added\nbool(false)\nIo\\Poll\\InactiveWatcherException: Cannot modify inactive watcher\nIo\\Poll\\InvalidHandleException: Invalid handle for polling\nEvents count: 0\nbool(false)\n"
+        "Io\\Poll\\HandleAlreadyWatchedException: Handle already added\nbool(false)\nstring(17) \"resource (closed)\"\nIo\\Poll\\InactiveWatcherException: Cannot modify inactive watcher\nIo\\Poll\\InvalidHandleException: Invalid handle for polling\nEvents count: 0\nbool(false)\n"
     );
 }
 

@@ -144,6 +144,12 @@ fn test_error_gettype_wrong_args() {
     expect_error("<?php gettype();", "gettype() takes exactly 1 argument");
 }
 
+/// Tests that `get_debug_type()` with no arguments produces the expected arity error.
+#[test]
+fn test_error_get_debug_type_wrong_args() {
+    expect_error("<?php get_debug_type();", "get_debug_type() takes exactly 1 argument");
+}
+
 /// Tests that `empty()` with no arguments produces the expected arity error.
 #[test]
 fn test_error_empty_wrong_args() {
