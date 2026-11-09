@@ -175,14 +175,30 @@ fn fp(text: &str) -> Option<Fp> {
     (num <= 31).then_some(Fp { num, size })
 }
 
+/// `text.split_once(byte)` for an ASCII `byte`, through `memchr`: `split_once(char)` went through
+/// a `CharSearcher` that compared each candidate with `memcmp`, a top frame of the assembler.
+fn split_at_byte(text: &str, byte: u8) -> Option<(&str, &str)> {
+    debug_assert!(byte.is_ascii());
+    let at = memchr::memchr(byte, text.as_bytes())?;
+    Some((&text[..at], &text[at + 1..]))
+}
+
 /// Parses `#123`, `#-16`, `#0x5b78` (the `#` is optional, as in `cmp x0, 6`).
 fn imm(text: &str) -> Option<i64> {
-    let text = text.strip_prefix('#').unwrap_or(text);
-    let (negative, digits) = match text.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, text),
+    // Prefixes tested as bytes: `strip_prefix` called `memcmp` on every immediate (see `classify`).
+    let text = match text.as_bytes() {
+        [b'#', ..] => &text[1..],
+        _ => text,
     };
-    let value = match digits.strip_prefix("0x") {
+    let (negative, digits) = match text.as_bytes() {
+        [b'-', ..] => (true, &text[1..]),
+        _ => (false, text),
+    };
+    let hex = match digits.as_bytes() {
+        [b'0', b'x', ..] => Some(&digits[2..]),
+        _ => None,
+    };
+    let value = match hex {
         // Parsed unsigned: `#0xffff000000000000` is a valid 64-bit bit pattern.
         Some(hex) if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
             u64::from_str_radix(hex, 16).ok()? as i64
@@ -239,7 +255,7 @@ struct Shift {
 
 /// Parses `lsl #3`, `sxtw #2`, `uxtw`, ...
 fn shift(text: &str) -> Option<Shift> {
-    let (name, rest) = match text.split_once(' ') {
+    let (name, rest) = match split_at_byte(text, b' ') {
         Some((name, rest)) => (name, Some(rest.trim_ascii_start())),
         None => (text, None),
     };
@@ -323,7 +339,7 @@ fn symbol(text: &str) -> Option<Symbol<'_>> {
     if !(first.is_ascii_alphanumeric() || first == b'_' || first == b'.' || first == b'$') {
         return None;
     }
-    let (name, suffix) = match text.split_once('@') {
+    let (name, suffix) = match split_at_byte(text, b'@') {
         Some((name, suffix)) => (name, suffix),
         None => (text, ""),
     };
@@ -369,7 +385,7 @@ fn with_fixup<'a>(word: u32, kind: FixupKind, sym: Symbol<'a>) -> Option<Encoded
 /// handled.
 pub(crate) fn encode_instruction(line: &str) -> Option<Encoded<'_>> {
     let line = line.trim_ascii();
-    let (mnemonic, rest) = match line.split_once(' ') {
+    let (mnemonic, rest) = match split_at_byte(line, b' ') {
         Some((mnemonic, rest)) => (mnemonic, rest),
         None => (line, ""),
     };
@@ -379,12 +395,12 @@ pub(crate) fn encode_instruction(line: &str) -> Option<Encoded<'_>> {
         "b" | "bl" => encode_branch(mnemonic, ops),
         "cbz" | "cbnz" | "tbz" | "tbnz" => encode_compare_branch(mnemonic, ops),
         "adr" | "adrp" => encode_adr(mnemonic, ops),
-        "add" if ops.len() == 3 && ops[2].contains('@') => encode_add_symbol(ops),
+        "add" if ops.len() == 3 && memchr::memchr(b'@', ops[2].as_bytes()).is_some() => encode_add_symbol(ops),
         "ldr" | "str" | "ldrb" | "strb" | "ldrh" | "strh" | "ldrsb" | "ldrsh" | "ldrsw" | "ldur"
         | "stur" | "ldurb" | "sturb" | "ldurh" | "sturh" | "ldursb" | "ldursh" | "ldursw" => {
             encode_load_store(mnemonic, ops)
         }
-        _ if mnemonic.starts_with("b.") => {
+        _ if matches!(mnemonic.as_bytes(), [b'b', b'.', ..]) => {
             let [target] = ops else { return None };
             let condition = cond(&mnemonic[2..])?;
             with_fixup(0x5400_0000 | condition, FixupKind::Branch19, symbol(target)?)
@@ -1227,7 +1243,7 @@ fn address<'a>(tail: &[&'a str]) -> Option<Addr<'a>> {
         [text, post] => (*text, Some(*post)),
         _ => return None,
     };
-    let (inner, after) = text.strip_prefix('[')?.split_once(']')?;
+    let (inner, after) = split_at_byte(text.strip_prefix('[')?, b']')?;
     let mut parts = inner.split(',');
     let base = gp(parts.next()?.trim_ascii())?;
     if !base.wide || base.zr {
@@ -1252,7 +1268,7 @@ fn address<'a>(tail: &[&'a str]) -> Option<Addr<'a>> {
     let Some(second) = second else {
         return (!writeback).then_some(Addr::Offset(base, 0));
     };
-    if second.starts_with('#') {
+    if second.as_bytes().first() == Some(&b'#') {
         if third.is_some() {
             return None;
         }
@@ -1300,10 +1316,12 @@ struct Transfer {
 /// Loads and stores of one register.
 fn encode_load_store<'a>(mnemonic: &str, ops: &[&'a str]) -> Option<Encoded<'a>> {
     let [target, tail @ ..] = ops else { return None };
-    let unscaled = mnemonic.contains("ur");
-    let load = mnemonic.starts_with("ld");
-    let suffix = mnemonic.trim_start_matches("ldur").trim_start_matches("stur");
-    let suffix = suffix.trim_start_matches("ldr").trim_start_matches("str");
+    // Every mnemonic routed here is `ld`/`st`, then `r` or `ur`, then the size suffix: read by
+    // position, as the substring searches this replaces built a searcher per load and store.
+    let bytes = mnemonic.as_bytes();
+    let unscaled = bytes.get(2) == Some(&b'u');
+    let load = bytes.first() == Some(&b'l');
+    let suffix = mnemonic.get(if unscaled { 4 } else { 3 }..)?;
     let signed = suffix.starts_with('s');
     let transfer = if let Some(fp) = fp(target) {
         if !suffix.is_empty() {

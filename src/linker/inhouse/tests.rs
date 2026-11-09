@@ -130,7 +130,8 @@ _table:
     assert_eq!(outputs[0], (Some(0), b"hello\n".to_vec()));
 }
 
-/// Times split + render + in-tree assembly of every slice of a real listing, with the split's
+/// Times split + in-tree assembly of every slice of a real listing, read straight from the
+/// listing or, with `ELEPHC_INHOUSE_BENCH_RENDERED=1`, from rendered slices with the split's
 /// pre-encoding on or off (`ELEPHC_INHOUSE_BENCH_RAW=1`):
 /// `ELEPHC_INHOUSE_BENCH=<file.s> cargo test --release --lib inhouse_bench -- --ignored --nocapture`.
 #[test]
@@ -144,8 +145,19 @@ fn inhouse_bench() {
     let started = std::time::Instant::now();
     let plan = super::super::asm_split::plan_split(&text, 6, "L", encode).expect("a legal cut");
     let (mut render, mut assemble_time, mut bytes) = (0f64, 0f64, 0usize);
+    let direct = std::env::var_os("ELEPHC_INHOUSE_BENCH_RENDERED").is_none();
+    let names = super::Names::promoted(plan.promoted(), plan.local_prefix());
     for part in 0..plan.slices() {
         let mark = std::time::Instant::now();
+        if direct {
+            let (prologue, body, footer) = plan.assembler_parts(part);
+            render += mark.elapsed().as_secs_f64();
+            let mark = std::time::Instant::now();
+            let object = super::assemble_parts(&[prologue.as_str(), body, footer.as_str()], names);
+            bytes += object.map(|object| object.len()).unwrap_or(0);
+            assemble_time += mark.elapsed().as_secs_f64();
+            continue;
+        }
         let mut slice = String::new();
         plan.render_slice(part, &mut |chunk| {
             slice.push_str(chunk);

@@ -60,11 +60,16 @@ enum Line<'a> {
 }
 
 /// Classifies one trimmed, non-empty, non-comment line.
+///
+/// Bytes are tested directly here and in [`lines`]: in a release build without LTO,
+/// `strip_suffix(':')` and `starts_with("//")` each called `memcmp`
+/// through an outlined `starts_with`, and those calls were the top frames of the assembler.
 fn classify(line: &str) -> Line<'_> {
-    if let Some(name) = line.strip_suffix(':') {
-        return Line::Label(name);
+    let bytes = line.as_bytes();
+    if bytes.last() == Some(&b':') {
+        return Line::Label(&line[..line.len() - 1]);
     }
-    if line.starts_with('.') {
+    if bytes.first() == Some(&b'.') {
         let (name, rest) = match line.bytes().position(|byte| byte.is_ascii_whitespace()) {
             Some(at) => (&line[..at], &line[at + 1..]),
             None => (line, ""),
@@ -88,9 +93,7 @@ fn lines(text: &str) -> impl Iterator<Item = &str> {
             line
         })
         .map(str::trim_ascii)
-        .filter(|line| {
-        !line.is_empty() && !line.starts_with("//") && !line.starts_with(';') && !line.starts_with('#')
-    })
+        .filter(|line| !matches!(line.as_bytes(), [] | [b'/', b'/', ..] | [b';' | b'#', ..]))
 }
 
 /// The lines of a listing given as consecutive parts, each ending at a line boundary.
@@ -128,7 +131,11 @@ impl<'a> Names<'a> {
     /// The object's name for the listing's `name`.
     fn get(&self, name: &'a str) -> &'a str {
         match self.promoted {
-            Some(promoted) if name.starts_with(self.local_prefix) => {
+            // The first byte rules most names out without a `memcmp` call.
+            Some(promoted)
+                if name.as_bytes().first() == self.local_prefix.as_bytes().first()
+                    && name.as_bytes().starts_with(self.local_prefix.as_bytes()) =>
+            {
                 promoted.get(name).map_or(name, String::as_str)
             }
             _ => name,
@@ -213,13 +220,13 @@ fn data_operands(rest: &str) -> impl Iterator<Item = &str> {
 
 /// Parses a plain integer operand: decimal or `0x` hexadecimal, optionally negative.
 fn integer(text: &str) -> Option<i64> {
-    let (negative, digits) = match text.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, text),
+    let (negative, digits) = match text.as_bytes() {
+        [b'-', ..] => (true, &text[1..]),
+        _ => (false, text),
     };
-    let value = match digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")) {
-        Some(hex) => u64::from_str_radix(hex, 16).ok()? as i64,
-        None => digits.parse::<u64>().ok()? as i64,
+    let value = match digits.as_bytes() {
+        [b'0', b'x' | b'X', ..] => u64::from_str_radix(&digits[2..], 16).ok()? as i64,
+        _ => digits.parse::<u64>().ok()? as i64,
     };
     Some(if negative { value.wrapping_neg() } else { value })
 }
@@ -385,7 +392,12 @@ fn patch_branch(word: u32, kind: FixupKind, distance: i64) -> Option<u32> {
 
 /// The value of `A - B` for two labels this object defines in one section.
 fn label_difference<'a>(layout: &Layout<'a>, operand: &'a str, names: Names<'a>) -> Option<i64> {
-    let (left, right) = operand.split_once(" - ")?;
+    // The first ` - `, found by its `-` alone: `split_once(" - ")` built a substring searcher for
+    // every `.quad` operand.
+    let bytes = operand.as_bytes();
+    let at = memchr::memchr_iter(b'-', bytes)
+        .find(|&at| at > 0 && bytes[at - 1] == b' ' && bytes.get(at + 1) == Some(&b' '))?;
+    let (left, right) = (&operand[..at - 1], &operand[at + 2..]);
     let (left, right) = (
         layout.labels.get(names.get(left.trim_ascii()))?,
         layout.labels.get(names.get(right.trim_ascii()))?,
@@ -582,7 +594,7 @@ fn write_object(layout: &Layout<'_>, sections: [Vec<u8>; 2], relocs: Vec<Pending
         .labels
         .iter()
         .filter(|(name, _)| {
-            !name.starts_with('L') || layout.exported.contains_key(**name) || referenced.contains(**name)
+            name.as_bytes().first() != Some(&b'L') || layout.exported.contains_key(**name) || referenced.contains(**name)
         })
         .collect();
     defined.sort_by(|(left_name, left), (right_name, right)| {
@@ -592,7 +604,7 @@ fn write_object(layout: &Layout<'_>, sections: [Vec<u8>; 2], relocs: Vec<Pending
         let exported = layout.exported.get(*name).copied();
         // An `L` label is assembler-local: `as` keeps it out of the symbol table unless a
         // relocation needs a symbol for it.
-        if exported.is_none() && name.starts_with('L') && !referenced.contains(*name) {
+        if exported.is_none() && name.as_bytes().first() == Some(&b'L') && !referenced.contains(*name) {
             continue;
         }
         let Some(section) = section_of(place.sect) else {
