@@ -332,6 +332,14 @@ pub(super) fn whatwg_declaration() -> Stmt {
                     ]),
             )
             .method(
+                method("__elephc_override_opaque_path")
+                    .param("path", TypeExpr::Str)
+                    .returns(TypeExpr::Void)
+                    .body(vec![
+                        s_expr(e_call("\\elephc_uri_set_opaque_path", vec![e_null_coalesce(e_this_prop("__elephc_uri_handle"), e_int(0)), e_call("\\bin2hex", vec![e_var("path")])])),
+                    ]),
+            )
+            .method(
                 method("getQuery")
                     .returns(t_nullable(TypeExpr::Str))
                     .body(vec![

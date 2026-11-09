@@ -47,6 +47,12 @@ pub struct WhatWgUri {
     /// The `url` crate collapses `file:////x` to `file:///x`; lexbor preserves the extra
     /// solidus in the path, so reads and serialization use this value instead.
     file_path: Option<String>,
+    /// Serialized opaque path installed by `Uri\WhatWg\UrlBuilder::build()`.
+    ///
+    /// php-src initializes an opaque path directly rather than reparsing the assembled URL,
+    /// so leading and trailing spaces the `url` crate trims survive there. The builder stores
+    /// the lexbor-normalized path here and every read/serialization uses it verbatim.
+    opaque_path: Option<String>,
 }
 
 /// Parses `input` against an optional base URL.
@@ -70,7 +76,7 @@ pub fn parse(
             url.set_fragment(None);
             let file_path = file_path_override(&input[trimmed.0..trimmed.1], &url);
             return Ok((
-                WhatWgUri { url, long_host: None, file_path },
+                WhatWgUri { url, long_host: None, file_path, opaque_path: None },
                 log.into_iter().rev().collect::<Vec<_>>(),
             ));
         }
@@ -104,13 +110,13 @@ pub fn parse(
             append_component_warnings(input, trimmed, special, &mut log);
             append_ipv4_trailing_dot_warning(input, trimmed, &mut log);
             Ok((
-                WhatWgUri { url, long_host: None, file_path },
+                WhatWgUri { url, long_host: None, file_path, opaque_path: None },
                 log.into_iter().rev().collect::<Vec<_>>(),
             ))
         }
         Err(ParseError::IdnaError) => match parse_long_idna_host(input, base) {
             Some((url, long_host)) => Ok((
-                WhatWgUri { url, long_host: Some(long_host), file_path: None },
+                WhatWgUri { url, long_host: Some(long_host), file_path: None, opaque_path: None },
                 log.into_iter().rev().collect::<Vec<_>>(),
             )),
             None => {
@@ -781,7 +787,9 @@ impl WhatWgUri {
                 }
             }
             COMPONENT_PATH => Some(
-                if self.url.scheme() == "file" {
+                if let Some(path) = &self.opaque_path {
+                    path.clone()
+                } else if self.url.scheme() == "file" {
                     self.file_path
                         .clone()
                         .unwrap_or_else(|| self.url.path().to_string())
@@ -828,7 +836,10 @@ impl WhatWgUri {
 
     /// Returns the number of path segments PHP's parser retains for this URL.
     pub fn charge_units(&self) -> i64 {
-        let path = self.url.path();
+        let path = self
+            .opaque_path
+            .as_deref()
+            .unwrap_or_else(|| self.url.path());
         let segments = path.split('/').count() as i64;
         let non_empty = path.split('/').filter(|part| !part.is_empty()).count() as i64;
         4 * segments + 2 * non_empty
@@ -851,6 +862,20 @@ impl WhatWgUri {
 
     /// Serializes the URL in ASCII or Unicode mode, optionally excluding the fragment.
     pub fn to_string(&self, unicode: bool, exclude_fragment: bool) -> String {
+        if let Some(path) = &self.opaque_path {
+            let mut text = format!("{}:{}", self.url.scheme(), path);
+            if let Some(query) = self.url.query() {
+                text.push('?');
+                text.push_str(query);
+            }
+            if !exclude_fragment {
+                if let Some(fragment) = self.url.fragment() {
+                    text.push('#');
+                    text.push_str(fragment);
+                }
+            }
+            return text;
+        }
         let mut text = if unicode {
             self.unicode_string()
         } else {
@@ -916,6 +941,7 @@ impl WhatWgUri {
             COMPONENT_SCHEME => {
                 write_scheme(&mut next.url, value.unwrap_or(""))?;
                 next.file_path = None;
+                next.opaque_path = None;
             }
             COMPONENT_USERNAME => write_username(&mut next.url, value.unwrap_or("")),
             COMPONENT_PASSWORD => write_password(&mut next.url, value.unwrap_or("")),
@@ -923,11 +949,13 @@ impl WhatWgUri {
                 write_host(&mut next.url, value)?;
                 next.long_host = None;
                 next.file_path = None;
+                next.opaque_path = None;
             }
             COMPONENT_PATH => {
                 next.url.set_path(value.unwrap_or(""));
                 normalize_path_encoding(&mut next.url);
                 next.file_path = None;
+                next.opaque_path = None;
             }
             COMPONENT_QUERY => {
                 let value = match value {
@@ -951,6 +979,11 @@ impl WhatWgUri {
             }
         }
         Ok(next)
+    }
+
+    /// Stores the builder-normalized serialized opaque path.
+    pub fn set_opaque_path(&mut self, path: String) {
+        self.opaque_path = Some(path);
     }
 
     /// Writes the port into a clone of this URL.
@@ -1403,6 +1436,20 @@ fn is_special_scheme(scheme: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the builder-installed opaque path drives component reads and serialization
+    /// without reparsing the assembled URL.
+    #[test]
+    fn opaque_path_override_drives_reads_and_serialization() {
+        let (mut url, errors) = parse("foo:abc", None).expect("valid opaque URL");
+        assert!(errors.is_empty());
+        url.set_opaque_path("  abc ".to_string());
+        assert_eq!(
+            url.component(COMPONENT_PATH, 0).as_deref(),
+            Some("  abc ")
+        );
+        assert_eq!(url.to_string(false, false), "foo:  abc ");
+    }
 
     /// Verifies php-src exposes preprocessing warnings before the parse failure that made the
     /// URL invalid, so a builder exception whose warnings were collected first compares equal

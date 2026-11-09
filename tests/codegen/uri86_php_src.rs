@@ -224,11 +224,6 @@ fn parse_phpt(name: &str, path: &Path) -> Option<Phpt> {
         .iter()
         .find(|section| sections.contains_key(**section))
         .map(|_| "requires a php-src harness section".to_string());
-    if name.contains("path_success_opaque_spaces") {
-        // php-src preserves raw opaque-path spaces and emits one warning per space with a
-        // context that includes the following delimiter; the `url` crate trims them.
-        skip = Some("opaque-path space preservation and warning contexts are not modeled".to_string());
-    }
     if name.ends_with("build_error_soft_errors_typed_reference_with_base.phpt") {
         // This fixture intentionally passes a typed property to a by-reference parameter to
         // exercise PHP's runtime "Cannot assign array to reference..." TypeError. elephc's

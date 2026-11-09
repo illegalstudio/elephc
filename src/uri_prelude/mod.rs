@@ -98,6 +98,11 @@ fn bridge_externs() -> Vec<Stmt> {
             .param("handle", CType::Int)
             .returns(CType::Int)
             .build(),
+        extern_fn("elephc_uri_set_opaque_path", "elephc_uri")
+            .param("handle", CType::Int)
+            .param("path", CType::Str)
+            .returns(CType::Int)
+            .build(),
         extern_fn("elephc_uri_with_port", "elephc_uri")
             .param("handle", CType::Int)
             .param("port", CType::Int)

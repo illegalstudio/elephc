@@ -115,6 +115,18 @@ fn with_handle<R>(handle: u64, action: impl FnOnce(&UriValue) -> R) -> Option<R>
     })
 }
 
+/// Runs `action` against one live handle with mutable access.
+fn with_handle_mut<R>(handle: u64, action: impl FnOnce(&mut UriValue) -> R) -> Option<R> {
+    if handle == 0 {
+        return None;
+    }
+    let index = (handle - 1) as usize;
+    HANDLES.with(|handles| {
+        let mut handles = handles.borrow_mut();
+        handles.get_mut(index)?.as_mut().map(action)
+    })
+}
+
 /// Copies bytes into the thread-local return buffer and returns their hex text.
 fn return_hex(bytes: &[u8]) -> *const c_char {
     let hex = hex_encode(bytes);
@@ -611,6 +623,29 @@ pub extern "C" fn elephc_uri_charge_units(handle: u64) -> i64 {
     with_handle(handle, |value| match value {
         UriValue::Rfc(uri) => uri.charge_units(),
         UriValue::WhatWg(uri) => uri.charge_units(),
+    })
+    .unwrap_or(0)
+}
+
+/// Installs the builder-normalized serialized opaque path on a WHATWG URL.
+///
+/// Input: `handle` = live WHATWG URL handle, `path` = hex-encoded serialized path.
+/// Output: 1 when the handle names a WHATWG URL, 0 otherwise.
+#[no_mangle]
+pub extern "C" fn elephc_uri_set_opaque_path(handle: u64, path: *const c_char) -> i64 {
+    clear_last();
+    let Some(bytes) = (unsafe { read_hex(path) }) else {
+        return 0;
+    };
+    let Ok(path) = String::from_utf8(bytes) else {
+        return 0;
+    };
+    with_handle_mut(handle, |value| match value {
+        UriValue::WhatWg(uri) => {
+            uri.set_opaque_path(path);
+            1
+        }
+        UriValue::Rfc(_) => 0,
     })
     .unwrap_or(0)
 }

@@ -378,6 +378,24 @@ namespace Uri\WhatWg {
                 }
             }
 
+            // Scalar sentinels keep the override visible after the conditional: a local
+            // initialized to null and reassigned inside a method conditional currently loses
+            // that assignment at the merge point.
+            $opaquePathSource = '';
+            $opaquePathDelimiter = '';
+            $opaquePathSerialized = '';
+            if (!$forceFileText && $this->host === null && $baseUrl === null && $this->scheme !== ''
+                && $path !== '' && !\str_starts_with($path, '/') && !$special && \str_contains($path, ' ')) {
+                $opaquePathSource = $path;
+                $opaquePathDelimiter = ($this->query !== null && $this->query !== '')
+                    ? '?'
+                    : (($this->fragment !== null && $this->fragment !== '') ? '#' : '');
+                $opaquePathSerialized = ($opaquePathDelimiter !== '' && \str_ends_with($path, ' '))
+                    ? \substr($path, 0, -1) . '%20'
+                    : $path;
+            }
+            $opaquePathText = $opaquePathSerialized !== '' ? \str_replace(' ', '%20', $opaquePathSource) : $path;
+
             $text = '';
             if ($forceFileText) {
                 $text = 'file://' . $path;
@@ -423,10 +441,10 @@ namespace Uri\WhatWg {
                     if (\str_contains($path, '#') || \str_contains($path, '?')) {
                         throw new \Uri\WhatWg\InvalidUrlException('The specified path is malformed');
                     }
-                    $text .= \Uri\WhatWg\url_percent_encode($path, \Uri\WhatWg\UrlPercentEncodingMode::OpaquePath);
+                    $text .= \Uri\WhatWg\url_percent_encode($opaquePathText, \Uri\WhatWg\UrlPercentEncodingMode::OpaquePath);
                 }
             } elseif (!$forceFileText && $path !== '') {
-                $text .= \Uri\WhatWg\url_percent_encode($path, \Uri\WhatWg\UrlPercentEncodingMode::OpaquePath);
+                $text .= \Uri\WhatWg\url_percent_encode($opaquePathText, \Uri\WhatWg\UrlPercentEncodingMode::OpaquePath);
             }
             if ($this->query !== null && $this->query !== '') {
                 $query = $this->query;
@@ -454,6 +472,29 @@ namespace Uri\WhatWg {
                 }
                 if ($this->fragment === '') {
                     $url = $url->withFragment('');
+                }
+                if ($opaquePathSerialized !== '') {
+                    $url->__elephc_override_opaque_path($opaquePathSerialized);
+                    if (\is_array($softErrors)) {
+                        $spaceWarnings = [];
+                        $opaqueLength = \strlen($opaquePathSource);
+                        for ($index = 0; $index < $opaqueLength; $index++) {
+                            if ($opaquePathSource[$index] === ' ') {
+                                $context = \substr($opaquePathSource, $index);
+                                if ($opaquePathDelimiter !== '') {
+                                    $context .= $opaquePathDelimiter;
+                                }
+                                $spaceWarnings[] = new \Uri\WhatWg\UrlValidationError(
+                                    $context,
+                                    \Uri\WhatWg\UrlValidationErrorType::InvalidUrlUnit,
+                                    false,
+                                );
+                            }
+                        }
+                        if ($spaceWarnings !== []) {
+                            $softErrors = \array_merge((array) $softErrors, $spaceWarnings);
+                        }
+                    }
                 }
                 if (($this->username !== null || $this->password !== null) && \is_array($softErrors)) {
                     $filtered = [];

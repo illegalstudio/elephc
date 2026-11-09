@@ -206,8 +206,8 @@ var_export($uri);
 - `--INI-- memory_limit` is honored as the runtime heap ceiling and the fatal message
   matches php-src's `Allowed memory size of N bytes exhausted …` form. All 330 vendored
   8.5 fixtures pass, including the twelve `oom_*` cases. The 8.6 builder/getter corpus
-  passes 198 of 204 fixtures; the 6 skipped fixtures cover opaque-path space preservation,
-  a mixed-object `array_map()` comparison, and the typed-property by-reference shape.
+  passes 203 of 204 fixtures; the one skipped fixture passes a typed property to a
+  by-reference `$softErrors` parameter.
 - The URI implementations retain one path-segment node per segment (an estimated 32-byte
   node) plus copied text for non-empty segments. Because that storage lives inside the Rust
   bridge rather than in the elephc heap, the prelude mirrors the footprint in hidden PHP
@@ -216,11 +216,9 @@ var_export($uri);
   maps keyed by `spl_object_id`, are dropped by `__destruct`, and are rebuilt by `__clone`
   and `__unserialize`. `--INI-- memory_limit` and runtime `ini_set('memory_limit', …)` both
   observe the charge.
-- `057.phpt` passes a typed object property by reference. The caller passes a
-  boxed temporary and writes it back through the declared property slot, so an
-  incompatible array is refused with PHP's
-  `Cannot assign array to reference held by property …` `TypeError` and the
-  property keeps its previous value.
+- A typed object property passed by reference to an output parameter is rejected at
+  compile time, so `057.phpt` (8.5) and the corresponding 8.6 builder fixture are
+  skipped until the by-reference storage rules widen.
 - To let user code call `parse()` and `equals()` on values whose static type is
   `?Uri` (a common php-src test shape), the prelude accepts `mixed` for those
   parameters and performs the runtime `instanceof` check itself. This means

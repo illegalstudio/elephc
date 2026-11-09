@@ -114,6 +114,53 @@ var_dump($softErrors);
     );
 }
 
+/// Verifies the WHATWG builder keeps raw opaque-path spaces, serializes the trailing space
+/// before a query or fragment as `%20`, and reports one `InvalidUrlUnit` warning per space in
+/// left-to-right order with lexbor's context.
+#[test]
+fn test_uri_builder_opaque_path_spaces() {
+    let out = compile_and_run(
+        r#"<?php
+$builder = new Uri\WhatWg\UrlBuilder();
+$builder->setScheme("foo");
+$builder->setPath("  abc ");
+$softErrors = [];
+$url = $builder->build(softErrors: $softErrors);
+echo $url->toAsciiString(), "\n";
+foreach ($softErrors as $error) {
+    echo "[", $error->context, "]\n";
+}
+var_dump($url->equals(new Uri\WhatWg\Url($url->toAsciiString())));
+
+$builder = new Uri\WhatWg\UrlBuilder();
+$builder->setScheme("foo");
+$builder->setPath("abc  ");
+$builder->setFragment("f");
+$softErrors = [];
+$url = $builder->build(softErrors: $softErrors);
+echo $url->toAsciiString(), "\n";
+echo $url->getPath(), "\n";
+foreach ($softErrors as $error) {
+    echo "[", $error->context, "]\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "foo:  abc \n",
+            "[  abc ]\n",
+            "[ abc ]\n",
+            "[ ]\n",
+            "bool(false)\n",
+            "foo:abc %20#f\n",
+            "abc %20\n",
+            "[  #]\n",
+            "[ #]\n",
+        )
+    );
+}
+
 /// Verifies the native handle is invisible to casts, `var_export`, and serialization while
 /// `__debugInfo()` still renders the eight URI components.
 #[test]
