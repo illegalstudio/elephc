@@ -1245,6 +1245,7 @@ fn c_type(ty: &CType) -> String {
         CType::Int => "CType::Int".to_string(),
         CType::Float => "CType::Float".to_string(),
         CType::Str => "CType::Str".to_string(),
+        CType::NullableStr => "CType::NullableStr".to_string(),
         CType::Bool => "CType::Bool".to_string(),
         CType::Void => "CType::Void".to_string(),
         CType::Ptr => "CType::Ptr".to_string(),

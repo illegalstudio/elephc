@@ -26,6 +26,12 @@ mod attributes;
 mod detect;
 mod entities;
 mod generated;
+// The libxml2-backed legacy surface that replaces the termwind walker below once the
+// SimpleXML bridge is ported (bead elephc-8q7.10); until then only its oracle test uses it.
+#[cfg_attr(not(test), allow(dead_code))]
+mod legacy;
+#[cfg(test)]
+mod legacy_php;
 mod node_cache;
 mod text;
 
@@ -411,5 +417,51 @@ mod tests {
         assert_eq!(method.params.len(), 2);
         assert_eq!(method.params[0].0, "source");
         assert_eq!(method.params[1].0, "options");
+    }
+}
+
+#[cfg(test)]
+mod legacy_oracle_tests {
+    //! Purpose:
+    //! The parse-parity oracle for the libxml2-backed legacy DOM builders: `legacy::declarations`
+    //! must equal the parse of `legacy_php::SRC`, declaration by declaration.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Spans are stripped: a built node has none and a parsed one does.
+
+    use super::{legacy, legacy_php};
+
+    /// Replaces every `Span { .. }` rendering with `Span` so only the node shapes compare.
+    fn strip_spans(rendered: &str) -> String {
+        let mut cleaned = String::with_capacity(rendered.len());
+        let mut rest = rendered;
+        while let Some(at) = rest.find("Span {") {
+            cleaned.push_str(&rest[..at]);
+            cleaned.push_str("Span");
+            let after = &rest[at..];
+            let close = after.find('}').map(|end| end + 1).unwrap_or(after.len());
+            rest = &after[close..];
+        }
+        cleaned.push_str(rest);
+        cleaned
+    }
+
+    /// The built legacy declarations are the parse of their PHP form, node for node.
+    #[test]
+    fn legacy_builders_match_the_php_form() {
+        let tokens = crate::lexer::tokenize(legacy_php::SRC).expect("legacy DOM PHP must tokenize");
+        let parsed = crate::parser::parse_internal(&tokens).expect("legacy DOM PHP must parse");
+        let built = legacy::declarations();
+        assert_eq!(built.len(), parsed.len(), "declaration count differs");
+        for (index, (built_stmt, parsed_stmt)) in built.iter().zip(parsed.iter()).enumerate() {
+            assert_eq!(
+                strip_spans(&format!("{built_stmt:?}")),
+                strip_spans(&format!("{parsed_stmt:?}")),
+                "legacy DOM declaration #{index} differs from its PHP form"
+            );
+        }
     }
 }
