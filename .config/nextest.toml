@@ -292,6 +292,80 @@ slow-timeout = { period = "60s", terminate-after = 20 }
 filter = 'binary(web_tests) and test(=environment::web_environment_computed_eval_retains_population)'
 slow-timeout = { period = "60s", terminate-after = 20 }
 
+# This fixture compiles the web prelude together with native closures and opaque
+# eval handlers. Keep HTTP requests bounded in the fixture while allowing a cold
+# compiler/linker run to finish on shared macOS runners.
+[[profile.default.overrides]]
+filter = 'test(web_resets_core_handlers_between_requests)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(web_resets_core_handlers_between_requests)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# The environment-review fixtures also compile eval-capable web hosts. Several
+# crossed the 60s guard on macOS while sharing the web shard with the edge
+# tests; keep the 60s slow warning and terminate a hang at 180s.
+[[profile.default.overrides]]
+filter = 'binary(web_tests) and test(/^environment::review::web_environment_.*_retains_population$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_tests) and test(/^environment::review::web_environment_.*_retains_population$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'binary(web_tests) and test(=environment::web_environment_opaque_eval_retains_population)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_tests) and test(=environment::web_environment_opaque_eval_retains_population)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# This ownership fixture likewise compiles the web prelude with opaque eval and
+# then drives several requests. Both retries on macOS CI reached nextest's exact
+# 60s termination boundary without a test panic or server diagnostic.
+[[profile.default.overrides]]
+filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# The two `web_session_tests` cases that compile a `--web` program WITH `eval()` — the only way
+# to reach the runtime script cache, which is what they test. Measured with `--timings`: that
+# program is ~3.1M lines of assembly and takes ~34s to compile on a fast unloaded Mac, 61% of it
+# assembling the object file. The volume is the eval bridge, not OPcache: the same `--web`
+# program with `eval()` and no OPcache call is already 3.08M lines. Both terminated at the 60s
+# guard on the macOS runners, on both attempts, in two consecutive runs.
+[[profile.default.overrides]]
+filter = 'binary(web_session_tests) and test(=opcache_reset_is_performed_at_the_next_request_boundary)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_session_tests) and test(=opcache_reset_is_performed_at_the_next_request_boundary)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# One web-runtime compile plus a served request: median 44s and up to 58s on macOS in the
+# CI JUnit reports of 2026-10-20..22, with five retried 60s timeouts in three days. Keep the
+# 60s slow warning and terminate a hang at 180s, like the other web session entries above.
+[[profile.default.overrides]]
+filter = 'binary(web_session_tests) and test(=ini_get_session_name_tracks_session_name)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_session_tests) and test(=ini_get_session_name_tracks_session_name)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # PDO_OCI loads the full PDO surface and the cold optional ODPI-C archive build
 # is appreciably slower on GitHub's shared runners.
 [[profile.default.overrides]]

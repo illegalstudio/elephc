@@ -1,0 +1,24 @@
+{
+	email admin@example.com
+}
+
+example.com {
+	root * /srv/app/public
+
+	handle /static/* {
+		file_server
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8080 {
+			header_up -Forwarded
+			header_up X-Forwarded-For {http.request.remote.host}
+			header_up X-Forwarded-Proto {http.request.scheme}
+			header_up X-Forwarded-Host {http.request.host}
+			header_up X-Forwarded-Port {http.request.local.port}
+			header_up X-Real-IP {http.request.remote.host}
+			health_uri /healthz
+			health_interval 10s
+		}
+	}
+}

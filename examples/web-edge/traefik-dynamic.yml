@@ -1,0 +1,31 @@
+# Traefik dynamic configuration for the elephc origin.
+# The backend is loopback TCP because Unix-socket support varies by version.
+http:
+  routers:
+    app:
+      rule: Host(`example.com`)
+      entryPoints:
+        - websecure
+      service: app
+      middlewares:
+        - forwarded
+      tls:
+        certResolver: le
+  middlewares:
+    forwarded:
+      headers:
+        customRequestHeaders:
+          # The origin prefers Forwarded over X-Forwarded-*; remove the
+          # client chain. Traefik overwrites X-Forwarded-For/Proto/Host/Port
+          # and X-Real-IP automatically.
+          Forwarded: ""
+          X-Forwarded-Port: "443"
+  services:
+    app:
+      loadBalancer:
+        healthCheck:
+          path: /healthz
+          interval: 10s
+          timeout: 3s
+        servers:
+          - url: "http://127.0.0.1:8080"

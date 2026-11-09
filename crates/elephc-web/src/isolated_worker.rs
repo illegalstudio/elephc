@@ -1,6 +1,6 @@
-//! Purpose:
-//! Isolated per-worker HTTP serving: prestart a threadless handler broker, take
-//! the worker listening socket, and stream isolated PHP responses through Tokio.
+//! Isolated per-worker HTTP serving: prestart a threadless handler broker,
+//! register a TCP or inherited Unix listener, and stream isolated PHP responses
+//! through Tokio.
 //!
 //! Called from:
 //! - `crate::server::spawn_worker` for pool- and request-isolated children.
@@ -9,12 +9,11 @@
 //! - PHP runs only in persistent-pool or disposable-request handler children.
 //! - Connection tasks perform async IPC and never fork or consume a blocking pool.
 //! - The listener follows `crate::listener`: per-worker `SO_REUSEPORT` on Linux,
-//!   one inherited socket on Apple targets.
+//!   one inherited socket on Apple targets, or the inherited Unix listener.
 
 use std::convert::Infallible;
 use std::fmt;
 use std::io::Write;
-use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -27,11 +26,12 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
 
+use crate::forwarded::{self, TrustedProxies};
 use crate::handler_broker::{BrokerMode, HandlerBroker, HandlerResponse, PrestartedBroker};
 use crate::handler_ipc::{HandlerRequest, ResponseFrame, MAX_REQUEST_BODY_BYTES};
+use crate::listener::{ListenSource, Listener};
 use crate::session::upload_progress;
 
 /// Number of requests this worker has served, used by `--max-requests` recycling.
@@ -59,9 +59,9 @@ fn record_completed_request(max_requests: usize, recycle: &watch::Sender<bool>) 
 /// shut the server down. Checked by `server::is_planned_recycle`.
 pub(crate) const RECYCLE_EXIT_CODE: i32 = 86;
 
-/// Per-worker serving configuration (all `Copy`, so it survives `fork` and moves
-/// into the connection tasks freely).
-#[derive(Clone, Copy)]
+/// Per-worker serving configuration. It is cloned into each connection task
+/// because the trusted-proxy allowlist owns a shared allocation.
+#[derive(Clone)]
 pub struct WorkerConfig {
     /// Max request body in bytes; `0` = unlimited (over-limit → HTTP 413).
     pub max_body: usize,
@@ -83,6 +83,8 @@ pub struct WorkerConfig {
     pub handler_concurrency: usize,
     /// Requests served by one pool child before planned replacement; `0` = never.
     pub max_handler_requests: usize,
+    /// Peers allowed to supply Forwarded / X-Forwarded-* headers.
+    pub trusted_proxies: TrustedProxies,
 }
 
 /// Minimum response size (bytes) worth gzip-compressing; below this the framing
@@ -169,10 +171,10 @@ impl Body for WebBody {
     }
 }
 
-/// Serves HTTP on `listen` (host:port) in this worker process. Builds a
-/// current-thread tokio runtime and loops accepting connections, serving each
-/// with the PHP handler per `WorkerConfig`.
-pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
+/// Serves HTTP on `source` in this worker process. Builds a current-thread
+/// tokio runtime and loops accepting connections, serving each with the PHP
+/// handler per `WorkerConfig`.
+pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) {
     let WorkerConfig {
         max_body,
         body_read_secs,
@@ -184,14 +186,8 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         handler_mode,
         handler_concurrency,
         max_handler_requests,
+        trusted_proxies,
     } = cfg;
-    let addr: SocketAddr = match listen.parse() {
-        Ok(a) => a,
-        Err(_) => {
-            eprintln!("elephc-web: invalid --listen address {:?}", listen);
-            std::process::exit(1);
-        }
-    };
     ignore_sigpipe();
     unsafe { crate::session::elephc_web_session_reset() };
     upload_progress::initialize_config();
@@ -211,22 +207,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             std::process::exit(1);
         }
     };
-    let std_listener = match crate::listener::worker_listener() {
-        Some(listener) => match listener {
-            Ok(listener) => listener,
-            Err(e) => {
-                eprintln!("elephc-web: failed to inherit the shared listener: {}", e);
-                std::process::exit(1);
-            }
-        },
-        None => match crate::listener::reuseport(addr) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("elephc-web: failed to bind {}: {}", addr, e);
-                std::process::exit(1);
-            }
-        },
-    };
+
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -242,10 +223,10 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                 std::process::exit(1);
             }
         };
-        let listener = match TcpListener::from_std(std_listener) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("elephc-web: failed to register listener: {}", e);
+        let listener = match Listener::bind(source) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!("elephc-web: failed to bind listener: {error}");
                 std::process::exit(1);
             }
         };
@@ -278,6 +259,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             let io = TokioIo::new(stream);
             let broker = broker.clone();
             let request_recycle = recycle.clone();
+            let trusted = trusted_proxies.clone();
             let mut connection_recycle = recycle.subscribe();
             connections.push(tokio::task::spawn_local(async move {
                 let connection = http1::Builder::new()
@@ -286,6 +268,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| {
                         let broker = broker.clone();
                         let request_recycle = request_recycle.clone();
+                        let trusted = trusted.clone();
                         async move {
                     let started = Instant::now();
                     let method = req.method().as_str().to_string();
@@ -358,6 +341,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     if body.len() > MAX_REQUEST_BODY_BYTES {
                         return Ok::<_, Infallible>(fixed_response(413, b"Payload Too Large"));
                     }
+                    let facts = forwarded::apply(&peer, &headers, &trusted);
                     let request = HandlerRequest {
                         method,
                         uri,
@@ -365,10 +349,12 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                         query,
                         headers,
                         body,
-                        remote_addr: peer.ip().to_string(),
-                        remote_port: peer.port(),
-                        server_addr: addr.ip().to_string(),
-                        server_port: addr.port(),
+                        remote_addr: facts.remote_addr,
+                        remote_port: facts.remote_port,
+                        server_addr: peer.server_addr(),
+                        server_port: facts.server_port,
+                        request_scheme: facts.request_scheme,
+                        https: facts.https,
                         protocol,
                     };
                     let handler_result =
@@ -392,7 +378,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     if let Some((m, p)) = log_method_path {
                         eprintln!(
                             "{} \"{} {}\" {} {}ms",
-                            peer.ip(),
+                            peer.log_peer(),
                             m,
                             p,
                             status,

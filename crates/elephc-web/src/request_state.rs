@@ -353,6 +353,10 @@ static mut REQ_REMOTE_PORT: i64 = 0;
 static mut REQ_SERVER_ADDR: Option<CString> = None;
 static mut REQ_SERVER_PORT: i64 = 0;
 static mut REQ_PROTOCOL: Option<CString> = None;
+/// Client-facing scheme derived from trusted proxy headers; backs `REQUEST_SCHEME`.
+static mut REQ_REQUEST_SCHEME: Option<CString> = None;
+/// Whether `HTTPS=on` must be exposed for this request.
+static mut REQ_HTTPS: bool = false;
 /// Request start time in whole Unix seconds (backs `$_SERVER['REQUEST_TIME']`).
 static mut REQ_TIME: i64 = 0;
 
@@ -360,6 +364,12 @@ static mut REQ_TIME: i64 = 0;
 pub(crate) struct RequestMeta {
     pub remote_addr: CString,
     pub remote_port: u16,
+    /// TCP port after trusted-proxy derivation; zero for a Unix peer.
+    pub server_port: u16,
+    /// Client-facing scheme when it differs from the default `http`.
+    pub request_scheme: Option<CString>,
+    /// Whether `$_SERVER['HTTPS']` must be set to `on`.
+    pub https: bool,
     /// HTTP protocol string, e.g. "HTTP/1.1".
     pub protocol: CString,
 }
@@ -499,10 +509,16 @@ pub(crate) fn set_request(
             Some(meta.remote_addr),
         ));
         core::ptr::write(core::ptr::addr_of_mut!(REQ_REMOTE_PORT), meta.remote_port as i64);
+        core::ptr::write(core::ptr::addr_of_mut!(REQ_SERVER_PORT), meta.server_port as i64);
         drop(core::ptr::replace(
             core::ptr::addr_of_mut!(REQ_PROTOCOL),
             Some(meta.protocol),
         ));
+        drop(core::ptr::replace(
+            core::ptr::addr_of_mut!(REQ_REQUEST_SCHEME),
+            meta.request_scheme,
+        ));
+        core::ptr::write(core::ptr::addr_of_mut!(REQ_HTTPS), meta.https);
         core::ptr::write(core::ptr::addr_of_mut!(REQ_TIME), now);
         // Invalidate the lazily-parsed multipart cache: it belongs to the prior request.
         drop(core::ptr::replace(
@@ -619,6 +635,22 @@ pub unsafe extern "C" fn elephc_web_server_port() -> i64 {
 #[no_mangle]
 pub unsafe extern "C" fn elephc_web_protocol() -> *const c_char {
     opt_ptr(core::ptr::addr_of!(REQ_PROTOCOL))
+}
+
+/// Returns the client-facing scheme; backs `$_SERVER['REQUEST_SCHEME']`.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_request_scheme() -> *const c_char {
+    static HTTP: [c_char; 5] = [b'h' as c_char, b't' as c_char, b't' as c_char, b'p' as c_char, 0];
+    match &*core::ptr::addr_of!(REQ_REQUEST_SCHEME) {
+        Some(scheme) => scheme.as_ptr(),
+        None => HTTP.as_ptr(),
+    }
+}
+
+/// Returns 1 when `$_SERVER['HTTPS']` must be `on`, 0 otherwise.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_is_https() -> i64 {
+    i64::from(*core::ptr::addr_of!(REQ_HTTPS))
 }
 
 /// Returns the request start time in whole Unix seconds; backs `$_SERVER['REQUEST_TIME']`.
@@ -783,6 +815,9 @@ mod tests {
             RequestMeta {
                 remote_addr: cstring(b"10.0.0.7"),
                 remote_port: 54321,
+                server_port: 8080,
+                request_scheme: Some(cstring(b"https")),
+                https: true,
                 protocol: cstring(b"HTTP/1.1"),
             },
         );
@@ -802,6 +837,8 @@ mod tests {
             assert_eq!(CStr::from_ptr(elephc_web_server_addr()).to_str().unwrap(), "127.0.0.1");
             assert_eq!(elephc_web_server_port(), 8080);
             assert_eq!(CStr::from_ptr(elephc_web_protocol()).to_str().unwrap(), "HTTP/1.1");
+            assert_eq!(CStr::from_ptr(elephc_web_request_scheme()).to_str().unwrap(), "https");
+            assert_eq!(elephc_web_is_https(), 1);
             assert!(elephc_web_request_time() > 0);
         }
     }

@@ -1,22 +1,20 @@
 //! Purpose:
 //! Per-worker HTTP serving: take the worker listening socket (shared on Apple,
-//! per-worker `SO_REUSEPORT` on Linux), run a tokio current-thread runtime, and
-//! dispatch each request to the PHP handler.
+//! per-worker `SO_REUSEPORT` on Linux, or the inherited Unix listener), run a
+//! tokio current-thread runtime, and dispatch each request to the PHP handler.
 //!
 //! Called from:
-//! - `crate::server::elephc_web_run` in each forked child process.
+//! - `crate::server::spawn_worker` in each forked child process.
 //!
 //! Key details:
 //! - current-thread runtime + a blocking handler() call means PHP never runs on
 //!   two threads in one worker; concurrency comes from the N forked workers.
-//! - Linux uses one `SO_REUSEPORT` socket per worker so the kernel can hash
-//!   connections across the group. On Apple targets the master binds one socket
-//!   and workers accept on inherited duplicates, because Darwin's `SO_REUSEPORT`
-//!   sends every connection from one client address to a single socket.
+//! - Linux uses one `SO_REUSEPORT` socket per worker; Apple targets accept on
+//!   inherited duplicates of the master socket; Unix sockets use the inherited
+//!   listener on every target.
 
 use std::convert::Infallible;
 use std::ffi::CString;
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -26,9 +24,10 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use tokio::net::TcpListener;
 use tokio::sync::watch;
 
+use crate::forwarded::{self, TrustedProxies};
+use crate::listener::{ListenSource, Listener};
 use crate::probe_route;
 use crate::request_state;
 use crate::session::upload_progress;
@@ -113,9 +112,9 @@ fn install_exec_timeout_handler() {
     }
 }
 
-/// Per-worker serving configuration (all `Copy`, so it survives `fork` and moves
-/// into the connection tasks freely).
-#[derive(Clone, Copy)]
+/// Per-worker serving configuration. It is cloned into each connection task
+/// because the trusted-proxy allowlist owns a shared allocation.
+#[derive(Clone)]
 pub struct WorkerConfig {
     /// Max request body in bytes; `0` = unlimited (over-limit → HTTP 413).
     pub max_body: usize,
@@ -135,22 +134,24 @@ pub struct WorkerConfig {
     /// connection lifetime, and enough such connections exhaust a worker's descriptors and
     /// task slots (issue #887).
     pub body_read_secs: u64,
+    /// Peers allowed to supply Forwarded / X-Forwarded-* headers.
+    pub trusted_proxies: TrustedProxies,
 }
 
 /// Minimum response size (bytes) worth gzip-compressing; below this the framing
 /// overhead outweighs the savings.
 const GZIP_MIN_LEN: usize = 256;
 
-/// Serves HTTP on `listen` (host:port) in this worker process. Builds a
-/// current-thread tokio runtime and loops accepting connections, serving each
-/// with the PHP handler per `WorkerConfig`.
-pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
-    serve_inner::<false>(listen, handler, cfg);
+/// Serves HTTP on `source` in this worker process. Builds a current-thread
+/// tokio runtime and loops accepting connections, serving each with the PHP
+/// handler per `WorkerConfig`.
+pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) {
+    serve_inner::<false>(source, handler, cfg);
 }
 
 /// Serves with cooperative signal draining for a bootstrapped application worker.
-pub(crate) fn serve_application(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
-    serve_inner::<true>(listen, handler, cfg);
+pub(crate) fn serve_application(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) {
+    serve_inner::<true>(source, handler, cfg);
 }
 
 /// Polls application shutdown without constructing timers in the legacy specialization.
@@ -160,7 +161,7 @@ async fn application_tick<const APPLICATION: bool>() {
 }
 
 /// Shares HTTP transport while compiling application-only signal checks out of the default path.
-fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
+fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) {
     let WorkerConfig {
         max_body,
         max_requests,
@@ -168,6 +169,7 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
         max_exec_secs,
         gzip,
         body_read_secs,
+        trusted_proxies,
     } = cfg;
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
@@ -178,30 +180,15 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
     // a worker keeps running elephc code, so it must sample again. No-op unless
     // the binary was built --probe.
     probe_route::rearm();
-    let addr: SocketAddr = match listen.parse() {
-        Ok(a) => a,
-        Err(_) => {
-            eprintln!("elephc-web: invalid --listen address {:?}", listen);
-            std::process::exit(1);
-        }
+    let (server_addr, server_port) = match &source {
+        ListenSource::Tcp(addr) => (addr.ip().to_string(), addr.port()),
+        ListenSource::TcpShared(listener) => listener
+            .local_addr()
+            .map(|addr| (addr.ip().to_string(), addr.port()))
+            .unwrap_or_default(),
+        ListenSource::Unix(_) => (String::new(), 0),
     };
-    request_state::set_server_addr(&addr.ip().to_string(), addr.port());
-    let std_listener = match crate::listener::worker_listener() {
-        Some(listener) => match listener {
-            Ok(listener) => listener,
-            Err(e) => {
-                eprintln!("elephc-web: failed to inherit the shared listener: {}", e);
-                std::process::exit(1);
-            }
-        },
-        None => match crate::listener::reuseport(addr) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("elephc-web: failed to bind {}: {}", addr, e);
-                std::process::exit(1);
-            }
-        },
-    };
+    request_state::set_server_addr(&server_addr, server_port);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -213,10 +200,10 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
     // only the async request/response I/O of different connections interleaves.
     let local = tokio::task::LocalSet::new();
     local.block_on(&rt, async move {
-        let listener = match TcpListener::from_std(std_listener) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("elephc-web: failed to register listener: {}", e);
+        let listener = match Listener::bind(source) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!("elephc-web: failed to bind listener: {error}");
                 std::process::exit(1);
             }
         };
@@ -262,6 +249,7 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
             let _ = stream.set_nodelay(true);
             let io = TokioIo::new(stream);
             let request_recycle = recycle.clone();
+            let trusted = trusted_proxies.clone();
             let mut connection_recycle = recycle.subscribe();
             connections.push(tokio::task::spawn_local(async move {
                 let connection = http1::Builder::new()
@@ -269,6 +257,7 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     .header_read_timeout(Duration::from_secs(30))
                     .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| {
                         let request_recycle = request_recycle.clone();
+                        let trusted = trusted.clone();
                         async move {
                     // Seed session deployment config before upload-progress body
                     // draining. The PHP prelude repeats this reset immediately
@@ -363,6 +352,20 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                             )
                         })
                         .collect();
+                    // Avoid materializing a second header list on the common
+                    // path where no proxy is trusted.
+                    let forwarded = if trusted.is_empty() {
+                        None
+                    } else {
+                        let forwarded_headers: Vec<(String, String)> = req
+                            .headers()
+                            .iter()
+                            .map(|(name, value)| {
+                                (name.as_str().to_string(), value.to_str().unwrap_or("").to_string())
+                            })
+                            .collect();
+                        Some(forwarded::apply(&peer, &forwarded_headers, &trusted))
+                    };
                     // The body must be fully collected (async) BEFORE the blocking handler
                     // runs, since handler() cannot yield on the current-thread runtime.
                     // Collect with a size cap (0 = unlimited); an over-limit body
@@ -437,9 +440,29 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     } else {
                         Vec::new()
                     };
+                    let remote_addr = match &forwarded {
+                        Some(facts) => request_state::cstring(facts.remote_addr.as_bytes()),
+                        None => peer
+                            .remote_ip()
+                            .map(request_state::ip_cstring)
+                            .unwrap_or_default(),
+                    };
+                    let request_scheme = forwarded.as_ref().and_then(|facts| {
+                        (facts.request_scheme != "http")
+                            .then(|| request_state::cstring(facts.request_scheme.as_bytes()))
+                    });
                     let meta = request_state::RequestMeta {
-                        remote_addr: request_state::ip_cstring(peer.ip()),
-                        remote_port: peer.port(),
+                        remote_addr,
+                        remote_port: forwarded
+                            .as_ref()
+                            .map(|facts| facts.remote_port)
+                            .unwrap_or_else(|| peer.remote_port()),
+                        server_port: forwarded
+                            .as_ref()
+                            .map(|facts| facts.server_port)
+                            .unwrap_or_else(|| peer.server_port()),
+                        request_scheme,
+                        https: forwarded.as_ref().is_some_and(|facts| facts.https),
                         protocol,
                     };
                     request_state::set_request(method, uri, path, query, headers, body, meta);
@@ -508,7 +531,7 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     if let Some((m, p)) = log_method_path {
                         eprintln!(
                             "{} \"{} {}\" {} {}ms",
-                            peer.ip(),
+                            peer.log_peer(),
                             m,
                             p,
                             status,

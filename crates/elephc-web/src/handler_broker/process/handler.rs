@@ -58,6 +58,8 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
         server_addr,
         server_port,
         protocol,
+        request_scheme,
+        https,
     } = request;
     let probe_route_label = if probe_route::active() {
         probe_route::route_label(&method, &path)
@@ -94,6 +96,10 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
         RequestMeta {
             remote_addr: request_state::cstring(remote_addr.as_bytes()),
             remote_port,
+            server_port,
+            request_scheme: (request_scheme != "http")
+                .then(|| request_state::cstring(request_scheme.as_bytes())),
+            https,
             protocol: request_state::cstring(protocol.as_bytes()),
         },
     );

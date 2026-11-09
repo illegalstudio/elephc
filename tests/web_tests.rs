@@ -16,6 +16,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -26,6 +27,12 @@ mod application;
 
 #[path = "web/isolated_json.rs"]
 mod isolated_json;
+
+#[path = "web/trusted_proxy.rs"]
+mod trusted_proxy;
+
+#[path = "web/uds.rs"]
+mod uds;
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -99,6 +106,27 @@ fn wait_until_ready(addr: &str) {
         std::thread::sleep(Duration::from_millis(25));
     }
     panic!("server did not start listening on {}", addr);
+}
+
+/// Returns a short `/tmp` path for a Unix-domain socket.
+///
+/// `sun_path` is 104 bytes on macOS; the test `TMPDIR` is longer than that, so
+/// every UDS test uses this fixed short prefix instead.
+fn uds_path() -> PathBuf {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    PathBuf::from(format!("/tmp/elephc-uds-{}-{}.sock", std::process::id(), id))
+}
+
+/// Blocks until `path` accepts a Unix connection (server ready), or panics after 10s.
+fn wait_until_ready_unix(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if UnixStream::connect(path).is_ok() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("server did not start listening on unix:{}", path.display());
 }
 
 /// RAII guard around a spawned web-server child process.
@@ -265,6 +293,47 @@ fn spawn_server_with_args(
     child
 }
 
+/// Spawns a server on a Unix socket, waits until it accepts connections, and
+/// returns an RAII guard that reaps it on scope exit.
+fn spawn_server_unix(
+    bin: &Path,
+    path: &Path,
+    workers: &str,
+    extra_args: &[&str],
+) -> ServerGuard {
+    let listen = format!("unix:{}", path.display());
+    let child = Command::new(bin)
+        .arg("--listen").arg(&listen)
+        .arg("--workers").arg(workers)
+        .args(extra_args)
+        .spawn_group()
+        .expect("failed to spawn web server");
+    wait_until_ready_unix(path);
+    child
+}
+
+/// Runs a command to completion, killing it after `timeout` so a startup
+/// regression cannot hang the test suite.
+fn output_with_timeout(mut command: Command, timeout: Duration) -> std::process::Output {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn command");
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    child.wait_with_output().unwrap()
+}
+
 /// Sends one HTTP/1.1 GET and returns the response with any complete chunked body decoded.
 fn http_get(addr: &str, path: &str) -> String {
     let mut s = TcpStream::connect(addr).unwrap();
@@ -272,6 +341,34 @@ fn http_get(addr: &str, path: &str) -> String {
     s.write_all(req.as_bytes()).unwrap();
     let mut buf = String::new();
     s.read_to_string(&mut buf).unwrap();
+    normalize_complete_http_response(buf)
+}
+
+/// Sends one HTTP/1.1 GET over a Unix socket and returns the decoded response.
+fn http_get_unix(path: &Path, request_path: &str) -> String {
+    http_request_unix(path, "GET", request_path, &[], "")
+}
+
+/// Sends one HTTP/1.1 request with headers over a Unix socket.
+fn http_request_unix(
+    path: &Path,
+    method: &str,
+    request_path: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> String {
+    let mut stream = UnixStream::connect(path).unwrap();
+    let mut request = format!(
+        "{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n",
+        method, request_path
+    );
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str(&format!("Content-Length: {}\r\n\r\n{}", body.len(), body));
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut buf = String::new();
+    stream.read_to_string(&mut buf).unwrap();
     normalize_complete_http_response(buf)
 }
 
@@ -2390,7 +2487,9 @@ fn web_help_and_version() {
     );
     let help_text = String::from_utf8_lossy(&help.stdout);
     assert!(
-        help_text.contains("respawn a worker") && !help_text.contains("--handler-concurrency"),
+        help_text.contains("respawn a worker")
+            && help_text.contains("--trusted-proxy")
+            && !help_text.contains("--handler-concurrency"),
         "default --web help must describe the in-process worker model: {help_text}"
     );
 
@@ -2404,6 +2503,7 @@ fn web_help_and_version() {
     assert!(
         request_help_text.contains("--response-write-timeout")
             && request_help_text.contains("--handler-concurrency")
+            && request_help_text.contains("--trusted-proxy")
             && request_help_text.contains("timed-out handler process"),
         "request help must expose isolated-handler controls: {request_help_text}"
     );

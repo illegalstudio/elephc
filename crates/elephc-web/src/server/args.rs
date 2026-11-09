@@ -11,20 +11,26 @@
 
 use std::ffi::{c_char, CStr};
 
+use crate::forwarded::TrustedProxies;
 use crate::handler_broker::BrokerMode;
 use crate::isolated_worker::WorkerConfig as IsolatedWorkerConfig;
+use crate::listener::ListenAddr;
 use crate::worker::WorkerConfig;
 
 use super::IsolationMode;
 
 /// `--help` text for the produced `--web` binary.
 const WORKER_HELP: &str = "\
-Usage: <binary> --listen HOST:PORT [options]
+Usage: <binary> --listen HOST:PORT | unix:/PATH [options]
 
 A standalone prefork HTTP server compiled with worker isolation.
 
 Options:
-  --listen HOST:PORT     Address to bind (required), e.g. 127.0.0.1:8080
+  --listen HOST:PORT | unix:/PATH
+                         Address to bind (required), e.g. 127.0.0.1:8080
+                         or unix:/run/elephc/app.sock
+  --trusted-proxy LIST   Comma-separated IPs/CIDRs (or 'unix') allowed to send
+                         Forwarded / X-Forwarded-* headers; repeatable
   --workers N            Number of prefork worker processes (default: CPU count)
   --max-body-size BYTES  Max request body in bytes; 0 = unlimited (default: 8388608)
   --body-read-timeout N  Max seconds to receive a request body; 0 = unlimited (default: 30)
@@ -37,12 +43,16 @@ Options:
 
 /// `--help` text for binaries compiled with pool or request isolation.
 const ISOLATED_HELP: &str = "\
-Usage: <binary> --listen HOST:PORT [options]
+Usage: <binary> --listen HOST:PORT | unix:/PATH [options]
 
 A standalone prefork HTTP server compiled with isolated handlers.
 
 Options:
-  --listen HOST:PORT     Address to bind (required), e.g. 127.0.0.1:8080
+  --listen HOST:PORT | unix:/PATH
+                         Address to bind (required), e.g. 127.0.0.1:8080
+                         or unix:/run/elephc/app.sock
+  --trusted-proxy LIST   Comma-separated IPs/CIDRs (or 'unix') allowed to send
+                         Forwarded / X-Forwarded-* headers; repeatable
   --workers N            Number of prefork web workers (default: CPU count)
   --handler-concurrency N
                          Handler processes per worker (default: 1)
@@ -68,7 +78,9 @@ const DEFAULT_RESPONSE_WRITE_SECS: u64 = 30;
 
 /// Parsed server configuration from the binary's own argv.
 pub(super) struct ServerArgs {
-    pub(super) listen: String,
+    pub(super) listen: ListenAddr,
+    /// Peers allowed to supply Forwarded / X-Forwarded-* headers.
+    trusted_proxies: TrustedProxies,
     pub(super) workers: usize,
     /// Handler processes supervised by each isolated web worker.
     handler_concurrency: usize,
@@ -100,6 +112,7 @@ impl ServerArgs {
             max_exec_secs: self.max_exec_secs,
             gzip: self.gzip,
             body_read_secs: self.body_read_secs,
+            trusted_proxies: self.trusted_proxies.clone(),
         }
     }
 
@@ -116,6 +129,7 @@ impl ServerArgs {
             handler_mode: mode,
             handler_concurrency: self.handler_concurrency,
             max_handler_requests: self.max_handler_requests,
+            trusted_proxies: self.trusted_proxies.clone(),
         }
     }
 }
@@ -190,7 +204,8 @@ pub(super) fn parse_args(
         return ParsedArgs::Exit(2);
     }
 
-    let mut listen: Option<String> = None;
+    let mut listen: Option<ListenAddr> = None;
+    let mut trusted_proxy_values: Vec<String> = Vec::new();
     let mut workers: usize = default_workers();
     let mut handler_concurrency: usize = 1;
     let mut max_handler_requests: usize = 1000;
@@ -206,7 +221,25 @@ pub(super) fn parse_args(
         match args[i].as_str() {
             "--listen" => {
                 i += 1;
-                listen = args.get(i).cloned();
+                let Some(value) = args.get(i) else {
+                    eprintln!("error: --listen requires HOST:PORT or unix:/PATH");
+                    return ParsedArgs::Exit(2);
+                };
+                match ListenAddr::parse(value) {
+                    Ok(address) => listen = Some(address),
+                    Err(message) => {
+                        eprintln!("error: {message}");
+                        return ParsedArgs::Exit(2);
+                    }
+                }
+            }
+            "--trusted-proxy" => {
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("error: --trusted-proxy requires an IP, CIDR, or 'unix'");
+                    return ParsedArgs::Exit(2);
+                };
+                trusted_proxy_values.push(value.clone());
             }
             "--workers" => {
                 i += 1;
@@ -271,9 +304,18 @@ pub(super) fn parse_args(
         i += 1;
     }
 
+    let trusted_proxies = match TrustedProxies::parse_values(&trusted_proxy_values) {
+        Ok(trusted) => trusted,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return ParsedArgs::Exit(2);
+        }
+    };
+
     match listen {
         Some(listen) => ParsedArgs::Run(ServerArgs {
             listen,
+            trusted_proxies,
             workers: workers.max(1),
             handler_concurrency: handler_concurrency.max(1),
             max_handler_requests,
@@ -286,7 +328,9 @@ pub(super) fn parse_args(
             gzip,
         }),
         None => {
-            eprintln!("error: --web binary requires --listen host:port (try --help)");
+            eprintln!(
+                "error: --web binary requires --listen HOST:PORT or unix:/PATH (try --help)"
+            );
             ParsedArgs::Exit(2)
         }
     }
@@ -414,5 +458,77 @@ mod tests {
             panic!("an explicit 0 must parse");
         };
         assert_eq!(args.worker_config().body_read_secs, 0);
+    }
+
+    /// Verifies the runtime accepts the Unix-socket form and threads it to the server.
+    #[test]
+    fn listen_accepts_unix_socket_path() {
+        let parsed = parse_test_args_for(
+            &["app", "--listen", "unix:/tmp/elephc-test.sock"],
+            IsolationMode::Worker,
+        );
+        let ParsedArgs::Run(args) = parsed else {
+            panic!("a valid Unix socket path must produce runnable server arguments");
+        };
+        assert_eq!(
+            args.listen,
+            ListenAddr::Unix(std::path::PathBuf::from("/tmp/elephc-test.sock"))
+        );
+    }
+
+    /// Verifies malformed Unix paths are usage errors, not panics or worker crashes.
+    #[test]
+    fn listen_rejects_empty_and_oversized_unix_paths() {
+        assert!(matches!(
+            parse_test_args_for(&["app", "--listen", "unix:"], IsolationMode::Worker),
+            ParsedArgs::Exit(2)
+        ));
+        let long = format!("unix:/{}", "x".repeat(101));
+        assert!(matches!(
+            parse_test_args_for(&["app", "--listen", &long], IsolationMode::Worker),
+            ParsedArgs::Exit(2)
+        ));
+    }
+
+    /// Verifies a missing `--listen` value is a usage error.
+    #[test]
+    fn listen_requires_a_value() {
+        assert!(matches!(
+            parse_test_args_for(&["app", "--listen"], IsolationMode::Worker),
+            ParsedArgs::Exit(2)
+        ));
+    }
+
+    /// Verifies the trusted-proxy allowlist accepts IPv4/IPv6/CIDR/`unix` and
+    /// rejects malformed or missing values as usage errors.
+    #[test]
+    fn trusted_proxy_flag_parses_and_rejects_malformed_values() {
+        assert!(matches!(
+            parse_test_args_for(
+                &[
+                    "app",
+                    "--listen",
+                    "127.0.0.1:0",
+                    "--trusted-proxy",
+                    "127.0.0.1/32,10.0.0.0/8,2001:db8::/32,unix",
+                ],
+                IsolationMode::Worker,
+            ),
+            ParsedArgs::Run(_)
+        ));
+        assert!(matches!(
+            parse_test_args_for(
+                &["app", "--listen", "127.0.0.1:0", "--trusted-proxy", "not-an-ip"],
+                IsolationMode::Worker,
+            ),
+            ParsedArgs::Exit(2)
+        ));
+        assert!(matches!(
+            parse_test_args_for(
+                &["app", "--listen", "127.0.0.1:0", "--trusted-proxy"],
+                IsolationMode::Worker,
+            ),
+            ParsedArgs::Exit(2)
+        ));
     }
 }

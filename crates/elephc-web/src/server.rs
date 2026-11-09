@@ -9,7 +9,8 @@
 //! - fork() happens BEFORE any tokio runtime is created (tokio does not survive
 //!   fork); pool/request workers prestart a threadless handler broker, while
 //!   worker isolation retains the original in-process serving path.
-//! - --listen host:port is required; without it the process errors and exits.
+//! - --listen host:port or unix:/path is required; a Unix listener is bound
+//!   once here, before the fork loop, and inherited by every worker.
 
 mod args;
 
@@ -20,6 +21,7 @@ use std::time::{Duration, Instant};
 use args::{parse_args, ParsedArgs, ServerArgs};
 use crate::handler_broker::BrokerMode;
 use crate::isolated_worker;
+use crate::listener::{self, ListenAddr, ListenSource};
 use crate::worker;
 
 /// Version-one generated callbacks; all PHP exceptions are contained before returning to Rust.
@@ -134,7 +136,8 @@ fn reset_signal_handlers_to_default() {
 /// master. The child restores default signal disposition and never returns. A
 /// fork failure aborts the whole process. Used for both initial spawn and respawn.
 fn spawn_worker(
-    listen: &str,
+    listen: &ListenAddr,
+    master_unix: Option<&std::os::unix::net::UnixListener>,
     handler: extern "C" fn(),
     args: &ServerArgs,
     isolation: IsolationMode,
@@ -147,6 +150,13 @@ fn spawn_worker(
         }
         0 => {
             reset_signal_handlers_to_default();
+            let source = match ListenSource::for_worker(listen, master_unix) {
+                Ok(source) => source,
+                Err(error) => {
+                    eprintln!("elephc-web: failed to inherit the listening socket: {error}");
+                    std::process::exit(1);
+                }
+            };
             if let Some(callbacks) = application {
                 worker::install_application_shutdown();
                 crate::request_state::reset_response();
@@ -159,16 +169,16 @@ fn spawn_worker(
                     std::process::exit(BOOTSTRAP_FAILURE_EXIT_CODE);
                 }
                 APPLICATION_PHASE.store(2, Ordering::Relaxed);
-                worker::serve_application(listen, callbacks.request, args.worker_config());
+                worker::serve_application(source, callbacks.request, args.worker_config());
                 crate::request_state::set_capture(false);
                 APPLICATION_PHASE.store(3, Ordering::Relaxed);
                 worker::with_application_signals_blocked(|| (callbacks.shutdown)());
                 std::process::exit(worker::RECYCLE_EXIT_CODE);
             }
             match isolation.broker_mode() {
-                None => worker::serve(listen, handler, args.worker_config()),
+                None => worker::serve(source, handler, args.worker_config()),
                 Some(mode) => {
-                    isolated_worker::serve(listen, handler, args.isolated_worker_config(mode))
+                    isolated_worker::serve(source, handler, args.isolated_worker_config(mode))
                 }
             }
             // serve() only returns when the worker stopped accepting on purpose
@@ -269,30 +279,50 @@ fn run_server(
         ParsedArgs::Exit(code) => return code,
     };
     install_signal_handlers();
-    // Bind the shared listener before forking. On Apple targets each worker
-    // accepts on an inherited duplicate; on Linux this is a no-op and workers
-    // keep their per-process SO_REUSEPORT sockets.
-    let listen_addr = match args.listen.parse::<std::net::SocketAddr>() {
-        Ok(addr) => addr,
-        Err(_) => {
-            eprintln!("elephc-web: invalid --listen address {:?}", args.listen);
-            return 2;
+    // Bind the shared TCP socket before forking on Apple targets. On Linux
+    // install_shared is a no-op and workers keep their per-process
+    // SO_REUSEPORT sockets. A Unix listener must always be bound once before
+    // the fork loop: SO_REUSEPORT does not balance accept() across AF_UNIX
+    // listeners. This runs before any worker fork or Tokio runtime, so
+    // bind_unix_master may temporarily narrow the process umask without racing
+    // another thread. A bind failure is a master startup error, not a worker
+    // crash loop.
+    let master_unix = match &args.listen {
+        ListenAddr::Tcp(addr) => {
+            if let Err(error) = listener::install_shared(*addr) {
+                eprintln!("elephc-web: failed to bind {addr}: {error}");
+                return 1;
+            }
+            None
         }
+        ListenAddr::Unix(path) => match listener::bind_unix_master(path) {
+            Ok(listener) => Some(listener),
+            Err(error) => {
+                eprintln!(
+                    "elephc-web: failed to bind unix:{}: {error}",
+                    path.display()
+                );
+                return 1;
+            }
+        },
     };
-    if let Err(error) = crate::listener::install_shared(listen_addr) {
-        eprintln!("elephc-web: failed to bind {}: {}", listen_addr, error);
-        return 2;
-    }
     // Fork workers BEFORE creating any tokio runtime. Track each worker's spawn
     // time so a crash-on-startup loop (e.g. a failed bind) can be detected.
     let mut children: Vec<(libc::pid_t, Instant)> = Vec::new();
     for _ in 0..args.workers {
-        let pid = spawn_worker(&args.listen, handler, &args, isolation, application);
+        let pid = spawn_worker(
+            &args.listen,
+            master_unix.as_ref(),
+            handler,
+            &args,
+            isolation,
+            application,
+        );
         children.push((pid, Instant::now()));
     }
     eprintln!(
-        "elephc-web: listening on http://{} ({} worker{}, isolation={})",
-        args.listen,
+        "elephc-web: listening on {} ({} worker{}, isolation={})",
+        args.listen.display(),
         args.workers,
         if args.workers == 1 { "" } else { "s" },
         isolation.name()
@@ -355,7 +385,14 @@ fn run_server(
                 }
             }
             // The worker is gone (crash or recycle): replace it to keep the pool at N.
-            let new_pid = spawn_worker(&args.listen, handler, &args, isolation, application);
+            let new_pid = spawn_worker(
+                &args.listen,
+                master_unix.as_ref(),
+                handler,
+                &args,
+                isolation,
+                application,
+            );
             children.push((new_pid, Instant::now()));
         } else if pid == -1 {
             // ECHILD: nothing left to wait for. EINTR: a signal arrived → re-loop
@@ -372,6 +409,9 @@ fn run_server(
     for &(pid, _) in &children {
         let mut status = 0;
         unsafe { libc::waitpid(pid, &mut status, 0); }
+    }
+    if let ListenAddr::Unix(path) = &args.listen {
+        listener::remove_unix_socket(path);
     }
     exit_code
 }
