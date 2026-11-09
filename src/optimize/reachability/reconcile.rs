@@ -38,16 +38,31 @@ where
         .filter(|(name, _)| declarations.externs.contains(&php_symbol_key(name)))
         .filter_map(|(_, signature)| signature.library.clone())
         .collect();
+    // `ELEPHC_DECL_REACH_TIMES=1` splits this step: it was 10 s of the Symfony demo's prune
+    // phase although that build prunes nothing.
+    let trace = std::env::var_os("ELEPHC_DECL_REACH_TIMES").is_some();
+    let mut mark = std::time::Instant::now();
+    let mut lap = |label: &str| {
+        if trace {
+            eprintln!("[elephc-reconcile] {label}={:.2}s", mark.elapsed().as_secs_f64());
+            mark = std::time::Instant::now();
+        }
+    };
     retain_free_function_metadata(check, reachability, declarations);
+    lap("functions");
     retain_class_metadata(check, reachability, declarations);
+    lap("classes");
     retain_extern_metadata(check, reachability, declarations);
+    lap("externs");
     retain_callable_parameter_metadata(check, reachability, declarations);
+    lap("callable_parameters");
     recompute_required_libraries(
         check,
         &declared_extern_libraries,
         original_builtin_libraries,
         remaining_builtin_libraries,
     );
+    lap("libraries");
 }
 
 /// Removes signatures and attributes for pruned source functions while preserving builtins.
