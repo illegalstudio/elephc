@@ -79,7 +79,7 @@ mod runtime_class_messages;
 mod literal_parameter_guards;
 pub(in crate::codegen) use literal_parameter_guards::{
     declared_parameter_contract, emit_boxed_declared_parameter_guard, emit_boxed_literal_parameter_guard,
-    emit_declared_parameter_refusal,
+    emit_boxed_variadic_parameter_guard, emit_declared_parameter_refusal,
 };
 mod scoped_constants;
 mod static_locals;

@@ -46,8 +46,10 @@ pub(super) fn coerce(
             if let Some((tags, _)) = crate::codegen::lower_inst::declared_parameter_contract(target) {
                 let labels = ctx.next_label("declared_parameter");
                 let table_reg = super::invoker_table_reg(emitter.target.arch);
+                let numeric_strings =
+                    matches!(target.codegen_repr(), PhpType::Int | PhpType::Float);
                 crate::codegen::lower_inst::emit_boxed_declared_parameter_guard(
-                    emitter, index, tags, table_reg, &labels,
+                    emitter, index, tags, numeric_strings, table_reg, &labels,
                 );
             }
         }

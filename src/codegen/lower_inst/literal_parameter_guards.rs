@@ -104,6 +104,8 @@ enum ArgumentPrefix<'a> {
     /// The invoker's name table at this frame offset, for the index the refusal pushed, and
     /// whether this module's frames can fill the Throwable's trace.
     Table(usize, bool),
+    /// The prefix a variadic guard stored in [`VARIADIC_PREFIX`], and the trace flag.
+    Global(bool),
 }
 
 /// Loads the pushed parameter's prefix from `[count, mask, (name)*, (prefix)*]`.
@@ -169,6 +171,10 @@ fn refuse_loaded_type(
             abi::emit_load_int_immediate(emitter, len, prefix_len as i64);
         }
         ArgumentPrefix::Table(table_offset, _) => emit_table_prefix(emitter, table_offset),
+        ArgumentPrefix::Global(_) => {
+            abi::emit_load_symbol_to_reg(emitter, ptr, VARIADIC_PREFIX, 0);
+            abi::emit_load_symbol_to_reg(emitter, len, VARIADIC_PREFIX, 8);
+        }
     }
     abi::emit_call_label(emitter, "__rt_concat");
 
@@ -208,7 +214,10 @@ fn refuse_loaded_type(
     }
     abi::emit_call_label(emitter, "__rt_concat");
     abi::emit_call_label(emitter, "__rt_str_persist");
-    throw_type_error(emitter, matches!(prefix, ArgumentPrefix::Table(_, true)));
+    throw_type_error(
+        emitter,
+        matches!(prefix, ArgumentPrefix::Table(_, true) | ArgumentPrefix::Global(true)),
+    );
 }
 
 /// Transfers the persisted diagnostic to a compact TypeError and the standard unwinder.
@@ -315,21 +324,136 @@ pub(in crate::codegen) fn emit_boxed_declared_parameter_guard(
     emitter: &mut Emitter,
     index: usize,
     accepted_tags: &[u8],
+    numeric_strings: bool,
     table_reg: &str,
     label_prefix: &str,
 ) {
     let accepted = format!("{label_prefix}_accepted");
+    let string = format!("{label_prefix}_string");
     let tag_reg = abi::int_result_reg(emitter);
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
     for tag in accepted_tags {
-        branch_tag(emitter, tag_reg, i64::from(*tag), &accepted);
+        // An `int` or `float` parameter takes a string only when the WHOLE string is numeric
+        // (php refuses `"x"`, `"7x"` and `"0x1A"` with a TypeError); the cast that follows would
+        // have answered 0 for them.
+        let target = if numeric_strings && *tag == STRING_TAG { &string } else { &accepted };
+        branch_tag(emitter, tag_reg, i64::from(*tag), target);
     }
     abi::emit_load_int_immediate(emitter, table_reg, index as i64);
     abi::emit_call_label(emitter, DECLARED_PARAMETER_REFUSAL);
+    if numeric_strings {
+        emitter.label(&string);
+        let (ptr, _) = abi::string_result_regs(emitter);
+        let payload = crate::codegen_support::mixed_unbox_payload_reg(emitter.target);
+        abi::emit_reg_move(emitter, ptr, payload);
+        abi::emit_call_label(emitter, "__rt_str_looks_like_int_for_coercion");
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("cbnz {tag_reg}, {accepted}"));    // a numeric string converts
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("test {tag_reg}, {tag_reg}"));     // a numeric string converts
+                emitter.instruction(&format!("jnz {accepted}"));                // keep it for the cast
+            }
+        }
+        abi::emit_load_int_immediate(emitter, tag_reg, i64::from(STRING_TAG));
+        abi::emit_load_int_immediate(emitter, table_reg, index as i64);
+        abi::emit_call_label(emitter, DECLARED_PARAMETER_REFUSAL);
+    }
     emitter.label(&accepted);
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
 }
+
+/// The runtime tag of a string payload.
+const STRING_TAG: u8 = 1;
+
+/// Refuses a boxed element of a declared variadic collector (`int ...$xs`) that its element type
+/// refuses, as the argument at its own position: `f(): Argument #2 must be of type int, string
+/// given`. php names no parameter for a collected argument, and the position is only known when
+/// the call runs, so the prefix is built then (on the refusal path only) and handed to the shared
+/// [`VARIADIC_PARAMETER_REFUSAL`] through [`VARIADIC_PREFIX`]. The box stays in place.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::codegen) fn emit_boxed_variadic_parameter_guard(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    accepted_tags: &[u8],
+    numeric_strings: bool,
+    type_name: &str,
+    tail_index_reg: &str,
+    position_bias: usize,
+    label_prefix: &str,
+) {
+    let accepted = format!("{label_prefix}_accepted");
+    let string = format!("{label_prefix}_string");
+    let refuse = format!("{label_prefix}_refuse");
+    let tag_reg = abi::int_result_reg(emitter);
+    let payload = crate::codegen_support::mixed_unbox_payload_reg(emitter.target);
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    for tag in accepted_tags {
+        let target = if numeric_strings && *tag == STRING_TAG { &string } else { &accepted };
+        branch_tag(emitter, tag_reg, i64::from(*tag), target);
+    }
+    abi::emit_jump(emitter, &refuse);
+    if numeric_strings {
+        emitter.label(&string);
+        let (ptr, _) = abi::string_result_regs(emitter);
+        abi::emit_push_reg(emitter, payload);
+        abi::emit_reg_move(emitter, ptr, payload);
+        abi::emit_call_label(emitter, "__rt_str_looks_like_int_for_coercion");
+        abi::emit_pop_reg(emitter, payload);
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("cbnz {tag_reg}, {accepted}"));    // a numeric string converts
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("test {tag_reg}, {tag_reg}"));     // a numeric string converts
+                emitter.instruction(&format!("jnz {accepted}"));                // keep it for the cast
+            }
+        }
+        abi::emit_load_int_immediate(emitter, tag_reg, i64::from(STRING_TAG));
+    }
+    emitter.label(&refuse);
+    // -- keep the refused tag and payload while the position's prefix is built --
+    abi::emit_push_reg_pair(emitter, tag_reg, payload);
+    abi::emit_reg_move(emitter, abi::int_result_reg(emitter), tail_index_reg);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("add x0, x0, #{position_bias}"));      // the argument's 1-based position
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("add rax, {position_bias}"));          // the argument's 1-based position
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_itoa");
+    let (ptr, len) = abi::string_result_regs(emitter);
+    let (right_ptr, right_len) = super::runtime_class_messages::concat_right_operand_regs(emitter);
+    abi::emit_reg_move(emitter, right_ptr, ptr);
+    abi::emit_reg_move(emitter, right_len, len);
+    let (head, head_len) = data.add_string(b"(): Argument #");
+    abi::emit_symbol_address(emitter, ptr, &head);
+    abi::emit_load_int_immediate(emitter, len, head_len as i64);
+    abi::emit_call_label(emitter, "__rt_concat");
+    let (tail, tail_len) = data.add_string(format!(" must be of type {type_name}, ").as_bytes());
+    abi::emit_symbol_address(emitter, right_ptr, &tail);
+    abi::emit_load_int_immediate(emitter, right_len, tail_len as i64);
+    abi::emit_call_label(emitter, "__rt_concat");
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    abi::emit_store_reg_to_symbol(emitter, ptr, VARIADIC_PREFIX, 0);
+    abi::emit_store_reg_to_symbol(emitter, len, VARIADIC_PREFIX, 8);
+    abi::emit_pop_reg_pair(emitter, tag_reg, payload);
+    abi::emit_call_label(emitter, VARIADIC_PARAMETER_REFUSAL);
+    emitter.label(&accepted);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
+}
+
+/// Shared refusal for a declared variadic element: tag and payload in their registers, the
+/// argument prefix in [`VARIADIC_PREFIX`], the invoker's frame still current.
+pub(in crate::codegen) const VARIADIC_PARAMETER_REFUSAL: &str = "_eir_variadic_parameter_refusal";
+
+/// The prefix the variadic guard built for [`VARIADIC_PARAMETER_REFUSAL`]: pointer, then length.
+const VARIADIC_PREFIX: &str = "_eir_variadic_refusal_prefix";
 
 /// Shared refusal: the unboxed tag and payload in their registers, the parameter index in
 /// `table_reg`, the invoker's frame still current.
@@ -344,15 +468,34 @@ pub(in crate::codegen) fn emit_declared_parameter_refusal(
     table_reg: &str,
     capture_trace: bool,
 ) {
+    emit_parameter_refusal(
+        emitter, data, descriptor_offset, table_reg, DECLARED_PARAMETER_REFUSAL,
+        ArgumentPrefix::Table(table_offset, capture_trace),
+    );
+    data.add_comm(VARIADIC_PREFIX.to_string(), 16);
+    emit_parameter_refusal(
+        emitter, data, descriptor_offset, table_reg, VARIADIC_PARAMETER_REFUSAL,
+        ArgumentPrefix::Global(capture_trace),
+    );
+}
+
+/// One shared refusal routine: a type-name arm per runtime tag, then the message and the throw.
+fn emit_parameter_refusal(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    descriptor_offset: usize,
+    table_reg: &str,
+    routine: &str,
+    prefix: ArgumentPrefix<'_>,
+) {
     let tag_reg = abi::int_result_reg(emitter);
     let payload = crate::codegen_support::mixed_unbox_payload_reg(emitter.target);
-    let prefix = ArgumentPrefix::Table(table_offset, capture_trace);
     emitter.blank();
-    emitter.comment("shared declared-parameter refusal");
-    emitter.label_global(DECLARED_PARAMETER_REFUSAL);
+    emitter.comment("shared parameter refusal");
+    emitter.label_global(routine);
     abi::emit_push_reg(emitter, table_reg);
     let arms = super::objects::RUNTIME_TAGS.iter()
-        .map(|(tag, name)| (*tag, *name, format!("{DECLARED_PARAMETER_REFUSAL}_tag_{tag}")))
+        .map(|(tag, name)| (*tag, *name, format!("{routine}_tag_{tag}")))
         .collect::<Vec<_>>();
     for (tag, _, label) in &arms {
         branch_tag(emitter, tag_reg, i64::from(*tag), label);
@@ -364,8 +507,8 @@ pub(in crate::codegen) fn emit_declared_parameter_refusal(
             let fallback = data.add_string(b"object");
             super::runtime_class_messages::emit_class_name_lookup(
                 emitter, payload, &fallback,
-                &format!("{DECLARED_PARAMETER_REFUSAL}_object_fallback"),
-                &format!("{DECLARED_PARAMETER_REFUSAL}_object_done"),
+                &format!("{routine}_object_fallback"),
+                &format!("{routine}_object_done"),
             );
             refuse_loaded_type(emitter, data, descriptor_offset, prefix);
         } else {

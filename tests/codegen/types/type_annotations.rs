@@ -329,6 +329,40 @@ fn test_typed_call_user_func_array_default_parameter() {
     assert_eq!(out, "20|15");
 }
 
+/// A call by name refuses what php refuses for a declared `int`/`float` parameter: a string that
+/// is not WHOLLY numeric (`"x"`, `"7x"`, `"0x1A"`) is a TypeError, a numeric one converts. The
+/// invoker only cast, so `"x"` arrived as 0. The elements of a declared variadic collector are
+/// checked the same way, each as the argument at its own position (php names no parameter for
+/// them). Expected output is php 8.5's, up to the `, called in` suffix php appends.
+#[test]
+fn test_call_by_name_refuses_non_numeric_strings_for_numeric_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $a) { return "f:" . $a; }
+function g(float $a) { return "g:" . $a; }
+function v(int ...$xs) { return "v:" . implode(",", $xs); }
+$names = $argc > 5 ? ["x", "y", "z"] : ["f", "g", "v"];
+foreach (["7", " 7 ", "1e2", "x", "7x", "0x1A"] as $value) {
+    foreach ($names as $name) {
+        try {
+            echo call_user_func_array($name, $name === "v" ? [1, $value] : [$value]), "|";
+        } catch (TypeError $e) {
+            echo substr($e->getMessage(), 0, strpos($e->getMessage(), " given") + 6), "|";
+        }
+    }
+    echo "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "f:7|g:7|v:1,7|\nf:7|g:7|v:1,7|\nf:100|g:100|v:1,100|\n\
+         f(): Argument #1 ($a) must be of type int, string given|g(): Argument #1 ($a) must be of type float, string given|v(): Argument #2 must be of type int, string given|\n\
+         f(): Argument #1 ($a) must be of type int, string given|g(): Argument #1 ($a) must be of type float, string given|v(): Argument #2 must be of type int, string given|\n\
+         f(): Argument #1 ($a) must be of type int, string given|g(): Argument #1 ($a) must be of type float, string given|v(): Argument #2 must be of type int, string given|\n"
+    );
+}
+
 /// Keeps a descriptor callback's missing required argument catchable at invocation time.
 #[test]
 fn test_call_user_func_array_missing_required_parameter_is_catchable() {

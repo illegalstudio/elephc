@@ -1158,6 +1158,28 @@ fn emit_loaded_indexed_array_callback_call(
             emitter.label(&stored_label);
             stored_ty = PhpType::Mixed;
         } else {
+            // A declared collector (`int ...$xs`) refuses what its element type refuses, each
+            // element as the argument at its own position, exactly as php checks it: the cast
+            // alone turned `"x"` into 0 and constructed the object.
+            let declared_variadic = crate::types::signatures::variadic_param_index(sig)
+                .is_some_and(|index| sig.declared_params.get(index).copied().unwrap_or(false));
+            if declared_variadic && matches!(elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                if let Some((tags, type_name)) =
+                    crate::codegen::lower_inst::declared_parameter_contract(&variadic_elem_ty)
+                {
+                    let labels = ctx.next_label("variadic_parameter");
+                    crate::codegen::lower_inst::emit_boxed_variadic_parameter_guard(
+                        emitter,
+                        data,
+                        tags,
+                        matches!(variadic_elem_ty.codegen_repr(), PhpType::Int | PhpType::Float),
+                        &type_name,
+                        tail_index_reg,
+                        source_base + 1,
+                        &labels,
+                    );
+                }
+            }
             let (coerced_ty, boxed_to_mixed) = coerce_current_value_to_target(
                 emitter, ctx, data, &elem_ty, Some(&variadic_elem_ty),
             );
