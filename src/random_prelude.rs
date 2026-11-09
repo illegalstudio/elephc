@@ -383,7 +383,9 @@ fn procedural_functions() -> Program {
 }
 
 /// Returns whether `program` references the PHP `random` surface.
-#[allow(dead_code)]
+///
+/// The autoload prelude probe calls this on the loaded closure. Injection calls
+/// the same check without a second stack reservation.
 pub fn program_uses_random(program: &[Stmt]) -> bool {
     crate::compiler_stack::with_compiler_stack(|| program_uses_random_on_compiler_stack(program))
 }
@@ -445,7 +447,9 @@ fn is_random_class(name: &str) -> bool {
     CLASSES.contains(&trimmed) || trimmed.starts_with("random\\engine\\")
 }
 
-/// Injects the random prelude when the program references its surface.
+/// Injects the random prelude when the program references its surface or `force` is set.
+///
+/// Callers set `force` for `--with-random` and for an autoload-probe hit.
 pub fn inject_if_used(
     program: Program,
     force: bool,
