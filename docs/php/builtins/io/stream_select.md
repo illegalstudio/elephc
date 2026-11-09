@@ -1,15 +1,15 @@
 ---
 title: "stream_select()"
-description: "Runs the equivalent of the select() system call on the given arrays of streams."
+description: "Runs the equivalent of the select() system call on the given arrays of streams, or returns false when a descriptor exceeds FD_SETSIZE."
 ---
 
 ## stream_select()
 
 ```php
-function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = 0, mixed $context = null): int
+function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = 0, mixed $context = null): int|false
 ```
 
-Runs the equivalent of the select() system call on the given arrays of streams.
+Runs the equivalent of the select() system call on the given arrays of streams, or returns false when a descriptor exceeds FD_SETSIZE.
 
 **Parameters**:
 - `$read` (`array`), passed by reference
@@ -19,7 +19,7 @@ Runs the equivalent of the select() system call on the given arrays of streams.
 - `$microseconds` (`int`), default `0`, optional
 - `$context` (`mixed`), default `null`, optional
 
-**Returns**: `int`
+**Returns**: `int|false`
 
 ## Availability
 

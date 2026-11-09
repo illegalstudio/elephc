@@ -37,7 +37,7 @@ description: "Compiler internals for stream_select(): lowering path, type checks
 ## Signature summary
 
 ```php
-function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = 0, mixed $context = null): int
+function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = 0, mixed $context = null): int|false
 ```
 
 ## What the type checker enforces

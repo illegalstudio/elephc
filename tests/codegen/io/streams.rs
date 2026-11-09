@@ -7494,6 +7494,41 @@ echo $n === 0 ? "ok" : "bad:$n";
     assert_eq!(out, "ok");
 }
 
+/// A descriptor at or above `FD_SETSIZE` reports php-src's recompile warning once and
+/// makes `stream_select()` return false without waiting, like PHP.
+#[test]
+fn test_stream_select_warns_and_returns_false_above_fd_setsize() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$files = [];
+for ($i = 0; $i < 1100; $i++) { $files[] = fopen("/dev/null", "r"); }
+$read = [$files[1099]];
+$write = null;
+$except = null;
+var_dump(stream_select($read, $write, $except, 0));
+foreach ($files as $handle) { fclose($handle); }
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n");
+    assert_eq!(
+        out.stderr.matches("You MUST recompile PHP with a larger value of FD_SETSIZE.").count(),
+        1,
+        "the warning must fire exactly once, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("It is set to 1024, but you have descriptors numbered at least as high as"),
+        "expected php-src's FD_SETSIZE detail, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("--enable-fd-setsize=2048 is recommended"),
+        "expected the rounded suggestion, got stderr={}",
+        out.stderr
+    );
+}
+
 /// Verifies `stream_select()` accepts `null` for a descriptor set, PHP's usual idiom for the
 /// write and except sets, and a `?array` set that holds `null` or an array at run time. A null
 /// set reached the runtime as the null sentinel, which was read as an array header: exit 139.

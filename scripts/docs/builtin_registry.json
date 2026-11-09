@@ -138051,7 +138051,7 @@
     },
     "area": "IO",
     "canonical_name": "stream_select",
-    "description": "Runs the equivalent of the select() system call on the given arrays of streams.",
+    "description": "Runs the equivalent of the select() system call on the given arrays of streams, or returns false when a descriptor exceeds FD_SETSIZE.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "filesystem",
@@ -138232,7 +138232,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "return_type": "int|false",
       "variadic": null
     },
     "since": null,

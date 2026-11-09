@@ -32880,9 +32880,9 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        returns: TypeSpec::Union(&[TypeSpec::Int, TypeSpec::False]),
         by_ref_return: false,
-        summary: "Runs the equivalent of the select() system call on the given arrays of streams.",
+        summary: "Runs the equivalent of the select() system call on the given arrays of streams, or returns false when a descriptor exceeds FD_SETSIZE.",
         examples: &[
         ],
         php_manual: Some("function.stream-select"),

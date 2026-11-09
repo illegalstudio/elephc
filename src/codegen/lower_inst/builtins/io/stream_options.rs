@@ -247,6 +247,9 @@ pub(crate) fn lower_stream_select(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_select");
+    // The runtime returns the ready count, or -1 when a descriptor exceeded FD_SETSIZE
+    // (after PHP's warning); PHP's declared result is int|false, so box both arms.
+    super::super::regex::box_count_or_false(ctx)?;
     store_if_result(ctx, inst)
 }
 

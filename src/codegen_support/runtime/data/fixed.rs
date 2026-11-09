@@ -1860,6 +1860,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _meta_stype_stdio\n_meta_stype_stdio:\n    .ascii \"STDIO\"\n");
     out.push_str(".globl _meta_stype_socket\n_meta_stype_socket:\n    .ascii \"tcp_socket\"\n");
     out.push_str(".globl _meta_stype_user_space\n_meta_stype_user_space:\n    .ascii \"user-space\"\n");
+    out.push_str(".globl _stream_select_fd_limit_prefix\n_stream_select_fd_limit_prefix:\n    .ascii \"stream_select(): You MUST recompile PHP with a larger value of FD_SETSIZE.\\nIt is set to 1024, but you have descriptors numbered at least as high as \"\n");
+    out.push_str(".globl _stream_select_fd_limit_middle\n_stream_select_fd_limit_middle:\n    .ascii \".\\n --enable-fd-setsize=\"\n");
+    out.push_str(".globl _stream_select_fd_limit_suffix\n_stream_select_fd_limit_suffix:\n    .ascii \" is recommended, but you may want to set it\\nto equal the maximum number of open files supported by your system,\\nin order to avoid seeing this error again at a later date.\\n\"\n");
     out.push_str(".globl _meta_wrapper_plainfile\n_meta_wrapper_plainfile:\n    .ascii \"plainfile\"\n");
     out.push_str(".globl _meta_mode_r\n_meta_mode_r:\n    .ascii \"r\"\n");
     out.push_str(".globl _meta_mode_w\n_meta_mode_w:\n    .ascii \"w\"\n");

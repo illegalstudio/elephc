@@ -86,6 +86,29 @@ try {
     );
 }
 
+/// A watcher on a descriptor at or above FD_SETSIZE makes the underlying
+/// `stream_select()` warn and return false, which surfaces as
+/// `FailedPollWaitException` instead of silently dropping the descriptor.
+#[test]
+fn test_io_poll_fd_setsize_descriptor_throws_php86() {
+    let out = run86(
+        r#"<?php
+$files = [];
+for ($i = 0; $i < 1100; $i++) { $files[] = fopen("/dev/null", "r"); }
+$context = new Io\Poll\Context(Io\Poll\Backend::Poll);
+$context->add(new StreamPollHandle($files[1099]), [Io\Poll\Event::Read], "high");
+try {
+    $context->wait(Time\Duration::fromMicroseconds(1000));
+    echo "no-throw";
+} catch (Io\Poll\FailedPollWaitException $error) {
+    echo "fd-setsize";
+}
+foreach ($files as $handle) { fclose($handle); }
+"#,
+    );
+    assert_eq!(out, "fd-setsize");
+}
+
 /// A user-wrapper stream resolves through stream_cast for both the metadata probe and
 /// the readiness wait, so Io\Poll observes the wrapped socket instead of crashing.
 #[test]

@@ -13,8 +13,21 @@
 //!   observed and higher descriptors are skipped.
 //! - A set passed as `null` arrives as a zero array pointer and is skipped on both passes.
 //!   The three resource arrays are compacted in place to the ready subset.
+//! - A descriptor at or above `FD_SETSIZE` cannot be represented in the bitmaps. The
+//!   build pass records the highest descriptor and, after all three sets are built,
+//!   reports PHP's `_php_emit_fd_setsize_warning` text once through the shared warning
+//!   dispatcher, then returns `-1` without waiting. Lowering boxes that sentinel as
+//!   PHP `false`, matching `stream_select()`'s `int|false` contract.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
+
+/// First line and lead-in of php-src's `_php_emit_fd_setsize_warning()` text.
+const FD_LIMIT_PREFIX: &[u8] = b"stream_select(): You MUST recompile PHP with a larger value of FD_SETSIZE.\nIt is set to 1024, but you have descriptors numbered at least as high as ";
+/// Separator before the rounded `--enable-fd-setsize` suggestion.
+const FD_LIMIT_MIDDLE: &[u8] = b".\n --enable-fd-setsize=";
+/// Tail of php-src's FD_SETSIZE warning.
+const FD_LIMIT_SUFFIX: &[u8] = b" is recommended, but you may want to set it\nto equal the maximum number of open files supported by your system,\nin order to avoid seeing this error again at a later date.\n";
 
 /// stream_select: select across three resource arrays, compacting each to the
 /// ready subset and returning the number of ready descriptors.
@@ -58,10 +71,39 @@ pub fn emit_stream_select(emitter: &mut Emitter) {
             emitter.instruction(&format!("stp xzr, xzr, [sp, #{}]", base + index * 16)); // clear one 16-byte bitmap slice
         }
     }
+    emitter.instruction("str xzr, [sp, #568]");                                 // highest descriptor observed across the sets
 
     for (arr_off, fds_off, suffix) in [(0, 32, "r"), (8, 160, "w"), (16, 288, "e")] {
         emit_build_fdset_aarch64(emitter, arr_off, fds_off, suffix);
     }
+
+    // -- php-src's FD_SETSIZE warning: report the highest descriptor once --
+    emitter.instruction("ldr x9, [sp, #568]");                                  // highest descriptor observed across the sets
+    emitter.instruction("cmp x9, #1024");                                       // does any descriptor exceed FD_SETSIZE?
+    emitter.instruction("b.lo __rt_stream_select_fd_limit_done");               // no warning needed
+    abi::emit_symbol_address(emitter, "x1", "_stream_select_fd_limit_prefix");
+    emitter.instruction(&format!("mov x2, #{}", FD_LIMIT_PREFIX.len()));        // warning prefix byte length
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
+    emitter.instruction("ldr x0, [sp, #568]");                                  // descriptor reported in the warning
+    abi::emit_call_label(emitter, "__rt_itoa");                                 // format it as decimal text
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
+    abi::emit_symbol_address(emitter, "x1", "_stream_select_fd_limit_middle");
+    emitter.instruction(&format!("mov x2, #{}", FD_LIMIT_MIDDLE.len()));        // separator byte length
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
+    emitter.instruction("ldr x0, [sp, #568]");                                  // recompute the rounded suggestion
+    emitter.instruction("add x0, x0, #1024");                                   // round up to the next FD_SETSIZE multiple
+    emitter.instruction("lsr x0, x0, #10");                                     // drop the low ten bits
+    emitter.instruction("lsl x0, x0, #10");                                     // restore the rounded value
+    abi::emit_call_label(emitter, "__rt_itoa");
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
+    abi::emit_symbol_address(emitter, "x1", "_stream_select_fd_limit_suffix");
+    emitter.instruction(&format!("mov x2, #{}", FD_LIMIT_SUFFIX.len()));        // warning tail byte length
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // finish and dispatch the warning
+    emitter.instruction("mov x0, #-1");                                         // PHP returns false without waiting when a descriptor exceeds FD_SETSIZE
+    emitter.instruction("ldp x29, x30, [sp, #496]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #576");                                    // release the select state frame
+    emitter.instruction("ret");                                                 // return the failure sentinel to the caller
+    emitter.label("__rt_stream_select_fd_limit_done");
 
     // -- select(nfds=1024, read, write, except, timeout, sigmask) --
     emitter.instruction("mov x0, #1024");                                       // nfds: examine descriptors 0..1023
@@ -134,8 +176,13 @@ fn emit_build_fdset_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, s
     emitter.label(&cast_skip_l);
     emitter.instruction("cmp x13, #0");                                         // is the descriptor negative?
     emitter.instruction(&format!("b.lt {}", next_l));                           // skip descriptors that cannot be set
+    emitter.instruction("ldr x14, [sp, #568]");                                 // current highest descriptor
+    emitter.instruction("cmp x13, x14");                                        // is this descriptor higher than the running maximum?
+    emitter.instruction(&format!("b.le {}_max_done", next_l));                  // keep the existing maximum
+    emitter.instruction("str x13, [sp, #568]");                                 // record the new highest descriptor
+    emitter.label(&format!("{}_max_done", next_l));
     emitter.instruction("cmp x13, #1024");                                      // is the descriptor outside the FD_SETSIZE range?
-    emitter.instruction(&format!("b.ge {}", next_l));                           // skip out-of-range descriptors
+    emitter.instruction(&format!("b.ge {}", next_l));                           // skip it; the post-build check warns once
     emitter.instruction("lsr x14, x13, #6");                                    // bitmap word index = fd / 64
     emitter.instruction("add x14, sp, x14, lsl #3");                            // address the selected bitmap word
     emitter.instruction(&format!("add x14, x14, #{}", fds_off));                // add this set's bitmap base
@@ -242,6 +289,7 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     //   [-424]=timeout.sec [-416]=timeout.nsec [-432]=ready count
     //   [-440..-464]=caller-saved loop registers spilled across
     //   __rt_user_wrapper_stream_cast (r12/r13 are callee-saved and survive it)
+    //   [-472]=highest descriptor observed across the sets
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 512");                                        // allocate the select state frame (incl. cast-call spill slots)
@@ -259,10 +307,43 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
             emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", base - index * 8)); // clear one bitmap word
         }
     }
+    emitter.instruction("mov QWORD PTR [rbp - 472], 0");                        // highest descriptor observed across the sets
 
     for (arr_off, fds_off, suffix) in [(8, 152, "r"), (16, 280, "w"), (24, 408, "e")] {
         emit_build_fdset_x86(emitter, arr_off, fds_off, suffix);
     }
+
+    // -- php-src's FD_SETSIZE warning: report the highest descriptor once --
+    emitter.instruction("mov r9, QWORD PTR [rbp - 472]");                       // highest descriptor observed across the sets
+    emitter.instruction("cmp r9, 1024");                                        // does any descriptor exceed FD_SETSIZE?
+    emitter.instruction("jb __rt_stream_select_fd_limit_done_x86");             // no warning needed
+    abi::emit_symbol_address(emitter, "rdi", "_stream_select_fd_limit_prefix");
+    emitter.instruction(&format!("mov esi, {}", FD_LIMIT_PREFIX.len()));        // warning prefix byte length
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 472]");                      // descriptor reported in the warning
+    abi::emit_call_label(emitter, "__rt_itoa");                                 // format it as decimal text
+    emitter.instruction("mov rdi, rax");                                        // pass the formatted pointer to the fragment sink
+    emitter.instruction("mov rsi, rdx");                                        // pass the formatted length to the fragment sink
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
+    abi::emit_symbol_address(emitter, "rdi", "_stream_select_fd_limit_middle");
+    emitter.instruction(&format!("mov esi, {}", FD_LIMIT_MIDDLE.len()));        // separator byte length
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 472]");                      // recompute the rounded suggestion
+    emitter.instruction("add rax, 1024");                                       // round up to the next FD_SETSIZE multiple
+    emitter.instruction("shr rax, 10");                                         // drop the low ten bits
+    emitter.instruction("shl rax, 10");                                         // restore the rounded value
+    abi::emit_call_label(emitter, "__rt_itoa");
+    emitter.instruction("mov rdi, rax");                                        // pass the formatted pointer to the fragment sink
+    emitter.instruction("mov rsi, rdx");                                        // pass the formatted length to the fragment sink
+    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
+    abi::emit_symbol_address(emitter, "rdi", "_stream_select_fd_limit_suffix");
+    emitter.instruction(&format!("mov esi, {}", FD_LIMIT_SUFFIX.len()));        // warning tail byte length
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // finish and dispatch the warning
+    emitter.instruction("mov rax, -1");                                         // PHP returns false without waiting when a descriptor exceeds FD_SETSIZE
+    emitter.instruction("add rsp, 512");                                        // release the select state frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the failure sentinel to the caller
+    emitter.label("__rt_stream_select_fd_limit_done_x86");
 
     // -- pselect6(nfds=1024, read, write, except, timeout, sigmask) --
     emitter.instruction("mov edi, 1024");                                       // nfds: examine descriptors 0..1023
@@ -331,8 +412,13 @@ fn emit_build_fdset_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     emitter.label(&cast_skip_l);
     emitter.instruction("cmp rdx, 0");                                          // is the descriptor negative?
     emitter.instruction(&format!("jl {}", next_l));                             // skip descriptors that cannot be set
+    emitter.instruction("mov r10, QWORD PTR [rbp - 472]");                      // current highest descriptor
+    emitter.instruction("cmp rdx, r10");                                        // is this descriptor higher than the running maximum?
+    emitter.instruction(&format!("jbe {}_max_done_x86", next_l));               // keep the existing maximum
+    emitter.instruction("mov QWORD PTR [rbp - 472], rdx");                      // record the new highest descriptor
+    emitter.label(&format!("{}_max_done_x86", next_l));
     emitter.instruction("cmp rdx, 1024");                                       // is the descriptor outside the FD_SETSIZE range?
-    emitter.instruction(&format!("jae {}", next_l));                            // skip out-of-range descriptors
+    emitter.instruction(&format!("jae {}", next_l));                            // skip it; the post-build check warns once
     emitter.instruction("mov r10, rdx");                                        // copy the descriptor for the word index
     emitter.instruction("shr r10, 6");                                          // bitmap word index = fd / 64
     emitter.instruction("mov rcx, rdx");                                        // descriptor position for the shift count

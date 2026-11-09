@@ -557,8 +557,11 @@ Known limits:
   epoll/kqueue syscalls directly, which is why edge triggering is refused.
 - `EventPorts` and `WSAPoll` constructors raise `BackendUnavailableException`
   because elephc does not target Solaris or Windows.
-- Descriptors `1024` and above are silently ignored by `stream_select()` and by
-  `Io\Poll`; PHP's `stream_select()` emits its `FD_SETSIZE` warning in that case.
+- A descriptor at or above `FD_SETSIZE` (`1024`) makes `stream_select()` emit PHP's
+  `You MUST recompile PHP with a larger value of FD_SETSIZE` warning once and return
+  `false` without waiting, exactly like PHP. `Io\Poll` observes that `false` and throws
+  `FailedPollWaitException`, so a high-descriptor watcher fails explicitly instead of
+  being silently dropped. Driving the wait with `poll(2)` would remove the limit.
 - `wait()` re-checks a level-ready descriptor that produced no watched event at
   1 ms granularity, so an `Error`/`HangUp`-only watcher does not return early on
   ordinary readable data. It can wake up to 1000 times per second while that data
