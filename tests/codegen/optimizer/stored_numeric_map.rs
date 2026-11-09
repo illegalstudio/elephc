@@ -1208,6 +1208,32 @@ echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "
     assert!(!main.contains("runtime.array_map "), "{main}");
 }
 
+/// Default `array_reverse($packed)` renumbers its keys and keeps the element type, so it is a
+/// direct packed source; the key-preserving form stays generic.
+#[test]
+fn test_stored_numeric_map_array_reverse_source() {
+    let source = r#"<?php
+$values = range(1, 10);
+$a = array_map(fn($v) => $v + 1, array_reverse([1, 2, 3]));
+$b = array_map(fn($v) => $v * 1.5, array_reverse($values, false));
+$c = array_map(fn($v) => $v / 2.0, array_reverse(array_slice($values, 2, 3)));
+$d = array_map(fn($v) => $v * 2, array_reverse(range(1, 3)));
+$e = array_map(fn($v) => $v + 1.5, array_reverse($values, true));
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implode(",", $d), "|", implode(",", $e), "
+";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "4,3,2|15,13.5,12,10.5,9,7.5,6,4.5,3,1.5|2.5,2,1.5|6,4,2|11.5,10.5,9.5,8.5,7.5,6.5,5.5,4.5,3.5,2.5
+"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_numeric").count(), 2, "{main}");
+    assert_eq!(main.matches("runtime.array_map_float_scale").count(), 1, "{main}");
+    assert_eq!(main.matches("runtime.array_map_float_div").count(), 1, "{main}");
+    assert_eq!(main.matches("runtime.array_map ").count(), 1, "{main}");
+}
+
 /// `array_slice(..., 0, ..., true)` preserves the 0..n-1 keys of a packed list, so it
 /// remains a direct packed source; a later offset still falls back to the generic map.
 #[test]
@@ -1291,13 +1317,14 @@ $c = array_map(fn($v) => $v / 2.0, array_slice(range(1, 10), 1, 4));
 $d = array_map(fn($v) => $v + 1, array_slice([1, 2, 3, 4], 1));
 $e = array_map(fn($v) => $v + 1, array_values(array_slice($values, 2, 3)));
 $f = array_map(fn($v) => $v + 1, array_slice($values, 0, 4, true));
-echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implode(",", $d), "|", implode(",", $e), "|", implode(",", $f), "\n";
+$g = array_map(fn($v) => $v + 1, array_reverse(array_slice($values, 2, 3)));
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implode(",", $d), "|", implode(",", $e), "|", implode(",", $f), "|", implode(",", $g), "\n";
 "#,
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(
         out.stdout,
-        "2.5,3.5,4.5,5.5,6.5|4.5,6,7.5|1,1.5,2,2.5|3,4,5|4,5,6|2,3,4,5\n"
+        "2.5,3.5,4.5,5.5,6.5|4.5,6,7.5|1,1.5,2,2.5|3,4,5|4,5,6|2,3,4,5|6,5,4\n"
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -1315,12 +1342,13 @@ for ($i = 0; $i < 3; $i++) {
     $a = array_map(fn($v) => $v + 1.5, range(1, 10));
     $b = array_map(fn($v) => $v / 2.0, array_slice(range(1, 10), 2, 3));
     $c = array_map(fn($v) => $v + 1, array_slice(range(1, 10), 0, 4, true));
-    $sum += array_sum($a) + array_sum($b) + array_sum($c);
+    $d = array_map(fn($v) => $v + 1, array_reverse(range(1, 5)));
+    $sum += array_sum($a) + array_sum($b) + array_sum($c) + array_sum($d);
 }
 echo $sum, "\n";
 "#;
-    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "270\n");
-    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "270\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "330\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "330\n");
 }
 
 /// Every supported target emits the fused kernels for direct range/slice sources.
@@ -1333,7 +1361,8 @@ function directSources(int $seed): float {
     $b = array_map(fn($v) => $v / 2.0, array_slice(range(1, 10), 2, 3));
     $c = array_map(fn($v) => $v + 1, array_values(range(1, 5)));
     $d = array_map(fn($v) => $v * 1.5, array_slice(range(1, 10), 0, 4, true));
-    return array_sum($a) + array_sum($b) + array_sum($c) + array_sum($d) + $seed;
+    $e = array_map(fn($v) => $v * $v, array_reverse(range(1, 5)));
+    return array_sum($a) + array_sum($b) + array_sum($c) + array_sum($d) + array_sum($e) + $seed;
 }
 "#;
     for target in [
@@ -1347,6 +1376,7 @@ function directSources(int $seed): float {
         assert!(assembly.contains("__rt_array_map_float_affine"), "{target}");
         assert!(assembly.contains("__rt_array_map_float_div"), "{target}");
         assert!(assembly.contains("__rt_array_map_numeric"), "{target}");
+        assert!(assembly.contains("__rt_array_map_square"), "{target}");
         assert!(!assembly.contains("__rt_array_map_boxed"), "{target}");
     }
 }

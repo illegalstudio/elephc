@@ -668,9 +668,9 @@ pub(super) fn lower_count_explode(
 /// Conservative proof that a stored-map source lowers to a packed `array<int>`.
 ///
 /// Variables use the lowering context's flow-sensitive type. Array literals, `range()` with
-/// integer-literal arguments, key-renumbering `array_slice()` over another proven source, and
-/// `array_values()` over one of those are proven structurally. The marker accepts the same
-/// shapes; when this proof fails before
+/// integer-literal arguments, key-renumbering `array_slice()` over another proven source,
+/// `array_values()`, and default `array_reverse()` over one of those are proven structurally.
+/// The marker accepts the same shapes; when this proof fails before
 /// any emission, the dispatcher falls back to the ordinary `array_map()` lowering.
 fn lowering_packed_int_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
     match &expr.kind {
@@ -710,6 +710,13 @@ fn lowering_packed_int_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> boo
                         && lowering_packed_int_source(ctx, &args[0])
                 }
                 "array_values" => args.len() == 1 && lowering_packed_int_source(ctx, &args[0]),
+                "array_reverse" => {
+                    (1..=2).contains(&args.len())
+                        && crate::ir_lower::stmt::stored_numeric_map::reverse_preserves_packed_layout(
+                            args.get(1),
+                        )
+                        && lowering_packed_int_source(ctx, &args[0])
+                }
                 _ => false,
             }
         }
