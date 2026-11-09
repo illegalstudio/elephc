@@ -745,7 +745,15 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     {
         return unbox_iterable_param_storage(ctx, value, Some(arg.span));
     }
-    if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+    if param_ty == PhpType::Str
+        && matches!(
+            source_ty,
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
+        )
+    {
+        // Objects reach a string parameter through PHP's `__toString` conversion; the
+        // checker already accepts the call and the EIR cast owns the dispatch (and the
+        // catchable failure for an object without `__toString`).
         return coerce_to_string(ctx, value, arg);
     }
     if bindable {
