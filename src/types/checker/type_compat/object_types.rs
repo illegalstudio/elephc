@@ -87,6 +87,21 @@ impl Checker {
         false
     }
 
+    /// Returns true when `class_name` is `ancestor_name` or nominally extends or implements it.
+    ///
+    /// These are the relations for which `common_object_type` keeps the ancestor side, so an
+    /// object slot typed as the ancestor can hold the class without changing its view. Generic
+    /// variance and the non-nominal `object` type are deliberately excluded: EIR lowering keeps
+    /// an indexed object element only for this same nominal relation
+    /// (`ir_lower::stmt::array_write_storage`).
+    pub(crate) fn object_is_a(&self, class_name: &str, ancestor_name: &str) -> bool {
+        class_name == ancestor_name
+            || self.is_subclass_of(class_name, ancestor_name)
+            || (self.interfaces.contains_key(ancestor_name)
+                && (self.class_implements_interface(class_name, ancestor_name)
+                    || self.interface_extends_interface(class_name, ancestor_name)))
+    }
+
     /// Returns true if `class_name` directly implements `interface_name` (not via inheritance).
     pub(crate) fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
         self.classes.get(class_name).is_some_and(|class_info| {

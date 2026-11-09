@@ -4111,8 +4111,12 @@ fn effective_array_set_value_type(
     if matches!(elem_ty, PhpType::Never | PhpType::Void) {
         return require_supported_array_set_value(value_ty, inst);
     }
+    // Every pointer is one raw word and every object one counted object pointer, whatever the
+    // target or class. Lowering keeps an object element only for a nominal upcast
+    // (`ir_lower::stmt::array_write_storage`), like the append that stores by element type.
     if elem_ty == value_ty
         || matches!((&elem_ty, &value_ty), (PhpType::Pointer(_), PhpType::Pointer(_)))
+        || matches!((&elem_ty, &value_ty), (PhpType::Object(_), PhpType::Object(_)))
     {
         return require_supported_array_set_value(value_ty, inst);
     }
