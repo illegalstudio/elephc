@@ -421,6 +421,8 @@ A value of the wrong class or type throws `TypeError` with PHP's message for tha
 
 A `static` return is checked against the called class, as in PHP. Named arguments (`take(t: $m)`) are checked like positional ones. After the boundary, the value has the declared type.
 
+**Differences from PHP.** A `Closure` is rejected at a bare `object` return or parameter, and at an `object` or `?object` property, because elephc stores closures apart from class instances. A `?object` return or parameter keeps it.
+
 **Not covered yet.** A `callable` boundary still rejects a `mixed` value at compile time. A call through a dynamic method name (`$obj->$name($m)`) does not check its arguments. A union that mixes classes with scalar types (`Timer|int`) keeps the static rules.
 
 ### Strict types

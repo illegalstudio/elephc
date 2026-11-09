@@ -710,7 +710,11 @@ fn guard_runtime_object_param(
 ) -> Option<LoweredValue> {
     let (param_name, param_ty) = sig.params.get(index)?;
     let boundary = runtime_object_param_boundary(ctx, param_ty, value.value, arg)?;
-    if let (PhpType::Object(class_name), true) = (param_ty, reread_guard_follows) {
+    // The re-reading guard tests `instanceof`, which a closure passes for a bare `object`
+    // parameter; this one keeps closures out of that raw object storage.
+    let bare_object = matches!(param_ty, PhpType::Object(class)
+        if class.is_empty() || class.eq_ignore_ascii_case("object"));
+    if let (PhpType::Object(class_name), true) = (param_ty, reread_guard_follows && !bare_object) {
         let source_ty = argument_static_type(ctx, arg)
             .unwrap_or_else(|| ctx.builder.value_php_type(value.value));
         let guarded_by_rereading = union_object_guard_word(&source_ty, class_name).is_some()
