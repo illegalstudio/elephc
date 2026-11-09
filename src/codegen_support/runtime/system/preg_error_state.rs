@@ -169,4 +169,3 @@ pub(crate) fn emit_exec_call(emitter: &mut Emitter) {
         Arch::X86_64 => emitter.instruction("call __rt_preg_exec"),             // execute through the error-recording wrapper
     }
 }
-

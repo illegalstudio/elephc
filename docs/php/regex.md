@@ -194,8 +194,13 @@ error makes the call fail like PHP: `preg_match()`, `preg_match_all()` and
 `preg_split()` return `false`, `preg_replace()` and `preg_replace_callback()`
 return `null`, and `preg_grep()` returns the entries collected so far. A subject
 PCRE2 rejects as malformed UTF-8 under `/u` sets `PREG_BAD_UTF8_ERROR`; an
-exhausted PCRE2 match or heap limit sets `PREG_BACKTRACK_LIMIT_ERROR`. eval()
-keeps its own error state, like the JSON error state.
+exhausted PCRE2 match or heap limit sets `PREG_BACKTRACK_LIMIT_ERROR`. As in
+PHP, an error recorded by a `preg_*` call inside a `preg_replace_callback()`
+callback stays visible to `preg_last_error()` without failing the outer call.
+
+eval() keeps its own error state, like the JSON error state: `preg_last_error()`
+in eval'd code does not see an error recorded by compiled code, and compiled code
+does not see one recorded inside eval(). PHP has a single state.
 
 `PCRE_VERSION`, `PCRE_VERSION_MAJOR` and `PCRE_VERSION_MINOR` describe the
 managed PCRE2 package (10.47), not the PHP build's library.
