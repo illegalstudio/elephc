@@ -226,11 +226,16 @@ process lifetime; see [Concurrency model](#concurrency-model).
 
 All models start with a prefork master and `--workers N` web workers. On Linux,
 each worker binds its own `SO_REUSEPORT` socket and the kernel hashes new
-connections across the group. On Apple targets the master binds one listener
-before forking and the workers accept on inherited duplicates: Darwin's
-`SO_REUSEPORT` sends every connection from one client address to the same
-socket, so per-worker sockets leave all but one core idle. The compile-time
-isolation model decides where PHP executes:
+connections across the group. On Apple targets the master binds the only TCP
+listener and accepts every connection itself, then passes the descriptor to a
+worker over a per-worker Unix datagram channel with `SCM_RIGHTS`. Each
+descriptor carries an id; the master holds its copy until the worker
+acknowledges installation, drains acknowledgements between accepts, and releases
+a reaped worker's pending descriptors so clients retry instead of hanging.
+Handoff is round-robin and skips a worker whose channel is full, which avoids
+both Darwin's per-client-address `SO_REUSEPORT` hash and a shared accept queue
+that lets one worker pin its keep-alive connections. The compile-time isolation
+model decides where PHP executes:
 
 | Model | PHP process lifetime | Maximum parallel handlers | Response | Operational trade-off |
 |---|---|---:|---|---|

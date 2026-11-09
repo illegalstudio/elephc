@@ -10,10 +10,13 @@
 //! - Linux keeps one `SO_REUSEPORT` TCP listener per worker: the kernel hashes
 //!   the connection 4-tuple across the group, which scales and avoids a shared
 //!   accept queue.
-//! - Darwin does NOT distribute TCP connections by the 4-tuple. Every connection
-//!   from one client IP lands on the same `SO_REUSEPORT` socket, so a prefork
-//!   server with N workers serves from one core. On Apple targets the master
-//!   binds once and workers accept on inherited duplicates of that descriptor.
+//! - Darwin does NOT distribute TCP connections by the 4-tuple, and a shared
+//!   accept queue lets one worker pin the keep-alive connections it wins. On
+//!   Apple targets the master binds the only TCP listener, accepts every
+//!   connection itself, and passes each descriptor to a worker over a Unix
+//!   datagram channel with `SCM_RIGHTS`. Round-robin starts at the next worker
+//!   and skips channels that are not writable, so a busy worker cannot stall
+//!   the acceptor. The master holds each descriptor until the worker acks.
 //! - UDS is bound once in the master on every target and inherited by workers
 //!   because `SO_REUSEPORT` does not balance `accept()` across AF_UNIX listeners.
 //! - The master marks shared descriptors `FD_CLOEXEC`, so exec'd handler and user
@@ -25,15 +28,24 @@
 //!   `REMOTE_PORT`/`SERVER_PORT` are zero.
 
 use std::io;
+#[cfg(target_vendor = "apple")]
+use std::collections::HashMap;
 use std::net::SocketAddr;
+#[cfg(target_vendor = "apple")]
+use std::net::TcpStream;
 use std::os::fd::{AsRawFd, RawFd};
 #[cfg(target_vendor = "apple")]
-use std::os::fd::{FromRawFd, IntoRawFd};
+use std::os::fd::FromRawFd;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+#[cfg(target_vendor = "apple")]
+use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 #[cfg(target_vendor = "apple")]
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+#[cfg(target_vendor = "apple")]
+use std::sync::Mutex;
 use std::task::{Context, Poll};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -43,17 +55,43 @@ use tokio::net::{TcpListener, UnixListener};
 /// Pending-connection backlog for each listening socket.
 const LISTEN_BACKLOG: i32 = 1024;
 
-/// Raw descriptor of the master-owned TCP listener on Apple targets (`-1` elsewhere).
-#[cfg(target_vendor = "apple")]
-static SHARED_LISTENER_FD: AtomicI32 = AtomicI32::new(-1);
-
-/// Binds the process-wide TCP listener every worker accepts on.
+/// Master-owned TCP listener and per-worker descriptor channels.
 ///
-/// Linux and other targets keep per-worker `SO_REUSEPORT` sockets, so this is a
-/// no-op there. On Darwin an invalid address or bind failure is fatal before any
-/// worker is forked, instead of turning into a worker crash loop.
+/// On Apple targets a single acceptor drains the shared listener and passes
+/// accepted descriptors to workers. That avoids both the Darwin
+/// `SO_REUSEPORT` single-client-IP hash and a thundering-herd accept queue that
+/// lets one worker pin every keep-alive connection.
+///
+/// Each descriptor carries a `u64` id and is held in `pending` until the worker
+/// acknowledges that it installed its own copy. Closing the master copy early
+/// can turn queued request bytes into an RST on Darwin, so the ack is required.
+/// Acks are asynchronous: the acceptor drains them between accepts and never
+/// blocks on a worker that is busy or recycling.
+pub(crate) struct SharedTcp {
+    #[cfg(target_vendor = "apple")]
+    listener: std::net::TcpListener,
+    #[cfg(target_vendor = "apple")]
+    master_ends: Vec<UnixDatagram>,
+    #[cfg(target_vendor = "apple")]
+    worker_ends: Vec<UnixDatagram>,
+    #[cfg(target_vendor = "apple")]
+    next_worker: AtomicUsize,
+    #[cfg(target_vendor = "apple")]
+    next_id: AtomicU64,
+    #[cfg(target_vendor = "apple")]
+    pending: Mutex<HashMap<u64, (usize, std::net::TcpStream)>>,
+    #[cfg(target_vendor = "apple")]
+    stop: AtomicBool,
+}
+
+/// Binds the master-owned TCP listener and creates one descriptor channel per
+/// worker. Returns `None` on targets that keep per-worker `SO_REUSEPORT`
+/// sockets.
 #[cfg(target_vendor = "apple")]
-pub(crate) fn install_shared(addr: SocketAddr) -> io::Result<()> {
+pub(crate) fn install_shared(
+    addr: SocketAddr,
+    workers: usize,
+) -> io::Result<Option<Arc<SharedTcp>>> {
     let domain = if addr.is_ipv6() {
         Domain::IPV6
     } else {
@@ -66,46 +104,356 @@ pub(crate) fn install_shared(addr: SocketAddr) -> io::Result<()> {
     socket.listen(LISTEN_BACKLOG)?;
     set_close_on_exec(socket.as_raw_fd())?;
     let listener: std::net::TcpListener = socket.into();
-    let fd = listener.into_raw_fd();
-    SHARED_LISTENER_FD.store(fd, Ordering::SeqCst);
-    Ok(())
+
+    let workers = workers.max(1);
+    let mut master_ends = Vec::with_capacity(workers);
+    let mut worker_ends = Vec::with_capacity(workers);
+    for _ in 0..workers {
+        let (master, worker) = UnixDatagram::pair()?;
+        // A full channel is reported to the acceptor as `WouldBlock`, which
+        // makes it try the next worker. The worker side stays blocking so its
+        // receiver thread can sleep in `recvmsg`.
+        master.set_nonblocking(true)?;
+        set_no_sigpipe(master.as_raw_fd())?;
+        set_no_sigpipe(worker.as_raw_fd())?;
+        set_close_on_exec(master.as_raw_fd())?;
+        set_close_on_exec(worker.as_raw_fd())?;
+        master_ends.push(master);
+        worker_ends.push(worker);
+    }
+
+    Ok(Some(Arc::new(SharedTcp {
+        listener,
+        master_ends,
+        worker_ends,
+        next_worker: AtomicUsize::new(0),
+        next_id: AtomicU64::new(0),
+        pending: Mutex::new(HashMap::with_capacity(workers)),
+        stop: AtomicBool::new(false),
+    })))
 }
 
 /// Leaves the per-worker `SO_REUSEPORT` strategy in place on non-Apple targets.
 #[cfg(not(target_vendor = "apple"))]
-pub(crate) fn install_shared(_addr: SocketAddr) -> io::Result<()> {
-    Ok(())
+pub(crate) fn install_shared(
+    _addr: SocketAddr,
+    _workers: usize,
+) -> io::Result<Option<Arc<SharedTcp>>> {
+    Ok(None)
 }
 
-/// Returns a worker-owned duplicate of the shared TCP listener on Apple targets.
-///
-/// `None` means the platform uses per-worker `SO_REUSEPORT` sockets and the
-/// caller must bind its own listener. The duplicate shares the master's accept
-/// queue but has an independent descriptor, so a worker that exits closes only
-/// its own handle.
+impl SharedTcp {
+    /// Returns a worker-owned descriptor channel for `index`.
+    #[cfg(target_vendor = "apple")]
+    pub(crate) fn worker_receiver(&self, index: usize) -> io::Result<UnixDatagram> {
+        let receiver = self.worker_ends.get(index).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "worker index out of range")
+        })?;
+        let clone = receiver.try_clone()?;
+        set_close_on_exec(clone.as_raw_fd())?;
+        Ok(clone)
+    }
+
+    /// Starts the master acceptor thread.
+    #[cfg(target_vendor = "apple")]
+    pub(crate) fn start_accepting(self: &Arc<Self>) -> std::thread::JoinHandle<()> {
+        let shared = Arc::clone(self);
+        std::thread::Builder::new()
+            .name("elephc-tcp-accept".to_string())
+            .spawn(move || accept_loop(shared))
+            .expect("failed to spawn the TCP accept thread")
+    }
+
+    /// Requests acceptor shutdown. The thread exits after its poll timeout.
+    pub(crate) fn stop(&self) {
+        #[cfg(target_vendor = "apple")]
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// Drops every descriptor still waiting for `index` and clears its stale
+    /// acks. Called after the supervisor reaps a worker and before the
+    /// replacement is forked, so a lost handoff cannot pin a client forever.
+    #[cfg(target_vendor = "apple")]
+    pub(crate) fn release_worker(&self, index: usize) {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.retain(|_, (owner, _)| *owner != index);
+        if let Some(socket) = self.master_ends.get(index) {
+            let mut id = [0u8; 8];
+            // Nonblocking: stop at the first `WouldBlock`/EOF/error.
+            while let Ok(8) = socket.recv(&mut id) {}
+        }
+    }
+}
+
+/// Drains completed handoffs, accepts pending connections, and passes each
+/// descriptor to a worker.
 #[cfg(target_vendor = "apple")]
-pub(crate) fn worker_listener() -> Option<io::Result<std::net::TcpListener>> {
-    let fd: RawFd = SHARED_LISTENER_FD.load(Ordering::SeqCst);
-    if fd < 0 {
-        return None;
+fn accept_loop(shared: Arc<SharedTcp>) {
+    let fd = shared.listener.as_raw_fd();
+    while !shared.stop.load(Ordering::SeqCst) {
+        shared.drain_acks();
+        // Only accept when a connection is pending AND at least one worker can
+        // receive a descriptor. Connections that cannot be handed off stay in
+        // the kernel accept queue, so the backlog applies backpressure instead
+        // of the acceptor blocking on a channel owned by a busy worker.
+        if !poll_fd(fd, libc::POLLIN, 100) {
+            continue;
+        }
+        if !shared.wait_for_writable_worker(100) {
+            continue;
+        }
+        match shared.listener.accept() {
+            Ok((stream, _peer)) => {
+                if !shared.pass_descriptor(stream) {
+                    // Every channel filled between the writability poll and the
+                    // handoff. Dropping this connection is bounded: the client
+                    // observes a reset and retries, while the acceptor stays
+                    // responsive for workers that are draining.
+                    continue;
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
     }
-    let duplicate = unsafe { libc::dup(fd) };
-    if duplicate < 0 {
-        return Some(Err(io::Error::last_os_error()));
-    }
-    if let Err(error) = set_close_on_exec(duplicate) {
-        unsafe { libc::close(duplicate) };
-        return Some(Err(error));
-    }
-    // SAFETY: `duplicate` is a fresh descriptor returned by `dup`; ownership is
-    // transferred to the listener exactly once.
-    Some(Ok(unsafe { std::net::TcpListener::from_raw_fd(duplicate) }))
 }
 
-/// Returns `None` on targets that bind one TCP listener per worker.
-#[cfg(not(target_vendor = "apple"))]
-pub(crate) fn worker_listener() -> Option<io::Result<std::net::TcpListener>> {
-    None
+impl SharedTcp {
+    /// Waits until at least one worker descriptor channel accepts a write.
+    #[cfg(target_vendor = "apple")]
+    fn wait_for_writable_worker(&self, timeout_ms: libc::c_int) -> bool {
+        let mut fds: Vec<libc::pollfd> = self
+            .master_ends
+            .iter()
+            .map(|socket| libc::pollfd {
+                fd: socket.as_raw_fd(),
+                events: libc::POLLOUT,
+                revents: 0,
+            })
+            .collect();
+        let result = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, timeout_ms) };
+        if result <= 0 {
+            return false;
+        }
+        fds.iter()
+            .any(|entry| entry.revents & libc::POLLOUT != 0)
+    }
+
+    /// Retires every acked descriptor whose worker installed its own copy.
+    #[cfg(target_vendor = "apple")]
+    fn drain_acks(&self) {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for socket in &self.master_ends {
+            let mut id = [0u8; 8];
+            loop {
+                match socket.recv(&mut id) {
+                    Ok(8) => {
+                        pending.remove(&u64::from_ne_bytes(id));
+                    }
+                    // A short datagram is not a valid ack; discard it and keep
+                    // draining so one bad message cannot wedge later acks.
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+
+    /// Passes one accepted socket to a writable worker, starting at the next
+    /// round-robin slot, and keeps the master's copy until the worker acks.
+    #[cfg(target_vendor = "apple")]
+    fn pass_descriptor(&self, stream: std::net::TcpStream) -> bool {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let fd = stream.as_raw_fd();
+        let count = self.master_ends.len();
+        let start = self.next_worker.fetch_add(1, Ordering::Relaxed);
+        for offset in 0..count {
+            let index = (start + offset) % count;
+            if send_fd(&self.master_ends[index], fd, id).is_ok() {
+                self.pending
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(id, (index, stream));
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Polls one descriptor for `events` and reports whether it is ready.
+#[cfg(target_vendor = "apple")]
+fn poll_fd(fd: RawFd, events: libc::c_short, timeout_ms: libc::c_int) -> bool {
+    let mut entry = libc::pollfd {
+        fd,
+        events,
+        revents: 0,
+    };
+    let result = unsafe { libc::poll(&mut entry, 1, timeout_ms) };
+    result > 0 && entry.revents & events != 0
+}
+
+/// Transfers one descriptor with its id over a Unix datagram channel.
+#[cfg(target_vendor = "apple")]
+fn send_fd(socket: &UnixDatagram, fd: RawFd, id: u64) -> io::Result<()> {
+    let mut payload = id.to_ne_bytes();
+    let mut iov = libc::iovec {
+        iov_base: payload.as_mut_ptr().cast(),
+        iov_len: payload.len(),
+    };
+    let mut control = [0u8; 64];
+    let space = unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &mut iov;
+    message.msg_iovlen = 1;
+    message.msg_control = control.as_mut_ptr().cast();
+    message.msg_controllen = space as _;
+    let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
+    if header.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "failed to build SCM_RIGHTS header",
+        ));
+    }
+    unsafe {
+        (*header).cmsg_level = libc::SOL_SOCKET;
+        (*header).cmsg_type = libc::SCM_RIGHTS;
+        (*header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
+        std::ptr::copy_nonoverlapping(
+            &fd,
+            libc::CMSG_DATA(header).cast::<RawFd>(),
+            1,
+        );
+    }
+    let result = unsafe { libc::sendmsg(socket.as_raw_fd(), &message, 0) };
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else if result as usize == payload.len() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::WriteZero,
+            "short descriptor datagram",
+        ))
+    }
+}
+
+/// Receives one descriptor and its id from a Unix datagram channel.
+#[cfg(target_vendor = "apple")]
+fn recv_fd(socket: &UnixDatagram) -> io::Result<(RawFd, u64)> {
+    let mut payload = [0u8; 8];
+    let mut iov = libc::iovec {
+        iov_base: payload.as_mut_ptr().cast(),
+        iov_len: payload.len(),
+    };
+    let mut control = [0u8; 64];
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &mut iov;
+    message.msg_iovlen = 1;
+    message.msg_control = control.as_mut_ptr().cast();
+    message.msg_controllen = control.len() as _;
+    let result = unsafe { libc::recvmsg(socket.as_raw_fd(), &mut message, 0) };
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if result == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "descriptor channel closed",
+        ));
+    }
+    if result as usize != payload.len() || message.msg_flags & libc::MSG_CTRUNC != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "truncated descriptor datagram",
+        ));
+    }
+    let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
+    if header.is_null()
+        || unsafe { (*header).cmsg_level } != libc::SOL_SOCKET
+        || unsafe { (*header).cmsg_type } != libc::SCM_RIGHTS
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "missing SCM_RIGHTS descriptor",
+        ));
+    }
+    let fd = unsafe { *libc::CMSG_DATA(header).cast::<RawFd>() };
+    if let Err(error) = set_close_on_exec(fd) {
+        unsafe { libc::close(fd) };
+        return Err(error);
+    }
+    Ok((fd, u64::from_ne_bytes(payload)))
+}
+
+/// Acknowledges one installed descriptor to the master.
+#[cfg(target_vendor = "apple")]
+fn send_ack(socket: &UnixDatagram, id: u64) -> io::Result<()> {
+    let payload = id.to_ne_bytes();
+    loop {
+        match socket.send(&payload) {
+            Ok(8) => return Ok(()),
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "short acknowledgement datagram",
+                ))
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Ignores `SIGPIPE` for a descriptor channel; a dead worker is an I/O error,
+/// not a reason to terminate the master.
+#[cfg(target_vendor = "apple")]
+fn set_no_sigpipe(fd: RawFd) -> io::Result<()> {
+    let value: libc::c_int = 1;
+    let result = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_NOSIGPIPE,
+            &value as *const libc::c_int as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Drains descriptors from the master channel, acknowledges each installed
+/// socket, and hands it to the worker's accept loop.
+#[cfg(target_vendor = "apple")]
+fn receive_tcp_connections(
+    socket: UnixDatagram,
+    sender: tokio::sync::mpsc::UnboundedSender<std::net::TcpStream>,
+) {
+    loop {
+        let (fd, id) = match recv_fd(&socket) {
+            Ok(descriptor) => descriptor,
+            Err(_) => break,
+        };
+        let stream = unsafe { TcpStream::from_raw_fd(fd) };
+        if stream.set_nonblocking(true).is_err() {
+            break;
+        }
+        if send_ack(&socket, id).is_err() || sender.send(stream).is_err() {
+            break;
+        }
+    }
 }
 
 /// Conservative `sun_path` limit shared by Linux (108 bytes) and macOS
@@ -171,14 +519,15 @@ impl ListenAddr {
     }
 }
 
-/// A worker's listener source: a TCP address to bind locally, a master-bound
-/// TCP listener inherited on Apple targets, or the master-bound Unix listener
-/// inherited across `fork`.
+/// A worker's listener source: a TCP address to bind locally, master-accepted
+/// TCP descriptors on Apple targets, or the master-bound Unix listener inherited
+/// across `fork`.
 pub(crate) enum ListenSource {
     /// Bind a fresh `SO_REUSEPORT` TCP socket in this worker.
     Tcp(SocketAddr),
-    /// Wrap the master-bound TCP listener shared by Apple workers.
-    TcpShared(std::net::TcpListener),
+    /// Receive master-accepted TCP descriptors on Apple targets.
+    #[cfg(target_vendor = "apple")]
+    TcpPassed(UnixDatagram, SocketAddr),
     /// Wrap the inherited master Unix listener in this worker.
     Unix(std::os::unix::net::UnixListener),
 }
@@ -188,13 +537,19 @@ impl ListenSource {
     pub(crate) fn for_worker(
         addr: &ListenAddr,
         master_unix: Option<&std::os::unix::net::UnixListener>,
+        shared_tcp: Option<&SharedTcp>,
+        worker_index: usize,
     ) -> io::Result<Self> {
         match addr {
             ListenAddr::Tcp(addr) => {
                 #[cfg(target_vendor = "apple")]
-                if let Some(listener) = worker_listener() {
-                    return Ok(Self::TcpShared(listener?));
+                if let Some(shared) = shared_tcp {
+                    return Ok(Self::TcpPassed(
+                        shared.worker_receiver(worker_index)?,
+                        *addr,
+                    ));
                 }
+                let _ = (shared_tcp, worker_index);
                 Ok(Self::Tcp(*addr))
             }
             ListenAddr::Unix(_) => {
@@ -228,13 +583,22 @@ pub(crate) enum Listener {
         /// The Tokio Unix listener.
         listener: UnixListener,
     },
+    /// Master-accepted TCP descriptors received over a Unix channel.
+    #[cfg(target_vendor = "apple")]
+    TcpPassed {
+        /// Descriptor receiver filled by the channel thread.
+        receiver: tokio::sync::mpsc::UnboundedReceiver<std::net::TcpStream>,
+        /// The configured server address.
+        server: SocketAddr,
+    },
 }
 
 impl Listener {
     /// Registers the worker listener with Tokio.
     ///
-    /// TCP binds a fresh `SO_REUSEPORT` socket; Unix wraps the inherited
-    /// master listener. Must run inside the worker's Tokio runtime.
+    /// TCP binds a fresh `SO_REUSEPORT` socket or starts the descriptor receiver
+    /// on Apple targets; Unix wraps the inherited master listener. Must run
+    /// inside the worker's Tokio runtime.
     pub(crate) fn bind(source: ListenSource) -> io::Result<Self> {
         match source {
             ListenSource::Tcp(addr) => {
@@ -244,11 +608,18 @@ impl Listener {
                     server: addr,
                 })
             }
-            ListenSource::TcpShared(listener) => {
-                listener.set_nonblocking(true)?;
-                let server = listener.local_addr()?;
-                let listener = TcpListener::from_std(listener)?;
-                Ok(Self::Tcp { listener, server })
+            #[cfg(target_vendor = "apple")]
+            ListenSource::TcpPassed(receiver, server) => {
+                let (sender, receiver_channel) =
+                    tokio::sync::mpsc::unbounded_channel::<std::net::TcpStream>();
+                std::thread::Builder::new()
+                    .name("elephc-tcp-receive".to_string())
+                    .spawn(move || receive_tcp_connections(receiver, sender))
+                    .expect("failed to spawn the TCP descriptor receiver");
+                Ok(Self::TcpPassed {
+                    receiver: receiver_channel,
+                    server,
+                })
             }
             ListenSource::Unix(listener) => {
                 listener.set_nonblocking(true)?;
@@ -259,7 +630,7 @@ impl Listener {
     }
 
     /// Accepts one connection and returns its stream plus peer/server addresses.
-    pub(crate) async fn accept(&self) -> io::Result<(Stream, PeerInfo)> {
+    pub(crate) async fn accept(&mut self) -> io::Result<(Stream, PeerInfo)> {
         match self {
             Self::Tcp { listener, server } => {
                 let (stream, peer) = listener.accept().await?;
@@ -274,6 +645,25 @@ impl Listener {
             Self::Unix { listener } => {
                 let (stream, _) = listener.accept().await?;
                 Ok((Stream::Unix(stream), PeerInfo::unix()))
+            }
+            #[cfg(target_vendor = "apple")]
+            Self::TcpPassed { receiver, server } => {
+                let stream = receiver.recv().await.ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::ConnectionAborted,
+                        "TCP descriptor channel closed",
+                    )
+                })?;
+                let peer = stream.peer_addr()?;
+                let local = stream.local_addr().unwrap_or(*server);
+                let stream = tokio::net::TcpStream::from_std(stream)?;
+                Ok((
+                    Stream::Tcp(stream),
+                    PeerInfo {
+                        remote: Some(peer),
+                        server: Some(local),
+                    },
+                ))
             }
         }
     }
@@ -561,24 +951,149 @@ mod tests {
         assert_ne!(listener.local_addr().unwrap().port(), 0);
     }
 
-    /// Apple workers inherit a duplicate of the master's bound TCP socket.
+    /// Apple targets create one descriptor channel per configured worker.
     #[cfg(target_vendor = "apple")]
     #[test]
-    fn shared_listener_is_inherited_by_workers() {
-        install_shared("127.0.0.1:0".parse().unwrap()).unwrap();
-        let worker = worker_listener()
-            .expect("Apple targets share one listener")
-            .unwrap();
-        let port = worker.local_addr().unwrap().port();
-        assert_ne!(port, 0);
+    fn shared_listener_creates_worker_channels() {
+        let shared = install_shared("127.0.0.1:0".parse().unwrap(), 2)
+            .unwrap()
+            .expect("Apple targets install a shared listener");
+        assert!(shared.worker_receiver(0).is_ok());
+        assert!(shared.worker_receiver(1).is_ok());
+        assert!(shared.worker_receiver(2).is_err());
+    }
+
+    /// SCM_RIGHTS transfers a live descriptor and its id between the two ends.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn descriptor_channel_round_trips() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+
+        let (master, worker) = UnixDatagram::pair().unwrap();
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        send_fd(&master, reader.as_raw_fd(), 42).unwrap();
+        let (fd, id) = recv_fd(&worker).unwrap();
+        assert_eq!(id, 42);
+        let mut received = unsafe { UnixStream::from_raw_fd(fd) };
+        writer.write_all(b"x").unwrap();
+        let mut byte = [0u8; 1];
+        received.read_exact(&mut byte).unwrap();
+        assert_eq!(&byte, b"x");
+    }
+
+    /// A worker acknowledgement carries the descriptor id back to the master.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn descriptor_ack_round_trips() {
+        let (master, worker) = UnixDatagram::pair().unwrap();
+        send_ack(&worker, 99).unwrap();
+        let mut ack = [0u8; 8];
+        assert_eq!(master.recv(&mut ack).unwrap(), 8);
+        assert_eq!(u64::from_ne_bytes(ack), 99);
+    }
+
+    /// Consecutive connections are handed to workers in round-robin order.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn descriptors_are_passed_round_robin() {
+        let shared = install_shared("127.0.0.1:0".parse().unwrap(), 3)
+            .unwrap()
+            .expect("Apple targets install a shared listener");
+        let receivers = (0..3)
+            .map(|index| shared.worker_receiver(index).unwrap())
+            .collect::<Vec<_>>();
+        let handles = receivers
+            .into_iter()
+            .map(|receiver| {
+                std::thread::spawn(move || {
+                    let mut received = 0usize;
+                    while received < 2 {
+                        let (fd, id) = recv_fd(&receiver).expect("descriptor must arrive");
+                        send_ack(&receiver, id).expect("ack must reach the master");
+                        unsafe { libc::close(fd) };
+                        received += 1;
+                    }
+                    received
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut clients = Vec::new();
+        for _ in 0..6 {
+            clients.push(TcpStream::connect(addr).unwrap());
+            let (server, _) = listener.accept().unwrap();
+            assert!(shared.pass_descriptor(server));
+        }
+        let counts = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        shared.drain_acks();
+        assert!(
+            shared.pending.lock().unwrap().is_empty(),
+            "every acked descriptor must be released"
+        );
+        assert_eq!(counts, vec![2, 2, 2]);
+    }
+
+    /// The worker's acknowledgement lets the master close its copy without
+    /// discarding request bytes already queued on the transferred connection.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn descriptor_ack_preserves_queued_request_bytes() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        client.write_all(b"hello").unwrap();
+
+        let (master, worker) = UnixDatagram::pair().unwrap();
+        send_fd(&master, server.as_raw_fd(), 7).unwrap();
+        let (fd, id) = recv_fd(&worker).unwrap();
+        assert_eq!(id, 7);
+        let mut received = unsafe { TcpStream::from_raw_fd(fd) };
+        send_ack(&worker, id).unwrap();
+        let mut ack = [0u8; 8];
+        assert_eq!(master.recv(&mut ack).unwrap(), 8);
+        assert_eq!(u64::from_ne_bytes(ack), 7);
+        // Closing the master's copy after the ack must not reset the worker's
+        // connection or drop the bytes the client already sent.
+        drop(server);
+
+        let mut bytes = [0u8; 5];
+        received.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"hello");
+    }
+
+    /// Reaping a worker releases descriptors that never reached a live worker.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn release_worker_drops_pending_descriptors() {
+        let shared = install_shared("127.0.0.1:0".parse().unwrap(), 1)
+            .unwrap()
+            .expect("Apple targets install a shared listener");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _client = TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        assert!(shared.pass_descriptor(server));
+        assert_eq!(shared.pending.lock().unwrap().len(), 1);
+        shared.release_worker(0);
+        assert!(shared.pending.lock().unwrap().is_empty());
     }
 
     /// Non-Apple targets keep the per-worker `SO_REUSEPORT` strategy.
     #[cfg(not(target_vendor = "apple"))]
     #[test]
     fn non_apple_targets_have_no_shared_listener() {
-        install_shared("127.0.0.1:0".parse().unwrap()).unwrap();
-        assert!(worker_listener().is_none());
+        assert!(install_shared("127.0.0.1:0".parse().unwrap(), 2)
+            .unwrap()
+            .is_none());
     }
 
     /// Returns a unique short Unix socket path for one unit test.
@@ -644,11 +1159,18 @@ mod tests {
         let path = test_socket_path("cloexec");
         let _ = std::fs::remove_file(&path);
         let master = std::os::unix::net::UnixListener::bind(&path).unwrap();
-        let source =
-            ListenSource::for_worker(&ListenAddr::Unix(path.clone()), Some(&master)).unwrap();
+        let source = ListenSource::for_worker(
+            &ListenAddr::Unix(path.clone()),
+            Some(&master),
+            None,
+            0,
+        )
+        .unwrap();
         let listener = match source {
             ListenSource::Unix(listener) => listener,
-            ListenSource::Tcp(_) | ListenSource::TcpShared(_) => {
+            ListenSource::Tcp(_) => panic!("a Unix listen target must produce a Unix source"),
+            #[cfg(target_vendor = "apple")]
+            ListenSource::TcpPassed(_, _) => {
                 panic!("a Unix listen target must produce a Unix source")
             }
         };

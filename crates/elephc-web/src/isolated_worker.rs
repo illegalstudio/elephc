@@ -223,7 +223,7 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
                 std::process::exit(1);
             }
         };
-        let listener = match Listener::bind(source) {
+        let mut listener = match Listener::bind(source) {
             Ok(listener) => listener,
             Err(error) => {
                 eprintln!("elephc-web: failed to bind listener: {error}");

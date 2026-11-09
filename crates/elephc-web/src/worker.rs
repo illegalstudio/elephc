@@ -182,10 +182,8 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
     probe_route::rearm();
     let (server_addr, server_port) = match &source {
         ListenSource::Tcp(addr) => (addr.ip().to_string(), addr.port()),
-        ListenSource::TcpShared(listener) => listener
-            .local_addr()
-            .map(|addr| (addr.ip().to_string(), addr.port()))
-            .unwrap_or_default(),
+        #[cfg(target_vendor = "apple")]
+        ListenSource::TcpPassed(_, addr) => (addr.ip().to_string(), addr.port()),
         ListenSource::Unix(_) => (String::new(), 0),
     };
     request_state::set_server_addr(&server_addr, server_port);
@@ -200,7 +198,7 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
     // only the async request/response I/O of different connections interleaves.
     let local = tokio::task::LocalSet::new();
     local.block_on(&rt, async move {
-        let listener = match Listener::bind(source) {
+        let mut listener = match Listener::bind(source) {
             Ok(listener) => listener,
             Err(error) => {
                 eprintln!("elephc-web: failed to bind listener: {error}");

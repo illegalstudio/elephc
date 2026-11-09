@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use args::{parse_args, ParsedArgs, ServerArgs};
 use crate::handler_broker::BrokerMode;
 use crate::isolated_worker;
-use crate::listener::{self, ListenAddr, ListenSource};
+use crate::listener::{self, ListenAddr, ListenSource, SharedTcp};
 use crate::worker;
 
 /// Version-one generated callbacks; all PHP exceptions are contained before returning to Rust.
@@ -138,6 +138,8 @@ fn reset_signal_handlers_to_default() {
 fn spawn_worker(
     listen: &ListenAddr,
     master_unix: Option<&std::os::unix::net::UnixListener>,
+    shared_tcp: Option<&SharedTcp>,
+    worker_index: usize,
     handler: extern "C" fn(),
     args: &ServerArgs,
     isolation: IsolationMode,
@@ -150,7 +152,12 @@ fn spawn_worker(
         }
         0 => {
             reset_signal_handlers_to_default();
-            let source = match ListenSource::for_worker(listen, master_unix) {
+            let source = match ListenSource::for_worker(
+                listen,
+                master_unix,
+                shared_tcp,
+                worker_index,
+            ) {
                 Ok(source) => source,
                 Err(error) => {
                     eprintln!("elephc-web: failed to inherit the listening socket: {error}");
@@ -211,11 +218,12 @@ fn is_planned_recycle(status: libc::c_int) -> bool {
 /// when the master is PID 1; those PIDs are reaped but must not trigger a worker
 /// replacement or change the configured pool size.
 fn remove_tracked_worker(
-    children: &mut Vec<(libc::pid_t, Instant)>,
+    children: &mut Vec<(libc::pid_t, Instant, usize)>,
     pid: libc::pid_t,
-) -> Option<Instant> {
-    let index = children.iter().position(|(child, _)| *child == pid)?;
-    Some(children.remove(index).1)
+) -> Option<(Instant, usize)> {
+    let index = children.iter().position(|(child, _, _)| *child == pid)?;
+    let (_, spawned_at, worker_index) = children.remove(index);
+    Some((spawned_at, worker_index))
 }
 
 /// Server entry: parse args, prefork workers, supervise. Returns an exit code.
@@ -287,16 +295,16 @@ fn run_server(
     // bind_unix_master may temporarily narrow the process umask without racing
     // another thread. A bind failure is a master startup error, not a worker
     // crash loop.
-    let master_unix = match &args.listen {
-        ListenAddr::Tcp(addr) => {
-            if let Err(error) = listener::install_shared(*addr) {
+    let (master_unix, shared_tcp) = match &args.listen {
+        ListenAddr::Tcp(addr) => match listener::install_shared(*addr, args.workers) {
+            Ok(shared) => (None, shared),
+            Err(error) => {
                 eprintln!("elephc-web: failed to bind {addr}: {error}");
                 return 1;
             }
-            None
-        }
+        },
         ListenAddr::Unix(path) => match listener::bind_unix_master(path) {
-            Ok(listener) => Some(listener),
+            Ok(listener) => (Some(listener), None),
             Err(error) => {
                 eprintln!(
                     "elephc-web: failed to bind unix:{}: {error}",
@@ -308,18 +316,26 @@ fn run_server(
     };
     // Fork workers BEFORE creating any tokio runtime. Track each worker's spawn
     // time so a crash-on-startup loop (e.g. a failed bind) can be detected.
-    let mut children: Vec<(libc::pid_t, Instant)> = Vec::new();
-    for _ in 0..args.workers {
+    let mut children: Vec<(libc::pid_t, Instant, usize)> = Vec::new();
+    for worker_index in 0..args.workers {
         let pid = spawn_worker(
             &args.listen,
             master_unix.as_ref(),
+            shared_tcp.as_deref(),
+            worker_index,
             handler,
             &args,
             isolation,
             application,
         );
-        children.push((pid, Instant::now()));
+        children.push((pid, Instant::now(), worker_index));
     }
+    #[cfg(target_vendor = "apple")]
+    let accept_thread = shared_tcp
+        .as_ref()
+        .map(|shared| shared.start_accepting());
+    #[cfg(not(target_vendor = "apple"))]
+    let accept_thread: Option<std::thread::JoinHandle<()>> = None;
     eprintln!(
         "elephc-web: listening on {} ({} worker{}, isolation={})",
         args.listen.display(),
@@ -340,7 +356,9 @@ fn run_server(
             break;
         }
         if pid > 0 {
-            let Some(spawned_at) = remove_tracked_worker(&mut children, pid) else {
+            let Some((spawned_at, worker_index)) =
+                remove_tracked_worker(&mut children, pid)
+            else {
                 continue;
             };
             if SHUTDOWN.load(Ordering::SeqCst) {
@@ -384,16 +402,26 @@ fn run_server(
                     fast_deaths = 0;
                 }
             }
+            #[cfg(target_vendor = "apple")]
+            if let Some(shared) = &shared_tcp {
+                // The worker is already reaped, so every descriptor still
+                // waiting for it is lost. Release those clients before the
+                // replacement starts; descriptors sent after this point stay in
+                // the channel and are served by the replacement.
+                shared.release_worker(worker_index);
+            }
             // The worker is gone (crash or recycle): replace it to keep the pool at N.
             let new_pid = spawn_worker(
                 &args.listen,
                 master_unix.as_ref(),
+                shared_tcp.as_deref(),
+                worker_index,
                 handler,
                 &args,
                 isolation,
                 application,
             );
-            children.push((new_pid, Instant::now()));
+            children.push((new_pid, Instant::now(), worker_index));
         } else if pid == -1 {
             // ECHILD: nothing left to wait for. EINTR: a signal arrived → re-loop
             // and re-check SHUTDOWN at the top.
@@ -402,13 +430,19 @@ fn run_server(
             }
         }
     }
+    if let Some(shared) = &shared_tcp {
+        shared.stop();
+    }
     // Clean teardown: ask every still-tracked worker to terminate, then reap.
-    for &(pid, _) in &children {
+    for &(pid, _, _) in &children {
         unsafe { libc::kill(pid, libc::SIGTERM); }
     }
-    for &(pid, _) in &children {
+    for &(pid, _, _) in &children {
         let mut status = 0;
         unsafe { libc::waitpid(pid, &mut status, 0); }
+    }
+    if let Some(handle) = accept_thread {
+        let _ = handle.join();
     }
     if let ListenAddr::Unix(path) = &args.listen {
         listener::remove_unix_socket(path);
@@ -461,12 +495,15 @@ mod tests {
     fn untracked_reaped_pid_does_not_change_worker_set() {
         let first = Instant::now();
         let second = Instant::now();
-        let mut children = vec![(101, first), (202, second)];
+        let mut children = vec![(101, first, 0), (202, second, 1)];
 
         assert!(remove_tracked_worker(&mut children, 303).is_none());
         assert_eq!(children.len(), 2);
         assert!(remove_tracked_worker(&mut children, 101).is_some());
-        assert_eq!(children.iter().map(|(pid, _)| *pid).collect::<Vec<_>>(), vec![202]);
+        assert_eq!(
+            children.iter().map(|(pid, _, _)| *pid).collect::<Vec<_>>(),
+            vec![202]
+        );
     }
 
 }
