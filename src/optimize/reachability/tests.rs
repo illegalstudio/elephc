@@ -1719,3 +1719,30 @@ echo $o->m1();
     eprintln!("VTABLE_WALKS_LATE={walks}");
     assert!(walks <= 12, "{walks} vtable walks");
 }
+
+/// Every member of one vtable family shares a lineage root, so the family is walked once per
+/// round, not once per member: eight overrides of `m` reached together cost one walk, where
+/// walking each member found the same eight pairs eight times (a family of n cost n * n).
+#[test]
+fn prune_walks_a_vtable_family_once_not_once_per_member() {
+    let mut source = String::from("<?php\nclass C0 { public function m() { return 0; } }\n");
+    for index in 1..8 {
+        source.push_str(&format!(
+            "class C{index} extends C{} {{ public function m() {{ return {index}; }} }}\n",
+            index - 1
+        ));
+    }
+    source.push_str("$o = match ($argc) {");
+    for index in 0..8 {
+        source.push_str(&format!(" {index} => new C{index}(),"));
+    }
+    source.push_str(" default => new C0() };\necho $o->m();\n");
+    super::graph::VTABLE_WALKS.with(|walks| walks.set(0));
+    let (program, _) = prune(&source);
+    let walks = super::graph::VTABLE_WALKS.with(|walks| walks.get());
+    for index in 0..8 {
+        assert!(has_method(&program, &format!("C{index}"), "m"), "C{index}::m");
+    }
+    eprintln!("VTABLE_WALKS_FAMILY={walks}");
+    assert!(walks <= 3, "{walks} vtable walks for one family of eight members");
+}

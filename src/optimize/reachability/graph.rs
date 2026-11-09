@@ -905,6 +905,14 @@ impl GraphState {
         let kept_methods = std::mem::take(&mut self.reach.methods);
         let mut found = Vec::new();
         let mut key: (String, String, bool) = (String::new(), String::new(), false);
+        // Family walks made in this call: `(lineage root, method, static, against all live
+        // classes)` -> whether that walk was behavioral. Every member of one vtable family has the
+        // same lineage root, so each walked the same descendants and found the same pairs: a
+        // family of n kept members cost n walks of n classes. A later member is skipped unless it
+        // is behavioral where the earlier walk was not (a behavioral walk also marks the pairs
+        // behavioral, so it subsumes a structural one). Members are still recorded in
+        // `vtable_walked` above, so later rounds see the same state.
+        let mut family_walks: HashMap<(String, String, bool, bool), bool> = HashMap::default();
         for visible in &kept_methods {
             if !self.vtable_slots.contains(visible) {
                 continue;
@@ -912,27 +920,35 @@ impl GraphState {
             let (class, method, is_static) = visible;
             let behavioral = self.behavioral.methods.contains(visible);
             // Which classes this method is walked against this round.
-            let (classes, by_root) = match (new_classes, &new_descendants_by_root) {
+            let (classes, by_root, against_all) = match (new_classes, &new_descendants_by_root) {
                 (Some(new_classes), Some(new_by_root)) => {
                     match self.vtable_walked.methods.get(visible) {
                         Some(walked_behavioral) if *walked_behavioral || !behavioral => {
                             if new_classes.is_empty() {
                                 continue;
                             }
-                            (new_classes, new_by_root)
+                            (new_classes, new_by_root, false)
                         }
                         _ => {
                             self.vtable_walked.methods.insert(visible.clone(), behavioral);
-                            (live_classes, &descendants_by_root)
+                            (live_classes, &descendants_by_root, true)
                         }
                     }
                 }
-                _ => (live_classes, &descendants_by_root),
+                _ => (live_classes, &descendants_by_root, true),
             };
             let lineage_root = self.vtable_lineage_root(class, method, *is_static);
             let Some(descendants) = by_root.get(&lineage_root) else {
                 continue;
             };
+            let family = (lineage_root, method.clone(), *is_static, against_all);
+            match family_walks.get_mut(&family) {
+                Some(walked_behavioral) if *walked_behavioral || !behavioral => continue,
+                Some(walked_behavioral) => *walked_behavioral = true,
+                None => {
+                    family_walks.insert(family, behavioral);
+                }
+            }
             #[cfg(test)]
             VTABLE_WALKS.with(|walks| walks.set(walks.get() + 1));
             for position in descendants {
