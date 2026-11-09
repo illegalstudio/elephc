@@ -300,3 +300,18 @@ pub(crate) fn lower_stream_resolve_include_path(
     store_if_result(ctx, inst)
 }
 
+
+/// Lowers the internal `__elephc_poll_revents($stream)` probe used by `Io\Poll`.
+///
+/// The runtime helper performs a zero-timeout `poll(2)` on the descriptor and returns
+/// `POLLERR`/`POLLHUP`/`POLLNVAL`, which `stream_select()` cannot expose on its own.
+pub(crate) fn lower_elephc_poll_revents(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "__elephc_poll_revents", 1)?;
+    let stream = expect_operand(inst, 0)?;
+    load_stream_fd_to_result(ctx, stream, "__elephc_poll_revents")?;
+    abi::emit_call_label(ctx.emitter, "__rt_stream_poll_revents");
+    store_if_result(ctx, inst)
+}

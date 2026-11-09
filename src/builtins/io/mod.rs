@@ -47,6 +47,7 @@ pub mod __elephc_phar_set_stub;
 pub mod __elephc_phar_set_zip_password;
 pub mod __elephc_phar_sign_hash;
 pub mod __elephc_phar_sign_openssl;
+pub mod __elephc_poll_revents;
 pub mod basename;
 pub mod chdir;
 pub mod chgrp;

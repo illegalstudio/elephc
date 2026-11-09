@@ -1,5 +1,5 @@
 //! Purpose:
-//! Declares PHP 8.6's `Io\Poll` API and implements its portable `Poll` backend in PHP.
+//! Declares PHP 8.6's `Io\Poll` API and implements its platform backends in PHP.
 //!
 //! Called from:
 //! - `crate::core_prelude::inject_if_used` when a program reaches `Io\Poll` or
@@ -8,9 +8,13 @@
 //! Key details:
 //! - The surface is parsed from one internal PHP source, so namespaces, enums, interfaces,
 //!   exception hierarchies, and readonly metadata stay identical to the engine's declarations.
-//! - The backend maps level-triggered read/write readiness onto `stream_select()`, including
-//!   data already buffered in the stream layer. Edge triggering and hang-up/error precision are
-//!   intentionally limited to what `stream_select()` can observe.
+//! - `Epoll` is advertised on Linux and `Kqueue` on Darwin; both select the edge-capable path
+//!   and `Auto` prefers them. `EventPorts` and `WSAPoll` stay unavailable because elephc has no
+//!   Solaris or Windows target. The wait itself runs on the shared runtime machinery:
+//!   `stream_select()` for level readiness (descriptors 0..1023) plus a zero-timeout `poll(2)`
+//!   revents probe that separates `HangUp`/`ReadHangUp` and `Error` from a bare read/write bit.
+//! - Edge-triggered watchers report one event per not-ready -> ready transition and rearm only
+//!   after the watcher is observed not ready again.
 //! - Watchers hold the context through `WeakReference`, so a watcher does not keep a dropped
 //!   context alive and `isActive()` turns false exactly when the context is gone.
 
@@ -34,15 +38,31 @@ namespace Io\Poll {
         case WSAPoll;
 
         public static function getAvailableBackends(): array {
-            return [self::Poll];
+            $backends = [self::Poll];
+            if (\PHP_OS === 'Linux') {
+                $backends[] = self::Epoll;
+            }
+            if (\PHP_OS === 'Darwin') {
+                $backends[] = self::Kqueue;
+            }
+            return $backends;
         }
 
         public function isAvailable(): bool {
-            return $this === self::Poll;
+            if ($this === self::Poll) {
+                return true;
+            }
+            if ($this === self::Epoll) {
+                return \PHP_OS === 'Linux';
+            }
+            if ($this === self::Kqueue) {
+                return \PHP_OS === 'Darwin';
+            }
+            return false;
         }
 
         public function supportsEdgeTriggering(): bool {
-            return false;
+            return $this === self::Epoll || $this === self::Kqueue;
         }
     }
 
@@ -66,6 +86,7 @@ namespace Io\Poll {
         private mixed $data;
         private bool $active = true;
         private bool $fired = false;
+        private bool $edgeArmed = true;
 
         public function __construct(\WeakReference $context, \StreamPollHandle $handle, array $events, mixed $data = null) {
             $this->context = $context;
@@ -110,13 +131,15 @@ namespace Io\Poll {
         }
 
         public function modifyEvents(array $events): void {
-            if ($this->context->get() === null || !$this->active || !$this->handle->isValid()) {
+            $context = $this->context->get();
+            if ($context === null || !$this->active || !$this->handle->isValid()) {
                 throw new InactiveWatcherException('Cannot modify inactive watcher');
             }
-            Context::validateEvents($events);
+            $context->validateEvents($events);
             $this->watchedEvents = $events;
             $this->triggeredEvents = [];
             $this->fired = false;
+            $this->edgeArmed = true;
         }
 
         public function modifyData(mixed $data): void {
@@ -154,6 +177,18 @@ namespace Io\Poll {
             return $this->fired;
         }
 
+        public function __elephcEdgeArmed(): bool {
+            return $this->edgeArmed;
+        }
+
+        public function __elephcArmEdge(): void {
+            $this->edgeArmed = true;
+        }
+
+        public function __elephcDisarmEdge(): void {
+            $this->edgeArmed = false;
+        }
+
         public function __elephcActive(): bool {
             return $this->active && $this->handle->isValid();
         }
@@ -181,7 +216,17 @@ namespace Io\Poll {
                 throw new \Error('Io\\Poll\\Context object is already constructed');
             }
             $this->constructed = true;
-            $actual = $backend === Backend::Auto ? Backend::Poll : $backend;
+            if ($backend === Backend::Auto) {
+                if (Backend::Epoll->isAvailable()) {
+                    $actual = Backend::Epoll;
+                } elseif (Backend::Kqueue->isAvailable()) {
+                    $actual = Backend::Kqueue;
+                } else {
+                    $actual = Backend::Poll;
+                }
+            } else {
+                $actual = $backend;
+            }
             if (!$actual->isAvailable()) {
                 throw new BackendUnavailableException('Backend ' . $actual->name . ' not available');
             }
@@ -195,7 +240,7 @@ namespace Io\Poll {
             if (!$handle->isValid()) {
                 throw new InvalidHandleException('Invalid handle for polling');
             }
-            self::validateEvents($events);
+            $this->validateEvents($events);
             foreach ($this->watchers as $existing) {
                 if ($existing->__elephcActive() && $existing->__elephcStream() === $handle->getStream()) {
                     throw new HandleAlreadyWatchedException('Handle already added');
@@ -250,20 +295,22 @@ namespace Io\Poll {
                 $events = $watcher->getWatchedEvents();
                 $wantsRead = in_array(Event::Read, $events, true);
                 $wantsWrite = in_array(Event::Write, $events, true);
-                $wantsError = in_array(Event::Error, $events, true)
-                    || in_array(Event::HangUp, $events, true)
+                $wantsError = in_array(Event::Error, $events, true);
+                $wantsHangUp = in_array(Event::HangUp, $events, true)
                     || in_array(Event::ReadHangUp, $events, true);
                 $meta = stream_get_meta_data($stream);
                 $hasBuffered = $wantsRead && ($meta['unread_bytes'] ?? 0) > 0;
                 if ($hasBuffered) {
                     $buffered[] = $watcher;
-                } elseif ($wantsRead) {
+                } elseif ($wantsRead || $wantsError || $wantsHangUp) {
+                    // A hang-up makes the descriptor READABLE; the zero-timeout poll below
+                    // tells that readiness apart from ordinary data.
                     $read[] = $stream;
                 }
                 if ($wantsWrite) {
                     $write[] = $stream;
                 }
-                if ($wantsError) {
+                if ($wantsError || $wantsHangUp) {
                     $except[] = $stream;
                 }
             }
@@ -286,20 +333,64 @@ namespace Io\Poll {
                 if (count($events) >= $limit) {
                     break;
                 }
+                $watched = $watcher->getWatchedEvents();
                 $stream = $watcher->__elephcStream();
+                $inRead = $ready && in_array($stream, $read, true);
+                $inWrite = $ready && in_array($stream, $write, true);
+                $inExcept = $ready && in_array($stream, $except, true);
+                $isBuffered = in_array($watcher, $buffered, true);
                 $triggered = [];
-                if (in_array($watcher, $buffered, true) || ($ready && in_array($stream, $read, true))) {
+                if ($isBuffered) {
                     $triggered[] = Event::Read;
-                }
-                if ($ready && in_array($stream, $write, true)) {
+                } elseif ($inRead || $inExcept) {
+                    // `select()` cannot distinguish a peer hang-up from ordinary readiness, so
+                    // the descriptor is probed for POLLHUP/POLLERR/POLLNVAL here. A watcher that
+                    // asked for HangUp/ReadHangUp reports them instead of the bare Read bit.
+                    $flags = __elephc_poll_revents($stream);
+                    $hungUp = ($flags & 16) !== 0;
+                    $errored = ($flags & 8) !== 0 || ($flags & 2) !== 0;
+                    if (($flags & 32) !== 0) {
+                        continue;
+                    }
+                    if ($hungUp) {
+                        if (in_array(Event::HangUp, $watched, true)) {
+                            $triggered[] = Event::HangUp;
+                        }
+                        if (in_array(Event::ReadHangUp, $watched, true)) {
+                            $triggered[] = Event::ReadHangUp;
+                        }
+                        if (in_array(Event::Read, $watched, true)) {
+                            $triggered[] = Event::Read;
+                        }
+                    } else {
+                        if ($inRead && in_array(Event::Read, $watched, true)) {
+                            $triggered[] = Event::Read;
+                        }
+                        if ($inWrite && in_array(Event::Write, $watched, true)) {
+                            $triggered[] = Event::Write;
+                        }
+                        if (($inExcept || $errored) && in_array(Event::Error, $watched, true)) {
+                            $triggered[] = Event::Error;
+                        }
+                    }
+                } elseif ($inWrite && in_array(Event::Write, $watched, true)) {
                     $triggered[] = Event::Write;
-                }
-                if ($ready && in_array($stream, $except, true)) {
+                } elseif ($inExcept && in_array(Event::Error, $watched, true)) {
                     $triggered[] = Event::Error;
                 }
+                $edge = in_array(Event::EdgeTriggered, $watched, true);
                 if ($triggered !== []) {
+                    if ($edge && !$watcher->__elephcEdgeArmed()) {
+                        continue;
+                    }
                     $watcher->__elephcMarkTriggered($triggered);
+                    if ($edge) {
+                        $watcher->__elephcDisarmEdge();
+                    }
                     $events[] = $watcher;
+                } elseif ($edge) {
+                    // Still not ready: the next readiness transition may report again.
+                    $watcher->__elephcArmEdge();
                 }
             }
             return $events;
@@ -319,7 +410,7 @@ namespace Io\Poll {
             }
         }
 
-        public static function validateEvents(array $events): void {
+        public function validateEvents(array $events): void {
             if ($events === []) {
                 throw new \ValueError('At least one event must be watched');
             }
@@ -327,8 +418,8 @@ namespace Io\Poll {
                 if (!$event instanceof Event) {
                     throw new \TypeError('Watched events must be of type Io\\Poll\\Event');
                 }
-                if ($event === Event::EdgeTriggered) {
-                    throw new BackendUnavailableException('Backend Poll does not support edge triggering');
+                if ($event === Event::EdgeTriggered && !$this->backend->supportsEdgeTriggering()) {
+                    throw new BackendUnavailableException('Backend ' . $this->backend->name . ' does not support edge triggering');
                 }
             }
         }

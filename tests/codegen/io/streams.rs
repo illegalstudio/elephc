@@ -6064,7 +6064,7 @@ fclose($f);
 echo "|t=" . gettype($f);
 "#,
     );
-    assert_eq!(out, "[hello, world!]|t=resource");
+    assert_eq!(out, "[hello, world!]|t=resource (closed)");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fpassthru writes and counts.
@@ -6090,7 +6090,7 @@ fclose($f);
 echo "|t=" . gettype($f);
 "#,
     );
-    assert_eq!(out, "Hello, world!|n=13|t=resource");
+    assert_eq!(out, "Hello, world!|n=13|t=resource (closed)");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fgets reads lines.
@@ -6115,7 +6115,7 @@ fclose($f);
 echo "|t=" . gettype($f);
 "#,
     );
-    assert_eq!(out, "[line1][line2][last]|t=resource");
+    assert_eq!(out, "[line1][line2][last]|t=resource (closed)");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fscanf reads through stream read.
@@ -6168,7 +6168,7 @@ fclose($src); fclose($dst);
 echo "|st=" . gettype($src);
 "#,
     );
-    assert_eq!(out, "n=13|got=[copy-me-over!]|st=resource");
+    assert_eq!(out, "n=13|got=[copy-me-over!]|st=resource (closed)");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper ftell dispatches to stream tell.
@@ -7399,6 +7399,25 @@ echo $n . ":" . count($r);
 "#,
     );
     assert_eq!(out, "1:1");
+}
+
+/// `stream_select()` observes descriptors above the old 0..63 word-0 limit.
+#[test]
+fn test_stream_select_beyond_63_descriptors() {
+    let out = compile_and_run(
+        r#"<?php
+$pairs = [];
+for ($i = 0; $i < 80; $i++) {
+    $pairs[] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+}
+[$r, $w] = $pairs[70];
+fwrite($w, "hi");
+$read = [$r]; $write = null; $except = null;
+$n = stream_select($read, $write, $except, 0, 0);
+echo $n, ":", count($read), ":", fread($read[0], 2);
+"#,
+    );
+    assert_eq!(out, "1:1:hi");
 }
 
 /// Verifies `stream_select()` accepts `null` for a descriptor set, PHP's usual idiom for the

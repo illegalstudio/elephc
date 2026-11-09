@@ -812,6 +812,7 @@ pub enum RuntimeFnId {
     Usleep,
     GetResourceId,
     GetResourceType,
+    ElephcPollRevents,
     Gettype,
     GetDebugType,
     IntvalBase,
@@ -1346,6 +1347,7 @@ impl RuntimeFnId {
             RuntimeFnId::Fmod |
             RuntimeFnId::GetResourceId |
             RuntimeFnId::GetResourceType |
+            RuntimeFnId::ElephcPollRevents |
             RuntimeFnId::Gettype |
             RuntimeFnId::GetDebugType |
             RuntimeFnId::GraphemeStrrev |
@@ -2394,6 +2396,7 @@ impl RuntimeFnId {
             self,
             RuntimeFnId::MemoryGetAllocations
                 | RuntimeFnId::MemoryGetFrees
+                | RuntimeFnId::ElephcPollRevents
                 | RuntimeFnId::MemoryGetPeakUsage
                 | RuntimeFnId::MemoryGetUsage
                 | RuntimeFnId::MemoryResetPeakUsage
@@ -3504,6 +3507,7 @@ impl RuntimeFnId {
             RuntimeFnId::Usleep => "usleep",
             RuntimeFnId::GetResourceId => "get_resource_id",
             RuntimeFnId::GetResourceType => "get_resource_type",
+            RuntimeFnId::ElephcPollRevents => "__elephc_poll_revents",
             RuntimeFnId::Gettype => "gettype",
             RuntimeFnId::GetDebugType => "get_debug_type",
             RuntimeFnId::IntvalBase => "intval_base",

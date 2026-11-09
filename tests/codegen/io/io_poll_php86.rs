@@ -27,27 +27,81 @@ fn run86(source: &str) -> String {
 /// and `poll_backend` availability predicates.
 #[test]
 fn test_io_poll_backend_surface_php86() {
-    let out = run86(
+    let (native, unavailable) = if cfg!(any(target_os = "macos", target_os = "ios")) {
+        ("Kqueue", "Epoll")
+    } else {
+        ("Epoll", "Kqueue")
+    };
+    let out = run86(&format!(
         r#"<?php
-foreach (Io\Poll\Backend::getAvailableBackends() as $backend) {
+foreach (Io\Poll\Backend::getAvailableBackends() as $backend) {{
     echo $backend->name, '|';
-}
+}}
 echo Io\Poll\Backend::Poll->isAvailable() ? 'yes' : 'no';
 echo '|';
 echo Io\Poll\Backend::WSAPoll->isAvailable() ? 'yes' : 'no';
 $context = new Io\Poll\Context(Io\Poll\Backend::Poll);
 echo '|', $context->getBackend()->name;
-try {
-    new Io\Poll\Context(Io\Poll\Backend::Kqueue);
-} catch (Throwable $e) {
+try {{
+    new Io\Poll\Context(Io\Poll\Backend::{unavailable});
+}} catch (Throwable $e) {{
     echo '|', $e::class, ': ', $e->getMessage();
-}
-"#,
-    );
+}}
+$auto = new Io\Poll\Context();
+echo '|', $auto->getBackend()->name;
+echo '|', $auto->getBackend()->supportsEdgeTriggering() ? 'edge' : 'level';
+"#
+    ));
     assert_eq!(
         out,
-        "Poll|yes|no|Poll|Io\\Poll\\BackendUnavailableException: Backend Kqueue not available"
+        format!(
+            "Poll|{native}|yes|no|Poll|Io\\Poll\\BackendUnavailableException: Backend {unavailable} not available|{native}|edge"
+        )
     );
+}
+
+/// The platform-native backend reports edge-triggered watchers only on readiness transitions.
+#[test]
+fn test_io_poll_native_backend_edge_triggering_php86() {
+    let out = run86(
+        r#"<?php
+[$r, $w] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$context = new Io\Poll\Context();
+$handle = new StreamPollHandle($r);
+$context->add($handle, [Io\Poll\Event::Read, Io\Poll\Event::EdgeTriggered], 'edge');
+fwrite($w, 'a');
+echo count($context->wait(Time\Duration::fromMicroseconds(100000))), ':';
+echo count($context->wait(Time\Duration::fromMicroseconds(100000))), ':';
+fread($r, 1);
+echo count($context->wait(Time\Duration::fromMicroseconds(100000))), ':';
+fwrite($w, 'b');
+$events = $context->wait(Time\Duration::fromMicroseconds(100000));
+echo count($events), ':', $events[0]->getData(), ':', fread($r, 1);
+"#,
+    );
+    assert_eq!(out, "1:0:0:1:edge:b");
+}
+
+/// A closed peer reports HangUp/ReadHangUp instead of a bare Read readiness bit.
+#[test]
+fn test_io_poll_hangup_precision_php86() {
+    let out = run86(
+        r#"<?php
+[$r, $w] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$context = new Io\Poll\Context(Io\Poll\Backend::Poll);
+$context->add(new StreamPollHandle($r), [Io\Poll\Event::Read, Io\Poll\Event::HangUp, Io\Poll\Event::ReadHangUp], 'peer');
+fwrite($w, 'x');
+$events = $context->wait(Time\Duration::fromMicroseconds(100000));
+echo $events[0]->hasTriggered(Io\Poll\Event::HangUp) ? 'H' : '-';
+echo ':', fread($r, 1), ':';
+fclose($w);
+$events = $context->wait(Time\Duration::fromMicroseconds(100000));
+echo count($events), ':';
+echo $events[0]->hasTriggered(Io\Poll\Event::HangUp) ? 'H' : '-';
+echo $events[0]->hasTriggered(Io\Poll\Event::ReadHangUp) ? 'h' : '-';
+"#,
+    );
+    assert_eq!(out, "-:x:1:Hh");
 }
 
 /// php-src `poll_stream_sock_add_only.phpt`: strict properties are hidden from var_dump.

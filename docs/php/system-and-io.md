@@ -491,9 +491,10 @@ wrappers are documented in [Streams](streams.md).
 ## Io\Poll (PHP 8.6)
 
 `Io\Poll` waits for readiness on stream descriptors without blocking on a single
-stream. elephc implements the portable `Poll` backend; `Backend::getAvailableBackends()`
-reports `[Backend::Poll]`, and the platform-specific `Epoll`, `Kqueue`, `EventPorts`,
-and `WSAPoll` cases report themselves unavailable.
+stream. `Backend::getAvailableBackends()` reports `[Poll, Kqueue]` on Darwin and
+`[Poll, Epoll]` on Linux; `Backend::Auto` prefers the platform backend. `Epoll` and
+`Kqueue` support edge-triggered watchers, while `EventPorts` and `WSAPoll` stay
+unavailable because elephc has no Solaris or Windows target.
 
 ```php
 <?php
@@ -522,15 +523,20 @@ data already buffered by the stream layer, one-shot watchers, `maxEvents`,
 `Time\Duration` timeouts, duplicate-handle rejection, closed-stream
 deactivation, and watcher/context lifetime rules are implemented.
 
+Edge-triggered watchers report one event per not-ready -> ready transition and
+rearm only after the watcher is observed not ready again. A zero-timeout `poll(2)`
+probe separates `HangUp`/`ReadHangUp` and `Error` from a bare read/write bit, so a
+closed peer is no longer reported as ordinary readiness. The runtime's
+`stream_select()` examines descriptors `0..1023` (`FD_SETSIZE`).
+
 Known limits:
 
-- Edge triggering is not supported by the `Poll` backend
-  (`Backend::Poll->supportsEdgeTriggering()` returns `false`).
-- `HangUp` and `ReadHangUp` are not distinguished from descriptor readiness;
-  `Error` is reported only when `stream_select()`'s exceptional set fires.
-- The runtime's `stream_select()` examines descriptors `0..63`.
-- Only the `Poll` backend is bundled. `Epoll`, `Kqueue`, `EventPorts`, and
-  `WSAPoll` constructors raise `BackendUnavailableException`.
+- `Epoll` and `Kqueue` are the platform backend *modes* and provide the
+  edge-capable behavior; the wait itself still runs on the shared portable
+  `stream_select()` + `poll(2)` machinery rather than issuing epoll/kqueue
+  syscalls directly.
+- `EventPorts` and `WSAPoll` constructors raise `BackendUnavailableException`
+  because elephc does not target Solaris or Windows.
 
 ## File system
 

@@ -13517,6 +13517,107 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "stream",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "__elephc_poll_revents",
+    "description": "Internal prelude helper returning the poll(2) revents flags for a stream.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_poll_revents` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/io/__elephc_poll_revents.rs"
+    },
+    "module": "elephc",
+    "name": "__elephc_poll_revents",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": []
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_poll_revents"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_poll_revents"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "stream",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_poll_revents",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "pointer",
           "optional": false,
           "type": "pointer"

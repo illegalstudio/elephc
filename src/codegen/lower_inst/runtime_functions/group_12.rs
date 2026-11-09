@@ -72,6 +72,9 @@ pub(super) fn lower(
         RuntimeFnId::GetResourceId => Some({
             crate::codegen::lower_inst::builtins::types::lower_get_resource_id(ctx, inst)
         }),
+        RuntimeFnId::ElephcPollRevents => Some({
+            crate::codegen::lower_inst::builtins::io::lower_elephc_poll_revents(ctx, inst)
+        }),
         RuntimeFnId::GetResourceType => Some({
             crate::codegen::lower_inst::builtins::types::lower_get_resource_type(ctx, inst)
         }),

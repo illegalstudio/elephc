@@ -167,7 +167,8 @@ mod tests {
         // the extension-hosting prelude calls.
         // +2: PHP 8.5 array value-edge functions.
         // +1: `get_debug_type`, the resolved debug type name.
-        assert_eq!(contracts().len(), 1254 + curl_surface);
+        // +1: `__elephc_poll_revents`, the internal Io\Poll revents probe.
+        assert_eq!(contracts().len(), 1255 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }
